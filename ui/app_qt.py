@@ -26,7 +26,8 @@ from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
 from coupang_analytics.kw_shopping import NaverShopCredentials  # noqa: E402
 from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_credentials_file  # noqa: E402
-from coupang_analytics.pipeline import master_exists, resumable_progress, run_full  # noqa: E402
+from coupang_analytics.pipeline import (master_exists, resumable_progress, run_full,  # noqa: E402
+                                        select_keywords_stage, track_ranks_stage)
 from coupang_analytics.rank import make_matcher, organic_rank, warmup  # noqa: E402
 from coupang_analytics.session_keepalive import KeepAlive  # noqa: E402
 
@@ -346,12 +347,22 @@ class App(QtWidgets.QMainWindow):
         w = QtWidgets.QWidget()
         v = QtWidgets.QVBoxLayout(w)
         v.setContentsMargins(12, 10, 12, 10)
-        run = self._card("전체 실행 (계정마다 로그인→판매분석→키워드→PC·모바일 순위 → 통합 엑셀)")
+        run = self._card("실행 — ①판매수집(로그인) → ②키워드 선정 → ③노출순위 조회 (②③은 로그인 불필요·순서무관)")
         rv = QtWidgets.QVBoxLayout(run)
         top = QtWidgets.QHBoxLayout()
-        self.pipeline_btn = QtWidgets.QPushButton("전체 실행")
+        # 단계별 실행 — ① 로그인 판매수집(상품ID·지표·재고), ② 키워드 선정(순위 없음), ③ 노출순위 조회
+        self.sales_btn = QtWidgets.QPushButton("① 판매수집")
+        self.sales_btn.clicked.connect(lambda: self.do_run_full(keywords_off=True))
+        top.addWidget(self.sales_btn)
+        self.kw_btn = QtWidgets.QPushButton("② 키워드 선정")
+        self.kw_btn.clicked.connect(self.do_select_keywords)
+        top.addWidget(self.kw_btn)
+        self.rank_btn = QtWidgets.QPushButton("③ 노출순위 조회")
+        self.rank_btn.clicked.connect(self.do_track_ranks)
+        top.addWidget(self.rank_btn)
+        self.pipeline_btn = QtWidgets.QPushButton("전체 실행(①→②→③)")
         self.pipeline_btn.setObjectName("accent")
-        self.pipeline_btn.clicked.connect(self.do_run_full)
+        self.pipeline_btn.clicked.connect(lambda: self.do_run_full(keywords_off=False))
         top.addWidget(self.pipeline_btn)
         self.keepalive_btn = QtWidgets.QPushButton("세션 유지 켜기")
         self.keepalive_btn.clicked.connect(self.toggle_keepalive)
@@ -737,7 +748,7 @@ class App(QtWidgets.QMainWindow):
             return d, d
         return self.from_edit.text().strip(), self.to_edit.text().strip()
 
-    def do_run_full(self):
+    def do_run_full(self, keywords_off: bool = False):
         if self.input_list is None:
             QtWidgets.QMessageBox.warning(self, "입력 필요", "설정 탭에서 입력 엑셀을 먼저 여세요.")
             return
@@ -785,9 +796,11 @@ class App(QtWidgets.QMainWindow):
         grow = carry and self.cb_grow.isChecked()   # 발굴 추가는 통계 이어쓰기 때만 의미
         input_list, naver_creds, key = self.input_list, self.naver_creds, self.ai_key
         mode_txt = "이어서 " if resume else ("통계이어쓰기 " if carry else "새통계 ")
-        self.log(f"[전체실행] {mode_txt}시작 — 상품 {n}개, 기간 {df}~{dt}"
-                 f"{' · 새 키워드 발굴 추가' if grow else ''}"
-                 f"{' · 순위 제외(판매데이터만)' if skip_ranks and not resume else ''}")
+        stage_txt = " · ①판매수집(키워드·순위 없음)" if keywords_off else \
+            (" · 순위 제외(판매데이터만)" if skip_ranks and not resume else "")
+        self.log(f"[{'판매수집' if keywords_off else '전체실행'}] {mode_txt}시작 — 상품 {n}개, 기간 {df}~{dt}"
+                 f"{' · 새 키워드 발굴 추가' if grow else ''}{stage_txt}")
+        btn = self.sales_btn if keywords_off else self.pipeline_btn
 
         def task():
             self._busy = True
@@ -795,10 +808,49 @@ class App(QtWidgets.QMainWindow):
                 naver = NaverAdApi(naver_creds)
                 return run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
                                 get_password=self._account_pw, resume=resume, carry_forward=carry,
-                                grow_keywords=grow, skip_ranks=skip_ranks, on_log=self.log)
+                                grow_keywords=grow, skip_ranks=skip_ranks,
+                                keywords_off=keywords_off, on_log=self.log)
             finally:
                 self._busy = False
-        self.run_bg(task, on_done=self._pipeline_done, btn=self.pipeline_btn)
+        self.run_bg(task, on_done=self._pipeline_done, btn=btn)
+
+    def do_select_keywords(self):
+        """② 키워드 선정 — 로그인 불필요. 최신 결과 워크북 상품에 키워드만 채운다(순위 없음)."""
+        if self.input_list is None or self.naver_creds is None or not self.ai_key:
+            QtWidgets.QMessageBox.warning(self, "키/입력 필요",
+                                          "설정 탭에서 입력 엑셀·네이버 API·OpenAI 키를 먼저 준비하세요.")
+            return
+        if not (master_exists() or resumable_progress()):
+            QtWidgets.QMessageBox.warning(self, "먼저 ① 판매수집",
+                                          "결과 파일이 없습니다. ① 판매수집을 먼저 실행해 상품을 수집하세요.")
+            return
+        grow = self.cb_grow.isChecked()
+        naver_creds, key = self.naver_creds, self.ai_key
+        self.log("[키워드 선정] 시작 — 순위 조회 없이 키워드만 선정(로그인 불필요)")
+
+        def task():
+            self._busy = True
+            try:
+                return select_keywords_stage(NaverAdApi(naver_creds), key, grow=grow, on_log=self.log)
+            finally:
+                self._busy = False
+        self.run_bg(task, on_done=self._pipeline_done, btn=self.kw_btn)
+
+    def do_track_ranks(self):
+        """③ 노출순위 조회 — 로그인 불필요. 최신 결과 워크북 상품ID+키워드로 순위만 채운다."""
+        if not (master_exists() or resumable_progress()):
+            QtWidgets.QMessageBox.warning(self, "먼저 ①②",
+                                          "결과 파일이 없습니다. ① 판매수집·② 키워드 선정을 먼저 실행하세요.")
+            return
+        self.log("[노출순위 조회] 시작 — 로그인 불필요(비로그인 쿠팡 검색)")
+
+        def task():
+            self._busy = True
+            try:
+                return track_ranks_stage(on_log=self.log)
+            finally:
+                self._busy = False
+        self.run_bg(task, on_done=self._pipeline_done, btn=self.rank_btn)
 
     def _pipeline_done(self, path):
         self.log("=" * 50)
