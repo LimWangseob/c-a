@@ -1,0 +1,24 @@
+# 세션·자격·출력물·캡처 — 절대 커밋 금지
+/data/
+/capture/
+/output/
+*.har
+creds.json
+.env
+
+# 로그인 폼 소스 캡처(봇탐지 관련·민감) · 로컬 백업 복사본 — 커밋 금지
+/login_source_*/
+/login_source_*.zip
+/src - 복사본/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,351 @@
+"""검색 노출순위(Q2) — 비로그인 검색에서 광고 제외 오가닉 순위.
+
+쿠팡 검색은 headless 를 차단(Access Denied)하므로 실제 Chrome(browser.WingBrowser)으로 조회한다.
+- 상품 항목: li[class*='ProductUnit_productUnit']
+- 광고 마커: 항목 내부의 <span>광고</span>
+- 상품 식별: /vp/products/{productId}?itemId=..&vendorItemId=.. (href)
+광고를 제외하고 오가닉 순번을 세며, 상한(기본 200) 안에 내 상품이 없으면 None(미노출).
+"""
+from __future__ import annotations
+
+import random
+import re
+import time
+from dataclasses import dataclass
+from typing import Callable
+from urllib.parse import quote
+
+from playwright.sync_api import TimeoutError as PWTimeout
+
+from . import config
+from .browser import WingBrowser
+
+HOME_URL = "https://www.coupang.com/"
+SEARCH_URL = "https://www.coupang.com/np/search?q={q}&page={page}"
+_BLOCK_HINTS = ("죄송", "Denied", "Access", "제한된")
+
+
+class RankBlocked(Exception):
+    """쿠팡이 검색을 차단(봇탐지)했을 때. 미노출(None)과 구분해 호출자가 로그·공란 처리."""
+_ITEM_SEL = "li[class*='ProductUnit_productUnit']"
+_NAME_SEL = "[class*='ProductUnit_productName']"
+_AD_XPATH = "xpath=.//span[normalize-space(text())='광고']"
+
+
+@dataclass
+class SearchItem:
+    is_ad: bool
+    product_id: str
+    vendor_item_id: str
+    name: str
+    is_rocket: bool = False
+
+
+def _parse_ids(href: str) -> tuple[str, str]:
+    pid = re.search(r"/vp/products/(\d+)", href)
+    vid = re.search(r"vendorItemId=(\d+)", href)
+    return (pid.group(1) if pid else "", vid.group(1) if vid else "")
+
+
+def extract_items(page) -> list[SearchItem]:
+    result: list[SearchItem] = []
+    for el in page.query_selector_all(_ITEM_SEL):
+        a = el.query_selector("a[href*='/vp/products/']")
+        if a is None:
+            continue
+        pid, vid = _parse_ids(a.get_attribute("href") or "")
+        name_el = el.query_selector(_NAME_SEL)
+        name = name_el.inner_text().strip() if name_el else ""
+        is_rocket = el.query_selector("[class*='rocketArea'], img[alt*='로켓'], img[src*='rocket']") is not None
+        result.append(SearchItem(el.query_selector(_AD_XPATH) is not None, pid, vid, name, is_rocket))
+    return result
+
+
+def make_matcher(product_ids: set[str] | None = None,
+                 vendor_item_ids: set[str] | None = None,
+                 name_substr: str | None = None) -> Callable[[SearchItem], bool]:
+    pids = product_ids or set()
+    vids = vendor_item_ids or set()
+    needle = (name_substr or "").strip()
+
+    def matches(it: SearchItem) -> bool:
+        if it.product_id and it.product_id in pids:
+            return True
+        if it.vendor_item_id and it.vendor_item_id in vids:
+            return True
+        if needle and needle in it.name:
+            return True
+        return False
+    return matches
+
+
+# Akamai 봇 신뢰 쿠키 — 유지해야 '재방문 신뢰 브라우저'로 인식돼 챌린지(차단)가 줄어든다.
+_AKAMAI_TRUST_COOKIES = ("_abck", "bm_sz", "ak_bmsc", "bm_sv", "bm_mi")
+
+
+def warmup(browser: WingBrowser) -> None:
+    """검색 전 준비 — **개인화 쿠키만 비우고 Akamai 신뢰 쿠키(_abck 등)는 유지**한 뒤 홈 1회 방문.
+
+    과거엔 매 실행 전체 쿠키를 지워 '매번 새 방문자'가 됐고, Akamai가 세션을 매번 재검증→봇 의심→차단을
+    유발했다(실측 2026-09-08). 개인화(최근검색 등)만 지우고 신뢰 쿠키는 남겨, 비로그인 기준은 유지하면서
+    '재방문 신뢰 브라우저'로 인식돼 차단 확률을 낮춘다. (goto 는 domcontentloaded 라 이미지는 안 기다림.)
+    """
+    try:
+        keep = [c for c in browser.context.cookies() if c.get("name") in _AKAMAI_TRUST_COOKIES]
+        browser.context.clear_cookies()          # 개인화 포함 전부 비우고
+        if keep:
+            browser.context.add_cookies(keep)    # Akamai 신뢰 쿠키만 되살림(차단 회피)
+    except Exception as exc:
+        print(f"[rank] 쿠키 정리 건너뜀({exc.__class__.__name__})")
+    browser.goto(HOME_URL)
+    time.sleep(random.uniform(config.RANK_PAGE_DELAY_MIN, config.RANK_PAGE_DELAY_MAX))
+
+
+def _load_results(browser: WingBrowser, url: str, timeout: float = 6000, log=None) -> bool:
+    """검색 결과를 로드. 상품이 뜨면 True, 결과 없음이면 False, 차단이면 RankBlocked.
+
+    상품은 정상 시 ~0.1초에 뜨므로 셀렉터 타임아웃은 짧게(6초) — 차단(챌린지 페이지)일 때 빨리 실패한다.
+    타임아웃 시 HTML에 Akamai 챌린지/차단 마커가 있으면 RankBlocked(단순 빈 결과와 구분).
+    """
+    t0 = time.time()
+    browser.goto(url)
+    t_goto = time.time() - t0
+    try:
+        browser.page.wait_for_selector(_ITEM_SEL, timeout=timeout)
+        t_sel = time.time() - t0 - t_goto
+        if log and (t_goto > 5.0 or t_sel > 5.0):   # 평상시엔 조용, 환경적 지연(느림)만 경고
+            log(f"    [느림] 페이지 로딩 goto {t_goto:.1f}s + 셀렉터 {t_sel:.1f}s (쿠팡 응답 지연)")
+        return True
+    except PWTimeout:
+        try:
+            html = browser.page.content()
+        except Exception:
+            html = browser.page.title() or ""
+        if any(h in html for h in _BLOCK_HINTS) or any(h in html for h in _CHALLENGE_MARKERS):
+            raise RankBlocked(f"검색 차단됨(Akamai 챌린지): {url}")
+        return False  # 정상 페이지지만 상품 없음(빈 결과)
+
+
+# Akamai 봇 챌린지 페이지 마커(실측 diag: sec-if-cpt-container / behavioral-content / 센서 스크립트).
+_CHALLENGE_MARKERS = ("sec-if-cpt-container", "behavioral-content", "_sec/cp_challenge")
+
+
+# 모바일 에뮬레이션(안드로이드 Chrome) — 모바일 노출순위 조회용
+_MOBILE_UA = ("Mozilla/5.0 (Linux; Android 14; SM-S928N) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36")
+_PC_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36")
+
+
+def _set_mobile(page, on: bool) -> None:
+    """CDP로 모바일 기기 에뮬레이션 On/Off(UA·화면·터치). 실제 창은 화면 밖(offscreen)."""
+    cdp = page.context.new_cdp_session(page)
+    try:
+        if on:
+            cdp.send("Emulation.setDeviceMetricsOverride",
+                     {"width": 412, "height": 915, "deviceScaleFactor": 3, "mobile": True})
+            cdp.send("Emulation.setUserAgentOverride",
+                     {"userAgent": _MOBILE_UA, "platform": "Android"})
+            cdp.send("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 5})
+        else:
+            cdp.send("Emulation.clearDeviceMetricsOverride")
+            cdp.send("Emulation.setUserAgentOverride", {"userAgent": _PC_UA})
+            cdp.send("Emulation.setTouchEmulationEnabled", {"enabled": False})
+    finally:
+        cdp.detach()
+
+
+def organic_ranks(browser: WingBrowser, keyword: str, matchers: dict[str, Callable[[SearchItem], bool]],
+                  max_rank: int | None = None, mobile: bool = False, log=None) -> dict[str, int | None]:
+    """키워드 1회 검색으로 여러 대상(옵션)의 오가닉 순위를 한 번에 산출.
+
+    matchers: {라벨: matcher}. 반환 {라벨: 순위 or None(미노출)}. 차단 시 RankBlocked.
+    mobile=True 면 모바일 기기 에뮬레이션으로 조회(모바일 노출순위). 조회 후 에뮬레이션 해제.
+    (경쟁강도용 상품수는 쿠팡이 아니라 네이버쇼핑에서 키워드 선정 시 수집한다.)
+    """
+    max_rank = config.RANK_SCAN_MAX if max_rank is None else max_rank
+    result: dict[str, int | None] = {label: None for label in matchers}
+    remaining = dict(matchers)
+    rank = 0
+    page_no = 1
+    if mobile:
+        _set_mobile(browser.page, True)
+    try:
+        while rank < max_rank and remaining:
+            if not _load_results(browser, SEARCH_URL.format(q=quote(keyword), page=page_no), log=log):
+                break
+            items = extract_items(browser.page)
+            if not items:
+                break
+            for it in items:
+                if it.is_ad:
+                    continue
+                rank += 1
+                for label in [lbl for lbl, m in remaining.items() if m(it)]:
+                    result[label] = rank
+                    del remaining[label]
+                if rank >= max_rank or not remaining:
+                    break
+            page_no += 1
+            if remaining:
+                time.sleep(random.uniform(config.RANK_PAGE_DELAY_MIN, config.RANK_PAGE_DELAY_MAX))
+    finally:
+        if mobile:
+            _set_mobile(browser.page, False)
+    return result
+
+
+# ── 병렬 fetch 순위조회 (기본, 대폭 가속) ──────────────────────────
+# 검색결과는 SSR HTML(상품 목록이 첫 응답에 있음, 진단서 셀렉터 0.1s로 확인)이라, 페이지 이동·렌더 없이
+# same-origin fetch 로 여러 키워드×페이지를 **동시에** 받아 DOMParser 로 파싱한다. 브라우저 네비게이션(1.5s)
+# ×순차 → 병렬 fetch 로 바뀌어 수십 초가 수 초로 준다. 실패(차단/빈응답) 시 호출부가 순차 방식으로 폴백.
+_BATCH_FETCH_JS = r"""
+async ({urls, concurrency, jitterMs}) => {
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  function parse(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const out = [];
+    for (const el of doc.querySelectorAll("li[class*='ProductUnit_productUnit']")) {
+      const a = el.querySelector("a[href*='/vp/products/']");
+      if (!a) continue;
+      const href = a.getAttribute('href') || '';
+      const pm = href.match(/\/vp\/products\/(\d+)/);
+      const vm = href.match(/vendorItemId=(\d+)/);
+      const nameEl = el.querySelector("[class*='ProductUnit_productName']");
+      let isAd = false;
+      for (const s of el.querySelectorAll('span')) {
+        if ((s.textContent || '').trim() === '광고') { isAd = true; break; }
+      }
+      const isRocket = !!el.querySelector("[class*='rocketArea'], img[alt*='로켓'], img[src*='rocket']");
+      out.push({is_ad: isAd, product_id: pm ? pm[1] : '', vendor_item_id: vm ? vm[1] : '',
+                name: nameEl ? nameEl.textContent.trim() : '', is_rocket: isRocket});
+    }
+    return out;
+  }
+  const results = {};
+  let i = 0;
+  async function worker() {
+    while (i < urls.length) {
+      const u = urls[i++];
+      if (jitterMs) await sleep(Math.random() * jitterMs);   // 사람처럼 간격(버스트 완화 → 차단 회피)
+      try {
+        const r = await fetch(u, {credentials: 'include',
+                                  headers: {accept: 'text/html,application/xhtml+xml'}});
+        const t = await r.text();
+        results[u] = {status: r.status, items: parse(t),
+                      blocked: /Access Denied|errors\.edgesuite\.net|정상적인 접근/.test(t)};
+      } catch (e) {
+        results[u] = {status: 0, items: [], error: String(e)};
+      }
+    }
+  }
+  await Promise.all(Array.from({length: Math.min(concurrency, urls.length)}, () => worker()));
+  return results;
+}
+"""
+
+
+def _pages_for(max_rank: int) -> int:
+    return max(1, -(-max_rank // config.RANK_ORGANIC_PER_PAGE))   # ceil (실측 60/페이지 → 스캔50은 1페이지)
+
+
+def _prime_search(browser: WingBrowser, keyword: str) -> bool:
+    """검색 1회 **네비게이션**으로 Akamai 통과(_abck 유효화) — 이후 fetch가 결과를 받게 한다(실측 T2→T3).
+
+    콜드 fetch 는 403(챌린지)이라, 배치 fetch 전에 세션을 한 번 '프라임'한다. 상품이 뜨면 True.
+    """
+    browser.goto(SEARCH_URL.format(q=quote(keyword), page=1))
+    try:
+        browser.page.wait_for_selector(_ITEM_SEL, timeout=6000)
+        return True
+    except PWTimeout:
+        return False
+
+
+def organic_ranks_batch(browser: WingBrowser, keywords: list[str],
+                        matchers: dict[str, Callable[[SearchItem], bool]],
+                        max_rank: int | None = None, mobile: bool = False,
+                        log=None) -> dict[str, dict[str, int | None]]:
+    """여러 키워드의 오가닉 순위를 **동시 fetch**(렌더 없이)로 한 번에 산출 → {키워드: {옵션: 순위 or None}}.
+
+    실측 근거(diag_search): 콜드 fetch 는 Akamai 403 → **검색 1회 네비로 프라임하면 이후 fetch 가 결과(60개/페이지)를
+    준다**. 그래서 ①병렬 fetch 시도 → ②전부 비면 1회 프라임 후 재시도 → ③그래도 0건이면 RankBlocked(순차 폴백).
+    스캔 50 은 1페이지(60개)로 충분. mobile=True 면 모바일 UA 로 fetch. 광고 제외 오가닉만 센다.
+    """
+    max_rank = config.RANK_SCAN_MAX if max_rank is None else max_rank
+    pages = _pages_for(max_rank)
+    url_of: dict[tuple[str, int], str] = {}
+    urls: list[str] = []
+    for kw in keywords:
+        for p in range(1, pages + 1):
+            u = SEARCH_URL.format(q=quote(kw), page=p)
+            url_of[(kw, p)] = u
+            urls.append(u)
+
+    def _fetch():
+        return browser.page.evaluate(_BATCH_FETCH_JS,
+                                     {"urls": urls, "concurrency": config.RANK_FETCH_CONCURRENCY,
+                                      "jitterMs": config.RANK_FETCH_JITTER_MS})
+
+    if mobile:
+        _set_mobile(browser.page, True)
+    try:
+        res = _fetch()
+        if sum(len(v.get("items", [])) for v in res.values()) == 0:   # 미프라임/만료 → 1회 프라임 후 재시도
+            if log:
+                log("  [노출측정] Akamai 프라임(검색 1회 네비) 후 병렬 fetch 재시도")
+            if not _prime_search(browser, keywords[0]):
+                raise RankBlocked("프라임 네비게이션 실패(검색 차단)")
+            res = _fetch()
+    finally:
+        if mobile:
+            _set_mobile(browser.page, False)
+    if sum(len(v.get("items", [])) for v in res.values()) == 0:       # 프라임 후에도 0 → 순차 폴백 유도
+        raise RankBlocked("프라임 후에도 검색결과 fetch 0건")
+
+    out: dict[str, dict[str, int | None]] = {}
+    for kw in keywords:
+        result: dict[str, int | None] = {label: None for label in matchers}
+        remaining = dict(matchers)
+        rank = 0
+        for p in range(1, pages + 1):
+            for it in (res.get(url_of[(kw, p)]) or {}).get("items", []):
+                if it.get("is_ad"):
+                    continue
+                rank += 1
+                item = SearchItem(False, it.get("product_id", ""), it.get("vendor_item_id", ""),
+                                  it.get("name", ""), it.get("is_rocket", False))
+                for label in [lbl for lbl, m in remaining.items() if m(item)]:
+                    result[label] = rank
+                    del remaining[label]
+                if rank >= max_rank or not remaining:
+                    break
+            if rank >= max_rank or not remaining:
+                break
+        out[kw] = result
+    return out
+
+
+def organic_rank(browser: WingBrowser, keyword: str, matches: Callable[[SearchItem], bool],
+                 max_rank: int | None = None) -> int | None:
+    """광고 제외 오가닉 순위. 상한 안에 없으면 None(미노출). 차단 시 RankBlocked."""
+    max_rank = config.RANK_SCAN_MAX if max_rank is None else max_rank
+    rank = 0
+    page_no = 1
+    while rank < max_rank:
+        if not _load_results(browser, SEARCH_URL.format(q=quote(keyword), page=page_no)):
+            return None
+        items = extract_items(browser.page)
+        if not items:
+            return None
+        for it in items:
+            if it.is_ad:
+                continue
+            rank += 1
+            if matches(it):
+                return rank
+            if rank >= max_rank:
+                return None
+        page_no += 1
+        time.sleep(random.uniform(config.RANK_PAGE_DELAY_MIN, config.RANK_PAGE_DELAY_MAX))
+    return None

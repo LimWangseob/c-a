@@ -1,0 +1,5 @@
+playwright>=1.44
+openpyxl>=3.1
+requests>=2.31
+openai>=1.40
+pyside6-essentials>=6.6
