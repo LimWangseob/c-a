@@ -132,6 +132,31 @@ def _measure(browser, keywords, matchers, log):
     return {kw: (pc.get(kw, {}), mo.get(kw, {})) for kw in keywords}
 
 
+def _measure_safe(browser, keywords, matchers, log):
+    """순위 측정 예외 안전 래퍼 — 조회 중 browser 가 죽거나(TargetClosedError) 어떤 예외가 나도
+    공란 처리하고 계속(순위는 부가지표, 실패가 전체 실행을 막지 않게)."""
+    if not keywords:
+        return {}
+    try:
+        return _measure(browser, keywords, matchers, log)
+    except Exception as exc:
+        log(f"  [순위] 측정 실패(공란 처리) — {exc.__class__.__name__}: {str(exc)[:80]}")
+        return {}
+
+
+def _vid_matcher(vids):
+    """상품 고유ID(vendorItemId) 목록으로 검색결과 상품을 매칭 — ③ 순위조회는 product 객체 없이 vid만 안다."""
+    return {"제품": make_matcher(vendor_item_ids=set(str(v) for v in vids if v))}
+
+
+def _load_latest_wb(out: Path):
+    """최신 결과 워크북 로드 — 마스터 우선, 없으면 진행중. (wb, path) 또는 (None, None)."""
+    for p in (_master_path(out), _partial_path(out)):
+        if p.exists():
+            return OutputWorkbook.load(p), p
+    return None, None
+
+
 def _login_and_discover(a: Account, date_from, date_to, get_password, log):
     """계정 하나: (필요시) 로그인 → **같은 신선한 세션**에서 즉시 판매분석 발견 + 지표.
 
@@ -270,13 +295,15 @@ def _log_diagnose(product, track_info, ai_key, log) -> None:
 
 
 def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
-                     date_iso, grow, log, save_path, skip_ranks: bool = False) -> None:
+                     date_iso, grow, log, save_path, skip_ranks: bool = False,
+                     keywords_off: bool = False) -> None:
     """계정(시트) 하나: 상품마다 [키워드 동결/선정 → 순위(PC) → 상품지표+재고 → 진단로그] 후 저장.
 
     - 기존 상품(시트에 키워드 있음): **키워드 동결**, 순위만 조회(grow=True면 상한 내 발굴 추가).
     - 새 상품: AI 선정 + 선정단계 순위 재사용. 순위는 상품 단위(옵션 통합, PC).
     - skip_ranks=True(날짜 지정 수집): 쿠팡 순위 조회를 제외(browser=None). 키워드는 있으면 재사용,
       없으면 순위 없이(네이버+AI 부분점수) 선정. 판매지표·재고만 채운다(차단 회피).
+    - keywords_off=True(① 판매수집 단계): 키워드·순위 없이 지표·재고·상품ID만 기록(키워드는 ②, 순위는 ③).
     상품마다 save_path 저장 → 도중 끊겨도 이어감.
     """
     biz = report_acc.business_name
@@ -284,16 +311,17 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
     for product in report_acc.products:
         title = product.display_title
         kind = product.kind or config.KIND_PERSONAL
+        if keywords_off:                               # ① 판매수집 단계 — 지표·재고·상품ID만
+            wb.ensure_product_block(biz, product.name, kind, wb.product_keywords(biz, product.name))
+            wb.set_product_vids(biz, product.name,
+                                [oid for opt in product.options for oid in opt.vendor_item_ids])
+            _fill_product_metrics(wb, biz, product, metrics, inventory, date_iso)
+            wb.save(save_path)
+            continue
         pmatcher = {"제품": _product_matcher(product)}
 
         def measure(kws, _m=pmatcher):
-            # 순위는 부가지표 — 조회 중 browser 가 죽거나(TargetClosedError) 어떤 예외가 나도
-            # 공란 처리하고 판매데이터 수집은 완주시킨다(순위 실패가 전체 실행을 막지 않게).
-            try:
-                return _measure(browser, kws, _m, log)
-            except Exception as exc:
-                log(f"  [순위] 측정 실패(공란 처리) — {exc.__class__.__name__}: {str(exc)[:80]}")
-                return {}
+            return _measure_safe(browser, kws, _m, log)   # 순위 실패해도 판매데이터 완주
 
         measure_cb = measure if (browser is not None and not skip_ranks) else None
         existing = wb.product_keywords(biz, product.name)
@@ -345,7 +373,8 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
 def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
              ai_key: str | None = None, date_from: str | None = None, date_to: str | None = None,
              get_password=None, resume: bool = False, carry_forward: bool = False,
-             grow_keywords: bool = False, skip_ranks: bool = False, on_log=None) -> Path:
+             grow_keywords: bool = False, skip_ranks: bool = False,
+             keywords_off: bool = False, on_log=None) -> Path:
     """계정별 end-to-end 완결 + **같은 날 이어서 하기** + **통계 마스터 이어쓰기(cross-day)**.
 
     실행 모드(하루 1회 실행 전제):
@@ -439,10 +468,12 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         if report_acc.products:
             # 재고현황: {옵션ID:수량} → {상품명: 상품 vid 합산}(상품당 vendorItem 여러 개일 수 있음)
             inventory = _inventory_by_product(report_acc.products, inv_by_vid)
-            if skip_ranks:
-                # 날짜 지정 수집 — 순위 제외: 쿠팡 순위 브라우저 안 열고(차단 접촉 0) 판매지표·재고·키워드(있으면 재사용)만
+            if skip_ranks or keywords_off:
+                # 순위 제외(날짜지정) 또는 판매수집 전용(①): 쿠팡 순위 브라우저 안 열고(차단 접촉 0)
+                # 판매지표·재고·상품ID만(keywords_off) 또는 + 키워드(재사용/부분점수 선정)만 기록
                 _process_account(report_acc, wb, naver, ai_key, None, metrics, inventory,
-                                 col_label, grow, log, partial, skip_ranks=True)
+                                 col_label, grow, log, partial, skip_ranks=skip_ranks,
+                                 keywords_off=keywords_off)
             else:
                 with WingBrowser(profile_dir=_PROFILE, offscreen=True) as rank_browser:
                     warmup(rank_browser)
@@ -466,3 +497,93 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
             p.unlink()
     log(f"== 완료: 마스터 {master.name} · 스냅샷 {snapshot.name} (성공 {len(done)}/{total} 계정) ==")
     return snapshot
+
+
+def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = "output",
+                          grow: bool = False, on_log=None) -> Path | None:
+    """② 키워드 선정 전용 — 최신 워크북 로드, 상품별 키워드(**순위 조회 없음**) 선정·기록. 로그인 불필요.
+
+    ①(판매수집)로 상품이 이미 워크북에 있어야 한다. 기존 키워드가 있으면 동결(grow=True면 상한 내 발굴
+    추가), 없으면 새로 선정한다. 쿠팡 순위는 조회하지 않는다(measure_ranks=None) — 순위는 ③에서.
+    자동완성(쿠팡, 비로그인)만 쓰므로 로그인 브라우저는 열지 않는다.
+    """
+    log = on_log or (lambda m: None)
+    if not ai_key:
+        raise KeywordAIError("OpenAI(ChatGPT) API 키가 없어 키워드 선정을 할 수 없습니다. "
+                             "설정 탭에서 OpenAI API 키를 입력한 뒤 다시 실행하세요.")
+    out = Path(out_dir)
+    wb, path = _load_latest_wb(out)
+    if wb is None:
+        log("== 키워드 선정: 결과 워크북이 없습니다 — 먼저 ①(판매데이터 수집)을 실행하세요 ==")
+        return None
+    log(f"== 키워드 선정 시작(순위 조회 없음) — {path.name} ==")
+    with WingBrowser(profile_dir=_PROFILE, offscreen=True) as browser:
+        warmup(browser)
+        for biz in wb.account_sheets():
+            for pname in wb.products_of(biz):
+                existing = wb.product_keywords(biz, pname)
+                if existing and not grow:                  # 이미 키워드 있음(사람 입력 포함) → 동결, 스킵
+                    log(f"  [{biz}] {pname} → 키워드 있음, 건너뜀(동결) {existing}")
+                    continue
+                try:
+                    if grow and existing:                  # 상한 내 발굴 추가
+                        want = min(config.KW_ADD_PER_DAY, config.KW_MAX_TRACK - len(existing))
+                        if want <= 0:
+                            continue
+                        tracks = select_keywords_light(pname, naver, ai_key, browser=browser, log=log,
+                                                       n=want, measure_ranks=None, exclude=set(existing))
+                        new = [t for t in tracks if t.keyword not in existing][:want]
+                        if new:
+                            wb.add_product_keywords(biz, pname, [t.keyword for t in new])
+                            for t in new:
+                                wb.set_keyword_search(biz, pname, t.keyword, t.volume)
+                            log(f"  [{biz}] {pname} → 발굴 추가 {[t.keyword for t in new]}")
+                    else:                                  # 새 상품 → 선정
+                        tracks = select_keywords_light(pname, naver, ai_key, browser=browser,
+                                                       log=log, measure_ranks=None)
+                        wb.add_product_keywords(biz, pname, [t.keyword for t in tracks])
+                        for t in tracks:
+                            wb.set_keyword_search(biz, pname, t.keyword, t.volume)
+                        log(f"  [{biz}] {pname} → 키워드 {[t.keyword for t in tracks]}")
+                except KeywordAIError as exc:
+                    log(f"  [{biz}] {pname} 키워드 선정 실패(건너뜀) — {str(exc)[:80]}")
+            wb.save(path)
+    log("== 키워드 선정 완료 ==")
+    return path
+
+
+def track_ranks_stage(out_dir: str = "output", on_log=None) -> Path | None:
+    """③ 노출순위 조회 전용 — 최신 워크북 로드, 상품(고유ID)+키워드로 순위 측정·기록. 로그인 불필요.
+
+    ①(상품ID)·②(키워드)가 이미 워크북에 있어야 한다. 상품마다 저장된 vendorItemId 로 검색결과에서 내
+    상품을 찾아 오가닉 순위를 기록한다(가장 최근 일자 컬럼). 예외 안전 — 차단·browser 죽음도 공란 처리.
+    """
+    log = on_log or (lambda m: None)
+    out = Path(out_dir)
+    wb, path = _load_latest_wb(out)
+    if wb is None:
+        log("== 순위 조회: 결과 워크북이 없습니다 — 먼저 ①②를 실행하세요 ==")
+        return None
+    log(f"== 노출순위 조회 시작 — {path.name} ==")
+    with WingBrowser(profile_dir=_PROFILE, offscreen=True) as browser:
+        warmup(browser)
+        for biz in wb.account_sheets():
+            date = wb.latest_date(biz)
+            if not date:
+                continue
+            for pname in wb.products_of(biz):
+                vids = wb.product_vids(biz, pname)
+                keywords = wb.product_keywords(biz, pname)
+                if not (vids and keywords):                # 상품ID나 키워드 없으면 건너뜀
+                    continue
+                todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
+                if not todo:
+                    continue
+                measured = _measure_safe(browser, todo, _vid_matcher(vids), log)
+                for kw in todo:
+                    r = _best(measured.get(kw))
+                    wb.set_keyword_rank(biz, pname, kw, date, r)
+                    log(f"  [{biz}] {pname} '{kw}': {rank_label(r)}")
+            wb.save(path)
+    log("== 노출순위 조회 완료 ==")
+    return path

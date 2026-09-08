@@ -118,6 +118,23 @@ class OutputWorkbook:
                 out.append(kw)
         return out
 
+    def products_of(self, biz: str) -> list[str]:
+        """그 사업자 시트의 상품명 목록(블록 등장 순서). ②③ 단계가 상품을 순회하는 데 쓴다."""
+        out: list[str] = []
+        for (b, p, _m) in self._metric_row:
+            if b == biz and p not in out:
+                out.append(p)
+        return out
+
+    def latest_date(self, biz: str) -> str | None:
+        """그 사업자의 가장 최근(맨 오른쪽) 일자 컬럼 라벨(③ 순위 기록 날짜)."""
+        cols = self._date_col.get(biz, {})
+        return max(cols, key=lambda d: cols[d]) if cols else None
+
+    def account_sheets(self) -> list[str]:
+        """계정(사업자) 시트명 목록 — 상품ID 숨김 시트는 제외."""
+        return [s for s in self.wb.sheetnames if s != _META_SHEET]
+
     def is_rank_filled(self, biz: str, product: str, keyword: str, date_iso: str) -> bool:
         row = self._kw_row.get((biz, product, keyword))
         col = self._date_col.get(biz, {}).get(date_iso)
@@ -178,9 +195,10 @@ class OutputWorkbook:
         if not add:
             return []
         ws = self.wb[biz]
+        # 기존 키워드 있으면 그 마지막 행 아래, 없으면(② 단계로 처음 채움) 소헤더행(마지막 지표행+1) 아래
         last_kw_row = max(self._kw_row[(biz, product, kw)] for kw in have) if have else \
-            max(self._metric_row[(biz, product, m)] for m in _ALL_METRICS
-                if (biz, product, m) in self._metric_row)
+            (max(self._metric_row[(biz, product, m)] for m in _ALL_METRICS
+                 if (biz, product, m) in self._metric_row) + 1)
         ws.insert_rows(last_kw_row + 1, amount=len(add))
         for i, kw in enumerate(add, 1):
             row = last_kw_row + i
