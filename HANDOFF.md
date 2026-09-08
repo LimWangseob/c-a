@@ -16,7 +16,7 @@
 **그밖에 이번 세션**:
 - ✅ **재고현황 라이브 실증**: bf0621 화로테이블 재고 13(예상 일치). `tools/verify_login_discover_live.py bf0621`(3-tuple+재고출력로 복구).
 - ✅ **버그수정 2건**: pipeline 로그인미완료 `return None,{}`→`None,{},{}`(3-tuple 오분류 방지, 실전 검증됨). verify_login_discover_live stale 2-tuple.
-- ✅ **순위조회 예외격리**(`_measure_safe`): 순위 중 browser 죽음(`TargetClosedError`)이 판매수집·전체실행을 중단시키던 문제 제거(2026-09-08 라이브 크래시 실측 근거).
+- ✅ **순위조회 예외격리**(`_measure_safe`): 순위 중 browser 죽음(`TargetClosedError`)이 판매수집·전체실행을 중단시키던 문제 제거(2026-09-08 라이브 크래시 실측 근거). **측정 실패(예외·차단)는 순위 공란 유지** — `set_keyword_rank(None)`의 `'-'`(미노출) 오기록 방지 위해 **측정된 키워드만 기록**(`track_ranks_stage`+`_process_account` 동결). 그래서 차단났던 순위도 **다음에 ③만 재실행하면 재조회**(`'-'` 박히면 `is_rank_filled=True`로 영영 스킵되던 버그 해결). 정밀 3단계 시뮬 `tools/simulate_stages.py`(18항목)가 발견·검증.
 - ✅ **차단회피**: 동시 3→2·지터 400→800ms·**차단시 백오프 30초 재시도1회**. **라이브 확인: 백오프 작동하나 오늘 IP 심하게 플래그면 무력**(근본=하루1회·IP 휴식).
 - ✅ **날짜지정 순위제외**(`skip_ranks`): 날짜 **직접지정** 실행=순위 제외(판매만·차단 접촉0), 어제(D-1) 자동=순위 포함(첫날 선정용).
 - ✅ **EPIPE 크래시 조사**: 로그인창 사람닫힘→다음계정 전환시 Playwright 드라이버 EPIPE(driver→client 파이프, **Python 못잡음**). 재현 2회 실패(특수 타이밍 race — 추측 코드수술 안함). 방어=`browser.wait_for_login` blocked(Akamai) 무한대기 폐지→60초 grace 후 건너뜀. 안전판=크래시해도 진행중파일 재개(실증).
