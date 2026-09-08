@@ -748,6 +748,8 @@ class App(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "키 필요", "키워드 추출에 OpenAI(ChatGPT) API 키가 필요합니다.")
             return
         df, dt = self._run_dates()
+        # 날짜를 직접 지정(어제 자동이 아님)하면 순위 조회 제외 = 그 날짜 판매데이터만 채움(차단 회피)
+        skip_ranks = not self.cb_today.isChecked()
         n = sum(len(a.products) for a in self.input_list.accounts)
         resume = carry = False
         meta = resumable_progress()
@@ -784,7 +786,8 @@ class App(QtWidgets.QMainWindow):
         input_list, naver_creds, key = self.input_list, self.naver_creds, self.ai_key
         mode_txt = "이어서 " if resume else ("통계이어쓰기 " if carry else "새통계 ")
         self.log(f"[전체실행] {mode_txt}시작 — 상품 {n}개, 기간 {df}~{dt}"
-                 f"{' · 새 키워드 발굴 추가' if grow else ''}")
+                 f"{' · 새 키워드 발굴 추가' if grow else ''}"
+                 f"{' · 순위 제외(판매데이터만)' if skip_ranks and not resume else ''}")
 
         def task():
             self._busy = True
@@ -792,7 +795,7 @@ class App(QtWidgets.QMainWindow):
                 naver = NaverAdApi(naver_creds)
                 return run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
                                 get_password=self._account_pw, resume=resume, carry_forward=carry,
-                                grow_keywords=grow, on_log=self.log)
+                                grow_keywords=grow, skip_ranks=skip_ranks, on_log=self.log)
             finally:
                 self._busy = False
         self.run_bg(task, on_done=self._pipeline_done, btn=self.pipeline_btn)

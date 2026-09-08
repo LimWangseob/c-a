@@ -435,6 +435,8 @@ class App(tk.Tk):
                                    "설정 탭에서 OpenAI API 키를 입력한 뒤 다시 실행하세요.")
             return
         df, dt = self._run_dates()
+        # 날짜를 직접 지정(오늘 자동이 아님)하면 순위 조회 제외 = 그 날짜 판매데이터만 채움(차단 회피)
+        skip_ranks = self.collect_mode.get() != "today"
         n = sum(len(a.products) for a in self.input_list.accounts)
         resume = carry = grow = False
         meta = resumable_progress()   # 끝나지 않은 진행분이 있으면 이어서/새로 팝업
@@ -475,7 +477,8 @@ class App(tk.Tk):
         input_list, naver_creds, key = self.input_list, self.naver_creds, self.ai_key
         mode_txt = "이어서 " if resume else ("통계이어쓰기 " if carry else "새통계 ")
         self.log(f"[전체실행] {mode_txt}시작 — 상품 {n}개, 기간 {df}~{dt}"
-                 f"{' · 새 키워드 발굴 추가' if grow else ''}")
+                 f"{' · 새 키워드 발굴 추가' if grow else ''}"
+                 f"{' · 순위 제외(판매데이터만)' if skip_ranks and not resume else ''}")
 
         def task():
             self._busy = True   # 실행 중 세션유지 일시정지(같은 프로필 충돌 방지)
@@ -483,7 +486,7 @@ class App(tk.Tk):
                 naver = NaverAdApi(naver_creds)
                 return run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
                                 get_password=self._account_pw, resume=resume, carry_forward=carry,
-                                grow_keywords=grow, on_log=self.log)
+                                grow_keywords=grow, skip_ranks=skip_ranks, on_log=self.log)
             finally:
                 self._busy = False
         self.run_bg(task, on_done=self._pipeline_done, btn=self.pipeline_btn)

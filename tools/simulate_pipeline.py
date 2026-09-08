@@ -105,7 +105,8 @@ def _accounts(ids) -> InputList:
 
 
 def _sheets(path: Path) -> set[str]:
-    return set(openpyxl.load_workbook(path).sheetnames)
+    # 계정(사업자) 시트만 — 상품ID 매핑용 숨김 시트(_상품ID)는 제외
+    return set(openpyxl.load_workbook(path).sheetnames) - {"_상품ID"}
 
 
 def _has_value(path: Path, target) -> bool:

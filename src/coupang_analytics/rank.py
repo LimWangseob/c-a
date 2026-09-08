@@ -287,21 +287,38 @@ def organic_ranks_batch(browser: WingBrowser, keywords: list[str],
                                      {"urls": urls, "concurrency": config.RANK_FETCH_CONCURRENCY,
                                       "jitterMs": config.RANK_FETCH_JITTER_MS})
 
-    if mobile:
-        _set_mobile(browser.page, True)
-    try:
-        res = _fetch()
-        if sum(len(v.get("items", [])) for v in res.values()) == 0:   # 미프라임/만료 → 1회 프라임 후 재시도
+    def _count(r):
+        return sum(len(v.get("items", [])) for v in r.values()) if r else 0
+
+    def _attempt():
+        """프라임 포함 1회 시도 → res({url: {...}}) 또는 None(프라임 실패). 0건일 수 있다."""
+        r = _fetch()
+        if _count(r) == 0:                          # 미프라임/만료 → 1회 프라임 후 재시도
             if log:
                 log("  [노출측정] Akamai 프라임(검색 1회 네비) 후 병렬 fetch 재시도")
             if not _prime_search(browser, keywords[0]):
-                raise RankBlocked("프라임 네비게이션 실패(검색 차단)")
-            res = _fetch()
+                return None
+            r = _fetch()
+        return r
+
+    if mobile:
+        _set_mobile(browser.page, True)
+    try:
+        res = _attempt()
+        tries = 0
+        # 차단(0건/프라임실패) 시: 즉시 공란 대신 잠시 쉬었다가 재시도(Akamai 플래그 완화 특성 활용)
+        while (res is None or _count(res) == 0) and tries < config.RANK_BLOCK_RETRIES:
+            tries += 1
+            if log:
+                log(f"  [노출측정] 차단 감지 — {config.RANK_BLOCK_BACKOFF_SEC}초 대기 후 재시도"
+                    f" {tries}/{config.RANK_BLOCK_RETRIES}")
+            time.sleep(config.RANK_BLOCK_BACKOFF_SEC)
+            res = _attempt()
     finally:
         if mobile:
             _set_mobile(browser.page, False)
-    if sum(len(v.get("items", [])) for v in res.values()) == 0:       # 프라임 후에도 0 → 순차 폴백 유도
-        raise RankBlocked("프라임 후에도 검색결과 fetch 0건")
+    if res is None or _count(res) == 0:             # 백오프 후에도 0 → 순차 폴백 유도
+        raise RankBlocked("프라임·백오프 후에도 검색결과 fetch 0건")
 
     out: dict[str, dict[str, int | None]] = {}
     for kw in keywords:

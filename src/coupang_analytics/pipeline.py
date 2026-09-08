@@ -73,10 +73,11 @@ def resumable_progress(out_dir: str | Path = "output") -> dict | None:
     return meta
 
 
-def _save_progress(out_dir, date_from, date_to, started_at, done, carry=False, grow=False) -> None:
+def _save_progress(out_dir, date_from, date_to, started_at, done,
+                   carry=False, grow=False, skip=False) -> None:
     _progress_path(out_dir).write_text(
         json.dumps({"date_from": date_from, "date_to": date_to, "started_at": started_at,
-                    "done": list(done), "carry": carry, "grow": grow},
+                    "done": list(done), "carry": carry, "grow": grow, "skip": skip},
                    ensure_ascii=False, indent=2),
         encoding="utf-8")
 
@@ -269,11 +270,13 @@ def _log_diagnose(product, track_info, ai_key, log) -> None:
 
 
 def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
-                     date_iso, grow, log, save_path) -> None:
+                     date_iso, grow, log, save_path, skip_ranks: bool = False) -> None:
     """계정(시트) 하나: 상품마다 [키워드 동결/선정 → 순위(PC) → 상품지표+재고 → 진단로그] 후 저장.
 
     - 기존 상품(시트에 키워드 있음): **키워드 동결**, 순위만 조회(grow=True면 상한 내 발굴 추가).
     - 새 상품: AI 선정 + 선정단계 순위 재사용. 순위는 상품 단위(옵션 통합, PC).
+    - skip_ranks=True(날짜 지정 수집): 쿠팡 순위 조회를 제외(browser=None). 키워드는 있으면 재사용,
+      없으면 순위 없이(네이버+AI 부분점수) 선정. 판매지표·재고만 채운다(차단 회피).
     상품마다 save_path 저장 → 도중 끊겨도 이어감.
     """
     biz = report_acc.business_name
@@ -284,8 +287,15 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
         pmatcher = {"제품": _product_matcher(product)}
 
         def measure(kws, _m=pmatcher):
-            return _measure(browser, kws, _m, log)
+            # 순위는 부가지표 — 조회 중 browser 가 죽거나(TargetClosedError) 어떤 예외가 나도
+            # 공란 처리하고 판매데이터 수집은 완주시킨다(순위 실패가 전체 실행을 막지 않게).
+            try:
+                return _measure(browser, kws, _m, log)
+            except Exception as exc:
+                log(f"  [순위] 측정 실패(공란 처리) — {exc.__class__.__name__}: {str(exc)[:80]}")
+                return {}
 
+        measure_cb = measure if (browser is not None and not skip_ranks) else None
         existing = wb.product_keywords(biz, product.name)
         if existing:                                   # 기존 상품 → 키워드 동결
             keywords = list(existing)
@@ -309,9 +319,9 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
             measured = measure(todo) if (browser is not None and todo) else {}
             ranks = {kw: _best(measured.get(kw)) for kw in todo}
             track_info = [(kw, 0, "", ranks.get(kw)) for kw in keywords]   # 동결분은 검색량/경쟁 미측정
-        else:                                          # 새 상품 → AI 선정
+        else:                                          # 새 상품 → AI 선정(skip_ranks면 순위 없이 부분점수)
             tracks = select_keywords_light(title, naver, ai_key, browser=browser, log=log,
-                                           measure_ranks=measure)
+                                           measure_ranks=measure_cb)
             keywords = [t.keyword for t in tracks]
             wb.ensure_product_block(biz, product.name, kind, keywords)
             for t in tracks:
@@ -320,10 +330,13 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
             track_info = [(t.keyword, t.volume, t.comp_idx, t.exposure_best) for t in tracks]
             log(f"  [키워드] {title} → {keywords}")
 
-        for kw in keywords:                            # 순위 기록(PC), 이미 채워진 건 건너뜀
-            if kw in ranks and not wb.is_rank_filled(biz, product.name, kw, date_iso):
-                wb.set_keyword_rank(biz, product.name, kw, date_iso, ranks.get(kw))
-                log(f"  [순위] '{kw}': {rank_label(ranks.get(kw))}")
+        if not skip_ranks:                             # 순위 기록(PC). 날짜지정 수집(skip_ranks)은 순위 제외
+            for kw in keywords:                        # 이미 채워진 건 건너뜀
+                if kw in ranks and not wb.is_rank_filled(biz, product.name, kw, date_iso):
+                    wb.set_keyword_rank(biz, product.name, kw, date_iso, ranks.get(kw))
+                    log(f"  [순위] '{kw}': {rank_label(ranks.get(kw))}")
+        wb.set_product_vids(biz, product.name,   # 상품 고유ID 저장(③ 순위조회 상품 매칭용)
+                            [oid for opt in product.options for oid in opt.vendor_item_ids])
         _fill_product_metrics(wb, biz, product, metrics, inventory, date_iso)
         _log_diagnose(product, track_info, ai_key, log)
         wb.save(save_path)
@@ -332,7 +345,7 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
 def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
              ai_key: str | None = None, date_from: str | None = None, date_to: str | None = None,
              get_password=None, resume: bool = False, carry_forward: bool = False,
-             grow_keywords: bool = False, on_log=None) -> Path:
+             grow_keywords: bool = False, skip_ranks: bool = False, on_log=None) -> Path:
     """계정별 end-to-end 완결 + **같은 날 이어서 하기** + **통계 마스터 이어쓰기(cross-day)**.
 
     실행 모드(하루 1회 실행 전제):
@@ -364,6 +377,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         done = set(meta["done"])
         carry = bool(meta.get("carry", False))
         grow = bool(meta.get("grow", False))
+        skip_ranks = bool(meta.get("skip", False))   # 재개 시 순위제외 모드도 그대로 유지
         wb = OutputWorkbook.load(partial)
         log(f"== 이어서 실행({'통계이어쓰기' if carry else '새통계'}) — 완료 {len(done)}개 건너뜀, "
             f"기간 {date_from}~{date_to} ==")
@@ -391,7 +405,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
             if p.exists():
                 p.unlink()
         wb.save(partial)                       # 크래시 복구 기준선(carry면 마스터 내용 포함)
-        _save_progress(out, date_from, date_to, started_at, done, carry, grow)
+        _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks)
 
     # 일자 컬럼 라벨 = 서식과 동일한 yy.mm.dd(단일일). 범위면 from~to.
     if date_from == date_to:
@@ -425,15 +439,20 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         if report_acc.products:
             # 재고현황: {옵션ID:수량} → {상품명: 상품 vid 합산}(상품당 vendorItem 여러 개일 수 있음)
             inventory = _inventory_by_product(report_acc.products, inv_by_vid)
-            with WingBrowser(profile_dir=_PROFILE, offscreen=True) as rank_browser:
-                warmup(rank_browser)
-                _process_account(report_acc, wb, naver, ai_key, rank_browser, metrics, inventory,
-                                 col_label, grow, log, partial)
+            if skip_ranks:
+                # 날짜 지정 수집 — 순위 제외: 쿠팡 순위 브라우저 안 열고(차단 접촉 0) 판매지표·재고·키워드(있으면 재사용)만
+                _process_account(report_acc, wb, naver, ai_key, None, metrics, inventory,
+                                 col_label, grow, log, partial, skip_ranks=True)
+            else:
+                with WingBrowser(profile_dir=_PROFILE, offscreen=True) as rank_browser:
+                    warmup(rank_browser)
+                    _process_account(report_acc, wb, naver, ai_key, rank_browser, metrics, inventory,
+                                     col_label, grow, log, partial)
         else:                                        # 활동 상품 0개 → Chrome 개방 생략, 시트도 생략
             log(f"  [{a.business_name}] 활동 상품 0개 — 시트·키워드·순위 생략")
 
         done.add(a.account_id)                    # 이 계정 완료 확정
-        _save_progress(out, date_from, date_to, started_at, done, carry, grow)
+        _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks)
         wb.save(partial)
         log(f"  [{a.business_name}] 완료 — 진행 {len(done)}/{total} (진행 저장: {partial.name})")
 

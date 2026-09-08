@@ -30,6 +30,7 @@ _LABEL_KEYWORD = "키워드"
 _LABEL_SEARCH = "검색량"
 _LABEL_NOTE = "비고"
 _ALL_METRICS = frozenset(config.CONTRACT_METRICS + config.PERSONAL_METRICS)
+_META_SHEET = "_상품ID"   # 숨김 시트: (사업자,상품)→고유ID(vendorItemId) 매핑. ③ 순위조회가 상품 매칭에 사용
 
 
 def _norm(v) -> str:
@@ -46,6 +47,7 @@ class OutputWorkbook:
         self._date_rows: dict[str, list[int]] = {}              # {사업자: [날짜 헤더행...]}
         self._metric_row: dict[tuple[str, str, str], int] = {}  # {(사업자,상품,지표): 행}
         self._kw_row: dict[tuple[str, str, str], int] = {}      # {(사업자,상품,키워드): 행}
+        self._vid_row: dict[tuple[str, str], int] = {}          # {(사업자,상품): _상품ID 시트 행}
         self._reindex()
 
     # ── 생성/로드/저장 ────────────────────────────────────────
@@ -72,8 +74,14 @@ class OutputWorkbook:
     # ── 인덱스 복원 ───────────────────────────────────────────
     def _reindex(self) -> None:
         self._date_col.clear(); self._date_rows.clear()
-        self._metric_row.clear(); self._kw_row.clear()
+        self._metric_row.clear(); self._kw_row.clear(); self._vid_row.clear()
         for ws in self.wb.worksheets:
+            if ws.title == _META_SHEET:                 # 상품ID 매핑 시트 → 행 인덱스만 복원
+                for r in range(2, ws.max_row + 1):
+                    b = _norm(ws.cell(r, 1).value); p = _norm(ws.cell(r, 2).value)
+                    if b and p:
+                        self._vid_row[(b, p)] = r
+                continue
             biz = ws.title
             self._date_col[biz] = {}
             self._date_rows[biz] = []
@@ -201,6 +209,36 @@ class OutputWorkbook:
         self.wb[biz].cell(row=row, column=self.ensure_date(biz, date_iso), value=value)
         return True
 
+    def _meta_ws(self):
+        """상품ID 숨김 시트(없으면 생성)."""
+        if _META_SHEET in self.wb.sheetnames:
+            return self.wb[_META_SHEET]
+        ws = self.wb.create_sheet(title=_META_SHEET)
+        ws.sheet_state = "hidden"
+        ws.cell(1, 1, "사업자"); ws.cell(1, 2, "상품명"); ws.cell(1, 3, "상품ID(|구분)")
+        return ws
+
+    def set_product_vids(self, biz: str, product: str, vids) -> None:
+        """상품의 고유ID(vendorItemId) 목록을 숨김 시트에 저장(③ 순위조회의 상품 매칭용)."""
+        vids = [str(v) for v in dict.fromkeys(vids) if v]
+        if not vids:
+            return
+        ws = self._meta_ws()
+        row = self._vid_row.get((biz, product))
+        if row is None:
+            row = ws.max_row + 1
+            ws.cell(row, 1, biz); ws.cell(row, 2, product)
+            self._vid_row[(biz, product)] = row
+        ws.cell(row, 3, "|".join(vids))
+
+    def product_vids(self, biz: str, product: str) -> list[str]:
+        """저장된 상품 고유ID 목록(없으면 빈 리스트)."""
+        row = self._vid_row.get((biz, product))
+        if row is None or _META_SHEET not in self.wb.sheetnames:
+            return []
+        v = self.wb[_META_SHEET].cell(row, 3).value
+        return [x for x in str(v).split("|") if x] if v else []
+
     def set_keyword_search(self, biz: str, product: str, keyword: str, volume) -> bool:
         row = self._kw_row.get((biz, product, keyword))
         if row is None:
@@ -253,7 +291,20 @@ class OutputWorkbook:
             if r2 > r1 or c2 > c1:
                 ws.merge_cells(start_row=r1, start_column=c1, end_row=r2, end_column=c2)
 
+        thick = Side(style="thick")
+
+        def edge(ws, maxc, row, side):
+            """상품 블록 경계(첫 행 상단/마지막 행 하단)에 굵은 선 — 상품 1개를 구분."""
+            for c in range(1, maxc + 1):
+                b = ws.cell(row, c).border
+                ws.cell(row, c).border = Border(
+                    left=b.left, right=b.right,
+                    top=thick if side == "top" else b.top,
+                    bottom=thick if side == "bottom" else b.bottom)
+
         for ws in self.wb.worksheets:
+            if ws.title == _META_SHEET:                 # 상품ID 숨김 시트는 서식 대상 아님
+                continue
             maxc = ws.max_column
             t = ws.cell(1, 1)
             t.font = title_font
@@ -275,18 +326,16 @@ class OutputWorkbook:
                         kh = r
                         break
                 m_end = (kh - 1) if kh else end
-                # 상품 지표블록: A:B 구분(세로) · C:F 상품명(세로) · G 라벨 · H~ 값
+                # 상품 지표블록: A:B 구분(살구=상품명색) · C:F 상품명(세로) · G 라벨 · H~ 값
                 for r in range(hr, m_end + 1):
-                    cell(ws, r, 1, fill=f_kind)
-                    cell(ws, r, 2, fill=f_kind)
+                    cell(ws, r, 1, fill=f_prod)
+                    cell(ws, r, 2, fill=f_prod)
                     for c in range(_COL_NAME, _COL_SEARCH + 1):
                         cell(ws, r, c, fill=f_prod, fnt=bold, align=wrap)
                     cell(ws, r, _COL_METRIC, fill=f_label)
                     for c in range(_FIRST_DATE, maxc + 1):
                         cell(ws, r, c, num=True)
-                merge(ws, hr, 1, m_end, 2)
-                merge(ws, hr, _COL_NAME, m_end, _COL_SEARCH)
-                # 키워드블록: A:B 사업자(세로) · C:E 키워드명(가로) · F 검색량 · G 순위라벨 · H~ 순위
+                # 키워드블록: A:B 사업자(세로) · C:E 키워드명(가로) · F 검색량 · G(소헤더 비고=회색/순위라벨=연파랑) · H~ 순위
                 if kh:
                     for r in range(kh, end + 1):
                         head = (r == kh)
@@ -295,9 +344,18 @@ class OutputWorkbook:
                         for c in range(_COL_NAME, _COL_SEARCH):     # C~E 키워드명(항상 bold)
                             cell(ws, r, c, fill=(f_kwhead if head else None), fnt=bold, align=wrap)
                         cell(ws, r, _COL_SEARCH, fill=(f_kwhead if head else None), num=not head)
-                        cell(ws, r, _COL_METRIC, fill=f_label)
+                        cell(ws, r, _COL_METRIC, fill=(f_kwhead if head else f_label))
                         for c in range(_FIRST_DATE, maxc + 1):
                             cell(ws, r, c)
+                # 상품 1개 구분 — 굵은 선. 상단=블록 첫 행 top(병합 top-left라 정상).
+                # 하단=다음(빈) 행의 top — 병합 범위(A:B 세로) 하위셀엔 bottom 테두리가 유실되므로
+                # 병합 밖 행에 top으로 그린다(시각적으로 마지막 행 하단선).
+                edge(ws, maxc, hr, "top")
+                edge(ws, maxc, end + 1, "top")
+                # 병합(마지막) — 세로/가로 병합은 서식·경계선 적용 뒤에
+                merge(ws, hr, 1, m_end, 2)
+                merge(ws, hr, _COL_NAME, m_end, _COL_SEARCH)
+                if kh:
                     merge(ws, kh, 1, end, 2)
                     for r in range(kh, end + 1):
                         merge(ws, r, _COL_NAME, r, _COL_SEARCH - 1)
