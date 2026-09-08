@@ -345,7 +345,7 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
                 log(f"  [키워드] {title} → (동결) {keywords}")
             todo = [kw for kw in keywords if not wb.is_rank_filled(biz, product.name, kw, date_iso)]
             measured = measure(todo) if (browser is not None and todo) else {}
-            ranks = {kw: _best(measured.get(kw)) for kw in todo}
+            ranks = {kw: _best(measured.get(kw)) for kw in todo if kw in measured}  # 측정 실패는 공란
             track_info = [(kw, 0, "", ranks.get(kw)) for kw in keywords]   # 동결분은 검색량/경쟁 미측정
         else:                                          # 새 상품 → AI 선정(skip_ranks면 순위 없이 부분점수)
             tracks = select_keywords_light(title, naver, ai_key, browser=browser, log=log,
@@ -581,7 +581,9 @@ def track_ranks_stage(out_dir: str = "output", on_log=None) -> Path | None:
                     continue
                 measured = _measure_safe(browser, todo, _vid_matcher(vids), log)
                 for kw in todo:
-                    r = _best(measured.get(kw))
+                    if kw not in measured:            # 측정 실패(예외·차단) → 공란 유지(다음에 재시도)
+                        continue
+                    r = _best(measured.get(kw))       # 정상 측정: 미노출이면 '-', 노출이면 'N위'
                     wb.set_keyword_rank(biz, pname, kw, date, r)
                     log(f"  [{biz}] {pname} '{kw}': {rank_label(r)}")
             wb.save(path)
