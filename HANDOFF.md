@@ -3,22 +3,34 @@
 > 새 세션 읽기 순서: **이 문서(§0 최신 세션 먼저) → `CLAUDE.md`(제약·함정) → `designs/KEYWORD_SELECTION.md`·`designs/DESIGN.md`(SSOT) → 메모리(`MEMORY.md`)**.
 > 이 문서는 **지금 이어서 할 일** 중심의 연속성 문서다. §1~ 이하 상당수는 **구(舊) 서식 시절 서술**이라 셀독 서식으로 대체된 부분이 있음 — 충돌 시 **§0과 메모리(`seldoc-output-format`·`input-ledger-format`·`inventory-api-rfm-search`)가 우선**.
 
-## 0. 최신 세션 요약 (2026-09-08) — 새 세션은 여기부터
-이번 세션 작업 (모두 커밋 전 로컬 상태, 린트 pyflakes/vulture 클린):
-- ✅ **입력 기준파일 전환·파서 적응**: 기준 입력 = `D:\토탈셀러\셀독\토탈셀러_셀독 관리 대장 (3).xlsx`(35계정·79상품, 시트 `셀독리스트`). **헤더가 2행**(1행은 예시 잔여값)이라 `input_list.py`에 **헤더 1~8행 자동감지**(`_find_header_row`) 추가 — 기존 파일(헤더1행)도 하위호환. `parse_input_list`·`parse_password_file` 둘 다. vid/pid·옵션 입력 없음(판매분석 API가 발견). 도구 3개 기준경로 갱신(`verify_offline`/`verify_login_discover_live`/`inspect_wing`). 상세=메모리 `input-ledger-format`.
-- ✅ **verify_offline.py 복구**: Phase A 이후 깨져 있던 stale 참조(`select_track_keywords`·구 워크북 API) 제거 → 현재 API로 복구, **실데이터 전 구간 통과**(파싱35/79·셀독워크북왕복·DPAPI·리포트파싱·Phase B 키워드선정). 실행: `python tools/verify_offline.py`.
-- ✅ **Phase 2 재고현황 배선 완료**: 로켓그로스 재고 API 발견·구현. `POST /tenants/rfm-inventory/inventory-health-dashboard/search` → `viProperties[].inventoryDetails.orderableQuantity`(판매가능 재고). `collector.fetch_inventory`/`_parse_inventory`, `pipeline._login_and_discover`(계약계정만 같은 세션 조회)→`_inventory_by_product`(상품별 vid 합산)→재고현황 기록. 실패해도 수집 전체 진행(명시 로그). **`simulate_pipeline.py` 전 시나리오 통과**(재고행 포함). 캡처도구 `tools/capture_inventory_api.py <계정ID>`도 hang-proof로 개선(메타 우선저장+JSON body 선별). 상세=메모리 `inventory-api-rfm-search`.
-- 🔎 **라이브 검증됨(bf0621/명진상사)**: 재고 API로 화로테이블 R023 재고 13(vid 3개 13+0+0) 실측. **앱 재시작 후 전체실행하면 재고현황 채워짐(미확인 — 새 세션에서 라이브 확인 필요).**
+## 0. 최신 세션 요약 (2026-09-08 저녁) — 새 세션은 여기부터
+이번 세션: **파이프라인 3단계 분리 재설계**(사용자 요청) + 서식 보완 + 순위 예외격리 + 차단회피. **커밋됨**: `6959b6e`(초기) → `af40d60`(예외격리·상품ID·차단회피·서식) → `afff41d`(3단계 백엔드) → `cd8e199`(UI 메뉴).
 
-### 다음 할 일 (우선순위)
-1. **앱 라이브 재확인**: 앱 완전 종료 후 재시작 → 전체실행 → 명진상사(bf0621) **재고현황 실제 기록** 확인(예상 13). 실행 로그로 검증.
-2. **⚠ 미해결 실측 불일치(추적)**: 재고 API 응답 `salesStatistics.yesterdaySales.totalPageViews`=669(화로테이블 09-07)인데 **vi-detail-search는 같은 날 노출/방문 0** 반환. 노출/방문 매핑 오류인지 익일반영 지연([[coupang-sales-data-lag]])인지 **다른 날짜(D-2 등)로 대조 확인 필요**(추측 금지). 메모리 `inventory-api-rfm-search` 하단에도 기록.
-3. (기존) 죽은 `tools/verify_offline.py`는 위에서 복구됨. 남은 개선: 단일일자 수집 UX, 대량 실행 속도.
+**핵심 — 3단계 독립 실행** (상세=메모리 `pipeline-3stage-separation`):
+- **① 판매수집**(로그인): `run_full(keywords_off=True)`. 상품 발견·제목·**상품ID(vendorItemId)**·판매/노출/방문/재고. vid는 결과엑셀 **숨김시트 `_상품ID`**에 저장(`workbook.set_product_vids`/`product_vids`).
+- **② 키워드 선정**(로그인 불필요): `pipeline.select_keywords_stage(naver, ai_key, grow)`. 최신 워크북 로드→상품별 키워드, **순위 조회 없음**(`select_keywords_light(measure_ranks=None)`). 키워드 있으면 스킵(사람 수동입력도 재사용).
+- **③ 노출순위 조회**(로그인 불필요): `pipeline.track_ranks_stage()`. vid로 검색결과 매칭(`_vid_matcher`)→순위(최신 일자). **예외격리**(`_measure_safe`: browser 죽어도 공란·완주).
+- **전체실행**(①→②③)은 `run_full` 유지. UI app_qt 버튼 4개. **app.py 폴백은 전체실행만**(①②③ 미배선).
+- 순서: ① 먼저(상품발견 선행), ②③은 ①이후 순서무관.
 
-### ⚠️ 이번 세션 운영 교훈 (중요)
-- **캡처 도구를 앱 전체실행과 동시에 돌리지 말 것**: `capture_inventory_api.py`가 앱과 **같은 Chrome 프로필(bf0621)**을 동시에 열어 `TargetClosedError: Page.evaluate ... browser has been closed` 유발(2026-09-08 14:28 발생). 프로세스 간에도 "동시 개방 금지" 적용. 캡처·라이브도구는 앱을 닫고 단독 실행.
-- **캡처 중단(TaskStop) 시 좀비 Chrome 누적**: 중단하면 `__exit__`(`_kill_tree`) 미실행 → 오프스크린 Chrome이 쌓여(이번에 51개) WingBrowser 프로필정리 taskkill 타임아웃 유발. 정리법: 명령줄에 `remote-debugging-port`/`data\profiles`/`chrome-pipeline` 포함한 chrome.exe만 골라 종료(사용자 실제 Chrome=기본 프로필은 보존). 정상 완료(exit 0)하면 스스로 정리됨.
-- 캡처 도구 stdout은 블록버퍼링 → 진행 보려면 `python -u` + Monitor로 tail.
+**그밖에 이번 세션**:
+- ✅ **재고현황 라이브 실증**: bf0621 화로테이블 재고 13(예상 일치). `tools/verify_login_discover_live.py bf0621`(3-tuple+재고출력로 복구).
+- ✅ **버그수정 2건**: pipeline 로그인미완료 `return None,{}`→`None,{},{}`(3-tuple 오분류 방지, 실전 검증됨). verify_login_discover_live stale 2-tuple.
+- ✅ **순위조회 예외격리**(`_measure_safe`): 순위 중 browser 죽음(`TargetClosedError`)이 판매수집·전체실행을 중단시키던 문제 제거(2026-09-08 라이브 크래시 실측 근거).
+- ✅ **차단회피**: 동시 3→2·지터 400→800ms·**차단시 백오프 30초 재시도1회**. **라이브 확인: 백오프 작동하나 오늘 IP 심하게 플래그면 무력**(근본=하루1회·IP 휴식).
+- ✅ **날짜지정 순위제외**(`skip_ranks`): 날짜 **직접지정** 실행=순위 제외(판매만·차단 접촉0), 어제(D-1) 자동=순위 포함(첫날 선정용).
+- ✅ **EPIPE 크래시 조사**: 로그인창 사람닫힘→다음계정 전환시 Playwright 드라이버 EPIPE(driver→client 파이프, **Python 못잡음**). 재현 2회 실패(특수 타이밍 race — 추측 코드수술 안함). 방어=`browser.wait_for_login` blocked(Akamai) 무한대기 폐지→60초 grace 후 건너뜀. 안전판=크래시해도 진행중파일 재개(실증).
+- ✅ **셀독 서식 재현·보완**(`workbook.apply_style`): 병합(제목A:G·지표블록A:B/C:F세로·키워드C:E가로)·팔레트(상품명 살구FBE2D5·G라벨 연파랑D9E9FA·키워드헤더 회색E8E8E8)·thin테두리·맑은고딕·#,##0. 보완: 비고=검색량색(회색), 계약상품=상품명색(살구), **상품 상하 굵은(thick) 구분선**(하단은 다음 빈행 top으로 — 병합 하위셀 border 유실 회피). ⚠ 서식파일 `셀독 판매 데이터_서식.xlsx`는 **한컴 셀**(openpyxl `IndexError`로 못읽음 → zip raw XML 파싱).
+- ✅ **키워드 4개**(`KW_TRACK_N=4`).
+
+### 다음 할 일
+1. **사무실 라이브 검증(3단계)**: ① 로그인 판매수집 → ② 키워드 → ③ 순위(IP 좋을 때 별도). 결과엑셀 **서식·상품ID·단계별 동작** 확인. ③은 로그인 없이 IP 휴식 후.
+2. **⚠ 미해결 실측 불일치(추적)**: 재고 API `salesStatistics.yesterdaySales.totalPageViews` vs vi-detail-search 노출/방문 — **단일일자 대조 필요**. 이번 7일합계 조회는 vi-detail-search 정상값(화로테이블 노출4074/방문3273) 반환 → 매핑오류보다 **익일반영 지연**([[coupang-sales-data-lag]]) 쪽. (추측 금지, D-2 등 실측)
+3. (선택) app.py 폴백에 ①②③ 버튼 배선. 단일일자 수집 UX.
+
+### ⚠️ 운영 교훈
+- **오늘(2026-09-08) IP 심하게 플래그**: 순위·**로그인 자동제출까지** Akamai Access Denied. 순위는 하루1회·IP 휴식 후. 3단계 분리로 순위 실패가 판매수집 안 막음(구조적 격리).
+- **좀비 Chrome 정리**: 명령줄에 `remote-debugging-port`/`data\profiles`/`chrome-pipeline` 포함 chrome.exe만 kill(사용자 실제 Chrome=기본프로필 보존). 정상완료(exit0)면 스스로 정리. 캡처도구·앱 동시실행 금지(같은 프로필 충돌).
 
 ## 1. 목표(요약)
 관리 쿠팡 판매자 계정들의 **상품별×일자별 지표**(노출순위 PC/모바일·노출건수·판매건수·방문자)를 수집하고,
