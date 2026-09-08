@@ -227,7 +227,10 @@ async ({urls, concurrency, jitterMs}) => {
   async function worker() {
     while (i < urls.length) {
       const u = urls[i++];
-      if (jitterMs) await sleep(Math.random() * jitterMs);   // 사람처럼 간격(버스트 완화 → 차단 회피)
+      if (jitterMs) {                                        // 사람처럼 간격(MIN~MAX 무작위) → 버스트 완화·차단 회피
+        const lo = jitterMinMs || 0, hi = Math.max(jitterMs, lo);
+        await sleep(lo + Math.random() * (hi - lo));
+      }
       try {
         const r = await fetch(u, {credentials: 'include',
                                   headers: {accept: 'text/html,application/xhtml+xml'}});
@@ -282,10 +285,14 @@ def organic_ranks_batch(browser: WingBrowser, keywords: list[str],
             url_of[(kw, p)] = u
             urls.append(u)
 
+    serial = config.RANK_HUMAN_SERIAL   # 직렬(동시성1·간격)이면 버스트 신호 제거 → 차단 회피. fetch라 여전히 빠름
+
     def _fetch():
         return browser.page.evaluate(_BATCH_FETCH_JS,
-                                     {"urls": urls, "concurrency": config.RANK_FETCH_CONCURRENCY,
-                                      "jitterMs": config.RANK_FETCH_JITTER_MS})
+                                     {"urls": urls,
+                                      "concurrency": 1 if serial else config.RANK_FETCH_CONCURRENCY,
+                                      "jitterMs": config.RANK_FETCH_JITTER_MS,
+                                      "jitterMinMs": config.RANK_FETCH_JITTER_MIN_MS if serial else 0})
 
     def _count(r):
         return sum(len(v.get("items", [])) for v in r.values()) if r else 0

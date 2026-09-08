@@ -565,6 +565,9 @@ def track_ranks_stage(out_dir: str = "output", on_log=None) -> Path | None:
         log("== 순위 조회: 결과 워크북이 없습니다 — 먼저 ①②를 실행하세요 ==")
         return None
     log(f"== 노출순위 조회 시작 — {path.name} ==")
+    if config.RANK_HUMAN_SERIAL:
+        log(f"  [모드] 사람속도 직렬(동시성1·요청간격 {config.RANK_FETCH_JITTER_MIN_MS/1000:.1f}"
+            f"~{config.RANK_FETCH_JITTER_MS/1000:.1f}s) — 버스트 없이 차단 회피")
     with WingBrowser(profile_dir=_PROFILE, offscreen=True) as browser:
         warmup(browser)
         for biz in wb.account_sheets():
