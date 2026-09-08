@@ -357,9 +357,9 @@ class App(QtWidgets.QMainWindow):
         self.kw_btn = QtWidgets.QPushButton("② 키워드 선정")
         self.kw_btn.clicked.connect(self.do_select_keywords)
         top.addWidget(self.kw_btn)
-        self.rank_btn = QtWidgets.QPushButton("③ 노출순위 조회")
-        self.rank_btn.clicked.connect(self.do_track_ranks)
-        top.addWidget(self.rank_btn)
+        self.track_btn = QtWidgets.QPushButton("③ 노출순위 조회")   # 순위조회 탭 rank_btn 과 이름 충돌 방지
+        self.track_btn.clicked.connect(self.do_track_ranks)
+        top.addWidget(self.track_btn)
         self.pipeline_btn = QtWidgets.QPushButton("전체 실행(①→②→③)")
         self.pipeline_btn.setObjectName("accent")
         self.pipeline_btn.clicked.connect(lambda: self.do_run_full(keywords_off=False))
@@ -850,7 +850,7 @@ class App(QtWidgets.QMainWindow):
                 return track_ranks_stage(on_log=self.log)
             finally:
                 self._busy = False
-        self.run_bg(task, on_done=self._pipeline_done, btn=self.rank_btn)
+        self.run_bg(task, on_done=self._pipeline_done, btn=self.track_btn)
 
     def _pipeline_done(self, path):
         self.log("=" * 50)

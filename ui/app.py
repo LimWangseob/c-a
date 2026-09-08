@@ -29,7 +29,8 @@ from coupang_analytics.input_list import parse_input_list, parse_password_file  
 from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
 from coupang_analytics.kw_shopping import NaverShopCredentials  # noqa: E402
-from coupang_analytics.pipeline import master_exists, resumable_progress, run_full  # noqa: E402
+from coupang_analytics.pipeline import (master_exists, resumable_progress, run_full,  # noqa: E402
+                                        select_keywords_stage, track_ranks_stage)
 from coupang_analytics.session_keepalive import KeepAlive  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_credentials_file  # noqa: E402
@@ -381,9 +382,18 @@ class App(tk.Tk):
         run.pack(fill="x", padx=8, pady=6)
         topbar = ttk.Frame(run)
         topbar.pack(anchor="w", fill="x", padx=6, pady=6)
-        self.pipeline_btn = ttk.Button(topbar, text="전체 실행", command=self.do_run_full,
+        # 단계별 실행 — ① 로그인 판매수집(상품ID·지표·재고) / ② 키워드 선정 / ③ 노출순위(②③ 로그인 불필요)
+        self.sales_btn = ttk.Button(topbar, text="① 판매수집",
+                                    command=lambda: self.do_run_full(keywords_off=True))
+        self.sales_btn.pack(side="left", padx=(0, 4))
+        self.kw_btn = ttk.Button(topbar, text="② 키워드 선정", command=self.do_select_keywords)
+        self.kw_btn.pack(side="left", padx=4)
+        self.track_btn = ttk.Button(topbar, text="③ 노출순위 조회", command=self.do_track_ranks)
+        self.track_btn.pack(side="left", padx=4)
+        self.pipeline_btn = ttk.Button(topbar, text="전체 실행(①→②③)",
+                                       command=lambda: self.do_run_full(keywords_off=False),
                                        style="Accent.TButton")
-        self.pipeline_btn.pack(side="left")
+        self.pipeline_btn.pack(side="left", padx=(4, 0))
         self.keepalive_btn = ttk.Button(topbar, text="세션 유지 켜기", command=self.toggle_keepalive)
         self.keepalive_btn.pack(side="left", padx=10)
         ttk.Label(topbar, text="(켜두면 로그인 세션을 주기적으로 살려둬 재로그인·2차인증이 줄어듭니다. 로그인 아님)"
@@ -423,7 +433,7 @@ class App(tk.Tk):
             return d, d
         return self.from_var.get().strip(), self.to_var.get().strip()
 
-    def do_run_full(self):
+    def do_run_full(self, keywords_off: bool = False):
         if self.input_list is None:
             messagebox.showwarning("입력 필요", "설정 탭에서 입력 엑셀을 먼저 여세요.")
             return
@@ -476,9 +486,11 @@ class App(tk.Tk):
                 return
         input_list, naver_creds, key = self.input_list, self.naver_creds, self.ai_key
         mode_txt = "이어서 " if resume else ("통계이어쓰기 " if carry else "새통계 ")
-        self.log(f"[전체실행] {mode_txt}시작 — 상품 {n}개, 기간 {df}~{dt}"
-                 f"{' · 새 키워드 발굴 추가' if grow else ''}"
-                 f"{' · 순위 제외(판매데이터만)' if skip_ranks and not resume else ''}")
+        stage_txt = " · ①판매수집(키워드·순위 없음)" if keywords_off else \
+            (" · 순위 제외(판매데이터만)" if skip_ranks and not resume else "")
+        self.log(f"[{'판매수집' if keywords_off else '전체실행'}] {mode_txt}시작 — 상품 {n}개, 기간 {df}~{dt}"
+                 f"{' · 새 키워드 발굴 추가' if grow else ''}{stage_txt}")
+        btn = self.sales_btn if keywords_off else self.pipeline_btn
 
         def task():
             self._busy = True   # 실행 중 세션유지 일시정지(같은 프로필 충돌 방지)
@@ -486,10 +498,48 @@ class App(tk.Tk):
                 naver = NaverAdApi(naver_creds)
                 return run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
                                 get_password=self._account_pw, resume=resume, carry_forward=carry,
-                                grow_keywords=grow, skip_ranks=skip_ranks, on_log=self.log)
+                                grow_keywords=grow, skip_ranks=skip_ranks,
+                                keywords_off=keywords_off, on_log=self.log)
             finally:
                 self._busy = False
-        self.run_bg(task, on_done=self._pipeline_done, btn=self.pipeline_btn)
+        self.run_bg(task, on_done=self._pipeline_done, btn=btn)
+
+    def do_select_keywords(self):
+        """② 키워드 선정 — 로그인 불필요. 최신 결과 워크북 상품에 키워드만 채운다(순위 없음)."""
+        if self.input_list is None or self.naver_creds is None or not self.ai_key:
+            messagebox.showwarning("키/입력 필요",
+                                   "설정 탭에서 입력 엑셀·네이버 API·OpenAI 키를 먼저 준비하세요.")
+            return
+        if not (master_exists() or resumable_progress()):
+            messagebox.showwarning("먼저 ① 판매수집",
+                                   "결과 파일이 없습니다. ① 판매수집을 먼저 실행해 상품을 수집하세요.")
+            return
+        naver_creds, key = self.naver_creds, self.ai_key
+        self.log("[키워드 선정] 시작 — 순위 조회 없이 키워드만 선정(로그인 불필요)")
+
+        def task():
+            self._busy = True
+            try:
+                return select_keywords_stage(NaverAdApi(naver_creds), key, grow=False, on_log=self.log)
+            finally:
+                self._busy = False
+        self.run_bg(task, on_done=self._pipeline_done, btn=self.kw_btn)
+
+    def do_track_ranks(self):
+        """③ 노출순위 조회 — 로그인 불필요. 최신 결과 워크북 상품ID+키워드로 순위만 채운다."""
+        if not (master_exists() or resumable_progress()):
+            messagebox.showwarning("먼저 ①②",
+                                   "결과 파일이 없습니다. ① 판매수집·② 키워드 선정을 먼저 실행하세요.")
+            return
+        self.log("[노출순위 조회] 시작 — 로그인 불필요(비로그인 쿠팡 검색)")
+
+        def task():
+            self._busy = True
+            try:
+                return track_ranks_stage(on_log=self.log)
+            finally:
+                self._busy = False
+        self.run_bg(task, on_done=self._pipeline_done, btn=self.track_btn)
 
     def toggle_keepalive(self):
         """세션 유지 켜기/끄기. 켜두면 주기적으로 세션을 살려둬 재로그인·2차인증이 준다(로그인 아님)."""
