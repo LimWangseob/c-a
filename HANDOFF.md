@@ -10,7 +10,7 @@
 - **① 판매수집**(로그인): `run_full(keywords_off=True)`. 상품 발견·제목·**상품ID(vendorItemId)**·판매/노출/방문/재고. vid는 결과엑셀 **숨김시트 `_상품ID`**에 저장(`workbook.set_product_vids`/`product_vids`).
 - **② 키워드 선정**(로그인 불필요): `pipeline.select_keywords_stage(naver, ai_key, grow)`. 최신 워크북 로드→상품별 키워드, **순위 조회 없음**(`select_keywords_light(measure_ranks=None)`). 키워드 있으면 스킵(사람 수동입력도 재사용).
 - **③ 노출순위 조회**(로그인 불필요): `pipeline.track_ranks_stage()`. vid로 검색결과 매칭(`_vid_matcher`)→순위(최신 일자). **예외격리**(`_measure_safe`: browser 죽어도 공란·완주).
-- **전체실행**(①→②③)은 `run_full` 유지. UI app_qt 버튼 4개. **app.py 폴백은 전체실행만**(①②③ 미배선).
+- **전체실행**(①→②③)은 `run_full` 유지. UI **app_qt·app.py 폴백 둘 다 버튼 4개**(①②③+전체). ⚠ app_qt 순위버튼 이름충돌(전체실행탭이 순위조회탭 `rank_btn` 덮어씀) → `track_btn`으로 수정.
 - 순서: ① 먼저(상품발견 선행), ②③은 ①이후 순서무관.
 
 **그밖에 이번 세션**:
@@ -26,7 +26,7 @@
 ### 다음 할 일
 1. **사무실 라이브 검증(3단계)**: ① 로그인 판매수집 → ② 키워드 → ③ 순위(IP 좋을 때 별도). 결과엑셀 **서식·상품ID·단계별 동작** 확인. ③은 로그인 없이 IP 휴식 후.
 2. **⚠ 미해결 실측 불일치(추적)**: 재고 API `salesStatistics.yesterdaySales.totalPageViews` vs vi-detail-search 노출/방문 — **단일일자 대조 필요**. 이번 7일합계 조회는 vi-detail-search 정상값(화로테이블 노출4074/방문3273) 반환 → 매핑오류보다 **익일반영 지연**([[coupang-sales-data-lag]]) 쪽. (추측 금지, D-2 등 실측)
-3. (선택) app.py 폴백에 ①②③ 버튼 배선. 단일일자 수집 UX.
+3. (선택) 단일일자 수집 UX, 대량 실행 속도. (app.py 폴백 ①②③ 배선은 완료 — 커밋 86dc892)
 
 ### ⚠️ 운영 교훈
 - **오늘(2026-09-08) IP 심하게 플래그**: 순위·**로그인 자동제출까지** Akamai Access Denied. 순위는 하루1회·IP 휴식 후. 3단계 분리로 순위 실패가 판매수집 안 막음(구조적 격리).
