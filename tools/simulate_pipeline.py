@@ -30,9 +30,12 @@ from coupang_analytics.kw_recommend import TrackKeyword  # noqa: E402
 from coupang_analytics.report import OptionMetric  # noqa: E402
 
 _LOGIN_FAIL_ID = "FAIL"
-_STATE = {"select_calls": 0, "crash_at": None, "error_at": None}
+_STATE = {"select_calls": 0, "crash_at": None, "error_at": None,
+          "need_login": set(), "block_login": set()}
 # crash_at = 프로세스 강제종료 프록시(KeyboardInterrupt=BaseException, 계정격리 안 됨 → resume 대상)
 # error_at = 한 계정 처리 오류 프록시(RuntimeError=일반 예외 → 그 계정만 건너뜀, 전체 완주)
+# need_login = 세션 만료(1차 패스에서 NeedLogin→대기열, 2차 로그인 시 정상 수집)
+# block_login = Akamai 로그인 차단(2차 패스에서 LoginBlocked → 서킷브레이커 카운트)
 
 
 # ── 가짜 의존성 ────────────────────────────────────────────────
@@ -42,7 +45,13 @@ class _FakeBrowser:
     def __exit__(self, *exc): return False
 
 
-def _fake_login_and_discover(a, date_from, date_to, get_password, log):
+def _fake_login_and_discover(a, date_from, date_to, get_password, log, login=True):
+    if a.account_id in _STATE["block_login"]:      # Akamai 차단 계정
+        if not login:
+            raise P.NeedLogin()                    # 1차: 세션 없음 → 대기열
+        raise P.LoginBlocked()                     # 2차: 로그인 차단(서킷브레이커 카운트)
+    if a.account_id in _STATE["need_login"] and not login:
+        raise P.NeedLogin()                        # 1차: 세션 만료 → 대기열(2차 로그인 시 정상)
     if a.account_id == _LOGIN_FAIL_ID:
         log(f"  [{a.business_name}] 로그인 미완료 — 건너뜀(가짜)")
         return None, {}, {}
@@ -259,6 +268,38 @@ def scenario_empty_business_name():
     _check("대표-X" in _sheets(final), "시트명이 대표자명으로 폴백됨(빈 시트명 KeyError 방지)")
 
 
+def scenario_session_first():
+    print("[시나리오 7] 세션우선 — 세션 만료 계정은 뒤로 미루고 살아있는 계정 먼저 수집")
+    d = Path(tempfile.mkdtemp())
+    _STATE.update(select_calls=0, crash_at=None, error_at=None,
+                  need_login={"b1"}, block_login=set())
+    logs: list[str] = []
+    final = P.run_full(_accounts(["a1", "b1", "c1"]), naver=None, out_dir=str(d), ai_key="sim",
+                       date_from="2026-09-02", date_to="2026-09-02", resume=False, on_log=logs.append)
+    joined = "\n".join(logs)
+    _check("로그인 대기열" in joined, "세션 만료 b1은 로그인 대기열로 미룸(자동제출 안 함)")
+    _check("로그인 필요 계정 1개" in joined, "2차 패스에서 로그인 필요 계정 처리")
+    _check(_sheets(final) == {"비즈-a1", "비즈-b1", "비즈-c1"}, "결국 3계정 모두 수집(세션우선+2차 로그인)")
+
+
+def scenario_circuit_breaker():
+    print("[시나리오 8] 로그인 서킷브레이커 — 연속 Akamai 차단 K회 후 이후 로그인 생략")
+    d = Path(tempfile.mkdtemp())
+    blocked = {"x1", "x2", "x3", "x4"}
+    _STATE.update(select_calls=0, crash_at=None, error_at=None,
+                  need_login=set(), block_login=blocked)
+    logs: list[str] = []
+    final = P.run_full(_accounts(["a1", "x1", "x2", "x3", "x4", "c1"]), naver=None, out_dir=str(d),
+                       ai_key="sim", date_from="2026-09-02", date_to="2026-09-02",
+                       resume=False, on_log=logs.append)
+    joined = "\n".join(logs)
+    _check(final is not None, "차단 다발에도 크래시 없이 완주")
+    _check({"비즈-a1", "비즈-c1"} <= _sheets(final), "세션 있는 a1·c1은 수집됨(세션우선)")
+    _check("로그인 생략" in joined, f"연속 {config.LOGIN_BLOCK_CIRCUIT}회 차단 후 이후 로그인 생략(서킷브레이커)")
+    _check(all(f"비즈-{x}" not in _sheets(final) for x in blocked), "차단 계정은 미수집(다음에 재시도)")
+    _STATE.update(need_login=set(), block_login=set())   # 뒤 시나리오 누수 방지
+
+
 def main():
     _install_fakes()
     print("=" * 60)
@@ -270,6 +311,8 @@ def main():
     scenario_carry_forward()
     scenario_account_error_isolated()
     scenario_empty_business_name()
+    scenario_session_first()
+    scenario_circuit_breaker()
     print("=" * 60)
     print("  [완료] 모든 시나리오 통과")
     print("=" * 60)

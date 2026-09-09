@@ -157,11 +157,21 @@ def _load_latest_wb(out: Path):
     return None, None
 
 
-def _login_and_discover(a: Account, date_from, date_to, get_password, log):
+class NeedLogin(Exception):
+    """세션이 없어 로그인이 필요한 계정(세션우선 1차 패스에서 뒤로 미룸)."""
+
+
+class LoginBlocked(Exception):
+    """Akamai 로그인 차단(Access Denied) — 서킷브레이커 카운트 대상."""
+
+
+def _login_and_discover(a: Account, date_from, date_to, get_password, log, login: bool = True):
     """계정 하나: (필요시) 로그인 → **같은 신선한 세션**에서 즉시 판매분석 발견 + 지표.
 
     반환: (report_account[활동 상품만] | None, {옵션ID: OptionMetric}, {옵션ID: 재고수량}).
     로그인 미완료면 (None, {}, {}) 반환 → 호출부가 건너뛰고 다음 계정으로(막힘 없음).
+    login=False(세션우선 1차): 세션 없으면 자동제출하지 않고 **NeedLogin** 을 던져 뒤로 미룬다
+    (반복 자동로그인 = IP 차단 유발이라, 세션 살아있는 계정을 먼저 다 수집). Akamai 차단 시 LoginBlocked.
     """
     from .collector import (discover, save_discovered,  # 지연 import
                             fetch_inventory, InventoryFetchError)
@@ -173,6 +183,8 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log):
         b.page.wait_for_timeout(1500)
         if b.authenticated():
             log(f"  [{a.label}] 세션 재사용 → 이미 로그인됨 (창 안 뜸)")
+        elif not login:            # 세션우선 1차 패스 — 자동제출 안 하고 로그인 대기열로 미룸
+            raise NeedLogin()
         else:
             shown = {"v": False}
 
@@ -189,6 +201,9 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log):
                 _need_user()   # 비번 없음/자동입력 실패 → 직접 로그인해야 하니 창 표시
                 log(f"  [{a.label}] 직접 로그인이 필요해 창을 띄웠습니다")
             if not b.wait_for_login(timeout=300, on_log=log, tag=a.account_id, on_need_user=_need_user):
+                if b.classify_login()[0] == "blocked":   # Akamai 차단 → 서킷브레이커가 세도록 신호
+                    log(f"  [{a.label}] Akamai 로그인 차단 — 이 계정 건너뜀")
+                    raise LoginBlocked()
                 log(f"  [{a.label}] 로그인 미완료 — 이 계정 건너뜀")
                 return None, {}, {}
             b.hide()   # 로그인 끝나면 다시 숨김
@@ -459,44 +474,78 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
 
     accounts = input_list.accounts
     total = len(accounts)
+
+    def _finish(a: Account, report_acc, metrics, inv_by_vid) -> None:
+        """발견 결과를 워크북에 기록 + 진행 저장(1·2차 패스 공통). report_acc=None이면 무동작."""
+        if report_acc is None:      # 로그인 미완료/데이터 없음 → 다음 계정(전체 안 막힘)
+            return
+        # 자동완성(키워드 후보)·순위 모두 비로그인 쿠팡 세션이 필요하다. 로그인 브라우저가 닫힌 뒤 별도로
+        # 연다(중첩 금지 — sync playwright 충돌 방지). 활동 상품이 있을 때만 열고, 그 한 세션에서
+        # 키워드 선정(자동완성)→순위까지 재사용한다(warmup 먼저 = 쿠팡 오리진 로드, same-origin fetch).
+        if report_acc.products:
+            inventory = _inventory_by_product(report_acc.products, inv_by_vid)
+            if skip_ranks or keywords_off:
+                # 순위 제외(날짜지정) 또는 판매수집 전용(①): 쿠팡 순위 브라우저 안 열고(차단 접촉 0)
+                _process_account(report_acc, wb, naver, ai_key, None, metrics, inventory,
+                                 col_label, grow, log, partial, skip_ranks=skip_ranks,
+                                 keywords_off=keywords_off)
+            else:
+                with WingBrowser(profile_dir=_PROFILE, offscreen=True) as rank_browser:
+                    warmup(rank_browser)
+                    _process_account(report_acc, wb, naver, ai_key, rank_browser, metrics, inventory,
+                                     col_label, grow, log, partial)
+        else:                                        # 활동 상품 0개 → Chrome 개방 생략, 시트도 생략
+            log(f"  [{a.label}] 활동 상품 0개 — 시트·키워드·순위 생략")
+        done.add(a.account_id)                    # 이 계정 완료 확정
+        _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks)
+        wb.save(partial)
+        log(f"  [{a.label}] 완료 — 진행 {len(done)}/{total} (진행 저장: {partial.name})")
+
+    # ── 1차 패스: 세션 살아있는 계정 먼저 수집(로그인 없음 → 차단 위험 0). 세션 만료는 로그인 대기열로. ──
+    #   반복 자동로그인이 Akamai IP 차단을 유발하므로, 로그인 없는 계정을 먼저 다 확보한다.
+    login_needed: list[tuple[int, Account]] = []
     for i, a in enumerate(accounts, 1):
         if a.account_id in done:                  # 완료 계정 → 건너뜀
             log(f"== [{i}/{total}] {a.label} — 이미 완료, 건너뜀 ==")
             continue
         log(f"== [{i}/{total}] {a.label} (계정ID: {a.account_id}) ==")
-        try:   # 한 계정의 어떤 오류(로그인·수집·워크북쓰기)도 전체를 막지 않게 계정 전체를 격리
-            report_acc, metrics, inv_by_vid = _login_and_discover(a, date_from, date_to, get_password, log)
-            if report_acc is None:      # 로그인 미완료/데이터 없음 → 다음 계정(전체 안 막힘)
-                continue
-
-            # 자동완성(키워드 후보)·순위 모두 비로그인 쿠팡 세션이 필요하다. 로그인 브라우저가 닫힌 뒤 별도로
-            # 연다(중첩 금지 — sync playwright 충돌 방지). 활동 상품이 있을 때만 열고, 그 한 세션에서
-            # 키워드 선정(자동완성)→순위까지 재사용한다(warmup 먼저 = 쿠팡 오리진 로드, same-origin fetch).
-            if report_acc.products:
-                # 재고현황: {옵션ID:수량} → {상품명: 상품 vid 합산}(상품당 vendorItem 여러 개일 수 있음)
-                inventory = _inventory_by_product(report_acc.products, inv_by_vid)
-                if skip_ranks or keywords_off:
-                    # 순위 제외(날짜지정) 또는 판매수집 전용(①): 쿠팡 순위 브라우저 안 열고(차단 접촉 0)
-                    # 판매지표·재고·상품ID만(keywords_off) 또는 + 키워드(재사용/부분점수 선정)만 기록
-                    _process_account(report_acc, wb, naver, ai_key, None, metrics, inventory,
-                                     col_label, grow, log, partial, skip_ranks=skip_ranks,
-                                     keywords_off=keywords_off)
-                else:
-                    with WingBrowser(profile_dir=_PROFILE, offscreen=True) as rank_browser:
-                        warmup(rank_browser)
-                        _process_account(report_acc, wb, naver, ai_key, rank_browser, metrics, inventory,
-                                         col_label, grow, log, partial)
-            else:                                        # 활동 상품 0개 → Chrome 개방 생략, 시트도 생략
-                log(f"  [{a.label}] 활동 상품 0개 — 시트·키워드·순위 생략")
-
-            done.add(a.account_id)                    # 이 계정 완료 확정
-            _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks)
-            wb.save(partial)
-            log(f"  [{a.label}] 완료 — 진행 {len(done)}/{total} (진행 저장: {partial.name})")
+        try:   # 한 계정의 어떤 오류(수집·워크북쓰기)도 전체를 막지 않게 계정 전체를 격리
+            report_acc, metrics, inv_by_vid = _login_and_discover(
+                a, date_from, date_to, get_password, log, login=False)
+            _finish(a, report_acc, metrics, inv_by_vid)
+        except NeedLogin:                         # 세션 없음 → 뒤로 미룸(자동제출 안 함)
+            login_needed.append((i, a))
+            log(f"  [{a.label}] 세션 만료 → 로그인 대기열(세션 있는 계정 먼저 수집 후 처리)")
         except Exception as exc:
             first = (str(exc).splitlines() or [""])[0][:250]
             log(f"  [{a.label}] 처리 오류: {exc.__class__.__name__}: {first} — 건너뜀")
+
+    # ── 2차 패스: 로그인 필요 계정 — 서킷브레이커(연속 Akamai 차단 K회면 이후 로그인 생략). ──
+    if login_needed:
+        log(f"== 로그인 필요 계정 {len(login_needed)}개 처리(세션우선 수집 완료) ==")
+    blocks = 0
+    for i, a in login_needed:
+        if blocks >= config.LOGIN_BLOCK_CIRCUIT:  # IP가 이미 플래그됨 → 더 두드리지 않음(더 태우기 방지)
+            log(f"== [{i}/{total}] {a.label} — Akamai 차단 지속(연속 {blocks}회)으로 로그인 생략 "
+                "→ 잠시 후/내일(쉰 IP) 이어서 수집 ==")
             continue
+        log(f"== [{i}/{total}] {a.label} (계정ID: {a.account_id}) — 로그인 시도 ==")
+        try:
+            report_acc, metrics, inv_by_vid = _login_and_discover(
+                a, date_from, date_to, get_password, log, login=True)
+            blocks = 0                            # 로그인 성공 → 연속 차단 카운터 리셋
+            _finish(a, report_acc, metrics, inv_by_vid)
+        except LoginBlocked:                      # Akamai 차단 → 서킷브레이커 카운트
+            blocks += 1
+            log(f"  [{a.label}] 로그인 차단 누적 {blocks}/{config.LOGIN_BLOCK_CIRCUIT}")
+        except Exception as exc:
+            first = (str(exc).splitlines() or [""])[0][:250]
+            log(f"  [{a.label}] 처리 오류: {exc.__class__.__name__}: {first} — 건너뜀")
+
+    uncollected = [a for _, a in login_needed if a.account_id not in done]
+    if uncollected:
+        log(f"== ⚠ 로그인 못한 계정 {len(uncollected)}개(세션만료+Akamai차단): "
+            f"{', '.join(a.label for a in uncollected)} — 쉰 IP(내일 등)에 재실행 시 수집됨 ==")
 
     # 전부 완료 → 통계 마스터 갱신 + 그날 스냅샷 저장, 진행 상태 정리
     snapshot = _snapshot_path(out, now)
