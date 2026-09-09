@@ -31,6 +31,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+try:   # 콘솔/리다이렉트가 cp949 여도 한글/기호 출력 크래시 방지
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 from coupang_analytics import config, session_state  # noqa: E402
 
 _PLAN_PATH = Path("data/ttl_cohort.json")
@@ -108,9 +113,10 @@ def status_rows(plan: dict, now: datetime) -> list[dict]:
 
 # ── 라이브 프로브(브라우저 1개, 로그인 0회) — 패키지의 touch_session 재사용 ──
 def _probe_one(account_id: str) -> tuple[bool, bool, str]:
-    """계정 프로필을 열어 WING 접속 후 (valid, redirected, final_url). 로그인 시도 없음."""
+    """계정 프로필을 열어 WING 접속 후 (valid, reached_idp, final_url). 로그인 시도 없음."""
     from coupang_analytics.session_keepalive import touch_session
-    return touch_session(account_id)
+    r = touch_session(account_id)
+    return r.alive, r.reached_idp, r.final
 
 
 def touch_pending(plan: dict, now: datetime, log=print) -> dict:

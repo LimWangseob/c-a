@@ -14,19 +14,38 @@
 from __future__ import annotations
 
 import threading
+from typing import NamedTuple
 
 from . import config
 from . import session_state
 from .browser import WING_URL, WingBrowser
 from .pipeline import account_profile
 
+# keep-warm 터치 결과 분류 — 단순 redirect 여부가 아니라 "IdP 인증요청이 실제로 일어났는지"까지 구분.
+# (Keycloak: SSO Idle 은 인증요청/refresh-token 요청 시 갱신 → APP_ONLY 는 갱신 안 됐을 수 있음)
+OUT_AUTH_SSO_SUCCESS = "AUTH_SSO_SUCCESS"  # IdP(xauth/oidc) 거쳐 세션 유효 복귀 = Idle 갱신 신호(가장 강)
+OUT_APP_ONLY = "APP_ONLY"                  # 유효하나 IdP 미접촉(WING 로컬응답) = Idle 갱신 불확실
+OUT_EXPIRED = "EXPIRED"                    # 세션 만료(로그인 폼) — keep-warm 실패
+OUT_CHALLENGE = "CHALLENGE"                # Akamai 차단/봇 챌린지
+# IdP(Keycloak/xauth) 접촉을 나타내는 URL 마커. login-actions(=credential POST)는 GET-only 흐름엔 안 나옴.
+_IDP_MARKERS = ("xauth", "/sso/", "openid-connect", "login-actions")
 
-def touch_session(account_id: str, wait_ms: int = 1200) -> tuple[bool, bool, str]:
-    """프로필을 열어 WING 접속 후 (alive, redirected, final_url) 반환. 로그인 시도 없음(안전 GET).
 
-    alive      : 윙 대시보드 도달 + 인증쿠키(세션 살아있음). 방문 자체가 만료 시계를 미룬다.
-    redirected : 접속 중 xauth/sso 로 리다이렉트가 있었는지(=WING 접속이 Keycloak 을 쳐 Idle 을
-                 갱신할 여지가 있는지 = keep-warm 유효성 힌트).
+class TouchResult(NamedTuple):
+    alive: bool          # 세션 유효(대시보드 도달 + 인증쿠키)
+    outcome: str         # 위 OUT_* 분류
+    reached_idp: bool    # 접속 중 IdP(xauth/oidc)로 리다이렉트가 실제 있었는지
+    final: str           # 최종 URL
+
+
+def touch_session(account_id: str, wait_ms: int = 1200) -> TouchResult:
+    """프로필을 열어 WING 접속(안전 GET, 로그인 시도 없음) 후 결과를 분류해 반환.
+
+    분류(redirect 유무만이 아니라 IdP 접촉+유효성 조합):
+    - CHALLENGE        : Akamai 차단/챌린지(classify_login blocked/akamai)
+    - AUTH_SSO_SUCCESS : 유효 + IdP 접촉(리다이렉트) = 인증요청이 일어나 Idle 갱신 신호(가장 강)
+    - APP_ONLY         : 유효하나 IdP 미접촉 = WING 로컬응답, Idle 갱신 불확실
+    - EXPIRED          : 무효(로그인 폼)
     """
     seen: list[str] = []
     with WingBrowser(profile_dir=account_profile(account_id), offscreen=True) as b:
@@ -35,32 +54,47 @@ def touch_session(account_id: str, wait_ms: int = 1200) -> tuple[bool, bool, str
         b.goto(WING_URL)
         b.page.wait_for_timeout(wait_ms)
         alive = b.authenticated()
+        code = b.classify_login()[0]   # blocked/akamai 구분용(alive 면 'success')
         final = b.page.url
-    redirected = any(("xauth" in u or "/sso/" in u) for u in seen)
-    return alive, redirected, final
+    reached = any(any(m in (u or "") for m in _IDP_MARKERS) for u in seen)
+    if code in ("blocked", "akamai"):
+        outcome = OUT_CHALLENGE
+    elif alive:
+        outcome = OUT_AUTH_SSO_SUCCESS if reached else OUT_APP_ONLY
+    else:
+        outcome = OUT_EXPIRED
+    return TouchResult(alive, outcome, reached, final)
 
 
-def keepwarm_once(account_ids, on_log=print, exclude=(), stop_check=None) -> tuple[int, int]:
-    """계정들 세션을 1회씩 살려둠(관측 이벤트 기록). (살아있음 수, 대상 수) 반환.
+def keepwarm_once(account_ids, on_log=print, exclude=(), stop_check=None) -> dict:
+    """계정들 세션을 1회씩 살려둠(결과 분류를 관측 이벤트로 기록). 카운트 dict 반환.
 
-    exclude    : 제외할 계정(예: TTL 측정 중인 코호트 — 건드리면 측정 오염).
+    반환: {attempted, alive, expired, app_only, challenge, error}.
+    exclude    : 제외할 계정(예: TTL 측정 코호트 — 건드리면 측정 오염).
     stop_check : () -> bool, True 면 중단(스레드 종료 신호).
     """
     ids = [a for a in account_ids if a not in set(exclude)]
-    alive = 0
+    c = {"attempted": 0, "alive": 0, "expired": 0, "app_only": 0, "challenge": 0, "error": 0}
     for aid in ids:
         if stop_check and stop_check():
             break
+        c["attempted"] += 1
         try:
-            ok, redirected, final = touch_session(aid)
+            r = touch_session(aid)
             session_state.record_event(   # 관측만(백그라운드 프로브 — 파이프라인 상태를 덮지 않음)
-                aid, "keepalive_alive" if ok else "keepalive_expired",
-                final_url=final, auth_redirect=redirected)
-            if ok:
-                alive += 1
+                aid, f"keepwarm_{r.outcome.lower()}", final_url=r.final, auth_redirect=r.reached_idp)
+            if r.alive:
+                c["alive"] += 1
+            if r.outcome == OUT_EXPIRED:
+                c["expired"] += 1
+            elif r.outcome == OUT_APP_ONLY:
+                c["app_only"] += 1
+            elif r.outcome == OUT_CHALLENGE:
+                c["challenge"] += 1
         except Exception as exc:          # best-effort — 사유만 남기고 다음 계정
+            c["error"] += 1
             on_log(f"[세션유지] {aid} 확인 실패: {exc.__class__.__name__}")
-    return alive, len(ids)
+    return c
 
 
 class KeepAlive:
@@ -103,7 +137,8 @@ class KeepAlive:
         ids = list(self._ids_fn() or [])
         if not ids:
             return
-        alive, total = keepwarm_once(ids, on_log=self._log, exclude=self._exclude_fn(),
-                                     stop_check=self._stop.is_set)
-        self._log(f"[세션유지] {total}계정 중 {alive}개 세션 유지됨 "
-                  f"(만료 {total - alive}개는 다음 실행 때 로그인). 다음 확인 {self._interval // 60}분 뒤")
+        c = keepwarm_once(ids, on_log=self._log, exclude=self._exclude_fn(),
+                          stop_check=self._stop.is_set)
+        self._log(f"[세션유지] {c['attempted']}계정 중 {c['alive']}개 유지"
+                  f"(만료 {c['expired']}·IdP미접촉 {c['app_only']}·챌린지 {c['challenge']}). "
+                  f"다음 확인 {self._interval // 60}분 뒤")

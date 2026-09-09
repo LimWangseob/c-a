@@ -14,6 +14,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+try:   # 콘솔/리다이렉트가 cp949 여도 한글/기호 출력 크래시 방지
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 from coupang_analytics import session_state  # noqa: E402
 
 

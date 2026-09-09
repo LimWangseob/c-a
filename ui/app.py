@@ -25,7 +25,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from coupang_analytics import config, keyword_store  # noqa: E402
 from coupang_analytics.browser import WingBrowser, reap_orphan_chrome  # noqa: E402
-from coupang_analytics.input_list import parse_input_list, parse_password_file  # noqa: E402
+from coupang_analytics.input_list import (parse_input_list, parse_password_file,  # noqa: E402
+                                          remember_input_path)
 from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
 from coupang_analytics.kw_shopping import NaverShopCredentials  # noqa: E402
@@ -651,6 +652,7 @@ class App(tk.Tk):
         if not path:
             return
         il = parse_input_list(path)
+        remember_input_path(path)   # keepwarm 등 앱 밖 도구가 운영계정 판별하도록 경로 기록
         self.input_list = il
         self.product_business.clear()
         products: list[str] = []

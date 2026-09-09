@@ -136,6 +136,12 @@ def _connect(db_path: str | None):
         " ts TEXT, account_id TEXT, event_type TEXT, failure_type TEXT,"
         " final_url TEXT, http_status INTEGER, auth_redirect INTEGER, elapsed_ms INTEGER)")
     con.execute("CREATE INDEX IF NOT EXISTS ix_events_acc ON session_events(account_id)")
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS keepwarm_runs ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        " started_at TEXT, finished_at TEXT,"
+        " attempted INTEGER, alive INTEGER, expired INTEGER,"
+        " app_only INTEGER, challenge INTEGER, error INTEGER)")
     return con
 
 
@@ -232,6 +238,20 @@ def record_event(account_id, event_type, *, failure_type=None, final_url=None,
     _apply(account_id, event_type, failure_type=failure_type, final_url=final_url,
            http_status=http_status, auth_redirect=auth_redirect, elapsed_ms=elapsed_ms,
            db_path=db_path)
+
+
+def record_keepwarm_run(started_at: str, counts: dict, db_path=None) -> None:
+    """keep-warm 1회 패스 요약 기록(run_id·시작/종료·시도/유지/만료/앱온리/챌린지/오류)."""
+    try:
+        with closing(_connect(db_path)) as con, con:
+            con.execute(
+                "INSERT INTO keepwarm_runs (started_at,finished_at,attempted,alive,expired,"
+                "app_only,challenge,error) VALUES (?,?,?,?,?,?,?,?)",
+                (started_at, _now(), counts.get("attempted", 0), counts.get("alive", 0),
+                 counts.get("expired", 0), counts.get("app_only", 0),
+                 counts.get("challenge", 0), counts.get("error", 0)))
+    except Exception as exc:
+        print(f"[세션관측] keepwarm run 기록 실패({exc.__class__.__name__})")
 
 
 def snapshot(db_path=None) -> list[dict]:
