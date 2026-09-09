@@ -106,24 +106,11 @@ def status_rows(plan: dict, now: datetime) -> list[dict]:
     return rows
 
 
-# ── 라이브 프로브(브라우저 1개, 로그인 0회) ───────────────────────
+# ── 라이브 프로브(브라우저 1개, 로그인 0회) — 패키지의 touch_session 재사용 ──
 def _probe_one(account_id: str) -> tuple[bool, bool, str]:
-    """계정 프로필을 열어 WING 접속 후 (valid, redirected, final_url) 반환. 로그인 시도 없음.
-
-    redirected = 접속 중 xauth/sso 로 리다이렉트가 있었는지(keep-warm 유효성 힌트).
-    """
-    from coupang_analytics.browser import WING_URL, WingBrowser
-    from coupang_analytics.pipeline import account_profile
-    seen: list[str] = []
-    with WingBrowser(profile_dir=account_profile(account_id), offscreen=True) as b:
-        b.page.on("framenavigated",
-                  lambda fr: seen.append(fr.url) if fr == b.page.main_frame else None)
-        b.goto(WING_URL)
-        b.page.wait_for_timeout(1500)
-        valid = b.authenticated()
-        final = b.page.url
-    redirected = any(("xauth" in u or "/sso/" in u) for u in seen)
-    return valid, redirected, final
+    """계정 프로필을 열어 WING 접속 후 (valid, redirected, final_url). 로그인 시도 없음."""
+    from coupang_analytics.session_keepalive import touch_session
+    return touch_session(account_id)
 
 
 def touch_pending(plan: dict, now: datetime, log=print) -> dict:
