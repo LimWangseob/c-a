@@ -340,6 +340,24 @@ class WingBrowser:
                 time.sleep(0.4)
         return None
 
+    def _check_remember_me(self, fr, log) -> None:
+        """로그인 폼에 '로그인 상태 유지'(Keycloak rememberMe) 체크박스가 있으면 체크.
+
+        켜지면 Keycloak 이 KEYCLOAK_IDENTITY 를 **지속쿠키**로 발급 → 브라우저 종료·전원 off 후에도
+        재로그인 없이 세션 복원 가능(현재는 세션쿠키라 종료 시 소멸 = 매번 재로그인→차단 유발).
+        폼에 없으면(realm 미지원) 사유만 로그(무음 아님). 제어흐름은 바꾸지 않는다.
+        """
+        cb = fr.query_selector("#rememberMe") or fr.query_selector("input[name='rememberMe']")
+        if cb is None:
+            log("  [자동입력] '로그인 상태 유지' 체크박스 없음(이 폼 미지원) — 지속쿠키화 불가")
+            return
+        try:
+            if not cb.is_checked():
+                cb.check()
+            log("  [자동입력] '로그인 상태 유지' 체크(세션 지속쿠키화 시도 — 전원off 후 복원 목적)")
+        except Exception as exc:
+            log(f"  [자동입력] 로그인 상태 유지 체크 실패({exc.__class__.__name__}) — 계속 진행")
+
     def autofill_login(self, account_id: str, password: str, on_log=None) -> bool:
         """로그인 폼에 ID/비번 자동입력 후 제출. 폼(#username) 못 찾으면 False(수동 폴백)."""
         log = on_log or (lambda m: None)
@@ -354,6 +372,7 @@ class WingBrowser:
                 return False
             u.click(); u.fill(account_id)
             p.click(); p.fill(password)
+            self._check_remember_me(fr, log)   # 로그인 상태 유지 → 인증쿠키 지속쿠키화(전원off 복원)
             btn = fr.query_selector("#kc-login")
             if btn:
                 btn.click()          # 전송 버튼 클릭 = 폼 제출
