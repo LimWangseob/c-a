@@ -83,15 +83,27 @@ def cohort_exclude() -> set[str]:
 
 
 def classify(input_path: str | None) -> dict:
-    """프로필들을 PRODUCTION/ORPHAN/COHORT 로 분류. keep-warm 대상은 PRODUCTION - COHORT."""
+    """명부 변경(신규·중지·해지)까지 반영해 분류. keep-warm 대상 = 대장∩프로필 − 코호트 − 죽은계정.
+
+    - production        : 대장에 있고 프로필 보유(= keep-warm 후보)
+    - orphan            : 프로필은 있으나 대장에 없음(관리 해지 → 자동 제외, 정리 후보)
+    - needs_first_login : 대장에 있으나 프로필 없음(신규 등록 → 사무실 첫 로그인 필요)
+    - blocked           : 중지/잠금/휴면/DISABLED 로 관측된 계정(keep-warm 두드리기 낭비 → 제외)
+    - warm              : 실제 keep-warm 대상
+    """
     profiles = profile_accounts()
     ledger, used_path = ledger_accounts(input_path)
     cohort = cohort_exclude()
+    dead = session_state.accounts_in_states(
+        (session_state.STATE_ACCOUNT_BLOCKED, session_state.STATE_DISABLED))
     production = [a for a in profiles if a in ledger] if ledger else []
     orphan = [a for a in profiles if a not in ledger] if ledger else list(profiles)
-    warm = [a for a in production if a not in cohort]
+    needs_first_login = sorted(ledger - set(profiles)) if ledger else []
+    blocked = [a for a in production if a in dead]
+    warm = [a for a in production if a not in cohort and a not in dead]
     return {"profiles": profiles, "ledger_known": bool(ledger), "ledger_path": used_path,
-            "production": production, "orphan": orphan, "cohort": sorted(cohort), "warm": warm}
+            "production": production, "orphan": orphan, "needs_first_login": needs_first_login,
+            "blocked": blocked, "cohort": sorted(cohort), "warm": warm}
 
 
 # ── 중복 실행 방지(single-instance lock) ──────────────────────────
@@ -155,21 +167,29 @@ def _once(input_path: str | None, limit: int | None, log=print) -> None:
 
 def _status(input_path: str | None) -> None:
     info = classify(input_path)
+    cohort, blocked = set(info["cohort"]), set(info["blocked"])
     print(f"대장: {info['ledger_path'] or '(모름 — 앱에서 1회 열거나 --input 지정)'}")
-    print("\n[PRODUCTION] (대장에 있고 프로필 보유 = keep-warm 후보)")
+    print("\n[PRODUCTION] (대장에 있고 프로필 보유)")
     for a in info["production"]:
-        tag = "EXCLUDED_TTL" if a in info["cohort"] else "WARM"
+        tag = ("EXCLUDED_TTL" if a in cohort else
+               "SKIP_BLOCKED" if a in blocked else "WARM")
         print(f"  {a:<20} {tag}")
+    if info["needs_first_login"]:
+        print("\n[NEEDS_FIRST_LOGIN] (신규 등록 — 사무실서 첫 로그인해야 keep-warm 편입)")
+        for a in info["needs_first_login"]:
+            print(f"  {a:<20} 프로필 없음")
     if info["orphan"]:
-        print("\n[ORPHAN] (프로필은 있으나 대장에 없음 = 제외, 정리 대상 검토)")
+        print("\n[ORPHAN] (프로필은 있으나 대장에 없음 = 관리 해지, 정리 후보)")
         for a in info["orphan"]:
             print(f"  {a:<20} EXCLUDED_ORPHAN")
     print("\n합계")
-    print(f"  TOTAL_PROFILES   = {len(info['profiles'])}")
-    print(f"  PRODUCTION       = {len(info['production'])}")
-    print(f"  TTL_COHORT       = {len(info['cohort'])}")
-    print(f"  ORPHAN           = {len(info['orphan'])}")
-    print(f"  KEEPWARM(실대상) = {len(info['warm'])}")
+    print(f"  TOTAL_PROFILES     = {len(info['profiles'])}")
+    print(f"  PRODUCTION         = {len(info['production'])}")
+    print(f"  NEEDS_FIRST_LOGIN  = {len(info['needs_first_login'])}")
+    print(f"  TTL_COHORT         = {len(info['cohort'])}")
+    print(f"  SKIP_BLOCKED(중지) = {len(info['blocked'])}")
+    print(f"  ORPHAN             = {len(info['orphan'])}")
+    print(f"  KEEPWARM(실대상)   = {len(info['warm'])}")
 
 
 def _arg(args: list[str], name: str) -> str | None:
@@ -182,6 +202,20 @@ if __name__ == "__main__":
     lim = int(_arg(args, "--limit")) if _arg(args, "--limit") else None
     if args and args[0] == "--status":
         _status(inp)
+    elif args and args[0] == "--disable":
+        if len(args) < 2:
+            print("사용: --disable <계정ID> [계정ID ...] (중지 계정 표시 → keep-warm·수집 제외)")
+        else:
+            for aid in args[1:]:
+                session_state.set_state(aid, session_state.STATE_DISABLED)
+                print(f"[중지표시] {aid} → DISABLED (keep-warm·수집에서 제외)")
+    elif args and args[0] == "--enable":
+        if len(args) < 2:
+            print("사용: --enable <계정ID> [계정ID ...] (중지 해제 → 다음 접속 때 재평가)")
+        else:
+            for aid in args[1:]:
+                session_state.set_state(aid, session_state.STATE_REAUTH_REQUIRED)
+                print(f"[중지해제] {aid} → 재평가 대기(다음 로그인/터치 때 상태 갱신)")
     elif args and args[0] == "--once":
         with _single_instance() as got:
             if got:

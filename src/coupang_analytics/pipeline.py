@@ -517,6 +517,9 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         if a.account_id in done:                  # 완료 계정 → 건너뜀
             log(f"== [{i}/{total}] {a.label} — 이미 완료, 건너뜀 ==")
             continue
+        if session_state.is_disabled(a.account_id):   # 사람이 중지(DISABLED) 표시 → 로그인 시도 안 함
+            log(f"== [{i}/{total}] {a.label} — 중지(DISABLED) 표시, 건너뜀(로그인 시도 안 함) ==")
+            continue
         log(f"== [{i}/{total}] {a.label} (계정ID: {a.account_id}) ==")
         try:   # 한 계정의 어떤 오류(수집·워크북쓰기)도 전체를 막지 않게 계정 전체를 격리
             report_acc, metrics, inv_by_vid = _login_and_discover(

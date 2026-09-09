@@ -240,6 +240,31 @@ def record_event(account_id, event_type, *, failure_type=None, final_url=None,
            db_path=db_path)
 
 
+def set_state(account_id, state, db_path=None) -> None:
+    """계정 상태를 사람이 직접 지정(예: 중지 계정 DISABLED, 복귀 시 재평가). 이벤트도 남김."""
+    _apply(account_id, "state_set", state=state, db_path=db_path)
+
+
+def accounts_in_states(states, db_path=None) -> set[str]:
+    """현재 상태가 주어진 집합에 속하는 계정ID 집합(keep-warm/수집 제외 판정용)."""
+    states = tuple(states)
+    if not states:
+        return set()
+    try:
+        with closing(_connect(db_path)) as con:
+            q = ("SELECT account_id FROM account_session_state WHERE state IN (%s)"
+                 % ",".join("?" * len(states)))
+            return {r[0] for r in con.execute(q, states)}
+    except Exception as exc:
+        print(f"[세션관측] 상태 조회 실패({exc.__class__.__name__})")
+        return set()
+
+
+def is_disabled(account_id, db_path=None) -> bool:
+    """사람이 중지(DISABLED)로 표시한 계정인지 — 수집/로그인 시도 자체를 건너뛰기용."""
+    return account_id in accounts_in_states((STATE_DISABLED,), db_path)
+
+
 def record_keepwarm_run(started_at: str, counts: dict, db_path=None) -> None:
     """keep-warm 1회 패스 요약 기록(run_id·시작/종료·시도/유지/만료/앱온리/챌린지/오류)."""
     try:
