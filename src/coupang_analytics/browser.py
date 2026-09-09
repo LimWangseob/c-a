@@ -69,6 +69,31 @@ def _kill_profile_chrome(profile_dir: str) -> int:
     return r.stdout.count("K")
 
 
+def reap_orphan_chrome(data_dir: str = "data") -> int:
+    """우리 자동화가 띄운 **잔여(좀비) Chrome 을 전부** 종료. 종료 수 반환. 앱 시작 시 1회 호출.
+
+    `__exit__`의 `_kill_tree`는 정상 종료 때만 돈다. 앱이 taskkill/F·크래시로 죽으면 그 순간 열려 있던
+    Chrome 이 좀비로 남는다(과거 246개 누적). 이걸 다음 앱 시작 때 싹 정리해 **누적을 원천 차단**한다.
+    우리 프로필 루트(`data\\profiles`·`data\\chrome-pipeline` 등 이 설치의 data 폴더) 경로를 `--user-data-dir`
+    로 쓰고 `--remote-debugging-port` 로 뜬 Chrome 만 종료 → 사용자의 일반 브라우징(기본 프로필)은 안 건드린다.
+    """
+    base = str(Path(data_dir).resolve()).lower()
+    ps = ("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+          "Where-Object { $_.CommandLine -and "
+          "$_.CommandLine.ToLower().Contains($env:SM_DATA) -and "
+          "$_.CommandLine.Contains('--remote-debugging-port') } | "
+          "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; 'K' }")
+    env = dict(os.environ)
+    env["SM_DATA"] = base
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                           capture_output=True, text=True, timeout=15, env=env)
+    except Exception as exc:   # 정리 실패는 치명적 아님 — 사유만 남기고 진행(무음 아님)
+        print(f"[browser] 좀비 Chrome 정리 건너뜀({exc.__class__.__name__})")
+        return 0
+    return r.stdout.count("K")
+
+
 def _wait_port(port: int, timeout: float = 20.0) -> None:
     end = time.time() + timeout
     while time.time() < end:

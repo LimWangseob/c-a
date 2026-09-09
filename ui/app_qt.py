@@ -19,7 +19,7 @@ from PySide6 import QtCore, QtWidgets
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from coupang_analytics import config, keyword_store  # noqa: E402
-from coupang_analytics.browser import WingBrowser  # noqa: E402
+from coupang_analytics.browser import WingBrowser, reap_orphan_chrome  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics.input_list import parse_input_list, parse_password_file  # noqa: E402
 from coupang_analytics.kw_ai import recommend_title  # noqa: E402
@@ -871,6 +871,9 @@ class App(QtWidgets.QMainWindow):
 
 
 def main():
+    reaped = reap_orphan_chrome()   # 이전 실행이 강제종료·크래시로 남긴 좀비 Chrome 정리(누적 원천 차단)
+    if reaped:
+        print(f"[시작] 잔여(좀비) Chrome {reaped}개 정리함")
     app = QtWidgets.QApplication(sys.argv)
     app.setStyleSheet(_QSS)
     win = App()
