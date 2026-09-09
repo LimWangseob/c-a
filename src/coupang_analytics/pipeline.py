@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import json
+import random
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -536,11 +538,18 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     if login_needed:
         log(f"== 로그인 필요 계정 {len(login_needed)}개 처리(세션우선 수집 완료) ==")
     blocks = 0
+    attempted = 0
     for i, a in login_needed:
         if blocks >= config.LOGIN_BLOCK_CIRCUIT:  # IP가 이미 플래그됨 → 더 두드리지 않음(더 태우기 방지)
             log(f"== [{i}/{total}] {a.label} — Akamai 차단 지속(연속 {blocks}회)으로 로그인 생략 "
                 "→ 잠시 후/내일(쉰 IP) 이어서 수집 ==")
             continue
+        if attempted > 0:   # 로그인 사이에 사람 간격(몰아치기=IP 플래그 방지). 첫 로그인엔 대기 없음
+            pace = random.uniform(config.LOGIN_PACE_MIN_SEC, config.LOGIN_PACE_MAX_SEC)
+            if pace > 0:
+                log(f"  [페이싱] 다음 로그인까지 {pace:.0f}s 대기(로그인 몰아치기=차단 회피)")
+                time.sleep(pace)
+        attempted += 1
         log(f"== [{i}/{total}] {a.label} (계정ID: {a.account_id}) — 로그인 시도 ==")
         try:
             report_acc, metrics, inv_by_vid = _login_and_discover(

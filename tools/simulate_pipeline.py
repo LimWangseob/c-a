@@ -302,6 +302,8 @@ def scenario_circuit_breaker():
 
 def main():
     _install_fakes()
+    config.LOGIN_PACE_MIN_SEC = 0   # 시뮬은 로그인 페이싱 sleep 없이(즉시)
+    config.LOGIN_PACE_MAX_SEC = 0
     print("=" * 60)
     print("  run_full 시뮬레이션 검증 (셀독 새 서식)")
     print("=" * 60)
