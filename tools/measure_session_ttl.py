@@ -94,10 +94,13 @@ def status_rows(plan: dict, now: datetime) -> list[dict]:
         el = _elapsed_hours(e, now)
         if e.get("probed_at"):
             phase = f"완료:{e['result']}" + (" (redirect)" if e.get("redirect") else "")
+        elif e.get("touch_result") == "EXPIRED":
+            phase = "⚠ 터치시 이미 EXPIRED — 재로그인 후 --touch 필요(측정 불가)"
         elif el >= e["target_hours"]:
             phase = "프로브 대기(도래)"
         else:
-            phase = f"측정중 {el:.1f}/{e['target_hours']:.0f}h"
+            base = "측정중" if e.get("touch_result") == "VALID" else "측정중(⚠ --touch 권장: baseline 부정확)"
+            phase = f"{base} {el:.1f}/{e['target_hours']:.0f}h"
         rows.append({"account_id": aid, "arm": e["arm"], "target_h": e["target_hours"],
                      "elapsed_h": round(el, 1), "phase": phase})
     return rows
@@ -121,6 +124,38 @@ def _probe_one(account_id: str) -> tuple[bool, bool, str]:
         final = b.page.url
     redirected = any(("xauth" in u or "/sso/" in u) for u in seen)
     return valid, redirected, final
+
+
+def touch_pending(plan: dict, now: datetime, log=print) -> dict:
+    """미프로브 계정을 지금 1회 터치(안전 GET, 로그인 0회) → baseline=진짜 활동시점=now 로 재설정.
+
+    Idle TTL 은 '마지막 활동 이후 경과'로 죽으므로, enroll(파일쓰기)만으론 baseline 이 부정확하다.
+    이 명령으로 실제 세션을 한 번 건드려 t=0 을 확정한다. 터치 시 EXPIRED 면 그 계정은 이미 죽어
+    측정 불가 → 재로그인 후 다시 --touch 해야 한다.
+    """
+    pending = [aid for aid, e in plan.items() if e.get("probed_at") is None]
+    if not pending:
+        log("터치할 대기 계정 없음(모두 프로브 완료).")
+        return plan
+    for aid in pending:
+        entry = plan[aid]
+        try:
+            valid, redirected, final = _probe_one(aid)
+        except Exception as exc:
+            log(f"  [{aid}] 터치 실패({exc.__class__.__name__}: {str(exc)[:80]}) — 다시 --touch")
+            continue
+        entry["baseline_at"] = now.strftime(_FMT)   # 진짜 활동시점으로 재설정
+        entry["touch_result"] = "VALID" if valid else "EXPIRED"
+        entry["touch_redirect"] = redirected
+        session_state.record_event(aid, "ttl_touch",
+                                   failure_type=None if valid else session_state.FAIL_SESSION_EXPIRED,
+                                   final_url=final, auth_redirect=redirected)
+        if valid:
+            log(f"  [{aid}] 터치 OK(VALID) — baseline=now, {entry['target_hours']:.0f}h 뒤 프로브")
+        else:
+            log(f"  [{aid}] ⚠ 터치시 EXPIRED — 재로그인 후 --touch 필요(현재 측정 불가)")
+    save_plan(plan)
+    return plan
 
 
 def probe_due(plan: dict, now: datetime, log=print) -> dict:
@@ -169,12 +204,20 @@ if __name__ == "__main__":
     if args and args[0] == "--enroll":
         plan = enroll(args[1:], plan, now)
         save_plan(plan)
-        print(f"[등록] {len(args[1:])}계정 코호트 시작(baseline=now). --status 로 확인.")
+        print(f"[등록] {len(args[1:])}계정 코호트 시작. ⚠ baseline 정확도를 위해 지금 "
+              "`--touch` 를 실행해 실제 활동시점으로 맞추세요.")
+        _print_status(plan, now)
+    elif args and args[0] == "--touch":
+        touch_pending(plan, now)
         _print_status(plan, now)
     elif args and args[0] == "--probe":
         probe_due(plan, now)
         _print_status(plan, now)
     elif args and args[0] == "--status":
         _print_status(plan, now)
+    elif args and args[0] == "--reset":
+        if _PLAN_PATH.exists():
+            _PLAN_PATH.unlink()
+        print("[초기화] 코호트 계획 삭제됨(관측 이벤트 로그는 보존). --enroll 로 다시 시작.")
     else:
         print(__doc__)
