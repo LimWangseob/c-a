@@ -245,6 +245,26 @@ def set_state(account_id, state, db_path=None) -> None:
     _apply(account_id, "state_set", state=state, db_path=db_path)
 
 
+# keep-warm 터치 결과(문자열) → 계정 상태. CHALLENGE(환경/일시)는 상태 안 바꿈.
+_KEEPWARM_STATE = {
+    "AUTH_SSO_SUCCESS": STATE_READY, "APP_ONLY": STATE_READY,
+    "EXPIRED": STATE_REAUTH_REQUIRED,
+}
+
+
+def observe_keepwarm(account_id, outcome, *, reached_idp=None, final_url=None,
+                     alive=False, db_path=None) -> None:
+    """keep-warm 1터치를 이벤트로 남기고 생존여부로 상태 갱신(다음 패스가 죽은 세션을 안 두드리게).
+
+    alive 면 READY(+세션OK시각·연속실패 리셋), EXPIRED 면 REAUTH_REQUIRED, CHALLENGE 면 상태 유지.
+    """
+    _apply(account_id, f"keepwarm_{outcome.lower()}",
+           state=_KEEPWARM_STATE.get(outcome),
+           stamp_fields=("last_session_ok_at",) if alive else (),
+           reset_account_failures=alive,
+           final_url=final_url, auth_redirect=reached_idp, db_path=db_path)
+
+
 def accounts_in_states(states, db_path=None) -> set[str]:
     """현재 상태가 주어진 집합에 속하는 계정ID 집합(keep-warm/수집 제외 판정용)."""
     states = tuple(states)

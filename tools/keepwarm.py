@@ -94,16 +94,20 @@ def classify(input_path: str | None) -> dict:
     profiles = profile_accounts()
     ledger, used_path = ledger_accounts(input_path)
     cohort = cohort_exclude()
-    dead = session_state.accounts_in_states(
+    blocked_st = session_state.accounts_in_states(
         (session_state.STATE_ACCOUNT_BLOCKED, session_state.STATE_DISABLED))
+    # 만료(로그인 필요) 세션은 GET 으로 못 살리므로 keep-warm 제외(무의미 auth 접촉 방지 = self-prune)
+    reauth_st = session_state.accounts_in_states((session_state.STATE_REAUTH_REQUIRED,))
     production = [a for a in profiles if a in ledger] if ledger else []
     orphan = [a for a in profiles if a not in ledger] if ledger else list(profiles)
     needs_first_login = sorted(ledger - set(profiles)) if ledger else []
-    blocked = [a for a in production if a in dead]
-    warm = [a for a in production if a not in cohort and a not in dead]
+    blocked = [a for a in production if a in blocked_st]
+    needs_login = [a for a in production if a in reauth_st and a not in blocked_st]
+    warm = [a for a in production
+            if a not in cohort and a not in blocked_st and a not in reauth_st]
     return {"profiles": profiles, "ledger_known": bool(ledger), "ledger_path": used_path,
             "production": production, "orphan": orphan, "needs_first_login": needs_first_login,
-            "blocked": blocked, "cohort": sorted(cohort), "warm": warm}
+            "blocked": blocked, "needs_login": needs_login, "cohort": sorted(cohort), "warm": warm}
 
 
 # ── 중복 실행 방지(single-instance lock) ──────────────────────────
@@ -168,11 +172,13 @@ def _once(input_path: str | None, limit: int | None, log=print) -> None:
 def _status(input_path: str | None) -> None:
     info = classify(input_path)
     cohort, blocked = set(info["cohort"]), set(info["blocked"])
+    needs_login = set(info["needs_login"])
     print(f"대장: {info['ledger_path'] or '(모름 — 앱에서 1회 열거나 --input 지정)'}")
     print("\n[PRODUCTION] (대장에 있고 프로필 보유)")
     for a in info["production"]:
         tag = ("EXCLUDED_TTL" if a in cohort else
-               "SKIP_BLOCKED" if a in blocked else "WARM")
+               "SKIP_BLOCKED" if a in blocked else
+               "NEEDS_LOGIN" if a in needs_login else "WARM")
         print(f"  {a:<20} {tag}")
     if info["needs_first_login"]:
         print("\n[NEEDS_FIRST_LOGIN] (신규 등록 — 사무실서 첫 로그인해야 keep-warm 편입)")
@@ -186,6 +192,7 @@ def _status(input_path: str | None) -> None:
     print(f"  TOTAL_PROFILES     = {len(info['profiles'])}")
     print(f"  PRODUCTION         = {len(info['production'])}")
     print(f"  NEEDS_FIRST_LOGIN  = {len(info['needs_first_login'])}")
+    print(f"  NEEDS_LOGIN(만료)  = {len(info['needs_login'])}")
     print(f"  TTL_COHORT         = {len(info['cohort'])}")
     print(f"  SKIP_BLOCKED(중지) = {len(info['blocked'])}")
     print(f"  ORPHAN             = {len(info['orphan'])}")

@@ -81,8 +81,8 @@ def keepwarm_once(account_ids, on_log=print, exclude=(), stop_check=None) -> dic
         c["attempted"] += 1
         try:
             r = touch_session(aid)
-            session_state.record_event(   # 관측만(백그라운드 프로브 — 파이프라인 상태를 덮지 않음)
-                aid, f"keepwarm_{r.outcome.lower()}", final_url=r.final, auth_redirect=r.reached_idp)
+            session_state.observe_keepwarm(   # 이벤트 + 생존여부로 상태 갱신(죽은 세션 self-prune)
+                aid, r.outcome, reached_idp=r.reached_idp, final_url=r.final, alive=r.alive)
             if r.alive:
                 c["alive"] += 1
             if r.outcome == OUT_EXPIRED:
