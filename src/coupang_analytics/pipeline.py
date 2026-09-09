@@ -109,15 +109,58 @@ def _best(pair) -> int | None:
     return min(vals) if vals else None
 
 
-def _measure(browser, keywords, matchers, log):
-    """키워드들의 순위를 **병렬 fetch로 한 번에** 측정 → {키워드: (ranks_pc, ranks_mobile)}. 실패 시 순차 폴백.
+# 순위 차단(Akamai 챌린지) 감지 시 이번 실행의 순위 조회를 전면 중단(더 두드리지 않음). 실행마다 리셋.
+_RANK_HALT = {"stop": False}
+_RANK_TELEMETRY_ID = "__rank__"   # 순위 응답 관측용 합성 계정ID(session_events 에 rank_* 이벤트)
 
-    모바일은 RANK_INCLUDE_MOBILE=True 일 때만 측정한다(기본 제외 — 요청사항. `_set_mobile`/mobile 경로는 보존).
-    select_keywords_light 의 measure_ranks 콜백 겸 키워드 동결 시 순위 측정에도 쓴다.
+
+class RankHalt(Exception):
+    """순위 조회 중 차단 감지 → 즉시 중단 신호. `.partial` = 중단 전까지 측정된 {키워드:(pc,mo)}."""
+    def __init__(self, partial=None):
+        super().__init__("순위 차단 감지 — 중단")
+        self.partial = partial or {}
+
+
+def _measure_nav_serial(browser, keywords, matchers, log):
+    """기본(안전) 순위 측정 — **사람처럼 검색창을 하나씩** 직렬 네비게이션 + 긴 간격(8~20s).
+
+    각 키워드 응답을 관측층에 기록(rank_ok/rank_empty/rank_challenge). 차단(RankBlocked) 감지 즉시
+    이번 실행 순위를 전면 중단(_RANK_HALT)하고 RankHalt(부분결과)를 올린다 — 더 두드리지 않는다.
     """
-    if not keywords:
+    pc: dict = {}
+    for i, kw in enumerate(keywords):
+        if _RANK_HALT["stop"]:
+            break
+        if i > 0:   # 검색 사이 사람 간격(버스트 제거 = 차단 회피)
+            d = random.uniform(config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC)
+            log(f"  [노출측정] 다음 검색까지 {d:.0f}s 대기(사람 속도)")
+            time.sleep(d)
+        try:
+            r = organic_ranks(browser, kw, matchers, log=log)
+            pc[kw] = r
+            session_state.record_event(
+                _RANK_TELEMETRY_ID, "rank_ok" if any(v is not None for v in r.values()) else "rank_empty")
+        except RankBlocked:
+            _RANK_HALT["stop"] = True
+            session_state.record_event(_RANK_TELEMETRY_ID, "rank_challenge")
+            log("  [노출측정] ⛔ 쿠팡 검색 차단 감지 — 순위 조회 즉시 중단(더 두드리지 않음)."
+                " 다음 재실행 시 남은 것부터 이어서(쉰 IP/시간 권장)")
+            raise RankHalt({k: (pc[k], {}) for k in pc})
+    return {kw: (pc.get(kw, {}), {}) for kw in keywords}
+
+
+def _measure(browser, keywords, matchers, log):
+    """키워드들의 순위 측정 → {키워드: (ranks_pc, ranks_mobile)}.
+
+    기본 = 직렬 네비게이션(RANK_NAV_SERIAL, 안전). False면 (구) 병렬 fetch 경로(빠르나 봇틱).
+    이번 실행에 이미 차단 감지(_RANK_HALT)면 즉시 빈 결과(더 두드리지 않음).
+    모바일은 RANK_INCLUDE_MOBILE=True 일 때만(기본 제외).
+    """
+    if not keywords or _RANK_HALT["stop"]:
         return {}
-    try:
+    if config.RANK_NAV_SERIAL:
+        return _measure_nav_serial(browser, keywords, matchers, log)
+    try:   # (구) 병렬 fetch 경로 — 옵션
         pc = organic_ranks_batch(browser, keywords, matchers, log=log)
         mo = (organic_ranks_batch(browser, keywords, matchers, mobile=True, log=log)
               if config.RANK_INCLUDE_MOBILE else {})
@@ -136,12 +179,17 @@ def _measure(browser, keywords, matchers, log):
 
 
 def _measure_safe(browser, keywords, matchers, log):
-    """순위 측정 예외 안전 래퍼 — 조회 중 browser 가 죽거나(TargetClosedError) 어떤 예외가 나도
-    공란 처리하고 계속(순위는 부가지표, 실패가 전체 실행을 막지 않게)."""
+    """순위 측정 예외 안전 래퍼(run_full 경로) — 어떤 예외가 나도 공란 처리하고 계속(순위는 부가지표).
+
+    차단(RankHalt)이면 부분결과를 돌려주고, 이후 _measure 는 _RANK_HALT 로 자동 no-op → 그 실행의
+    나머지 순위는 안 두드린다(자동 중단). track_ranks_stage(③)는 RankHalt 를 직접 잡아 중단·저장한다.
+    """
     if not keywords:
         return {}
     try:
         return _measure(browser, keywords, matchers, log)
+    except RankHalt as h:
+        return h.partial
     except Exception as exc:
         log(f"  [순위] 측정 실패(공란 처리) — {exc.__class__.__name__}: {str(exc)[:80]}")
         return {}
@@ -416,6 +464,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     키워드는 AI로 도출하므로 `ai_key` 필수(없으면 KeywordAIError). 한 계정이 막혀도 그 계정만 건너뛴다.
     """
     log = on_log or (lambda m: None)
+    _RANK_HALT["stop"] = False   # 이번 실행 순위 차단 플래그 초기화(차단 감지 시 이후 순위 자동 중단)
     if not ai_key:
         raise KeywordAIError("OpenAI(ChatGPT) API 키가 없어 키워드 추출을 할 수 없습니다. "
                              "설정 탭에서 OpenAI API 키를 입력한 뒤 다시 실행하세요.")
@@ -646,12 +695,16 @@ def track_ranks_stage(out_dir: str = "output", on_log=None) -> Path | None:
         log("== 순위 조회: 결과 워크북이 없습니다 — 먼저 ①②를 실행하세요 ==")
         return None
     log(f"== 노출순위 조회 시작 — {path.name} ==")
-    if config.RANK_HUMAN_SERIAL:
-        log(f"  [모드] 사람속도 직렬(동시성1·요청간격 {config.RANK_FETCH_JITTER_MIN_MS/1000:.1f}"
-            f"~{config.RANK_FETCH_JITTER_MS/1000:.1f}s) — 버스트 없이 차단 회피")
+    _RANK_HALT["stop"] = False   # 이번 실행 차단 플래그 초기화
+    if config.RANK_NAV_SERIAL:
+        log(f"  [모드] 사람속도 직렬 네비게이션(검색 간격 {config.RANK_NAV_DELAY_MIN_SEC}"
+            f"~{config.RANK_NAV_DELAY_MAX_SEC}s) — 버스트 없이 차단 회피. 차단 감지 시 즉시 중단(이어서 재개)")
+    halted = False
     with WingBrowser(profile_dir=_PROFILE, offscreen=True) as browser:
         warmup(browser)
         for biz in wb.account_sheets():
+            if halted:
+                break
             date = wb.latest_date(biz)
             if not date:
                 continue
@@ -660,16 +713,30 @@ def track_ranks_stage(out_dir: str = "output", on_log=None) -> Path | None:
                 keywords = wb.product_keywords(biz, pname)
                 if not (vids and keywords):                # 상품ID나 키워드 없으면 건너뜀
                     continue
+                # 이미 채워진 키워드는 건너뜀 = **중단 지점부터 이어서**(당일 재작업 시 남은 것만)
                 todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
                 if not todo:
                     continue
-                measured = _measure_safe(browser, todo, _vid_matcher(vids), log)
+                try:
+                    measured = _measure(browser, todo, _vid_matcher(vids), log)
+                except RankHalt as h:              # 차단 감지 → 부분결과만 기록하고 전면 중단
+                    measured = h.partial
+                    halted = True
+                except Exception as exc:           # 그 외 예외 → 공란(다음에 재시도)
+                    log(f"  [순위] 측정 실패(공란) — {exc.__class__.__name__}: {str(exc)[:80]}")
+                    measured = {}
                 for kw in todo:
-                    if kw not in measured:            # 측정 실패(예외·차단) → 공란 유지(다음에 재시도)
+                    if kw not in measured:            # 측정 안 됨(중단·실패) → 공란 유지(다음에 이어서)
                         continue
                     r = _best(measured.get(kw))       # 정상 측정: 미노출이면 '-', 노출이면 'N위'
                     wb.set_keyword_rank(biz, pname, kw, date, r)
                     log(f"  [{biz}] {pname} '{kw}': {rank_label(r)}")
-            wb.save(path)
+                wb.save(path)   # **상품마다 저장** → 중단돼도 여기까지 보존(재실행 시 이어서)
+                if halted:
+                    break
+    if halted:
+        log("== ⛔ 노출순위 중단(쿠팡 검색 차단 감지) — 진행분 저장됨. "
+            "쉰 IP/시간에 다시 실행하면 남은 것부터 이어서 조회합니다 ==")
+        return path
     log("== 노출순위 조회 완료 ==")
     return path

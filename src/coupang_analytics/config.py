@@ -28,7 +28,12 @@ RANK_PAGE_DELAY_MAX = 2.5     # 페이지 간 최대 지연(초)
 # 병렬 fetch 순위조회(기본) — 검색 1회 네비로 Akamai 프라임 후 여러 키워드를 same-origin fetch로 동시에 받아
 # 렌더 없이 파싱(실측: 프라임 후 3키워드 병렬 ~1.3초, 현행 네비 15초/키워드 대비 대폭 가속).
 RANK_ORGANIC_PER_PAGE = 60   # 검색 1페이지 상품수(실측 60) → 스캔 50은 1페이지로 충분(페이지네이션 불필요)
-RANK_HUMAN_SERIAL = True      # 사람속도 직렬 모드: 동시 fetch(버스트=봇신호) 대신 1개씩·간격 두고 조회 → 차단 회피. 빠른 병렬로 되돌리려면 False
+RANK_HUMAN_SERIAL = True      # (구 병렬 fetch 경로 전용) 직렬 fetch 여부. RANK_NAV_SERIAL=True면 이 경로 안 씀
+# 순위 안전 모드 — 공개검색(www.coupang.com)은 최고강도 봇방어. 병렬 fetch 버스트 대신 **사람처럼 검색창을
+# 하나씩 치는 직렬 네비게이션 + 긴 간격**으로 조회(위조 아님, 정상 사용 패턴). 차단 감지 시 즉시 중단.
+RANK_NAV_SERIAL = True        # True=직렬 네비게이션(기본, 안전). False=구 병렬 fetch(빠르나 봇틱)
+RANK_NAV_DELAY_MIN_SEC = 8    # 키워드(검색) 사이 최소 대기(초) — 사람이 하나씩 검색하는 리듬
+RANK_NAV_DELAY_MAX_SEC = 20   # 최대 대기(초). 실제는 MIN~MAX 무작위
 RANK_FETCH_CONCURRENCY = 2   # 병렬(직렬모드 off) 시 동시 fetch 개수. RANK_HUMAN_SERIAL=True면 1로 강제(직렬)
 RANK_FETCH_JITTER_MIN_MS = 700  # 각 fetch 전 최소 지연(ms) — 직렬모드 사람 간격 하한(0이면 하한 없음)
 RANK_FETCH_JITTER_MS = 1800   # 각 fetch 전 최대 지연(ms) — 실제 지연은 MIN~MAX 무작위(사람처럼). 직렬이라 여전히 빠름(요청당 fetch ~0.3s)

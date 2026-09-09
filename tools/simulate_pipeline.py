@@ -304,6 +304,10 @@ def main():
     _install_fakes()
     config.LOGIN_PACE_MIN_SEC = 0   # 시뮬은 로그인 페이싱 sleep 없이(즉시)
     config.LOGIN_PACE_MAX_SEC = 0
+    config.RANK_NAV_DELAY_MIN_SEC = 0   # 순위 직렬 네비 간격도 0(즉시)
+    config.RANK_NAV_DELAY_MAX_SEC = 0
+    import os, tempfile      # 관측 DB는 임시로(실 data/session_state.db 오염 방지)
+    config.SESSION_STATE_DB = os.path.join(tempfile.gettempdir(), "sim_session_state.db")
     print("=" * 60)
     print("  run_full 시뮬레이션 검증 (셀독 새 서식)")
     print("=" * 60)
