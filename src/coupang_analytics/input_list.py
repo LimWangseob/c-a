@@ -16,29 +16,6 @@ import openpyxl
 
 from . import config
 
-# 마지막으로 연 입력 대장 경로 포인터 — 상시 keep-warm(앱 밖 실행)이 "무엇이 운영계정인지" 알기 위함.
-_LAST_INPUT_PTR = Path("data/last_input_path.txt")
-
-
-def remember_input_path(path: str | Path) -> None:
-    """UI 가 입력 대장을 열 때 그 경로를 기록(비밀값 아님) → keepwarm 등 앱 밖 도구가 운영계정 판별."""
-    try:
-        _LAST_INPUT_PTR.parent.mkdir(parents=True, exist_ok=True)
-        _LAST_INPUT_PTR.write_text(str(Path(path).resolve()), encoding="utf-8")
-    except OSError as exc:
-        print(f"[입력경로] 기록 실패({exc.__class__.__name__}) — keepwarm 은 --input 로 지정 필요")
-
-
-def last_input_path() -> str | None:
-    """마지막으로 연 입력 대장 경로(존재할 때만). 없거나 파일이 사라졌으면 None."""
-    if not _LAST_INPUT_PTR.exists():
-        return None
-    try:
-        p = _LAST_INPUT_PTR.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    return p if (p and Path(p).exists()) else None
-
 
 @dataclass
 class Option:

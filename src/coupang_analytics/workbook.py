@@ -61,11 +61,6 @@ class OutputWorkbook:
     def load(cls, path: str | Path) -> "OutputWorkbook":
         return cls(openpyxl.load_workbook(path))
 
-    @property
-    def has_sheets(self) -> bool:
-        """계정 시트가 하나라도 있는지(openpyxl는 시트 0개면 저장 불가 → 저장 전 확인)."""
-        return bool(self.wb.worksheets)
-
     def save(self, path: str | Path) -> None:
         if not self.wb.worksheets:
             return   # 아직 계정 시트 없음(빈 워크북) — 저장 불가, 첫 계정 생성 후 저장됨
@@ -104,9 +99,6 @@ class OutputWorkbook:
                         self._kw_row[(biz, cur_prod, name)] = r
 
     # ── 재개(이어서)용 조회 ──────────────────────────────────
-    def has_account(self, biz: str) -> bool:
-        return biz in self.wb.sheetnames
-
     def has_product(self, biz: str, product: str) -> bool:
         return any(k[0] == biz and k[1] == product for k in self._metric_row)
 

@@ -21,8 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from coupang_analytics import config, keyword_store  # noqa: E402
 from coupang_analytics.browser import WingBrowser, reap_orphan_chrome  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
-from coupang_analytics.input_list import (parse_input_list, parse_password_file,  # noqa: E402
-                                          remember_input_path)
+from coupang_analytics.input_list import parse_input_list, parse_password_file  # noqa: E402
 from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
 from coupang_analytics.kw_shopping import NaverShopCredentials  # noqa: E402
@@ -30,7 +29,6 @@ from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_cred
 from coupang_analytics.pipeline import (master_exists, resumable_progress, run_full,  # noqa: E402
                                         select_keywords_stage, track_ranks_stage)
 from coupang_analytics.rank import make_matcher, organic_rank, warmup  # noqa: E402
-from coupang_analytics.session_keepalive import KeepAlive  # noqa: E402
 
 _PROFILE = "data/chrome-ui"
 
@@ -164,13 +162,9 @@ class App(QtWidgets.QMainWindow):
         self.naver_creds = None
         self.naver_shop = None
         self.ai_key = ""
-        self._busy = False
         self.creds_store = CredStore()
         self.product_business: dict[str, str] = {}
         self.cfg_edits: dict[str, tuple] = {}
-        self.keepalive = KeepAlive(
-            account_ids_fn=lambda: [a.account_id for a in self.input_list.accounts] if self.input_list else [],
-            on_log=self.log, pause_check=lambda: self._busy)
 
         # 실시간 모니터링용 로그 파일 미러(GUI 콘솔과 동일 내용을 파일로도 기록)
         _log_dir = Path(__file__).resolve().parents[1] / "output"
@@ -365,12 +359,6 @@ class App(QtWidgets.QMainWindow):
         self.pipeline_btn.setObjectName("accent")
         self.pipeline_btn.clicked.connect(lambda: self.do_run_full(keywords_off=False))
         top.addWidget(self.pipeline_btn)
-        self.keepalive_btn = QtWidgets.QPushButton("세션 유지 켜기")
-        self.keepalive_btn.clicked.connect(self.toggle_keepalive)
-        top.addWidget(self.keepalive_btn)
-        ka = QtWidgets.QLabel("(켜두면 세션을 주기적으로 살려둬 재로그인·2차인증이 줄어듭니다. 로그인 아님)")
-        ka.setObjectName("muted")
-        top.addWidget(ka)
         top.addStretch(1)
         rv.addLayout(top)
         desc = QtWidgets.QLabel(
@@ -506,7 +494,6 @@ class App(QtWidgets.QMainWindow):
         if not path:
             return
         il = parse_input_list(path)
-        remember_input_path(path)   # keepwarm 등 앱 밖 도구가 운영계정 판별하도록 경로 기록
         self.input_list = il
         self.product_business.clear()
         products = []
@@ -805,15 +792,11 @@ class App(QtWidgets.QMainWindow):
         btn = self.sales_btn if keywords_off else self.pipeline_btn
 
         def task():
-            self._busy = True
-            try:
-                naver = NaverAdApi(naver_creds)
-                return run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
-                                get_password=self._account_pw, resume=resume, carry_forward=carry,
-                                grow_keywords=grow, skip_ranks=skip_ranks,
-                                keywords_off=keywords_off, on_log=self.log)
-            finally:
-                self._busy = False
+            naver = NaverAdApi(naver_creds)
+            return run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
+                            get_password=self._account_pw, resume=resume, carry_forward=carry,
+                            grow_keywords=grow, skip_ranks=skip_ranks,
+                            keywords_off=keywords_off, on_log=self.log)
         self.run_bg(task, on_done=self._pipeline_done, btn=btn)
 
     def do_select_keywords(self):
@@ -831,11 +814,7 @@ class App(QtWidgets.QMainWindow):
         self.log("[키워드 선정] 시작 — 순위 조회 없이 키워드만 선정(로그인 불필요)")
 
         def task():
-            self._busy = True
-            try:
-                return select_keywords_stage(NaverAdApi(naver_creds), key, grow=grow, on_log=self.log)
-            finally:
-                self._busy = False
+            return select_keywords_stage(NaverAdApi(naver_creds), key, grow=grow, on_log=self.log)
         self.run_bg(task, on_done=self._pipeline_done, btn=self.kw_btn)
 
     def do_track_ranks(self):
@@ -847,11 +826,7 @@ class App(QtWidgets.QMainWindow):
         self.log("[노출순위 조회] 시작 — 로그인 불필요(비로그인 쿠팡 검색)")
 
         def task():
-            self._busy = True
-            try:
-                return track_ranks_stage(on_log=self.log)
-            finally:
-                self._busy = False
+            return track_ranks_stage(on_log=self.log)
         self.run_bg(task, on_done=self._pipeline_done, btn=self.track_btn)
 
     def _pipeline_done(self, path):
@@ -860,16 +835,6 @@ class App(QtWidgets.QMainWindow):
         self.log(f"[전체실행] 파일: {path}")
         self.log("=" * 50)
 
-    def toggle_keepalive(self):
-        if self.keepalive.is_running():
-            self.keepalive.stop()
-            self.keepalive_btn.setText("세션 유지 켜기")
-            return
-        if self.input_list is None:
-            QtWidgets.QMessageBox.warning(self, "입력 필요", "먼저 설정 탭에서 입력 엑셀을 여세요(대상 계정 목록).")
-            return
-        self.keepalive.start()
-        self.keepalive_btn.setText("세션 유지 끄기")
 
 
 def main():

@@ -28,7 +28,6 @@ STATE_READY = "READY"                    # 세션 정상 · 수집 가능
 STATE_REAUTH_REQUIRED = "REAUTH_REQUIRED"  # 세션 만료/2차인증 필요 — 정상 재인증 대상
 STATE_ACCOUNT_BLOCKED = "ACCOUNT_BLOCKED"  # 그 계정만의 문제(비번오류·계정잠금·90일휴면·OTP5회잠금)
 STATE_AUTH_ENV_BLOCKED = "AUTH_ENV_BLOCKED"  # 환경/전역 차단(Akamai 접근차단·봇챌린지·레이트) — 전역 서킷 후보
-STATE_DISABLED = "DISABLED"              # 운영에서 의도적으로 제외(사람이 지정)
 
 # ── 실패 분류(taxonomy) ─────────────────────────────────────────
 FAIL_BAD_CREDENTIAL = "AUTH_BAD_CREDENTIAL"  # 계정 스코프
@@ -40,7 +39,6 @@ FAIL_SESSION_EXPIRED = "SESSION_EXPIRED"     # 정상 재인증(폼 지속/세�
 FAIL_RATE_LIMITED = "RATE_LIMITED"           # 전역 신호(현재 로그인 단계 관측 신호 없음 — 데이터API용 예비)
 FAIL_CHALLENGE_PAGE = "CHALLENGE_PAGE"       # 전역 신호(Akamai 봇 챌린지 오버레이)
 FAIL_ACCESS_BLOCKED = "ACCESS_BLOCKED"       # 전역 신호(Akamai 전면 차단 Access Denied)
-FAIL_NETWORK_ERROR = "NETWORK_ERROR"         # 일시(상태 변경 안 함)
 FAIL_UNKNOWN = "UNKNOWN_AUTH_ERROR"          # 미상(상태 변경 안 함)
 
 # 전역(환경) 서킷 후보 — 이것만 IP 차원 신호로 취급(계정 스코프 오류는 전역 중단시키지 않음)
@@ -136,12 +134,6 @@ def _connect(db_path: str | None):
         " ts TEXT, account_id TEXT, event_type TEXT, failure_type TEXT,"
         " final_url TEXT, http_status INTEGER, auth_redirect INTEGER, elapsed_ms INTEGER)")
     con.execute("CREATE INDEX IF NOT EXISTS ix_events_acc ON session_events(account_id)")
-    con.execute(
-        "CREATE TABLE IF NOT EXISTS keepwarm_runs ("
-        " id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        " started_at TEXT, finished_at TEXT,"
-        " attempted INTEGER, alive INTEGER, expired INTEGER,"
-        " app_only INTEGER, challenge INTEGER, error INTEGER)")
     return con
 
 
@@ -238,65 +230,6 @@ def record_event(account_id, event_type, *, failure_type=None, final_url=None,
     _apply(account_id, event_type, failure_type=failure_type, final_url=final_url,
            http_status=http_status, auth_redirect=auth_redirect, elapsed_ms=elapsed_ms,
            db_path=db_path)
-
-
-def set_state(account_id, state, db_path=None) -> None:
-    """계정 상태를 사람이 직접 지정(예: 중지 계정 DISABLED, 복귀 시 재평가). 이벤트도 남김."""
-    _apply(account_id, "state_set", state=state, db_path=db_path)
-
-
-# keep-warm 터치 결과(문자열) → 계정 상태. CHALLENGE(환경/일시)는 상태 안 바꿈.
-_KEEPWARM_STATE = {
-    "AUTH_SSO_SUCCESS": STATE_READY, "APP_ONLY": STATE_READY,
-    "EXPIRED": STATE_REAUTH_REQUIRED,
-}
-
-
-def observe_keepwarm(account_id, outcome, *, reached_idp=None, final_url=None,
-                     alive=False, db_path=None) -> None:
-    """keep-warm 1터치를 이벤트로 남기고 생존여부로 상태 갱신(다음 패스가 죽은 세션을 안 두드리게).
-
-    alive 면 READY(+세션OK시각·연속실패 리셋), EXPIRED 면 REAUTH_REQUIRED, CHALLENGE 면 상태 유지.
-    """
-    _apply(account_id, f"keepwarm_{outcome.lower()}",
-           state=_KEEPWARM_STATE.get(outcome),
-           stamp_fields=("last_session_ok_at",) if alive else (),
-           reset_account_failures=alive,
-           final_url=final_url, auth_redirect=reached_idp, db_path=db_path)
-
-
-def accounts_in_states(states, db_path=None) -> set[str]:
-    """현재 상태가 주어진 집합에 속하는 계정ID 집합(keep-warm/수집 제외 판정용)."""
-    states = tuple(states)
-    if not states:
-        return set()
-    try:
-        with closing(_connect(db_path)) as con:
-            q = ("SELECT account_id FROM account_session_state WHERE state IN (%s)"
-                 % ",".join("?" * len(states)))
-            return {r[0] for r in con.execute(q, states)}
-    except Exception as exc:
-        print(f"[세션관측] 상태 조회 실패({exc.__class__.__name__})")
-        return set()
-
-
-def is_disabled(account_id, db_path=None) -> bool:
-    """사람이 중지(DISABLED)로 표시한 계정인지 — 수집/로그인 시도 자체를 건너뛰기용."""
-    return account_id in accounts_in_states((STATE_DISABLED,), db_path)
-
-
-def record_keepwarm_run(started_at: str, counts: dict, db_path=None) -> None:
-    """keep-warm 1회 패스 요약 기록(run_id·시작/종료·시도/유지/만료/앱온리/챌린지/오류)."""
-    try:
-        with closing(_connect(db_path)) as con, con:
-            con.execute(
-                "INSERT INTO keepwarm_runs (started_at,finished_at,attempted,alive,expired,"
-                "app_only,challenge,error) VALUES (?,?,?,?,?,?,?,?)",
-                (started_at, _now(), counts.get("attempted", 0), counts.get("alive", 0),
-                 counts.get("expired", 0), counts.get("app_only", 0),
-                 counts.get("challenge", 0), counts.get("error", 0)))
-    except Exception as exc:
-        print(f"[세션관측] keepwarm run 기록 실패({exc.__class__.__name__})")
 
 
 def snapshot(db_path=None) -> list[dict]:

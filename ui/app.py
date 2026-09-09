@@ -25,14 +25,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from coupang_analytics import config, keyword_store  # noqa: E402
 from coupang_analytics.browser import WingBrowser, reap_orphan_chrome  # noqa: E402
-from coupang_analytics.input_list import (parse_input_list, parse_password_file,  # noqa: E402
-                                          remember_input_path)
+from coupang_analytics.input_list import parse_input_list, parse_password_file  # noqa: E402
 from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
 from coupang_analytics.kw_shopping import NaverShopCredentials  # noqa: E402
 from coupang_analytics.pipeline import (master_exists, resumable_progress, run_full,  # noqa: E402
                                         select_keywords_stage, track_ranks_stage)
-from coupang_analytics.session_keepalive import KeepAlive  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_credentials_file  # noqa: E402
 from coupang_analytics.rank import make_matcher, organic_rank, warmup  # noqa: E402
@@ -140,10 +138,6 @@ class App(tk.Tk):
         self.naver_creds = None
         self.naver_shop = None   # NaverShopCredentials (경쟁강도용, 선택)
         self.ai_key = os.environ.get("OPENAI_API_KEY", "")
-        self._busy = False       # 전체 실행 중 여부(세션유지 일시정지용)
-        self.keepalive = KeepAlive(
-            account_ids_fn=lambda: [a.account_id for a in self.input_list.accounts] if self.input_list else [],
-            on_log=self.log, pause_check=lambda: self._busy)
         self.product_business: dict[str, str] = {}
         self.cfg_vars: dict[str, tuple] = {}
         self.creds_store = CredStore()
@@ -395,10 +389,6 @@ class App(tk.Tk):
                                        command=lambda: self.do_run_full(keywords_off=False),
                                        style="Accent.TButton")
         self.pipeline_btn.pack(side="left", padx=(4, 0))
-        self.keepalive_btn = ttk.Button(topbar, text="세션 유지 켜기", command=self.toggle_keepalive)
-        self.keepalive_btn.pack(side="left", padx=10)
-        ttk.Label(topbar, text="(켜두면 로그인 세션을 주기적으로 살려둬 재로그인·2차인증이 줄어듭니다. 로그인 아님)"
-                  ).pack(side="left")
         ttk.Label(run, justify="left", foreground="#64748b", text=(
             "계정마다 [로그인→판매분석→키워드→PC·모바일 순위]를 완결하고 통합 엑셀에 누적 저장합니다. "
             "로그인은 창 없이 자동, 2차인증 필요할 때만 창이 뜹니다(로그로 예고). 진행상황은 아래 로그에서 확인."
@@ -494,15 +484,11 @@ class App(tk.Tk):
         btn = self.sales_btn if keywords_off else self.pipeline_btn
 
         def task():
-            self._busy = True   # 실행 중 세션유지 일시정지(같은 프로필 충돌 방지)
-            try:
-                naver = NaverAdApi(naver_creds)
-                return run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
-                                get_password=self._account_pw, resume=resume, carry_forward=carry,
-                                grow_keywords=grow, skip_ranks=skip_ranks,
-                                keywords_off=keywords_off, on_log=self.log)
-            finally:
-                self._busy = False
+            naver = NaverAdApi(naver_creds)
+            return run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
+                            get_password=self._account_pw, resume=resume, carry_forward=carry,
+                            grow_keywords=grow, skip_ranks=skip_ranks,
+                            keywords_off=keywords_off, on_log=self.log)
         self.run_bg(task, on_done=self._pipeline_done, btn=btn)
 
     def do_select_keywords(self):
@@ -519,11 +505,7 @@ class App(tk.Tk):
         self.log("[키워드 선정] 시작 — 순위 조회 없이 키워드만 선정(로그인 불필요)")
 
         def task():
-            self._busy = True
-            try:
-                return select_keywords_stage(NaverAdApi(naver_creds), key, grow=False, on_log=self.log)
-            finally:
-                self._busy = False
+            return select_keywords_stage(NaverAdApi(naver_creds), key, grow=False, on_log=self.log)
         self.run_bg(task, on_done=self._pipeline_done, btn=self.kw_btn)
 
     def do_track_ranks(self):
@@ -535,24 +517,8 @@ class App(tk.Tk):
         self.log("[노출순위 조회] 시작 — 로그인 불필요(비로그인 쿠팡 검색)")
 
         def task():
-            self._busy = True
-            try:
-                return track_ranks_stage(on_log=self.log)
-            finally:
-                self._busy = False
+            return track_ranks_stage(on_log=self.log)
         self.run_bg(task, on_done=self._pipeline_done, btn=self.track_btn)
-
-    def toggle_keepalive(self):
-        """세션 유지 켜기/끄기. 켜두면 주기적으로 세션을 살려둬 재로그인·2차인증이 준다(로그인 아님)."""
-        if self.keepalive.is_running():
-            self.keepalive.stop()
-            self.keepalive_btn.config(text="세션 유지 켜기")
-            return
-        if self.input_list is None:
-            messagebox.showwarning("입력 필요", "먼저 설정 탭에서 입력 엑셀을 여세요(대상 계정 목록).")
-            return
-        self.keepalive.start()
-        self.keepalive_btn.config(text="세션 유지 끄기")
 
     def _pipeline_done(self, path):
         # 팝업 창 없이 로그에만 상태 기록(갑작스러운 창으로 놀라지 않도록)
@@ -652,7 +618,6 @@ class App(tk.Tk):
         if not path:
             return
         il = parse_input_list(path)
-        remember_input_path(path)   # keepwarm 등 앱 밖 도구가 운영계정 판별하도록 경로 기록
         self.input_list = il
         self.product_business.clear()
         products: list[str] = []
