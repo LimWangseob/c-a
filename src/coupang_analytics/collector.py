@@ -186,11 +186,17 @@ def fetch_inventory(page, log=None) -> dict[str, int]:
         except json.JSONDecodeError as exc:
             raise InventoryFetchError(f"inventory search 응답 JSON 파싱 실패: {exc}") from exc
         props = data.get("viProperties") or []
+        before = len(out)
         out.update(_parse_inventory(props))
         pg = data.get("paginationResponse") or {}
         total = int(pg.get("totalNumberOfElements") or len(out))
         log(f"  [재고] search p{page_num + 1} — {len(props)}개 (누적 {len(out)}/{total})")
-        if not props or len(out) >= total:
+        # 종료: 빈 페이지 / 목표 도달 / **이 페이지가 새 항목 0개**(페이지네이션 미진행=중복 재수신)
+        # → 마지막 조건이 무한루프 방지 가드(재고 API가 pageNumber 무시하고 첫 100개만 반복 반환하는 경우).
+        if not props or len(out) >= total or len(out) == before:
+            if len(out) < total and len(out) == before:
+                log(f"  [재고] ⚠ 페이지네이션 미진행 — 상위 {len(out)}개(재고 많은순)만 기록하고 종료"
+                    f" (총 {total}개 중, 무한루프 방지)")
             break
         page_num += 1
     return out
