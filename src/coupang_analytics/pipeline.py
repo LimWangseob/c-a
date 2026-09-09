@@ -14,7 +14,7 @@ from pathlib import Path
 
 from . import config
 from .browser import WING_URL, WingBrowser
-from .input_list import Account, InputList
+from .input_list import Account, InputList, InputValidationError, validate_input_list
 from . import wing_session
 from .kw_ai import KeywordAIError, recommend_title
 from .kw_recommend import (attack_priority, comp_from_idx, diagnose_exposure,
@@ -393,6 +393,17 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     if not ai_key:
         raise KeywordAIError("OpenAI(ChatGPT) API 키가 없어 키워드 추출을 할 수 없습니다. "
                              "설정 탭에서 OpenAI API 키를 입력한 뒤 다시 실행하세요.")
+    # 시작 전 입력 검증 — 경고는 알리고 진행, 치명적 이상은 시작 차단(작업 도중 크래시·데이터 손실 예방)
+    fatals, warns = validate_input_list(input_list)
+    for w in warns:
+        log(f"  [입력검증] ⚠ {w}")
+    if fatals:
+        for f in fatals:
+            log(f"  [입력검증] ✖ {f}")
+        raise InputValidationError("입력 파일 검증 실패 — 위 항목을 고친 뒤 다시 시작하세요.")
+    log(f"[입력검증] 통과 — 계정 {len(input_list.accounts)}개 · "
+        f"상품 {sum(len(a.products) for a in input_list.accounts)}개"
+        + (f" · 경고 {len(warns)}건(진행)" if warns else ""))
     now = datetime.now()
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)

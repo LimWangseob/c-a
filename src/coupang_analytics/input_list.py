@@ -156,6 +156,7 @@ def parse_input_list(path: str | Path) -> InputList:
     i_opt, i_vid, i_pid = idx.get("option"), idx.get("vendor"), idx.get("product_id")
 
     accounts: list[Account] = []
+    by_id: dict[str, Account] = {}          # 같은 계정ID 재등장 시 상품을 이어 붙이기 위한 색인
     errors: list[str] = []
     current_rep = ""
     current_acct: Account | None = None
@@ -170,10 +171,16 @@ def parse_input_list(path: str | Path) -> InputList:
         if rep:
             current_rep = rep
         if acct:
-            current_acct = Account(acct, current_rep, biz)
-            if not current_rep and not biz:
-                errors.append(f"{row_no}행: 계정 '{acct}' 대표자명/사업자명이 모두 비어 있음")
-            accounts.append(current_acct)
+            if acct in by_id:               # 같은 계정ID 재등장 → 기존 계정에 상품 이어붙임(분리·누락 방지)
+                current_acct = by_id[acct]
+                if not current_acct.business_name and biz:   # 뒤 행에 사업자명 있으면 채움
+                    current_acct.business_name = biz
+            else:
+                current_acct = Account(acct, current_rep, biz)
+                if not current_rep and not biz:
+                    errors.append(f"{row_no}행: 계정 '{acct}' 대표자명/사업자명이 모두 비어 있음")
+                by_id[acct] = current_acct
+                accounts.append(current_acct)
         if prod:
             _finalize(current_prod)
             current_prod = Product(prod)
@@ -192,3 +199,35 @@ def parse_input_list(path: str | Path) -> InputList:
     # 리포트 기준 시드: 상품/옵션/ID는 판매분석 리포트가 제공하므로 계정만 있으면 유효.
     valid = [a for a in accounts if a.account_id]
     return InputList(accounts=valid, errors=errors)
+
+
+class InputValidationError(Exception):
+    """입력 파일에 치명적 이상이 있어 작업을 시작할 수 없음(시작 전 차단)."""
+
+
+def validate_input_list(il: InputList) -> tuple[list[str], list[str]]:
+    """작업 시작 전 입력 검증 → (치명적, 경고) 목록.
+
+    치명적(시작 차단): 파서 구조오류·유효계정 0개·계정ID 빈칸·시트명 충돌(다른 계정이 같은 시트명 → 덮어씀).
+    경고(진행하되 알림): 사업자명 빈칸(→대표자명/계정ID 대체)·상품 0개 계정(수집 시 건너뜀).
+    """
+    fatals: list[str] = list(il.errors)     # 파서가 잡은 구조 오류
+    warnings: list[str] = []
+    accts = il.accounts
+    if not accts:
+        fatals.append("유효한 계정이 하나도 없습니다(입력 파일/헤더 확인).")
+    if any(not (a.account_id or "").strip() for a in accts):
+        fatals.append("계정ID가 빈 계정이 있습니다.")
+    labels: dict[str, set[str]] = {}        # 시트명(label) → 그 이름을 쓰는 계정ID들
+    for a in accts:
+        labels.setdefault(a.label, set()).add(a.account_id)
+    for name, ids in labels.items():
+        if len(ids) > 1:                    # 서로 다른 계정이 같은 시트명 → 데이터 덮어씀
+            fatals.append(f"시트명 충돌: '{name}' 을 서로 다른 계정({', '.join(sorted(ids))})이 공유 "
+                          "→ 시트 덮어씀. 사업자명/대표자명으로 구분하세요.")
+    for a in accts:
+        if not (a.business_name or "").strip():
+            warnings.append(f"계정 '{a.account_id}' 사업자명 없음 → 시트명 '{a.label}'(대표자명/계정ID) 사용.")
+        if not a.products:
+            warnings.append(f"계정 '{a.account_id}'({a.label}) 상품 0개 → 수집 시 건너뜀.")
+    return fatals, warnings
