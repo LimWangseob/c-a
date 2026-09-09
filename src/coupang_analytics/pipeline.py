@@ -672,8 +672,8 @@ def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = 
                         for t in tracks:
                             wb.set_keyword_search(biz, pname, t.keyword, t.volume)
                         log(f"  [{biz}] {pname} → 키워드 {[t.keyword for t in tracks]}")
-                except KeywordAIError as exc:
-                    log(f"  [{biz}] {pname} 키워드 선정 실패(건너뜀) — {str(exc)[:80]}")
+                except Exception as exc:   # 한 상품 실패(AI·네이버 400 등)가 나머지 상품·계정 선정을 안 막게 격리
+                    log(f"  [{biz}] {pname} 키워드 선정 실패(건너뜀) — {exc.__class__.__name__}: {str(exc)[:80]}")
             wb.save(path)
     log("== 키워드 선정 완료 ==")
     return path
