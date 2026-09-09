@@ -30,7 +30,9 @@ from coupang_analytics.kw_recommend import TrackKeyword  # noqa: E402
 from coupang_analytics.report import OptionMetric  # noqa: E402
 
 _LOGIN_FAIL_ID = "FAIL"
-_STATE = {"select_calls": 0, "crash_at": None}   # 키워드 선정 호출을 세고 지정 시점에 크래시
+_STATE = {"select_calls": 0, "crash_at": None, "error_at": None}
+# crash_at = 프로세스 강제종료 프록시(KeyboardInterrupt=BaseException, 계정격리 안 됨 → resume 대상)
+# error_at = 한 계정 처리 오류 프록시(RuntimeError=일반 예외 → 그 계정만 건너뜀, 전체 완주)
 
 
 # ── 가짜 의존성 ────────────────────────────────────────────────
@@ -64,7 +66,9 @@ def _fake_keywords(title, naver, ai_key=None, n=None, browser=None, log=None,
     """가짜 선정 — TrackKeyword(exposure_best=순위3). exclude면 새 키워드만. crash_at 시점에 크래시."""
     _STATE["select_calls"] += 1
     if _STATE["crash_at"] is not None and _STATE["select_calls"] == _STATE["crash_at"]:
-        raise RuntimeError("시뮬레이션 크래시(키워드 선정 중)")
+        raise KeyboardInterrupt("시뮬레이션 프로세스 강제종료(계정격리로 안 잡힘 → resume 대상)")
+    if _STATE["error_at"] is not None and _STATE["select_calls"] == _STATE["error_at"]:
+        raise RuntimeError("시뮬레이션 계정 처리 오류(일반 예외 → 그 계정만 건너뜀)")
     if exclude:
         extra = [("kw3", 1500, "낮음"), ("kw4", 800, "중간")]
         picks = [p for p in extra if p[0] not in exclude][:(n or 1)]
@@ -149,7 +153,7 @@ def _check(cond: bool, msg: str) -> None:
 # ── 시나리오 ──────────────────────────────────────────────────
 def scenario_normal():
     print("[시나리오 1] 정상 전체 실행 (3계정: 계약1·개인2)")
-    _STATE.update(select_calls=0, crash_at=None)
+    _STATE.update(select_calls=0, crash_at=None, error_at=None)
     d = Path(tempfile.mkdtemp())
     final = P.run_full(_accounts(["a1", "b1", "c1"]), naver=None, out_dir=str(d), ai_key="sim",
                        date_from="2026-09-02", date_to="2026-09-02", resume=False, on_log=lambda m: None)
@@ -171,19 +175,19 @@ def scenario_crash_resume():
     print("[시나리오 2] 크래시 후 이어서 하기")
     d = Path(tempfile.mkdtemp())
     # 첫 실행: a1 선정(호출1) 완료, b1 선정(호출2)에서 크래시 → done=[a1]
-    _STATE.update(select_calls=0, crash_at=2)
+    _STATE.update(select_calls=0, crash_at=2, error_at=None)
     crashed = False
     try:
         P.run_full(_accounts(["a1", "b1", "c1"]), naver=None, out_dir=str(d), ai_key="sim",
                    date_from="2026-09-02", date_to="2026-09-02", resume=False, on_log=lambda m: None)
-    except RuntimeError:
+    except KeyboardInterrupt:   # 프로세스 강제종료 프록시(BaseException) — 계정격리로 안 잡히고 런 중단
         crashed = True
     _check(crashed, "첫 실행이 크래시로 중단됨")
     _check(P._partial_path(d).exists() and P._progress_path(d).exists(), "진행 파일 남음")
     meta = json.loads(P._progress_path(d).read_text(encoding="utf-8"))
     _check(meta["done"] == ["a1"], f"완료 계정=a1 (실제 {meta['done']})")
     # 이어서: a1 건너뛰고 b1·c1 완료
-    _STATE.update(select_calls=0, crash_at=None)
+    _STATE.update(select_calls=0, crash_at=None, error_at=None)
     logs: list[str] = []
     final = P.run_full(_accounts(["a1", "b1", "c1"]), naver=None, out_dir=str(d), ai_key="sim",
                        date_from="2026-09-02", date_to="2026-09-02", resume=True, on_log=logs.append)
@@ -194,7 +198,7 @@ def scenario_crash_resume():
 
 def scenario_login_fail():
     print("[시나리오 3] 로그인 실패 계정 건너뛰기")
-    _STATE.update(select_calls=0, crash_at=None)
+    _STATE.update(select_calls=0, crash_at=None, error_at=None)
     d = Path(tempfile.mkdtemp())
     final = P.run_full(_accounts(["a1", _LOGIN_FAIL_ID, "c1"]), naver=None, out_dir=str(d), ai_key="sim",
                        date_from="2026-09-02", date_to="2026-09-02", resume=False, on_log=lambda m: None)
@@ -204,7 +208,7 @@ def scenario_login_fail():
 
 def scenario_carry_forward():
     print("[시나리오 4] 통계 이어쓰기(동결) + 발굴 추가")
-    _STATE.update(select_calls=0, crash_at=None)
+    _STATE.update(select_calls=0, crash_at=None, error_at=None)
     d = Path(tempfile.mkdtemp())
     accts = _accounts(["a1"])
     master = P._master_path(d)
@@ -228,6 +232,33 @@ def scenario_carry_forward():
     _check(len(kws3) <= config.KW_MAX_TRACK, f"day3: 상한 이내 ({len(kws3)})")
 
 
+def scenario_account_error_isolated():
+    print("[시나리오 5] 한 계정 처리 오류 → 격리(건너뜀), 나머지 완주(전체 안 막힘)")
+    d = Path(tempfile.mkdtemp())
+    _STATE.update(select_calls=0, crash_at=None, error_at=2)   # b1(2번째) 처리 중 일반 예외
+    logs: list[str] = []
+    final = P.run_full(_accounts(["a1", "b1", "c1"]), naver=None, out_dir=str(d), ai_key="sim",
+                       date_from="2026-09-02", date_to="2026-09-02", resume=False, on_log=logs.append)
+    joined = "\n".join(logs)
+    _check(final is not None, "런이 크래시 없이 완주(최종본 반환)")
+    _check("처리 오류" in joined and "건너뜀" in joined, "오류 계정 격리 로그(건너뜀)")
+    _check({"비즈-a1", "비즈-c1"} <= _sheets(final), "정상 계정 a1·c1 시트 존재")
+    _check(not P._partial_path(d).exists(), "완주 후 진행 파일 정리됨")
+
+
+def scenario_empty_business_name():
+    print("[시나리오 6] 빈 사업자명 → 시트명 label 폴백(대표자명), KeyError 없음")
+    d = Path(tempfile.mkdtemp())
+    _STATE.update(select_calls=0, crash_at=None, error_at=None)
+    opt = Option(label="옵-x", vendor_item_ids=["vid-x"], product_ids=[])
+    prod = Product(name="상품-x", options=[opt], kind=config.KIND_PERSONAL)
+    ilist = InputList(accounts=[Account("acctX", "대표-X", "", [prod])], errors=[])   # 사업자명 빈값
+    final = P.run_full(ilist, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-09-02",
+                       date_to="2026-09-02", resume=False, keywords_off=True, on_log=lambda m: None)
+    _check(final is not None, "빈 사업자명이어도 크래시 없이 완주")
+    _check("대표-X" in _sheets(final), "시트명이 대표자명으로 폴백됨(빈 시트명 KeyError 방지)")
+
+
 def main():
     _install_fakes()
     print("=" * 60)
@@ -237,6 +268,8 @@ def main():
     scenario_crash_resume()
     scenario_login_fail()
     scenario_carry_forward()
+    scenario_account_error_isolated()
+    scenario_empty_business_name()
     print("=" * 60)
     print("  [완료] 모든 시나리오 통과")
     print("=" * 60)

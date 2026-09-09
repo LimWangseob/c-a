@@ -172,46 +172,46 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log):
         b.goto(WING_URL)
         b.page.wait_for_timeout(1500)
         if b.authenticated():
-            log(f"  [{a.business_name}] 세션 재사용 → 이미 로그인됨 (창 안 뜸)")
+            log(f"  [{a.label}] 세션 재사용 → 이미 로그인됨 (창 안 뜸)")
         else:
             shown = {"v": False}
 
             def _need_user():   # 2차인증·봇챌린지 등 사람이 꼭 필요할 때만 창을 띄운다(1회)
                 if not shown["v"]:
                     shown["v"] = True
-                    log(f"  [{a.business_name}] ⚠ 로그인 창을 잠시 띄웁니다(2차인증/직접로그인 필요). 놀라지 마세요")
+                    log(f"  [{a.label}] ⚠ 로그인 창을 잠시 띄웁니다(2차인증/직접로그인 필요). 놀라지 마세요")
                     b.show()
 
             if pw and b.autofill_login(a.account_id, pw, on_log=log):
-                log(f"  [{a.business_name}] ID/비번 자동입력·제출 — 창 숨긴 채 로그인 확인 중"
+                log(f"  [{a.label}] ID/비번 자동입력·제출 — 창 숨긴 채 로그인 확인 중"
                     " (2차인증 필요할 때만 창 표시)")
             else:
                 _need_user()   # 비번 없음/자동입력 실패 → 직접 로그인해야 하니 창 표시
-                log(f"  [{a.business_name}] 직접 로그인이 필요해 창을 띄웠습니다")
+                log(f"  [{a.label}] 직접 로그인이 필요해 창을 띄웠습니다")
             if not b.wait_for_login(timeout=300, on_log=log, tag=a.account_id, on_need_user=_need_user):
-                log(f"  [{a.business_name}] 로그인 미완료 — 이 계정 건너뜀")
+                log(f"  [{a.label}] 로그인 미완료 — 이 계정 건너뜀")
                 return None, {}, {}
             b.hide()   # 로그인 끝나면 다시 숨김
         try:
             products, metrics = discover(b.page, date_from, date_to, log)   # 같은 세션에서 즉시 수집
         except PWTimeout:   # '엑셀 다운로드'/데이터 미표시 = 판매(수집) 상품 없음(정상)
-            log(f"  [{a.business_name}] 판매분석 데이터 없음 — 정상(수집할 상품 없음), 건너뜀")
+            log(f"  [{a.label}] 판매분석 데이터 없음 — 정상(수집할 상품 없음), 건너뜀")
             return None, {}, {}
         # 로켓그로스(계약) 상품이 있으면 같은 세션에서 재고현황도 직접조회(개인계정은 재고 없음 → 생략)
         inventory: dict[str, int] = {}
         if any(p.kind == config.KIND_CONTRACT for p in products):
             try:
                 inventory = fetch_inventory(b.page, log)
-                log(f"  [{a.business_name}] 재고현황 {len(inventory)}개 옵션 조회")
+                log(f"  [{a.label}] 재고현황 {len(inventory)}개 옵션 조회")
             except InventoryFetchError as exc:   # 부가지표 — 실패해도 수집 전체는 진행(사유 명시)
-                log(f"  [{a.business_name}] ⚠ 재고현황 조회 실패(계속) — {str(exc)[:120]}")
+                log(f"  [{a.label}] ⚠ 재고현황 조회 실패(계속) — {str(exc)[:120]}")
         _persist_session(a, b, log)                                 # 세션 3요소+쿠키 영속(부가)
     save_discovered(a.account_id, products)
     # 활동(조회/판매/방문>0) 있는 상품만 추적 대상으로
     active = [p for p in products
               if any((m := metrics.get(oid)) and (m.views or m.sales or m.visitors)
                      for opt in p.options for oid in opt.vendor_item_ids)]
-    log(f"  [{a.business_name}] 상품 {len(products)}개 발견, 활동 {len(active)}개 추적")
+    log(f"  [{a.label}] 상품 {len(products)}개 발견, 활동 {len(active)}개 추적")
     return Account(a.account_id, a.representative, a.business_name, active), metrics, inventory
 
 
@@ -306,7 +306,7 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
     - keywords_off=True(① 판매수집 단계): 키워드·순위 없이 지표·재고·상품ID만 기록(키워드는 ②, 순위는 ③).
     상품마다 save_path 저장 → 도중 끊겨도 이어감.
     """
-    biz = report_acc.business_name
+    biz = report_acc.label   # 시트명 = 사업자명, 없으면 대표자명·계정ID(빈 시트명 KeyError 방지)
     wb.ensure_account(biz)
     for product in report_acc.products:
         title = product.display_title
@@ -450,42 +450,42 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     total = len(accounts)
     for i, a in enumerate(accounts, 1):
         if a.account_id in done:                  # 완료 계정 → 건너뜀
-            log(f"== [{i}/{total}] {a.business_name} — 이미 완료, 건너뜀 ==")
+            log(f"== [{i}/{total}] {a.label} — 이미 완료, 건너뜀 ==")
             continue
-        log(f"== [{i}/{total}] {a.business_name} (계정ID: {a.account_id}) ==")
-        try:
+        log(f"== [{i}/{total}] {a.label} (계정ID: {a.account_id}) ==")
+        try:   # 한 계정의 어떤 오류(로그인·수집·워크북쓰기)도 전체를 막지 않게 계정 전체를 격리
             report_acc, metrics, inv_by_vid = _login_and_discover(a, date_from, date_to, get_password, log)
+            if report_acc is None:      # 로그인 미완료/데이터 없음 → 다음 계정(전체 안 막힘)
+                continue
+
+            # 자동완성(키워드 후보)·순위 모두 비로그인 쿠팡 세션이 필요하다. 로그인 브라우저가 닫힌 뒤 별도로
+            # 연다(중첩 금지 — sync playwright 충돌 방지). 활동 상품이 있을 때만 열고, 그 한 세션에서
+            # 키워드 선정(자동완성)→순위까지 재사용한다(warmup 먼저 = 쿠팡 오리진 로드, same-origin fetch).
+            if report_acc.products:
+                # 재고현황: {옵션ID:수량} → {상품명: 상품 vid 합산}(상품당 vendorItem 여러 개일 수 있음)
+                inventory = _inventory_by_product(report_acc.products, inv_by_vid)
+                if skip_ranks or keywords_off:
+                    # 순위 제외(날짜지정) 또는 판매수집 전용(①): 쿠팡 순위 브라우저 안 열고(차단 접촉 0)
+                    # 판매지표·재고·상품ID만(keywords_off) 또는 + 키워드(재사용/부분점수 선정)만 기록
+                    _process_account(report_acc, wb, naver, ai_key, None, metrics, inventory,
+                                     col_label, grow, log, partial, skip_ranks=skip_ranks,
+                                     keywords_off=keywords_off)
+                else:
+                    with WingBrowser(profile_dir=_PROFILE, offscreen=True) as rank_browser:
+                        warmup(rank_browser)
+                        _process_account(report_acc, wb, naver, ai_key, rank_browser, metrics, inventory,
+                                         col_label, grow, log, partial)
+            else:                                        # 활동 상품 0개 → Chrome 개방 생략, 시트도 생략
+                log(f"  [{a.label}] 활동 상품 0개 — 시트·키워드·순위 생략")
+
+            done.add(a.account_id)                    # 이 계정 완료 확정
+            _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks)
+            wb.save(partial)
+            log(f"  [{a.label}] 완료 — 진행 {len(done)}/{total} (진행 저장: {partial.name})")
         except Exception as exc:
             first = (str(exc).splitlines() or [""])[0][:250]
-            log(f"  [{a.business_name}] 처리 오류: {exc.__class__.__name__}: {first} — 건너뜀")
+            log(f"  [{a.label}] 처리 오류: {exc.__class__.__name__}: {first} — 건너뜀")
             continue
-        if report_acc is None:      # 로그인 미완료 → 다음 계정(전체 안 막힘)
-            continue
-
-        # 자동완성(키워드 후보)·순위 모두 비로그인 쿠팡 세션이 필요하다. 로그인 브라우저가 닫힌 뒤 별도로
-        # 연다(중첩 금지 — sync playwright 충돌 방지). 활동 상품이 있을 때만 열고, 그 한 세션에서
-        # 키워드 선정(자동완성)→순위까지 재사용한다(warmup 먼저 = 쿠팡 오리진 로드, same-origin fetch).
-        if report_acc.products:
-            # 재고현황: {옵션ID:수량} → {상품명: 상품 vid 합산}(상품당 vendorItem 여러 개일 수 있음)
-            inventory = _inventory_by_product(report_acc.products, inv_by_vid)
-            if skip_ranks or keywords_off:
-                # 순위 제외(날짜지정) 또는 판매수집 전용(①): 쿠팡 순위 브라우저 안 열고(차단 접촉 0)
-                # 판매지표·재고·상품ID만(keywords_off) 또는 + 키워드(재사용/부분점수 선정)만 기록
-                _process_account(report_acc, wb, naver, ai_key, None, metrics, inventory,
-                                 col_label, grow, log, partial, skip_ranks=skip_ranks,
-                                 keywords_off=keywords_off)
-            else:
-                with WingBrowser(profile_dir=_PROFILE, offscreen=True) as rank_browser:
-                    warmup(rank_browser)
-                    _process_account(report_acc, wb, naver, ai_key, rank_browser, metrics, inventory,
-                                     col_label, grow, log, partial)
-        else:                                        # 활동 상품 0개 → Chrome 개방 생략, 시트도 생략
-            log(f"  [{a.business_name}] 활동 상품 0개 — 시트·키워드·순위 생략")
-
-        done.add(a.account_id)                    # 이 계정 완료 확정
-        _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks)
-        wb.save(partial)
-        log(f"  [{a.business_name}] 완료 — 진행 {len(done)}/{total} (진행 저장: {partial.name})")
 
     # 전부 완료 → 통계 마스터 갱신 + 그날 스냅샷 저장, 진행 상태 정리
     snapshot = _snapshot_path(out, now)
