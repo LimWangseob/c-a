@@ -11,6 +11,7 @@ from __future__ import annotations
 import threading
 
 from . import config
+from . import session_state
 from .browser import WING_URL, WingBrowser
 from .pipeline import account_profile
 
@@ -61,7 +62,14 @@ class KeepAlive:
                 with WingBrowser(profile_dir=account_profile(aid), offscreen=True) as b:
                     b.goto(WING_URL)
                     b.page.wait_for_timeout(1200)
-                    if b.authenticated():     # 대시보드 도달=세션 살아있음(방문 자체가 만료 시계를 미룸)
+                    ok = b.authenticated()    # 대시보드 도달=세션 살아있음(방문 자체가 만료 시계를 미룸)
+                    # 관측만(백그라운드 프로브 — 파이프라인이 정한 상태를 덮지 않음). WING 접속이
+                    # 실제 재인증 리다이렉트를 거쳤는지(=keep-warm 유효성)도 최종 URL로 힌트 기록.
+                    redirected = any(s in (b.page.url or "") for s in ("xauth", "/sso/"))
+                    session_state.record_event(
+                        aid, "keepalive_alive" if ok else "keepalive_expired",
+                        final_url=b.page.url, auth_redirect=redirected)
+                    if ok:
                         alive += 1
             except Exception as exc:          # 백그라운드 best-effort — 사유만 남기고 다음 계정
                 self._log(f"[세션유지] {aid} 확인 실패: {exc.__class__.__name__}")

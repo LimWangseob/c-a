@@ -16,6 +16,7 @@ from . import config
 from .browser import WING_URL, WingBrowser
 from .input_list import Account, InputList, InputValidationError, validate_input_list
 from . import wing_session
+from . import session_state
 from .kw_ai import KeywordAIError, recommend_title
 from .kw_recommend import (attack_priority, comp_from_idx, diagnose_exposure,
                            keyword_in_title, rank_label, select_keywords_light)
@@ -183,7 +184,9 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
         b.page.wait_for_timeout(1500)
         if b.authenticated():
             log(f"  [{a.label}] 세션 재사용 → 이미 로그인됨 (창 안 뜸)")
+            session_state.observe_session_ok(a.account_id, final_url=b.page.url)   # 관측(제어흐름 불변)
         elif not login:            # 세션우선 1차 패스 — 자동제출 안 하고 로그인 대기열로 미룸
+            session_state.observe_reauth_required(a.account_id, final_url=b.page.url)
             raise NeedLogin()
         else:
             shown = {"v": False}
@@ -201,16 +204,21 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
                 _need_user()   # 비번 없음/자동입력 실패 → 직접 로그인해야 하니 창 표시
                 log(f"  [{a.label}] 직접 로그인이 필요해 창을 띄웠습니다")
             if not b.wait_for_login(timeout=300, on_log=log, tag=a.account_id, on_need_user=_need_user):
-                if b.classify_login()[0] == "blocked":   # Akamai 차단 → 서킷브레이커가 세도록 신호
+                code, detail = b.classify_login()
+                ftype = session_state.failure_type_of(code, detail)   # 세분 실패분류(탐지코드는 불변)
+                session_state.observe_auth_failure(a.account_id, ftype, final_url=b.page.url)
+                if code == "blocked":   # Akamai 차단 → 서킷브레이커가 세도록 신호
                     log(f"  [{a.label}] Akamai 로그인 차단 — 이 계정 건너뜀")
                     raise LoginBlocked()
                 log(f"  [{a.label}] 로그인 미완료 — 이 계정 건너뜀")
                 return None, {}, {}
+            session_state.observe_auth_success(a.account_id, final_url=b.page.url)
             b.hide()   # 로그인 끝나면 다시 숨김
         try:
             products, metrics = discover(b.page, date_from, date_to, log)   # 같은 세션에서 즉시 수집
         except PWTimeout:   # '엑셀 다운로드'/데이터 미표시 = 판매(수집) 상품 없음(정상)
             log(f"  [{a.label}] 판매분석 데이터 없음 — 정상(수집할 상품 없음), 건너뜀")
+            session_state.observe_collection_empty(a.account_id)
             return None, {}, {}
         # 로켓그로스(계약) 상품이 있으면 같은 세션에서 재고현황도 직접조회(개인계정은 재고 없음 → 생략)
         inventory: dict[str, int] = {}
@@ -221,6 +229,7 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
             except InventoryFetchError as exc:   # 부가지표 — 실패해도 수집 전체는 진행(사유 명시)
                 log(f"  [{a.label}] ⚠ 재고현황 조회 실패(계속) — {str(exc)[:120]}")
         _persist_session(a, b, log)                                 # 세션 3요소+쿠키 영속(부가)
+        session_state.observe_collection_done(a.account_id)         # 관측: 이 계정 수집 완료 시각
     save_discovered(a.account_id, products)
     # 활동(조회/판매/방문>0) 있는 상품만 추적 대상으로
     active = [p for p in products
