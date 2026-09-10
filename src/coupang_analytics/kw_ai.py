@@ -323,6 +323,7 @@ def _ask(client: OpenAI, model: str, system: str, user: str, max_tokens: int = 1
     try:
         resp = client.chat.completions.create(
             model=model, max_tokens=max_tokens, temperature=temperature,  # 0=결정적(재현성)
+            response_format={"type": "json_object"},   # OpenAI JSON 모드 — 깨진 JSON(파싱실패) 원천 차단(전 단계 JSON 객체 반환)
             messages=[{"role": "system", "content": system},
                       {"role": "user", "content": user}])
     except Exception as exc:

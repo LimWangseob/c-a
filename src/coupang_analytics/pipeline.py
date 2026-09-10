@@ -411,41 +411,47 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
             return _measure_safe(browser, kws, _m, log)   # 순위 실패해도 판매데이터 완주
 
         measure_cb = measure if (browser is not None and not skip_ranks) else None
-        existing = wb.product_keywords(biz, product.name)
-        if existing:                                   # 기존 상품 → 키워드 동결
-            keywords = list(existing)
-            wb.ensure_product_block(biz, product.name, kind, keywords)   # no-op
-            if grow and len(existing) < config.KW_MAX_TRACK and browser is not None:
-                want = min(config.KW_ADD_PER_DAY, config.KW_MAX_TRACK - len(existing))
-                found = select_keywords_light(title, naver, ai_key, browser=browser, log=log,
-                                              n=want, measure_ranks=measure, exclude=set(existing))
-                add = [t for t in found if t.keyword not in existing][:want]
-                if add:
-                    wb.add_product_keywords(biz, product.name, [t.keyword for t in add])
-                    for t in add:
-                        wb.set_keyword_search(biz, product.name, t.keyword, t.volume)
-                    keywords += [t.keyword for t in add]
-                    log(f"  [키워드] {title} → 동결 {existing} + 발굴 {[t.keyword for t in add]}")
+        try:   # 한 상품의 키워드 선정 실패(AI 깨진 JSON·네이버 400 등)가 계정 전체를 막지 않게 격리
+            existing = wb.product_keywords(biz, product.name)
+            if existing:                                   # 기존 상품 → 키워드 동결
+                keywords = list(existing)
+                wb.ensure_product_block(biz, product.name, kind, keywords)   # no-op
+                if grow and len(existing) < config.KW_MAX_TRACK and browser is not None:
+                    want = min(config.KW_ADD_PER_DAY, config.KW_MAX_TRACK - len(existing))
+                    found = select_keywords_light(title, naver, ai_key, browser=browser, log=log,
+                                                  n=want, measure_ranks=measure, exclude=set(existing))
+                    add = [t for t in found if t.keyword not in existing][:want]
+                    if add:
+                        wb.add_product_keywords(biz, product.name, [t.keyword for t in add])
+                        for t in add:
+                            wb.set_keyword_search(biz, product.name, t.keyword, t.volume)
+                        keywords += [t.keyword for t in add]
+                        log(f"  [키워드] {title} → 동결 {existing} + 발굴 {[t.keyword for t in add]}")
+                    else:
+                        log(f"  [키워드] {title} → (동결) {keywords}")
                 else:
                     log(f"  [키워드] {title} → (동결) {keywords}")
-            else:
-                log(f"  [키워드] {title} → (동결) {keywords}")
-            todo = [kw for kw in keywords if not wb.is_rank_filled(biz, product.name, kw, date_iso)]
-            measured = measure(todo) if (browser is not None and todo) else {}
-            ranks = {kw: _best(measured.get(kw)) for kw in todo if kw in measured}  # 측정 실패는 공란
-            track_info = [(kw, 0, "", ranks.get(kw)) for kw in keywords]   # 동결분은 검색량/경쟁 미측정
-            roles = {}                                     # 동결 상품은 역할 재판정 안 함
-        else:                                          # 새 상품 → AI 선정(skip_ranks면 순위 없이 부분점수)
-            tracks = select_keywords_light(title, naver, ai_key, browser=browser, log=log,
-                                           measure_ranks=measure_cb)
-            keywords = [t.keyword for t in tracks]
-            wb.ensure_product_block(biz, product.name, kind, keywords)
-            for t in tracks:
-                wb.set_keyword_search(biz, product.name, t.keyword, t.volume)
-            ranks = {t.keyword: t.exposure_best for t in tracks}          # 선정단계 순위 재사용
-            track_info = [(t.keyword, t.volume, t.comp_idx, t.exposure_best) for t in tracks]
-            roles = {t.keyword: t.role for t in tracks if t.role}         # ④ 역할(REP/SALES/GROWTH/DEFENSE)
-            log(f"  [키워드] {title} → {[f'{t.keyword}({t.role})' if t.role else t.keyword for t in tracks]}")
+                todo = [kw for kw in keywords if not wb.is_rank_filled(biz, product.name, kw, date_iso)]
+                measured = measure(todo) if (browser is not None and todo) else {}
+                ranks = {kw: _best(measured.get(kw)) for kw in todo if kw in measured}  # 측정 실패는 공란
+                track_info = [(kw, 0, "", ranks.get(kw)) for kw in keywords]   # 동결분은 검색량/경쟁 미측정
+                roles = {}                                     # 동결 상품은 역할 재판정 안 함
+            else:                                          # 새 상품 → AI 선정(skip_ranks면 순위 없이 부분점수)
+                tracks = select_keywords_light(title, naver, ai_key, browser=browser, log=log,
+                                               measure_ranks=measure_cb)
+                keywords = [t.keyword for t in tracks]
+                wb.ensure_product_block(biz, product.name, kind, keywords)
+                for t in tracks:
+                    wb.set_keyword_search(biz, product.name, t.keyword, t.volume)
+                ranks = {t.keyword: t.exposure_best for t in tracks}          # 선정단계 순위 재사용
+                track_info = [(t.keyword, t.volume, t.comp_idx, t.exposure_best) for t in tracks]
+                roles = {t.keyword: t.role for t in tracks if t.role}         # ④ 역할(REP/SALES/GROWTH/DEFENSE)
+                log(f"  [키워드] {title} → {[f'{t.keyword}({t.role})' if t.role else t.keyword for t in tracks]}")
+        except Exception as exc:   # 이 상품만 건너뜀(판매지표·재고는 아래에서 계속 기록). 계정은 완주.
+            log(f"  [{biz}] {title} 키워드 처리 실패(건너뜀, 판매지표는 기록) — "
+                f"{exc.__class__.__name__}: {str(exc)[:80]}")
+            wb.ensure_product_block(biz, product.name, kind, wb.product_keywords(biz, product.name))
+            keywords, ranks, track_info, roles = [], {}, [], {}
 
         if not skip_ranks:                             # 순위 기록(PC). 날짜지정 수집(skip_ranks)은 순위 제외
             for kw in keywords:                        # 이미 채워진 건 건너뜀
