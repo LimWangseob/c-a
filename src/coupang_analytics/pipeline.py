@@ -345,24 +345,37 @@ def _fill_product_metrics(wb, biz, product, metrics, inventory, date_iso) -> Non
         wb.set_product_metric(biz, product.name, config.M_TOTAL_VIEWS, date_iso, views)
 
 
-def _log_diagnose(product, track_info, ai_key, log) -> None:
-    """진단(제목포함×순위)·공략우선순위·권고제목을 **로그로** 남긴다(새 서식엔 미기록, 셀러 참고용).
+def _log_diagnose(product, track_info, ai_key, log, wb=None, biz=None, roles=None) -> None:
+    """진단(제목포함×순위)·공략우선순위·역할·권고제목을 **로그로** 남긴다(새 서식엔 미기록, 셀러 참고용).
 
     track_info: [(키워드, 검색량, 경쟁정도, 순위)]. 새 서식은 검색량·순위만 기록하고, 이 분석은 로그로 제공.
+    roles: {키워드: 역할}(REP/SALES/GROWTH/DEFENSE) — 새 상품 AI 선정 시에만. 동결 상품은 None.
+    권고제목(⑤): 키워드 서명이 캐시와 같으면 AI 재호출 없이 재사용(동결 상품 매일 재생성 방지).
     """
     if not track_info:
         return
     title = product.display_title
+    roles = roles or {}
     for kw, vol, comp, rank in track_info:
         diag = diagnose_exposure(keyword_in_title(kw, title), rank, None)
+        role = f" · 역할 {roles[kw]}" if kw in roles else ""
         log(f"  [진단] '{kw}': {diag} · 공략우선순위 {attack_priority(vol, comp_from_idx(comp))}"
-            f" · 순위 {rank_label(rank)}")
+            f" · 순위 {rank_label(rank)}{role}")
     kws_by_vol = [kw for kw, _v, _c, _r in sorted(track_info, key=lambda x: x[1], reverse=True)]
-    try:
-        rec = recommend_title(title, kws_by_vol, api_key=ai_key)
-    except KeywordAIError as exc:
-        log(f"  [제목] 권고제목 생성 실패 — {exc.__class__.__name__}: {str(exc)[:60]}")
-        rec = ""
+    sig = "|".join(sorted(kw for kw, *_ in track_info))   # 키워드 집합 서명(순서 무관)
+    rec = ""
+    if wb is not None and biz is not None:                 # ⑤ 캐시 재사용(키워드 동일 → 같은 제목)
+        csig, ctitle = wb.title_cache(biz, product.name)
+        if csig == sig and ctitle:
+            rec = ctitle
+    if not rec:
+        try:
+            rec = recommend_title(title, kws_by_vol, api_key=ai_key)
+        except KeywordAIError as exc:
+            log(f"  [제목] 권고제목 생성 실패 — {exc.__class__.__name__}: {str(exc)[:60]}")
+            rec = ""
+        if rec and wb is not None and biz is not None:
+            wb.set_title_cache(biz, product.name, sig, rec)
     cov = round(sum(1 for kw, *_ in track_info if keyword_in_title(kw, title)) / len(track_info) * 100)
     log(f"  [제목] 현재: {title}")
     log(f"  [제목] 커버리지 {cov}% → 권고: {rec or '(생성실패)'}")
@@ -421,6 +434,7 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
             measured = measure(todo) if (browser is not None and todo) else {}
             ranks = {kw: _best(measured.get(kw)) for kw in todo if kw in measured}  # 측정 실패는 공란
             track_info = [(kw, 0, "", ranks.get(kw)) for kw in keywords]   # 동결분은 검색량/경쟁 미측정
+            roles = {}                                     # 동결 상품은 역할 재판정 안 함
         else:                                          # 새 상품 → AI 선정(skip_ranks면 순위 없이 부분점수)
             tracks = select_keywords_light(title, naver, ai_key, browser=browser, log=log,
                                            measure_ranks=measure_cb)
@@ -430,7 +444,8 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
                 wb.set_keyword_search(biz, product.name, t.keyword, t.volume)
             ranks = {t.keyword: t.exposure_best for t in tracks}          # 선정단계 순위 재사용
             track_info = [(t.keyword, t.volume, t.comp_idx, t.exposure_best) for t in tracks]
-            log(f"  [키워드] {title} → {keywords}")
+            roles = {t.keyword: t.role for t in tracks if t.role}         # ④ 역할(REP/SALES/GROWTH/DEFENSE)
+            log(f"  [키워드] {title} → {[f'{t.keyword}({t.role})' if t.role else t.keyword for t in tracks]}")
 
         if not skip_ranks:                             # 순위 기록(PC). 날짜지정 수집(skip_ranks)은 순위 제외
             for kw in keywords:                        # 이미 채워진 건 건너뜀
@@ -440,7 +455,7 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
         wb.set_product_vids(biz, product.name,   # 상품 고유ID 저장(③ 순위조회 상품 매칭용)
                             [oid for opt in product.options for oid in opt.vendor_item_ids])
         _fill_product_metrics(wb, biz, product, metrics, inventory, date_iso)
-        _log_diagnose(product, track_info, ai_key, log)
+        _log_diagnose(product, track_info, ai_key, log, wb=wb, biz=biz, roles=roles)
         wb.save(save_path)
 
 

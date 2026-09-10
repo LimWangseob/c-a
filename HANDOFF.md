@@ -163,6 +163,12 @@ python ui/app_qt.py     # 기본 UI(PySide6). 설정→입력엑셀 열기(비�
 - 정적: `python -m pyflakes src/coupang_analytics/` (무결 유지)
 
 ## 7. 최근 세션 변경 요약 (무엇이 바뀌었나)
+- (2026-09-10) **AI 프롬프트 경량화 + 호출 최적화**(사용자 2건 인계 중 ②; ①itemscout=로그인필수 유료SaaS라 드롭). **실호출량 재산정: 정상 운영일 AI=`recommend_title` 하나뿐(하루~79콜), ①~④는 새상품/발굴만**(동결). "3만콜" 전제는 ~400배 과대. 반영:
+  - **프롬프트 5종 경량화**(`kw_ai.py`) — 사용자 초안 채택하되 **`identities`(정체성) 필수 복원**(2026-09-07 실측픽스 보호), `attributes` 신규 병기. 출력 JSON 스키마화: analyze `{core,use,identities,attributes,anchors}` / generate `{candidates}` / judge `{judged:[{k,label,match}]}` / select `{selected:[{k,role,priority}]}` / title `{title,primary_keyword}`.
+  - **③ match(0~1) 채택, AI intent는 드롭**(네이버 실클릭 intent 유지 — 이중계산·토큰 방지). `judge_keywords`→`{kw:(tier,match)}`, `_score_relevance(tier,match)`가 티어 내 미세조정(핵심35×(0.7+0.3·match)). **④ role**(REP/SALES/GROWTH/DEFENSE)=`TrackKeyword.role`, **로그로 소비**(셀독 서식 컬럼 불변). `select_keywords`→`[(kw,role)]`.
+  - **⑤ 제목 캐시**(`pipeline._log_diagnose`+`workbook.title_cache`/`set_title_cache`, `_상품ID` 숨김시트 col4/5 키워드서명·권고제목): 키워드 동일 시 `recommend_title` AI 재호출 생략 → **동결 상품 매일 79콜→≈0**.
+  - **보류**: `①+②③` 통합(판정풀이 네이버·쿠팡 소스와 섞여 구조상 불가/첫날만 절감). `_assemble_candidates` 반환 8튜플(+attributes,matches).
+  - **검증**: pyflakes·vulture 0 · simulate_pipeline(8시나리오)·simulate_stages(18/0) 통과 · `_ask` 목킹 파싱계약 14/14. ⚠️ **라이브 OpenAI 품질검증은 429(키 쿼터)로 보류** — 쿼터 회복 후 `python tools/verify_offline.py` 재실행(화로테이블 회귀 확인).
 - (2026-09-08) **출력 서식 = 셀독 전면 재설계**(사용자 `셀독 판매 데이터_서식.xlsx`): `workbook.py` 새로 작성 — **시트=사업자**, 상품 블록 **계약(로켓그로스)=판매량·방문자·노출량·재고현황 / 개인=전체판매량·전체노출량**, 키워드별 **노출순위(PC 단일)**·검색량, 일자 가로 누적. 상품구분은 vi-detail-search **registrationType(RFM/NORMAL) 자동판별**(collector). **모바일 순위 제외**(`RANK_INCLUDE_MOBILE=False`, `_set_mobile`/mobile 경로 **보존**). 순위=상품단위(옵션 통합). 점수/진단/권고제목은 서식 미기록·**로그로만** 제공. 키워드 동결·발굴(grow) 유지. config 구 서식 상수 제거, shop 파라미터 제거. **Phase2 남음=재고현황(rfm-inventory API)** — `tools/capture_inventory_api.py`로 캡처 후 `_fill_product_metrics` 재고 배선. 검증: simulate 4시나리오·verify_prescribe 27/0·pyflakes/vulture 0. 메모리 `seldoc-output-format`.
 - (2026-09-08) **순위조회 병렬 fetch + AI/네이버 단축**(실측 근거):
   - 순위: `organic_ranks_batch`(검색 1회 프라임→병렬 fetch, 60/페이지=1페이지) — 6키워드 순위측정 ~72s→**~3s**(실측). 실패 시 순차 폴백. 메모리 `coupang-search-prime-then-fetch`.

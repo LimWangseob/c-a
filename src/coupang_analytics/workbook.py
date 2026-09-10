@@ -245,6 +245,7 @@ class OutputWorkbook:
         ws = self.wb.create_sheet(title=_META_SHEET)
         ws.sheet_state = "hidden"
         ws.cell(1, 1, "사업자"); ws.cell(1, 2, "상품명"); ws.cell(1, 3, "상품ID(|구분)")
+        ws.cell(1, 4, "키워드서명"); ws.cell(1, 5, "권고제목")   # ⑤ 제목 캐시(동결 상품 AI 재호출 생략)
         return ws
 
     def set_product_vids(self, biz: str, product: str, vids) -> None:
@@ -267,6 +268,24 @@ class OutputWorkbook:
             return []
         v = self.wb[_META_SHEET].cell(row, 3).value
         return [x for x in str(v).split("|") if x] if v else []
+
+    def title_cache(self, biz: str, product: str) -> tuple[str, str]:
+        """(키워드서명, 권고제목) — 없으면 ('', ''). 서명이 현재 키워드와 같으면 AI 재호출 없이 재사용(⑤)."""
+        row = self._vid_row.get((biz, product))
+        if row is None or _META_SHEET not in self.wb.sheetnames:
+            return "", ""
+        ws = self.wb[_META_SHEET]
+        return _norm(ws.cell(row, 4).value), _norm(ws.cell(row, 5).value)
+
+    def set_title_cache(self, biz: str, product: str, sig: str, title: str) -> None:
+        """권고제목을 키워드서명과 함께 숨김 시트에 캐시(동결 상품은 매일 재생성하지 않도록)."""
+        ws = self._meta_ws()
+        row = self._vid_row.get((biz, product))
+        if row is None:
+            row = ws.max_row + 1
+            ws.cell(row, 1, biz); ws.cell(row, 2, product)
+            self._vid_row[(biz, product)] = row
+        ws.cell(row, 4, sig); ws.cell(row, 5, title)
 
     def set_keyword_search(self, biz: str, product: str, keyword: str, volume) -> bool:
         row = self._kw_row.get((biz, product, keyword))

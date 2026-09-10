@@ -57,6 +57,7 @@ class TrackKeyword:
     exposure_best: int | None = None       # 쿠팡 오가닉 최상위 순위(옵션 통틀어), 미노출 None
     ranks_pc: dict = field(default_factory=dict)      # {옵션라벨: PC순위 or None} — 선정단계 측정 재사용
     ranks_mobile: dict = field(default_factory=dict)  # {옵션라벨: 모바일순위 or None}
+    role: str = ""                 # REP(대표)/SALES(수요)/GROWTH(성장)/DEFENSE(방어) — AI 최종선정 역할
 
 
 def _score(volume: int, rocket_ratio: float, ad_count: int) -> float:
@@ -77,12 +78,19 @@ def _norm(s: str) -> str:
 # ── Keyword Score(100점) — 후보 지표 종합 (페이즈 B) ────────────────
 # 관련성35(핵심/연관) + 구매의도25(클릭·롱테일) + 검색량20 + 쿠팡노출15 + 추세5(데이터 없어 0).
 # 압축(부분점수=노출 제외)으로 상위 후보만 쿠팡 실노출을 측정한 뒤, 노출점수를 더해 전체점수·등급을 낸다.
-def _score_relevance(tier: str) -> float:
+def _score_relevance(tier: str, match: float = 1.0) -> float:
+    """관련성 점수 = 티어(핵심/연관) 기본점 × AI 적합도(match) 미세조정.
+
+    티어가 굵은 축(핵심 35 / 연관 19.25)이고, match(0~1)로 티어 내 순서를 다듬는다
+    (match=0이면 0.7배, 1이면 1.0배). 구매의도(intent)는 별도로 네이버 실클릭에서 측정한다.
+    """
     if tier == "핵심":
-        return config.KW_SCORE_W_RELEVANCE
-    if tier == "연관":
-        return config.KW_SCORE_W_RELEVANCE * 0.55
-    return 0.0
+        base = config.KW_SCORE_W_RELEVANCE
+    elif tier == "연관":
+        base = config.KW_SCORE_W_RELEVANCE * 0.55
+    else:
+        return 0.0
+    return base * (0.7 + 0.3 * max(0.0, min(match, 1.0)))
 
 
 def _score_volume(volume: int) -> float:
@@ -113,14 +121,14 @@ def _score_exposure(best_rank: int | None) -> float:
     return 0.0
 
 
-def _partial_score(kv: KeywordVolume, tier: str) -> float:
-    """노출 측정 전 점수(압축용) — 관련성+구매의도+검색량+추세(0)."""
-    return (_score_relevance(tier) + _score_intent(kv.total_clicks, kv.keyword)
+def _partial_score(kv: KeywordVolume, tier: str, match: float = 1.0) -> float:
+    """노출 측정 전 점수(압축용) — 관련성(티어×match)+구매의도+검색량+추세(0)."""
+    return (_score_relevance(tier, match) + _score_intent(kv.total_clicks, kv.keyword)
             + _score_volume(kv.total))
 
 
-def _keyword_score(kv: KeywordVolume, tier: str, best_rank: int | None) -> float:
-    return _partial_score(kv, tier) + _score_exposure(best_rank)
+def _keyword_score(kv: KeywordVolume, tier: str, match: float, best_rank: int | None) -> float:
+    return _partial_score(kv, tier, match) + _score_exposure(best_rank)
 
 
 def _grade(score: float) -> str:
@@ -152,8 +160,11 @@ def _timed(_logf, label, fn, *args, **kwargs):
 
 def _assemble_candidates(title: str, naver: NaverAdApi, ai_key: str | None, generate: bool,
                          browser=None, log=None
-                         ) -> tuple[str, str, list[str], list[str], list[KeywordVolume], dict[str, str]]:
-    """후보 조립(여러 방안) → 핵심/연관 판정. 반환: (core, use, identities, 앵커, 통과 KeywordVolume, {키워드:연관도}).
+                         ) -> tuple[str, str, list[str], list[str], list[str],
+                                    list[KeywordVolume], dict[str, str], dict[str, float]]:
+    """후보 조립(여러 방안) → 핵심/연관 판정.
+
+    반환: (core, use, identities, attributes, 앵커, 통과 KeywordVolume, {키워드:연관도}, {키워드:match}).
 
     후보 소스(generate=True 배치 추적):
       ① 앵커 네이버 연관확장(≥KW_MIN_VOLUME=500) — 넓은 맥락.
@@ -163,7 +174,8 @@ def _assemble_candidates(title: str, naver: NaverAdApi, ai_key: str | None, gene
     핵심(core)은 후보에 있으면 하한과 무관하게 추적 대상. AI 실패 시 KeywordAIError 전파.
     자동완성 소스 실패는 로그로 남기고 그 소스만 건너뛴다(다른 소스로 계속).
     """
-    use, core, identities, anchors = _timed(log, "AI 제목분석", analyze_product, title, api_key=ai_key)
+    use, core, identities, attributes, anchors = _timed(log, "AI 제목분석", analyze_product,
+                                                        title, api_key=ai_key)
     pool: dict[str, KeywordVolume] = {}
     for c in _timed(log, "네이버 앵커연관", naver.related_keywords_multi, anchors):   # ① 넓은 연관(≥500)
         if c.total >= config.KW_MIN_VOLUME:
@@ -182,7 +194,8 @@ def _assemble_candidates(title: str, naver: NaverAdApi, ai_key: str | None, gene
                 for c in _timed(log, "네이버 자동완성연관", naver.related_keywords_multi, suggests):
                     if _norm(c.keyword) in sug_norm and c.total >= config.KW_TRACK_MIN_VOLUME:
                         pool.setdefault(c.keyword, c)
-        gen = _timed(log, "AI 조합생성", generate_keywords, title, use, identities, api_key=ai_key)  # ③
+        gen = _timed(log, "AI 조합생성", generate_keywords, title, use, identities, attributes,
+                     api_key=ai_key)  # ③
         gen_norm = {_norm(g) for g in gen}
         for c in _timed(log, "네이버 조합연관", naver.related_keywords_multi, gen):   # 생성어 실검색량 측정
             if _norm(c.keyword) in gen_norm and c.total >= config.KW_TRACK_MIN_VOLUME:
@@ -193,12 +206,15 @@ def _assemble_candidates(title: str, naver: NaverAdApi, ai_key: str | None, gene
             for c in _timed(log, "네이버 2단계연관", naver.related_keywords_multi, exp_seeds):
                 if c.total >= config.KW_TRACK_MIN_VOLUME:
                     pool.setdefault(c.keyword, c)
-    tiers = _timed(log, "AI 핵심연관판정", judge_keywords, title, [c.keyword for c in pool.values()],
-                   api_key=ai_key, use=use, core=core, identities=identities)  # gpt-4o + 배치 병렬
+    judged = _timed(log, "AI 핵심연관판정", judge_keywords, title, [c.keyword for c in pool.values()],
+                    api_key=ai_key, use=use, core=core, identities=identities)  # {키워드:(티어,match)}
+    tiers = {k: t for k, (t, _m) in judged.items()}
+    matches = {k: m for k, (_t, m) in judged.items()}
     if core and core in pool and core not in tiers:                # 핵심은 무조건 추적 대상
         tiers[core] = "핵심"
+        matches.setdefault(core, 1.0)
     relevant = [pool[name] for name in pool if name in tiers]
-    return core, use, identities, anchors, relevant, tiers
+    return core, use, identities, attributes, anchors, relevant, tiers, matches
 
 
 def _ai_candidates(title: str, naver: NaverAdApi,
@@ -223,15 +239,17 @@ def select_keywords_light(title: str, naver: NaverAdApi, ai_key: str | None,
     exclude 는 통계 유지 중 **발굴 추가**용으로, 이미 추적 중인 키워드를 후보에서 빼 **새 키워드만** n개 뽑는다
     (기존은 호출부가 동결). AI 없으면 KeywordAIError.
     """
-    core, use, identities, _anchors, relevant, tiers = _assemble_candidates(
+    core, use, identities, _attributes, _anchors, relevant, tiers, matches = _assemble_candidates(
         title, naver, ai_key, generate=True, browser=browser, log=log)
     if exclude:   # 통계 유지 중 발굴 추가 — 이미 추적 중인 키워드는 후보에서 제외(새 것만 뽑음)
         relevant = [c for c in relevant if c.keyword not in exclude]
         tiers = {k: v for k, v in tiers.items() if k not in exclude}
+        matches = {k: v for k, v in matches.items() if k not in exclude}
     if not relevant:
         return []
     # (2) 부분점수로 압축 — 요청량·IP차단 제어 위해 상위 소수만 쿠팡 노출 측정
-    ranked = sorted(relevant, key=lambda c: _partial_score(c, tiers.get(c.keyword, "")), reverse=True)
+    ranked = sorted(relevant, key=lambda c: _partial_score(c, tiers.get(c.keyword, ""),
+                                                           matches.get(c.keyword, 1.0)), reverse=True)
     pool = ranked[:config.KW_SCORE_POOL_N]
     core_tracked = bool(exclude) and core in exclude   # 발굴 추가에서 core가 이미 추적중이면 강제포함 불필요
     if core and not core_tracked and core in {c.keyword for c in relevant} \
@@ -249,7 +267,7 @@ def select_keywords_light(title: str, naver: NaverAdApi, ai_key: str | None,
         best = min([v for v in (*ranks_pc.values(), *ranks_mobile.values()) if v], default=None)
         if measure_ranks is not None and log:
             log(f"  [노출측정] '{c.keyword}' 쿠팡 오가닉 노출순위: {rank_label(best)}")
-        s = _keyword_score(c, tiers.get(c.keyword, ""), best)
+        s = _keyword_score(c, tiers.get(c.keyword, ""), matches.get(c.keyword, 1.0), best)
         meta[c.keyword] = (round(s, 1), _grade(s), best, ranks_pc, ranks_mobile)
     # (4) AI 최종선정 — 점수·등급·노출까지 종합해 우선순위 확정
     items = [{"keyword": c.keyword, "volume": c.total, "mobile": _mobile_share(c),
@@ -257,16 +275,16 @@ def select_keywords_light(title: str, naver: NaverAdApi, ai_key: str | None,
               "relevance": tiers.get(c.keyword, ""), "score": meta[c.keyword][0],
               "grade": meta[c.keyword][1],
               "exposure": meta[c.keyword][2] if meta[c.keyword][2] else "미노출"} for c in pool]
-    picked_kws = _timed(log, "AI 최종선정", select_keywords, title, items, use=use, core=core,
-                        identities=identities, n=n, api_key=ai_key)
+    picked = _timed(log, "AI 최종선정", select_keywords, title, items, use=use, core=core,
+                    identities=identities, n=n, api_key=ai_key)   # [(키워드, 역할)]
     kv = {c.keyword: c for c in pool}
     out: list[TrackKeyword] = []
-    for kw in picked_kws:
+    for kw, role in picked:
         c = kv[kw]
         s, g, best, rpc, rmo = meta[kw]
         out.append(TrackKeyword(kw, c.total, _mobile_share(c), relevance=tiers.get(kw, ""),
                                 clicks=round(c.total_clicks, 1), comp_idx=c.comp_idx,
-                                score=s, grade=g, exposure_best=best,
+                                score=s, grade=g, exposure_best=best, role=role,
                                 ranks_pc=rpc, ranks_mobile=rmo))
     return out
 
@@ -285,7 +303,7 @@ def recommend_from_title(title: str, naver: NaverAdApi, browser: WingBrowser,
     AI 없으면 KeywordAIError(토큰 폴백 폐지).
     """
     top_n = config.KW_TOP_N if top_n is None else top_n
-    _core, _use, _identities, _anchors, relevant, _tiers = _ai_candidates(title, naver, ai_key)
+    relevant = _ai_candidates(title, naver, ai_key)[5]   # (core,use,identities,attributes,anchors,relevant,tiers,matches)
     return _rank_candidates(relevant, browser, top_n)
 
 
