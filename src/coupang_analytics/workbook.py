@@ -21,6 +21,19 @@ from openpyxl.utils import get_column_letter
 
 from . import config
 
+
+def _unmerge_all(ws) -> None:
+    """시트의 모든 병합을 해제. 희소(미실체화) 병합셀은 정규 Cell 로 먼저 채워 unmerge KeyError 를 막는다.
+
+    openpyxl `insert_rows`/재서식이 병합셀과 함께 쓰이면 데이터가 유실되므로, 행 삽입·서식 전에 호출한다.
+    """
+    for mr in list(ws.merged_cells.ranges):
+        for rr in range(mr.min_row, mr.max_row + 1):
+            for cc in range(mr.min_col, mr.max_col + 1):
+                if (rr, cc) not in ws._cells:
+                    ws._cells[(rr, cc)] = Cell(ws, row=rr, column=cc)
+        ws.unmerge_cells(str(mr))
+
 _COL_KIND = 1      # A: 상품구분 / 사업자명
 _COL_NAME = 3      # C: 상품명 / 키워드
 _COL_SEARCH = 6    # F: 검색량
@@ -190,6 +203,9 @@ class OutputWorkbook:
         if not add:
             return []
         ws = self.wb[biz]
+        # ⚠ insert_rows 는 병합셀이 있으면 데이터(상품명·키워드)를 손상시킨다 → 삽입 전 병합 전부 해제
+        # (호출부가 이후 apply_style 로 표준 재병합). 이게 run1 계정 이름/키워드 유실의 근본 원인이었음.
+        _unmerge_all(ws)
         # 기존 키워드 있으면 그 마지막 행 아래, 없으면(② 단계로 처음 채움) 소헤더행(마지막 지표행+1) 아래
         last_kw_row = max(self._kw_row[(biz, product, kw)] for kw in have) if have else \
             (max(self._metric_row[(biz, product, m)] for m in _ALL_METRICS
@@ -322,13 +338,7 @@ class OutputWorkbook:
             # 멱등화: 기존 병합을 모두 해제한 뒤 아래에서 표준대로 다시 병합한다.
             # (②/③/반영 등이 서식 없이 셀을 추가해 병합·테두리가 시트마다 섞이는 것을 원천 제거 →
             #  apply_style 을 몇 번 돌려도 항상 '첫 시트 표준' 하나로 고정됨.)
-            for mr in list(ws.merged_cells.ranges):
-                # 병합범위에 실체화 안 된 셀이 있으면 unmerge_cells 가 KeyError → 먼저 정규 셀로 채운다.
-                for rr in range(mr.min_row, mr.max_row + 1):
-                    for cc in range(mr.min_col, mr.max_col + 1):
-                        if (rr, cc) not in ws._cells:
-                            ws._cells[(rr, cc)] = Cell(ws, row=rr, column=cc)
-                ws.unmerge_cells(str(mr))
+            _unmerge_all(ws)
             maxc = ws.max_column
             t = ws.cell(1, 1)
             t.font = title_font
