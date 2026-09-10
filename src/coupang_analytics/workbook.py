@@ -132,7 +132,9 @@ class OutputWorkbook:
         col = self._date_col.get(biz, {}).get(date_iso)
         if row is None or col is None:
             return False
-        return self.wb[biz].cell(row=row, column=col).value not in (None, "")
+        # '-'(구 미측정/스캔밖 placeholder)는 미채움으로 봐 ③ 재실행이 다시 측정하게 한다
+        # (새 규칙에선 스캔밖=50위로 기록하므로 '-'는 측정 안 된 잔재).
+        return self.wb[biz].cell(row=row, column=col).value not in (None, "", "-")
 
     # ── 생성 ─────────────────────────────────────────────────
     def ensure_account(self, biz: str):
@@ -261,7 +263,8 @@ class OutputWorkbook:
         row = self._kw_row.get((biz, product, keyword))
         if row is None:
             return False
-        val = f"{rank}위" if rank else "-"   # 스캔 밖/미노출은 '-'(서식 관례)
+        # 스캔 상한(RANK_SCAN_MAX) 안이면 그 순위, 밖(None)이면 상한값으로 고정(요청: 50위밖→50).
+        val = f"{rank}위" if rank else f"{config.RANK_SCAN_MAX}위"
         self.wb[biz].cell(row=row, column=self.ensure_date(biz, date_iso), value=val)
         return True
 
