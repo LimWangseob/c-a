@@ -490,10 +490,20 @@ class App(QtWidgets.QMainWindow):
             on_done(result)
 
     # ── 파일·키 로드 ──────────────────────────────────────────
+    def _last_dir(self, key: str) -> str:
+        """파일 대화상자 초기 폴더 = 직전에 그 용도로 연 폴더(QSettings 영속). 없으면 빈 문자열(기본 위치)."""
+        return QtCore.QSettings("coupang-analytics", "ui").value(f"dir/{key}", "", type=str)
+
+    def _remember_dir(self, key: str, path: str) -> None:
+        """선택한 파일의 폴더를 그 용도의 '직전 폴더'로 저장 → 다음엔 그 폴더에서 열림."""
+        QtCore.QSettings("coupang-analytics", "ui").setValue(f"dir/{key}", str(Path(path).parent))
+
     def load_input(self):
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "입력 분석용 엑셀", "", "Excel (*.xlsx)")
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "입력 분석용 엑셀", self._last_dir("input"), "Excel (*.xlsx)")
         if not path:
             return
+        self._remember_dir("input", path)
         il = parse_input_list(path)
         self.input_list = il
         self.product_business.clear()
@@ -533,8 +543,10 @@ class App(QtWidgets.QMainWindow):
 
     def load_passwords(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "계정 비밀번호 엑셀 (계정아이디+비밀번호 컬럼)", "", "Excel (*.xlsx);;All (*.*)")
+            self, "계정 비밀번호 엑셀 (계정아이디+비밀번호 컬럼)", self._last_dir("pw"),
+            "Excel (*.xlsx);;All (*.*)")
         if path:
+            self._remember_dir("pw", path)
             self._store_passwords_from(path, quiet=False)
 
     def _account_pw(self, account_id):
@@ -545,9 +557,10 @@ class App(QtWidgets.QMainWindow):
 
     def load_naver(self):
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "네이버 검색광고 API 키 파일", "", "Text (*.txt);;All (*.*)")
+            self, "네이버 검색광고 API 키 파일", self._last_dir("naver"), "Text (*.txt);;All (*.*)")
         if not path:
             return
+        self._remember_dir("naver", path)
         c = self.naver_creds = parse_credentials_file(path)
         self.naver_lbl.setText(f"{Path(path).name}  (고객 {c.customer_id})")
         try:

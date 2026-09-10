@@ -111,7 +111,38 @@ def _best(pair) -> int | None:
 
 # 순위 차단(Akamai 챌린지) 감지 시 이번 실행의 순위 조회를 전면 중단(더 두드리지 않음). 실행마다 리셋.
 _RANK_HALT = {"stop": False}
+# 서킷브레이커 — 이번 실행에 쓴 cooldown 횟수(상한 초과 시 당일 중지). 실행마다 리셋.
+_RANK_CB = {"cooldowns": 0}
 _RANK_TELEMETRY_ID = "__rank__"   # 순위 응답 관측용 합성 계정ID(session_events 에 rank_* 이벤트)
+
+
+def _reset_rank_state() -> None:
+    """실행 시작 시 순위 차단 상태 초기화 — halt 플래그 해제 + 서킷브레이커 cooldown 카운터 리셋."""
+    _RANK_HALT["stop"] = False
+    _RANK_CB["cooldowns"] = 0
+
+
+def _rank_cooldown(browser, log, reason: str) -> bool:
+    """이상징후 → 신규검색 중지 → 충분한 cooldown → (홈 1회 = 소량 정상요청). 재개 가능하면 True.
+
+    cooldown 반복이 상한(RANK_COOLDOWN_MAX) 초과면 당일 중지(False). 우회 재요청은 하지 않는다 —
+    호출부가 True면 같은 검색을 1회 재측정(=probe)해 정상 여부를 확인한다.
+    """
+    _RANK_CB["cooldowns"] += 1
+    if _RANK_CB["cooldowns"] > config.RANK_COOLDOWN_MAX:
+        _RANK_HALT["stop"] = True
+        log(f"  [노출측정] ⛔ 이상징후 반복({reason}) — cooldown {config.RANK_COOLDOWN_MAX}회 초과, "
+            "당일 중지. 쉰 시간/IP에 다시 실행하면 남은 것부터 이어서")
+        return False
+    cd = config.RANK_COOLDOWN_SEC
+    log(f"  [노출측정] ⚠ 이상징후 감지({reason}) → 신규검색 즉시 중지, {cd // 60}분 cooldown 후 "
+        f"probe(재측정)로 상태확인 (cooldown {_RANK_CB['cooldowns']}/{config.RANK_COOLDOWN_MAX})")
+    time.sleep(cd)
+    try:
+        warmup(browser)          # 홈 1회(신뢰쿠키 갱신) = 소량 정상요청
+    except Exception:
+        pass
+    return True
 
 
 class RankHalt(Exception):
@@ -122,10 +153,12 @@ class RankHalt(Exception):
 
 
 def _measure_nav_serial(browser, keywords, matchers, log):
-    """기본(안전) 순위 측정 — **사람처럼 검색창을 하나씩** 직렬 네비게이션 + 긴 간격(8~20s).
+    """기본(안전) 순위 측정 — **사람처럼 검색창을 하나씩** 직렬 네비게이션 + 랜덤 간격(RANK_NAV_DELAY).
 
-    각 키워드 응답을 관측층에 기록(rank_ok/rank_empty/rank_challenge). 차단(RankBlocked) 감지 즉시
-    이번 실행 순위를 전면 중단(_RANK_HALT)하고 RankHalt(부분결과)를 올린다 — 더 두드리지 않는다.
+    **서킷브레이커**: 이상징후(응답시간 급증 RANK_SLOW_ABS_SEC↑ · 403/429/Akamai 챌린지 RankBlocked)를
+    감지하면 신규검색을 즉시 중지하고 충분한 cooldown(RANK_COOLDOWN_SEC) 후 같은 검색을 1회 재측정(probe)한다.
+    정상이면 재개, 또 이상이면 cooldown 반복(상한 RANK_COOLDOWN_MAX)→초과 시 당일 중지(_RANK_HALT)+RankHalt.
+    우회 재요청은 하지 않는다. 각 응답은 관측층에 기록(rank_ok/rank_empty/rank_challenge).
     """
     pc: dict = {}
     for i, kw in enumerate(keywords):
@@ -135,17 +168,24 @@ def _measure_nav_serial(browser, keywords, matchers, log):
             d = random.uniform(config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC)
             log(f"  [노출측정] 다음 검색까지 {d:.0f}s 대기(사람 속도)")
             time.sleep(d)
-        try:
-            r = organic_ranks(browser, kw, matchers, log=log)
-            pc[kw] = r
-            session_state.record_event(
-                _RANK_TELEMETRY_ID, "rank_ok" if any(v is not None for v in r.values()) else "rank_empty")
-        except RankBlocked:
-            _RANK_HALT["stop"] = True
-            session_state.record_event(_RANK_TELEMETRY_ID, "rank_challenge")
-            log("  [노출측정] ⛔ 쿠팡 검색 차단 감지 — 순위 조회 즉시 중단(더 두드리지 않음)."
-                " 다음 재실행 시 남은 것부터 이어서(쉰 IP/시간 권장)")
-            raise RankHalt({k: (pc[k], {}) for k in pc})
+        while True:   # 이상징후 → cooldown 후 같은 kw 재측정(probe). 반복 상한 초과면 당일 중지.
+            try:
+                t0 = time.monotonic()
+                r = organic_ranks(browser, kw, matchers, log=log)
+                dt = time.monotonic() - t0
+                if dt >= config.RANK_SLOW_ABS_SEC:      # 응답시간 급증 = 이상징후(조기감지)
+                    if not _rank_cooldown(browser, log, f"응답 {dt:.0f}s 급증"):
+                        raise RankHalt({k: (pc[k], {}) for k in pc})
+                    continue                            # cooldown 후 같은 kw 재측정(probe)
+                pc[kw] = r
+                session_state.record_event(
+                    _RANK_TELEMETRY_ID, "rank_ok" if any(v is not None for v in r.values()) else "rank_empty")
+                break
+            except RankBlocked:                         # 403/429/Akamai 챌린지 = 이상징후
+                session_state.record_event(_RANK_TELEMETRY_ID, "rank_challenge")
+                if not _rank_cooldown(browser, log, "차단(403/Challenge)"):
+                    raise RankHalt({k: (pc[k], {}) for k in pc})
+                continue                                # cooldown 후 같은 kw 재측정(probe)
     return {kw: (pc.get(kw, {}), {}) for kw in keywords}
 
 
@@ -502,7 +542,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     키워드는 AI로 도출하므로 `ai_key` 필수(없으면 KeywordAIError). 한 계정이 막혀도 그 계정만 건너뛴다.
     """
     log = on_log or (lambda m: None)
-    _RANK_HALT["stop"] = False   # 이번 실행 순위 차단 플래그 초기화(차단 감지 시 이후 순위 자동 중단)
+    _reset_rank_state()          # 이번 실행 순위 차단 플래그·서킷브레이커(cooldown) 초기화
     if not ai_key:
         raise KeywordAIError("OpenAI(ChatGPT) API 키가 없어 키워드 추출을 할 수 없습니다. "
                              "설정 탭에서 OpenAI API 키를 입력한 뒤 다시 실행하세요.")
@@ -732,7 +772,7 @@ def track_ranks_stage(out_dir: str = "output", on_log=None) -> Path | None:
         log("== 순위 조회: 결과 워크북이 없습니다 — 먼저 ①②를 실행하세요 ==")
         return None
     log(f"== 노출순위 조회 시작 — {path.name} ==")
-    _RANK_HALT["stop"] = False   # 이번 실행 차단 플래그 초기화
+    _reset_rank_state()          # 이번 실행 차단 플래그·서킷브레이커(cooldown) 초기화
     if config.RANK_NAV_SERIAL:
         log(f"  [모드] 사람속도 직렬 네비게이션(검색 간격 {config.RANK_NAV_DELAY_MIN_SEC}"
             f"~{config.RANK_NAV_DELAY_MAX_SEC}s) — 버스트 없이 차단 회피. 차단 감지 시 즉시 중단(이어서 재개)")

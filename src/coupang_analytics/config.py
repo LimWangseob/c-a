@@ -31,14 +31,21 @@ RANK_HUMAN_SERIAL = True      # (구 병렬 fetch 경로 전용) 직렬 fetch �
 # 순위 안전 모드 — 공개검색(www.coupang.com)은 최고강도 봇방어. 병렬 fetch 버스트 대신 **사람처럼 검색창을
 # 하나씩 치는 직렬 네비게이션 + 긴 간격**으로 조회(위조 아님, 정상 사용 패턴). 차단 감지 시 즉시 중단.
 RANK_NAV_SERIAL = True        # True=직렬 네비게이션(기본, 안전). False=구 병렬 fetch(빠르나 봇틱)
-RANK_NAV_DELAY_MIN_SEC = 8    # 키워드(검색) 사이 최소 대기(초) — 사람이 하나씩 검색하는 리듬
-RANK_NAV_DELAY_MAX_SEC = 20   # 최대 대기(초). 실제는 MIN~MAX 무작위
+RANK_NAV_DELAY_MIN_SEC = 25   # 키워드(검색) 사이 최소 대기(초). 새 IP(모바일 핫스팟 등) 모드: 25~50(평균~37s)
+RANK_NAV_DELAY_MAX_SEC = 50   # 최대 대기(초). 무작위. 뜨거운 IP면 45~95(초저속), 새 IP면 25~50, 급하면 15~35
 RANK_FETCH_CONCURRENCY = 2   # 병렬(직렬모드 off) 시 동시 fetch 개수. RANK_HUMAN_SERIAL=True면 1로 강제(직렬)
 RANK_FETCH_JITTER_MIN_MS = 700  # 각 fetch 전 최소 지연(ms) — 직렬모드 사람 간격 하한(0이면 하한 없음)
 RANK_FETCH_JITTER_MS = 1800   # 각 fetch 전 최대 지연(ms) — 실제 지연은 MIN~MAX 무작위(사람처럼). 직렬이라 여전히 빠름(요청당 fetch ~0.3s)
 # 차단(Akamai) 감지 시: 즉시 공란 대신 잠시 쉬었다가 재시도한다(플래그가 수십 초~분 내 완화되는 특성 활용).
-RANK_BLOCK_BACKOFF_SEC = 30  # 차단 감지 후 재시도까지 대기(초)
-RANK_BLOCK_RETRIES = 1       # 차단 시 백오프 후 재시도 횟수(0이면 즉시 공란)
+RANK_BLOCK_BACKOFF_SEC = 30  # (구 병렬 fetch 경로 전용) 차단 감지 후 재시도까지 대기(초)
+RANK_BLOCK_RETRIES = 1       # (구 병렬 fetch 경로 전용) 차단 시 백오프 후 재시도 횟수(0이면 즉시 공란)
+# 직렬 네비게이션(기본) 차단 대응 = **서킷브레이커(NORMAL→WARNING→COOLDOWN→RECOVERY)**:
+# 이상징후(응답시간 급증·403/429·Akamai 챌린지) 감지 시 신규검색 즉시 중지 → 충분한 cooldown →
+# 소량 probe(재측정) → 정상이면 재개, 또 이상이면 당일 중지(쉰 시간/IP에 이어서). 우회 재요청 금지.
+# (점감 백오프 폐기 — 볼륨 차단은 짧은 대기로 안 풀림. 두드릴수록 IP만 태운다.)
+RANK_SLOW_ABS_SEC = 8        # 검색 1건이 이 초 이상 = 이상징후(정상 ~2~4s, 챌린지=셀렉터 타임아웃으로 지연)
+RANK_COOLDOWN_SEC = 600      # 이상 감지 시 신규검색 중지 후 대기(충분히 길게·고정). 10분
+RANK_COOLDOWN_MAX = 2        # cooldown 반복 상한 — 초과 시 당일 중지
 
 
 # ── 키워드 추천 정책 (황금키워드) ───────────────────────────────
