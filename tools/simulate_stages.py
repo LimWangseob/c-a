@@ -70,7 +70,8 @@ def main():
     check("상품-a1" in a1 and "상품-b1" in b1, "두 계정 시트·상품 블록 생성")
     check(a1["상품-a1"]["metrics"].get(config.M_SALES) == 7, "a1 계약 판매량=7")
     check(a1["상품-a1"]["metrics"].get(config.M_INVENTORY) == 42, "a1 재고현황=42")
-    check(config.M_TOTAL_SALES in b1["상품-b1"]["metrics"], "b1 개인 전체판매량 지표행")
+    check(config.M_SALES in b1["상품-b1"]["metrics"] and config.M_INVENTORY not in b1["상품-b1"]["metrics"],
+          "b1 개인 판매량 지표행(재고현황 없음)")
     check(wb.product_vids("비즈-a1", "상품-a1") == ["vid-a1"], "a1 상품ID(vid) 저장")
     check(a1["상품-a1"]["kw"] == [], "① 단계엔 키워드 없음")
 

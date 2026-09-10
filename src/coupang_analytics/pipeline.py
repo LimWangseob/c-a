@@ -226,6 +226,7 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
     """
     from .collector import (discover, save_discovered,  # 지연 import
                             fetch_inventory, InventoryFetchError)
+    from .product_match import scope_to_ledger
     from playwright.sync_api import TimeoutError as PWTimeout  # 판매데이터 없음 판별용
     pw = get_password(a.account_id) if get_password else None
     # 기본은 **창 숨김**(offscreen). 로그인/2차인증이 필요할 때만 잠깐 창을 띄운다.
@@ -263,6 +264,8 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
                 log(f"  [{a.label}] 로그인 미완료 — 이 계정 건너뜀")
                 return None, {}, {}
             session_state.observe_auth_success(a.account_id, final_url=b.page.url)
+            b.goto(WING_URL)                     # 신선 로그인 후 wing 안착(인증 리다이렉트 완료 대기)
+            b.page.wait_for_timeout(1500)        # 페이지 안정 — discover fetch 가 진행중 네비에 중단(Failed to fetch)되는 것 방지
             b.hide()   # 로그인 끝나면 다시 숨김
         try:
             products, metrics = discover(b.page, date_from, date_to, log)   # 같은 세션에서 즉시 수집
@@ -270,6 +273,18 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
             log(f"  [{a.label}] 판매분석 데이터 없음 — 정상(수집할 상품 없음), 건너뜀")
             session_state.observe_collection_empty(a.account_id)
             return None, {}, {}
+        except Exception as exc:   # 신선 로그인 직후 페이지 미안착 → fetch 중단(Failed to fetch). wing 재안착 후 1회 재시도
+            if "Failed to fetch" not in str(exc):
+                raise
+            log(f"  [{a.label}] discover fetch 중단(Failed to fetch) — wing 재안착 후 1회 재시도")
+            b.goto(WING_URL)
+            b.page.wait_for_timeout(2500)
+            try:
+                products, metrics = discover(b.page, date_from, date_to, log)
+            except PWTimeout:
+                log(f"  [{a.label}] 판매분석 데이터 없음 — 정상(수집할 상품 없음), 건너뜀")
+                session_state.observe_collection_empty(a.account_id)
+                return None, {}, {}
         # 로켓그로스(계약) 상품이 있으면 같은 세션에서 재고현황도 직접조회(개인계정은 재고 없음 → 생략)
         inventory: dict[str, int] = {}
         if any(p.kind == config.KIND_CONTRACT for p in products):
@@ -281,12 +296,11 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
         _persist_session(a, b, log)                                 # 세션 3요소+쿠키 영속(부가)
         session_state.observe_collection_done(a.account_id)         # 관측: 이 계정 수집 완료 시각
     save_discovered(a.account_id, products)
-    # 활동(조회/판매/방문>0) 있는 상품만 추적 대상으로
-    active = [p for p in products
-              if any((m := metrics.get(oid)) and (m.views or m.sales or m.visitors)
-                     for opt in p.options for oid in opt.vendor_item_ids)]
-    log(f"  [{a.label}] 상품 {len(products)}개 발견, 활동 {len(active)}개 추적")
-    return Account(a.account_id, a.representative, a.business_name, active), metrics, inventory
+    # 추적 범위 = 입력 대장 상품(위탁 관리분)만. 대장↔발견을 매칭해 노출제목·vid·구분 부여,
+    # 미매칭(휴면 등)은 대장명으로 추적(지표·재고 공란). 판매중지/취소선 상품은 입력 파싱에서 이미 제외됨.
+    tracked, n_match = scope_to_ledger(a.products, products)
+    log(f"  [{a.label}] 발견 {len(products)}개 · 대장 {len(a.products)}개 → 추적 {len(tracked)}개(매칭 {n_match})")
+    return Account(a.account_id, a.representative, a.business_name, tracked), metrics, inventory
 
 
 def _persist_session(a: Account, b, log) -> None:
@@ -321,7 +335,7 @@ def _inventory_by_product(products, inv_by_vid: dict) -> dict:
 
 
 def _fill_product_metrics(wb, biz, product, metrics, inventory, date_iso) -> None:
-    """상품단위 판매지표 기록 — 계약(로켓그로스)=판매량/방문자/노출량/재고현황, 개인=전체판매량/전체노출량.
+    """상품단위 판매지표 기록 — 기본 판매량/방문자/노출량(계약·개인 공통), 재고현황은 로켓그로스(계약)만.
 
     옵션 지표를 상품 단위로 합산한다. 재고현황(판매가능 수량)은 inventory[상품명](Phase2 rfm-inventory)에서.
     """
@@ -333,16 +347,13 @@ def _fill_product_metrics(wb, biz, product, metrics, inventory, date_iso) -> Non
                 views += m.views
                 sales += m.sales
                 visitors += m.visitors
-    if product.kind == config.KIND_CONTRACT:
-        wb.set_product_metric(biz, product.name, config.M_SALES, date_iso, sales)
-        wb.set_product_metric(biz, product.name, config.M_VISITORS, date_iso, visitors)
-        wb.set_product_metric(biz, product.name, config.M_VIEWS, date_iso, views)
+    wb.set_product_metric(biz, product.name, config.M_SALES, date_iso, sales)
+    wb.set_product_metric(biz, product.name, config.M_VISITORS, date_iso, visitors)
+    wb.set_product_metric(biz, product.name, config.M_VIEWS, date_iso, views)
+    if product.kind == config.KIND_CONTRACT:   # 재고현황은 로켓그로스만
         inv = inventory.get(product.name) if inventory else None
         if inv is not None:
             wb.set_product_metric(biz, product.name, config.M_INVENTORY, date_iso, inv)
-    else:
-        wb.set_product_metric(biz, product.name, config.M_TOTAL_SALES, date_iso, sales)
-        wb.set_product_metric(biz, product.name, config.M_TOTAL_VIEWS, date_iso, views)
 
 
 def _log_diagnose(product, track_info, ai_key, log, wb=None, biz=None, roles=None) -> None:
@@ -454,10 +465,16 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
             keywords, ranks, track_info, roles = [], {}, [], {}
 
         if not skip_ranks:                             # 순위 기록(PC). 날짜지정 수집(skip_ranks)은 순위 제외
+            # 차단된 실행이면 미측정(None)을 '50위'로 위장 기록하지 않고 **공란**으로 남긴다 →
+            # is_rank_filled=False 유지 → 다음(쉰 IP) 실행이 그 순위만 재측정. (차단 아닌 실 미노출만 RANK_SCAN_MAX 기록)
+            blocked = _RANK_HALT["stop"]
             for kw in keywords:                        # 이미 채워진 건 건너뜀
-                if kw in ranks and not wb.is_rank_filled(biz, product.name, kw, date_iso):
-                    wb.set_keyword_rank(biz, product.name, kw, date_iso, ranks.get(kw))
-                    log(f"  [순위] '{kw}': {rank_label(ranks.get(kw))}")
+                if kw not in ranks or wb.is_rank_filled(biz, product.name, kw, date_iso):
+                    continue
+                if ranks.get(kw) is None and blocked:  # 차단으로 못 잰 값 → 공란(재측정 대상)
+                    continue
+                wb.set_keyword_rank(biz, product.name, kw, date_iso, ranks.get(kw))
+                log(f"  [순위] '{kw}': {rank_label(ranks.get(kw))}")
         wb.set_product_vids(biz, product.name,   # 상품 고유ID 저장(③ 순위조회 상품 매칭용)
                             [oid for opt in product.options for oid in opt.vendor_item_ids])
         _fill_product_metrics(wb, biz, product, metrics, inventory, date_iso)
@@ -575,8 +592,8 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
                     warmup(rank_browser)
                     _process_account(report_acc, wb, naver, ai_key, rank_browser, metrics, inventory,
                                      col_label, grow, log, partial)
-        else:                                        # 활동 상품 0개 → Chrome 개방 생략, 시트도 생략
-            log(f"  [{a.label}] 활동 상품 0개 — 시트·키워드·순위 생략")
+        else:                                        # 대장 상품 0개 → Chrome 개방 생략, 시트도 생략
+            log(f"  [{a.label}] 대장 상품 0개 — 시트·키워드·순위 생략")
         done.add(a.account_id)                    # 이 계정 완료 확정
         _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks)
         wb.save(partial)

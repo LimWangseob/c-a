@@ -6,12 +6,11 @@ SELDOC_SHEET_TITLE = "셀독 상품 데이터"       # 워크북 A1 제목
 M_SALES = "판매량"        # 계약(로켓그로스) 상품 일자별 판매량
 M_VISITORS = "방문자"     # 계약 방문자수
 M_VIEWS = "노출량"        # 계약 노출량(조회수)
-M_INVENTORY = "재고현황"   # 계약 판매가능 재고수량(로켓그로스, rfm-inventory)
-M_TOTAL_SALES = "전체 판매량"  # 개인(판매자배송) 상품 판매량
-M_TOTAL_VIEWS = "전체 노출량"  # 개인 노출량
+M_INVENTORY = "재고현황"   # 판매가능 재고수량 — **로켓그로스(계약)만** 해당(rfm-inventory)
 M_RANK = "노출 순위"      # 키워드별 오가닉 순위(PC)
-CONTRACT_METRICS = (M_SALES, M_VISITORS, M_VIEWS, M_INVENTORY)  # 계약=로켓그로스
-PERSONAL_METRICS = (M_TOTAL_SALES, M_TOTAL_VIEWS)               # 개인=판매자배송
+# 기본 지표 = 판매량·방문자·노출량(계약/개인 공통). 재고현황은 로켓그로스(계약)에만 추가.
+CONTRACT_METRICS = (M_SALES, M_VISITORS, M_VIEWS, M_INVENTORY)  # 계약=로켓그로스(재고 포함)
+PERSONAL_METRICS = (M_SALES, M_VISITORS, M_VIEWS)              # 개인=판매자배송(재고 없음)
 KIND_CONTRACT = "계약 상품"
 KIND_PERSONAL = "개인 상품"
 

@@ -43,7 +43,8 @@ _SALES_API = "https://wing.coupang.com/tenants/rfm-ss/api/business-insight/vi-de
 # 로켓그로스 재고현황(판매가능 재고수량) — 재고관리 페이지가 부르는 데이터 API(라이브 캡처 확정).
 _INVENTORY_API = "https://wing.coupang.com/tenants/rfm-inventory/inventory-health-dashboard/search"
 _PAGE_SIZE = 20            # 실측 정상값(캡처와 동일). 크게(200) 주면 서버가 400 → 검증된 20 유지, 페이지네이션으로 커버
-_INV_PAGE_SIZE = 100       # 재고 search 는 큰 pageSize 허용(응답이 실제 개수로 축소). totalNumberOfElements 로 페이징 종료
+_INV_PAGE_SIZE = 100       # 재고 search 1차 페이지 크기(검증된 안전값). pageNumber 무시(안 넘어감) 시 아래 큰 pageSize 로 전량 재요청
+_INV_PAGE_MAX = 2000       # 페이지 미진행 시 전량 1회 재요청할 최대 pageSize(주석: 재고 search 는 큰 pageSize 허용·실제개수로 축소)
 
 # axios withCredentials 라 XSRF-TOKEN 쿠키를 x-xsrf-token 으로 되보내야 한다(쿠키에서 읽어 넣음).
 _POST_JSON_JS = """
@@ -163,13 +164,13 @@ def fetch_inventory(page, log=None) -> dict[str, int]:
 
     page 는 **로그인된 wing.coupang.com 세션 페이지**(same-origin + 세션쿠키 + XSRF). 계약(RFM) 계정 전용
     — 개인(NORMAL) 계정은 로켓그로스 재고가 없어 빈 dict(정상). 비200/파싱실패는 InventoryFetchError.
-    totalNumberOfElements 로 페이지네이션 종료.
+    페이지네이션: pageNumber 로 넘기다가 **안 넘어가면(재고 API가 pageNumber 무시)** 큰 pageSize 로 전량 1회 재요청.
+    ⚠ 상품별 재고를 빠짐없이 잡기 위함 — 재고 적은 옵션이 정렬 하위로 밀려 상위 100 밖에 있으면 그 상품 재고현황이 공란이 되던 문제 해결.
     """
     log = log or (lambda m: None)
-    out: dict[str, int] = {}
-    page_num = 0
-    while True:
-        payload = {"paginationRequest": {"pageSize": _INV_PAGE_SIZE, "pageNumber": page_num,
+
+    def _fetch(page_size: int, page_num: int) -> tuple[list, int]:
+        payload = {"paginationRequest": {"pageSize": page_size, "pageNumber": page_num,
                                          "searchAfterSortValues": None},
                    "hiddenStatus": "VISIBLE",
                    "sort": [{"sortParameter": "ORDERABLE_QUANTITY", "sortDirection": "DESCENDING"}],
@@ -185,20 +186,35 @@ def fetch_inventory(page, log=None) -> dict[str, int]:
             data = json.loads(body)
         except json.JSONDecodeError as exc:
             raise InventoryFetchError(f"inventory search 응답 JSON 파싱 실패: {exc}") from exc
-        props = data.get("viProperties") or []
+        pg = data.get("paginationResponse") or {}
+        return data.get("viProperties") or [], int(pg.get("totalNumberOfElements") or 0)
+
+    out: dict[str, int] = {}
+    page_num = 0
+    total = 0
+    while True:
+        props, total = _fetch(_INV_PAGE_SIZE, page_num)
         before = len(out)
         out.update(_parse_inventory(props))
-        pg = data.get("paginationResponse") or {}
-        total = int(pg.get("totalNumberOfElements") or len(out))
+        total = total or len(out)
         log(f"  [재고] search p{page_num + 1} — {len(props)}개 (누적 {len(out)}/{total})")
-        # 종료: 빈 페이지 / 목표 도달 / **이 페이지가 새 항목 0개**(페이지네이션 미진행=중복 재수신)
-        # → 마지막 조건이 무한루프 방지 가드(재고 API가 pageNumber 무시하고 첫 100개만 반복 반환하는 경우).
         if not props or len(out) >= total or len(out) == before:
-            if len(out) < total and len(out) == before:
-                log(f"  [재고] ⚠ 페이지네이션 미진행 — 상위 {len(out)}개(재고 많은순)만 기록하고 종료"
-                    f" (총 {total}개 중, 무한루프 방지)")
-            break
+            break            # 빈 페이지 / 목표 도달 / 페이지 미진행(새 항목 0개)
         page_num += 1
+
+    # pageNumber 가 안 먹혀 상위 일부만 모였고 아직 남았으면 → 큰 pageSize 로 전량 1회 재요청(커서 대신).
+    if len(out) < total:
+        big = min(total, _INV_PAGE_MAX)
+        try:
+            props, _ = _fetch(big, 0)
+        except InventoryFetchError as exc:   # 큰 pageSize 거부 → 상위분 유지(회귀 없음)
+            log(f"  [재고] ⚠ 전량 재요청 실패(pageSize {big}) — 상위 {len(out)}/{total}개만 유지 · {str(exc)[:80]}")
+            return out
+        full = _parse_inventory(props)
+        if len(full) > len(out):
+            log(f"  [재고] 전량 재요청(pageSize {big}) → {len(full)}개 확보(이전 상위 {len(out)}개)")
+            return full
+        log(f"  [재고] ⚠ 전량 재요청도 {len(full)}개 — 상위 {len(out)}/{total}개만 유지(무한루프 방지)")
     return out
 
 

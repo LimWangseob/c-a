@@ -53,6 +53,7 @@ class Account:
 class InputList:
     accounts: list[Account]
     errors: list[str]
+    struck: list[str] = field(default_factory=list)   # 취소선으로 제외된 계정/상품(해지·품절·판매중지)
 
 
 def _norm(value) -> str:
@@ -139,9 +140,42 @@ def parse_password_file(path: str | Path) -> dict[str, str]:
     return out
 
 
+_DISCONTINUED = ("판매중지", "판매중단", "판매종료", "판매불가")   # 대장 텍스트 마커(판매부진=계속 판매라 제외)
+
+
+def _is_discontinued(name: str) -> bool:
+    """상품명에 판매중지 계열 마커가 있으면 True → 추적 제외(쿠팡 판매중지분)."""
+    n = str(name)
+    return any(m in n for m in _DISCONTINUED)
+
+
+def _cell_struck(ws, row_no: int, col0: int | None) -> bool:
+    """그 셀에 취소선(strike) 서식이 있으면 True. 취소선 = 해지·품절·판매중지 → 제외 표시."""
+    if col0 is None:
+        return False
+    try:
+        return bool(getattr(ws.cell(row_no, col0 + 1).font, "strike", False))
+    except Exception:
+        return False
+
+
+def _load_for_parse(path):
+    """(워크시트, 취소선감지가능?) 반환.
+
+    값은 반드시 read_only 로도 안전하게 읽힌다. 취소선(strike) 서식은 read_only=False 로드가 필요한데,
+    한컴 셀이 저장한 파일은 openpyxl 스타일 로드가 깨질 수 있다(IndexError). 그때는 read_only 로 값만 읽고
+    취소선 감지는 생략(strike_ok=False) — 크래시 대신 우아하게 축소.
+    """
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True)     # 스타일(취소선) 포함 로드
+        return wb[wb.sheetnames[0]], True
+    except Exception:
+        wb = openpyxl.load_workbook(path, data_only=True, read_only=True)  # 견고 로드(취소선 감지 생략)
+        return wb[wb.sheetnames[0]], False
+
+
 def parse_input_list(path: str | Path) -> InputList:
-    wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
-    ws = wb[wb.sheetnames[0]]
+    ws, strike_ok = _load_for_parse(path)   # strike_ok=False면 취소선 자동감지 불가(한컴 스타일 비호환)
     rows = list(ws.iter_rows(values_only=True))
     required = (config.IN_COL_REPRESENTATIVE, config.IN_COL_BUSINESS,
                 config.IN_COL_ACCOUNT_ID, config.IN_COL_PRODUCT)
@@ -158,9 +192,12 @@ def parse_input_list(path: str | Path) -> InputList:
     accounts: list[Account] = []
     by_id: dict[str, Account] = {}          # 같은 계정ID 재등장 시 상품을 이어 붙이기 위한 색인
     errors: list[str] = []
+    struck: list[str] = []                   # 취소선으로 제외한 계정/상품
     current_rep = ""
     current_acct: Account | None = None
     current_prod: Product | None = None
+    acct_cancelled = False                    # 현재 계정이 취소선(해지) → 아래 상품·옵션 전부 제외
+    prod_cancelled = False                    # 현재 상품이 취소선(품절/중지) → 아래 옵션 제외
 
     for row_no, row in enumerate(rows[hrow + 1:], start=hrow + 2):
         rep, biz = _norm(_cell(row, i_rep)), _norm(_cell(row, i_biz))
@@ -171,23 +208,44 @@ def parse_input_list(path: str | Path) -> InputList:
         if rep:
             current_rep = rep
         if acct:
-            if acct in by_id:               # 같은 계정ID 재등장 → 기존 계정에 상품 이어붙임(분리·누락 방지)
-                current_acct = by_id[acct]
-                if not current_acct.business_name and biz:   # 뒤 행에 사업자명 있으면 채움
-                    current_acct.business_name = biz
+            if strike_ok and _cell_struck(ws, row_no, i_acct):   # 취소선 계정 = 해지/취소 → 계정 전체 제외
+                _finalize(current_prod)
+                acct_cancelled = True
+                prod_cancelled = False
+                current_acct = current_prod = None
+                struck.append(f"계정 '{acct}'({biz or current_rep}) — 취소선(해지)")
             else:
-                current_acct = Account(acct, current_rep, biz)
-                if not current_rep and not biz:
-                    errors.append(f"{row_no}행: 계정 '{acct}' 대표자명/사업자명이 모두 비어 있음")
-                by_id[acct] = current_acct
-                accounts.append(current_acct)
+                acct_cancelled = False
+                prod_cancelled = False
+                if acct in by_id:               # 같은 계정ID 재등장 → 기존 계정에 상품 이어붙임(분리·누락 방지)
+                    current_acct = by_id[acct]
+                    if not current_acct.business_name and biz:   # 뒤 행에 사업자명 있으면 채움
+                        current_acct.business_name = biz
+                else:
+                    current_acct = Account(acct, current_rep, biz)
+                    if not current_rep and not biz:
+                        errors.append(f"{row_no}행: 계정 '{acct}' 대표자명/사업자명이 모두 비어 있음")
+                    by_id[acct] = current_acct
+                    accounts.append(current_acct)
+        if acct_cancelled:                      # 취소된 계정 아래 행은 전부 건너뜀
+            continue
         if prod:
-            _finalize(current_prod)
-            current_prod = Product(prod)
-            if current_acct is None:
-                errors.append(f"{row_no}행: 소속 계정 없이 상품 '{prod}'")
+            _finalize(current_prod)             # 이전 상품 마감(옵션 없으면 기본옵션)
+            # 판매중지(텍스트 마커) 또는 취소선 상품 → 추적 제외
+            if _is_discontinued(prod) or (strike_ok and _cell_struck(ws, row_no, i_prod)):
+                prod_cancelled = True
+                current_prod = None
+                reason = "판매중지" if _is_discontinued(prod) else "취소선(품절/중지)"
+                struck.append(f"상품 '{prod}' — {reason}")
             else:
-                current_acct.products.append(current_prod)
+                prod_cancelled = False
+                current_prod = Product(prod)
+                if current_acct is None:
+                    errors.append(f"{row_no}행: 소속 계정 없이 상품 '{prod}'")
+                else:
+                    current_acct.products.append(current_prod)
+        if prod_cancelled:                      # 취소된 상품 아래 옵션 행 건너뜀
+            continue
         # 옵션 행 (옵션명 또는 vid 가 있으면 현재 상품의 옵션)
         if opt or vids or pids:
             if current_prod is None:
@@ -196,9 +254,11 @@ def parse_input_list(path: str | Path) -> InputList:
                 current_prod.options.append(Option(opt, vids, pids))
     _finalize(current_prod)
 
+    if not strike_ok:   # 취소선을 못 읽었음을 알림(수동 확인 유도). 값 파싱은 정상.
+        struck.append("⚠ 취소선 자동감지 불가(엑셀 스타일 비호환) — 해지/품절 계정·상품은 수동 확인 필요")
     # 리포트 기준 시드: 상품/옵션/ID는 판매분석 리포트가 제공하므로 계정만 있으면 유효.
     valid = [a for a in accounts if a.account_id]
-    return InputList(accounts=valid, errors=errors)
+    return InputList(accounts=valid, errors=errors, struck=struck)
 
 
 class InputValidationError(Exception):
@@ -230,4 +290,6 @@ def validate_input_list(il: InputList) -> tuple[list[str], list[str]]:
             warnings.append(f"계정 '{a.account_id}' 사업자명 없음 → 시트명 '{a.label}'(대표자명/계정ID) 사용.")
         if not a.products:
             warnings.append(f"계정 '{a.account_id}'({a.label}) 상품 0개 → 수집 시 건너뜀.")
+    for s in il.struck:                       # 취소선으로 제외된 항목을 알림(감지 결과 노출)
+        warnings.append(f"취소선 제외: {s}")
     return fatals, warnings

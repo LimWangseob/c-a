@@ -172,12 +172,13 @@ def scenario_normal():
     _check(_has_value(final, "3위"), "키워드 노출순위(3위) 기록됨")
     _check(_has_value(final, 7), "판매량 값 기록됨")
     _check(_has_value(final, 1000), "검색량(1000) 기록됨")
-    # 계약(a1)=재고현황 행 존재, 개인(b1)=전체 판매량 행 존재
+    # 계약(a1)=판매량·방문자·노출량·재고현황, 개인(b1)=판매량·방문자·노출량(재고 없음)
     wb = openpyxl.load_workbook(final)
     g_a1 = {_n(wb["비즈-a1"].cell(r, 7).value) for r in range(1, wb["비즈-a1"].max_row + 1)}
     g_b1 = {_n(wb["비즈-b1"].cell(r, 7).value) for r in range(1, wb["비즈-b1"].max_row + 1)}
     _check(config.M_SALES in g_a1 and config.M_INVENTORY in g_a1, "계약 상품: 판매량·재고현황 지표행")
-    _check(config.M_TOTAL_SALES in g_b1, "개인 상품: 전체 판매량 지표행")
+    _check(config.M_SALES in g_b1 and config.M_VISITORS in g_b1 and config.M_INVENTORY not in g_b1,
+           "개인 상품: 판매량·방문자·노출량(재고현황 없음)")
 
 
 def scenario_crash_resume():
