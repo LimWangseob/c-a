@@ -214,7 +214,24 @@ def _assemble_candidates(title: str, naver: NaverAdApi, ai_key: str | None, gene
             for c in _timed(log, "네이버 2단계연관", naver.related_keywords_multi, exp_seeds):
                 if c.total >= config.KW_TRACK_MIN_VOLUME:
                     pool.setdefault(c.keyword, c)
-    judged = _timed(log, "AI 핵심연관판정", judge_keywords, title, [c.keyword for c in pool.values()],
+    # judge 전 후보 축소(토큰 절감) — **상품 인접어(정체성 토큰 포함) 우선 → 검색량** 순으로 상위 KW_JUDGE_POOL_N개.
+    # 순수 검색량 컷은 거대 broad 어(고검색이나 어차피 judge가 DROP)가 상위를 차지해 정작 중검색 상품어를
+    # 밀어내므로 금지. 상품 자기 정체성(core+identities+anchors)은 인접+강제포함(니치 저검색 자기 이름 보호).
+    id_tokens = {_norm(t) for t in ([core] + identities + anchors) if t}
+
+    def _adjacent(kw: str) -> bool:      # 정체성 토큰을 포함/피포함하면 상품 인접어(판정 우선)
+        nk = _norm(kw)
+        return any(tok and (tok in nk or nk in tok) for tok in id_tokens)
+
+    identity_set = {t for t in ([core] + identities + anchors) if t}
+    ranked_for_judge = sorted(pool.values(), key=lambda c: (_adjacent(c.keyword), c.total), reverse=True)
+    judge_pool = [c for c in ranked_for_judge if c.keyword in identity_set]   # 정체성 먼저(항상)
+    for c in ranked_for_judge:
+        if c.keyword not in identity_set and len(judge_pool) < config.KW_JUDGE_POOL_N:
+            judge_pool.append(c)
+    if log and len(judge_pool) < len(pool):
+        log(f"  [판정축소] 후보 {len(pool)}개 → 판정 {len(judge_pool)}개(인접어 우선 상위{config.KW_JUDGE_POOL_N}+정체성)")
+    judged = _timed(log, "AI 핵심연관판정", judge_keywords, title, [c.keyword for c in judge_pool],
                     api_key=ai_key, use=use, core=core, identities=identities)  # {키워드:(티어,match)}
     tiers = {k: t for k, (t, _m) in judged.items()}
     matches = {k: m for k, (_t, m) in judged.items()}
