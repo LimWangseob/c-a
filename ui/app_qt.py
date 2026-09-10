@@ -334,7 +334,8 @@ class App(QtWidgets.QMainWindow):
         bar.addWidget(self.rank_btn)
         bar.addStretch(1)
         v.addLayout(bar)
-        v.addWidget(QtWidgets.QLabel("광고 제외 오가닉 순위를 조회합니다(상한 200위). 로그인 불필요."))
+        v.addWidget(QtWidgets.QLabel(
+            f"광고 제외 오가닉 순위를 조회합니다(상한 {config.RANK_SCAN_MAX}위, 밖이면 {config.RANK_SCAN_MAX}위). 로그인 불필요."))
         v.addStretch(1)
         return w
 
@@ -722,7 +723,8 @@ class App(QtWidgets.QMainWindow):
                 warmup(wb)
                 return organic_rank(wb, kw, make_matcher(name_substr=name))
         self.run_bg(task, on_done=lambda r: self.log(
-            f"[순위] 결과: {('오가닉 ' + str(r) + '위') if r else '200위 내 미노출'}"), btn=self.rank_btn)
+            f"[순위] 결과: {('오가닉 ' + str(r) + '위') if r else (str(config.RANK_SCAN_MAX) + '위 밖 → ' + str(config.RANK_SCAN_MAX) + '위')}"),
+            btn=self.rank_btn)
 
     # ── 전체 실행 ─────────────────────────────────────────────
     def _toggle_range(self):

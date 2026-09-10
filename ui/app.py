@@ -367,7 +367,8 @@ class App(tk.Tk):
         ttk.Entry(bar, textvariable=self.rank_name_var, width=22).pack(side="left", padx=4)
         self.rank_btn = ttk.Button(bar, text="순위 조회", command=self.do_rank, style="Accent.TButton")
         self.rank_btn.pack(side="left", padx=6)
-        ttk.Label(tab, text="광고 제외 오가닉 순위를 조회합니다(상한 200위). 로그인 불필요.").pack(anchor="w", padx=4)
+        ttk.Label(tab, text=f"광고 제외 오가닉 순위를 조회합니다(상한 {config.RANK_SCAN_MAX}위, 밖이면 "
+                            f"{config.RANK_SCAN_MAX}위). 로그인 불필요.").pack(anchor="w", padx=4)
 
     def _build_collect_tab(self, nb):
         tab = ttk.Frame(nb.body)
@@ -810,7 +811,8 @@ class App(tk.Tk):
                 warmup(wb)
                 return organic_rank(wb, kw, make_matcher(name_substr=name))
         self.run_bg(task, on_done=lambda r: self.log(
-            f"[순위] 결과: {('오가닉 ' + str(r) + '위') if r else '200위 내 미노출'}"), btn=self.rank_btn)
+            f"[순위] 결과: {('오가닉 ' + str(r) + '위') if r else (str(config.RANK_SCAN_MAX) + '위 밖 → ' + str(config.RANK_SCAN_MAX) + '위')}"),
+            btn=self.rank_btn)
 
 
 def main():
