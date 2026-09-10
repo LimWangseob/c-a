@@ -15,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import openpyxl
+from openpyxl.cell.cell import Cell
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -318,14 +319,26 @@ class OutputWorkbook:
         for ws in self.wb.worksheets:
             if ws.title == _META_SHEET:                 # 상품ID 숨김 시트는 서식 대상 아님
                 continue
+            # 멱등화: 기존 병합을 모두 해제한 뒤 아래에서 표준대로 다시 병합한다.
+            # (②/③/반영 등이 서식 없이 셀을 추가해 병합·테두리가 시트마다 섞이는 것을 원천 제거 →
+            #  apply_style 을 몇 번 돌려도 항상 '첫 시트 표준' 하나로 고정됨.)
+            for mr in list(ws.merged_cells.ranges):
+                # 병합범위에 실체화 안 된 셀이 있으면 unmerge_cells 가 KeyError → 먼저 정규 셀로 채운다.
+                for rr in range(mr.min_row, mr.max_row + 1):
+                    for cc in range(mr.min_col, mr.max_col + 1):
+                        if (rr, cc) not in ws._cells:
+                            ws._cells[(rr, cc)] = Cell(ws, row=rr, column=cc)
+                ws.unmerge_cells(str(mr))
             maxc = ws.max_column
             t = ws.cell(1, 1)
             t.font = title_font
             t.alignment = center
             t.border = Border(bottom=Side(style="medium"))
             merge(ws, 1, 1, 1, _COL_METRIC)           # 제목은 고정영역(A~G)만, H~ 일자 제외
-            ws.freeze_panes = "H2"
-            for c, w in {1: 11, 2: 6, 3: 10, 4: 9, 5: 9, 6: 10, 7: 14}.items():
+            ws.row_dimensions[1].height = 21          # 제목행 높이(샘플 서식 고정값)
+            ws.freeze_panes = "H2"                     # A~G열·1행 고정, H~ 일자만 스크롤
+            # 표준 열너비(샘플 첫 시트와 100% 일치): A11 B6 C10 D9 E9 F13.75 G14
+            for c, w in {1: 11, 2: 6, 3: 10, 4: 9, 5: 9, 6: 13.75, 7: 14}.items():
                 ws.column_dimensions[get_column_letter(c)].width = w
             for c in range(_FIRST_DATE, maxc + 1):
                 ws.column_dimensions[get_column_letter(c)].width = 11

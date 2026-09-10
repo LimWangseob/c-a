@@ -675,6 +675,8 @@ def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = 
                 except Exception as exc:   # 한 상품 실패(AI·네이버 400 등)가 나머지 상품·계정 선정을 안 막게 격리
                     log(f"  [{biz}] {pname} 키워드 선정 실패(건너뜀) — {exc.__class__.__name__}: {str(exc)[:80]}")
             wb.save(path)
+    wb.apply_style()   # 추가한 키워드 행까지 표준 서식 고정(시트간 서식 섞임 방지)
+    wb.save(path)
     log("== 키워드 선정 완료 ==")
     return path
 
@@ -731,6 +733,8 @@ def track_ranks_stage(out_dir: str = "output", on_log=None) -> Path | None:
                 wb.save(path)   # **상품마다 저장** → 중단돼도 여기까지 보존(재실행 시 이어서)
                 if halted:
                     break
+    wb.apply_style()   # 저장본 서식 항상 표준으로 고정
+    wb.save(path)
     if halted:
         log("== ⛔ 노출순위 중단(쿠팡 검색 차단 감지) — 진행분 저장됨. "
             "쉰 IP/시간에 다시 실행하면 남은 것부터 이어서 조회합니다 ==")

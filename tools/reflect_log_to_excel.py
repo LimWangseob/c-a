@@ -96,6 +96,7 @@ def main() -> None:
             applied += 1
         else:
             no_row += 1
+    wb.apply_style()   # 저장본 서식 항상 표준으로 고정(시트간 서식 섞임 방지)
     wb.save(wb_path)
     print(f"[반영] 완료 — 순위 갱신 {applied}개 · 행 없음(스킵) {no_row}개")
     if no_sheet:
