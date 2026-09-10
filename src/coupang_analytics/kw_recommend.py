@@ -177,9 +177,17 @@ def _assemble_candidates(title: str, naver: NaverAdApi, ai_key: str | None, gene
     use, core, identities, attributes, anchors = _timed(log, "AI 제목분석", analyze_product,
                                                         title, api_key=ai_key)
     pool: dict[str, KeywordVolume] = {}
+    anchor_rel = {}
     for c in _timed(log, "네이버 앵커연관", naver.related_keywords_multi, anchors):   # ① 넓은 연관(≥500)
+        anchor_rel.setdefault(c.keyword, c)
         if c.total >= config.KW_MIN_VOLUME:
             pool.setdefault(c.keyword, c)
+    # 상품 자기 정체성(core+identities+anchors)은 **검색량 하한과 무관하게 항상 후보에 포함**한다.
+    # 니치 상품(예 레몬버베나·초저검색 성분)은 자기 이름조차 하한(≥500/≥30)에 걸려 후보가 비는 문제 방지 —
+    # 상품 자신의 키워드는 검색량이 낮아도 그 상품의 노출순위를 추적할 대상이다(네이버가 값을 준 것만).
+    for term in dict.fromkeys(t for t in ([core] + identities + anchors) if t):
+        if term in anchor_rel:
+            pool.setdefault(term, anchor_rel[term])
     if generate:
         if browser is not None:                                     # ② 쿠팡 자동완성(실수요)
             seeds = list(dict.fromkeys(s for s in ([core] + identities) if s))   # 순서보존 중복제거
