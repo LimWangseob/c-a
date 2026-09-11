@@ -446,10 +446,14 @@ class OutputWorkbook:
                         for c in range(_FIRST_DATE, maxc + 1):
                             cell(ws, r, c)
                 # 상품 1개 구분 — 굵은 선. 상단=블록 첫 행 top(병합 top-left라 정상).
-                # 하단=다음(빈) 행의 top — 병합 범위(A:B 세로) 하위셀엔 bottom 테두리가 유실되므로
-                # 병합 밖 행에 top으로 그린다(시각적으로 마지막 행 하단선).
+                # 하단=다음(빈) 구분행의 top(시각적으로 마지막 행 하단선). ⚠ 마지막 블록은 end+1 행이
+                # 없어서 거기 테두리를 그리면 **빈 행이 새로 생긴다**(2상품 시트의 2번째 블록 하단 공백줄 버그).
+                # → 마지막 블록은 end 행 자체의 bottom 에 그려 새 행을 만들지 않는다.
                 edge(ws, maxc, hr, "top")
-                edge(ws, maxc, end + 1, "top")
+                if i + 1 < len(headers):
+                    edge(ws, maxc, end + 1, "top")     # 사이 블록: 기존 구분 빈 행 상단선
+                else:
+                    edge(ws, maxc, end, "bottom")       # 마지막 블록: 마지막 행 하단선(새 행 안 만듦)
                 # 병합(마지막) — 세로/가로 병합은 서식·경계선 적용 뒤에
                 merge(ws, hr, 1, m_end, 2)
                 merge(ws, hr, _COL_NAME, m_end, _COL_SEARCH)
