@@ -890,6 +890,47 @@ def _live_url(pg) -> str:
         return ""
 
 
+# 반자동 자동채움 — 뜬 창의 쿠팡 검색창(들)에 키워드만 미리 채운다. **제출·네비게이션은 안 함**(실제 검색은
+# 사람이 Enter). 자동 검색이 아니라 입력값 프리필이라 반자동 정책(사람이 직접 검색) 유지. 검색창은 반응형이라
+# 여러 개(name='q', class headerSearchKeyword) → 전부 채우고 보이는 것에 포커스해 바로 Enter 되게 한다.
+# React 제어 input 이라 네이티브 value setter + input 이벤트로 프레임워크 상태까지 갱신(안 하면 Enter 시 옛 값 제출).
+_PREFILL_JS = r"""(kw) => {
+  const inputs = Array.from(document.querySelectorAll(
+      "input[name='q'], input.headerSearchKeyword, #headerSearchKeyword"));
+  if (!inputs.length) return false;
+  const proto = window.HTMLInputElement && window.HTMLInputElement.prototype;
+  const setter = proto && Object.getOwnPropertyDescriptor(proto, 'value').set;
+  let focused = false;
+  for (const input of inputs) {
+    try {
+      if (setter) setter.call(input, kw); else input.value = kw;
+      input.dispatchEvent(new Event('input', {bubbles: true}));
+      input.dispatchEvent(new Event('change', {bubbles: true}));
+      if (!focused && input.offsetParent !== null) { input.focus(); focused = true; }
+    } catch (e) {}
+  }
+  if (!focused) { try { inputs[0].focus(); } catch (e) {} }
+  return true;
+}"""
+
+
+def _prefill_search(browser, kw: str) -> bool:
+    """뜬 창의 검색창(들)에 kw 를 자동입력(제출 안 함). 성공 시 True(실패 시 복사 폴백 안내). browser.page 우선."""
+    pages = _all_pages(browser)
+    try:
+        if browser.page in pages:
+            pages = [browser.page] + [p for p in pages if p is not browser.page]
+    except Exception:
+        pass
+    for pg in pages:
+        try:
+            if pg.evaluate(_PREFILL_JS, kw):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _all_pages(browser):
     """연결된 브라우저의 **모든 컨텍스트×모든 탭**(방어적). 단일 컨텍스트라도 전부 순회. 실패 시 browser.page."""
     ctxs = []
@@ -959,11 +1000,12 @@ def _wait_user_search(browser, kw: str, log, should_stop, timeout: float = 300.0
                     f"페이지가 다 뜰 때까지 잠시 기다리거나 새로고침 해주세요{extra}")
             elif other_qs:
                 opened = ", ".join(f"'{q}'" for q in other_qs)
-                log(f"    ⌨ 창엔 다른 검색({opened})만 떠 있습니다 → 검색창을 비우고 위 '검색어 ▶  {kw}' 로"
-                    f" 검색하세요('{other_qs[0]}'가 아니라 '{kw}')")
+                _prefill_search(browser, kw)   # 창엔 옛 검색이 떠 있음 → 검색창을 kw로 재채움(사람은 Enter만)
+                log(f"    ⌨ 창엔 '{other_qs[0]}' 결과가 떠 있습니다 → 검색창에 「{kw}」를 다시 채웠으니"
+                    f" **그 창에서 Enter** 하세요(안 채워졌으면 직접 입력: {kw})")
             else:
-                log(f"    … 위 '검색어 ▶  {kw}' 를 **뜬 Chrome 창**(빨간 띠)의 검색창에 붙여넣고 검색하세요"
-                    " (다른 브라우저 아님, 중지는 '반자동 중지')")
+                log(f"    … **뜬 Chrome 창**(빨간 띠)에서 「{kw}」로 검색(Enter)하세요"
+                    f" (자동입력 안 됐으면 직접 입력: {kw} · 다른 브라우저 아님 · 중지는 '반자동 중지')")
             last = time.time()
         time.sleep(1.0)
     return None
@@ -1033,11 +1075,15 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                     if should_stop():
                         break
                     browser.to_front()   # 키워드마다 창을 앞으로(다른 창에 가려 못 찾는 것 방지)
-                    # 키워드는 **앞뒤 공백으로 분리**(「」·기호 제거) → 그 단어만 더블클릭하면 타임스탬프·괄호 없이
-                    # 깨끗이 복사된다(실측: 「」로 감싸면 복사 시 괄호·앞 글자가 딸려와 검색이 오염됨).
+                    filled = _prefill_search(browser, kw)   # 검색창에 키워드 자동입력(제출 안 함 — 사람이 Enter)
                     log(f"  🔎 [{biz}] {pname}  ({idx}/{len(todo)})")
-                    log(f"     그 창 검색창을 비우고, 아래 '검색어'만 더블클릭해 복사→붙여넣고 Enter:")
-                    log(f"     검색어 ▶  {kw}")
+                    if filled:
+                        log(f"     ✅ 검색창에 「{kw}」 자동입력됨 → **빨간 띠 창에서 Enter만** 누르세요"
+                            f" (안 채워졌으면 직접 입력: {kw})")
+                    else:
+                        # 자동입력 실패 시 복사 폴백 — 키워드를 앞뒤 공백으로 분리(괄호 없음)해 더블클릭 복사가 깨끗.
+                        log(f"     그 창 검색창을 비우고, 아래 '검색어'만 더블클릭해 복사→붙여넣고 Enter:")
+                        log(f"     검색어 ▶  {kw}")
                     pg = _wait_user_search(browser, kw, log, should_stop)
                     if pg is None:
                         log(f"  [반자동] 「{kw}」 미감지/시간초과 — 공란으로 두고 다음에 이어서 조회합니다")
