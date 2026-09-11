@@ -796,6 +796,7 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
         log(f"  [모드] 사람속도 직렬 네비게이션(검색 간격 {config.RANK_NAV_DELAY_MIN_SEC}"
             f"~{config.RANK_NAV_DELAY_MAX_SEC}s) — 버스트 없이 차단 회피. 차단 감지 시 즉시 중단(이어서 재개)")
     halted = False
+    novid_products = 0    # vid 없어 순위 매칭 불가로 건너뛴 상품 수(집계 → 종료 시 안내)
     with WingBrowser(profile_dir=_PROFILE, offscreen=True) as browser:
         warmup(browser)
         for biz in wb.account_sheets():
@@ -807,7 +808,13 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
             for pname in wb.products_of(biz):
                 vids = wb.product_vids(biz, pname)
                 keywords = wb.product_keywords(biz, pname)
-                if not (vids and keywords):                # 상품ID나 키워드 없으면 건너뜀
+                if not keywords:
+                    continue
+                if not vids:
+                    # vid 없으면 검색결과에서 내 상품을 정확히 지목 불가 → 조용히 건너뛰지 않고 이유를 남긴다.
+                    # vid 는 ①판매수집(WING 로그인)에서만 확보(대장엔 vid 없음).
+                    novid_products += 1
+                    log(f"  [건너뜀] {biz} · {pname} — vendorItemId 없음(①판매수집 미완) → 순위 공란")
                     continue
                 # 이미 채워진 키워드는 건너뜀 = **중단 지점부터 이어서**(당일 재작업 시 남은 것만)
                 todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
@@ -836,6 +843,9 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
                     break
     wb.apply_style()   # 저장본 서식 항상 표준으로 고정
     wb.save(path)
+    if novid_products:
+        log(f"  [안내] vid(vendorItemId) 없는 상품 {novid_products}개는 순위 공란으로 남았습니다 — "
+            "이 상품들은 ①판매수집(WING 로그인)으로 vid를 확보해야 순위조회가 됩니다(대장 입력엔 vid 없음).")
     if halted:
         log("== ⛔ 노출순위 중단(쿠팡 검색 차단 감지) — 진행분 저장됨. "
             "쉰 IP/시간에 다시 실행하면 남은 것부터 이어서 조회합니다 ==")
