@@ -147,6 +147,12 @@ _CFG_ROWS = [
     ("AI 모델", "KW_AI_MODEL", str),
     ("순위 설정", None, None),
     ("순위 스캔 상한", "RANK_SCAN_MAX", int),
+    ("검색 간격 최소(초)", "RANK_NAV_DELAY_MIN_SEC", int),
+    ("검색 간격 최대(초)", "RANK_NAV_DELAY_MAX_SEC", int),
+    ("반자동 쿨다운(초)", "RANK_SEMI_COOLDOWN_SEC", int),
+    ("쿨다운 최대 반복(포기까지)", "RANK_SEMI_COOLDOWN_MAX", int),
+    ("연속 차단 허용(쿨다운 진입)", "RANK_SEMI_AUTO_MAX_MISS", int),
+    ("반자동 결과 대기(초)", "RANK_SEMI_AUTO_WAIT_SEC", int),
 ]
 _LOG_COLORS = {"ok": "#4ade80", "err": "#f87171", "warn": "#fbbf24", "head": "#60a5fa", "": "#e2e8f0"}
 
