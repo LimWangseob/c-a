@@ -24,7 +24,8 @@ from tkinter import filedialog, font as tkfont, messagebox, scrolledtext, simple
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from coupang_analytics import config, keyword_store  # noqa: E402
-from coupang_analytics.browser import WingBrowser, reap_orphan_chrome  # noqa: E402
+from coupang_analytics.apppaths import set_workdir  # noqa: E402
+from coupang_analytics.browser import WingBrowser, find_chrome, reap_orphan_chrome  # noqa: E402
 from coupang_analytics.input_list import parse_input_list, parse_password_file  # noqa: E402
 from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
@@ -816,6 +817,17 @@ class App(tk.Tk):
 
 
 def main():
+    set_workdir()                   # .exe 더블클릭 대비 — 상대경로(output·data)가 exe 폴더에서 해석되게 CWD 고정
+    try:                            # Chrome 필수(실제 Chrome+CDP 정책) — 없으면 크래시 대신 안내 후 종료
+        find_chrome()
+    except FileNotFoundError:
+        root = tk.Tk(); root.withdraw()
+        messagebox.showerror(
+            "Google Chrome 필요",
+            "이 프로그램은 실제 Google Chrome 으로 동작합니다.\n\n"
+            "이 PC 에 Chrome 이 설치돼 있지 않습니다. https://www.google.com/chrome 에서 "
+            "Chrome 을 설치한 뒤 다시 실행하세요.")
+        return
     reaped = reap_orphan_chrome()   # 이전 실행이 강제종료·크래시로 남긴 좀비 Chrome 정리(누적 원천 차단)
     if reaped:
         print(f"[시작] 잔여(좀비) Chrome {reaped}개 정리함")

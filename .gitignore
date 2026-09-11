@@ -11,6 +11,10 @@ creds.json
 /login_source_*.zip
 /src - 복사본/
 
+# PyInstaller 빌드 산출물 — 커밋 금지(build.bat 로 재생성)
+/build/
+/dist/
+
 # Python
 __pycache__/
 *.py[cod]
