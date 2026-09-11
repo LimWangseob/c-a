@@ -855,13 +855,34 @@ def _search_q(url: str) -> str | None:
     return None
 
 
+# 쿠팡 차단/권한없음 페이지 마커(실측: "요청하신 페이지의 사용권한이 없습니다 … 제한된 페이지").
+_BLOCK_PAGE_MARKERS = ("사용권한", "제한된", "Access Denied", "Denied", "죄송")
+
+
+def _looks_blocked(pg) -> bool:
+    """현재 페이지가 쿠팡 차단/권한없음 안내 페이지로 보이는가(사람이 그 창에서 봤을 화면)."""
+    try:
+        txt = pg.inner_text("body")[:400]
+    except Exception:
+        try:
+            txt = pg.title() or ""
+        except Exception:
+            return False
+    return any(m in txt for m in _BLOCK_PAGE_MARKERS)
+
+
 def _wait_user_search(browser, kw: str, log, should_stop, timeout: float = 300.0):
     """사용자가 뜬 창에서 kw 를 직접 검색할 때까지 대기(폴링). 감지되면 **그 페이지**를, 타임아웃/중지면 None.
 
     **여러 탭 전부**를 스캔한다(프로필 복원 탭·사용자가 연 새 탭이 browser.page 와 달라도 인식).
     URL 이 /np/search 이고 q(디코드·공백무시)가 kw 와 같고 상품이 떠 있는 첫 탭을 그 검색으로 인정한다
     (이전/다른 키워드 잔여결과를 잘못 기록하지 않도록 q 일치 요구). 자동 네비게이션은 하지 않는다.
-    보고 있는 검색 URL 이 있는데 q 가 안 맞으면 그 사실을 로그로 알린다(사용자가 안내 키워드로 검색하도록).
+
+    안내를 **상황별로 정확히** 준다(과거엔 q 가 실제로 맞아도 무조건 "안내 키워드로 검색하세요"라고 떠서
+    올바로 검색한 사용자가 '인식 못 함'으로 오해했다 — 실측 재현):
+    - q 일치인데 상품 목록이 비면: **차단(권한없음) 페이지**인지, 단순 **로딩 대기**인지 구분해 알린다.
+    - q 불일치 검색결과만 있으면: 안내 키워드로 검색하라고 알린다.
+    - 검색결과가 아예 없으면: 검색창에 입력하라고 알린다.
     """
     from .rank import extract_items
     want = kw.replace(" ", "")
@@ -874,7 +895,10 @@ def _wait_user_search(browser, kw: str, log, should_stop, timeout: float = 300.0
             pages = list(browser.context.pages) or [browser.page]
         except Exception:
             pages = [browser.page]
-        seen: list[str] = []
+        other_qs: list[str] = []      # 안내와 다른 키워드로 열린 검색결과
+        matched_empty = False         # 안내 키워드로 검색은 됐으나 상품이 안 잡힘(차단/로딩)
+        matched_blocked = False       # 그 중 차단/권한없음 페이지로 보임
+        err_reason = ""               # extract 예외 원인(있으면 로그에 노출 — 조용히 삼키지 않음)
         for pg in pages:
             try:
                 q = _search_q(pg.url or "")
@@ -882,16 +906,29 @@ def _wait_user_search(browser, kw: str, log, should_stop, timeout: float = 300.0
                 continue
             if q is None:
                 continue
-            seen.append(q)
-            if q == want:
-                try:
-                    if extract_items(pg):
-                        return pg
-                except Exception:
-                    pass
+            if q != want:
+                other_qs.append(q)
+                continue
+            try:
+                items = extract_items(pg)
+            except Exception as exc:
+                err_reason = f"{exc.__class__.__name__}: {str(exc)[:60]}"
+                items = []
+            if items:
+                return pg
+            matched_empty = True
+            if _looks_blocked(pg):
+                matched_blocked = True
         if time.time() - last > 15:
-            if seen:
-                log(f"    …「{kw}」 대기 — 지금 열린 검색결과: {', '.join(repr(q) for q in seen)}"
+            if matched_blocked:
+                log(f"    …「{kw}」 검색은 인식됐으나 **쿠팡 차단(사용권한 없음) 페이지**가 떴습니다 — "
+                    "그 창을 새로고침(F5)하거나 잠시 후 다시 검색하세요(자동 우회 없음)")
+            elif matched_empty:
+                extra = f" [{err_reason}]" if err_reason else ""
+                log(f"    …「{kw}」 검색은 인식됐으나 상품 목록이 아직 안 보입니다 — "
+                    f"페이지가 다 뜰 때까지 잠시 기다리거나 새로고침 해주세요{extra}")
+            elif other_qs:
+                log(f"    …「{kw}」 대기 — 지금 열린 검색결과: {', '.join(repr(q) for q in other_qs)}"
                     " (안내된 키워드로 그 창에서 검색해야 인식됩니다)")
             else:
                 log(f"    …「{kw}」 입력 대기 중 — **뜬 Chrome 창**의 쿠팡 검색창에 입력·검색하세요"
@@ -971,7 +1008,9 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                         log(f"  [반자동] '{kw}' 미감지/중지 — 공란(다음에 이어서)")
                         continue
                     try:
-                        res = parse_serp_rank(pg, matcher)
+                        # 반자동은 이미 떠 있는 페이지 1장만 읽으므로 트래픽·차단 부담이 없다 →
+                        # 50위 상한 없이 로드된 페이지의 오가닉 전부를 세어 **50위를 넘어도 실제 등수 기록**.
+                        res = parse_serp_rank(pg, matcher, max_rank=config.RANK_SCAN_MAX_SEMI)
                     except Exception as exc:
                         log(f"  [반자동] '{kw}' 파싱 실패(공란) — {exc.__class__.__name__}: {str(exc)[:80]}")
                         continue
