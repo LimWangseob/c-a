@@ -1101,6 +1101,7 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
     autosubmit = config.RANK_SEMI_AUTOSUBMIT
     halted = False        # 자동제출 서킷브레이커(연속 차단/미감지) → 당일 전면 중단
     miss_streak = 0       # 자동제출 연속 실패 수(성공 시 0으로 리셋)
+    novid_products = 0    # vid 없어 순위 매칭 불가로 건너뛴 상품 수(집계 → 종료 시 안내)
     if autosubmit:
         log("== 반자동(자동검색) 노출순위 시작 — 앱이 키워드 자동입력+Enter까지 수행(손 안 대도 됨). "
             f"키워드 간 {config.RANK_NAV_DELAY_MIN_SEC}~{config.RANK_NAV_DELAY_MAX_SEC}s 간격, "
@@ -1135,7 +1136,13 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                     break
                 vids = wb.product_vids(biz, pname)
                 keywords = wb.product_keywords(biz, pname)
-                if not (vids and keywords):
+                if not keywords:
+                    continue
+                if not vids:
+                    # vid(vendorItemId)가 없으면 검색결과에서 내 상품을 정확히 지목할 수 없어 순위 매칭 불가.
+                    # vid 는 ①판매수집(WING 로그인)에서만 확보된다 → 조용히 건너뛰지 않고 이유를 남긴다(집계).
+                    novid_products += 1
+                    log(f"  [건너뜀] {biz} · {pname} — vendorItemId 없음(①판매수집 미완) → 순위 공란")
                     continue
                 todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
                 if not todo:
@@ -1192,6 +1199,9 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                         time.sleep(random.uniform(config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC))
     wb.apply_style()
     wb.save(path)
+    if novid_products:
+        log(f"  [안내] vid(vendorItemId) 없는 상품 {novid_products}개는 순위 공란으로 남았습니다 — "
+            "이 상품들은 ①판매수집(WING 로그인)으로 vid를 확보해야 순위조회가 됩니다(대장 입력엔 vid 없음).")
     if halted:
         log("== ⛔ 반자동(자동검색) 중단(차단 추정) — 진행분 저장됨. 쉰 시간/IP에 다시 실행하면 이어서 조회 ==")
     else:
