@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import random
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import config
@@ -1026,6 +1026,23 @@ def _wait_results_loaded(browser, kw: str, should_stop, timeout: float):
     return None, blocked
 
 
+def _interruptible_sleep(total_sec: float, should_stop, log=None, resume_label: str = "") -> None:
+    """긴 쿨다운 대기 — should_stop 을 주기적으로 확인해 **즉시 중지 가능**, 5분마다 남은시간 하트비트 로그.
+
+    자리 비운 사용자가 '멈춘 줄 알고 4시간 방치'하지 않도록, 대기 중임을 로그로 계속 알린다.
+    """
+    end = time.time() + total_sec
+    next_beat = 0.0
+    while time.time() < end:
+        if should_stop():
+            return
+        if log and time.time() >= next_beat:
+            mins = max(0, int((end - time.time()) // 60) + 1)
+            log(f"    ⏳ 쿨다운 대기 중… 약 {mins}분 후 자동 재개{resume_label}")
+            next_beat = time.time() + 300     # 5분마다 하트비트
+        time.sleep(min(5.0, max(0.5, end - time.time())))
+
+
 def _all_pages(browser):
     """연결된 브라우저의 **모든 컨텍스트×모든 탭**(방어적). 단일 컨텍스트라도 전부 순회. 실패 시 browser.page."""
     ctxs = []
@@ -1135,6 +1152,7 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
     autosubmit = config.RANK_SEMI_AUTOSUBMIT
     halted = False        # 자동제출 서킷브레이커(연속 차단/미감지) → 당일 전면 중단
     miss_streak = 0       # 자동제출 연속 실패 수(성공 시 0으로 리셋)
+    cooldowns = 0         # 차단 감지 쿨다운 진입 횟수(진전 있으면 0으로 리셋) — 무한 재시도 방지
     novid_products = 0    # vid 없어 순위 매칭 불가로 건너뛴 상품 수(집계 → 종료 시 안내)
     if autosubmit:
         log("== 반자동(자동검색) 노출순위 시작 — 앱이 키워드 자동입력+Enter까지 수행(손 안 대도 됨). "
@@ -1207,14 +1225,27 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                             why = "차단 페이지 감지" if blocked else "결과 미로딩(차단 추정)"
                             log(f"  [반자동] 「{kw}」 {why} — 공란. 연속 {miss_streak}/{config.RANK_SEMI_AUTO_MAX_MISS}")
                             if miss_streak >= config.RANK_SEMI_AUTO_MAX_MISS:
-                                halted = True
-                                log("  ⛔ 자동검색 연속 실패 = Akamai 차단 추정 → 계정 보호 위해 당일 중단. "
-                                    "쉰 시간/다른 IP에서 다시 실행하면 남은 것부터 이어서 조회합니다")
-                                break
+                                # 하드 스톱 대신 **긴 쿨다운 후 자동 재개**(무인 장시간). 쿨다운 후에도 진전 0이
+                                # 반복되면(cooldowns 초과) 그때 당일 중단(IP 회복 불가 판단 — 무한 재시도 금지).
+                                cooldowns += 1
+                                if cooldowns > config.RANK_SEMI_COOLDOWN_MAX:
+                                    halted = True
+                                    log(f"  ⛔ 쿨다운 {config.RANK_SEMI_COOLDOWN_MAX}회 후에도 계속 차단 = IP 회복 불가"
+                                        " → 당일 중단. 쉰 시간/다른 IP에서 다시 실행하면 남은 것부터 이어서")
+                                    break
+                                mins = config.RANK_SEMI_COOLDOWN_SEC // 60
+                                resume_at = (datetime.now() + timedelta(
+                                    seconds=config.RANK_SEMI_COOLDOWN_SEC)).strftime("%H:%M")
+                                log(f"  ⏸ 차단 감지 — 하드중단 대신 {mins}분 쿨다운 후 자동 재개(약 {resume_at}). "
+                                    f"쿨다운 {cooldowns}/{config.RANK_SEMI_COOLDOWN_MAX} (재개 후 1개라도 측정되면 리셋)")
+                                _interruptible_sleep(config.RANK_SEMI_COOLDOWN_SEC, should_stop, log,
+                                                     f"(약 {resume_at})")
+                                miss_streak = 0    # 쿨다운 끝 → 다음 키워드부터 재개
                         else:
                             log(f"  [반자동] 「{kw}」 미감지/시간초과 — 공란으로 두고 다음에 이어서 조회합니다")
                         continue
-                    miss_streak = 0    # 성공 → 서킷브레이커 리셋
+                    miss_streak = 0    # 성공 → 연속 실패 리셋
+                    cooldowns = 0      # 진전 발생 → 쿨다운 카운터도 리셋(IP 살아있음)
                     try:
                         # 반자동은 로드된 페이지 1장만 읽는다 → 50위 상한 없이 오가닉 전부를 세어 **50위 초과도 실제 등수 기록**.
                         res = parse_serp_rank(pg, matcher, max_rank=config.RANK_SCAN_MAX_SEMI)

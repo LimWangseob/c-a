@@ -31,8 +31,14 @@ RANK_SCAN_MAX_SEMI = 300
 # 플래그 위험이 있어(원래 반자동을 사람 검색으로 둔 이유), **키워드 사이 사람속도 간격(RANK_NAV_DELAY) + 차단
 # 감지 시 즉시 중단(연속 실패 RANK_SEMI_AUTO_MAX_MISS회)**로 계정을 태우지 않게 한다. False 면 예전처럼 사람이 Enter.
 RANK_SEMI_AUTOSUBMIT = True
-RANK_SEMI_AUTO_MAX_MISS = 3   # 자동제출 후 연속 미감지/차단 이 횟수면 당일 중단(서킷브레이커, 남은 건 다음에 이어서)
+RANK_SEMI_AUTO_MAX_MISS = 3   # 자동제출 후 연속 미감지/차단 이 횟수면 '차단 감지'로 보고 쿨다운(아래) 진입
 RANK_SEMI_AUTO_WAIT_SEC = 40  # 자동제출 1건의 결과 로딩 최대 대기(초). 넘으면 미감지로 카운트
+# 차단 감지 시 **하드 스톱 대신 긴 쿨다운 후 자동 재개**(무인 장시간 운용 — 자리 비운 새 4시간 방치 방지).
+# ⚠️ 짧은 백오프로 두드리면 IP만 탐(메모리 안티차단) → **충분히 긴 쿨다운** + **쿨다운 후에도 진전 0이
+# RANK_SEMI_COOLDOWN_MAX회 연속이면 그때 당일 중단**(IP 하드플래그로 판단, 무한 재시도 금지).
+# 쿨다운 뒤 한 개라도 측정되면(진전) 카운터 리셋하고 계속 → IP가 풀리는 한 밤새 점진 수집.
+RANK_SEMI_COOLDOWN_SEC = 900   # 차단 감지 후 재개까지 대기(초). 15분(볼륨 플래그가 완화될 만큼 충분히 길게)
+RANK_SEMI_COOLDOWN_MAX = 4     # 쿨다운 후에도 진전 0이 이만큼 연속이면 당일 중단(그 IP는 회복 불가로 판단)
 RANK_PAGE_DELAY_MIN = 1.0     # 페이지 간 최소 지연(초) — 순차(폴백) 방식에서만. 병렬 fetch는 지연 없음
 RANK_PAGE_DELAY_MAX = 2.5     # 페이지 간 최대 지연(초)
 # 병렬 fetch 순위조회(기본) — 검색 1회 네비로 Akamai 프라임 후 여러 키워드를 same-origin fetch로 동시에 받아
