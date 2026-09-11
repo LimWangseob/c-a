@@ -958,8 +958,9 @@ def _wait_user_search(browser, kw: str, log, should_stop, timeout: float = 300.0
                 log(f"    …「{kw}」 검색은 인식됐으나 상품 목록이 아직 안 보입니다 — "
                     f"페이지가 다 뜰 때까지 잠시 기다리거나 새로고침 해주세요{extra}")
             elif other_qs:
-                log(f"    …「{kw}」 대기 — 지금 열린 검색결과: {', '.join(repr(q) for q in other_qs)}"
-                    " (안내된 키워드로 그 창에서 검색해야 인식됩니다)")
+                opened = ", ".join(f"'{q}'" for q in other_qs)
+                log(f"    ⌨ 지금 창엔 다른 검색({opened})만 떠 있습니다 → 검색창을 지우고"
+                    f" 바로 이 키워드를 입력·검색하세요: 「{kw}」  (창에 뜬 '{other_qs[0]}'가 아니라 「{kw}」)")
             else:
                 log(f"    …「{kw}」 입력 대기 중 — **뜬 Chrome 창**의 쿠팡 검색창에 입력·검색하세요"
                     " (다른 브라우저 아님, 중지는 '반자동 중지')")
