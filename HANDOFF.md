@@ -17,10 +17,17 @@
 7. **서식 버그 수정**(`6203f3c`): 2상품 시트의 **마지막 블록 하단 공백줄칸(유령행)** = apply_style이 `edge(end+1,'top')`로 max_row+1에 테두리 그려 빈 행 생성 → 마지막 블록은 `edge(end,'bottom')`. 검증: apply_style 멱등·max_row 불변.
 8. `tools/upload_to_gdrive.bat`(결과 구글드라이브 자동업로드, rclone+작업스케줄러 9시 — **사용자가 rclone OAuth·스케줄러 설정 필요**, `drive.file` 스코프·지정공유 권장).
 
-**⏸ 미완료 — 최우선(새 세션이 이어서 할 것) = 결과서식 상품제목 2줄화**:
-- 요구: 상품 블록 이름칸을 **1줄=쿠팡 full 상품제목, 2줄=상품 인식코드(vendorItemId)**, 제목 폭을 full 제목에 맞추기(현재 C:F 병합·wrap, 너무 좁음).
-- ⚠️ **함정**: `_COL_NAME`(C열) 셀 값이 **상품 키**로 쓰인다(`_reindex`가 헤더행 C값을 상품명으로 읽어 `_metric_row`/`_kw_row` 구성). ID를 그냥 붙이면 키가 깨짐. → **첫 줄만 상품명으로 파싱**하거나(모든 name 읽기 지점 수정: `_reindex`·`set_display_name`·`resolve_block_name`) ID를 안 깨지게 표시. vid는 `product_vids(biz,pname)`(숨김시트 `_상품ID`)에서.
-- 손댈 곳: `ensure_product_block`(이름칸에 name+ID), `apply_style`(C:F wrap 유지+열너비/행높이 확대), `set_display_name`(정확노출명 갱신 시 ID줄 보존), `_reindex`(첫줄=name). 반드시 **2상품 합성 워크북으로 키 안정+표시 검증**.
+**✅ 완료(2026-09-11 추가세션, 커밋 `ff51dd2`) = 결과서식 상품제목 2줄화**:
+- 이름칸 = **1줄 쿠팡 full 제목 + 2줄 상품 인식코드(vendorItemId)**, C열 폭 10→36 확대.
+- 함정 해결: `_COL_NAME`(C) 셀 값은 상품 **키**(시계열 정체성). 실제 마스터엔 **내부 개행 상품명**이 존재
+  (`근막마사지기 MS007\n\n(&picks …)`)해 '첫 줄만 파싱'은 키를 깨뜨림 → **보이지 않는 구분자 U+2063
+  (`config.NAME_ID_SEP`)** 로 이름/vid 분리. 키 = 항상 구분자 앞부분(`workbook._key`). 쿠팡 제목엔 이
+  제어문자 없어 내부 개행 이름도 보존.
+- 구현: `_key`(키 복원)·`_display_name`(제목⟨SEP⟩\nvid) 추가, `_reindex`·`set_display_name` 헤더매칭을
+  `_key` 기반 전환, **`apply_style`이 저장 직전 헤더 C를 표시값으로 렌더링**(멱등, vid는 저장시점 확정이라
+  ensure 시점 아님)+C 폭 36. vid 없는 상품=이름만 1줄. `simulate_pipeline`·`simulate_stages` 리더도 갱신.
+- 검증: 2상품 합성 20항목·`simulate_pipeline` 9시나리오 전부 통과, 실제 마스터 74상품 사본 적용
+  (키 74개 재로드 동일·유령행0·vid 46/이름만 28). 미리보기 `output/쿠팡데이타분석_통계_제목2줄_미리보기.xlsx`.
 
 **현재 상태(2026-09-11 저녁)**:
 - ① 판매수집: 오늘 **25/28 완료**(마스터 `쿠팡데이타분석_통계.xlsx`, 날짜 26.09.10). 미수집 3: **globalline·mrc098=비번오류**(입력파일 비번 수정 필요), **fe3276=Akamai차단**(쉰 IP 재시도). 진행분 유지됨→재실행 시 그 3개만.
