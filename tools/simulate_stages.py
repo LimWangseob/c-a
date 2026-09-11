@@ -44,7 +44,8 @@ def _rows(wb, biz):
     for r in range(1, ws.max_row + 1):
         g, name = ws.cell(r, 7).value, ws.cell(r, 3).value
         if g == "날짜":
-            cur = name
+            # 이름칸의 표시용 vid 꼬리(구분자 뒤)를 떼어 순수 상품명(=키)만 취한다.
+            cur = str(name or "").split(config.NAME_ID_SEP, 1)[0].strip()
             out[cur] = {"metrics": {}, "kw": []}
         elif g in (config.CONTRACT_METRICS + config.PERSONAL_METRICS) and cur:
             out[cur]["metrics"][g] = ws.cell(r, 8).value

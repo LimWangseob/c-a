@@ -51,6 +51,14 @@ def _norm(v) -> str:
     return str(v).strip() if v is not None else ""
 
 
+def _key(v) -> str:
+    """이름칸 셀 값 → **상품 키**(순수 상품명). 표시용으로 붙은 `⟨SEP⟩<vendorItemId>` 꼬리를 떼어낸다.
+
+    상품 정체성(시계열 키)은 항상 구분자(`config.NAME_ID_SEP`) 앞부분이다. 구분자가 없으면(순수 이름·
+    키워드 셀) `_norm` 과 동일하게 동작해 기존 키를 그대로 보존한다. 상품명 내부 개행은 손대지 않는다."""
+    return _norm(v).split(config.NAME_ID_SEP, 1)[0]
+
+
 class OutputWorkbook:
     """셀독 서식 워크북(시트=사업자). 상품 블록을 시트에 세로로 쌓고 일자 컬럼을 누적한다."""
 
@@ -96,7 +104,9 @@ class OutputWorkbook:
             self._date_rows[biz] = []
             cur_prod = ""
             for r in range(1, ws.max_row + 1):
-                name = _norm(ws.cell(r, _COL_NAME).value)
+                # 이름칸엔 표시용 vid 꼬리가 붙을 수 있으므로 **키(순수 상품명)** 로 복원해 읽는다.
+                # (키워드 셀엔 구분자가 없어 _key == _norm — 무해.)
+                name = _key(ws.cell(r, _COL_NAME).value)
                 metric = _norm(ws.cell(r, _COL_METRIC).value)
                 if metric == _LABEL_DATE:                       # 상품 헤더행 → 새 상품
                     cur_prod = name
@@ -269,6 +279,16 @@ class OutputWorkbook:
         v = self.wb[_META_SHEET].cell(row, 3).value
         return [x for x in str(v).split("|") if x] if v else []
 
+    def _display_name(self, biz: str, name: str) -> str:
+        """이름칸 표시값 = **1줄 상품제목 + (보이지 않는 구분자) + 2줄 상품 인식코드(vendorItemId)**.
+
+        키(순수 상품명 `name`)는 건드리지 않고 표시용 꼬리만 만든다. vid 없으면 이름만(1줄). 여러 옵션이면
+        vid 를 '/' 로 이어 붙인다. `apply_style` 이 저장 직전 이 값으로 헤더 C셀을 렌더링(멱등)."""
+        vids = self.product_vids(biz, name)
+        if not vids:
+            return name
+        return f"{name}{config.NAME_ID_SEP}\n{' / '.join(vids)}"
+
     def resolve_block_name(self, biz: str, vids) -> str | None:
         """이 사업자에서 주어진 vid(옵션ID)와 교집합이 있는 **기존 상품 블록의 이름**을 반환(없으면 None).
 
@@ -295,7 +315,7 @@ class OutputWorkbook:
             return False
         ws = self.wb[biz]
         header = next((r for r in self._date_rows.get(biz, [])
-                       if _norm(ws.cell(r, _COL_NAME).value) == product), None)
+                       if _key(ws.cell(r, _COL_NAME).value) == product), None)
         if header is None:
             return False
         if any(k[0] == biz and k[1] == new_name for k in self._metric_row):
@@ -409,14 +429,20 @@ class OutputWorkbook:
             merge(ws, 1, 1, 1, _COL_METRIC)           # 제목은 고정영역(A~G)만, H~ 일자 제외
             ws.row_dimensions[1].height = 21          # 제목행 높이(샘플 서식 고정값)
             ws.freeze_panes = "H2"                     # A~G열·1행 고정, H~ 일자만 스크롤
-            # 표준 열너비(샘플 첫 시트와 100% 일치): A11 B6 C10 D9 E9 F13.75 G14
-            for c, w in {1: 11, 2: 6, 3: 10, 4: 9, 5: 9, 6: 13.75, 7: 14}.items():
+            # 표준 열너비: A11 B6 D9 E9 F13.75 G14. **C(상품명/키워드)만 full 제목이 보이도록 넓힘**
+            # (사용자 요청: 이름칸 1줄=제목·2줄=vid, 제목 폭을 제목에 맞추기 — 기존 C10은 너무 좁았음).
+            for c, w in {1: 11, 2: 6, 3: 36, 4: 9, 5: 9, 6: 13.75, 7: 14}.items():
                 ws.column_dimensions[get_column_letter(c)].width = w
             for c in range(_FIRST_DATE, maxc + 1):
                 ws.column_dimensions[get_column_letter(c)].width = 11
             headers = sorted(self._date_rows.get(ws.title, []))
             for i, hr in enumerate(headers):
                 end = (headers[i + 1] - 2) if i + 1 < len(headers) else ws.max_row
+                # 이름칸 렌더링(멱등): 헤더 C = 1줄 상품제목 + (보이지 않는 구분자) + 2줄 vendorItemId.
+                # 키는 항상 구분자 앞부분이므로 _key 로 순수명 복원 후 vid 를 다시 붙여 표준화한다.
+                nm = _key(ws.cell(hr, _COL_NAME).value)
+                if nm:
+                    ws.cell(hr, _COL_NAME).value = self._display_name(ws.title, nm)
                 kh = None                                   # 키워드 소헤더행
                 for r in range(hr, end + 1):
                     if (_norm(ws.cell(r, _COL_NAME).value) == _LABEL_KEYWORD

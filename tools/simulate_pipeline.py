@@ -314,8 +314,9 @@ def _product_names(path: Path, sheet: str) -> list[str]:
     """그 시트의 상품 블록 이름 목록(헤더행=col7 '날짜'의 col3). 중복 블록 감지에 사용."""
     wb = openpyxl.load_workbook(path)
     ws = wb[sheet]
-    return [_n(ws.cell(r, 3).value) for r in range(1, ws.max_row + 1)
-            if _n(ws.cell(r, 7).value) == "날짜"]
+    # 이름칸엔 표시용 vid 꼬리(구분자 뒤)가 붙으므로 순수 상품명(구분자 앞)만 취한다.
+    return [_n(ws.cell(r, 3).value).split(config.NAME_ID_SEP, 1)[0]
+            for r in range(1, ws.max_row + 1) if _n(ws.cell(r, 7).value) == "날짜"]
 
 
 def scenario_display_name_rename():

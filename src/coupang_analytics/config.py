@@ -13,6 +13,12 @@ CONTRACT_METRICS = (M_SALES, M_VISITORS, M_VIEWS, M_INVENTORY)  # 계약=로켓�
 PERSONAL_METRICS = (M_SALES, M_VISITORS, M_VIEWS)              # 개인=판매자배송(재고 없음)
 KIND_CONTRACT = "계약 상품"
 KIND_PERSONAL = "개인 상품"
+# 상품 이름칸 표시: 1줄=쿠팡 full 상품제목, 2줄=상품 인식코드(vendorItemId). 두 값을 한 셀에 담되
+# **보이지 않는 구분자(U+2063 INVISIBLE SEPARATOR)**로 나눈다. 상품 키(=시계열 정체성)는 항상
+# 이 구분자 앞부분(=순수 상품명). ⚠️ 상품명 자체에 내부 개행('\n')이 들어있는 경우가 실제로 있어
+# (예: '다리스트레칭 MS007\n\n(&picks …)') '첫 줄만 파싱'은 키를 깨뜨린다 → 개행에 안전한 구분자 사용.
+# 쿠팡 제목엔 이 제어문자가 절대 없으므로 내부 개행 상품명도 그대로 보존된다. workbook·검증도구 공용.
+NAME_ID_SEP = "⁣"
 
 # 모바일 노출순위 포함 여부 — 기본 제외(요청). rank._set_mobile/organic_ranks(mobile=) 모듈은 보존(재사용).
 RANK_INCLUDE_MOBILE = False
