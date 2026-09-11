@@ -27,7 +27,12 @@ a = Analysis(
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
-    excludes=["tkinter"],
+    # 기본 UI=PySide6 → tkinter 폴백 제외. 나머지는 이 앱이 안 쓰는데 환경에 깔려 딸려오던 거대
+    # 패키지들(torch 370MB·scipy·pandas·botocore 등) — 제외해 배포 용량을 크게 줄인다.
+    excludes=[
+        "tkinter", "torch", "torchvision", "torchaudio", "scipy", "pandas",
+        "matplotlib", "botocore", "boto3", "IPython", "notebook", "sympy",
+    ],
     noarchive=False,
 )
 pyz = PYZ(a.pure)
