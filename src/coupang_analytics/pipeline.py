@@ -959,10 +959,10 @@ def _wait_user_search(browser, kw: str, log, should_stop, timeout: float = 300.0
                     f"페이지가 다 뜰 때까지 잠시 기다리거나 새로고침 해주세요{extra}")
             elif other_qs:
                 opened = ", ".join(f"'{q}'" for q in other_qs)
-                log(f"    ⌨ 지금 창엔 다른 검색({opened})만 떠 있습니다 → 검색창을 지우고"
-                    f" 바로 이 키워드를 입력·검색하세요: 「{kw}」  (창에 뜬 '{other_qs[0]}'가 아니라 「{kw}」)")
+                log(f"    ⌨ 창엔 다른 검색({opened})만 떠 있습니다 → 검색창을 비우고 위 '검색어 ▶  {kw}' 로"
+                    f" 검색하세요('{other_qs[0]}'가 아니라 '{kw}')")
             else:
-                log(f"    …「{kw}」 입력 대기 중 — **뜬 Chrome 창**의 쿠팡 검색창에 입력·검색하세요"
+                log(f"    … 위 '검색어 ▶  {kw}' 를 **뜬 Chrome 창**(빨간 띠)의 검색창에 붙여넣고 검색하세요"
                     " (다른 브라우저 아님, 중지는 '반자동 중지')")
             last = time.time()
         time.sleep(1.0)
@@ -1029,25 +1029,29 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                 if not todo:
                     continue
                 matcher = _vid_matcher(vids)
-                for kw in todo:
+                for idx, kw in enumerate(todo, 1):
                     if should_stop():
                         break
                     browser.to_front()   # 키워드마다 창을 앞으로(다른 창에 가려 못 찾는 것 방지)
-                    log(f"  🔎 [{biz}] {pname} — (맨 앞 창의) 쿠팡 검색창에 입력·검색: 「{kw}」")
+                    # 키워드는 **앞뒤 공백으로 분리**(「」·기호 제거) → 그 단어만 더블클릭하면 타임스탬프·괄호 없이
+                    # 깨끗이 복사된다(실측: 「」로 감싸면 복사 시 괄호·앞 글자가 딸려와 검색이 오염됨).
+                    log(f"  🔎 [{biz}] {pname}  ({idx}/{len(todo)})")
+                    log(f"     그 창 검색창을 비우고, 아래 '검색어'만 더블클릭해 복사→붙여넣고 Enter:")
+                    log(f"     검색어 ▶  {kw}")
                     pg = _wait_user_search(browser, kw, log, should_stop)
                     if pg is None:
-                        log(f"  [반자동] '{kw}' 미감지/중지 — 공란(다음에 이어서)")
+                        log(f"  [반자동] 「{kw}」 미감지/시간초과 — 공란으로 두고 다음에 이어서 조회합니다")
                         continue
                     try:
                         # 반자동은 이미 떠 있는 페이지 1장만 읽으므로 트래픽·차단 부담이 없다 →
                         # 50위 상한 없이 로드된 페이지의 오가닉 전부를 세어 **50위를 넘어도 실제 등수 기록**.
                         res = parse_serp_rank(pg, matcher, max_rank=config.RANK_SCAN_MAX_SEMI)
                     except Exception as exc:
-                        log(f"  [반자동] '{kw}' 파싱 실패(공란) — {exc.__class__.__name__}: {str(exc)[:80]}")
+                        log(f"  [반자동] 「{kw}」 파싱 실패(공란) — {exc.__class__.__name__}: {str(exc)[:80]}")
                         continue
                     rank, mi = res.get("제품", (None, None))
                     wb.set_keyword_rank(biz, pname, kw, date, rank)
-                    log(f"  [{biz}] {pname} '{kw}': {rank_label(rank)}")
+                    log(f"  ✅ 「{kw}」 순위 = {rank_label(rank)}  — 기록 완료({idx}/{len(todo)})")
                     if mi is not None and getattr(mi, "name", "") and wb.set_display_name(biz, pname, mi.name):
                         log(f"  [노출명] 계약상품명 갱신 → {mi.name}")
                         pname = mi.name.strip()   # 이후 저장도 새 이름으로
