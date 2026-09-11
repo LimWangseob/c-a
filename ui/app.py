@@ -15,7 +15,7 @@ import json
 import os
 import sys
 import threading
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import tkinter as tk
@@ -139,7 +139,6 @@ class App(tk.Tk):
         self.naver_shop = None   # NaverShopCredentials (경쟁강도용, 선택)
         self.ai_key = os.environ.get("OPENAI_API_KEY", "")
         self.product_business: dict[str, str] = {}
-        self.cfg_vars: dict[str, tuple] = {}
         self.creds_store = CredStore()
         self._build_header()
         self._build_tabs()
@@ -223,19 +222,6 @@ class App(tk.Tk):
 
     # ── 레이아웃 ──────────────────────────────────────────────
     # 설정 탭에 노출할 정책값: (라벨, config 속성명, 변환)
-    _CFG_ROWS = [
-        ("키워드 추천 설정", None, None),
-        ("검색량 하한", "KW_MIN_VOLUME", int),
-        ("검색량 상한(추천 탭 전용)", "KW_MAX_VOLUME", int),
-        ("후보 수집 수", "KW_CANDIDATE_LIMIT", int),
-        ("추천 개수(top_n)", "KW_TOP_N", int),
-        ("추적 키워드 수", "KW_TRACK_N", int),
-        ("AI 앵커 수", "KW_AI_ANCHOR_N", int),
-        ("AI 모델", "KW_AI_MODEL", str),
-        ("순위 설정", None, None),
-        ("순위 스캔 상한", "RANK_SCAN_MAX", int),
-    ]
-
     _NB_HEIGHT = 320   # 탭(내용) 영역 고정 높이 — 탭 전환해도 출렁이지 않음. 나머지는 로그창
 
     def _build_tabs(self):
@@ -270,31 +256,7 @@ class App(tk.Tk):
         )):
             ttk.Button(fk, text=text, width=16, command=cmd).grid(row=row, column=0, padx=5, pady=4)
             ttk.Label(fk, textvariable=var, width=58).grid(row=row, column=1, sticky="w")
-        # 정책값
-        cur = None
-        for label, attr, cast in self._CFG_ROWS:
-            if attr is None:  # 섹션 헤더
-                cur = ttk.LabelFrame(tab, text=label)
-                cur.pack(fill="x", padx=8, pady=6)
-                continue
-            r = len(cur.grid_slaves())
-            ttk.Label(cur, text=label, width=18).grid(row=r, column=0, sticky="w", padx=6, pady=3)
-            var = tk.StringVar(value=str(getattr(config, attr)))
-            ttk.Entry(cur, textvariable=var, width=18).grid(row=r, column=1, sticky="w", padx=4)
-            self.cfg_vars[attr] = (var, cast)
-        ttk.Button(tab, text="설정 적용", command=self.apply_settings).pack(anchor="e", padx=8, pady=8)
-
-    def apply_settings(self):
-        for attr, (var, cast) in self.cfg_vars.items():
-            raw = var.get().strip()
-            try:
-                value = cast(raw)
-            except ValueError:
-                messagebox.showwarning("설정 오류", f"'{attr}' 값이 올바르지 않습니다: {raw}")
-                return
-            setattr(config, attr, value)
-        self.log("[설정] 적용됨 — " + ", ".join(f"{a}={getattr(config, a)}" for a in self.cfg_vars))
-        messagebox.showinfo("설정", "설정이 적용되었습니다.")
+        # 키워드/순위 등 세부 설정값 입력란은 제거(사용자 미사용 · 영속 저장도 안 됨). 값은 config.py 에서 관리.
 
     def _build_kw_tab(self, nb):
         tab = ttk.Frame(nb.body)
@@ -401,15 +363,27 @@ class App(tk.Tk):
             "계정마다 [로그인→판매분석→키워드→PC·모바일 순위]를 완결하고 통합 엑셀에 누적 저장합니다. "
             "로그인은 창 없이 자동, 2차인증 필요할 때만 창이 뜹니다(로그로 예고). 진행상황은 아래 로그에서 확인."
         ), wraplength=980).pack(anchor="w", padx=6, pady=(0, 6))
+        # 실행 모드 — 팝업 3택 대신 화면에서 선택(이어쓰기=누적 / 처음부터=새 통계). 실행 시 예/아니오만 확인.
+        moderow = ttk.Frame(tab)
+        moderow.pack(fill="x", padx=10, pady=(2, 2))
+        self.run_mode = tk.StringVar(value="append")
+        ttk.Label(moderow, text="실행 모드:").pack(side="left")
+        ttk.Radiobutton(moderow, text="이어쓰기(누적)", variable=self.run_mode,
+                        value="append").pack(side="left", padx=(8, 0))
+        ttk.Radiobutton(moderow, text="처음부터(새 통계)", variable=self.run_mode,
+                        value="fresh").pack(side="left", padx=(8, 4))
+        self.grow_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(moderow, text="새 키워드 발굴 추가 (이어쓰기 시, 상한 7개·하루 2개)",
+                        variable=self.grow_var).pack(side="left", padx=(16, 0))
         # 수집 기간 — 한 줄로 압축(로그창을 더 크게)
         box = ttk.Frame(tab)
         box.pack(fill="x", padx=10, pady=(2, 4))
         self.collect_mode = tk.StringVar(value="today")
-        today = date.today().isoformat()
-        self.from_var = tk.StringVar(value=today)
-        self.to_var = tk.StringVar(value=today)
+        yday = (date.today() - timedelta(days=1)).isoformat()   # 기본값=확정일(어제, D-1)
+        self.from_var = tk.StringVar(value=yday)
+        self.to_var = tk.StringVar(value=yday)
         ttk.Label(box, text="수집 기간:").pack(side="left")
-        ttk.Radiobutton(box, text="당일", variable=self.collect_mode, value="today",
+        ttk.Radiobutton(box, text="당일(=어제, 최신 확정일)", variable=self.collect_mode, value="today",
                         command=self._toggle_range).pack(side="left", padx=(8, 0))
         ttk.Radiobutton(box, text="기간", variable=self.collect_mode, value="range",
                         command=self._toggle_range).pack(side="left", padx=(8, 4))
@@ -428,7 +402,8 @@ class App(tk.Tk):
 
     def _run_dates(self):
         if self.collect_mode.get() == "today":
-            d = date.today().isoformat()
+            # 쿠팡 판매분석은 당일 데이터를 익일 이후 생성 → '당일'은 확정된 어제(D-1) 기준(app_qt 와 동일).
+            d = (date.today() - timedelta(days=1)).isoformat()
             return d, d
         return self.from_var.get().strip(), self.to_var.get().strip()
 
@@ -444,45 +419,34 @@ class App(tk.Tk):
                                    "설정 탭에서 OpenAI API 키를 입력한 뒤 다시 실행하세요.")
             return
         df, dt = self._run_dates()
-        # 날짜를 직접 지정(오늘 자동이 아님)하면 순위 조회 제외 = 그 날짜 판매데이터만 채움(차단 회피)
+        # 날짜를 직접 지정(당일 자동이 아님)하면 순위 조회 제외 = 그 날짜 판매데이터만 채움(차단 회피)
         skip_ranks = self.collect_mode.get() != "today"
         n = sum(len(a.products) for a in self.input_list.accounts)
-        resume = carry = grow = False
-        meta = resumable_progress()   # 끝나지 않은 진행분이 있으면 이어서/새로 팝업
-        if meta:                        # ① 같은 날 크래시 복구
-            mode = "통계 이어쓰기" if meta.get("carry") else "새 통계"
-            ans = messagebox.askyesnocancel(
-                "이어서 할까요?",
-                f"이전에 끝나지 않은 작업이 있습니다({mode}).\n"
-                f"기간 {meta['date_from']}~{meta['date_to']}, 완료 {len(meta['done'])}개 계정.\n\n"
-                "[예] 이어서 하기 — 완료 계정은 건너뛰고 끊긴 지점(순위 포함)부터\n"
-                "[아니오] 처음부터 새로 시작 — 진행분 삭제\n"
-                "[취소] 중단")
-            if ans is None:
-                return
-            resume = bool(ans)
-            if resume:
-                df, dt = meta["date_from"], meta["date_to"]   # 기간은 진행분을 따름
-        elif master_exists():           # ② 통계 마스터 있음 — 오늘 이어쓸지/새로 시작할지
-            ans = messagebox.askyesnocancel(
-                "오늘 통계 이어쓰기",
-                f"기존 통계(쿠팡데이타분석_통계.xlsx)가 있습니다.\n오늘({dt}) 데이터를 이어서 쌓을까요?\n"
-                "키워드는 그대로 유지되고 오늘 날짜만 추가됩니다.\n\n"
-                "[예] 기존 통계에 추가\n[아니오] 새 통계 시작(기존은 보관)\n[취소] 중단")
-            if ans is None:
-                return
-            carry = bool(ans)
-            if carry:   # 발굴 추가 여부(기존 키워드는 절대 제거 안 됨)
-                grow = messagebox.askyesno(
-                    "새 키워드 발굴 추가",
-                    "기존 키워드를 유지하면서, 상한(7개) 안에서 하루 최대 2개까지\n"
-                    "새 키워드를 발굴해 추가할까요?\n\n[예] 발굴 추가 / [아니오] 키워드 동결(권장)")
-        else:                           # ③ 첫 실행(새 통계)
-            if not messagebox.askyesno("새 통계 시작", f"상품 {n}개, 기간 {df}~{dt}.\n"
-                                       "첫 통계를 시작합니다(키워드 선정). 이후 매일 실행하면 키워드를 유지하며 누적됩니다.\n"
-                                       "로그인 안 된 계정은 창이 뜨니 (자동입력/직접) 로그인하세요. 계정마다 중간 저장됩니다.\n"
-                                       "진행할까요?"):
-                return
+        title = "① 판매수집" if keywords_off else "전체 실행"
+        # 실행 모드는 화면 라디오로 선택(팝업 3택 제거) → 여기선 예/아니오만 확인.
+        #  · 처음부터(새 통계): carry_forward=False → 기존 마스터 백업 후 새로 시작.
+        #  · 이어쓰기: 같은 날 미완료분 있으면 이어서(완료 계정 건너뜀), 아니면 마스터에 오늘 컬럼 추가.
+        fresh = self.run_mode.get() == "fresh"
+        resume = carry = False
+        meta = None if fresh else resumable_progress()
+        if fresh:
+            mode_desc = "처음부터(새 통계) — ⚠ 기존 통계 마스터는 백업 후 새로 시작(누적 시계열 끊김)"
+        elif meta:
+            resume = True
+            carry = bool(meta.get("carry", False))
+            df, dt = meta["date_from"], meta["date_to"]
+            mode_desc = f"이어쓰기 — 같은 날 미완료분 이어서(완료 {len(meta['done'])}개 건너뜀), 기간 {df}~{dt}"
+        elif master_exists():
+            carry = True
+            mode_desc = f"이어쓰기 — 오늘({dt}) 컬럼 추가(키워드 동결)"
+        else:
+            mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음), 기간 {df}~{dt}"
+        grow = carry and self.grow_var.get()   # 발굴 추가는 통계 이어쓰기 때만 의미
+        if not messagebox.askyesno(f"{title} 확인",
+                                   f"{mode_desc}\n대상: 상품 {n}개"
+                                   f"{' · 새 키워드 발굴 추가' if grow else ''}\n\n실행할까요?"):
+            self.log(f"[{title}] 취소됨")
+            return
         input_list, naver_creds, key = self.input_list, self.naver_creds, self.ai_key
         mode_txt = "이어서 " if resume else ("통계이어쓰기 " if carry else "새통계 ")
         stage_txt = " · ①판매수집(키워드·순위 없음)" if keywords_off else \
@@ -621,6 +585,10 @@ class App(tk.Tk):
         def append():
             tag = self._log_tag(msg)
             self.log_text.insert("end", msg + "\n", (tag,) if tag else ())
+            # 24/365 상시가동 메모리 방지: 최근 N줄만 유지(오래된 줄 폐기). Text 는 무한 누적된다.
+            lines = int(self.log_text.index("end-1c").split(".")[0])
+            if lines > config.UI_LOG_MAX_LINES:
+                self.log_text.delete("1.0", f"{lines - config.UI_LOG_MAX_LINES}.0")
             self.log_text.see("end")
         self.after(0, append)
 
