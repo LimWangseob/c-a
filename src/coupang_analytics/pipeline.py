@@ -721,14 +721,22 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         log(f"== ⚠ 로그인 못한 계정 {len(uncollected)}개(세션만료+Akamai차단): "
             f"{', '.join(a.label for a in uncollected)} — 쉰 IP(내일 등)에 재실행 시 수집됨 ==")
 
-    # 전부 완료 → 통계 마스터 갱신 + 그날 스냅샷 저장, 진행 상태 정리
+    # 통계 마스터 갱신 + 그날 스냅샷 저장
     snapshot = _snapshot_path(out, now)
     wb.apply_style()         # 가독성 서식(헤더 고정·상품 구분·정렬) — 최종본에만
     wb.save(master)          # 다음 날 이어쓸 마스터
     wb.save(snapshot)        # 그날 백업본(감사용)
-    for p in (partial, prog):
-        if p.exists():
-            p.unlink()
+    # 진행 상태 정리 — 단, 이 실행에서 로그인 못한 계정이 **남았으면 진행분을 유지**해서
+    # 같은 날 재실행이 '미완료분만' 이어서 처리하게 한다(완료 계정은 done 으로 자동 건너뜀).
+    # 날짜가 바뀌면 resumable_progress 가 '오늘 아님'으로 무시 → 자동으로 처음부터.
+    if uncollected:
+        _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks)
+        wb.save(partial)     # 재개 기준선(완료분 반영)
+        log(f"== 미완료 {len(uncollected)}개 남음 — 진행분 유지(같은 날 재실행 시 그 계정만 이어서) ==")
+    else:
+        for p in (partial, prog):
+            if p.exists():
+                p.unlink()
     log(f"== 완료: 마스터 {master.name} · 스냅샷 {snapshot.name} (성공 {len(done)}/{total} 계정) ==")
     return snapshot
 
