@@ -153,19 +153,26 @@ class WingBrowser:
             args += [f"--window-position={cx},{cy}", "--window-size=1200,900"]
         args.append("about:blank")
         self._proc = subprocess.Popen(args)
+        # ⚠ 24/365 상시가동 안정성: __enter__ 도중 예외가 나면 파이썬은 __exit__ 를 부르지 않는다 →
+        # 이미 띄운 Chrome(_proc)·playwright 가 좀비로 남아 상시가동 중 로그인 실패·포트경쟁이 반복되면
+        # 계속 누적된다(reap_orphan_chrome 은 앱 시작 때만 돎). 그래서 실패 시 여기서 직접 정리 후 재전파.
         try:
-            _wait_port(self.port)
-        except TimeoutError:
-            if self._proc.poll() is not None:   # Chrome 이 즉시 종료 = 기존 인스턴스로 넘어감(프로필 잠금)
-                raise RuntimeError(
-                    "Chrome 디버깅 포트가 안 열립니다 — 같은 프로필로 Chrome 이 이미 실행 중일 수 "
-                    f"있습니다. 모든 Chrome 창을 닫고 다시 실행하세요. (프로필: {self.profile_dir})") from None
+            try:
+                _wait_port(self.port)
+            except TimeoutError:
+                if self._proc.poll() is not None:   # Chrome 이 즉시 종료 = 기존 인스턴스로 넘어감(프로필 잠금)
+                    raise RuntimeError(
+                        "Chrome 디버깅 포트가 안 열립니다 — 같은 프로필로 Chrome 이 이미 실행 중일 수 "
+                        f"있습니다. 모든 Chrome 창을 닫고 다시 실행하세요. (프로필: {self.profile_dir})") from None
+                raise
+            self._pw = sync_playwright().start()
+            self._browser = self._connect_cdp()     # ECONNRESET 등 재시도
+            self.context = self._browser.contexts[0]
+            self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
+            return self
+        except BaseException:
+            self.__exit__(None, None, None)          # _pw.stop() + _kill_tree() → 좀비 누수 차단
             raise
-        self._pw = sync_playwright().start()
-        self._browser = self._connect_cdp()     # ECONNRESET 등 재시도
-        self.context = self._browser.contexts[0]
-        self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
-        return self
 
     def __exit__(self, *exc) -> None:
         try:

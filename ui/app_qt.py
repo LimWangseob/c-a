@@ -136,24 +136,6 @@ QScrollBar::handle:horizontal { background: #cbd5e1; border-radius: 5px; min-wid
 #logTitle { font-weight: 700; color: #1e293b; }
 """
 
-_CFG_ROWS = [
-    ("키워드 추천 설정", None, None),
-    ("검색량 하한", "KW_MIN_VOLUME", int),
-    ("검색량 상한(추천 탭 전용)", "KW_MAX_VOLUME", int),
-    ("후보 수집 수", "KW_CANDIDATE_LIMIT", int),
-    ("추천 개수(top_n)", "KW_TOP_N", int),
-    ("추적 키워드 수", "KW_TRACK_N", int),
-    ("AI 앵커 수", "KW_AI_ANCHOR_N", int),
-    ("AI 모델", "KW_AI_MODEL", str),
-    ("순위 설정", None, None),
-    ("순위 스캔 상한", "RANK_SCAN_MAX", int),
-    ("검색 간격 최소(초)", "RANK_NAV_DELAY_MIN_SEC", int),
-    ("검색 간격 최대(초)", "RANK_NAV_DELAY_MAX_SEC", int),
-    ("반자동 쿨다운(초)", "RANK_SEMI_COOLDOWN_SEC", int),
-    ("쿨다운 최대 반복(포기까지)", "RANK_SEMI_COOLDOWN_MAX", int),
-    ("연속 차단 허용(쿨다운 진입)", "RANK_SEMI_AUTO_MAX_MISS", int),
-    ("반자동 결과 대기(초)", "RANK_SEMI_AUTO_WAIT_SEC", int),
-]
 _LOG_COLORS = {"ok": "#4ade80", "err": "#f87171", "warn": "#fbbf24", "head": "#60a5fa", "": "#e2e8f0"}
 
 
@@ -170,7 +152,6 @@ class App(QtWidgets.QMainWindow):
         self.ai_key = ""
         self.creds_store = CredStore()
         self.product_business: dict[str, str] = {}
-        self.cfg_edits: dict[str, tuple] = {}
 
         # 실시간 모니터링용 로그 파일 미러(GUI 콘솔과 동일 내용을 파일로도 기록)
         _log_dir = Path(__file__).resolve().parents[1] / "output"
@@ -251,30 +232,7 @@ class App(QtWidgets.QMainWindow):
             grid.addWidget(lbl, i, 1)
         grid.setColumnStretch(1, 1)
         v.addWidget(fk)
-
-        cur_form, cur_n = None, 0
-        for label, attr, cast in _CFG_ROWS:
-            if attr is None:                       # 섹션 카드 시작
-                card = self._card(label)
-                cur_form = QtWidgets.QGridLayout(card)
-                cur_form.setColumnStretch(1, 1)    # 입력칸 열 늘어남
-                cur_form.setColumnStretch(3, 1)
-                cur_form.setColumnMinimumWidth(0, 140)
-                cur_form.setColumnMinimumWidth(2, 140)
-                cur_n = 0
-                v.addWidget(card)
-                continue
-            row, col = cur_n // 2, (cur_n % 2) * 2   # 1줄에 2개씩(라벨+입력칸)
-            cur_form.addWidget(QtWidgets.QLabel(label), row, col)
-            e = QtWidgets.QLineEdit(str(getattr(config, attr)))
-            e.setMaximumWidth(200)
-            cur_form.addWidget(e, row, col + 1)
-            self.cfg_edits[attr] = (e, cast)
-            cur_n += 1
-        apply_btn = QtWidgets.QPushButton("설정 적용")
-        apply_btn.setObjectName("accent")          # '전체 실행'과 동일한 파란 악센트
-        apply_btn.clicked.connect(self.apply_settings)
-        v.addWidget(apply_btn, alignment=QtCore.Qt.AlignRight)
+        # 키워드/순위 등 세부 설정값 입력란은 제거(사용자 미사용 · 영속 저장도 안 됨). 값은 config.py 에서 관리.
         v.addStretch(1)
         return scroll
 
@@ -385,6 +343,24 @@ class App(QtWidgets.QMainWindow):
         desc.setObjectName("muted")
         desc.setWordWrap(True)
         rv.addWidget(desc)
+        # 실행 모드 — 팝업 3택 대신 화면에서 선택(이어쓰기=누적 / 처음부터=새 통계). 실행 시 예/아니오만 확인.
+        moderow = QtWidgets.QHBoxLayout()
+        moderow.addWidget(QtWidgets.QLabel("실행 모드:"))
+        self.rb_append = QtWidgets.QRadioButton("이어쓰기(누적)")
+        self.rb_append.setChecked(True)
+        self.rb_append.setToolTip("기존 통계 마스터에 오늘 날짜 컬럼을 추가합니다(키워드 동결, 시계열 누적).\n"
+                                  "같은 날 미완료분이 있으면 완료 계정을 건너뛰고 이어서 진행합니다.")
+        self.rb_fresh = QtWidgets.QRadioButton("처음부터(새 통계)")
+        self.rb_fresh.setToolTip("기존 통계 마스터를 백업한 뒤 빈 통계로 새로 시작합니다.\n"
+                                 "⚠ 누적 시계열이 끊깁니다 — 첫 수집이나 키워드 전면 재선정 때만 사용하세요.")
+        self._mode_group = QtWidgets.QButtonGroup(self)
+        self._mode_group.setExclusive(True)
+        self._mode_group.addButton(self.rb_append)
+        self._mode_group.addButton(self.rb_fresh)
+        moderow.addWidget(self.rb_append)
+        moderow.addWidget(self.rb_fresh)
+        moderow.addStretch(1)
+        rv.addLayout(moderow)
         optrow = QtWidgets.QHBoxLayout()
         self.cb_grow = QtWidgets.QCheckBox("새 키워드 발굴 추가 (통계 이어쓰기 시, 상한 7개·하루 2개)")
         self.cb_grow.setToolTip(
@@ -447,6 +423,9 @@ class App(QtWidgets.QMainWindow):
         self.log_console = QtWidgets.QTextEdit()
         self.log_console.setObjectName("logConsole")
         self.log_console.setReadOnly(True)
+        # 24/365 상시가동 메모리 잠식 방지: 콘솔은 최근 N줄만 유지(오래된 줄 자동 폐기).
+        # 전체 이력은 파일 미러(run_log_*.log)에 남으므로 화면 상한이 데이터 손실은 아니다.
+        self.log_console.document().setMaximumBlockCount(config.UI_LOG_MAX_LINES)
         v.addWidget(self.log_console, 1)
         return w
 
@@ -477,8 +456,23 @@ class App(QtWidgets.QMainWindow):
             f'<span style="color:{color}">{safe}</span>')
         sb = self.log_console.verticalScrollBar()
         sb.setValue(sb.maximum())
+        self._rotate_log_if_big()   # 상시가동 시 로그 파일 무한 증가(디스크) 방지 — 상한 넘으면 .1 로 회전
         with open(self._log_path, "a", encoding="utf-8") as fh:  # 파일 미러(실시간 tail용)
             fh.write(f"[{ts}] {msg}\n")
+
+    def _rotate_log_if_big(self) -> None:
+        """로그 파일이 상한(config.UI_LOG_FILE_MAX_BYTES)을 넘으면 `.1` 로 회전(직전 1세대 보관).
+
+        stat() 부담을 줄이려 수십 줄마다 한 번만 확인한다. 회전 실패는 로깅을 막지 않는다(무해).
+        """
+        self._log_writes = getattr(self, "_log_writes", 0) + 1
+        if self._log_writes % 50:
+            return
+        try:
+            if self._log_path.exists() and self._log_path.stat().st_size > config.UI_LOG_FILE_MAX_BYTES:
+                self._log_path.replace(self._log_path.with_suffix(".log.1"))
+        except OSError:
+            pass
 
     def copy_log(self):
         QtWidgets.QApplication.clipboard().setText(self.log_console.toPlainText())
@@ -647,18 +641,6 @@ class App(QtWidgets.QMainWindow):
             self.openai_lbl.setText("(OpenAI 키: 저장됨 — 자동 로드)")
             self.log("[OpenAI] 저장된 키 자동 로드됨")
 
-    # ── 설정 ──────────────────────────────────────────────────
-    def apply_settings(self):
-        for attr, (edit, cast) in self.cfg_edits.items():
-            raw = edit.text().strip()
-            try:
-                setattr(config, attr, cast(raw))
-            except ValueError:
-                QtWidgets.QMessageBox.warning(self, "설정 오류", f"'{attr}' 값이 올바르지 않습니다: {raw}")
-                return
-        self.log("[설정] 적용됨 — " + ", ".join(f"{a}={getattr(config, a)}" for a in self.cfg_edits))
-        QtWidgets.QMessageBox.information(self, "설정", "설정이 적용되었습니다.")
-
     # ── 키워드 추천 ───────────────────────────────────────────
     def do_recommend(self):
         if self.naver_creds is None:
@@ -785,26 +767,33 @@ class App(QtWidgets.QMainWindow):
         # 날짜를 직접 지정(어제 자동이 아님)하면 순위 조회 제외 = 그 날짜 판매데이터만 채움(차단 회피)
         skip_ranks = not self.cb_today.isChecked()
         n = sum(len(a.products) for a in self.input_list.accounts)
-        # 무인 자동 결정(팝업 최소화): 같은 날 미완료분이 있으면 자동으로 이어서(완료 계정 건너뜀),
-        # 없고 마스터가 있으면 오늘 컬럼 자동 이어쓰기(키워드 동결), 둘 다 없으면 첫 통계만 1회 확인.
-        # (resumable_progress 는 '오늘 시작분'만 반환 → 날짜가 바뀌면 자동으로 처음부터 = 새 오늘 컬럼.)
+        title = "① 판매수집" if keywords_off else "전체 실행"
+        # 실행 모드는 화면 라디오로 선택(팝업 3택 제거) → 여기선 예/아니오만 확인.
+        #  · 처음부터(새 통계): carry_forward=False → 기존 마스터 백업 후 새로 시작.
+        #  · 이어쓰기: 같은 날 미완료분이 있으면 이어서(완료 계정 건너뜀), 아니면 마스터에 오늘 컬럼 추가.
+        #    (resumable_progress 는 '오늘 시작분'만 반환 → 날짜가 바뀌면 자동으로 새 오늘 컬럼.)
+        fresh = self.rb_fresh.isChecked()
         resume = carry = False
-        meta = resumable_progress()
-        if meta:                        # ① 같은 날 미완료 → 자동 이어서(실행 안 된 계정만)
+        meta = None if fresh else resumable_progress()
+        if fresh:
+            mode_desc = "처음부터(새 통계) — ⚠ 기존 통계 마스터는 백업 후 새로 시작(누적 시계열 끊김)"
+        elif meta:
             resume = True
             carry = bool(meta.get("carry", False))
             df, dt = meta["date_from"], meta["date_to"]
-            self.log(f"[전체실행] 같은 날 미완료분 이어서(자동) — 완료 {len(meta['done'])}개 건너뜀, "
-                     f"기간 {df}~{dt}")
-        elif master_exists():           # ② 마스터 있음 → 오늘 컬럼 자동 이어쓰기(무인, 팝업 없음)
+            mode_desc = f"이어쓰기 — 같은 날 미완료분 이어서(완료 {len(meta['done'])}개 건너뜀), 기간 {df}~{dt}"
+        elif master_exists():
             carry = True
-            self.log(f"[전체실행] 통계 이어쓰기(자동) — 오늘({dt}) 컬럼 추가, 키워드 동결")
-        else:                           # ③ 첫 실행(새 통계 생성)만 1회 확인
-            if QtWidgets.QMessageBox.question(
-                    self, "새 통계 시작", f"상품 {n}개, 기간 {df}~{dt}.\n첫 통계를 시작합니다(키워드 선정). "
-                    "이후 매일 실행하면 키워드를 유지하며 누적됩니다.\n진행할까요?") != QtWidgets.QMessageBox.Yes:
-                return
+            mode_desc = f"이어쓰기 — 오늘({dt}) 컬럼 추가(키워드 동결)"
+        else:
+            mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음), 기간 {df}~{dt}"
         grow = carry and self.cb_grow.isChecked()   # 발굴 추가는 통계 이어쓰기 때만 의미
+        # 단일 확인 팝업 — 실행 여부(예/아니오)만.
+        confirm = (f"{mode_desc}\n대상: 상품 {n}개"
+                   f"{' · 새 키워드 발굴 추가' if grow else ''}\n\n실행할까요?")
+        if QtWidgets.QMessageBox.question(self, f"{title} 확인", confirm) != QtWidgets.QMessageBox.Yes:
+            self.log(f"[{title}] 취소됨")
+            return
         input_list, naver_creds, key = self.input_list, self.naver_creds, self.ai_key
         mode_txt = "이어서 " if resume else ("통계이어쓰기 " if carry else "새통계 ")
         stage_txt = " · ①판매수집(키워드·순위 없음)" if keywords_off else \
