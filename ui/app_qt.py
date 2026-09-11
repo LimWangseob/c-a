@@ -779,33 +779,21 @@ class App(QtWidgets.QMainWindow):
         # 날짜를 직접 지정(어제 자동이 아님)하면 순위 조회 제외 = 그 날짜 판매데이터만 채움(차단 회피)
         skip_ranks = not self.cb_today.isChecked()
         n = sum(len(a.products) for a in self.input_list.accounts)
+        # 무인 자동 결정(팝업 최소화): 같은 날 미완료분이 있으면 자동으로 이어서(완료 계정 건너뜀),
+        # 없고 마스터가 있으면 오늘 컬럼 자동 이어쓰기(키워드 동결), 둘 다 없으면 첫 통계만 1회 확인.
+        # (resumable_progress 는 '오늘 시작분'만 반환 → 날짜가 바뀌면 자동으로 처음부터 = 새 오늘 컬럼.)
         resume = carry = False
         meta = resumable_progress()
-        if meta:                        # ① 같은 날 크래시 복구
-            mode = "통계 이어쓰기" if meta.get("carry") else "새 통계"
-            box = QtWidgets.QMessageBox(self)
-            box.setWindowTitle("이어서 할까요?")
-            box.setText(f"이전에 끝나지 않은 작업이 있습니다({mode}).\n기간 {meta['date_from']}~{meta['date_to']}, "
-                        f"완료 {len(meta['done'])}개 계정.\n\n[예] 이어서 / [아니오] 처음부터 다시 / [취소] 중단")
-            box.setStandardButtons(QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No | QtWidgets.QMessageBox.Cancel)
-            ans = box.exec()
-            if ans == QtWidgets.QMessageBox.Cancel:
-                return
-            resume = ans == QtWidgets.QMessageBox.Yes
-            if resume:
-                df, dt = meta["date_from"], meta["date_to"]
-        elif master_exists():           # ② 통계 마스터 있음 — 오늘 이어쓸지/새로 시작할지
-            box = QtWidgets.QMessageBox(self)
-            box.setWindowTitle("오늘 통계 이어쓰기")
-            box.setText(f"기존 통계(쿠팡데이타분석_통계.xlsx)가 있습니다.\n오늘({dt}) 데이터를 이어서 쌓을까요?\n"
-                        "키워드는 그대로 유지되고 오늘 날짜만 추가됩니다.\n\n"
-                        "[예] 기존 통계에 추가 / [아니오] 새 통계 시작(기존은 보관) / [취소] 중단")
-            box.setStandardButtons(QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No | QtWidgets.QMessageBox.Cancel)
-            ans = box.exec()
-            if ans == QtWidgets.QMessageBox.Cancel:
-                return
-            carry = ans == QtWidgets.QMessageBox.Yes
-        else:                           # ③ 첫 실행(새 통계)
+        if meta:                        # ① 같은 날 미완료 → 자동 이어서(실행 안 된 계정만)
+            resume = True
+            carry = bool(meta.get("carry", False))
+            df, dt = meta["date_from"], meta["date_to"]
+            self.log(f"[전체실행] 같은 날 미완료분 이어서(자동) — 완료 {len(meta['done'])}개 건너뜀, "
+                     f"기간 {df}~{dt}")
+        elif master_exists():           # ② 마스터 있음 → 오늘 컬럼 자동 이어쓰기(무인, 팝업 없음)
+            carry = True
+            self.log(f"[전체실행] 통계 이어쓰기(자동) — 오늘({dt}) 컬럼 추가, 키워드 동결")
+        else:                           # ③ 첫 실행(새 통계 생성)만 1회 확인
             if QtWidgets.QMessageBox.question(
                     self, "새 통계 시작", f"상품 {n}개, 기간 {df}~{dt}.\n첫 통계를 시작합니다(키워드 선정). "
                     "이후 매일 실행하면 키워드를 유지하며 누적됩니다.\n진행할까요?") != QtWidgets.QMessageBox.Yes:

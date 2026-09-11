@@ -73,6 +73,11 @@ def resumable_progress(out_dir: str | Path = "output") -> dict | None:
         return None
     if not isinstance(meta.get("done"), list):
         return None
+    # 날짜 변경 시 처음부터 — 진행분이 **오늘 시작한 것**일 때만 재개 대상으로 인정한다.
+    # (started_at 의 달력 날짜 != 오늘 → 어제 이전의 미완료 잔재이므로 이어쓰지 않고 새로 시작하게 None 반환.)
+    started = str(meta.get("started_at", ""))[:10]   # 'YYYY-MM-DD'
+    if started and started != datetime.now().strftime("%Y-%m-%d"):
+        return None
     return meta
 
 
@@ -282,9 +287,12 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
             session_state.observe_reauth_required(a.account_id, final_url=b.page.url)
             raise NeedLogin()
         else:
+            unattended = config.LOGIN_UNATTENDED
             shown = {"v": False}
 
-            def _need_user():   # 2차인증·봇챌린지 등 사람이 꼭 필요할 때만 창을 띄운다(1회)
+            def _need_user():   # 2차인증·봇챌린지 등 사람이 꼭 필요할 때
+                if unattended:  # 무인: 창 안 띄움 — 사람 필요분은 건너뛰고 나중에 반자동/수동으로
+                    return
                 if not shown["v"]:
                     shown["v"] = True
                     log(f"  [{a.label}] ⚠ 로그인 창을 잠시 띄웁니다(2차인증/직접로그인 필요). 놀라지 마세요")
@@ -292,11 +300,19 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
 
             if pw and b.autofill_login(a.account_id, pw, on_log=log):
                 log(f"  [{a.label}] ID/비번 자동입력·제출 — 창 숨긴 채 로그인 확인 중"
-                    " (2차인증 필요할 때만 창 표시)")
+                    + (" (무인: 사람 필요 시 건너뜀)" if unattended else " (2차인증 필요할 때만 창 표시)"))
+            elif unattended:
+                # 무인 + 비번없음/자동입력실패 → 사람 개입 불가 → 건너뜀(창 안 띄움)
+                log(f"  [{a.label}] 무인 로그인 불가(비번 없음/자동입력 실패) — 건너뜀(나중에 반자동/수동)")
+                session_state.observe_reauth_required(a.account_id, final_url=b.page.url)
+                return None, {}, {}
             else:
                 _need_user()   # 비번 없음/자동입력 실패 → 직접 로그인해야 하니 창 표시
                 log(f"  [{a.label}] 직접 로그인이 필요해 창을 띄웠습니다")
-            if not b.wait_for_login(timeout=300, on_log=log, tag=a.account_id, on_need_user=_need_user):
+            _wait_to = config.LOGIN_UNATTENDED_WAIT_SEC if unattended else 300
+            _grace = config.LOGIN_BLOCK_GRACE_SEC if unattended else 60.0
+            if not b.wait_for_login(timeout=_wait_to, on_log=log, tag=a.account_id,
+                                    on_need_user=_need_user, blocked_grace=_grace):
                 code, detail = b.classify_login()
                 ftype = session_state.failure_type_of(code, detail)   # 세분 실패분류(탐지코드는 불변)
                 session_state.observe_auth_failure(a.account_id, ftype, final_url=b.page.url)
