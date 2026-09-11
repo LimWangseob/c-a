@@ -871,6 +871,42 @@ def _looks_blocked(pg) -> bool:
     return any(m in txt for m in _BLOCK_PAGE_MARKERS)
 
 
+def _live_url(pg) -> str:
+    """페이지의 **현재 렌더러 실제 URL**(location.href 직접 읽기).
+
+    실측(2026-09-11): connect_over_cdp 장기 연결에서 사용자가 창에서 직접 검색하면 Playwright 가 그
+    네비게이션 이벤트를 놓쳐 캐시된 `pg.url` 이 이전(홈) URL 로 **고착**되는 일이 있다(별도 연결로는 최신
+    q 가 보이는데 앱은 "입력 대기 중"만 반복). 캐시 대신 렌더러에서 location.href 를 직접 읽어 이를 회피.
+    """
+    try:
+        u = pg.evaluate("() => location.href")
+        if u:
+            return u
+    except Exception:
+        pass
+    try:
+        return pg.url or ""
+    except Exception:
+        return ""
+
+
+def _all_pages(browser):
+    """연결된 브라우저의 **모든 컨텍스트×모든 탭**(방어적). 단일 컨텍스트라도 전부 순회. 실패 시 browser.page."""
+    ctxs = []
+    try:
+        b = browser.context.browser
+        ctxs = list(b.contexts) if b else [browser.context]
+    except Exception:
+        ctxs = [browser.context] if browser.context else []
+    pages = []
+    for ctx in ctxs:
+        try:
+            pages.extend(ctx.pages)
+        except Exception:
+            continue
+    return pages or [browser.page]
+
+
 def _wait_user_search(browser, kw: str, log, should_stop, timeout: float = 300.0):
     """사용자가 뜬 창에서 kw 를 직접 검색할 때까지 대기(폴링). 감지되면 **그 페이지**를, 타임아웃/중지면 None.
 
@@ -891,19 +927,13 @@ def _wait_user_search(browser, kw: str, log, should_stop, timeout: float = 300.0
     while time.time() < deadline:
         if should_stop():
             return None
-        try:
-            pages = list(browser.context.pages) or [browser.page]
-        except Exception:
-            pages = [browser.page]
+        pages = _all_pages(browser)   # 모든 컨텍스트×탭 순회(사용자가 연 새 탭·창도 포함)
         other_qs: list[str] = []      # 안내와 다른 키워드로 열린 검색결과
         matched_empty = False         # 안내 키워드로 검색은 됐으나 상품이 안 잡힘(차단/로딩)
         matched_blocked = False       # 그 중 차단/권한없음 페이지로 보임
         err_reason = ""               # extract 예외 원인(있으면 로그에 노출 — 조용히 삼키지 않음)
         for pg in pages:
-            try:
-                q = _search_q(pg.url or "")
-            except Exception:
-                continue
+            q = _search_q(_live_url(pg))   # 캐시 pg.url 대신 렌더러 실제 location.href(이벤트 놓침 방지)
             if q is None:
                 continue
             if q != want:
