@@ -269,6 +269,49 @@ class OutputWorkbook:
         v = self.wb[_META_SHEET].cell(row, 3).value
         return [x for x in str(v).split("|") if x] if v else []
 
+    def resolve_block_name(self, biz: str, vids) -> str | None:
+        """이 사업자에서 주어진 vid(옵션ID)와 교집합이 있는 **기존 상품 블록의 이름**을 반환(없으면 None).
+
+        상품 정체성을 vendorItemId 에 앵커한다 — ①판매수집이 매일 넘기는 이름(복원명)이 달라도, ③이
+        검색결과 정확명으로 바꿔둔 블록을 vid 로 찾아 재사용하기 위함(중복 블록 생성·시계열 단절 방지).
+        """
+        want = {str(v) for v in vids if v}
+        if not want:
+            return None
+        for (b, p) in list(self._vid_row):
+            if b == biz and want & set(self.product_vids(b, p)):
+                return p
+        return None
+
+    def set_display_name(self, biz: str, product: str, new_name: str) -> bool:
+        """상품 블록의 표시명(계약상품명)을 검색결과의 **정확한 노출명**으로 교체(시계열 키 안전 이동).
+
+        헤더행 C셀 값만 바꾸고(행 삽입/삭제·병합 변경 없음 → 서식 손상 없음), 인메모리 키
+        (_metric_row/_kw_row/_vid_row)와 숨김시트 상품명을 (biz, product)→(biz, new_name)로 원자적 이동.
+        같은 이름·빈값·헤더 못 찾음·이름 충돌(다른 블록이 이미 그 이름)일 땐 no-op(데이터 보존).
+        """
+        new_name = _norm(new_name)
+        if not new_name or new_name == product or biz not in self.wb.sheetnames:
+            return False
+        ws = self.wb[biz]
+        header = next((r for r in self._date_rows.get(biz, [])
+                       if _norm(ws.cell(r, _COL_NAME).value) == product), None)
+        if header is None:
+            return False
+        if any(k[0] == biz and k[1] == new_name for k in self._metric_row):
+            return False   # 새 이름이 이미 다른 상품 블록 → 병합 방지, 갱신 생략
+        ws.cell(header, _COL_NAME, new_name)
+        self._metric_row = {((b, new_name, m) if (b == biz and p == product) else (b, p, m)): v
+                            for (b, p, m), v in self._metric_row.items()}
+        self._kw_row = {((b, new_name, kw) if (b == biz and p == product) else (b, p, kw)): v
+                        for (b, p, kw), v in self._kw_row.items()}
+        row = self._vid_row.pop((biz, product), None)
+        if row is not None:
+            if _META_SHEET in self.wb.sheetnames:
+                self.wb[_META_SHEET].cell(row, 2, new_name)
+            self._vid_row[(biz, new_name)] = row
+        return True
+
     def title_cache(self, biz: str, product: str) -> tuple[str, str]:
         """(키워드서명, 권고제목) — 없으면 ('', ''). 서명이 현재 키워드와 같으면 AI 재호출 없이 재사용(⑤)."""
         row = self._vid_row.get((biz, product))

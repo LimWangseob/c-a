@@ -156,11 +156,14 @@ def _set_mobile(page, on: bool) -> None:
 
 
 def organic_ranks(browser: WingBrowser, keyword: str, matchers: dict[str, Callable[[SearchItem], bool]],
-                  max_rank: int | None = None, mobile: bool = False, log=None) -> dict[str, int | None]:
+                  max_rank: int | None = None, mobile: bool = False, log=None,
+                  matched_out: dict[str, SearchItem] | None = None) -> dict[str, int | None]:
     """키워드 1회 검색으로 여러 대상(옵션)의 오가닉 순위를 한 번에 산출.
 
     matchers: {라벨: matcher}. 반환 {라벨: 순위 or None(미노출)}. 차단 시 RankBlocked.
     mobile=True 면 모바일 기기 에뮬레이션으로 조회(모바일 노출순위). 조회 후 에뮬레이션 해제.
+    matched_out 를 주면 매칭된 라벨의 실제 검색결과 항목(SearchItem — 정확 노출명 포함)을 채워
+    호출부가 노출명 갱신에 쓸 수 있다(제어흐름 불변).
     (경쟁강도용 상품수는 쿠팡이 아니라 네이버쇼핑에서 키워드 선정 시 수집한다.)
     """
     max_rank = config.RANK_SCAN_MAX if max_rank is None else max_rank
@@ -183,6 +186,8 @@ def organic_ranks(browser: WingBrowser, keyword: str, matchers: dict[str, Callab
                 rank += 1
                 for label in [lbl for lbl, m in remaining.items() if m(it)]:
                     result[label] = rank
+                    if matched_out is not None:
+                        matched_out[label] = it
                     del remaining[label]
                 if rank >= max_rank or not remaining:
                     break
@@ -192,6 +197,29 @@ def organic_ranks(browser: WingBrowser, keyword: str, matchers: dict[str, Callab
     finally:
         if mobile:
             _set_mobile(browser.page, False)
+    return result
+
+
+def parse_serp_rank(page, matchers: dict[str, Callable[[SearchItem], bool]],
+                    max_rank: int | None = None) -> dict[str, tuple[int | None, SearchItem | None]]:
+    """**네비게이션 없이** 현재 열린 검색결과 페이지에서 광고 제외 오가닉 순위를 산출(반자동 전용).
+
+    사람이 직접 검색해 이미 떠 있는 SERP 의 DOM(extract_items)만 읽는다 — goto/warmup 안 함(봇 신호 0).
+    반환 {라벨: (순위 or None, 매칭 SearchItem or None)}. 매칭 항목의 name = 정확 노출명.
+    """
+    max_rank = config.RANK_SCAN_MAX if max_rank is None else max_rank
+    result: dict[str, tuple[int | None, SearchItem | None]] = {label: (None, None) for label in matchers}
+    remaining = dict(matchers)
+    rank = 0
+    for it in extract_items(page):
+        if it.is_ad:
+            continue
+        rank += 1
+        for label in [lbl for lbl, m in remaining.items() if m(it)]:
+            result[label] = (rank, it)
+            del remaining[label]
+        if rank >= max_rank or not remaining:
+            break
     return result
 
 

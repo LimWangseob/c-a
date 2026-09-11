@@ -185,9 +185,17 @@ class WingBrowser:
             cdp.detach()
 
     def show(self) -> None:
-        """숨긴 창을 화면 정중앙으로 이동·표시(로그인/2차인증 등 사람이 조작해야 할 때만)."""
+        """숨긴 창을 화면 정중앙으로 이동·표시하고 **맨 앞으로** 가져온다(로그인/2차인증/반자동 등 사람 조작용)."""
         cx, cy = _center_pos(1200, 900)
         self._set_bounds({"left": cx, "top": cy, "width": 1200, "height": 900, "windowState": "normal"})
+        self.to_front()
+
+    def to_front(self) -> None:
+        """창을 최소화 해제 + 맨 앞으로(포커스). 다른 창에 가려 못 찾는 것 방지. 실패해도 무해."""
+        try:
+            self.page.bring_to_front()   # CDP Target 활성화 → 창이 앞으로
+        except Exception as exc:
+            print(f"[browser] to_front 스킵({exc.__class__.__name__})")
 
     def hide(self) -> None:
         """창을 화면 밖으로 이동(숨김). 실제 Chrome 은 살아있어 세션·Akamai 통과 유지."""

@@ -152,13 +152,14 @@ class RankHalt(Exception):
         self.partial = partial or {}
 
 
-def _measure_nav_serial(browser, keywords, matchers, log):
+def _measure_nav_serial(browser, keywords, matchers, log, matched_out=None):
     """기본(안전) 순위 측정 — **사람처럼 검색창을 하나씩** 직렬 네비게이션 + 랜덤 간격(RANK_NAV_DELAY).
 
     **서킷브레이커**: 이상징후(응답시간 급증 RANK_SLOW_ABS_SEC↑ · 403/429/Akamai 챌린지 RankBlocked)를
     감지하면 신규검색을 즉시 중지하고 충분한 cooldown(RANK_COOLDOWN_SEC) 후 같은 검색을 1회 재측정(probe)한다.
     정상이면 재개, 또 이상이면 cooldown 반복(상한 RANK_COOLDOWN_MAX)→초과 시 당일 중지(_RANK_HALT)+RankHalt.
     우회 재요청은 하지 않는다. 각 응답은 관측층에 기록(rank_ok/rank_empty/rank_challenge).
+    matched_out 를 주면 매칭된 검색결과 항목(정확 노출명 포함)을 채워 호출부가 노출명 갱신에 쓴다.
     """
     pc: dict = {}
     for i, kw in enumerate(keywords):
@@ -171,7 +172,7 @@ def _measure_nav_serial(browser, keywords, matchers, log):
         while True:   # 이상징후 → cooldown 후 같은 kw 재측정(probe). 반복 상한 초과면 당일 중지.
             try:
                 t0 = time.monotonic()
-                r = organic_ranks(browser, kw, matchers, log=log)
+                r = organic_ranks(browser, kw, matchers, log=log, matched_out=matched_out)
                 dt = time.monotonic() - t0
                 if dt >= config.RANK_SLOW_ABS_SEC:      # 응답시간 급증 = 이상징후(조기감지)
                     if not _rank_cooldown(browser, log, f"응답 {dt:.0f}s 급증"):
@@ -189,17 +190,18 @@ def _measure_nav_serial(browser, keywords, matchers, log):
     return {kw: (pc.get(kw, {}), {}) for kw in keywords}
 
 
-def _measure(browser, keywords, matchers, log):
+def _measure(browser, keywords, matchers, log, matched_out=None):
     """키워드들의 순위 측정 → {키워드: (ranks_pc, ranks_mobile)}.
 
     기본 = 직렬 네비게이션(RANK_NAV_SERIAL, 안전). False면 (구) 병렬 fetch 경로(빠르나 봇틱).
     이번 실행에 이미 차단 감지(_RANK_HALT)면 즉시 빈 결과(더 두드리지 않음).
     모바일은 RANK_INCLUDE_MOBILE=True 일 때만(기본 제외).
+    matched_out(선택)엔 매칭된 검색결과 항목이 담겨 노출명 갱신에 쓰인다(직렬 경로에서만).
     """
     if not keywords or _RANK_HALT["stop"]:
         return {}
     if config.RANK_NAV_SERIAL:
-        return _measure_nav_serial(browser, keywords, matchers, log)
+        return _measure_nav_serial(browser, keywords, matchers, log, matched_out)
     try:   # (구) 병렬 fetch 경로 — 옵션
         pc = organic_ranks_batch(browser, keywords, matchers, log=log)
         mo = (organic_ranks_batch(browser, keywords, matchers, mobile=True, log=log)
@@ -218,7 +220,7 @@ def _measure(browser, keywords, matchers, log):
     return {kw: (pc.get(kw, {}), mo.get(kw, {})) for kw in keywords}
 
 
-def _measure_safe(browser, keywords, matchers, log):
+def _measure_safe(browser, keywords, matchers, log, matched_out=None):
     """순위 측정 예외 안전 래퍼(run_full 경로) — 어떤 예외가 나도 공란 처리하고 계속(순위는 부가지표).
 
     차단(RankHalt)이면 부분결과를 돌려주고, 이후 _measure 는 _RANK_HALT 로 자동 no-op → 그 실행의
@@ -227,7 +229,7 @@ def _measure_safe(browser, keywords, matchers, log):
     if not keywords:
         return {}
     try:
-        return _measure(browser, keywords, matchers, log)
+        return _measure(browser, keywords, matchers, log, matched_out)
     except RankHalt as h:
         return h.partial
     except Exception as exc:
@@ -374,11 +376,13 @@ def _inventory_by_product(products, inv_by_vid: dict) -> dict:
     return out
 
 
-def _fill_product_metrics(wb, biz, product, metrics, inventory, date_iso) -> None:
+def _fill_product_metrics(wb, biz, product, metrics, inventory, date_iso, pname=None) -> None:
     """상품단위 판매지표 기록 — 기본 판매량/방문자/노출량(계약·개인 공통), 재고현황은 로켓그로스(계약)만.
 
     옵션 지표를 상품 단위로 합산한다. 재고현황(판매가능 수량)은 inventory[상품명](Phase2 rfm-inventory)에서.
+    pname = 워크북 블록 이름(정확 노출명으로 갱신됐을 수 있음). inventory 는 발견명(product.name)으로 키.
     """
+    pname = pname or product.name
     views = sales = visitors = 0
     for opt in product.options:
         for oid in opt.vendor_item_ids:
@@ -387,16 +391,16 @@ def _fill_product_metrics(wb, biz, product, metrics, inventory, date_iso) -> Non
                 views += m.views
                 sales += m.sales
                 visitors += m.visitors
-    wb.set_product_metric(biz, product.name, config.M_SALES, date_iso, sales)
-    wb.set_product_metric(biz, product.name, config.M_VISITORS, date_iso, visitors)
-    wb.set_product_metric(biz, product.name, config.M_VIEWS, date_iso, views)
+    wb.set_product_metric(biz, pname, config.M_SALES, date_iso, sales)
+    wb.set_product_metric(biz, pname, config.M_VISITORS, date_iso, visitors)
+    wb.set_product_metric(biz, pname, config.M_VIEWS, date_iso, views)
     if product.kind == config.KIND_CONTRACT:   # 재고현황은 로켓그로스만
         inv = inventory.get(product.name) if inventory else None
         if inv is not None:
-            wb.set_product_metric(biz, product.name, config.M_INVENTORY, date_iso, inv)
+            wb.set_product_metric(biz, pname, config.M_INVENTORY, date_iso, inv)
 
 
-def _log_diagnose(product, track_info, ai_key, log, wb=None, biz=None, roles=None) -> None:
+def _log_diagnose(product, track_info, ai_key, log, wb=None, biz=None, roles=None, pname=None) -> None:
     """진단(제목포함×순위)·공략우선순위·역할·권고제목을 **로그로** 남긴다(새 서식엔 미기록, 셀러 참고용).
 
     track_info: [(키워드, 검색량, 경쟁정도, 순위)]. 새 서식은 검색량·순위만 기록하고, 이 분석은 로그로 제공.
@@ -406,6 +410,7 @@ def _log_diagnose(product, track_info, ai_key, log, wb=None, biz=None, roles=Non
     if not track_info:
         return
     title = product.display_title
+    pname = pname or product.name
     roles = roles or {}
     for kw, vol, comp, rank in track_info:
         diag = diagnose_exposure(keyword_in_title(kw, title), rank, None)
@@ -416,7 +421,7 @@ def _log_diagnose(product, track_info, ai_key, log, wb=None, biz=None, roles=Non
     sig = "|".join(sorted(kw for kw, *_ in track_info))   # 키워드 집합 서명(순서 무관)
     rec = ""
     if wb is not None and biz is not None:                 # ⑤ 캐시 재사용(키워드 동일 → 같은 제목)
-        csig, ctitle = wb.title_cache(biz, product.name)
+        csig, ctitle = wb.title_cache(biz, pname)
         if csig == sig and ctitle:
             rec = ctitle
     if not rec:
@@ -426,7 +431,7 @@ def _log_diagnose(product, track_info, ai_key, log, wb=None, biz=None, roles=Non
             log(f"  [제목] 권고제목 생성 실패 — {exc.__class__.__name__}: {str(exc)[:60]}")
             rec = ""
         if rec and wb is not None and biz is not None:
-            wb.set_title_cache(biz, product.name, sig, rec)
+            wb.set_title_cache(biz, pname, sig, rec)
     cov = round(sum(1 for kw, *_ in track_info if keyword_in_title(kw, title)) / len(track_info) * 100)
     log(f"  [제목] 현재: {title}")
     log(f"  [제목] 커버리지 {cov}% → 권고: {rec or '(생성실패)'}")
@@ -449,41 +454,45 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
     for product in report_acc.products:
         title = product.display_title
         kind = product.kind or config.KIND_PERSONAL
+        vids0 = [oid for opt in product.options for oid in opt.vendor_item_ids]
+        # 상품 정체성 = vendorItemId 앵커. 이미 있는 블록(③이 정확 노출명으로 바꿔뒀을 수 있음)을 vid 로
+        # 찾아 그 이름으로 이어간다(발견명이 매일 달라도 중복 블록·시계열 단절 방지). 없으면 발견명 사용.
+        pname = wb.resolve_block_name(biz, vids0) or product.name
         if keywords_off:                               # ① 판매수집 단계 — 지표·재고·상품ID만
-            wb.ensure_product_block(biz, product.name, kind, wb.product_keywords(biz, product.name))
-            wb.set_product_vids(biz, product.name,
-                                [oid for opt in product.options for oid in opt.vendor_item_ids])
-            _fill_product_metrics(wb, biz, product, metrics, inventory, date_iso)
+            wb.ensure_product_block(biz, pname, kind, wb.product_keywords(biz, pname))
+            wb.set_product_vids(biz, pname, vids0)
+            _fill_product_metrics(wb, biz, product, metrics, inventory, date_iso, pname)
             wb.save(save_path)
             continue
         pmatcher = {"제품": _product_matcher(product)}
 
-        def measure(kws, _m=pmatcher):
-            return _measure_safe(browser, kws, _m, log)   # 순위 실패해도 판매데이터 완주
+        def measure(kws, _m=pmatcher, _cap=None):
+            return _measure_safe(browser, kws, _m, log, matched_out=_cap)   # 순위 실패해도 판매데이터 완주
 
         measure_cb = measure if (browser is not None and not skip_ranks) else None
+        cap: dict = {}   # 매칭된 검색결과 항목(정확 노출명) 회수용
         try:   # 한 상품의 키워드 선정 실패(AI 깨진 JSON·네이버 400 등)가 계정 전체를 막지 않게 격리
-            existing = wb.product_keywords(biz, product.name)
+            existing = wb.product_keywords(biz, pname)
             if existing:                                   # 기존 상품 → 키워드 동결
                 keywords = list(existing)
-                wb.ensure_product_block(biz, product.name, kind, keywords)   # no-op
+                wb.ensure_product_block(biz, pname, kind, keywords)   # no-op
                 if grow and len(existing) < config.KW_MAX_TRACK and browser is not None:
                     want = min(config.KW_ADD_PER_DAY, config.KW_MAX_TRACK - len(existing))
                     found = select_keywords_light(title, naver, ai_key, browser=browser, log=log,
                                                   n=want, measure_ranks=measure, exclude=set(existing))
                     add = [t for t in found if t.keyword not in existing][:want]
                     if add:
-                        wb.add_product_keywords(biz, product.name, [t.keyword for t in add])
+                        wb.add_product_keywords(biz, pname, [t.keyword for t in add])
                         for t in add:
-                            wb.set_keyword_search(biz, product.name, t.keyword, t.volume)
+                            wb.set_keyword_search(biz, pname, t.keyword, t.volume)
                         keywords += [t.keyword for t in add]
                         log(f"  [키워드] {title} → 동결 {existing} + 발굴 {[t.keyword for t in add]}")
                     else:
                         log(f"  [키워드] {title} → (동결) {keywords}")
                 else:
                     log(f"  [키워드] {title} → (동결) {keywords}")
-                todo = [kw for kw in keywords if not wb.is_rank_filled(biz, product.name, kw, date_iso)]
-                measured = measure(todo) if (browser is not None and todo) else {}
+                todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date_iso)]
+                measured = measure(todo, _cap=cap) if (browser is not None and todo) else {}
                 ranks = {kw: _best(measured.get(kw)) for kw in todo if kw in measured}  # 측정 실패는 공란
                 track_info = [(kw, 0, "", ranks.get(kw)) for kw in keywords]   # 동결분은 검색량/경쟁 미측정
                 roles = {}                                     # 동결 상품은 역할 재판정 안 함
@@ -491,9 +500,9 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
                 tracks = select_keywords_light(title, naver, ai_key, browser=browser, log=log,
                                                measure_ranks=measure_cb)
                 keywords = [t.keyword for t in tracks]
-                wb.ensure_product_block(biz, product.name, kind, keywords)
+                wb.ensure_product_block(biz, pname, kind, keywords)
                 for t in tracks:
-                    wb.set_keyword_search(biz, product.name, t.keyword, t.volume)
+                    wb.set_keyword_search(biz, pname, t.keyword, t.volume)
                 ranks = {t.keyword: t.exposure_best for t in tracks}          # 선정단계 순위 재사용
                 track_info = [(t.keyword, t.volume, t.comp_idx, t.exposure_best) for t in tracks]
                 roles = {t.keyword: t.role for t in tracks if t.role}         # ④ 역할(REP/SALES/GROWTH/DEFENSE)
@@ -501,7 +510,7 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
         except Exception as exc:   # 이 상품만 건너뜀(판매지표·재고는 아래에서 계속 기록). 계정은 완주.
             log(f"  [{biz}] {title} 키워드 처리 실패(건너뜀, 판매지표는 기록) — "
                 f"{exc.__class__.__name__}: {str(exc)[:80]}")
-            wb.ensure_product_block(biz, product.name, kind, wb.product_keywords(biz, product.name))
+            wb.ensure_product_block(biz, pname, kind, wb.product_keywords(biz, pname))
             keywords, ranks, track_info, roles = [], {}, [], {}
 
         if not skip_ranks:                             # 순위 기록(PC). 날짜지정 수집(skip_ranks)은 순위 제외
@@ -509,16 +518,20 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
             # is_rank_filled=False 유지 → 다음(쉰 IP) 실행이 그 순위만 재측정. (차단 아닌 실 미노출만 RANK_SCAN_MAX 기록)
             blocked = _RANK_HALT["stop"]
             for kw in keywords:                        # 이미 채워진 건 건너뜀
-                if kw not in ranks or wb.is_rank_filled(biz, product.name, kw, date_iso):
+                if kw not in ranks or wb.is_rank_filled(biz, pname, kw, date_iso):
                     continue
                 if ranks.get(kw) is None and blocked:  # 차단으로 못 잰 값 → 공란(재측정 대상)
                     continue
-                wb.set_keyword_rank(biz, product.name, kw, date_iso, ranks.get(kw))
+                wb.set_keyword_rank(biz, pname, kw, date_iso, ranks.get(kw))
                 log(f"  [순위] '{kw}': {rank_label(ranks.get(kw))}")
-        wb.set_product_vids(biz, product.name,   # 상품 고유ID 저장(③ 순위조회 상품 매칭용)
-                            [oid for opt in product.options for oid in opt.vendor_item_ids])
-        _fill_product_metrics(wb, biz, product, metrics, inventory, date_iso)
-        _log_diagnose(product, track_info, ai_key, log, wb=wb, biz=biz, roles=roles)
+            mi = cap.get("제품")                        # 매칭된 항목 → 계약상품명을 검색결과 정확 노출명으로
+            if mi is not None and getattr(mi, "name", ""):
+                if wb.set_display_name(biz, pname, mi.name):
+                    log(f"  [노출명] 계약상품명 갱신 → {mi.name}")
+                    pname = mi.name.strip()            # 이후 저장도 새 이름으로
+        wb.set_product_vids(biz, pname, vids0)          # 상품 고유ID 저장(③ 순위조회 상품 매칭용)
+        _fill_product_metrics(wb, biz, product, metrics, inventory, date_iso, pname)
+        _log_diagnose(product, track_info, ai_key, log, wb=wb, biz=biz, roles=roles, pname=pname)
         wb.save(save_path)
 
 
@@ -759,11 +772,15 @@ def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = 
     return path
 
 
-def track_ranks_stage(out_dir: str = "output", on_log=None) -> Path | None:
+def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
+                      should_stop=None) -> Path | None:
     """③ 노출순위 조회 전용 — 최신 워크북 로드, 상품(고유ID)+키워드로 순위 측정·기록. 로그인 불필요.
 
     ①(상품ID)·②(키워드)가 이미 워크북에 있어야 한다. 상품마다 저장된 vendorItemId 로 검색결과에서 내
     상품을 찾아 오가닉 순위를 기록한다(가장 최근 일자 컬럼). 예외 안전 — 차단·browser 죽음도 공란 처리.
+    매칭 시 계약상품명을 검색결과의 **정확한 노출명**으로 갱신한다.
+    semi=True 면 **반자동** — 앱이 창을 띄우고 키워드를 안내, 사람이 직접 검색하면 그 화면만 읽어 순위 산출
+    (자동 네비게이션 없음 → 차단 회피). should_stop() 이 참이면 중도 중단.
     """
     log = on_log or (lambda m: None)
     out = Path(out_dir)
@@ -771,6 +788,8 @@ def track_ranks_stage(out_dir: str = "output", on_log=None) -> Path | None:
     if wb is None:
         log("== 순위 조회: 결과 워크북이 없습니다 — 먼저 ①②를 실행하세요 ==")
         return None
+    if semi:
+        return _track_ranks_semi(wb, path, log, should_stop or (lambda: False))
     log(f"== 노출순위 조회 시작 — {path.name} ==")
     _reset_rank_state()          # 이번 실행 차단 플래그·서킷브레이커(cooldown) 초기화
     if config.RANK_NAV_SERIAL:
@@ -794,8 +813,9 @@ def track_ranks_stage(out_dir: str = "output", on_log=None) -> Path | None:
                 todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
                 if not todo:
                     continue
+                cap: dict = {}
                 try:
-                    measured = _measure(browser, todo, _vid_matcher(vids), log)
+                    measured = _measure(browser, todo, _vid_matcher(vids), log, matched_out=cap)
                 except RankHalt as h:              # 차단 감지 → 부분결과만 기록하고 전면 중단
                     measured = h.partial
                     halted = True
@@ -808,6 +828,9 @@ def track_ranks_stage(out_dir: str = "output", on_log=None) -> Path | None:
                     r = _best(measured.get(kw))       # 정상 측정: 미노출이면 '-', 노출이면 'N위'
                     wb.set_keyword_rank(biz, pname, kw, date, r)
                     log(f"  [{biz}] {pname} '{kw}': {rank_label(r)}")
+                mi = cap.get("제품")                   # 매칭된 항목 → 계약상품명 정확 노출명 갱신
+                if mi is not None and getattr(mi, "name", "") and wb.set_display_name(biz, pname, mi.name):
+                    log(f"  [노출명] 계약상품명 갱신 → {mi.name}")
                 wb.save(path)   # **상품마다 저장** → 중단돼도 여기까지 보존(재실행 시 이어서)
                 if halted:
                     break
@@ -818,4 +841,148 @@ def track_ranks_stage(out_dir: str = "output", on_log=None) -> Path | None:
             "쉰 IP/시간에 다시 실행하면 남은 것부터 이어서 조회합니다 ==")
         return path
     log("== 노출순위 조회 완료 ==")
+    return path
+
+
+def _search_q(url: str) -> str | None:
+    """검색결과 URL 이면 q(디코드·공백제거) 반환, 아니면 None."""
+    from urllib.parse import unquote
+    if "/np/search" not in url or "q=" not in url:
+        return None
+    for part in url.split("?", 1)[-1].split("&"):
+        if part.startswith("q="):
+            return unquote(part[2:]).replace("+", " ").replace(" ", "")
+    return None
+
+
+def _wait_user_search(browser, kw: str, log, should_stop, timeout: float = 300.0):
+    """사용자가 뜬 창에서 kw 를 직접 검색할 때까지 대기(폴링). 감지되면 **그 페이지**를, 타임아웃/중지면 None.
+
+    **여러 탭 전부**를 스캔한다(프로필 복원 탭·사용자가 연 새 탭이 browser.page 와 달라도 인식).
+    URL 이 /np/search 이고 q(디코드·공백무시)가 kw 와 같고 상품이 떠 있는 첫 탭을 그 검색으로 인정한다
+    (이전/다른 키워드 잔여결과를 잘못 기록하지 않도록 q 일치 요구). 자동 네비게이션은 하지 않는다.
+    보고 있는 검색 URL 이 있는데 q 가 안 맞으면 그 사실을 로그로 알린다(사용자가 안내 키워드로 검색하도록).
+    """
+    from .rank import extract_items
+    want = kw.replace(" ", "")
+    deadline = time.time() + timeout
+    last = 0.0
+    while time.time() < deadline:
+        if should_stop():
+            return None
+        try:
+            pages = list(browser.context.pages) or [browser.page]
+        except Exception:
+            pages = [browser.page]
+        seen: list[str] = []
+        for pg in pages:
+            try:
+                q = _search_q(pg.url or "")
+            except Exception:
+                continue
+            if q is None:
+                continue
+            seen.append(q)
+            if q == want:
+                try:
+                    if extract_items(pg):
+                        return pg
+                except Exception:
+                    pass
+        if time.time() - last > 15:
+            if seen:
+                log(f"    …「{kw}」 대기 — 지금 열린 검색결과: {', '.join(repr(q) for q in seen)}"
+                    " (안내된 키워드로 그 창에서 검색해야 인식됩니다)")
+            else:
+                log(f"    …「{kw}」 입력 대기 중 — **뜬 Chrome 창**의 쿠팡 검색창에 입력·검색하세요"
+                    " (다른 브라우저 아님, 중지는 '반자동 중지')")
+            last = time.time()
+        time.sleep(1.0)
+    return None
+
+
+# 반자동 창 식별용 — 우리가 연 창에만 하단 빨간 띠(모든 페이지·검색결과에 계속 표시). 다른 Chrome 창엔 없어
+# 여러 창 중 이 창을 한눈에 찾게 한다. Akamai 탐지와 무관(우리 창 UI 표식일 뿐, 지문위조·행동위장 아님).
+_SEMI_BANNER_JS = r"""(() => {
+  const ID='__semi_marker__';
+  function add(){
+    if(document.getElementById(ID))return;
+    const d=document.createElement('div');
+    d.id=ID;
+    d.textContent='★ 반자동 순위조회 창 — 이 창에서 검색하세요 ★';
+    d.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:2147483647;'
+      +'background:#ff3b30;color:#fff;font:bold 18px sans-serif;text-align:center;'
+      +'padding:10px;box-shadow:0 -2px 10px rgba(0,0,0,.4);pointer-events:none';
+    (document.body||document.documentElement).appendChild(d);
+  }
+  add();
+  try{new MutationObserver(add).observe(document.documentElement,{childList:true,subtree:true});}catch(e){}
+  setInterval(add,1000);
+})();"""
+
+
+def _track_ranks_semi(wb, path, log, should_stop) -> Path:
+    """반자동 순위조회 — 앱이 창을 띄우고 키워드를 안내, 사람이 직접 검색한 화면만 읽어 순위 산출·기록.
+
+    우리가 검색(네비게이션)을 하지 않으므로 Akamai 봇차단이 안 생긴다. 상품마다 저장 → 중단해도 이어서.
+    """
+    from .rank import parse_serp_rank
+    log("== 반자동 노출순위 시작 — 뜬 Chrome 창의 쿠팡 검색창에 '안내되는 키워드'를 직접 입력·검색하세요 ==")
+    with WingBrowser(profile_dir=_PROFILE, offscreen=False) as browser:
+        try:
+            browser.page.add_init_script(_SEMI_BANNER_JS)   # 이후 모든 네비/검색결과에 빨간 띠(창 식별)
+        except Exception:
+            pass
+        browser.show()
+        try:
+            browser.goto("https://www.coupang.com/")   # 검색창 제공(검색은 사람이 직접)
+        except Exception:
+            pass
+        try:
+            browser.page.evaluate(_SEMI_BANNER_JS)          # 현재(홈) 페이지에도 즉시 표시
+        except Exception:
+            pass
+        browser.show()   # goto 후 다시 중앙·맨앞으로
+        log("  [반자동] ⬆ 창 여러 개 중 **하단에 빨간 띠('반자동 순위조회 창')**가 있는 창에서 검색하세요")
+        for biz in wb.account_sheets():
+            if should_stop():
+                break
+            date = wb.latest_date(biz)
+            if not date:
+                continue
+            for pname in wb.products_of(biz):
+                if should_stop():
+                    break
+                vids = wb.product_vids(biz, pname)
+                keywords = wb.product_keywords(biz, pname)
+                if not (vids and keywords):
+                    continue
+                todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
+                if not todo:
+                    continue
+                matcher = _vid_matcher(vids)
+                for kw in todo:
+                    if should_stop():
+                        break
+                    browser.to_front()   # 키워드마다 창을 앞으로(다른 창에 가려 못 찾는 것 방지)
+                    log(f"  🔎 [{biz}] {pname} — (맨 앞 창의) 쿠팡 검색창에 입력·검색: 「{kw}」")
+                    pg = _wait_user_search(browser, kw, log, should_stop)
+                    if pg is None:
+                        log(f"  [반자동] '{kw}' 미감지/중지 — 공란(다음에 이어서)")
+                        continue
+                    try:
+                        res = parse_serp_rank(pg, matcher)
+                    except Exception as exc:
+                        log(f"  [반자동] '{kw}' 파싱 실패(공란) — {exc.__class__.__name__}: {str(exc)[:80]}")
+                        continue
+                    rank, mi = res.get("제품", (None, None))
+                    wb.set_keyword_rank(biz, pname, kw, date, rank)
+                    log(f"  [{biz}] {pname} '{kw}': {rank_label(rank)}")
+                    if mi is not None and getattr(mi, "name", "") and wb.set_display_name(biz, pname, mi.name):
+                        log(f"  [노출명] 계약상품명 갱신 → {mi.name}")
+                        pname = mi.name.strip()   # 이후 저장도 새 이름으로
+                    wb.save(path)
+    wb.apply_style()
+    wb.save(path)
+    log("== 반자동 노출순위 종료 — 진행분 저장됨(중단 시 다음 실행이 남은 것부터 이어서) ==")
     return path

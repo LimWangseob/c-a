@@ -27,7 +27,11 @@ from coupang_analytics import config  # noqa: E402
 from coupang_analytics import pipeline as P  # noqa: E402
 from coupang_analytics.input_list import Account, InputList, Option, Product  # noqa: E402
 from coupang_analytics.kw_recommend import TrackKeyword  # noqa: E402
+from coupang_analytics.rank import SearchItem  # noqa: E402
 from coupang_analytics.report import OptionMetric  # noqa: E402
+
+# 검색결과 매칭 시 반환되는 '정확 노출명'(가짜). run_full 동결 경로에서 계약상품명 갱신을 재현.
+_SERP_NAME = "쿠팡실제노출명"
 
 _LOGIN_FAIL_ID = "FAIL"
 _STATE = {"select_calls": 0, "crash_at": None, "error_at": None,
@@ -91,7 +95,12 @@ def _fake_batch(browser, keywords, matchers, max_rank=None, mobile=False, log=No
     return {kw: {lbl: 3 for lbl in matchers} for kw in keywords}
 
 
-def _fake_organic_ranks(browser, kw, matchers, max_rank=None, mobile=False, log=None):
+def _fake_organic_ranks(browser, kw, matchers, max_rank=None, mobile=False, log=None, matched_out=None):
+    """organic_ranks 대체 — 순위 3. matched_out 주면 매칭 항목(정확 노출명)을 채워 노출명 갱신 재현."""
+    if matched_out is not None:
+        for lbl in matchers:
+            matched_out[lbl] = SearchItem(is_ad=False, product_id="pid1", vendor_item_id="v1",
+                                          name=_SERP_NAME)
     return {lbl: 3 for lbl in matchers}
 
 
@@ -301,6 +310,48 @@ def scenario_circuit_breaker():
     _STATE.update(need_login=set(), block_login=set())   # 뒤 시나리오 누수 방지
 
 
+def _product_names(path: Path, sheet: str) -> list[str]:
+    """그 시트의 상품 블록 이름 목록(헤더행=col7 '날짜'의 col3). 중복 블록 감지에 사용."""
+    wb = openpyxl.load_workbook(path)
+    ws = wb[sheet]
+    return [_n(ws.cell(r, 3).value) for r in range(1, ws.max_row + 1)
+            if _n(ws.cell(r, 7).value) == "날짜"]
+
+
+def scenario_display_name_rename():
+    print("[시나리오 9] 실제 노출명 갱신 + vid 앵커(중복방지) + save/load 왕복")
+    _STATE.update(select_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    d = Path(tempfile.mkdtemp())
+    accts = _accounts(["a1"])                      # 계약 상품 1개(vid-a1)
+    master = P._master_path(d)
+    # day1: 새 상품 선정(신규 경로 → 아직 rename 안 함, 발견명 '상품-a1')
+    P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim",
+               date_from="2026-09-01", date_to="2026-09-01", resume=False, on_log=lambda m: None)
+    _check("상품-a1" in _product_names(master, "비즈-a1"), "day1: 발견명 '상품-a1' 블록")
+    # day2: 동결(기존 경로) → 순위측정에서 매칭 항목의 정확 노출명으로 계약상품명 갱신
+    P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-09-02",
+               date_to="2026-09-02", carry_forward=True, on_log=lambda m: None)
+    names2 = _product_names(master, "비즈-a1")
+    _check(_SERP_NAME in names2, f"day2: 계약상품명이 정확 노출명으로 갱신({names2})")
+    _check("상품-a1" not in names2, "day2: 옛 발견명 블록 사라짐(중복 아님)")
+    _check(len(names2) == 1, f"day2: 상품 블록 1개 유지(중복 없음) — {names2}")
+    _check(_keywords_in(master) == {"kw1", "kw2"}, "day2: 키워드 동결 유지(rename에도 보존)")
+    _check(_date_headers(master) == {"26.09.01", "26.09.02"}, "day2: 날짜 2일 누적")
+    # day3: 같은 vid → 이름 바뀐 블록을 vid 로 찾아 재사용(발견명 '상품-a1'로 와도 중복 생성 안 함)
+    P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-09-03",
+               date_to="2026-09-03", carry_forward=True, on_log=lambda m: None)
+    names3 = _product_names(master, "비즈-a1")
+    _check(len(names3) == 1 and _SERP_NAME in names3, f"day3: vid 앵커로 재사용(중복 없음) — {names3}")
+    _check(_date_headers(master) == {"26.09.01", "26.09.02", "26.09.03"}, "day3: 날짜 3일 누적")
+    # 워크북 직접 검증 — set_display_name/resolve_block_name + save/load 왕복 키 안정
+    from coupang_analytics.workbook import OutputWorkbook
+    wb2 = OutputWorkbook.load(master)
+    _check(wb2.resolve_block_name("비즈-a1", ["vid-a1"]) == _SERP_NAME,
+           "resolve_block_name: vid로 정확명 블록 조회")
+    _check(wb2.product_keywords("비즈-a1", _SERP_NAME) == ["kw1", "kw2"],
+           "load 후에도 (사업자,정확명) 키로 키워드 조회됨(키 안정)")
+
+
 def main():
     _install_fakes()
     config.LOGIN_PACE_MIN_SEC = 0   # 시뮬은 로그인 페이싱 sleep 없이(즉시)
@@ -320,6 +371,7 @@ def main():
     scenario_empty_business_name()
     scenario_session_first()
     scenario_circuit_breaker()
+    scenario_display_name_rename()
     print("=" * 60)
     print("  [완료] 모든 시나리오 통과")
     print("=" * 60)
