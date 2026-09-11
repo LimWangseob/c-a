@@ -287,7 +287,7 @@ class OutputWorkbook:
         vids = self.product_vids(biz, name)
         if not vids:
             return name
-        return f"{name}{config.NAME_ID_SEP}\n{' / '.join(vids)}"
+        return f"{name}{config.NAME_ID_SEP}\nVID : {' / '.join(vids)}"
 
     def resolve_block_name(self, biz: str, vids) -> str | None:
         """이 사업자에서 주어진 vid(옵션ID)와 교집합이 있는 **기존 상품 블록의 이름**을 반환(없으면 None).
@@ -421,6 +421,16 @@ class OutputWorkbook:
             # (②/③/반영 등이 서식 없이 셀을 추가해 병합·테두리가 시트마다 섞이는 것을 원천 제거 →
             #  apply_style 을 몇 번 돌려도 항상 '첫 시트 표준' 하나로 고정됨.)
             _unmerge_all(ws)
+            # 꼬리 공백행 제거(멱등): 값이 있는 마지막 행 아래를 모두 삭제해 max_row 를 실제 데이터에 맞춘다.
+            # 구 버그(마지막 블록 하단선을 end+1 빈 행에 그리던 시절)가 남긴 '스타일만 있는 빈 행'이 통계
+            # 이어쓰기로 시트마다 누적돼(상품 1·2·5개 무관 5행씩) 마지막 상품 아래 공백으로 보였다. →
+            # 아래에서 마지막 블록 하단선을 end(=이제 실제 마지막 데이터행)에 그리면 공백 없이 딱 닫힌다.
+            mc0 = ws.max_column
+            last_data = max((r for r in range(1, ws.max_row + 1)
+                             if any(ws.cell(r, c).value not in (None, "") for c in range(1, mc0 + 1))),
+                            default=1)
+            if ws.max_row > last_data:
+                ws.delete_rows(last_data + 1, ws.max_row - last_data)
             maxc = ws.max_column
             t = ws.cell(1, 1)
             t.font = title_font
