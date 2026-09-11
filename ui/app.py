@@ -347,9 +347,7 @@ class App(tk.Tk):
         self.sales_btn.pack(side="left", padx=(0, 4))
         self.kw_btn = ttk.Button(topbar, text="② 키워드 선정", command=self.do_select_keywords)
         self.kw_btn.pack(side="left", padx=4)
-        self.track_btn = ttk.Button(topbar, text="③ 순위(자동)",
-                                     command=lambda: self.do_track_ranks(semi=False))
-        self.track_btn.pack(side="left", padx=4)
+        # ③ 순위(자동, 비로그인 검색)은 차단 위험이 커 현실성이 없어 제거(사용자 요청). 반자동만 유지.
         self.track_semi_btn = ttk.Button(topbar, text="③ 순위(반자동)",
                                          command=lambda: self.do_track_ranks(semi=True))
         self.track_semi_btn.pack(side="left", padx=4)
@@ -481,34 +479,26 @@ class App(tk.Tk):
             return select_keywords_stage(NaverAdApi(naver_creds), key, grow=False, on_log=self.log)
         self.run_bg(task, on_done=self._pipeline_done, btn=self.kw_btn)
 
-    def do_track_ranks(self, semi: bool = False):
-        """③ 노출순위 조회 — 로그인 불필요. 최신 결과 워크북 상품ID+키워드로 순위만 채운다.
-
-        semi=True 면 반자동: 창이 뜨면 로그에 안내되는 키워드를 그 창에서 직접 검색, 앱이 화면을 읽어 기록.
+    def do_track_ranks(self, semi: bool = True):
+        """③ 노출순위 조회(반자동) — 로그인 불필요. 창이 뜨면 로그에 안내되는 키워드를 그 창에서 직접
+        검색, 앱이 화면을 읽어 기록(자동 검색을 안 해 차단이 안 생김). 자동 방식은 차단 위험으로 폐지.
         """
         if not (master_exists() or resumable_progress()):
             messagebox.showwarning("먼저 ①②",
                                    "결과 파일이 없습니다. ① 판매수집·② 키워드 선정을 먼저 실행하세요.")
             return
-        if semi:
-            self._semi_stop = threading.Event()
-            self.track_stop_btn.config(state="normal")
-            self.log("[반자동 순위] 시작 — 뜬 창에서 안내 키워드를 직접 검색하세요(중지: '반자동 중지')")
-            should_stop = self._semi_stop.is_set
+        self._semi_stop = threading.Event()
+        self.track_stop_btn.config(state="normal")
+        self.log("[반자동 순위] 시작 — 뜬 창에서 안내 키워드를 직접 검색하세요(중지: '반자동 중지')")
+        should_stop = self._semi_stop.is_set
 
-            def task_semi():
-                return track_ranks_stage(semi=True, should_stop=should_stop, on_log=self.log)
+        def task_semi():
+            return track_ranks_stage(semi=True, should_stop=should_stop, on_log=self.log)
 
-            def done(p):
-                self.track_stop_btn.config(state="disabled")
-                self._pipeline_done(p)
-            self.run_bg(task_semi, on_done=done, btn=self.track_semi_btn)
-            return
-        self.log("[노출순위 조회] 시작 — 로그인 불필요(비로그인 쿠팡 검색)")
-
-        def task():
-            return track_ranks_stage(on_log=self.log)
-        self.run_bg(task, on_done=self._pipeline_done, btn=self.track_btn)
+        def done(p):
+            self.track_stop_btn.config(state="disabled")
+            self._pipeline_done(p)
+        self.run_bg(task_semi, on_done=done, btn=self.track_semi_btn)
 
     def _stop_semi(self):
         """반자동 순위 중지 요청 — 현재 키워드까지만 처리하고 멈춤."""
