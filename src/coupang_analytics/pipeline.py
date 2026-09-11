@@ -931,6 +931,67 @@ def _prefill_search(browser, kw: str) -> bool:
     return False
 
 
+# 자동제출 폴백 — Enter 가 폼을 안 넘길 때 검색버튼 클릭 또는 폼 submit.
+_SUBMIT_JS = r"""() => {
+  const input = document.querySelector("input[name='q'], input.headerSearchKeyword");
+  if (!input) return false;
+  const btn = document.querySelector(
+      "form [type='submit'], button[type='submit'], [class*='searchButton'], [class*='search-btn']");
+  if (btn) { btn.click(); return true; }
+  if (input.form) { input.form.submit(); return true; }
+  return false;
+}"""
+
+
+def _submit_search(browser) -> None:
+    """자동제출 — 프리필된 검색창에서 Enter(사이트 자체 JS로 검색=사람 조작에 가장 가까움). 실패 시 버튼/폼 폴백.
+
+    성공 여부는 이 함수가 아니라 이후 결과 페이지 로드(_wait_results_loaded)로 판정한다.
+    """
+    try:
+        browser.page.keyboard.press("Enter")
+    except Exception:
+        pass
+    # Enter 로 안 넘어가는 레이아웃 대비 — 검색버튼/폼 제출도 시도(무해, 이미 넘어갔으면 no-op에 가까움)
+    try:
+        browser.page.evaluate(_SUBMIT_JS)
+    except Exception:
+        pass
+
+
+def _wait_results_loaded(browser, kw: str, should_stop, timeout: float):
+    """자동제출 후 kw 검색결과가 **완전히 로드**될 때까지 대기(사람 안내 없음). (pg, blocked) 반환.
+
+    URL q==kw + document.readyState=='complete' + 상품 존재를 모두 만족해야 결과로 인정(로딩 중/전환 중 오독 방지
+    = '결과를 기다림'). 상품 0인데 차단 페이지 마커면 blocked=True. 타임아웃/중지면 (None, blocked).
+    """
+    from .rank import extract_items
+    want = kw.replace(" ", "")
+    deadline = time.time() + timeout
+    blocked = False
+    while time.time() < deadline:
+        if should_stop():
+            return None, blocked
+        for pg in _all_pages(browser):
+            if _search_q(_live_url(pg)) != want:
+                continue
+            try:
+                if pg.evaluate("() => document.readyState") != "complete":
+                    continue     # 아직 로딩 중 → 기다림
+            except Exception:
+                continue
+            try:
+                items = extract_items(pg)
+            except Exception:
+                items = []
+            if items:
+                return pg, False
+            if _looks_blocked(pg):
+                blocked = True
+        time.sleep(1.0)
+    return None, blocked
+
+
 def _all_pages(browser):
     """연결된 브라우저의 **모든 컨텍스트×모든 탭**(방어적). 단일 컨텍스트라도 전부 순회. 실패 시 browser.page."""
     ctxs = []
@@ -1037,7 +1098,15 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
     우리가 검색(네비게이션)을 하지 않으므로 Akamai 봇차단이 안 생긴다. 상품마다 저장 → 중단해도 이어서.
     """
     from .rank import parse_serp_rank
-    log("== 반자동 노출순위 시작 — 뜬 Chrome 창의 쿠팡 검색창에 '안내되는 키워드'를 직접 입력·검색하세요 ==")
+    autosubmit = config.RANK_SEMI_AUTOSUBMIT
+    halted = False        # 자동제출 서킷브레이커(연속 차단/미감지) → 당일 전면 중단
+    miss_streak = 0       # 자동제출 연속 실패 수(성공 시 0으로 리셋)
+    if autosubmit:
+        log("== 반자동(자동검색) 노출순위 시작 — 앱이 키워드 자동입력+Enter까지 수행(손 안 대도 됨). "
+            f"키워드 간 {config.RANK_NAV_DELAY_MIN_SEC}~{config.RANK_NAV_DELAY_MAX_SEC}s 간격, "
+            f"연속 {config.RANK_SEMI_AUTO_MAX_MISS}회 차단 시 계정 보호로 당일 중단 ==")
+    else:
+        log("== 반자동 노출순위 시작 — 뜬 Chrome 창의 쿠팡 검색창에 '안내되는 키워드'를 직접 입력·검색하세요 ==")
     with WingBrowser(profile_dir=_PROFILE, offscreen=False) as browser:
         try:
             browser.page.add_init_script(_SEMI_BANNER_JS)   # 이후 모든 네비/검색결과에 빨간 띠(창 식별)
@@ -1045,7 +1114,7 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
             pass
         browser.show()
         try:
-            browser.goto("https://www.coupang.com/")   # 검색창 제공(검색은 사람이 직접)
+            browser.goto("https://www.coupang.com/")   # 검색창 제공
         except Exception:
             pass
         try:
@@ -1053,15 +1122,16 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
         except Exception:
             pass
         browser.show()   # goto 후 다시 중앙·맨앞으로
-        log("  [반자동] ⬆ 창 여러 개 중 **하단에 빨간 띠('반자동 순위조회 창')**가 있는 창에서 검색하세요")
+        if not autosubmit:
+            log("  [반자동] ⬆ 창 여러 개 중 **하단에 빨간 띠('반자동 순위조회 창')**가 있는 창에서 검색하세요")
         for biz in wb.account_sheets():
-            if should_stop():
+            if should_stop() or halted:
                 break
             date = wb.latest_date(biz)
             if not date:
                 continue
             for pname in wb.products_of(biz):
-                if should_stop():
+                if should_stop() or halted:
                     break
                 vids = wb.product_vids(biz, pname)
                 keywords = wb.product_keywords(biz, pname)
@@ -1072,25 +1142,40 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                     continue
                 matcher = _vid_matcher(vids)
                 for idx, kw in enumerate(todo, 1):
-                    if should_stop():
+                    if should_stop() or halted:
                         break
                     browser.to_front()   # 키워드마다 창을 앞으로(다른 창에 가려 못 찾는 것 방지)
-                    filled = _prefill_search(browser, kw)   # 검색창에 키워드 자동입력(제출 안 함 — 사람이 Enter)
+                    filled = _prefill_search(browser, kw)   # 검색창에 키워드 자동입력
                     log(f"  🔎 [{biz}] {pname}  ({idx}/{len(todo)})")
-                    if filled:
-                        log(f"     ✅ 검색창에 「{kw}」 자동입력됨 → **빨간 띠 창에서 Enter만** 누르세요"
-                            f" (안 채워졌으면 직접 입력: {kw})")
+                    if autosubmit:
+                        log(f"     ⏎ 「{kw}」 자동입력→자동검색(Enter) 실행 — 결과 대기 중")
+                        _submit_search(browser)              # 사람 대신 앱이 Enter(제출)
+                        pg, blocked = _wait_results_loaded(
+                            browser, kw, should_stop, config.RANK_SEMI_AUTO_WAIT_SEC)
                     else:
-                        # 자동입력 실패 시 복사 폴백 — 키워드를 앞뒤 공백으로 분리(괄호 없음)해 더블클릭 복사가 깨끗.
-                        log(f"     그 창 검색창을 비우고, 아래 '검색어'만 더블클릭해 복사→붙여넣고 Enter:")
-                        log(f"     검색어 ▶  {kw}")
-                    pg = _wait_user_search(browser, kw, log, should_stop)
+                        if filled:
+                            log(f"     ✅ 검색창에 「{kw}」 자동입력됨 → **빨간 띠 창에서 Enter만** 누르세요"
+                                f" (안 채워졌으면 직접 입력: {kw})")
+                        else:
+                            log(f"     그 창 검색창을 비우고, 아래 '검색어'만 더블클릭해 복사→붙여넣고 Enter:")
+                            log(f"     검색어 ▶  {kw}")
+                        pg, blocked = _wait_user_search(browser, kw, log, should_stop), False
                     if pg is None:
-                        log(f"  [반자동] 「{kw}」 미감지/시간초과 — 공란으로 두고 다음에 이어서 조회합니다")
+                        if autosubmit:
+                            miss_streak += 1
+                            why = "차단 페이지 감지" if blocked else "결과 미로딩(차단 추정)"
+                            log(f"  [반자동] 「{kw}」 {why} — 공란. 연속 {miss_streak}/{config.RANK_SEMI_AUTO_MAX_MISS}")
+                            if miss_streak >= config.RANK_SEMI_AUTO_MAX_MISS:
+                                halted = True
+                                log("  ⛔ 자동검색 연속 실패 = Akamai 차단 추정 → 계정 보호 위해 당일 중단. "
+                                    "쉰 시간/다른 IP에서 다시 실행하면 남은 것부터 이어서 조회합니다")
+                                break
+                        else:
+                            log(f"  [반자동] 「{kw}」 미감지/시간초과 — 공란으로 두고 다음에 이어서 조회합니다")
                         continue
+                    miss_streak = 0    # 성공 → 서킷브레이커 리셋
                     try:
-                        # 반자동은 이미 떠 있는 페이지 1장만 읽으므로 트래픽·차단 부담이 없다 →
-                        # 50위 상한 없이 로드된 페이지의 오가닉 전부를 세어 **50위를 넘어도 실제 등수 기록**.
+                        # 반자동은 로드된 페이지 1장만 읽는다 → 50위 상한 없이 오가닉 전부를 세어 **50위 초과도 실제 등수 기록**.
                         res = parse_serp_rank(pg, matcher, max_rank=config.RANK_SCAN_MAX_SEMI)
                     except Exception as exc:
                         log(f"  [반자동] 「{kw}」 파싱 실패(공란) — {exc.__class__.__name__}: {str(exc)[:80]}")
@@ -1102,7 +1187,13 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                         log(f"  [노출명] 계약상품명 갱신 → {mi.name}")
                         pname = mi.name.strip()   # 이후 저장도 새 이름으로
                     wb.save(path)
+                    if autosubmit and not (should_stop() or halted):
+                        # 키워드 사이 사람속도 간격(버스트 없이 차단 회피). 다음 상품 마지막 키워드면 굳이 안 쉬어도 무방하나 단순화.
+                        time.sleep(random.uniform(config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC))
     wb.apply_style()
     wb.save(path)
-    log("== 반자동 노출순위 종료 — 진행분 저장됨(중단 시 다음 실행이 남은 것부터 이어서) ==")
+    if halted:
+        log("== ⛔ 반자동(자동검색) 중단(차단 추정) — 진행분 저장됨. 쉰 시간/IP에 다시 실행하면 이어서 조회 ==")
+    else:
+        log("== 반자동 노출순위 종료 — 진행분 저장됨(중단 시 다음 실행이 남은 것부터 이어서) ==")
     return path
