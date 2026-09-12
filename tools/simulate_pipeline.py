@@ -128,7 +128,7 @@ def _accounts(ids) -> InputList:
 
 def _sheets(path: Path) -> set[str]:
     # 계정(사업자) 시트만 — 특수 시트(상품ID·목차·계정정보)는 제외
-    return set(openpyxl.load_workbook(path).sheetnames) - {"_상품ID", "목차", "_계정정보"}
+    return set(openpyxl.load_workbook(path).sheetnames) - {"_상품ID", "목차", "계정 목록", "_계정정보"}
 
 
 def _has_value(path: Path, target) -> bool:
