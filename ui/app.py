@@ -39,6 +39,25 @@ from coupang_analytics.rank import make_matcher, organic_rank, warmup  # noqa: E
 _PROFILE = "data/chrome-ui"
 
 
+def _shared_setting(group: str, name: str) -> str:
+    """app_qt(PySide6 QSettings · 조직 'coupang-analytics' · 앱 'ui')가 저장한 값을 **PySide6 없이** 읽는다.
+
+    Tkinter 폴백은 PySide6 부재 시 쓰이므로 그 의존을 피해야 한다 → Windows 레지스트리(winreg 표준 라이브러리)
+    에서 직접 읽는다. QSettings NativeFormat 매핑: 'group/name' → HKCU\\Software\\coupang-analytics\\ui\\group 의
+    값 name(실측 확인). 없거나 Windows 아니면 '' 반환(→ 해당 기능 비활성, 정상 — 조용한 실패 아님)."""
+    try:
+        import winreg
+    except ImportError:
+        return ""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            rf"Software\coupang-analytics\ui\{group}") as k:
+            val, _ = winreg.QueryValueEx(k, name)
+        return str(val).strip() if val else ""
+    except OSError:
+        return ""
+
+
 class RoundedTabs(ttk.Frame):
     """Windows 11 탐색기 스타일 탭 바(Canvas 직접 그림).
 
@@ -447,6 +466,7 @@ class App(tk.Tk):
             self.log(f"[{title}] 취소됨")
             return
         input_list, naver_creds, key = self.input_list, self.naver_creds, self.ai_key
+        gs_out = _shared_setting("gsheet", "output_url")   # app_qt에 등록된 결과 구글시트 링크(있으면 반영)
         mode_txt = "이어서 " if resume else ("통계이어쓰기 " if carry else "새통계 ")
         stage_txt = " · ①판매수집(키워드·순위 없음)" if keywords_off else \
             (" · 순위 제외(판매데이터만)" if skip_ranks and not resume else "")
@@ -459,7 +479,7 @@ class App(tk.Tk):
             return run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
                             get_password=self._account_pw, resume=resume, carry_forward=carry,
                             grow_keywords=grow, skip_ranks=skip_ranks,
-                            keywords_off=keywords_off, on_log=self.log)
+                            keywords_off=keywords_off, on_log=self.log, gsheet_output_url=gs_out)
         self.run_bg(task, on_done=self._pipeline_done, btn=btn)
 
     def do_select_keywords(self):
