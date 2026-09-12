@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+from datetime import date as _date, datetime as _dt
 from pathlib import Path
 
 import openpyxl
@@ -48,7 +49,9 @@ _ALL_METRICS = frozenset(config.CONTRACT_METRICS + config.PERSONAL_METRICS)
 _META_SHEET = "_상품ID"   # 숨김 시트: (사업자,상품)→고유ID(vendorItemId) 매핑. ③ 순위조회가 상품 매칭에 사용
 _INDEX_SHEET = "계정 목록"  # 첫 시트: 전 계정(사업자) 목록 + 하이퍼링크 점프 + 요약(계정 100개도 탐색 쉽게)
 _ACCT_SHEET = "_계정정보"  # 숨김 시트: (사업자)→계정ID 매핑. 목차에 계정ID 표시용(⚠ 비밀번호는 절대 저장 안 함)
-_SPECIAL_SHEETS = (_META_SHEET, _INDEX_SHEET, _ACCT_SHEET)
+_MKT_SHEET = "_마케팅"     # 숨김 시트: (사업자,상품)→마케팅 시작·종료·모니터링종료. 계정목록 입력을 보존(재생성돼도 유지)
+_SPECIAL_SHEETS = (_META_SHEET, _INDEX_SHEET, _ACCT_SHEET, _MKT_SHEET)
+_MKT_COLS = ("마케팅 시작일", "마케팅 종료일", "모니터링 종료일")   # 계정목록 편집 열(사용자 입력)
 
 
 def _norm(v) -> str:
@@ -61,6 +64,22 @@ def _key(v) -> str:
     상품 정체성(시계열 키)은 항상 구분자(`config.NAME_ID_SEP`) 앞부분이다. 구분자가 없으면(순수 이름·
     키워드 셀) `_norm` 과 동일하게 동작해 기존 키를 그대로 보존한다. 상품명 내부 개행은 손대지 않는다."""
     return _norm(v).split(config.NAME_ID_SEP, 1)[0]
+
+
+def _parse_date(s):
+    """마케팅 날짜 문자열 → date(못 읽으면 None). YYYY-MM-DD·YY.MM.DD·YYYY/MM/DD·MM/DD(올해) 등 허용."""
+    s = _norm(s)
+    if not s:
+        return None
+    if isinstance(s, (_dt, _date)):
+        return s.date() if isinstance(s, _dt) else s
+    for fmt in ("%Y-%m-%d", "%Y.%m.%d", "%y.%m.%d", "%Y/%m/%d", "%y/%m/%d", "%m/%d", "%m-%d"):
+        try:
+            d = _dt.strptime(s, fmt).date()
+            return d.replace(year=_date.today().year) if fmt in ("%m/%d", "%m-%d") else d
+        except ValueError:
+            continue
+    return None
 
 
 class OutputWorkbook:
@@ -97,7 +116,7 @@ class OutputWorkbook:
         self._date_col.clear(); self._date_rows.clear()
         self._metric_row.clear(); self._kw_row.clear(); self._vid_row.clear()
         for ws in self.wb.worksheets:
-            if ws.title in (_INDEX_SHEET, _ACCT_SHEET):  # 목차·계정정보 시트는 데이터 아님 → 제외
+            if ws.title in (_INDEX_SHEET, _ACCT_SHEET, _MKT_SHEET):  # 계정목록·계정정보·마케팅 = 데이터 아님
                 continue
             if ws.title == _META_SHEET:                 # 상품ID 매핑 시트 → 행 인덱스만 복원
                 for r in range(2, ws.max_row + 1):
@@ -566,66 +585,170 @@ class OutputWorkbook:
                     out.append((b, False)); have.add(b)
         return out
 
+    # ── 마케팅 기간(계정 목록에서 입력 → 숨김시트 보존) ──────────
+    def _mkt_ws(self, create: bool = False):
+        if _MKT_SHEET in self.wb.sheetnames:
+            return self.wb[_MKT_SHEET]
+        if not create:
+            return None
+        ws = self.wb.create_sheet(_MKT_SHEET)
+        ws.sheet_state = "hidden"
+        ws.cell(1, 1, "사업자"); ws.cell(1, 2, "상품"); ws.cell(1, 3, "시작")
+        ws.cell(1, 4, "종료"); ws.cell(1, 5, "모니터링종료")
+        return ws
+
+    def set_marketing(self, biz: str, product: str, start, end, mon) -> None:
+        """마케팅 기간 저장(숨김 _마케팅). 셋 다 비면 기존 항목 비움. 상품 없는 계정행은 product=''."""
+        biz, product = _norm(biz), _key(product)
+        start, end, mon = _norm(start), _norm(end), _norm(mon)
+        ws = self._mkt_ws(create=bool(start or end or mon))
+        if ws is None:
+            return
+        for r in range(2, ws.max_row + 1):
+            if _norm(ws.cell(r, 1).value) == biz and _key(ws.cell(r, 2).value) == product:
+                ws.cell(r, 3, start or None); ws.cell(r, 4, end or None); ws.cell(r, 5, mon or None)
+                return
+        if start or end or mon:
+            r = ws.max_row + 1
+            ws.cell(r, 1, biz); ws.cell(r, 2, product)
+            ws.cell(r, 3, start or None); ws.cell(r, 4, end or None); ws.cell(r, 5, mon or None)
+
+    def marketing_of(self, biz: str, product: str) -> tuple[str, str, str]:
+        """(시작, 종료, 모니터링종료) 문자열 — 없으면 ('','','')."""
+        ws = self._mkt_ws()
+        biz, product = _norm(biz), _key(product)
+        if ws:
+            for r in range(2, ws.max_row + 1):
+                if _norm(ws.cell(r, 1).value) == biz and _key(ws.cell(r, 2).value) == product:
+                    return (_norm(ws.cell(r, 3).value), _norm(ws.cell(r, 4).value), _norm(ws.cell(r, 5).value))
+        return ("", "", "")
+
+    @staticmethod
+    def _mkt_status(start: str, end: str, mon: str) -> str:
+        """오늘 기준 마케팅 상태: 예정/마케팅중/모니터링/종료/''(미설정)."""
+        s, e, m = _parse_date(start), _parse_date(end), _parse_date(mon)
+        today = _date.today()
+        if s and today < s:
+            return "예정"
+        if s and e and s <= today <= e:
+            return "마케팅중"
+        if e and m and e < today <= m:
+            return "모니터링"
+        if m and today > m:
+            return "종료"
+        if (s or e or m):
+            return "마케팅중" if (s and e and s <= today <= e) else ""
+        return ""
+
+    def _product_rows(self) -> list[tuple[str, str, int | None, bool]]:
+        """계정 목록에 실을 상품 로스터 — (사업자, 상품, 그 상품 블록 헤더행|None, 데이터시트有無).
+        수집된 계정의 상품들 먼저(계정→상품 순), 그 뒤 미수집 계정(상품='')."""
+        rows: list[tuple[str, str, int | None, bool]] = []
+        for biz in self.account_sheets():
+            hdr: dict[str, int] = {}
+            for r in self._date_rows.get(biz, []):
+                nm = _key(self.wb[biz].cell(r, _COL_NAME).value)
+                if nm:
+                    hdr.setdefault(nm, r)
+            prods = self.products_of(biz)
+            if prods:
+                for p in prods:
+                    rows.append((biz, p, hdr.get(p), True))
+            else:
+                rows.append((biz, "", None, True))
+        have = set(self.account_sheets())
+        if _ACCT_SHEET in self.wb.sheetnames:
+            aws = self.wb[_ACCT_SHEET]
+            for r in range(2, aws.max_row + 1):
+                b = _norm(aws.cell(r, 1).value)
+                if b and b not in have:
+                    rows.append((b, "", None, False)); have.add(b)
+        return rows
+
+    def _sync_marketing_from_index(self) -> None:
+        """재생성 전에 **현재 계정목록(가시)의 마케팅 입력을 숨김시트로 회수**(사용자 입력 보존).
+        레이아웃 고정: 3행부터 A=사업자 B=상품 D=시작 E=종료 F=모니터링종료."""
+        if _INDEX_SHEET not in self.wb.sheetnames:
+            return
+        ws = self.wb[_INDEX_SHEET]
+        if _norm(ws.cell(2, 4).value) != _MKT_COLS[0]:   # 새 레이아웃(마케팅 열)일 때만 회수(옛 레이아웃 오독 방지)
+            return
+        for r in range(3, ws.max_row + 1):
+            biz = _norm(ws.cell(r, 1).value)
+            prod = _key(ws.cell(r, 2).value)
+            if not biz:
+                continue
+            start, end, mon = (_norm(ws.cell(r, 4).value), _norm(ws.cell(r, 5).value),
+                               _norm(ws.cell(r, 6).value))
+            if start or end or mon:
+                self.set_marketing(biz, prod, start, end, mon)
+
     def _build_index(self) -> None:
-        """첫 시트 '목차' 재생성 — 전 계정(사업자) 목록 + 하이퍼링크 점프 + 요약(상품수·최근일자·순위공란).
+        """첫 시트 '계정 목록' 재생성 — 상품 단위 로스터 + 마케팅 기간 입력열 + 점프 링크 + 상태.
 
         계정이 100개여도 한눈에 보고 클릭 한 번으로 이동하도록. 데이터 시트는 안 건드리고 목차만 추가(멱등:
         매번 지우고 다시 만든다). 순위 공란수 = 최근 일자 컬럼에서 아직 못 잰(공란) 키워드 수(재측정 대상).
         """
+        self._sync_marketing_from_index()   # 사용자가 입력한 마케팅 기간을 먼저 숨김시트로 보존
         for legacy in (_INDEX_SHEET, "목차"):   # 새 이름 + 레거시('목차') 모두 제거(옛 시트가 계정으로 오인 방지)
             if legacy in self.wb.sheetnames:
                 del self.wb[legacy]
-        roster = self._roster()   # (사업자, 데이터시트有無) — 수집된 계정 + 미수집(로스터) 전체
+        rows = self._product_rows()   # (사업자, 상품, 헤더행|None, 시트有無) — 상품 단위
         ws = self.wb.create_sheet(_INDEX_SHEET, 0)       # 맨 앞
         font = Font(name=self._FN, size=11)
         bold = Font(name=self._FN, size=11, bold=True)
         link_font = Font(name=self._FN, size=11, color="0563C1", underline="single")
-        gray_font = Font(name=self._FN, size=11, color="9AA7B6")   # 미수집 계정(옅게)
+        gray_font = Font(name=self._FN, size=11, color="9AA7B6")   # 미수집(옅게)
+        red_bold = Font(name=self._FN, size=11, bold=True, color="C00000")   # 마케팅중 상태
         title_font = Font(name=self._FN, size=14, bold=True)
         thin = Side(style="thin", color="BFBFBF")
         box = Border(left=thin, right=thin, top=thin, bottom=thin)
         center = Alignment(horizontal="center", vertical="center")
         left = Alignment(horizontal="left", vertical="center")
         head_fill = PatternFill("solid", fgColor=self._FILL_LABEL)
+        mkt_fill = PatternFill("solid", fgColor="FFF2CC")   # 마케팅 입력열 강조(입력 자리 안내)
+        n_prod = sum(1 for _b, p, _h, hs in rows if hs and p)
 
-        ws.cell(1, 1, f"{_INDEX_SHEET} · 계정 {len(roster)}개").font = title_font
-        ws.merge_cells("A1:F1")
+        ws.cell(1, 1, f"{_INDEX_SHEET} · 상품 {n_prod}개").font = title_font
+        ws.merge_cells("A1:H1")
         ws.cell(1, 1).alignment = center
-        heads = ["사업자(클릭 이동)", "계정ID", "상품수", "최근 수집일자", "순위 공란", "비고"]
+        heads = ["사업자", "상품명(클릭 이동)", "계정ID",
+                 _MKT_COLS[0], _MKT_COLS[1], _MKT_COLS[2], "상태", "순위 공란"]
         for c, h in enumerate(heads, 1):
             x = ws.cell(2, c, h)
-            x.font = bold; x.alignment = center; x.border = box; x.fill = head_fill
-        for r, (biz, has_sheet) in enumerate(roster, start=3):
-            cell1 = ws.cell(r, 1, biz)
-            if has_sheet:
-                prods = self.products_of(biz)
+            x.font = bold; x.alignment = center; x.border = box
+            x.fill = mkt_fill if 4 <= c <= 6 else head_fill   # 4~6열=마케팅 입력열(노랑)
+        for r, (biz, prod, hdr, has_sheet) in enumerate(rows, start=3):
+            ws.cell(r, 1, biz).font = font if has_sheet else gray_font
+            pcell = ws.cell(r, 2, prod if prod else ("(미수집)" if not has_sheet else "(상품없음)"))
+            if has_sheet and prod and hdr:      # 상품 블록으로 점프(헤더행)
+                pcell.hyperlink = Hyperlink(ref=pcell.coordinate,
+                                            location=f"'{biz.replace(chr(39), chr(39) * 2)}'!A{hdr}")
+                pcell.font = link_font
+            else:
+                pcell.font = gray_font
+            ws.cell(r, 3, self.account_id_of(biz)).font = font if has_sheet else gray_font
+            start, end, mon = self.marketing_of(biz, prod)
+            status = self._mkt_status(start, end, mon) if has_sheet else "미수집"
+            blank = ""
+            if has_sheet and prod:
                 date = self.latest_date(biz)
-                blank = 0
                 col = self._date_col.get(biz, {}).get(date) if date else None
                 if col is not None:
-                    for (b, p, kw), row in self._kw_row.items():
-                        if b == biz and self.wb[biz].cell(row, col).value in (None, ""):
-                            blank += 1
-                # 같은 통합문서 내 시트로 점프(내부 링크). ⚠ target='#...' 는 특수문자 시트명에서 링크 오류 →
-                # location 속성 사용(시트명 내 작은따옴표는 2개로 이스케이프).
-                cell1.hyperlink = Hyperlink(ref=cell1.coordinate,
-                                            location=f"'{biz.replace(chr(39), chr(39) * 2)}'!A1")
-                cell1.font = link_font
-                vals = (len(prods), date or "-", blank, "")
-                fnt = font
-            else:                       # 미수집 계정(입력 로스터엔 있으나 데이터 시트 없음) — 링크 없음
-                cell1.font = gray_font
-                vals = ("-", "-", "-", "미수집")
-                fnt = gray_font
-            cell1.alignment = left; cell1.border = box
-            # ⚠ 계정ID만 표시(비밀번호는 어떤 경우도 저장·표시 안 함)
-            for c, v in ((2, self.account_id_of(biz)), (3, vals[0]), (4, vals[1]), (5, vals[2]), (6, vals[3])):
-                x = ws.cell(r, c, v)
-                x.font = fnt; x.alignment = center; x.border = box
-        for c, w in {1: 34, 2: 16, 3: 8, 4: 14, 5: 9, 6: 16}.items():
+                    blank = sum(1 for (b, p, kw), row in self._kw_row.items()
+                                if b == biz and p == prod and self.wb[biz].cell(row, col).value in (None, ""))
+            for c, v in ((4, start), (5, end), (6, mon)):   # 마케팅 입력열(노랑 배경·편집)
+                x = ws.cell(r, c, v); x.font = font; x.alignment = center; x.border = box; x.fill = mkt_fill
+            st = ws.cell(r, 7, status); st.alignment = center; st.border = box
+            st.font = red_bold if status == "마케팅중" else (gray_font if status in ("미수집", "종료") else font)
+            bl = ws.cell(r, 8, blank); bl.font = font; bl.alignment = center; bl.border = box
+            for c in (1, 2, 3):
+                ws.cell(r, c).alignment = left if c == 2 else center
+                ws.cell(r, c).border = box
+        for c, w in {1: 22, 2: 40, 3: 15, 4: 13, 5: 13, 6: 14, 7: 10, 8: 9}.items():
             ws.column_dimensions[get_column_letter(c)].width = w
         ws.row_dimensions[1].height = 21
-        ws.freeze_panes = "A3"                            # 제목·헤더 틀고정
+        ws.freeze_panes = "D3"                            # 제목·헤더 + 사업자/상품/계정ID 고정(가로 스크롤 시)
         # '항상 고정': 첫 탭(index 0) + **파일 열면 항상 목차가 선택된 채로 열리게** 활성 시트로 지정.
         try:
             self.wb.active = self.wb.index(ws)
