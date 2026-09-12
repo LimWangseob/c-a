@@ -472,11 +472,11 @@ class OutputWorkbook:
             merge(ws, 1, 1, 1, _COL_SEARCH - 1)       # 제목 A~E (F·G 는 목차 복귀 링크 자리)
             # ◀ 목차 복귀 링크(F1:G1) — 1행+A~G열은 틀고정이라 **어느 시트·어디로 스크롤해도 항상 보임**.
             # 탭이 많아 목차 탭이 탭바에서 밀려 안 보일 때, 여기 클릭 한 번으로 목차로 돌아간다(사용자 요청).
-            back = ws.cell(1, _COL_SEARCH, "◀ 목차")
+            back = ws.cell(1, _COL_SEARCH, "👈 목차로 이동")   # 손가락(뒤로) + 명확한 문구
             back.hyperlink = Hyperlink(ref=back.coordinate, location=f"'{_INDEX_SHEET}'!A1")
-            back.font = Font(name=self._FN, size=11, bold=True, color="0563C1", underline="single")
+            back.font = Font(name=self._FN, size=12, bold=True, color="FF0000")  # 빨간색 진하게(눈에 띄게)
             back.alignment = Alignment(horizontal="center", vertical="center")
-            back.fill = PatternFill("solid", fgColor=self._FILL_LABEL)
+            back.fill = PatternFill("solid", fgColor="FFF2CC")   # 옅은 노랑 강조 배경
             back.border = Border(bottom=Side(style="medium"))
             merge(ws, 1, _COL_SEARCH, 1, _COL_METRIC)  # F1:G1
             ws.row_dimensions[1].height = 21          # 제목행 높이(샘플 서식 고정값)
