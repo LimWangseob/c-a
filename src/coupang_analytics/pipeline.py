@@ -647,6 +647,10 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         wb.save(partial)                       # 크래시 복구 기준선(carry면 마스터 내용 포함)
         _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks)
 
+    # 목차 로스터 — 입력 전체 계정(계정ID)을 등록해 **미수집 계정도 목차에 표시**(수집 현황 파악)
+    for _a in input_list.accounts:
+        wb.set_account_id(_a.label, _a.account_id)
+
     # 일자 컬럼 라벨 = 서식과 동일한 yy.mm.dd(단일일). 범위면 from~to.
     if date_from == date_to:
         try:

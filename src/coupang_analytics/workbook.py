@@ -553,19 +553,33 @@ class OutputWorkbook:
                                                                top=cf.top, bottom=thick)
         self._build_index()   # 전 계정 요약·점프 링크의 '목차' 시트를 맨 앞에 재생성(멱등)
 
+    def _roster(self) -> list[tuple[str, bool]]:
+        """목차에 실을 계정 로스터 — (사업자, 데이터시트有無). 수집된 계정(시트 있음) 먼저, 그 뒤에
+        입력 로스터(`_계정정보`)엔 있으나 아직 시트가 없는 **미수집 계정**을 잇는다(전체 현황 파악)."""
+        out = [(b, True) for b in self.account_sheets()]
+        have = {b for b, _ in out}
+        if _ACCT_SHEET in self.wb.sheetnames:
+            ws = self.wb[_ACCT_SHEET]
+            for r in range(2, ws.max_row + 1):
+                b = _norm(ws.cell(r, 1).value)
+                if b and b not in have:
+                    out.append((b, False)); have.add(b)
+        return out
+
     def _build_index(self) -> None:
         """첫 시트 '목차' 재생성 — 전 계정(사업자) 목록 + 하이퍼링크 점프 + 요약(상품수·최근일자·순위공란).
 
         계정이 100개여도 한눈에 보고 클릭 한 번으로 이동하도록. 데이터 시트는 안 건드리고 목차만 추가(멱등:
         매번 지우고 다시 만든다). 순위 공란수 = 최근 일자 컬럼에서 아직 못 잰(공란) 키워드 수(재측정 대상).
         """
-        bizs = self.account_sheets()
+        roster = self._roster()   # (사업자, 데이터시트有無) — 수집된 계정 + 미수집(로스터) 전체
         if _INDEX_SHEET in self.wb.sheetnames:
             del self.wb[_INDEX_SHEET]
         ws = self.wb.create_sheet(_INDEX_SHEET, 0)       # 맨 앞
         font = Font(name=self._FN, size=11)
         bold = Font(name=self._FN, size=11, bold=True)
         link_font = Font(name=self._FN, size=11, color="0563C1", underline="single")
+        gray_font = Font(name=self._FN, size=11, color="9AA7B6")   # 미수집 계정(옅게)
         title_font = Font(name=self._FN, size=14, bold=True)
         thin = Side(style="thin", color="BFBFBF")
         box = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -573,33 +587,40 @@ class OutputWorkbook:
         left = Alignment(horizontal="left", vertical="center")
         head_fill = PatternFill("solid", fgColor=self._FILL_LABEL)
 
-        ws.cell(1, 1, f"목차 · 계정 {len(bizs)}개").font = title_font
+        ws.cell(1, 1, f"목차 · 계정 {len(roster)}개").font = title_font
         ws.merge_cells("A1:F1")
         ws.cell(1, 1).alignment = center
         heads = ["사업자(클릭 이동)", "계정ID", "상품수", "최근 수집일자", "순위 공란", "비고"]
         for c, h in enumerate(heads, 1):
             x = ws.cell(2, c, h)
             x.font = bold; x.alignment = center; x.border = box; x.fill = head_fill
-        for r, biz in enumerate(bizs, start=3):
-            prods = self.products_of(biz)
-            date = self.latest_date(biz)
-            blank = 0
-            col = self._date_col.get(biz, {}).get(date) if date else None
-            if col is not None:
-                for (b, p, kw), row in self._kw_row.items():
-                    if b == biz and self.wb[biz].cell(row, col).value in (None, ""):
-                        blank += 1
-            link = ws.cell(r, 1, biz)
-            # 같은 통합문서 내 시트로 점프(내부 링크). ⚠ target='#...' 문자열은 Excel 이 링크 오류를 내는
-            # 경우가 있어(특히 (주)·공백 등 특수문자 시트명) **location** 속성으로 지정한다. 시트명 안의
-            # 작은따옴표는 규칙상 2개로 이스케이프.
-            link.hyperlink = Hyperlink(ref=link.coordinate, location=f"'{biz.replace(chr(39), chr(39) * 2)}'!A1")
-            link.font = link_font; link.alignment = left; link.border = box
+        for r, (biz, has_sheet) in enumerate(roster, start=3):
+            cell1 = ws.cell(r, 1, biz)
+            if has_sheet:
+                prods = self.products_of(biz)
+                date = self.latest_date(biz)
+                blank = 0
+                col = self._date_col.get(biz, {}).get(date) if date else None
+                if col is not None:
+                    for (b, p, kw), row in self._kw_row.items():
+                        if b == biz and self.wb[biz].cell(row, col).value in (None, ""):
+                            blank += 1
+                # 같은 통합문서 내 시트로 점프(내부 링크). ⚠ target='#...' 는 특수문자 시트명에서 링크 오류 →
+                # location 속성 사용(시트명 내 작은따옴표는 2개로 이스케이프).
+                cell1.hyperlink = Hyperlink(ref=cell1.coordinate,
+                                            location=f"'{biz.replace(chr(39), chr(39) * 2)}'!A1")
+                cell1.font = link_font
+                vals = (len(prods), date or "-", blank, "")
+                fnt = font
+            else:                       # 미수집 계정(입력 로스터엔 있으나 데이터 시트 없음) — 링크 없음
+                cell1.font = gray_font
+                vals = ("-", "-", "-", "미수집")
+                fnt = gray_font
+            cell1.alignment = left; cell1.border = box
             # ⚠ 계정ID만 표시(비밀번호는 어떤 경우도 저장·표시 안 함)
-            for c, v in ((2, self.account_id_of(biz)), (3, len(prods)),
-                         (4, date or "-"), (5, blank), (6, "")):
+            for c, v in ((2, self.account_id_of(biz)), (3, vals[0]), (4, vals[1]), (5, vals[2]), (6, vals[3])):
                 x = ws.cell(r, c, v)
-                x.font = font; x.alignment = center; x.border = box
+                x.font = fnt; x.alignment = center; x.border = box
         for c, w in {1: 34, 2: 16, 3: 8, 4: 14, 5: 9, 6: 16}.items():
             ws.column_dimensions[get_column_letter(c)].width = w
         ws.row_dimensions[1].height = 21
