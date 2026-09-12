@@ -140,12 +140,26 @@ QScrollBar::handle:horizontal { background: #cbd5e1; border-radius: 5px; min-wid
 _LOG_COLORS = {"ok": "#4ade80", "err": "#f87171", "warn": "#fbbf24", "head": "#60a5fa", "": "#e2e8f0"}
 
 
+def _prevent_sleep(on: bool) -> None:
+    """무인 야간 실행 동안 Windows 절전/화면꺼짐 방지(SetThreadExecutionState). 실패해도 무해."""
+    try:
+        import ctypes
+        ES_CONTINUOUS = 0x80000000
+        ES_SYSTEM_REQUIRED = 0x00000001
+        ES_DISPLAY_REQUIRED = 0x00000002
+        flags = ES_CONTINUOUS | ((ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED) if on else 0)
+        ctypes.windll.kernel32.SetThreadExecutionState(flags)
+    except Exception:
+        pass
+
+
 class App(QtWidgets.QMainWindow):
     log_signal = QtCore.Signal(str)
     finish_signal = QtCore.Signal(object, object, object, object)   # (btn, on_done, result, err)
 
-    def __init__(self):
+    def __init__(self, auto: bool = False):
         super().__init__()
+        self.auto = auto            # 무인 자동 실행(--auto) 모드 — 팝업 없이 로그로, 06:00 자동 종료
         self.setWindowTitle("쿠팡 애널리틱스")
         self.input_list = None
         self.naver_creds = None
@@ -165,6 +179,7 @@ class App(QtWidgets.QMainWindow):
 
         self._build_ui()
         self._load_saved_secrets()
+        self._auto_load_input()     # 마지막 사용 입력 엑셀 자동 로드(무인 실행·재시작 후 즉시 실행 가능)
         scr = self.screen().availableGeometry()
         self.resize(min(1200, scr.width() - 80), min(1050, scr.height() - 80))
 
@@ -516,6 +531,10 @@ class App(QtWidgets.QMainWindow):
         if not path:
             return
         self._remember_dir("input", path)
+        self._apply_input(path)
+
+    def _apply_input(self, path) -> bool:
+        """입력 엑셀 파싱·상품목록·비번 저장(load_input 과 무인 자동로드 공용). 성공 시 마지막 경로 영속."""
         il = parse_input_list(path)
         self.input_list = il
         self.product_business.clear()
@@ -531,6 +550,19 @@ class App(QtWidgets.QMainWindow):
         for e in il.errors[:5]:
             self.log(f"   - 입력오류: {e}")
         self._store_passwords_from(path, quiet=True)
+        QtCore.QSettings("coupang-analytics", "ui").setValue("file/input", str(path))  # 무인 자동로드용
+        return True
+
+    def _auto_load_input(self) -> bool:
+        """마지막으로 연 입력 엑셀을 자동 로드(무인 실행·재시작 후). 없거나 실패하면 False."""
+        path = QtCore.QSettings("coupang-analytics", "ui").value("file/input", "", type=str)
+        if not (path and Path(path).exists()):
+            return False
+        try:
+            return self._apply_input(path)
+        except Exception as exc:
+            self.log(f"[입력] 자동 로드 실패({exc.__class__.__name__}): {exc}")
+            return False
 
     def _store_passwords_from(self, path, quiet=False) -> int:
         try:
@@ -809,6 +841,70 @@ class App(QtWidgets.QMainWindow):
                             keywords_off=keywords_off, on_log=self.log)
         self.run_bg(task, on_done=self._pipeline_done, btn=btn)
 
+    # ── 무인 자동 실행(--auto, 18:00 시작 → 06:00 자동 종료) ───────
+    def start_auto(self):
+        """무인 자동 실행 — 팝업 없이 ①판매수집+②키워드(자동순위 제외) → ③반자동 순위, 06:00 자동 종료.
+
+        사람 개입 0: 입력·키 자동 로드, 확인 팝업 없음, 로그인 차단·2차인증 계정은 건너뜀(멈추지 않음),
+        순위는 반자동 autosubmit(자동입력→자동검색→읽기, 차단 시 쿨다운/자동재개). 절전은 실행 동안 방지.
+        """
+        self.log("== [무인 자동 실행] 시작 ==")
+        _prevent_sleep(True)
+        if self.input_list is None:
+            self.log("[무인] 입력 엑셀이 없어 실행 불가 — 앱을 한 번 수동 실행해 '입력 엑셀'을 연 뒤 다시 예약하세요. 종료")
+            return self._auto_quit()
+        if self.naver_creds is None or not self.ai_key:
+            self.log("[무인] 네이버/OpenAI 키 미설정 — 설정 후 재시도. 종료")
+            return self._auto_quit()
+        self._schedule_auto_stop()                 # 06:00 자동 종료 예약
+        df, dt = self._run_dates()                 # 당일=어제(D-1)
+        meta = resumable_progress()
+        resume = bool(meta)
+        carry = bool(meta.get("carry", False)) if meta else master_exists()
+        if resume:
+            df, dt = meta["date_from"], meta["date_to"]
+        self._semi_stop = threading.Event()
+        n = sum(len(a.products) for a in self.input_list.accounts)
+        self.log(f"[무인] ①판매수집+②키워드(자동순위 제외) → ③반자동 순위 · 상품 {n}개 · 기간 {df}~{dt} · "
+                 f"{'이어서' if resume else ('이어쓰기' if carry else '새 통계')}")
+        il, naver_creds, key, stop = self.input_list, self.naver_creds, self.ai_key, self._semi_stop
+
+        def task():
+            try:
+                naver = NaverAdApi(naver_creds)
+                run_full(il, naver, ai_key=key, date_from=df, date_to=dt,
+                         get_password=self._account_pw, resume=resume, carry_forward=carry,
+                         grow_keywords=False, skip_ranks=True, keywords_off=False, on_log=self.log)
+                if not stop.is_set():
+                    track_ranks_stage(semi=True, should_stop=stop.is_set, on_log=self.log)
+            except Exception as exc:                # 무인: 어떤 오류도 앱을 매달아두지 않게 로그 후 종료로
+                self.log(f"[무인] 실행 중 오류: {exc.__class__.__name__}: {exc}")
+            return None
+        self.run_bg(task, on_done=self._auto_done, btn=None)
+
+    def _schedule_auto_stop(self):
+        now = datetime.now()
+        stop = now.replace(hour=6, minute=0, second=0, microsecond=0)
+        if stop <= now:
+            stop += timedelta(days=1)
+        QtCore.QTimer.singleShot(int((stop - now).total_seconds() * 1000), self._auto_stop)
+        self.log(f"[무인] {stop:%m-%d %H:%M} 자동 종료 예약")
+
+    def _auto_stop(self):
+        self.log("[무인] 06:00 도달 — 순위 조회 중지 요청 후 종료")
+        ev = getattr(self, "_semi_stop", None)
+        if ev is not None:
+            ev.set()
+        QtCore.QTimer.singleShot(60000, self._auto_quit)   # 정리 시간 준 뒤 강제 종료(백스톱)
+
+    def _auto_done(self, _result=None):
+        self.log("== [무인 자동 실행] 완료 — 종료 ==")
+        self._auto_quit()
+
+    def _auto_quit(self):
+        _prevent_sleep(False)
+        QtWidgets.QApplication.quit()
+
     def do_select_keywords(self):
         """② 키워드 선정 — 로그인 불필요. 최신 결과 워크북 상품에 키워드만 채운다(순위 없음)."""
         if self.input_list is None or self.naver_creds is None or not self.ai_key:
@@ -862,22 +958,28 @@ class App(QtWidgets.QMainWindow):
 
 def main():
     set_workdir()                   # .exe 더블클릭 대비 — 상대경로(output·data)가 exe 폴더에서 해석되게 CWD 고정
+    auto = "--auto" in sys.argv     # 무인 자동 실행(작업 스케줄러가 18:00에 이 인자로 실행)
     app = QtWidgets.QApplication(sys.argv)
     app.setStyleSheet(_QSS)
     try:                            # Chrome 필수(실제 Chrome+CDP 정책) — 없으면 크래시 대신 안내 후 종료
         find_chrome()
     except FileNotFoundError:
-        QtWidgets.QMessageBox.critical(
-            None, "Google Chrome 필요",
-            "이 프로그램은 실제 Google Chrome 으로 동작합니다.\n\n"
-            "이 PC 에 Chrome 이 설치돼 있지 않습니다. https://www.google.com/chrome 에서 "
-            "Chrome 을 설치한 뒤 다시 실행하세요.")
+        if auto:
+            print("[무인] Google Chrome 미설치 — 실행 불가")   # 무인: 대화상자 대신 로그
+        else:
+            QtWidgets.QMessageBox.critical(
+                None, "Google Chrome 필요",
+                "이 프로그램은 실제 Google Chrome 으로 동작합니다.\n\n"
+                "이 PC 에 Chrome 이 설치돼 있지 않습니다. https://www.google.com/chrome 에서 "
+                "Chrome 을 설치한 뒤 다시 실행하세요.")
         sys.exit(1)
     reaped = reap_orphan_chrome()   # 이전 실행이 강제종료·크래시로 남긴 좀비 Chrome 정리(누적 원천 차단)
     if reaped:
         print(f"[시작] 잔여(좀비) Chrome {reaped}개 정리함")
-    win = App()
+    win = App(auto=auto)
     win.show()
+    if auto:                        # 이벤트 루프 뜬 직후 무인 실행 자동 시작
+        QtCore.QTimer.singleShot(1500, win.start_auto)
     sys.exit(app.exec())
 
 

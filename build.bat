@@ -14,10 +14,16 @@ echo [2/3] EXE 빌드(PyInstaller)...
 python -m PyInstaller --noconfirm coupang_analytics.spec
 if errorlevel 1 goto :err
 echo.
-echo [3/3] 완료!
+echo [3/3] 무인 예약 스크립트 복사...
+copy /Y "%~dp0deploy\install_schedule.bat" "dist\쿠팡애널리틱스\" >nul
+copy /Y "%~dp0deploy\install_schedule.ps1" "dist\쿠팡애널리틱스\" >nul
+copy /Y "%~dp0deploy\uninstall_schedule.bat" "dist\쿠팡애널리틱스\" >nul
+echo.
+echo 완료!
 echo   결과: dist\쿠팡애널리틱스\쿠팡애널리틱스.exe
 echo   이 "쿠팡애널리틱스" 폴더 전체를 다른 PC로 복사해서 쓰세요.
 echo   (실행 PC 에 Google Chrome 설치 필수)
+echo   무인 야간 실행: 그 폴더의 install_schedule.bat 실행(매일 18:00 자동, 06:00 종료)
 echo.
 pause
 exit /b 0
