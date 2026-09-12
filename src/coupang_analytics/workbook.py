@@ -46,6 +46,8 @@ _LABEL_NOTE = "비고"
 _ALL_METRICS = frozenset(config.CONTRACT_METRICS + config.PERSONAL_METRICS)
 _META_SHEET = "_상품ID"   # 숨김 시트: (사업자,상품)→고유ID(vendorItemId) 매핑. ③ 순위조회가 상품 매칭에 사용
 _INDEX_SHEET = "목차"     # 첫 시트: 전 계정(사업자) 목록 + 하이퍼링크 점프 + 요약(계정 100개도 탐색 쉽게)
+_ACCT_SHEET = "_계정정보"  # 숨김 시트: (사업자)→계정ID 매핑. 목차에 계정ID 표시용(⚠ 비밀번호는 절대 저장 안 함)
+_SPECIAL_SHEETS = (_META_SHEET, _INDEX_SHEET, _ACCT_SHEET)
 
 
 def _norm(v) -> str:
@@ -94,7 +96,7 @@ class OutputWorkbook:
         self._date_col.clear(); self._date_rows.clear()
         self._metric_row.clear(); self._kw_row.clear(); self._vid_row.clear()
         for ws in self.wb.worksheets:
-            if ws.title == _INDEX_SHEET:                 # 목차 시트는 데이터 아님 → 인덱스 대상 제외
+            if ws.title in (_INDEX_SHEET, _ACCT_SHEET):  # 목차·계정정보 시트는 데이터 아님 → 제외
                 continue
             if ws.title == _META_SHEET:                 # 상품ID 매핑 시트 → 행 인덱스만 복원
                 for r in range(2, ws.max_row + 1):
@@ -151,8 +153,35 @@ class OutputWorkbook:
         return max(cols, key=lambda d: cols[d]) if cols else None
 
     def account_sheets(self) -> list[str]:
-        """계정(사업자) 시트명 목록 — 상품ID 숨김 시트·목차 시트는 제외."""
-        return [s for s in self.wb.sheetnames if s not in (_META_SHEET, _INDEX_SHEET)]
+        """계정(사업자) 시트명 목록 — 특수 시트(상품ID·목차·계정정보)는 제외."""
+        return [s for s in self.wb.sheetnames if s not in _SPECIAL_SHEETS]
+
+    def set_account_id(self, biz: str, account_id: str) -> None:
+        """(사업자)→계정ID 를 숨김 시트에 저장(목차 표시용). ⚠ 비밀번호는 저장하지 않는다."""
+        aid = _norm(account_id)
+        if not aid:
+            return
+        if _ACCT_SHEET in self.wb.sheetnames:
+            ws = self.wb[_ACCT_SHEET]
+        else:
+            ws = self.wb.create_sheet(_ACCT_SHEET)
+            ws.sheet_state = "hidden"
+            ws.cell(1, 1, "사업자"); ws.cell(1, 2, "계정ID")
+        for r in range(2, ws.max_row + 1):
+            if _norm(ws.cell(r, 1).value) == biz:
+                ws.cell(r, 2, aid); return
+        row = ws.max_row + 1
+        ws.cell(row, 1, biz); ws.cell(row, 2, aid)
+
+    def account_id_of(self, biz: str) -> str:
+        """저장된 계정ID(없으면 '')."""
+        if _ACCT_SHEET not in self.wb.sheetnames:
+            return ""
+        ws = self.wb[_ACCT_SHEET]
+        for r in range(2, ws.max_row + 1):
+            if _norm(ws.cell(r, 1).value) == biz:
+                return _norm(ws.cell(r, 2).value)
+        return ""
 
     def is_rank_filled(self, biz: str, product: str, keyword: str, date_iso: str) -> bool:
         row = self._kw_row.get((biz, product, keyword))
@@ -418,7 +447,7 @@ class OutputWorkbook:
                     bottom=thick if side == "bottom" else b.bottom)
 
         for ws in self.wb.worksheets:
-            if ws.title in (_META_SHEET, _INDEX_SHEET):   # 숨김 매핑·목차 시트는 블록 서식 대상 아님
+            if ws.title in _SPECIAL_SHEETS:              # 숨김 매핑·목차·계정정보 시트는 블록 서식 대상 아님
                 continue
             # 멱등화: 기존 병합을 모두 해제한 뒤 아래에서 표준대로 다시 병합한다.
             # (②/③/반영 등이 서식 없이 셀을 추가해 병합·테두리가 시트마다 섞이는 것을 원천 제거 →
@@ -535,9 +564,9 @@ class OutputWorkbook:
         head_fill = PatternFill("solid", fgColor=self._FILL_LABEL)
 
         ws.cell(1, 1, f"목차 · 계정 {len(bizs)}개").font = title_font
-        ws.merge_cells("A1:E1")
+        ws.merge_cells("A1:F1")
         ws.cell(1, 1).alignment = center
-        heads = ["사업자(클릭 이동)", "상품수", "최근 수집일자", "순위 공란", "비고"]
+        heads = ["사업자(클릭 이동)", "계정ID", "상품수", "최근 수집일자", "순위 공란", "비고"]
         for c, h in enumerate(heads, 1):
             x = ws.cell(2, c, h)
             x.font = bold; x.alignment = center; x.border = box; x.fill = head_fill
@@ -553,10 +582,12 @@ class OutputWorkbook:
             link = ws.cell(r, 1, biz)
             link.hyperlink = f"#'{biz}'!A1"              # 같은 통합문서 내 시트로 점프
             link.font = link_font; link.alignment = left; link.border = box
-            for c, v in ((2, len(prods)), (3, date or "-"), (4, blank), (5, "")):
+            # ⚠ 계정ID만 표시(비밀번호는 어떤 경우도 저장·표시 안 함)
+            for c, v in ((2, self.account_id_of(biz)), (3, len(prods)),
+                         (4, date or "-"), (5, blank), (6, "")):
                 x = ws.cell(r, c, v)
                 x.font = font; x.alignment = center; x.border = box
-        for c, w in {1: 34, 2: 8, 3: 14, 4: 9, 5: 20}.items():
+        for c, w in {1: 34, 2: 16, 3: 8, 4: 14, 5: 9, 6: 16}.items():
             ws.column_dimensions[get_column_letter(c)].width = w
         ws.row_dimensions[1].height = 21
         ws.freeze_panes = "A3"                            # 제목·헤더 고정

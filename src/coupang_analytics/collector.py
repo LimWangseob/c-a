@@ -194,6 +194,16 @@ def fetch_inventory(page, log=None) -> dict[str, int]:
     total = 0
     while True:
         props, total = _fetch(_INV_PAGE_SIZE, page_num)
+        if page_num == 0 and props:
+            # vid 보강용 진단(1회): 재고 응답이 상품명/ID를 담는지 확인. 필드'명'만 로그(값 아님=민감정보 X).
+            s0 = props[0]
+            log(f"  [재고·진단] viProperty 필드: {sorted(s0.keys())}")
+            for k, v in s0.items():
+                if isinstance(v, dict):
+                    log(f"  [재고·진단]   .{k} 하위: {sorted(v.keys())}")
+            hit = [c for c in ("productName", "productId", "itemName", "itemId", "vendorItemName", "skuId")
+                   if c in s0 or any(isinstance(v, dict) and c in v for v in s0.values())]
+            log(f"  [재고·진단] 상품식별 후보 필드: {hit or '없음 — vid 보강엔 다른 소스 필요'}")
         before = len(out)
         out.update(_parse_inventory(props))
         total = total or len(out)
