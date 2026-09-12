@@ -50,7 +50,8 @@ _META_SHEET = "_상품ID"   # 숨김 시트: (사업자,상품)→고유ID(vendo
 _INDEX_SHEET = "계정 목록"  # 첫 시트: 전 계정(사업자) 목록 + 하이퍼링크 점프 + 요약(계정 100개도 탐색 쉽게)
 _ACCT_SHEET = "_계정정보"  # 숨김 시트: (사업자)→계정ID 매핑. 목차에 계정ID 표시용(⚠ 비밀번호는 절대 저장 안 함)
 _MKT_SHEET = "_마케팅"     # 숨김 시트: (사업자,상품)→마케팅 시작·종료·모니터링종료. 계정목록 입력을 보존(재생성돼도 유지)
-_SPECIAL_SHEETS = (_META_SHEET, _INDEX_SHEET, _ACCT_SHEET, _MKT_SHEET)
+_DISC_SHEET = "_중단"      # 숨김 시트: (사업자,상품) 판매중지/삭제(대장에서 사라짐) 표기. 데이터는 보존, 표시만 구분
+_SPECIAL_SHEETS = (_META_SHEET, _INDEX_SHEET, _ACCT_SHEET, _MKT_SHEET, _DISC_SHEET)
 _MKT_COLS = ("마케팅 시작일", "마케팅 종료일", "모니터링 종료일")   # 계정목록 편집 열(사용자 입력)
 
 
@@ -116,7 +117,7 @@ class OutputWorkbook:
         self._date_col.clear(); self._date_rows.clear()
         self._metric_row.clear(); self._kw_row.clear(); self._vid_row.clear()
         for ws in self.wb.worksheets:
-            if ws.title in (_INDEX_SHEET, _ACCT_SHEET, _MKT_SHEET):  # 계정목록·계정정보·마케팅 = 데이터 아님
+            if ws.title in (_INDEX_SHEET, _ACCT_SHEET, _MKT_SHEET, _DISC_SHEET):  # 특수시트 = 데이터 아님
                 continue
             if ws.title == _META_SHEET:                 # 상품ID 매핑 시트 → 행 인덱스만 복원
                 for r in range(2, ws.max_row + 1):
@@ -519,6 +520,7 @@ class OutputWorkbook:
                 # 마케팅: 이 상품의 기간·상태 + 마케팅기간(시작~종료)에 해당하는 일자 컬럼 집합(배경색용)
                 mstart, mend, _mmon = self.marketing_of(ws.title, nm)
                 is_mkt = self._mkt_status(mstart, mend, _mmon) == "마케팅중"
+                is_disc = self.is_discontinued(ws.title, nm)   # 대장에서 사라짐 = 판매중지 표기
                 mcols: set[int] = set()
                 _s, _e = _parse_date(mstart), _parse_date(mend)
                 if _s:
@@ -551,11 +553,16 @@ class OutputWorkbook:
                             cell(ws, r, c, fill=(f_kwhead if head else None), fnt=bold, align=wrap)
                         cell(ws, r, _COL_SEARCH, fill=(f_kwhead if head else None), num=not head)
                         cell(ws, r, _COL_METRIC, fill=(f_kwhead if head else f_label))
-                        if head:   # 비고 자리(소헤더 G) = 마케팅중이면 표기, 아니면 '비고'(멱등 재계산)
+                        if head:   # 비고 자리(소헤더 G): 판매중지 > 마케팅중 > 비고 (멱등 재계산)
                             gm = ws.cell(r, _COL_METRIC)
-                            gm.value = "🔴 마케팅중" if is_mkt else _LABEL_NOTE
-                            if is_mkt:
+                            if is_disc:
+                                gm.value = "⛔ 판매중지"
+                                gm.font = Font(name=self._FN, size=11, bold=True, color="808080")
+                            elif is_mkt:
+                                gm.value = "🔴 마케팅중"
                                 gm.font = Font(name=self._FN, size=11, bold=True, color="C00000")
+                            else:
+                                gm.value = _LABEL_NOTE
                         for c in range(_FIRST_DATE, maxc + 1):
                             cell(ws, r, c, fill=(mkt_fill if c in mcols else None))
                 # 상품 1개 구분 — 굵은 선. 상단=블록 첫 행 top(병합 top-left라 정상).
@@ -622,12 +629,16 @@ class OutputWorkbook:
             return
         for r in range(2, ws.max_row + 1):
             if _norm(ws.cell(r, 1).value) == biz and _key(ws.cell(r, 2).value) == product:
-                ws.cell(r, 3, start or None); ws.cell(r, 4, end or None); ws.cell(r, 5, mon or None)
+                ws.cell(r, 3).value = start or None   # ⚠ cell(r,c,None) 은 클리어 안 됨 → .value 대입
+                ws.cell(r, 4).value = end or None
+                ws.cell(r, 5).value = mon or None
                 return
         if start or end or mon:
             r = ws.max_row + 1
             ws.cell(r, 1, biz); ws.cell(r, 2, product)
-            ws.cell(r, 3, start or None); ws.cell(r, 4, end or None); ws.cell(r, 5, mon or None)
+            ws.cell(r, 3).value = start or None
+            ws.cell(r, 4).value = end or None
+            ws.cell(r, 5).value = mon or None
 
     def marketing_of(self, biz: str, product: str) -> tuple[str, str, str]:
         """(시작, 종료, 모니터링종료) 문자열 — 없으면 ('','','')."""
@@ -638,6 +649,48 @@ class OutputWorkbook:
                 if _norm(ws.cell(r, 1).value) == biz and _key(ws.cell(r, 2).value) == product:
                     return (_norm(ws.cell(r, 3).value), _norm(ws.cell(r, 4).value), _norm(ws.cell(r, 5).value))
         return ("", "", "")
+
+    # ── 판매중지/삭제(대장에서 사라짐) 표기 — 데이터는 보존, 표시만 구분 ──────
+    def set_discontinued(self, biz: str, product: str, flag: bool) -> None:
+        """(사업자,상품) 판매중지 여부 기록. flag=False면 해제(대장에 다시 나타나면 복귀)."""
+        biz, product = _norm(biz), _key(product)
+        if _DISC_SHEET in self.wb.sheetnames:
+            ws = self.wb[_DISC_SHEET]
+        elif not flag:
+            return
+        else:
+            ws = self.wb.create_sheet(_DISC_SHEET); ws.sheet_state = "hidden"
+            ws.cell(1, 1, "사업자"); ws.cell(1, 2, "상품")
+        for r in range(2, ws.max_row + 1):
+            if _norm(ws.cell(r, 1).value) == biz and _key(ws.cell(r, 2).value) == product:
+                ws.cell(r, 3).value = "Y" if flag else None   # ⚠ cell(r,c,None) 은 클리어 안 됨 → .value 대입
+                return
+        if flag:
+            r = ws.max_row + 1
+            ws.cell(r, 1, biz); ws.cell(r, 2, product); ws.cell(r, 3, "Y")
+
+    def is_discontinued(self, biz: str, product: str) -> bool:
+        if _DISC_SHEET not in self.wb.sheetnames:
+            return False
+        ws = self.wb[_DISC_SHEET]
+        biz, product = _norm(biz), _key(product)
+        for r in range(2, ws.max_row + 1):
+            if (_norm(ws.cell(r, 1).value) == biz and _key(ws.cell(r, 2).value) == product
+                    and _norm(ws.cell(r, 3).value) == "Y"):
+                return True
+        return False
+
+    def reconcile_account(self, biz: str, seen_products) -> list[str]:
+        """대장 대조: 그 계정의 마스터 블록 중 이번 대장에 **없는** 상품 = 판매중지 표기, 있는 것은 해제.
+        seen_products = 이번 실행에서 대장에 존재한 상품(블록명, vid 앵커로 해석된 pname) 집합. 반환=새로 중지된 상품."""
+        seen = {_key(p) for p in seen_products}
+        newly: list[str] = []
+        for p in self.products_of(biz):
+            gone = p not in seen
+            if gone and not self.is_discontinued(biz, p):
+                newly.append(p)
+            self.set_discontinued(biz, p, gone)
+        return newly
 
     @staticmethod
     def _mkt_status(start: str, end: str, mon: str) -> str:
@@ -807,11 +860,15 @@ class OutputWorkbook:
                 pcell.font = gray_font
             ws.cell(r, 3, self.account_id_of(biz)).font = font if has_sheet else gray_font
             start, end, mon = self.marketing_of(biz, prod)
-            status = self._mkt_status(start, end, mon) if has_sheet else "미수집"
+            if has_sheet and prod and self.is_discontinued(biz, prod):
+                status = "⛔ 판매중지"
+            else:
+                status = self._mkt_status(start, end, mon) if has_sheet else "미수집"
             for c, v in ((4, start), (5, end), (6, mon)):   # 마케팅(관리대장 값 표시)
                 x = ws.cell(r, c, v); x.font = font; x.alignment = center; x.border = box; x.fill = mkt_fill
             st = ws.cell(r, 7, status); st.alignment = center; st.border = box
-            st.font = red_bold if status == "마케팅중" else (gray_font if status in ("미수집", "종료") else font)
+            st.font = (red_bold if status == "마케팅중"
+                       else (gray_font if status in ("미수집", "종료", "⛔ 판매중지") else font))
             for c in (1, 2, 3):
                 ws.cell(r, c).alignment = left if c == 2 else center
                 ws.cell(r, c).border = box

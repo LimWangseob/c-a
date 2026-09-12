@@ -485,6 +485,7 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
     """
     biz = report_acc.label   # 시트명 = 사업자명, 없으면 대표자명·계정ID(빈 시트명 KeyError 방지)
     wb.ensure_account(biz)
+    seen_products: list[str] = []          # 이번 대장에 존재한 상품(블록명) — 대조로 판매중지 감지
     for product in report_acc.products:
         title = product.display_title
         kind = product.kind or config.KIND_PERSONAL
@@ -492,6 +493,7 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
         # 상품 정체성 = vendorItemId 앵커. 이미 있는 블록(③이 정확 노출명으로 바꿔뒀을 수 있음)을 vid 로
         # 찾아 그 이름으로 이어간다(발견명이 매일 달라도 중복 블록·시계열 단절 방지). 없으면 발견명 사용.
         pname = wb.resolve_block_name(biz, vids0) or product.name
+        seen_products.append(pname)        # 대장에 있음(수집주기로 오늘 스킵돼도 '있음'으로 집계)
         wb.set_marketing(biz, pname, product.mkt_start, product.mkt_end, product.mkt_mon)  # 대장 마케팅 → 저장(원본 소스)
         # 상품 단위 수집 주기(마케팅 설정 있을 때만): 오늘 대상 아닌 상품은 오늘치 기록 생략(마케팅 상품만 매일).
         if wb.has_marketing():
@@ -574,6 +576,12 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
         _fill_product_metrics(wb, biz, product, metrics, inventory, date_iso, pname)
         _log_diagnose(product, track_info, ai_key, log, wb=wb, biz=biz, roles=roles, pname=pname)
         wb.save(save_path)
+    # 대장 대조: 이번 대장에 없던 마스터 블록 = 판매중지/삭제 표기(데이터 보존, 다시 나타나면 자동 해제)
+    newly = wb.reconcile_account(biz, seen_products)
+    if newly:
+        log(f"  [{biz}] 대장에서 사라진 상품 {len(newly)}개 → 판매중지 표기: "
+            f"{newly[:3]}{'…' if len(newly) > 3 else ''}")
+    wb.save(save_path)
 
 
 def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
@@ -757,6 +765,16 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     if uncollected:
         log(f"== ⚠ 로그인 못한 계정 {len(uncollected)}개(세션만료+Akamai차단): "
             f"{', '.join(a.label for a in uncollected)} — 쉰 IP(내일 등)에 재실행 시 수집됨 ==")
+
+    # 계정 단위 대조: 대장에서 통째로 사라진 계정(로그인 못한 계정 제외)의 상품 = 판매중지 표기.
+    # ⚠ 로그인 실패(uncollected)는 '사라짐'이 아니므로 제외(다음에 수집). 대장에 있는 계정만 active 로 본다.
+    active_biz = {a.label for a in input_list.accounts}
+    uncollected_biz = {a.label for a in uncollected}
+    for biz in wb.account_sheets():
+        if biz not in active_biz and biz not in uncollected_biz:
+            gone = wb.reconcile_account(biz, [])   # 대장에 없는 계정 → 전 상품 판매중지
+            if gone:
+                log(f"== [{biz}] 대장에서 사라진 계정 → 상품 {len(gone)}개 판매중지 표기 ==")
 
     # 통계 마스터 갱신 + 그날 스냅샷 저장
     snapshot = _snapshot_path(out, now)
