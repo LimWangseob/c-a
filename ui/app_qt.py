@@ -231,13 +231,11 @@ class App(QtWidgets.QMainWindow):
         fk = self._card("파일 · API 키")
         grid = QtWidgets.QGridLayout(fk)
         self.input_lbl = QtWidgets.QLabel("(입력 분석용 엑셀 미선택)")
-        self.pw_lbl = QtWidgets.QLabel("(입력 엑셀에 '비밀번호' 컬럼 있으면 자동 저장 · 별도 파일만 이 버튼)")
         self.naver_lbl = QtWidgets.QLabel("(네이버 API 키 미선택)")
         self.openai_lbl = QtWidgets.QLabel("(OpenAI 키 미설정 — 키워드 추출 불가)")
         self.shop_lbl = QtWidgets.QLabel("(선택) 네이버쇼핑 키 미설정 — 경쟁강도 미반영")
         rows = [
             ("입력 엑셀 열기", self.load_input, self.input_lbl),
-            ("(선택) 비번 파일", self.load_passwords, self.pw_lbl),
             ("네이버 API 키 열기", self.load_naver, self.naver_lbl),
             ("OpenAI(ChatGPT) API 키 입력", self.load_openai, self.openai_lbl),
             ("(선택) 네이버쇼핑 키 입력", self.load_naver_shop, self.shop_lbl),
@@ -655,19 +653,10 @@ class App(QtWidgets.QMainWindow):
             except Exception as exc:
                 self.log(f"[비번] {aid} 저장 실패: {exc.__class__.__name__}")
         if saved:
-            self.pw_lbl.setText(f"{Path(path).name}  (계정 {saved}개 비번 암호화 저장)")
             self.log(f"[비번] {saved}개 계정 비밀번호 저장됨 (이 PC 전용 암호화, 공유·git 안 됨). 순차 로그인 시 자동입력.")
         elif not quiet:
             self.log("[비번] 비밀번호를 찾지 못했습니다 (계정아이디/비밀번호 컬럼 확인).")
         return saved
-
-    def load_passwords(self):
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "계정 비밀번호 엑셀 (계정아이디+비밀번호 컬럼)", self._last_dir("pw"),
-            "Excel (*.xlsx);;All (*.*)")
-        if path:
-            self._remember_dir("pw", path)
-            self._store_passwords_from(path, quiet=False)
 
     def _account_pw(self, account_id):
         try:
