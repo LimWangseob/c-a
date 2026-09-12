@@ -494,7 +494,9 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
         # 찾아 그 이름으로 이어간다(발견명이 매일 달라도 중복 블록·시계열 단절 방지). 없으면 발견명 사용.
         pname = wb.resolve_block_name(biz, vids0) or product.name
         seen_products.append(pname)        # 대장에 있음(수집주기로 오늘 스킵돼도 '있음'으로 집계)
-        wb.set_marketing(biz, pname, product.mkt_start, product.mkt_end, product.mkt_mon)  # 대장 마케팅 → 저장(원본 소스)
+        if product.mkt_start or product.mkt_end or product.mkt_mon:   # 대장에 마케팅 값 있을 때만 반영
+            wb.set_marketing(biz, pname, product.mkt_start, product.mkt_end, product.mkt_mon)
+            # (대장이 비어 있으면 덮어쓰지 않음 → 사용자가 마스터 계정목록에 직접 넣은 값 보존)
         # 상품 단위 수집 주기(마케팅 설정 있을 때만): 오늘 대상 아닌 상품은 오늘치 기록 생략(마케팅 상품만 매일).
         if wb.has_marketing():
             _due, _why = wb.product_due(biz, pname, date_iso)
