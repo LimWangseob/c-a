@@ -311,8 +311,26 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
                 log(f"  [{a.label}] 직접 로그인이 필요해 창을 띄웠습니다")
             _wait_to = config.LOGIN_UNATTENDED_WAIT_SEC if unattended else 300
             _grace = config.LOGIN_BLOCK_GRACE_SEC if unattended else 60.0
-            if not b.wait_for_login(timeout=_wait_to, on_log=log, tag=a.account_id,
-                                    on_need_user=_need_user, blocked_grace=_grace):
+            ok = b.wait_for_login(timeout=_wait_to, on_log=log, tag=a.account_id,
+                                  on_need_user=_need_user, blocked_grace=_grace)
+            if not ok and unattended and pw and config.LOGIN_SEMI_ON_BLOCK:
+                # ── 반자동(무인) 1회 재시도 ── 무인 오프스크린 자동입력이 차단/폼정체로 실패하면, 창을
+                # 화면에 띄우고 앱이 사람처럼 자동입력·클릭으로 **딱 1번** 더 시도한다(사용자 선택).
+                # ⚠ 제출이 1회 추가되므로(5회 오류=계정잠금·위탁계정) **계정당·실행당 정확히 1회**로 제한.
+                # Akamai IP 접근차단은 이걸로도 대부분 못 뚫는다(지문위조 금지) — 소프트 차단(폼 정체)에만 기대.
+                log(f"  [{a.label}] 로그인 차단/미완료 → 반자동 1회 재시도(창 표시, 앱이 자동입력·클릭)")
+                b.show()
+                b.goto(WING_URL)                      # 신선 로그인 폼으로 리다이렉트 유도
+                b.page.wait_for_timeout(1200)
+                if b.authenticated():                 # 그새 로그인 완료됐을 수도
+                    ok = True
+                elif b.autofill_login(a.account_id, pw, on_log=log):
+                    ok = b.wait_for_login(timeout=config.LOGIN_SEMI_WAIT_SEC, on_log=log,
+                                          tag=a.account_id, on_need_user=lambda: None,
+                                          blocked_grace=_grace)
+                log(f"  [{a.label}] 반자동 재시도 {'성공' if ok else '실패 — 이 계정 건너뜀'}")
+                b.hide()
+            if not ok:
                 code, detail = b.classify_login()
                 ftype = session_state.failure_type_of(code, detail)   # 세분 실패분류(탐지코드는 불변)
                 session_state.observe_auth_failure(a.account_id, ftype, final_url=b.page.url)
