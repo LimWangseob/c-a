@@ -594,4 +594,11 @@ class OutputWorkbook:
         for c, w in {1: 34, 2: 16, 3: 8, 4: 14, 5: 9, 6: 16}.items():
             ws.column_dimensions[get_column_letter(c)].width = w
         ws.row_dimensions[1].height = 21
-        ws.freeze_panes = "A3"                            # 제목·헤더 고정
+        ws.freeze_panes = "A3"                            # 제목·헤더 틀고정
+        # '항상 고정': 첫 탭(index 0) + **파일 열면 항상 목차가 선택된 채로 열리게** 활성 시트로 지정.
+        try:
+            self.wb.active = self.wb.index(ws)
+            for other in self.wb.worksheets:             # 다른 시트 탭 선택 해제(목차만 활성)
+                other.sheet_view.tabSelected = (other is ws)
+        except Exception:
+            pass
