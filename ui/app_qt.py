@@ -259,6 +259,17 @@ class App(QtWidgets.QMainWindow):
         gs_btn.clicked.connect(self.load_input_gsheet)
         grid.addWidget(gs_btn, gs_row, 0)
         grid.addWidget(self.gsheet_edit, gs_row, 1)
+        # 결과 자동 업로드 대상(rclone remote:폴더). 무인 실행 완료 시 그 위치에 같은 파일로 덮어쓰기(링크 유지).
+        gd_row = gs_row + 1
+        self.gdrive_edit = QtWidgets.QLineEdit()
+        self.gdrive_edit.setPlaceholderText("결과 자동업로드: rclone 대상(예: gdrive:쿠팡분석) — 비우면 안 함")
+        self.gdrive_edit.setText(
+            QtCore.QSettings("coupang-analytics", "ui").value("gdrive/dest", "", type=str))
+        self.gdrive_edit.editingFinished.connect(
+            lambda: QtCore.QSettings("coupang-analytics", "ui").setValue(
+                "gdrive/dest", self.gdrive_edit.text().strip()))
+        grid.addWidget(QtWidgets.QLabel("구글드라이브 업로드"), gd_row, 0)
+        grid.addWidget(self.gdrive_edit, gd_row, 1)
         grid.setColumnStretch(1, 1)
         v.addWidget(fk)
         # 키워드/순위 등 세부 설정값 입력란은 제거(사용자 미사용 · 영속 저장도 안 됨). 값은 config.py 에서 관리.
@@ -939,10 +950,48 @@ class App(QtWidgets.QMainWindow):
                                  grow_keywords=False, skip_ranks=True, keywords_off=False, on_log=self.log)
                 if not stop.is_set():
                     track_ranks_stage(semi=True, should_stop=stop.is_set, on_log=self.log)
+                self._upload_to_gdrive()            # 완료 후 결과 파일을 구글드라이브로 자동 업로드(설정 시)
             except Exception as exc:                # 무인: 어떤 오류도 앱을 매달아두지 않게 로그 후 종료로
                 self.log(f"[무인] 실행 중 오류: {exc.__class__.__name__}: {exc}")
             return None
         self.run_bg(task, on_done=self._auto_done, btn=None)
+
+    def _upload_to_gdrive(self) -> None:
+        """결과 파일을 rclone 으로 구글드라이브 지정 위치에 **같은 파일로 덮어쓰기**(공유 링크 유지). 설정
+        (QSettings gdrive/dest, 예 'gdrive:쿠팡분석') 없거나 rclone 미설치면 조용히 건너뛴다(로그만)."""
+        import shutil as _sh
+        import subprocess
+        import tempfile
+        dest = QtCore.QSettings("coupang-analytics", "ui").value("gdrive/dest", "", type=str).strip()
+        if not dest:
+            return                                  # 업로드 미설정 — 건너뜀
+        rclone = _sh.which("rclone")
+        if not rclone:
+            self.log("[업로드] rclone 미설치 — 구글드라이브 업로드 건너뜀(설치·설정 필요)")
+            return
+        src = app_base_dir() / "output" / f"{config.OUTPUT_FILE_PREFIX}_통계.xlsx"
+        if not src.exists():
+            self.log("[업로드] 결과 파일이 없어 업로드 건너뜀")
+            return
+        tmp = Path(tempfile.gettempdir()) / f"{config.OUTPUT_FILE_PREFIX}_통계_upload.xlsx"
+        try:
+            _sh.copy2(src, tmp)                      # 앱이 쓰는 중일 수 있어 사본으로(잠김 회피)
+            target = f"{dest}/{src.name}"
+            r = subprocess.run(
+                [rclone, "copyto", str(tmp), target, "-v",
+                 f"--log-file={app_base_dir() / 'output' / 'gdrive_upload.log'}"],
+                capture_output=True, timeout=600)
+            if r.returncode == 0:
+                self.log(f"[업로드] 구글드라이브 갱신 완료 → {target} (공유 링크 그대로 최신본)")
+            else:
+                self.log(f"[업로드] 실패(rc={r.returncode}) — output/gdrive_upload.log 확인")
+        except Exception as exc:
+            self.log(f"[업로드] 오류: {exc.__class__.__name__}: {exc}")
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def _schedule_auto_stop(self):
         now = datetime.now()
