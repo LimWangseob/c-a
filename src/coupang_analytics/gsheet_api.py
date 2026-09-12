@@ -179,6 +179,27 @@ class GSheetClient:
         self._meta = None   # 캐시 무효화(새 시트 반영)
         return resp["replies"][0]["addSheet"]["properties"]["sheetId"]
 
+    def ensure_sheets(self, titles: list[str]) -> dict[str, int]:
+        """여러 시트를 **한 번의 batchUpdate**로 생성(없는 것만)하고 {제목: gid} 반환.
+
+        대량 최초 생성(사업자 수십 개)에서 addSheet 를 연달아 보내면 쿼터(429)에 걸리므로 묶는다.
+        생성 후 메타를 한 번만 새로 읽어 gid 를 채운다. 이미 있는 시트는 기존 gid.
+        """
+        existing = {t: self.sheet_id(t) for t in titles}   # 첫 조회에서 meta() 캐시
+        missing = [t for t in titles if existing[t] is None]
+        if missing:
+            try:
+                self._sheets().batchUpdate(
+                    spreadsheetId=self.spreadsheet_id,
+                    body={"requests": [{"addSheet": {"properties": {"title": t}}} for t in missing]}
+                ).execute()
+            except Exception as exc:
+                raise self._wrap(exc)
+            self._meta = None
+            for t in missing:
+                existing[t] = self.sheet_id(t)             # 새 메타 1회 재조회 후 gid 채움
+        return existing
+
     # ── 값 읽기/쓰기 ─────────────────────────────────────────────
     def read_values(self, sheet: str, cell_range: str | None = None) -> list[list[Any]]:
         """시트(또는 'Sheet!A1:D')의 값 격자 반환. 빈 뒤쪽 셀은 잘려 행 길이가 다를 수 있다.

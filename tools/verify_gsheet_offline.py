@@ -26,10 +26,11 @@ except AttributeError:
 import openpyxl  # noqa: E402
 from openpyxl.styles import Font  # noqa: E402
 
-from coupang_analytics import gsheet_index as gi  # noqa: E402
+from coupang_analytics import config, gsheet_index as gi, gsheet_stats  # noqa: E402
 from coupang_analytics.gsheet_index import DATA_START0, DISCONTINUED, ExistingRow, IndexRow  # noqa: E402
 from coupang_analytics.input_list import (Account, Product,  # noqa: E402
                                           parse_input_list, parse_input_rows, parse_password_rows)
+from coupang_analytics.workbook import OutputWorkbook  # noqa: E402
 
 _HEAD = ["사업자", "상품명(클릭 이동)", "계정ID", "마케팅 시작일", "마케팅 종료일", "모니터링 종료일", "상태"]
 
@@ -163,9 +164,54 @@ def t4_marketing_merge() -> None:
     _ok("직원 입력 우선 반영(2개), 미입력 스킵, 시트 없으면 빈 dict")
 
 
+def _sample_workbook() -> OutputWorkbook:
+    """작은 실제 OutputWorkbook — 계정 1·상품 1(계약)·키워드 2·값 채움 후 서식 적용."""
+    wb = OutputWorkbook.empty()
+    wb.set_account_id("가게A", "idA")
+    wb.ensure_product_block("가게A", "텀블러", config.KIND_CONTRACT, ["텀블러", "보온 텀블러"])
+    wb.set_product_vids("가게A", "텀블러", ["111", "222"])
+    wb.set_product_metric("가게A", "텀블러", config.CONTRACT_METRICS[0], "2026-09-12", 5)
+    wb.set_keyword_rank("가게A", "텀블러", "텀블러", "2026-09-12", 3)
+    wb.apply_style()
+    return wb
+
+
+def t5_stats_mirror() -> None:
+    print("[5] 통계 시트 미러링(worksheet_to_requests) + 등록명 보존")
+    wb = _sample_workbook()
+    assert wb.registered_name("가게A", "텀블러") == "텀블러"
+    assert wb.set_display_name("가게A", "텀블러", "스텐 텀블러 500ml")
+    assert wb.registered_name("가게A", "스텐 텀블러 500ml") == "텀블러"   # 노출명 변경에도 등록명 보존
+
+    ws = wb.wb["가게A"]
+    reqs = gsheet_stats.worksheet_to_requests(ws, 42, index_gid=7)
+    kinds = [next(iter(r)) for r in reqs]
+    for need in ("unmergeCells", "updateSheetProperties", "updateCells", "mergeCells"):
+        assert need in kinds, (need, kinds)
+    gp = next(r for r in reqs if "updateSheetProperties" in r)["updateSheetProperties"]["properties"]["gridProperties"]
+    assert gp["frozenRowCount"] == 1 and gp["frozenColumnCount"] == 7, gp   # freeze_panes 'H2'
+    flat = str(next(r for r in reqs if "updateCells" in r))
+    assert "#gid=7&range=A1" in flat and "계정 목록" in flat               # 복귀 링크 → 계정목록 gid
+    _ok("전체교체 요청(병합해제·틀고정 H2·복귀 HYPERLINK) + 등록명 보존")
+
+
+def t6_roster_from_workbook() -> None:
+    print("[6] roster_from_workbook — 등록명 기반 안정키·노출명 표시·통계링크")
+    wb = _sample_workbook()
+    wb.set_display_name("가게A", "텀블러", "스텐 텀블러 500ml")
+    roster = gi.roster_from_workbook(wb, {"가게A": 42})
+    r0 = next(r for r in roster if r.product)
+    assert r0.business == "가게A" and r0.account_id == "idA"
+    assert r0.product == "스텐 텀블러 500ml"                              # B=노출명(표시)
+    assert r0.key == gi.marketing_key("idA", "텀블러")                    # 안정키=계정ID+등록명(노출명 아님)
+    assert r0.link_gid == 42 and r0.link_row is not None
+    _ok("노출명 표시·안정키=등록명 기반·통계시트 링크(gid+헤더행)")
+
+
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
-    for fn in (t1_ledger_rows, t2_file_regression, t3_index_sync, t3b_full_and_incremental, t4_marketing_merge):
+    for fn in (t1_ledger_rows, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
+               t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook):
         fn()
     print("=== 전부 통과 ===")
     return 0

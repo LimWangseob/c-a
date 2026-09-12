@@ -586,11 +586,35 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
     wb.save(save_path)
 
 
+def _push_gsheet(wb, output_url: str | None, log) -> None:
+    """완성된 openpyxl 마스터를 결과 구글시트로 반영 — 통계 시트 미러링 + 계정목록 증분 동기화.
+
+    output_url 없거나 서비스계정 미등록이면 조용히 생략(정상 — 구글 통합 미사용). 반영 실패는 **로그로 명시**
+    (조용한 무시 아님)하되 파이프라인을 죽이지 않는다: xlsx 마스터·스냅샷은 이미 저장됐다(오프라인 백업).
+    """
+    if not output_url:
+        return
+    try:
+        from . import gsheet_api, gsheet_index, gsheet_stats
+        if not gsheet_api.load_sa_info():
+            log("== [구글시트] 서비스계정 키 미등록 — 결과 시트 반영 생략(xlsx는 저장됨) ==")
+            return
+        client = gsheet_api.GSheetClient(output_url)
+        gids = gsheet_stats.push_statistics(client, wb, on_log=log)          # 사업자별 통계 시트 전체 미러링
+        roster = gsheet_index.roster_from_workbook(wb, gids)                 # 계정목록 로스터(등록명 기반 안정키)
+        plan = gsheet_index.sync_index(client, roster)                      # 계정목록 증분(마케팅 D~F 보존)
+        log(f"== [구글시트] 결과 반영 완료 — 통계 {len(gids)}시트 · 계정목록 "
+            f"갱신 {len(plan.updates)}·신규 {len(plan.inserts)}·판매중지 {len(plan.discontinue)} ==")
+    except Exception as exc:
+        log(f"== [구글시트] 결과 반영 실패: {exc.__class__.__name__}: {exc} "
+            "(xlsx 마스터·스냅샷은 정상 저장됨) ==")
+
+
 def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
              ai_key: str | None = None, date_from: str | None = None, date_to: str | None = None,
              get_password=None, resume: bool = False, carry_forward: bool = False,
              grow_keywords: bool = False, skip_ranks: bool = False,
-             keywords_off: bool = False, on_log=None) -> Path:
+             keywords_off: bool = False, on_log=None, gsheet_output_url: str | None = None) -> Path:
     """계정별 end-to-end 완결 + **같은 날 이어서 하기** + **통계 마스터 이어쓰기(cross-day)**.
 
     실행 모드(하루 1회 실행 전제):
@@ -783,6 +807,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     wb.apply_style()         # 가독성 서식(헤더 고정·상품 구분·정렬) — 최종본에만
     wb.save(master)          # 다음 날 이어쓸 마스터
     wb.save(snapshot)        # 그날 백업본(감사용)
+    _push_gsheet(wb, gsheet_output_url, log)   # 결과 구글시트 반영(통계 미러링 + 계정목록 동기화)
     # 진행 상태 정리 — 단, 이 실행에서 로그인 못한 계정이 **남았으면 진행분을 유지**해서
     # 같은 날 재실행이 '미완료분만' 이어서 처리하게 한다(완료 계정은 done 으로 자동 건너뜀).
     # 날짜가 바뀌면 resumable_progress 가 '오늘 아님'으로 무시 → 자동으로 처음부터.

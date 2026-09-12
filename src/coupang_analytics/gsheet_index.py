@@ -24,6 +24,7 @@ N_COLS = 7
 HEADER_ROW0 = 1        # 헤더가 있는 0-based 행(=시트 2행). 0행=제목.
 DATA_START0 = 2        # 데이터 시작 0-based 행(=시트 3행)
 DISCONTINUED = "⛔ 판매중지"
+INDEX_SHEET_NAME = "계정목록"   # 결과 구글시트의 계정목록 시트명(openpyxl '계정 목록'과 구분 — 공백 없음)
 _MKT_FILL = {"red": 1.0, "green": 0.949, "blue": 0.8}     # FFF2CC 마케팅 입력열 안내색
 _HEAD_FILL = {"red": 0.851, "green": 0.882, "blue": 0.949}  # D9E9FA 헤더
 
@@ -267,7 +268,7 @@ def marketing_key(account_id: str, product: str) -> str:
     return _synth_key(account_id, product)
 
 
-def read_marketing(client, *, sheet: str = "계정목록") -> dict[str, tuple[str, str, str]]:
+def read_marketing(client, *, sheet: str = INDEX_SHEET_NAME) -> dict[str, tuple[str, str, str]]:
     """출력 `계정목록`의 **직원 입력 마케팅(D~F)** 을 {안정키: (시작, 종료, 모니터링종료)} 로 읽는다.
 
     값이 하나도 없는 행은 건너뛴다. 시트가 아직 없으면 빈 dict(첫 실행 대비 — fallback 아님, 정상 상태).
@@ -308,7 +309,28 @@ def apply_marketing(accounts, marketing_map: dict[str, tuple[str, str, str]]) ->
     return n
 
 
-def sync_index(client, desired: list[IndexRow], *, sheet: str = "계정목록") -> SyncPlan:
+def roster_from_workbook(wb, stats_gids: dict[str, int]) -> list[IndexRow]:
+    """openpyxl `OutputWorkbook` → 계정목록 IndexRow 로스터(자동열만). 파이프라인이 sync_index 에 투입.
+
+    - 순서·집합 = `wb.product_roster()`(openpyxl `계정 목록`과 동일).
+    - **안정 키 = marketing_key(계정ID + 등록상품명)**(노출명이 바뀌어도 불변, 3c 마케팅 머지와 매칭 — §7).
+      등록명이 없으면(옛 마스터) 노출명으로 폴백.
+    - B 하이퍼링크 = 그 사업자 통계 시트 gid(`stats_gids`) + 블록 헤더행(있을 때만).
+    """
+    rows: list[IndexRow] = []
+    for biz, prod, hdr, has_sheet in wb.product_roster():
+        acct = wb.account_id_of(biz)
+        registered = wb.registered_name(biz, prod) or prod
+        key = marketing_key(acct, registered)
+        linkable = bool(has_sheet and prod and hdr)
+        gid = stats_gids.get(biz) if linkable else None
+        rows.append(IndexRow(business=biz, product=prod, account_id=acct,
+                             status=wb.status_of(biz, prod, has_sheet), key=key,
+                             link_gid=gid, link_row=(hdr if (linkable and gid is not None) else None)))
+    return rows
+
+
+def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME) -> SyncPlan:
     """결과 구글시트의 `계정목록`을 원하는 로스터에 맞춰 생성/동기화하고 계획을 반환.
 
     비어 있으면 전체 생성, 아니면 증분(자동열만 갱신·신규 삽입·판매중지 표기). 마케팅 D~F는 안 건드린다.

@@ -254,6 +254,7 @@ class OutputWorkbook:
             ws.cell(r, _COL_NAME, kw)
             ws.cell(r, _COL_METRIC, config.M_RANK)
             self._kw_row[(biz, product, kw)] = r
+        self.set_registered_name(biz, product)   # 생성 시점의 이름 = 등록상품명(이후 노출명으로 바뀌어도 보존)
 
     def add_product_keywords(self, biz: str, product: str, keywords: list[str]) -> list[str]:
         """기존 상품 블록에 새 키워드 순위행 추가(통계 유지 중 발굴 추가). 반환: 실제 추가분.
@@ -309,6 +310,7 @@ class OutputWorkbook:
         ws.sheet_state = "hidden"
         ws.cell(1, 1, "사업자"); ws.cell(1, 2, "상품명"); ws.cell(1, 3, "상품ID(|구분)")
         ws.cell(1, 4, "키워드서명"); ws.cell(1, 5, "권고제목")   # ⑤ 제목 캐시(동결 상품 AI 재호출 생략)
+        ws.cell(1, 6, "등록상품명")   # 대장 원본명(노출명으로 바뀌어도 불변) — 계정목록 안정키·3c 마케팅 매칭 기준
         return ws
 
     def set_product_vids(self, biz: str, product: str, vids) -> None:
@@ -331,6 +333,30 @@ class OutputWorkbook:
             return []
         v = self.wb[_META_SHEET].cell(row, 3).value
         return [x for x in str(v).split("|") if x] if v else []
+
+    def set_registered_name(self, biz: str, product: str) -> None:
+        """상품 블록의 **등록상품명**(대장 원본명)을 숨김시트에 최초 1회 보존(노출명으로 바뀌어도 불변).
+
+        계정목록(구글시트) 안정키 `marketing_key(계정ID+등록상품명)`·3c 마케팅 역머지 매칭의 기준(§7).
+        이미 값이 있으면 덮지 않는다(이름 변경·재호출에도 최초 등록명 유지)."""
+        biz, product = _norm(biz), _key(product)
+        if not (biz and product):
+            return
+        ws = self._meta_ws()
+        row = self._vid_row.get((biz, product))
+        if row is None:
+            row = ws.max_row + 1
+            ws.cell(row, 1, biz); ws.cell(row, 2, product)
+            self._vid_row[(biz, product)] = row
+        if not _norm(ws.cell(row, 6).value):
+            ws.cell(row, 6, product)
+
+    def registered_name(self, biz: str, product: str) -> str:
+        """저장된 등록상품명(없으면 '' — 옛 마스터엔 없을 수 있음, 호출부가 노출명으로 폴백)."""
+        row = self._vid_row.get((biz, product))
+        if row is None or _META_SHEET not in self.wb.sheetnames:
+            return ""
+        return _norm(self.wb[_META_SHEET].cell(row, 6).value)
 
     def _display_name(self, biz: str, name: str) -> str:
         """이름칸 표시값 = **1줄 상품제목 + (보이지 않는 구분자) + 2줄 상품 인식코드(vendorItemId)**.
@@ -769,6 +795,21 @@ class OutputWorkbook:
             if self.product_due(biz, p, target_iso)[0]:
                 return True, "수집 대상 상품 있음"
         return False, "모든 상품 오늘 수집 대상 아님"
+
+    def product_roster(self) -> list[tuple[str, str, int | None, bool]]:
+        """계정목록(구글시트) 동기화용 상품 로스터 — (사업자, 상품(노출명), 블록 헤더행|None, 데이터시트有無).
+        openpyxl `계정 목록`(_build_index)과 동일 순서·집합(수집 계정→상품, 그 뒤 미수집 계정)."""
+        return self._product_rows()
+
+    def status_of(self, biz: str, product: str, has_sheet: bool = True) -> str:
+        """계정목록 상태 열(G) 값 — openpyxl `_build_index` 규칙과 동일:
+        판매중지 > (미수집) > 마케팅 상태(예정/마케팅중/모니터링/종료/'')."""
+        if has_sheet and product and self.is_discontinued(biz, product):
+            return "⛔ 판매중지"
+        if not has_sheet:
+            return "미수집"
+        s, e, m = self.marketing_of(biz, product)
+        return self._mkt_status(s, e, m)
 
     def _product_rows(self) -> list[tuple[str, str, int | None, bool]]:
         """계정 목록에 실을 상품 로스터 — (사업자, 상품, 그 상품 블록 헤더행|None, 데이터시트有無).

@@ -953,6 +953,7 @@ class App(QtWidgets.QMainWindow):
             self.log(f"[{title}] 취소됨")
             return
         input_list, naver_creds, key = self.input_list, self.naver_creds, self.ai_key
+        gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
         mode_txt = "이어서 " if resume else ("통계이어쓰기 " if carry else "새통계 ")
         stage_txt = " · ①판매수집(키워드·순위 없음)" if keywords_off else \
             (" · 순위 제외(판매데이터만)" if skip_ranks and not resume else "")
@@ -965,7 +966,7 @@ class App(QtWidgets.QMainWindow):
             return run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
                             get_password=self._account_pw, resume=resume, carry_forward=carry,
                             grow_keywords=grow, skip_ranks=skip_ranks,
-                            keywords_off=keywords_off, on_log=self.log)
+                            keywords_off=keywords_off, on_log=self.log, gsheet_output_url=gs_out)
         self.run_bg(task, on_done=self._pipeline_done, btn=btn)
 
     # ── 무인 자동 실행(--auto, 18:00 시작 → 06:00 자동 종료) ───────
@@ -995,13 +996,15 @@ class App(QtWidgets.QMainWindow):
         self.log(f"[무인] ①판매수집+②키워드(자동순위 제외) → ③반자동 순위 · 상품 {n}개 · 기간 {df}~{dt} · "
                  f"{'이어서' if resume else ('이어쓰기' if carry else '새 통계')}")
         il, naver_creds, key, stop = self.input_list, self.naver_creds, self.ai_key, self._semi_stop
+        gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
 
         def task():
             try:
                 naver = NaverAdApi(naver_creds)
                 run_full(il, naver, ai_key=key, date_from=df, date_to=dt,
                          get_password=self._account_pw, resume=resume, carry_forward=carry,
-                         grow_keywords=False, skip_ranks=True, keywords_off=False, on_log=self.log)
+                         grow_keywords=False, skip_ranks=True, keywords_off=False, on_log=self.log,
+                         gsheet_output_url=gs_out)
                 # 야간 1회 쿨다운-재개: 차단 등으로 미완료 계정이 남았으면(진행중 파일 잔존) 30분 쉬고
                 # **남은 계정만 1회 더** 시도(제출 총량 억제 = 위탁계정 잠금 방지, 무한 재시도 금지).
                 if (not stop.is_set() and config.LOGIN_NIGHT_RESUME and resumable_progress()):
@@ -1013,7 +1016,8 @@ class App(QtWidgets.QMainWindow):
                         self.log("[무인] 쿨다운 종료 — 미완료 계정 로그인 재개(1회)")
                         run_full(il, naver, ai_key=key, date_from=df, date_to=dt,
                                  get_password=self._account_pw, resume=True, carry_forward=carry,
-                                 grow_keywords=False, skip_ranks=True, keywords_off=False, on_log=self.log)
+                                 grow_keywords=False, skip_ranks=True, keywords_off=False, on_log=self.log,
+                                 gsheet_output_url=gs_out)
                 if not stop.is_set():
                     track_ranks_stage(semi=True, should_stop=stop.is_set, on_log=self.log)
                 # (결과는 구글 시트 통합으로 결과시트에 직접 반영 — rclone 업로드 제거)

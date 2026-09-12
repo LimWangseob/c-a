@@ -154,12 +154,21 @@ F 모니터링종료 | G 상태`. **자동열=A·B·C·G**(프로그램), **직�
 - [x] **마케팅 D~F 값은 어떤 경로에서도 안 씀**(단위테스트로 불변식 검증). 동시편집 안전.
 - [x] 서식: 제목 병합·헤더색·마케팅 안내색(FFF2CC)·틀고정(2행·A~C 3열)·열너비·B열 HYPERLINK.
 
-#### Phase 3b — 통계 시트 쓰기 (다음, 최대 작업량)
-- [ ] `workbook.py`의 상품블록 서식을 Sheets API `batchUpdate`로 재현: 상품블록·일자 가로 누적·키워드
-      노출순위·재고·마케팅 배경색(FCE4D6)·하단 테두리·틀고정·"👈 계정 목록" 복귀 링크·상태.
-- [ ] **시계열 이어쓰기**: 기존 시트 날짜 컬럼 읽어 새 날짜만 추가(키워드 동결). openpyxl 마스터와 동치.
-- [ ] 데이터 모델/규칙(`_key`·`marketing_of`·`_mkt_status`·`reconcile_account`·`_product_rows`)을 렌더러와
-      분리해 openpyxl·Sheets 양쪽이 공유(리팩터). `IndexRow` 로스터를 파이프라인이 채워 `sync_index`에 투입.
+#### Phase 3b — 통계 시트 쓰기 (✅ 완료 2026-09-13 — **openpyxl 시트 미러링** 방식, 사용자 확정)
+- [x] **방식 = openpyxl 마스터 미러링**(규칙 재구현·이중 렌더러 대신, 이미 완성된 openpyxl 시트를 그대로 번역).
+      `src/coupang_analytics/gsheet_stats.py`: `worksheet_to_requests(ws, sheet_id, index_gid)`(순수·테스트) —
+      openpyxl 사업자 시트 1개 → Sheets `batchUpdate`(병합해제→그리드/틀고정→값+서식 updateCells→병합 재적용→
+      열너비/행높이). 색(ARGB→0~1)·글꼴·정렬·줄바꿈·테두리·숫자서식 번역. "👈 계정 목록" 복귀 링크는 구글
+      `계정목록` gid 로 `=HYPERLINK("#gid=..&range=A1", …)` 재연결. `push_statistics(client, wb)` — 사업자 시트만
+      **전체 교체**(프로그램 전용이라 안전), 특수시트 제외. `GSheetClient.ensure_sheets([...])` 로 대량 최초 생성 429 회피.
+- [x] **시계열 이어쓰기** = openpyxl 마스터가 이미 날짜 컬럼을 누적(키워드 동결)하므로 그 시트를 미러링하면 그대로 재현.
+- [x] **파이프라인 배선**: `run_full(..., gsheet_output_url=)`(UI가 `gsheet/output_url` 전달·수동/무인 3개 호출부).
+      최종 저장(마스터·스냅샷) 직후 `_push_gsheet`: `push_statistics` → `gsheet_index.roster_from_workbook(wb, gids)`
+      → `sync_index`(계정목록 증분, 마케팅 D~F 보존). 실패는 **로그로 명시**하되 xlsx는 이미 저장(비치명적).
+- [x] **안정키 규약 통일(§7)**: 블록 생성 시 **등록상품명 보존**(`workbook.set_registered_name`/`registered_name`,
+      `_상품ID` 숨김시트 6열, `set_display_name` 후에도 불변). `IndexRow.key = marketing_key(계정ID+등록상품명)`
+      → 노출명이 바뀌어도 3c 마케팅 머지·행 매칭 안정. `OutputWorkbook.product_roster()`/`status_of()` 공개.
+- 검증: `tools/verify_gsheet_offline.py` [5][6] 추가(미러링 요청·등록명 보존·로스터 안정키). 라이브(서비스계정+실제 시트)는 사무실.
 
 #### Phase 3c — 마케팅 역방향 머지 (✅ 완료 2026-09-13)
 - [x] `gsheet_index.read_marketing(client)` — 출력 `계정목록`의 직원 입력 D~F를 {안정키:(시작,종료,모니터링)}로
@@ -236,12 +245,13 @@ workbook.py 상품블록 서식 → batchUpdate(일자 가로누적·키워드 �
 - UI(`ui/app_qt.py`) 설정 탭: "구글 시트 연동" 카드(SA키·입력/출력 링크·연결확인·"관리대장에서 불러오기"). rclone 제거.
 - 의존성(requirements.txt·spec) 추가. QSettings 키: `gsheet/input_url`·`gsheet/output_url`·`input/source`.
 
-**아직 안 된 것(=Phase 3b가 할 일):**
-- `sync_index`(계정목록 쓰기)를 **파이프라인이 아직 호출 안 함** — 통계 시트 로스터를 만드는 3b가 있어야 배선됨.
-  파이프라인이 `IndexRow` 리스트(사업자·노출명·계정ID·상태·안정키·링크 gid/행)를 채워 `sync_index`에 투입할 것.
-- 통계 시트 자체가 구글에 아직 안 써짐(openpyxl `workbook.py`만 존재).
-- 안정키 규약 통일: `gsheet_index.marketing_key(account_id, product)` = 계정ID+등록상품명. 3b에서 IndexRow.key도
-  이 규약으로(노출명 아님) 넣어야 3c 머지와 매칭됨.
+**Phase 3b 완료(2026-09-13) — 위에서 미해결이던 항목 전부 처리됨:**
+- ✅ `sync_index` 파이프라인 배선 완료(`_push_gsheet` → `roster_from_workbook` → `sync_index`).
+- ✅ 통계 시트 구글 쓰기 완료(`gsheet_stats.push_statistics`, openpyxl 미러링).
+- ✅ 안정키 규약 통일(등록상품명 보존 → `IndexRow.key = marketing_key(계정ID+등록상품명)`).
+
+**남은 것(Phase 4 — 마무리):** 라이브 검증(사무실), Tkinter 폴백(`ui/app.py`) 동기화, 동시성/쿼터 실측,
+CLAUDE.md·DESIGN.md 반영. 첫 실행 시 시트 대량 생성 + 사업자별 batchUpdate 버스트의 실제 429 여부 라이브 확인 필요.
 
 **리팩터 지침(3b 핵심):** `workbook.py`의 "데이터 모델/규칙"(`_key`·`_display_name`·`marketing_of`·`_mkt_status`·
 `reconcile_account`·`_product_rows`·수집주기)과 "openpyxl 렌더링"을 분리 → 두 렌더러(openpyxl·Sheets)가 규칙 공유.
