@@ -25,7 +25,6 @@ from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics.input_list import parse_input_list, parse_password_file  # noqa: E402
 from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
-from coupang_analytics.kw_shopping import NaverShopCredentials  # noqa: E402
 from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_credentials_file  # noqa: E402
 from coupang_analytics.pipeline import (_interruptible_sleep, master_exists,  # noqa: E402
                                         resumable_progress, run_full,
@@ -164,7 +163,6 @@ class App(QtWidgets.QMainWindow):
         self.setWindowTitle("쿠팡 애널리틱스")
         self.input_list = None
         self.naver_creds = None
-        self.naver_shop = None
         self.ai_key = ""
         self.creds_store = CredStore()
         self.product_business: dict[str, str] = {}
@@ -233,12 +231,10 @@ class App(QtWidgets.QMainWindow):
         self.input_lbl = QtWidgets.QLabel("(입력 분석용 엑셀 미선택)")
         self.naver_lbl = QtWidgets.QLabel("(네이버 API 키 미선택)")
         self.openai_lbl = QtWidgets.QLabel("(OpenAI 키 미설정 — 키워드 추출 불가)")
-        self.shop_lbl = QtWidgets.QLabel("(선택) 네이버쇼핑 키 미설정 — 경쟁강도 미반영")
         rows = [
             ("입력 엑셀 열기", self.load_input, self.input_lbl),
             ("네이버 API 키 열기", self.load_naver, self.naver_lbl),
             ("OpenAI(ChatGPT) API 키 입력", self.load_openai, self.openai_lbl),
-            ("(선택) 네이버쇼핑 키 입력", self.load_naver_shop, self.shop_lbl),
         ]
         for i, (text, cmd, lbl) in enumerate(rows):
             b = QtWidgets.QPushButton(text)
@@ -629,23 +625,6 @@ class App(QtWidgets.QMainWindow):
         except Exception as exc:
             self.log(f"[OpenAI] 입력됨(저장 실패: {exc.__class__.__name__})")
 
-    def load_naver_shop(self):
-        cid, ok1 = QtWidgets.QInputDialog.getText(self, "네이버쇼핑 Client ID", "개발자센터 Client ID")
-        if not (ok1 and cid):
-            return
-        sec, ok2 = QtWidgets.QInputDialog.getText(
-            self, "네이버쇼핑 Client Secret", "개발자센터 Client Secret", QtWidgets.QLineEdit.Password)
-        if not (ok2 and sec):
-            return
-        self.naver_shop = NaverShopCredentials(cid.strip(), sec.strip())
-        self.shop_lbl.setText("(네이버쇼핑 키: 입력됨 — 경쟁강도 반영)")
-        try:
-            self.creds_store.set_password("__naver_shop__", json.dumps(
-                {"client_id": self.naver_shop.client_id, "client_secret": self.naver_shop.client_secret}))
-            self.log("[네이버쇼핑] 키 입력·저장됨 (경쟁강도 선정 반영)")
-        except Exception as exc:
-            self.log(f"[네이버쇼핑] 입력됨(저장 실패: {exc.__class__.__name__})")
-
     def _load_saved_secrets(self):
         try:
             nj = self.creds_store.get_password("__naver__")
@@ -656,15 +635,6 @@ class App(QtWidgets.QMainWindow):
             self.naver_creds = NaverCredentials(d["customer_id"], d["api_key"], d["secret_key"])
             self.naver_lbl.setText(f"저장된 네이버 키 (고객 {d['customer_id']})")
             self.log("[네이버] 저장된 키 자동 로드됨")
-        try:
-            sj = self.creds_store.get_password("__naver_shop__")
-        except Exception:
-            sj = None
-        if sj:
-            d = json.loads(sj)
-            self.naver_shop = NaverShopCredentials(d["client_id"], d["client_secret"])
-            self.shop_lbl.setText("(네이버쇼핑 키: 저장됨 — 경쟁강도 반영)")
-            self.log("[네이버쇼핑] 저장된 키 자동 로드됨")
         try:
             ak = self.creds_store.get_password("__openai__")
         except Exception:
