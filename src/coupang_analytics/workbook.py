@@ -12,7 +12,7 @@
 """
 from __future__ import annotations
 
-from datetime import date as _date, datetime as _dt
+from datetime import date as _date, datetime as _dt, timedelta as _td
 from pathlib import Path
 
 import openpyxl
@@ -655,6 +655,54 @@ class OutputWorkbook:
         if (s or e or m):
             return "마케팅중" if (s and e and s <= today <= e) else ""
         return ""
+
+    # ── 수집 주기(마케팅 기반) ────────────────────────────────
+    def has_marketing(self) -> bool:
+        """마케팅 기간이 한 건이라도 설정돼 있는가(수집 주기 게이팅 활성 조건). 미설정이면 현행대로 매일."""
+        ws = self._mkt_ws()
+        if ws is None:
+            return False
+        for r in range(2, ws.max_row + 1):
+            if any(_norm(ws.cell(r, c).value) for c in (3, 4, 5)):
+                return True
+        return False
+
+    def account_cadence(self, biz: str, target_iso: str) -> str:
+        """그 계정의 오늘(target) 수집 주기: 'daily'(매일)·'every3'(3일1회)·'stop'(중단).
+
+        상품별 마케팅으로 판정 후 **계정 단위로 집계**(로그인은 계정 단위): 마케팅 시작~+1개월 상품이
+        하나라도 있으면 계정 전체 매일. 모니터링 종료 지난 상품은 중단, 나머지·미설정은 3일1회.
+        전 상품이 중단이면 계정 중단."""
+        target = _parse_date(target_iso)
+        states: list[str] = []
+        for p in self.products_of(biz):
+            s, e, m = (_parse_date(x) for x in self.marketing_of(biz, p))
+            if not (s or e or m):
+                states.append("every3"); continue          # 마케팅 미설정 = 기본 추적
+            if m and target and target > m:
+                states.append("stop"); continue            # 모니터링 종료일 이후 = 중단
+            if s and target and s <= target <= s + _td(days=30):
+                states.append("daily"); continue           # 마케팅 시작~1개월 = 매일
+            states.append("every3")
+        if not states:
+            return "every3"                                 # 상품 없음(신규 계정 등) = 기본 수집
+        if "daily" in states:
+            return "daily"
+        if "every3" in states:
+            return "every3"
+        return "stop"
+
+    def account_due(self, biz: str, target_iso: str) -> tuple[bool, str]:
+        """오늘(target) 이 계정을 수집할지 (여부, 사유). every3는 마지막 수집일과 3일 이상 벌어졌을 때만."""
+        cad = self.account_cadence(biz, target_iso)
+        if cad == "stop":
+            return False, "모니터링 종료(수집 중단)"
+        if cad == "daily":
+            return True, "마케팅 기간(매일)"
+        last, target = _parse_date(self.latest_date(biz)), _parse_date(target_iso)
+        if last and target and (target - last).days < 3:
+            return False, f"3일 주기(최근 수집 {self.latest_date(biz)})"
+        return True, "3일 주기 도래"
 
     def _product_rows(self) -> list[tuple[str, str, int | None, bool]]:
         """계정 목록에 실을 상품 로스터 — (사업자, 상품, 그 상품 블록 헤더행|None, 데이터시트有無).

@@ -698,6 +698,13 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         if a.account_id in done:                  # 완료 계정 → 건너뜀
             log(f"== [{i}/{total}] {a.label} — 이미 완료, 건너뜀 ==")
             continue
+        if carry and wb.has_marketing():          # 마케팅 설정됐을 때만 주기 게이팅(미설정=현행 매일 유지)
+            due, why = wb.account_due(a.label, date_to)
+            if not due:
+                log(f"== [{i}/{total}] {a.label} — {why} → 오늘 수집 안 함(로그인 생략) ==")
+                done.add(a.account_id)            # 오늘은 의도적 스킵으로 '처리됨'(완주 판정·재개 일관)
+                _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks)
+                continue
         log(f"== [{i}/{total}] {a.label} (계정ID: {a.account_id}) ==")
         try:   # 한 계정의 어떤 오류(수집·워크북쓰기)도 전체를 막지 않게 계정 전체를 격리
             report_acc, metrics, inv_by_vid = _login_and_discover(
