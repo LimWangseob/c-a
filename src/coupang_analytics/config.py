@@ -132,6 +132,11 @@ LOGIN_BLOCK_GRACE_SEC = 8        # 무인 시 Akamai 차단 감지 후 이 초�
 # Akamai IP 접근차단은 이걸로도 대부분 못 뚫는다(지문위조 금지) — 소프트 차단(폼 되돌아옴)에만 효과 기대.
 LOGIN_SEMI_ON_BLOCK = True
 LOGIN_SEMI_WAIT_SEC = 90         # 그 1회 재시도의 로그인 완료 최대 대기(초, 창 표시 상태)
+# 무인 야간(--auto): ① 실행 후 차단 등으로 미완료 계정이 남으면 **쿨다운 후 남은 계정만 1회 재개**.
+# ⚠️ 제출 총량을 억제(위탁계정 잠금 방지)하려 **밤에 딱 1회만** 재개한다(무한 재시도 금지). 낮 재실행이나
+# 서킷브레이커와 별개 — Akamai IP 차단이 쿨다운 사이 풀리면 그때 남은 계정을 건지는 목적.
+LOGIN_NIGHT_RESUME = True
+LOGIN_NIGHT_RESUME_COOLDOWN_SEC = 1800   # 재개 전 쿨다운(초). 30분(사용자 지정)
 
 # ── 출력 파일 ──────────────────────────────────────────────────
 OUTPUT_FILE_PREFIX = "쿠팡데이타분석"   # {prefix}_통계.xlsx / _통계_yymmdd.xlsx(스냅샷)

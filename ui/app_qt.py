@@ -27,7 +27,8 @@ from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
 from coupang_analytics.kw_shopping import NaverShopCredentials  # noqa: E402
 from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_credentials_file  # noqa: E402
-from coupang_analytics.pipeline import (master_exists, resumable_progress, run_full,  # noqa: E402
+from coupang_analytics.pipeline import (_interruptible_sleep, master_exists,  # noqa: E402
+                                        resumable_progress, run_full,
                                         select_keywords_stage, track_ranks_stage)
 from coupang_analytics.rank import make_matcher, organic_rank, warmup  # noqa: E402
 
@@ -875,6 +876,18 @@ class App(QtWidgets.QMainWindow):
                 run_full(il, naver, ai_key=key, date_from=df, date_to=dt,
                          get_password=self._account_pw, resume=resume, carry_forward=carry,
                          grow_keywords=False, skip_ranks=True, keywords_off=False, on_log=self.log)
+                # 야간 1회 쿨다운-재개: 차단 등으로 미완료 계정이 남았으면(진행중 파일 잔존) 30분 쉬고
+                # **남은 계정만 1회 더** 시도(제출 총량 억제 = 위탁계정 잠금 방지, 무한 재시도 금지).
+                if (not stop.is_set() and config.LOGIN_NIGHT_RESUME and resumable_progress()):
+                    mins = config.LOGIN_NIGHT_RESUME_COOLDOWN_SEC // 60
+                    self.log(f"[무인] 차단 등 미완료 계정 남음 → {mins}분 쿨다운 후 1회 재개(남은 계정만)")
+                    _interruptible_sleep(config.LOGIN_NIGHT_RESUME_COOLDOWN_SEC, stop.is_set,
+                                         self.log, resume_label=" — 로그인 재개")
+                    if not stop.is_set():
+                        self.log("[무인] 쿨다운 종료 — 미완료 계정 로그인 재개(1회)")
+                        run_full(il, naver, ai_key=key, date_from=df, date_to=dt,
+                                 get_password=self._account_pw, resume=True, carry_forward=carry,
+                                 grow_keywords=False, skip_ranks=True, keywords_off=False, on_log=self.log)
                 if not stop.is_set():
                     track_ranks_stage(semi=True, should_stop=stop.is_set, on_log=self.log)
             except Exception as exc:                # 무인: 어떤 오류도 앱을 매달아두지 않게 로그 후 종료로
