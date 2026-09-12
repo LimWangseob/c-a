@@ -18,7 +18,7 @@ from PySide6 import QtCore, QtWidgets
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from coupang_analytics import config, keyword_store  # noqa: E402
+from coupang_analytics import config, gsheet, keyword_store  # noqa: E402
 from coupang_analytics.apppaths import base_dir as app_base_dir, set_workdir  # noqa: E402
 from coupang_analytics.browser import WingBrowser, find_chrome, reap_orphan_chrome  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
@@ -248,6 +248,17 @@ class App(QtWidgets.QMainWindow):
             b.setMinimumWidth(210)
             grid.addWidget(b, i, 0)
             grid.addWidget(lbl, i, 1)
+        # 구글 시트(공개 링크)에서 바로 불러오기 — URL 저장 → 무인 실행이 매번 최신본을 가져온다.
+        gs_row = len(rows)
+        self.gsheet_edit = QtWidgets.QLineEdit()
+        self.gsheet_edit.setPlaceholderText("구글 시트 공유 링크(보기 권한) 붙여넣기")
+        self.gsheet_edit.setText(
+            QtCore.QSettings("coupang-analytics", "ui").value("input/gsheet_url", "", type=str))
+        gs_btn = QtWidgets.QPushButton("구글시트 불러오기")
+        gs_btn.setMinimumWidth(210)
+        gs_btn.clicked.connect(self.load_input_gsheet)
+        grid.addWidget(gs_btn, gs_row, 0)
+        grid.addWidget(self.gsheet_edit, gs_row, 1)
         grid.setColumnStretch(1, 1)
         v.addWidget(fk)
         # 키워드/순위 등 세부 설정값 입력란은 제거(사용자 미사용 · 영속 저장도 안 됨). 값은 config.py 에서 관리.
@@ -532,10 +543,37 @@ class App(QtWidgets.QMainWindow):
         if not path:
             return
         self._remember_dir("input", path)
-        self._apply_input(path)
+        self._apply_input(path, label=Path(path).name)
+        s = QtCore.QSettings("coupang-analytics", "ui")
+        s.setValue("file/input", str(path))   # 무인 자동로드용(로컬 파일 소스)
+        s.remove("input/gsheet_url")           # 로컬 파일을 열면 구글시트 소스는 해제
 
-    def _apply_input(self, path) -> bool:
-        """입력 엑셀 파싱·상품목록·비번 저장(load_input 과 무인 자동로드 공용). 성공 시 마지막 경로 영속."""
+    def load_input_gsheet(self):
+        """구글 시트(공개 링크)에서 입력 대장을 내려받아 로드. URL 은 영속 → 무인 실행이 매번 최신본을 가져온다."""
+        url = (self.gsheet_edit.text() or "").strip()
+        if not url:
+            QtWidgets.QMessageBox.warning(self, "URL 필요", "구글 시트 공유 링크(또는 ID)를 입력하세요.")
+            return
+        self.log("[입력] 구글 시트에서 불러오는 중…")
+
+        def task():
+            dest = app_base_dir() / "data" / "_gsheet_input.xlsx"
+            gsheet.download_xlsx(url, dest)
+            return str(dest)
+
+        def done(path):
+            try:
+                self._apply_input(path, label="구글시트")
+                QtCore.QSettings("coupang-analytics", "ui").setValue("input/gsheet_url", url)
+            finally:
+                try:                       # 평문 비번이 담긴 임시 파일은 파싱 직후 삭제
+                    Path(path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+        self.run_bg(task, on_done=done, btn=None)
+
+    def _apply_input(self, path, label: str | None = None) -> bool:
+        """입력 엑셀 파싱·상품목록·비번 저장(파일/구글시트/무인 공용). 영속은 호출부가 담당."""
         il = parse_input_list(path)
         self.input_list = il
         self.product_business.clear()
@@ -546,17 +584,28 @@ class App(QtWidgets.QMainWindow):
                 self.product_business[p.name] = a.business_name
         self.kw_product.clear()
         self.kw_product.addItems(products)
-        self.input_lbl.setText(f"{Path(path).name}  (계정 {len(il.accounts)}, 상품 {len(products)})")
+        self.input_lbl.setText(f"{label or Path(path).name}  (계정 {len(il.accounts)}, 상품 {len(products)})")
         self.log(f"[입력] {len(il.accounts)}계정 · 상품 {len(products)}개 로드 · 오류 {len(il.errors)}건")
         for e in il.errors[:5]:
             self.log(f"   - 입력오류: {e}")
         self._store_passwords_from(path, quiet=True)
-        QtCore.QSettings("coupang-analytics", "ui").setValue("file/input", str(path))  # 무인 자동로드용
         return True
 
     def _auto_load_input(self) -> bool:
-        """마지막으로 연 입력 엑셀을 자동 로드(무인 실행·재시작 후). 없거나 실패하면 False."""
-        path = QtCore.QSettings("coupang-analytics", "ui").value("file/input", "", type=str)
+        """입력 자동 로드(무인 실행·재시작 후): 구글시트 URL 이 있으면 최신본을 내려받아, 없으면 로컬 파일."""
+        s = QtCore.QSettings("coupang-analytics", "ui")
+        url = s.value("input/gsheet_url", "", type=str)
+        if url:
+            try:
+                dest = app_base_dir() / "data" / "_gsheet_input.xlsx"
+                gsheet.download_xlsx(url, dest)
+                ok = self._apply_input(str(dest), label="구글시트")
+                Path(dest).unlink(missing_ok=True)   # 평문 비번 임시파일 삭제
+                return ok
+            except Exception as exc:
+                self.log(f"[입력] 구글시트 자동 로드 실패({exc.__class__.__name__}): {exc}")
+                return False
+        path = s.value("file/input", "", type=str)
         if not (path and Path(path).exists()):
             return False
         try:
