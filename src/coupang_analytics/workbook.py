@@ -18,6 +18,7 @@ import openpyxl
 from openpyxl.cell.cell import Cell
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.hyperlink import Hyperlink
 
 from . import config
 
@@ -580,7 +581,10 @@ class OutputWorkbook:
                     if b == biz and self.wb[biz].cell(row, col).value in (None, ""):
                         blank += 1
             link = ws.cell(r, 1, biz)
-            link.hyperlink = f"#'{biz}'!A1"              # 같은 통합문서 내 시트로 점프
+            # 같은 통합문서 내 시트로 점프(내부 링크). ⚠ target='#...' 문자열은 Excel 이 링크 오류를 내는
+            # 경우가 있어(특히 (주)·공백 등 특수문자 시트명) **location** 속성으로 지정한다. 시트명 안의
+            # 작은따옴표는 규칙상 2개로 이스케이프.
+            link.hyperlink = Hyperlink(ref=link.coordinate, location=f"'{biz.replace(chr(39), chr(39) * 2)}'!A1")
             link.font = link_font; link.alignment = left; link.border = box
             # ⚠ 계정ID만 표시(비밀번호는 어떤 경우도 저장·표시 안 함)
             for c, v in ((2, self.account_id_of(biz)), (3, len(prods)),
