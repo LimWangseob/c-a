@@ -487,9 +487,7 @@ class OutputWorkbook:
                 # → 마지막 블록은 end 행 자체의 bottom 에 그려 새 행을 만들지 않는다.
                 edge(ws, maxc, hr, "top")
                 if i + 1 < len(headers):
-                    edge(ws, maxc, end + 1, "top")     # 사이 블록: 기존 구분 빈 행 상단선
-                else:
-                    edge(ws, maxc, end, "bottom")       # 마지막 블록: 마지막 행 하단선(새 행 안 만듦)
+                    edge(ws, maxc, end + 1, "top")     # 사이 블록: 기존 구분 빈 행 상단선(비병합 행이라 정상)
                 # 병합(마지막) — 세로/가로 병합은 서식·경계선 적용 뒤에
                 merge(ws, hr, 1, m_end, 2)
                 merge(ws, hr, _COL_NAME, m_end, _COL_SEARCH)
@@ -497,3 +495,17 @@ class OutputWorkbook:
                     merge(ws, kh, 1, end, 2)
                     for r in range(kh, end + 1):
                         merge(ws, r, _COL_NAME, r, _COL_SEARCH - 1)
+                # 마지막 블록 하단 굵은선(새 행 안 만듦). ⚠ openpyxl 은 **세로 병합의 하단 테두리를
+                # '앵커(top-left) 셀'의 border 로 렌더**한다 → 마지막행 셀에 그려도 A:B 세로병합(col1·2)은
+                # 얇게 남던 버그(사용자 관찰). 그래서 단일셀·가로병합은 마지막행에, A:B 세로병합은 그 앵커
+                # (kh 또는 hr, col1)에 굵은 하단선을 지정한다.
+                if i + 1 >= len(headers):
+                    edge(ws, maxc, end, "bottom")       # 단일셀 + 가로병합(C:E, 앵커=마지막행) 하단
+                    ab_row = kh if kh else hr           # A:B 세로병합 앵커 행
+                    ab = ws.cell(ab_row, 1).border
+                    ws.cell(ab_row, 1).border = Border(left=ab.left, right=ab.right,
+                                                       top=ab.top, bottom=thick)
+                    if not kh:                          # 키워드 없는 블록: C:F 세로병합 앵커도
+                        cf = ws.cell(hr, _COL_NAME).border
+                        ws.cell(hr, _COL_NAME).border = Border(left=cf.left, right=cf.right,
+                                                               top=cf.top, bottom=thick)
