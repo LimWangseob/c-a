@@ -30,6 +30,9 @@ class Product:
     options: list[Option] = field(default_factory=list)
     title: str = ""                 # 고객이 보는 전체 노출제목(발견 시 채움). 비면 name 사용
     kind: str = ""                  # 계약 상품(로켓그로스)/개인 상품(판매자배송) — 발견 시 API로 판별
+    mkt_start: str = ""             # 마케팅 시작일(관리대장 입력) — 그 상품만 매일 수집·비고·배경색
+    mkt_end: str = ""               # 마케팅 종료일
+    mkt_mon: str = ""               # 모니터링 종료일(이후 수집 중단)
 
     @property
     def display_title(self) -> str:
@@ -96,11 +99,28 @@ def _column_index(header: list[str]) -> dict[str, int]:
         idx[name] = header.index(name)
     if config.IN_COL_REPRESENTATIVE in header:      # 대표자명은 선택
         idx[config.IN_COL_REPRESENTATIVE] = header.index(config.IN_COL_REPRESENTATIVE)
+    norm = [h.lower().replace(" ", "") for h in header]   # 마케팅 컬럼(선택)은 별칭으로 탐색
+    for key, aliases in (("mkt_start", config.IN_ALIASES_MKT_START),
+                         ("mkt_end", config.IN_ALIASES_MKT_END),
+                         ("mkt_mon", config.IN_ALIASES_MKT_MON)):
+        i = _alias_index(norm, aliases)
+        if i is not None:
+            idx[key] = i
     return idx
 
 
 def _cell(row, i):
     return row[i] if (i is not None and len(row) > i) else None
+
+
+def _norm_date(v) -> str:
+    """마케팅 날짜 셀 → 문자열. 엑셀 날짜(datetime)면 YYYY-MM-DD, 아니면 일반 정규화."""
+    from datetime import date as _d, datetime as _dtm
+    if isinstance(v, _dtm):
+        return v.date().isoformat()
+    if isinstance(v, _d):
+        return v.isoformat()
+    return _norm(v)
 
 
 def _finalize(product: Product | None) -> None:
@@ -186,6 +206,7 @@ def parse_input_list(path: str | Path) -> InputList:
     i_biz = idx[config.IN_COL_BUSINESS]
     i_acct, i_prod = idx[config.IN_COL_ACCOUNT_ID], idx[config.IN_COL_PRODUCT]
     i_opt = i_vid = i_pid = None                     # 옵션/vid/pid 미파싱(입력 정리 — 라이브에서 vid 확보)
+    i_ms, i_me, i_mm = idx.get("mkt_start"), idx.get("mkt_end"), idx.get("mkt_mon")   # 마케팅(선택)
 
     accounts: list[Account] = []
     by_id: dict[str, Account] = {}          # 같은 계정ID 재등장 시 상품을 이어 붙이기 위한 색인
@@ -237,7 +258,9 @@ def parse_input_list(path: str | Path) -> InputList:
                 struck.append(f"상품 '{prod}' — {reason}")
             else:
                 prod_cancelled = False
-                current_prod = Product(prod)
+                current_prod = Product(prod, mkt_start=_norm_date(_cell(row, i_ms)),
+                                       mkt_end=_norm_date(_cell(row, i_me)),
+                                       mkt_mon=_norm_date(_cell(row, i_mm)))
                 if current_acct is None:
                     errors.append(f"{row_no}행: 소속 계정 없이 상품 '{prod}'")
                 else:

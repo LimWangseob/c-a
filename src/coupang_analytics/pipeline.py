@@ -492,6 +492,7 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
         # 상품 정체성 = vendorItemId 앵커. 이미 있는 블록(③이 정확 노출명으로 바꿔뒀을 수 있음)을 vid 로
         # 찾아 그 이름으로 이어간다(발견명이 매일 달라도 중복 블록·시계열 단절 방지). 없으면 발견명 사용.
         pname = wb.resolve_block_name(biz, vids0) or product.name
+        wb.set_marketing(biz, pname, product.mkt_start, product.mkt_end, product.mkt_mon)  # 대장 마케팅 → 저장(원본 소스)
         # 상품 단위 수집 주기(마케팅 설정 있을 때만): 오늘 대상 아닌 상품은 오늘치 기록 생략(마케팅 상품만 매일).
         if wb.has_marketing():
             _due, _why = wb.product_due(biz, pname, date_iso)

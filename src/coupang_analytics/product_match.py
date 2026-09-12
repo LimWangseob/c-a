@@ -97,7 +97,9 @@ def scope_to_ledger(ledger: list[Product], discovered: list[Product]) -> tuple[l
         if d is not None:
             out.append(Product(
                 name=_title(d), title=_title(d), kind=d.kind,
-                options=[Option(o.label, list(o.vendor_item_ids), list(o.product_ids)) for o in d.options]))
+                options=[Option(o.label, list(o.vendor_item_ids), list(o.product_ids)) for o in d.options],
+                mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon))   # 대장 마케팅 이월
         else:
-            out.append(Product(name=lp.name, title=lp.name, kind=config.KIND_PERSONAL, options=[Option("")]))
+            out.append(Product(name=lp.name, title=lp.name, kind=config.KIND_PERSONAL, options=[Option("")],
+                               mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon))
     return out, len(res)

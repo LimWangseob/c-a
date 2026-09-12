@@ -156,6 +156,10 @@ IN_COL_REPRESENTATIVE = "대표자명"   # 선택
 IN_COL_BUSINESS = "사업자명"
 IN_COL_ACCOUNT_ID = "계정아이디"
 IN_COL_PRODUCT = "상품명"
+# 마케팅 기간(선택) — 관리대장 상품 행에 있으면 파싱해 상품별 수집주기·비고·배경색 구동. 헤더 별칭(정규화=소문자·공백제거).
+IN_ALIASES_MKT_START = ("마케팅시작일", "마케팅시작", "mktstart")
+IN_ALIASES_MKT_END = ("마케팅종료일", "마케팅종료", "mktend")
+IN_ALIASES_MKT_MON = ("모니터링종료일", "모니터링종료", "monitorend", "monend")
 
 # ── 상품별 판매 리포트 헤더 (필수 매칭 대상) ────────────────────
 RP_COL_PRODUCT = "상품명"

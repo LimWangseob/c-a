@@ -766,7 +766,7 @@ class OutputWorkbook:
         계정이 100개여도 한눈에 보고 클릭 한 번으로 이동하도록. 데이터 시트는 안 건드리고 목차만 추가(멱등:
         매번 지우고 다시 만든다). 순위 공란수 = 최근 일자 컬럼에서 아직 못 잰(공란) 키워드 수(재측정 대상).
         """
-        self._sync_marketing_from_index()   # 사용자가 입력한 마케팅 기간을 먼저 숨김시트로 보존
+        # (마케팅 원본 = 관리대장 → 파이프라인이 set_marketing 으로 _마케팅 갱신. 계정목록은 그 값을 '표시'만.)
         for legacy in (_INDEX_SHEET, "목차"):   # 새 이름 + 레거시('목차') 모두 제거(옛 시트가 계정으로 오인 방지)
             if legacy in self.wb.sheetnames:
                 del self.wb[legacy]
@@ -787,14 +787,15 @@ class OutputWorkbook:
         n_prod = sum(1 for _b, p, _h, hs in rows if hs and p)
 
         ws.cell(1, 1, f"{_INDEX_SHEET} · 상품 {n_prod}개").font = title_font
-        ws.merge_cells("A1:H1")
+        ws.merge_cells("A1:G1")
         ws.cell(1, 1).alignment = center
+        # 마케팅 3열은 **관리대장에서 입력**(원본) → 여기선 표시. 헤더 안내로 (관리대장) 표기.
         heads = ["사업자", "상품명(클릭 이동)", "계정ID",
-                 _MKT_COLS[0], _MKT_COLS[1], _MKT_COLS[2], "상태", "순위 공란"]
+                 _MKT_COLS[0], _MKT_COLS[1], _MKT_COLS[2], "상태"]
         for c, h in enumerate(heads, 1):
             x = ws.cell(2, c, h)
             x.font = bold; x.alignment = center; x.border = box
-            x.fill = mkt_fill if 4 <= c <= 6 else head_fill   # 4~6열=마케팅 입력열(노랑)
+            x.fill = mkt_fill if 4 <= c <= 6 else head_fill   # 4~6열=마케팅(관리대장 값 표시)
         for r, (biz, prod, hdr, has_sheet) in enumerate(rows, start=3):
             ws.cell(r, 1, biz).font = font if has_sheet else gray_font
             pcell = ws.cell(r, 2, prod if prod else ("(미수집)" if not has_sheet else "(상품없음)"))
@@ -807,22 +808,14 @@ class OutputWorkbook:
             ws.cell(r, 3, self.account_id_of(biz)).font = font if has_sheet else gray_font
             start, end, mon = self.marketing_of(biz, prod)
             status = self._mkt_status(start, end, mon) if has_sheet else "미수집"
-            blank = ""
-            if has_sheet and prod:
-                date = self.latest_date(biz)
-                col = self._date_col.get(biz, {}).get(date) if date else None
-                if col is not None:
-                    blank = sum(1 for (b, p, kw), row in self._kw_row.items()
-                                if b == biz and p == prod and self.wb[biz].cell(row, col).value in (None, ""))
-            for c, v in ((4, start), (5, end), (6, mon)):   # 마케팅 입력열(노랑 배경·편집)
+            for c, v in ((4, start), (5, end), (6, mon)):   # 마케팅(관리대장 값 표시)
                 x = ws.cell(r, c, v); x.font = font; x.alignment = center; x.border = box; x.fill = mkt_fill
             st = ws.cell(r, 7, status); st.alignment = center; st.border = box
             st.font = red_bold if status == "마케팅중" else (gray_font if status in ("미수집", "종료") else font)
-            bl = ws.cell(r, 8, blank); bl.font = font; bl.alignment = center; bl.border = box
             for c in (1, 2, 3):
                 ws.cell(r, c).alignment = left if c == 2 else center
                 ws.cell(r, c).border = box
-        for c, w in {1: 22, 2: 40, 3: 15, 4: 13, 5: 13, 6: 14, 7: 10, 8: 9}.items():
+        for c, w in {1: 22, 2: 40, 3: 15, 4: 13, 5: 13, 6: 14, 7: 10}.items():
             ws.column_dimensions[get_column_letter(c)].width = w
         ws.row_dimensions[1].height = 21
         ws.freeze_panes = "D3"                            # 제목·헤더 + 사업자/상품/계정ID 고정(가로 스크롤 시)
