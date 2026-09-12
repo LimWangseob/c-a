@@ -148,15 +148,14 @@ UI_LOG_MAX_LINES = 5000
 # 로그 파일이 이 크기를 넘으면 .1 로 회전(직전 1세대 보관) → 디스크 무한 증가 방지.
 UI_LOG_FILE_MAX_BYTES = 20_000_000   # 20MB
 
-# ── 입력 분석용 엑셀 헤더 (필수) ────────────────────────────────
-IN_COL_REPRESENTATIVE = "대표자명"
+# ── 입력 분석용 엑셀 헤더 ────────────────────────────────────────
+# **가져오는 값 = 사업자명·계정아이디·상품명(필수 3개).** 대표자명은 선택(빈 사업자명 시트 라벨 폴백용).
+# (비밀번호는 별도 경로=parse_password_file→DPAPI 암호화. 옵션/vendorItemId/productId 는 미파싱 — vid 는
+#  라이브 판매수집에서 확보하므로 입력에서 안 가져온다. 2026-09-12 입력 정리.)
+IN_COL_REPRESENTATIVE = "대표자명"   # 선택
 IN_COL_BUSINESS = "사업자명"
 IN_COL_ACCOUNT_ID = "계정아이디"
 IN_COL_PRODUCT = "상품명"
-# 선택 컬럼. 옵션별 추적: '옵션' 행마다 옵션명 + vendorItemId. 한 옵션에 vid 여러 개면 콤마 구분.
-IN_ALIASES_OPTION = ("옵션", "옵션명", "option")
-IN_ALIASES_VENDOR_ITEM_ID = ("vendoritemid", "vendoritemids", "벤더아이템id", "옵션id")
-IN_ALIASES_PRODUCT_ID = ("productid", "productids", "상품id")
 
 # ── 상품별 판매 리포트 헤더 (필수 매칭 대상) ────────────────────
 RP_COL_PRODUCT = "상품명"

@@ -86,18 +86,16 @@ def _alias_index(norm_header: list[str], aliases) -> int | None:
 
 
 def _column_index(header: list[str]) -> dict[str, int]:
-    """이름·별칭으로 컬럼 위치 해석(필수 4개는 앞서 존재 확인됨)."""
+    """컬럼 위치 해석 — **가져오는 값 = 사업자·계정ID·상품**(필수 3개는 앞서 존재 확인됨).
+
+    대표자명은 **선택**(있으면 빈 사업자명 시트의 라벨 폴백에만 사용). 옵션/vendorItemId/productId 는
+    이 관리대장에 없고 실제 미사용(vid 는 라이브 판매수집에서 확보)이라 **파싱하지 않는다**(입력 정리).
+    """
     idx: dict[str, int] = {}
-    for name in (config.IN_COL_REPRESENTATIVE, config.IN_COL_BUSINESS,
-                 config.IN_COL_ACCOUNT_ID, config.IN_COL_PRODUCT):
+    for name in (config.IN_COL_BUSINESS, config.IN_COL_ACCOUNT_ID, config.IN_COL_PRODUCT):
         idx[name] = header.index(name)
-    norm = [h.lower().replace(" ", "") for h in header]
-    for key, aliases in (("option", config.IN_ALIASES_OPTION),
-                         ("vendor", config.IN_ALIASES_VENDOR_ITEM_ID),
-                         ("product_id", config.IN_ALIASES_PRODUCT_ID)):
-        i = _alias_index(norm, aliases)
-        if i is not None:
-            idx[key] = i
+    if config.IN_COL_REPRESENTATIVE in header:      # 대표자명은 선택
+        idx[config.IN_COL_REPRESENTATIVE] = header.index(config.IN_COL_REPRESENTATIVE)
     return idx
 
 
@@ -177,17 +175,17 @@ def _load_for_parse(path):
 def parse_input_list(path: str | Path) -> InputList:
     ws, strike_ok = _load_for_parse(path)   # strike_ok=False면 취소선 자동감지 불가(한컴 스타일 비호환)
     rows = list(ws.iter_rows(values_only=True))
-    required = (config.IN_COL_REPRESENTATIVE, config.IN_COL_BUSINESS,
-                config.IN_COL_ACCOUNT_ID, config.IN_COL_PRODUCT)
+    required = (config.IN_COL_BUSINESS, config.IN_COL_ACCOUNT_ID, config.IN_COL_PRODUCT)
     header, hrow = _find_header_row(rows, lambda h: all(name in h for name in required))
     if hrow < 0:
         missing = [n for n in required if not any(n in [_norm(c) for c in r] for r in rows[:_HEADER_SCAN_ROWS])]
         raise ValueError(f"입력 파일 상단 {_HEADER_SCAN_ROWS}행에서 헤더를 찾지 못했습니다. "
                          f"누락 필수 컬럼: {', '.join(missing) or '(부분 일치)'}")
     idx = _column_index(header)
-    i_rep, i_biz = idx[config.IN_COL_REPRESENTATIVE], idx[config.IN_COL_BUSINESS]
+    i_rep = idx.get(config.IN_COL_REPRESENTATIVE)   # 선택(없으면 None → 라벨 폴백에서만 무시)
+    i_biz = idx[config.IN_COL_BUSINESS]
     i_acct, i_prod = idx[config.IN_COL_ACCOUNT_ID], idx[config.IN_COL_PRODUCT]
-    i_opt, i_vid, i_pid = idx.get("option"), idx.get("vendor"), idx.get("product_id")
+    i_opt = i_vid = i_pid = None                     # 옵션/vid/pid 미파싱(입력 정리 — 라이브에서 vid 확보)
 
     accounts: list[Account] = []
     by_id: dict[str, Account] = {}          # 같은 계정ID 재등장 시 상품을 이어 붙이기 위한 색인
@@ -222,9 +220,9 @@ def parse_input_list(path: str | Path) -> InputList:
                     if not current_acct.business_name and biz:   # 뒤 행에 사업자명 있으면 채움
                         current_acct.business_name = biz
                 else:
+                    # 정체성=계정ID(필수). 사업자명이 비어도 라벨은 계정ID로 폴백되므로 치명오류 아님
+                    # (빈 사업자명은 validate_input_list 가 경고로만 알림).
                     current_acct = Account(acct, current_rep, biz)
-                    if not current_rep and not biz:
-                        errors.append(f"{row_no}행: 계정 '{acct}' 대표자명/사업자명이 모두 비어 있음")
                     by_id[acct] = current_acct
                     accounts.append(current_acct)
         if acct_cancelled:                      # 취소된 계정 아래 행은 전부 건너뜀
