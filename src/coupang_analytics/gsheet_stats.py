@@ -17,7 +17,8 @@ from typing import Any
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .gsheet_index import INDEX_SHEET_NAME
-from .workbook import _SPECIAL_SHEETS
+from .workbook import (_COL_METRIC, _COL_NAME, _LABEL_DATE, _LABEL_KEYWORD,
+                       _SPECIAL_SHEETS, _key)
 
 # openpyxl 선(Side) 스타일 → Sheets 테두리 스타일
 _BORDER_STYLE = {
@@ -243,3 +244,54 @@ def push_statistics(client, wb, *, on_log=None) -> dict[str, int]:
         gids[biz] = sheet_id
         log(f"  [구글시트] 통계 시트 '{biz}' 반영({ws.max_row}행×{ws.max_column}열)")
     return gids
+
+
+def read_staff_keywords(client, wb) -> dict[tuple[str, str], list[str]]:
+    """결과 통계 시트에서 **상품별 키워드 목록**을 읽는다 → {(사업자, 상품): [키워드…]}.
+
+    통계 시트는 push_statistics 가 쓴 레이아웃(상품 헤더행 G='날짜'·C=노출명 / 키워드 소헤더 C='키워드' /
+    그 아래 키워드 행 C=키워드명)을 그대로 되읽는다. 프로그램이 쓴 AI 키워드 + **직원이 그 영역에 직접 타이핑한
+    키워드**를 모두 포함(위치 기반 파싱이라 직원 행에 G='노출 순위'가 없어도 잡힌다). 시트가 없으면 건너뜀.
+    """
+    ci, gi = _COL_NAME - 1, _COL_METRIC - 1     # read_grid 값 격자는 0-based
+    titles = set(client.sheet_titles())
+    out: dict[tuple[str, str], list[str]] = {}
+    for biz in wb.account_sheets():
+        if biz in _SPECIAL_SHEETS or biz not in titles:
+            continue
+        values, _notes = client.read_grid(biz)
+        cur: str | None = None
+        in_kw = False
+        for row in values:
+            c = row[ci].strip() if len(row) > ci and row[ci] else ""
+            g = row[gi].strip() if len(row) > gi and row[gi] else ""
+            if g == _LABEL_DATE and c:                 # 상품 헤더행 → 새 상품(노출명 꼬리 제거)
+                cur, in_kw = _key(c), False
+            elif c == _LABEL_KEYWORD:                   # 키워드 소헤더 → 이 아래가 키워드 영역
+                in_kw = True
+            elif in_kw and cur and c and c != _LABEL_KEYWORD:
+                out.setdefault((biz, cur), [])
+                if c not in out[(biz, cur)]:
+                    out[(biz, cur)].append(c)
+    return out
+
+
+def merge_staff_keywords(client, wb, *, on_log=None) -> int:
+    """결과 통계 시트의 상품별 키워드를 **워크북에 병합**(직원이 시트에 직접 넣은 키워드 반영). 반영 상품 수 반환.
+
+    효과: 병합 후 그 상품은 `product_keywords` 가 비지 않으므로 파이프라인이 **AI 선정을 건너뛰고 동결**한다
+    (값 있으면 skip·없으면 선정 규칙 그대로). 워크북에 **없던 키워드만 추가**(기존 순서·값 보존, 절대 제거 안 함).
+    실행 시작 시 호출 → 병합분이 워크북에 들어가므로 종료 시 미러링(전체 교체)돼도 직원 입력이 보존된다.
+    """
+    log = on_log or (lambda m: None)
+    n = 0
+    for (biz, product), kws in read_staff_keywords(client, wb).items():
+        if not wb.has_product(biz, product):
+            continue
+        have = set(wb.product_keywords(biz, product))
+        add = [k for k in kws if k not in have]
+        if add:
+            wb.add_product_keywords(biz, product, add)
+            n += 1
+            log(f"  [구글시트] 직원 키워드 반영 '{biz}/{product}' +{add}")
+    return n

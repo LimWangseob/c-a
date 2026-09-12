@@ -208,10 +208,47 @@ def t6_roster_from_workbook() -> None:
     _ok("노출명 표시·안정키=등록명 기반·통계시트 링크(gid+헤더행)")
 
 
+def _grow(c="", g=""):
+    """통계 시트 한 행(0-based 격자) — C(3열=index2)=이름, G(7열=index6)=지표."""
+    r = [""] * 7
+    r[2] = c
+    r[6] = g
+    return r
+
+
+class _StatsFake:
+    """사업자 시트명→격자 매핑을 돌려주는 최소 클라이언트(merge_staff_keywords 용)."""
+    def __init__(self, grids): self._g = grids
+    def sheet_titles(self): return list(self._g)
+    def read_grid(self, sheet, notes=False):
+        v = self._g.get(sheet, [])
+        return v, [[None] * len(r) for r in v]
+
+
+def t7_staff_keywords_merge() -> None:
+    print("[7] 직원 입력 키워드 역머지(merge_staff_keywords)")
+    wb = _sample_workbook()   # 가게A/텀블러, 키워드 [텀블러, 보온 텀블러]
+    assert set(wb.product_keywords("가게A", "텀블러")) == {"텀블러", "보온 텀블러"}
+    grid = {"가게A": [
+        _grow(),                                          # 제목행
+        _grow("텀블러", "날짜"),                           # 상품 헤더
+        _grow("", config.CONTRACT_METRICS[0]), _grow("", config.CONTRACT_METRICS[1]),  # 지표행(C 병합=빈칸)
+        _grow("키워드", "비고"),                           # 키워드 소헤더
+        _grow("텀블러", "노출 순위"), _grow("보온 텀블러", "노출 순위"),  # 프로그램 기록
+        _grow("국산 텀블러", ""),                          # 직원 직접 입력(G 없음)
+    ]}
+    n = gsheet_stats.merge_staff_keywords(_StatsFake(grid), wb)
+    assert n == 1, n
+    kws = wb.product_keywords("가게A", "텀블러")
+    assert kws[:2] == ["텀블러", "보온 텀블러"] and "국산 텀블러" in kws, kws   # 기존 보존 + 직원분 추가
+    assert gsheet_stats.merge_staff_keywords(_StatsFake(grid), wb) == 0        # 재실행 무증가(idempotent)
+    _ok("직원 키워드 위치기반 파싱·1개 추가·기존 보존·재실행 idempotent(→그 상품 AI 선정 생략)")
+
+
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
     for fn in (t1_ledger_rows, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
-               t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook):
+               t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook, t7_staff_keywords_merge):
         fn()
     print("=== 전부 통과 ===")
     return 0

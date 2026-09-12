@@ -586,6 +586,25 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
     wb.save(save_path)
 
 
+def _pull_gsheet_keywords(wb, output_url: str | None, log) -> None:
+    """실행 시작 시 결과 통계 시트의 **직원 입력 키워드**를 워크북으로 역머지(그 상품은 AI 선정 대신 동결).
+
+    output_url 없거나 SA 미등록이면 조용히 생략(정상 — 구글 통합 미사용). 실패는 로그로 명시하되 실행을
+    막지 않는다(읽기 실패 시 AI 선정으로 진행). 첫 실행엔 통계 시트가 아직 없어 no-op(정상)."""
+    if not output_url:
+        return
+    try:
+        from . import gsheet_api, gsheet_stats
+        if not gsheet_api.load_sa_info():
+            return
+        client = gsheet_api.GSheetClient(output_url)
+        n = gsheet_stats.merge_staff_keywords(client, wb, on_log=log)
+        if n:
+            log(f"== [구글시트] 직원 입력 키워드 반영 {n}개 상품 → 해당 상품 AI 선정 생략(동결) ==")
+    except Exception as exc:
+        log(f"== [구글시트] 직원 키워드 읽기 실패: {exc.__class__.__name__}: {exc} (AI 선정으로 진행) ==")
+
+
 def _push_gsheet(wb, output_url: str | None, log) -> None:
     """완성된 openpyxl 마스터를 결과 구글시트로 반영 — 통계 시트 미러링 + 계정목록 증분 동기화.
 
@@ -691,6 +710,11 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     # 목차 로스터 — 입력 전체 계정(계정ID)을 등록해 **미수집 계정도 목차에 표시**(수집 현황 파악)
     for _a in input_list.accounts:
         wb.set_account_id(_a.label, _a.account_id)
+
+    # 직원이 결과 통계 시트에 직접 넣은 키워드를 역머지(값 있으면 그 상품은 AI 선정 대신 동결). 미러링 전에 워크북에
+    # 들어가야 종료 시 전체 교체돼도 보존된다. 새 상품(블록 없음)은 대상 아님(첫 수집 후 시트가 생겨야 입력 가능).
+    if not keywords_off:                       # ①판매수집 전용은 키워드 단계가 없어 역머지 불필요
+        _pull_gsheet_keywords(wb, gsheet_output_url, log)
 
     # 일자 컬럼 라벨 = 서식과 동일한 yy.mm.dd(단일일). 범위면 from~to.
     if date_from == date_to:
