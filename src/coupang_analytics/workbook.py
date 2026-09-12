@@ -45,6 +45,7 @@ _LABEL_SEARCH = "검색량"
 _LABEL_NOTE = "비고"
 _ALL_METRICS = frozenset(config.CONTRACT_METRICS + config.PERSONAL_METRICS)
 _META_SHEET = "_상품ID"   # 숨김 시트: (사업자,상품)→고유ID(vendorItemId) 매핑. ③ 순위조회가 상품 매칭에 사용
+_INDEX_SHEET = "목차"     # 첫 시트: 전 계정(사업자) 목록 + 하이퍼링크 점프 + 요약(계정 100개도 탐색 쉽게)
 
 
 def _norm(v) -> str:
@@ -93,6 +94,8 @@ class OutputWorkbook:
         self._date_col.clear(); self._date_rows.clear()
         self._metric_row.clear(); self._kw_row.clear(); self._vid_row.clear()
         for ws in self.wb.worksheets:
+            if ws.title == _INDEX_SHEET:                 # 목차 시트는 데이터 아님 → 인덱스 대상 제외
+                continue
             if ws.title == _META_SHEET:                 # 상품ID 매핑 시트 → 행 인덱스만 복원
                 for r in range(2, ws.max_row + 1):
                     b = _norm(ws.cell(r, 1).value); p = _norm(ws.cell(r, 2).value)
@@ -148,8 +151,8 @@ class OutputWorkbook:
         return max(cols, key=lambda d: cols[d]) if cols else None
 
     def account_sheets(self) -> list[str]:
-        """계정(사업자) 시트명 목록 — 상품ID 숨김 시트는 제외."""
-        return [s for s in self.wb.sheetnames if s != _META_SHEET]
+        """계정(사업자) 시트명 목록 — 상품ID 숨김 시트·목차 시트는 제외."""
+        return [s for s in self.wb.sheetnames if s not in (_META_SHEET, _INDEX_SHEET)]
 
     def is_rank_filled(self, biz: str, product: str, keyword: str, date_iso: str) -> bool:
         row = self._kw_row.get((biz, product, keyword))
@@ -415,7 +418,7 @@ class OutputWorkbook:
                     bottom=thick if side == "bottom" else b.bottom)
 
         for ws in self.wb.worksheets:
-            if ws.title == _META_SHEET:                 # 상품ID 숨김 시트는 서식 대상 아님
+            if ws.title in (_META_SHEET, _INDEX_SHEET):   # 숨김 매핑·목차 시트는 블록 서식 대상 아님
                 continue
             # 멱등화: 기존 병합을 모두 해제한 뒤 아래에서 표준대로 다시 병합한다.
             # (②/③/반영 등이 서식 없이 셀을 추가해 병합·테두리가 시트마다 섞이는 것을 원천 제거 →
@@ -509,3 +512,51 @@ class OutputWorkbook:
                         cf = ws.cell(hr, _COL_NAME).border
                         ws.cell(hr, _COL_NAME).border = Border(left=cf.left, right=cf.right,
                                                                top=cf.top, bottom=thick)
+        self._build_index()   # 전 계정 요약·점프 링크의 '목차' 시트를 맨 앞에 재생성(멱등)
+
+    def _build_index(self) -> None:
+        """첫 시트 '목차' 재생성 — 전 계정(사업자) 목록 + 하이퍼링크 점프 + 요약(상품수·최근일자·순위공란).
+
+        계정이 100개여도 한눈에 보고 클릭 한 번으로 이동하도록. 데이터 시트는 안 건드리고 목차만 추가(멱등:
+        매번 지우고 다시 만든다). 순위 공란수 = 최근 일자 컬럼에서 아직 못 잰(공란) 키워드 수(재측정 대상).
+        """
+        bizs = self.account_sheets()
+        if _INDEX_SHEET in self.wb.sheetnames:
+            del self.wb[_INDEX_SHEET]
+        ws = self.wb.create_sheet(_INDEX_SHEET, 0)       # 맨 앞
+        font = Font(name=self._FN, size=11)
+        bold = Font(name=self._FN, size=11, bold=True)
+        link_font = Font(name=self._FN, size=11, color="0563C1", underline="single")
+        title_font = Font(name=self._FN, size=14, bold=True)
+        thin = Side(style="thin", color="BFBFBF")
+        box = Border(left=thin, right=thin, top=thin, bottom=thin)
+        center = Alignment(horizontal="center", vertical="center")
+        left = Alignment(horizontal="left", vertical="center")
+        head_fill = PatternFill("solid", fgColor=self._FILL_LABEL)
+
+        ws.cell(1, 1, f"목차 · 계정 {len(bizs)}개").font = title_font
+        ws.merge_cells("A1:E1")
+        ws.cell(1, 1).alignment = center
+        heads = ["사업자(클릭 이동)", "상품수", "최근 수집일자", "순위 공란", "비고"]
+        for c, h in enumerate(heads, 1):
+            x = ws.cell(2, c, h)
+            x.font = bold; x.alignment = center; x.border = box; x.fill = head_fill
+        for r, biz in enumerate(bizs, start=3):
+            prods = self.products_of(biz)
+            date = self.latest_date(biz)
+            blank = 0
+            col = self._date_col.get(biz, {}).get(date) if date else None
+            if col is not None:
+                for (b, p, kw), row in self._kw_row.items():
+                    if b == biz and self.wb[biz].cell(row, col).value in (None, ""):
+                        blank += 1
+            link = ws.cell(r, 1, biz)
+            link.hyperlink = f"#'{biz}'!A1"              # 같은 통합문서 내 시트로 점프
+            link.font = link_font; link.alignment = left; link.border = box
+            for c, v in ((2, len(prods)), (3, date or "-"), (4, blank), (5, "")):
+                x = ws.cell(r, c, v)
+                x.font = font; x.alignment = center; x.border = box
+        for c, w in {1: 34, 2: 8, 3: 14, 4: 9, 5: 20}.items():
+            ws.column_dimensions[get_column_letter(c)].width = w
+        ws.row_dimensions[1].height = 21
+        ws.freeze_panes = "A3"                            # 제목·헤더 고정
