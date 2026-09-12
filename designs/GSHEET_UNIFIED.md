@@ -182,8 +182,9 @@ F 모니터링종료 | G 상태`. **자동열=A·B·C·G**(프로그램), **직�
 - [ ] 동시성: 프로그램 쓰기 중 사람이 편집 → 마지막 쓰기 승리 위험. `계정 목록`은 읽기만/통계는 쓰기만으로
       물리 분리해 충돌 최소화. 필요 시 수집 시작 시점 스냅샷.
 - [ ] 오류 처리: 인증 실패·권한 없음·쿼터 초과(429) 명확한 한국어 메시지(fallback 금지 원칙).
-- [ ] `ui/app_qt.py` 설정 탭: "구글 시트(입력·출력) 링크" + "서비스계정 키" 등록 UI. 기존 rclone 항목 정리.
-- [ ] `ui/app.py`(Tkinter 폴백) 동기화.
+- [x] `ui/app_qt.py` 설정 탭: "구글 시트 연동" 카드(입·출력 링크 + 서비스계정 키 + 연결확인). rclone 정리(Phase 1).
+- [x] `ui/app.py`(Tkinter 폴백) 동기화 — PySide6 없이 `_shared_setting`(winreg)로 app_qt의 `gsheet/output_url`
+      읽어 `run_full(gsheet_output_url=)` 전달(ba0a444). SA키는 credstore 공유라 별도 불필요.
 - [ ] `tools/simulate_pipeline.py` 및 검증도구를 Sheets API 모킹으로 갱신(라이브 쿼터 소모 없이).
 - [ ] CLAUDE.md·DESIGN.md·memory 갱신.
 
