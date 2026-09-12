@@ -18,7 +18,7 @@ from PySide6 import QtCore, QtWidgets
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from coupang_analytics import config, gsheet, keyword_store  # noqa: E402
+from coupang_analytics import config, keyword_store  # noqa: E402
 from coupang_analytics.apppaths import base_dir as app_base_dir, set_workdir  # noqa: E402
 from coupang_analytics.browser import WingBrowser, find_chrome, reap_orphan_chrome  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
@@ -246,29 +246,17 @@ class App(QtWidgets.QMainWindow):
             b.setMinimumWidth(210)
             grid.addWidget(b, i, 0)
             grid.addWidget(lbl, i, 1)
-        # 입력 소스로 '구글 드라이브 링크'를 등록 — 링크만 입력해두면(등록) 실행 시 그 시트에서 자동으로
-        # 가져온다(지금 불러올 필요 없음). '지금 불러오기' 버튼은 즉시 로드/테스트용(선택).
-        gs_row = len(rows)
-        self.gsheet_edit = QtWidgets.QLineEdit()
-        self.gsheet_edit.setPlaceholderText("구글 드라이브 링크 등록(입력만 하면 실행 시 자동으로 가져옴)")
-        self.gsheet_edit.setText(
-            QtCore.QSettings("coupang-analytics", "ui").value("input/gsheet_url", "", type=str))
-        self.gsheet_edit.editingFinished.connect(self._save_gsheet_url)   # 입력=등록(저장)
-        gs_btn = QtWidgets.QPushButton("구글시트 지금 불러오기")
-        gs_btn.setMinimumWidth(210)
-        gs_btn.clicked.connect(self.load_input_gsheet)
-        grid.addWidget(gs_btn, gs_row, 0)
-        grid.addWidget(self.gsheet_edit, gs_row, 1)
-        # 결과 자동 업로드 대상(rclone remote:폴더). 무인 실행 완료 시 그 위치에 같은 파일로 덮어쓰기(링크 유지).
-        gd_row = gs_row + 1
+        # 결과 파일을 구글드라이브로 자동 공유(rclone 대상). 무인 실행 완료 시 그 위치에 같은 파일로
+        # 덮어쓰기(공유 링크 유지 → 팀은 항상 최신본). 비우면 업로드 안 함. (입력은 'PC 입력 엑셀 열기' 사용)
+        gd_row = len(rows)
         self.gdrive_edit = QtWidgets.QLineEdit()
-        self.gdrive_edit.setPlaceholderText("결과 자동업로드: rclone 대상(예: gdrive:쿠팡분석) — 비우면 안 함")
+        self.gdrive_edit.setPlaceholderText("rclone 대상(예: gdrive:쿠팡분석) — 비우면 공유 안 함")
         self.gdrive_edit.setText(
             QtCore.QSettings("coupang-analytics", "ui").value("gdrive/dest", "", type=str))
         self.gdrive_edit.editingFinished.connect(
             lambda: QtCore.QSettings("coupang-analytics", "ui").setValue(
                 "gdrive/dest", self.gdrive_edit.text().strip()))
-        grid.addWidget(QtWidgets.QLabel("구글드라이브 업로드"), gd_row, 0)
+        grid.addWidget(QtWidgets.QLabel("결과 파일을 구글드라이브로 공유하기"), gd_row, 0)
         grid.addWidget(self.gdrive_edit, gd_row, 1)
         grid.setColumnStretch(1, 1)
         v.addWidget(fk)
@@ -555,49 +543,10 @@ class App(QtWidgets.QMainWindow):
             return
         self._remember_dir("input", path)
         self._apply_input(path, label=Path(path).name)
-        s = QtCore.QSettings("coupang-analytics", "ui")
-        s.setValue("file/input", str(path))   # 무인 자동로드용(로컬 파일 소스)
-        s.remove("input/gsheet_url")           # 로컬 파일을 열면 구글시트 소스는 해제
-
-    def _save_gsheet_url(self):
-        """구글 드라이브 링크 '등록' — 입력만 하면 저장(실행 시 자동 입력). 지금 다운로드는 안 함.
-        링크를 등록하면 로컬 파일 소스는 해제(구글이 입력원). 비우면 등록 해제."""
-        url = (self.gsheet_edit.text() or "").strip()
-        s = QtCore.QSettings("coupang-analytics", "ui")
-        if url:
-            s.setValue("input/gsheet_url", url)
-            s.remove("file/input")             # 구글 링크 등록 시 로컬파일 소스 해제(입력원=구글)
-            self.log(f"[입력] 구글 드라이브 링크 등록됨 — 실행 시 자동으로 가져옵니다: {url[:60]}")
-        else:
-            s.remove("input/gsheet_url")
-            self.log("[입력] 구글 드라이브 링크 등록 해제")
-
-    def load_input_gsheet(self):
-        """구글 시트(공개 링크)에서 입력 대장을 내려받아 로드. URL 은 영속 → 무인 실행이 매번 최신본을 가져온다."""
-        url = (self.gsheet_edit.text() or "").strip()
-        if not url:
-            QtWidgets.QMessageBox.warning(self, "URL 필요", "구글 시트 공유 링크(또는 ID)를 입력하세요.")
-            return
-        self.log("[입력] 구글 시트에서 불러오는 중…")
-
-        def task():
-            dest = app_base_dir() / "data" / "_gsheet_input.xlsx"
-            gsheet.download_xlsx(url, dest)
-            return str(dest)
-
-        def done(path):
-            try:
-                self._apply_input(path, label="구글시트")
-                QtCore.QSettings("coupang-analytics", "ui").setValue("input/gsheet_url", url)
-            finally:
-                try:                       # 평문 비번이 담긴 임시 파일은 파싱 직후 삭제
-                    Path(path).unlink(missing_ok=True)
-                except OSError:
-                    pass
-        self.run_bg(task, on_done=done, btn=None)
+        QtCore.QSettings("coupang-analytics", "ui").setValue("file/input", str(path))   # 무인 자동로드용
 
     def _apply_input(self, path, label: str | None = None) -> bool:
-        """입력 엑셀 파싱·상품목록·비번 저장(파일/구글시트/무인 공용). 영속은 호출부가 담당."""
+        """입력 엑셀 파싱·상품목록·비번 저장(수동/무인 공용). 영속은 호출부가 담당."""
         il = parse_input_list(path)
         self.input_list = il
         self.product_business.clear()
@@ -616,20 +565,8 @@ class App(QtWidgets.QMainWindow):
         return True
 
     def _auto_load_input(self) -> bool:
-        """입력 자동 로드(무인 실행·재시작 후): 구글시트 URL 이 있으면 최신본을 내려받아, 없으면 로컬 파일."""
-        s = QtCore.QSettings("coupang-analytics", "ui")
-        url = s.value("input/gsheet_url", "", type=str)
-        if url:
-            try:
-                dest = app_base_dir() / "data" / "_gsheet_input.xlsx"
-                gsheet.download_xlsx(url, dest)
-                ok = self._apply_input(str(dest), label="구글시트")
-                Path(dest).unlink(missing_ok=True)   # 평문 비번 임시파일 삭제
-                return ok
-            except Exception as exc:
-                self.log(f"[입력] 구글시트 자동 로드 실패({exc.__class__.__name__}): {exc}")
-                return False
-        path = s.value("file/input", "", type=str)
+        """입력 자동 로드(무인 실행·재시작 후): 마지막으로 연 PC 입력 엑셀을 다시 로드."""
+        path = QtCore.QSettings("coupang-analytics", "ui").value("file/input", "", type=str)
         if not (path and Path(path).exists()):
             return False
         try:
