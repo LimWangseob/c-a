@@ -667,42 +667,55 @@ class OutputWorkbook:
                 return True
         return False
 
-    def account_cadence(self, biz: str, target_iso: str) -> str:
-        """그 계정의 오늘(target) 수집 주기: 'daily'(매일)·'every3'(3일1회)·'stop'(중단).
+    def product_latest_date(self, biz: str, product: str) -> str:
+        """그 상품이 값을 가진 가장 최근(오른쪽) 일자 라벨(없으면 ''). 상품별 3일주기 판정용."""
+        cols = self._date_col.get(biz, {})
+        if not cols or biz not in self.wb.sheetnames:
+            return ""
+        ws = self.wb[biz]
+        best, best_c = "", -1
+        for m in _ALL_METRICS:
+            row = self._metric_row.get((biz, product, m))
+            if row is None:
+                continue
+            for lbl, c in cols.items():
+                if c > best_c and ws.cell(row, c).value not in (None, ""):
+                    best, best_c = lbl, c
+        return best
 
-        상품별 마케팅으로 판정 후 **계정 단위로 집계**(로그인은 계정 단위): 마케팅 시작~+1개월 상품이
-        하나라도 있으면 계정 전체 매일. 모니터링 종료 지난 상품은 중단, 나머지·미설정은 3일1회.
-        전 상품이 중단이면 계정 중단."""
+    def product_cadence(self, biz: str, product: str, target_iso: str) -> str:
+        """그 상품의 오늘(target) 수집 주기: 'daily'·'every3'·'stop'(상품별 마케팅 기준)."""
         target = _parse_date(target_iso)
-        states: list[str] = []
-        for p in self.products_of(biz):
-            s, e, m = (_parse_date(x) for x in self.marketing_of(biz, p))
-            if not (s or e or m):
-                states.append("every3"); continue          # 마케팅 미설정 = 기본 추적
-            if m and target and target > m:
-                states.append("stop"); continue            # 모니터링 종료일 이후 = 중단
-            if s and target and s <= target <= s + _td(days=30):
-                states.append("daily"); continue           # 마케팅 시작~1개월 = 매일
-            states.append("every3")
-        if not states:
-            return "every3"                                 # 상품 없음(신규 계정 등) = 기본 수집
-        if "daily" in states:
-            return "daily"
-        if "every3" in states:
-            return "every3"
-        return "stop"
+        s, e, m = (_parse_date(x) for x in self.marketing_of(biz, product))
+        if not (s or e or m):
+            return "every3"                                 # 마케팅 미설정 = 기본 3일주기
+        if m and target and target > m:
+            return "stop"                                   # 모니터링 종료일 이후 = 중단
+        if s and target and s <= target <= s + _td(days=30):
+            return "daily"                                  # 마케팅 시작~1개월 = 매일
+        return "every3"
+
+    def product_due(self, biz: str, product: str, target_iso: str) -> tuple[bool, str]:
+        """오늘(target) 이 **상품**을 수집할지 (여부, 사유). every3는 그 상품 최근수집과 3일 이상일 때만."""
+        cad = self.product_cadence(biz, product, target_iso)
+        if cad == "stop":
+            return False, "모니터링 종료(중단)"
+        if cad == "daily":
+            return True, "마케팅(매일)"
+        last, target = _parse_date(self.product_latest_date(biz, product)), _parse_date(target_iso)
+        if last and target and (target - last).days < 3:
+            return False, f"3일 주기(최근 {self.product_latest_date(biz, product)})"
+        return True, "3일 주기 도래"
 
     def account_due(self, biz: str, target_iso: str) -> tuple[bool, str]:
-        """오늘(target) 이 계정을 수집할지 (여부, 사유). every3는 마지막 수집일과 3일 이상 벌어졌을 때만."""
-        cad = self.account_cadence(biz, target_iso)
-        if cad == "stop":
-            return False, "모니터링 종료(수집 중단)"
-        if cad == "daily":
-            return True, "마케팅 기간(매일)"
-        last, target = _parse_date(self.latest_date(biz)), _parse_date(target_iso)
-        if last and target and (target - last).days < 3:
-            return False, f"3일 주기(최근 수집 {self.latest_date(biz)})"
-        return True, "3일 주기 도래"
+        """오늘 이 **계정**에 로그인할지(=상품이 하나라도 수집 대상). 로그인은 계정 단위라 OR 로 집계."""
+        prods = self.products_of(biz)
+        if not prods:
+            return True, "신규/상품없음(수집 시도)"
+        for p in prods:
+            if self.product_due(biz, p, target_iso)[0]:
+                return True, "수집 대상 상품 있음"
+        return False, "모든 상품 오늘 수집 대상 아님"
 
     def _product_rows(self) -> list[tuple[str, str, int | None, bool]]:
         """계정 목록에 실을 상품 로스터 — (사업자, 상품, 그 상품 블록 헤더행|None, 데이터시트有無).

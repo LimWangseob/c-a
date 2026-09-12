@@ -492,6 +492,12 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
         # 상품 정체성 = vendorItemId 앵커. 이미 있는 블록(③이 정확 노출명으로 바꿔뒀을 수 있음)을 vid 로
         # 찾아 그 이름으로 이어간다(발견명이 매일 달라도 중복 블록·시계열 단절 방지). 없으면 발견명 사용.
         pname = wb.resolve_block_name(biz, vids0) or product.name
+        # 상품 단위 수집 주기(마케팅 설정 있을 때만): 오늘 대상 아닌 상품은 오늘치 기록 생략(마케팅 상품만 매일).
+        if wb.has_marketing():
+            _due, _why = wb.product_due(biz, pname, date_iso)
+            if not _due:
+                log(f"  [{title}] {_why} — 오늘 수집 생략(상품 주기)")
+                continue
         if keywords_off:                               # ① 판매수집 단계 — 지표·재고·상품ID만
             wb.ensure_product_block(biz, pname, kind, wb.product_keywords(biz, pname))
             wb.set_product_vids(biz, pname, vids0)
@@ -1216,6 +1222,8 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
             for pname in wb.products_of(biz):
                 if should_stop() or halted:
                     break
+                if wb.has_marketing() and not wb.product_due(biz, pname, date)[0]:
+                    continue                       # 상품 수집 주기(마케팅 상품만 매일) — 오늘 대상 아니면 순위도 생략
                 vids = wb.product_vids(biz, pname)
                 keywords = wb.product_keywords(biz, pname)
                 if not keywords:
