@@ -427,6 +427,7 @@ class OutputWorkbook:
     _FILL_LABEL = "D9E9FA"    # G열 지표 라벨/순위(연파랑)
     _FILL_KWHEAD = "E8E8E8"   # 키워드 소헤더행(회색)
     _FILL_KIND = "FFFFFF"     # 구분(계약/개인)·사업자명(흰)
+    _FILL_MKT = "FCE4D6"      # 마케팅 기간 일자 컬럼 배경(연주황 — 캠페인 구간 구분)
 
     def apply_style(self) -> None:
         font = Font(name=self._FN, size=11)
@@ -436,6 +437,7 @@ class OutputWorkbook:
         f_label = PatternFill("solid", fgColor=self._FILL_LABEL)
         f_kwhead = PatternFill("solid", fgColor=self._FILL_KWHEAD)
         f_kind = PatternFill("solid", fgColor=self._FILL_KIND)
+        mkt_fill = PatternFill("solid", fgColor=self._FILL_MKT)   # 마케팅 기간(시작~종료) 일자 컬럼 배경
         thin = Side(style="thin", color="BFBFBF")
         box = Border(left=thin, right=thin, top=thin, bottom=thin)
         center = Alignment(horizontal="center", vertical="center")
@@ -514,10 +516,19 @@ class OutputWorkbook:
                 nm = _key(ws.cell(hr, _COL_NAME).value)
                 if nm:
                     ws.cell(hr, _COL_NAME).value = self._display_name(ws.title, nm)
-                kh = None                                   # 키워드 소헤더행
+                # 마케팅: 이 상품의 기간·상태 + 마케팅기간(시작~종료)에 해당하는 일자 컬럼 집합(배경색용)
+                mstart, mend, _mmon = self.marketing_of(ws.title, nm)
+                is_mkt = self._mkt_status(mstart, mend, _mmon) == "마케팅중"
+                mcols: set[int] = set()
+                _s, _e = _parse_date(mstart), _parse_date(mend)
+                if _s:
+                    for _lbl, _cc in self._date_col.get(ws.title, {}).items():
+                        _d = _parse_date(_lbl)
+                        if _d and _d >= _s and (not _e or _d <= _e):
+                            mcols.add(_cc)
+                kh = None                                   # 키워드 소헤더행(C='키워드'로 식별 — G는 비고/마케팅 표기에 씀)
                 for r in range(hr, end + 1):
-                    if (_norm(ws.cell(r, _COL_NAME).value) == _LABEL_KEYWORD
-                            and _norm(ws.cell(r, _COL_METRIC).value) == _LABEL_NOTE):
+                    if _norm(ws.cell(r, _COL_NAME).value) == _LABEL_KEYWORD:
                         kh = r
                         break
                 m_end = (kh - 1) if kh else end
@@ -529,7 +540,7 @@ class OutputWorkbook:
                         cell(ws, r, c, fill=f_prod, fnt=bold, align=wrap)
                     cell(ws, r, _COL_METRIC, fill=f_label)
                     for c in range(_FIRST_DATE, maxc + 1):
-                        cell(ws, r, c, num=True)
+                        cell(ws, r, c, num=True, fill=(mkt_fill if c in mcols else None))
                 # 키워드블록: A:B 사업자(세로) · C:E 키워드명(가로) · F 검색량 · G(소헤더 비고=회색/순위라벨=연파랑) · H~ 순위
                 if kh:
                     for r in range(kh, end + 1):
@@ -540,8 +551,13 @@ class OutputWorkbook:
                             cell(ws, r, c, fill=(f_kwhead if head else None), fnt=bold, align=wrap)
                         cell(ws, r, _COL_SEARCH, fill=(f_kwhead if head else None), num=not head)
                         cell(ws, r, _COL_METRIC, fill=(f_kwhead if head else f_label))
+                        if head:   # 비고 자리(소헤더 G) = 마케팅중이면 표기, 아니면 '비고'(멱등 재계산)
+                            gm = ws.cell(r, _COL_METRIC)
+                            gm.value = "🔴 마케팅중" if is_mkt else _LABEL_NOTE
+                            if is_mkt:
+                                gm.font = Font(name=self._FN, size=11, bold=True, color="C00000")
                         for c in range(_FIRST_DATE, maxc + 1):
-                            cell(ws, r, c)
+                            cell(ws, r, c, fill=(mkt_fill if c in mcols else None))
                 # 상품 1개 구분 — 굵은 선. 상단=블록 첫 행 top(병합 top-left라 정상).
                 # 하단=다음(빈) 구분행의 top(시각적으로 마지막 행 하단선). ⚠ 마지막 블록은 end+1 행이
                 # 없어서 거기 테두리를 그리면 **빈 행이 새로 생긴다**(2상품 시트의 2번째 블록 하단 공백줄 버그).
