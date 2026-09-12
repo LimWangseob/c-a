@@ -22,7 +22,10 @@ from coupang_analytics import config, keyword_store  # noqa: E402
 from coupang_analytics.apppaths import base_dir as app_base_dir, set_workdir  # noqa: E402
 from coupang_analytics.browser import WingBrowser, find_chrome, reap_orphan_chrome  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
-from coupang_analytics.input_list import parse_input_list, parse_password_file  # noqa: E402
+from coupang_analytics import gsheet_api, gsheet_index  # noqa: E402
+from coupang_analytics.input_list import (parse_input_list, parse_input_rows,  # noqa: E402
+                                           parse_password_file, parse_password_rows,
+                                           read_ledger_rows)
 from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
 from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_credentials_file  # noqa: E402
@@ -242,23 +245,59 @@ class App(QtWidgets.QMainWindow):
             b.setMinimumWidth(210)
             grid.addWidget(b, i, 0)
             grid.addWidget(lbl, i, 1)
-        # 결과 파일을 구글드라이브로 자동 공유(rclone 대상). 무인 실행 완료 시 그 위치에 같은 파일로
-        # 덮어쓰기(공유 링크 유지 → 팀은 항상 최신본). 비우면 업로드 안 함. (입력은 'PC 입력 엑셀 열기' 사용)
-        gd_row = len(rows)
-        self.gdrive_edit = QtWidgets.QLineEdit()
-        self.gdrive_edit.setPlaceholderText("rclone 대상(예: gdrive:쿠팡분석) — 비우면 공유 안 함")
-        self.gdrive_edit.setText(
-            QtCore.QSettings("coupang-analytics", "ui").value("gdrive/dest", "", type=str))
-        self.gdrive_edit.editingFinished.connect(
-            lambda: QtCore.QSettings("coupang-analytics", "ui").setValue(
-                "gdrive/dest", self.gdrive_edit.text().strip()))
-        grid.addWidget(QtWidgets.QLabel("결과 파일을 구글드라이브로 공유하기"), gd_row, 0)
-        grid.addWidget(self.gdrive_edit, gd_row, 1)
         grid.setColumnStretch(1, 1)
         v.addWidget(fk)
+        v.addWidget(self._gsheet_card())   # 구글 시트 연동(입력 관리대장 · 출력 결과시트 · 서비스계정)
         # 키워드/순위 등 세부 설정값 입력란은 제거(사용자 미사용 · 영속 저장도 안 됨). 값은 config.py 에서 관리.
         v.addStretch(1)
         return scroll
+
+    def _gsheet_card(self):
+        """구글 시트 연동 카드 — 서비스계정 키 + 입력(관리대장)·출력(결과) 구글시트 링크 등록.
+
+        입력은 PC 엑셀('입력 엑셀 열기')과 **병존**한다. 여기서 링크를 등록하면 서비스계정으로 직접 읽는다.
+        결과 시트는 프로그램이 계정목록/통계를 쓴다(서비스계정을 '편집자'로 공유 필요). 설정 상세=docs/GSHEET_SETUP.md.
+        """
+        st = QtCore.QSettings("coupang-analytics", "ui")
+        card = self._card("구글 시트 연동 (입력=관리대장 · 출력=결과시트)")
+        g = QtWidgets.QGridLayout(card)
+        g.setColumnStretch(1, 1)
+
+        # 1) 서비스계정 키
+        self.sa_lbl = QtWidgets.QLabel("(서비스계정 키 미등록 — 구글 시트 사용 불가)")
+        sa_btn = QtWidgets.QPushButton("서비스계정 키(JSON) 등록")
+        sa_btn.setMinimumWidth(210)
+        sa_btn.clicked.connect(self.load_service_account)
+        g.addWidget(sa_btn, 0, 0)
+        g.addWidget(self.sa_lbl, 0, 1, 1, 2)
+
+        # 2) 관리대장(입력) 링크
+        self.gs_input_edit = QtWidgets.QLineEdit(st.value("gsheet/input_url", "", type=str))
+        self.gs_input_edit.setPlaceholderText("「토탈셀러_셀독 관리 대장」 구글시트 링크 또는 ID — 비우면 PC 엑셀 사용")
+        self.gs_input_edit.editingFinished.connect(
+            lambda: st.setValue("gsheet/input_url", self.gs_input_edit.text().strip()))
+        in_btns = QtWidgets.QHBoxLayout()
+        in_chk = QtWidgets.QPushButton("연결 확인")
+        in_chk.clicked.connect(lambda: self._check_gsheet("input"))
+        in_load = QtWidgets.QPushButton("관리대장에서 불러오기")
+        in_load.clicked.connect(self.load_input_from_gsheet)
+        in_btns.addWidget(in_chk)
+        in_btns.addWidget(in_load)
+        g.addWidget(QtWidgets.QLabel("관리대장(입력) 링크"), 1, 0)
+        g.addWidget(self.gs_input_edit, 1, 1)
+        g.addLayout(in_btns, 1, 2)
+
+        # 3) 결과(출력) 링크
+        self.gs_output_edit = QtWidgets.QLineEdit(st.value("gsheet/output_url", "", type=str))
+        self.gs_output_edit.setPlaceholderText("결과 구글시트 링크 또는 ID (계정목록·통계를 여기에 씀 — 서비스계정 '편집자' 공유)")
+        self.gs_output_edit.editingFinished.connect(
+            lambda: st.setValue("gsheet/output_url", self.gs_output_edit.text().strip()))
+        out_chk = QtWidgets.QPushButton("연결 확인")
+        out_chk.clicked.connect(lambda: self._check_gsheet("output"))
+        g.addWidget(QtWidgets.QLabel("결과(출력) 링크"), 2, 0)
+        g.addWidget(self.gs_output_edit, 2, 1)
+        g.addWidget(out_chk, 2, 2)
+        return card
 
     def _kw_tab(self):
         w = QtWidgets.QWidget()
@@ -541,9 +580,8 @@ class App(QtWidgets.QMainWindow):
         self._apply_input(path, label=Path(path).name)
         QtCore.QSettings("coupang-analytics", "ui").setValue("file/input", str(path))   # 무인 자동로드용
 
-    def _apply_input(self, path, label: str | None = None) -> bool:
-        """입력 엑셀 파싱·상품목록·비번 저장(수동/무인 공용). 영속은 호출부가 담당."""
-        il = parse_input_list(path)
+    def _set_input_list(self, il, label: str) -> None:
+        """파싱된 InputList 를 UI 상태(상품목록·라벨·로그)에 반영. 파일/구글시트 공용."""
         self.input_list = il
         self.product_business.clear()
         products = []
@@ -553,16 +591,77 @@ class App(QtWidgets.QMainWindow):
                 self.product_business[p.name] = a.business_name
         self.kw_product.clear()
         self.kw_product.addItems(products)
-        self.input_lbl.setText(f"{label or Path(path).name}  (계정 {len(il.accounts)}, 상품 {len(products)})")
+        self.input_lbl.setText(f"{label}  (계정 {len(il.accounts)}, 상품 {len(products)})")
         self.log(f"[입력] {len(il.accounts)}계정 · 상품 {len(products)}개 로드 · 오류 {len(il.errors)}건")
         for e in il.errors[:5]:
             self.log(f"   - 입력오류: {e}")
+        for s in il.struck[:8]:                     # 제외(상태=판매중지/삭제·취소선) 알림
+            self.log(f"   · 제외: {s}")
+        self._merge_output_marketing(il)            # 출력 계정목록의 직원 입력 마케팅 반영(권위 출처)
+
+    def _merge_output_marketing(self, il) -> None:
+        """출력 결과 구글시트 `계정목록`의 직원 입력 마케팅(D~F)을 입력 상품 모델에 병합.
+
+        마케팅 권위 출처 = **출력 계정목록**(관리대장 아님). 출력 링크/서비스계정 미설정이면 조용히 건너뛴다
+        (첫 실행엔 계정목록이 없을 수 있음 — 정상). 실패해도 입력 로드를 막지 않는다(로그만).
+        """
+        url = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
+        if not url:
+            return
+        try:
+            if not gsheet_api.service_account_email(self.creds_store):
+                return                              # 서비스계정 미등록 → 구글 기능 비활성(조용히)
+            client = gsheet_api.GSheetClient(url, store=self.creds_store)
+            merged = gsheet_index.apply_marketing(il.accounts, gsheet_index.read_marketing(client))
+            if merged:
+                self.log(f"[마케팅] 출력 계정목록에서 {merged}개 상품 마케팅 기간 반영(직원 입력 우선)")
+        except gsheet_api.GSheetError as exc:
+            self.log(f"[마케팅] 출력 계정목록 마케팅 읽기 건너뜀: {exc}")
+
+    def _apply_input(self, path, label: str | None = None) -> bool:
+        """PC 입력 엑셀 파싱·상품목록·비번 저장(수동/무인 공용). 영속은 호출부가 담당."""
+        il = parse_input_list(path)
+        self._set_input_list(il, label or Path(path).name)
         self._store_passwords_from(path, quiet=True)
         return True
 
+    def load_input_from_gsheet(self):
+        """설정 탭에 등록한 관리대장(구글시트) 링크를 서비스계정으로 읽어 입력으로 적용(수동 버튼).
+
+        rows 를 한 번 읽어 상품 파싱 + 비번 추출 둘 다 처리(API 호출 최소화). 비번은 즉시 DPAPI 저장.
+        """
+        url = self.gs_input_edit.text().strip()
+        if not url:
+            QtWidgets.QMessageBox.information(self, "링크 필요", "관리대장(입력) 구글시트 링크를 먼저 등록하세요.")
+            return
+        self.log("[입력] 관리대장(구글시트) 읽는 중…")
+        try:
+            self._apply_input_gsheet(url)
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(self, "관리대장 읽기 실패", str(exc))
+            self.log(f"[입력] 구글시트 읽기 실패({exc.__class__.__name__}): {exc}")
+
+    def _apply_input_gsheet(self, url: str) -> bool:
+        """관리대장 구글시트 → InputList 적용 + 비번 DPAPI 저장(수동/무인 공용). 실패는 예외로 올림."""
+        title, rows = read_ledger_rows(url, store=self.creds_store)
+        il = parse_input_rows(rows)
+        self._set_input_list(il, f"[구글시트] {title}")
+        self._store_passwords_map(parse_password_rows(rows), quiet=True)
+        st = QtCore.QSettings("coupang-analytics", "ui")
+        st.setValue("gsheet/input_url", url)
+        st.setValue("input/source", "gsheet")       # 무인 자동로드가 구글시트를 우선하도록 표시
+        return True
+
     def _auto_load_input(self) -> bool:
-        """입력 자동 로드(무인 실행·재시작 후): 마지막으로 연 PC 입력 엑셀을 다시 로드."""
-        path = QtCore.QSettings("coupang-analytics", "ui").value("file/input", "", type=str)
+        """입력 자동 로드(무인 실행·재시작 후): 소스=gsheet면 등록 링크에서, 아니면 마지막 PC 엑셀에서."""
+        st = QtCore.QSettings("coupang-analytics", "ui")
+        url = st.value("gsheet/input_url", "", type=str)
+        if st.value("input/source", "", type=str) == "gsheet" and url:
+            try:
+                return self._apply_input_gsheet(url)
+            except Exception as exc:
+                self.log(f"[입력] 구글시트 자동 로드 실패({exc.__class__.__name__}): {exc} — PC 엑셀로 폴백 시도")
+        path = st.value("file/input", "", type=str)
         if not (path and Path(path).exists()):
             return False
         try:
@@ -578,6 +677,13 @@ class App(QtWidgets.QMainWindow):
             if not quiet:
                 QtWidgets.QMessageBox.warning(self, "비밀번호 파일 오류", str(exc))
             return 0
+        return self._store_passwords_map(pw_map, quiet=quiet)
+
+    def _store_passwords_map(self, pw_map: dict, quiet=False) -> int:
+        """{계정아이디: 비밀번호} 를 DPAPI(이 PC 전용)로 저장. 관리대장(파일/구글시트) 공용.
+
+        비번은 관리대장(입력)에서만 오며 결과 구글시트엔 저장하지 않는다(출력물 평문 금지).
+        """
         saved = 0
         for aid, pw in pw_map.items():
             try:
@@ -625,7 +731,56 @@ class App(QtWidgets.QMainWindow):
         except Exception as exc:
             self.log(f"[OpenAI] 입력됨(저장 실패: {exc.__class__.__name__})")
 
+    def load_service_account(self):
+        """서비스계정 JSON 키 파일을 선택 → 검증 후 DPAPI 저장(이 PC 전용). 이메일 표시.
+
+        원본 JSON 은 앱이 별도로 남기지 않는다(credstore 암호화만). 대상 시트를 이 이메일에 공유해야 접근 가능.
+        """
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "서비스계정 키 (JSON)", self._last_dir("sa"), "JSON (*.json);;All (*.*)")
+        if not path:
+            return
+        self._remember_dir("sa", path)
+        try:
+            raw = Path(path).read_text(encoding="utf-8")
+            email = gsheet_api.store_sa_json(raw, self.creds_store)
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(self, "서비스계정 키 오류", str(exc))
+            self.log(f"[구글] 서비스계정 키 등록 실패: {exc}")
+            return
+        self.sa_lbl.setText(f"서비스계정: {email}  (이 주소에 시트를 공유하세요)")
+        self.log(f"[구글] 서비스계정 키 등록·저장됨 — {email}")
+
+    def _check_gsheet(self, kind: str):
+        """등록한 구글시트 링크로 실제 접속해 제목·시트목록을 확인(권한/공유 상태 즉시 진단)."""
+        edit = self.gs_input_edit if kind == "input" else self.gs_output_edit
+        who = "관리대장(입력)" if kind == "input" else "결과(출력)"
+        url = edit.text().strip()
+        if not url:
+            QtWidgets.QMessageBox.information(self, "링크 필요", f"{who} 구글시트 링크를 먼저 입력하세요.")
+            return
+        # 편집 중 값도 즉시 저장(editingFinished 미발생 상태 대비)
+        QtCore.QSettings("coupang-analytics", "ui").setValue(f"gsheet/{kind}_url", url)
+        try:
+            title, sheets = gsheet_api.check_access(url, store=self.creds_store)
+        except gsheet_api.GSheetError as exc:
+            QtWidgets.QMessageBox.warning(self, "연결 실패", str(exc))
+            self.log(f"[구글] {who} 연결 실패: {exc}")
+            return
+        preview = ", ".join(sheets[:8]) + (" …" if len(sheets) > 8 else "")
+        QtWidgets.QMessageBox.information(
+            self, "연결 성공", f"'{title}'\n시트 {len(sheets)}개: {preview}")
+        self.log(f"[구글] {who} 연결 확인 OK — '{title}' (시트 {len(sheets)}개)")
+
     def _load_saved_secrets(self):
+        try:
+            email = gsheet_api.service_account_email(self.creds_store)
+        except Exception as exc:
+            email = None
+            self.log(f"[구글] 저장된 서비스계정 키 확인 실패: {exc}")
+        if email:
+            self.sa_lbl.setText(f"서비스계정: {email}  (저장됨 — 자동 로드)")
+            self.log(f"[구글] 저장된 서비스계정 키 자동 로드됨 — {email}")
         try:
             nj = self.creds_store.get_password("__naver__")
         except Exception:
@@ -861,48 +1016,11 @@ class App(QtWidgets.QMainWindow):
                                  grow_keywords=False, skip_ranks=True, keywords_off=False, on_log=self.log)
                 if not stop.is_set():
                     track_ranks_stage(semi=True, should_stop=stop.is_set, on_log=self.log)
-                self._upload_to_gdrive()            # 완료 후 결과 파일을 구글드라이브로 자동 업로드(설정 시)
+                # (결과는 구글 시트 통합으로 결과시트에 직접 반영 — rclone 업로드 제거)
             except Exception as exc:                # 무인: 어떤 오류도 앱을 매달아두지 않게 로그 후 종료로
                 self.log(f"[무인] 실행 중 오류: {exc.__class__.__name__}: {exc}")
             return None
         self.run_bg(task, on_done=self._auto_done, btn=None)
-
-    def _upload_to_gdrive(self) -> None:
-        """결과 파일을 rclone 으로 구글드라이브 지정 위치에 **같은 파일로 덮어쓰기**(공유 링크 유지). 설정
-        (QSettings gdrive/dest, 예 'gdrive:쿠팡분석') 없거나 rclone 미설치면 조용히 건너뛴다(로그만)."""
-        import shutil as _sh
-        import subprocess
-        import tempfile
-        dest = QtCore.QSettings("coupang-analytics", "ui").value("gdrive/dest", "", type=str).strip()
-        if not dest:
-            return                                  # 업로드 미설정 — 건너뜀
-        rclone = _sh.which("rclone")
-        if not rclone:
-            self.log("[업로드] rclone 미설치 — 구글드라이브 업로드 건너뜀(설치·설정 필요)")
-            return
-        src = app_base_dir() / "output" / f"{config.OUTPUT_FILE_PREFIX}_통계.xlsx"
-        if not src.exists():
-            self.log("[업로드] 결과 파일이 없어 업로드 건너뜀")
-            return
-        tmp = Path(tempfile.gettempdir()) / f"{config.OUTPUT_FILE_PREFIX}_통계_upload.xlsx"
-        try:
-            _sh.copy2(src, tmp)                      # 앱이 쓰는 중일 수 있어 사본으로(잠김 회피)
-            target = f"{dest}/{src.name}"
-            r = subprocess.run(
-                [rclone, "copyto", str(tmp), target, "-v",
-                 f"--log-file={app_base_dir() / 'output' / 'gdrive_upload.log'}"],
-                capture_output=True, timeout=600)
-            if r.returncode == 0:
-                self.log(f"[업로드] 구글드라이브 갱신 완료 → {target} (공유 링크 그대로 최신본)")
-            else:
-                self.log(f"[업로드] 실패(rc={r.returncode}) — output/gdrive_upload.log 확인")
-        except Exception as exc:
-            self.log(f"[업로드] 오류: {exc.__class__.__name__}: {exc}")
-        finally:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError:
-                pass
 
     def _schedule_auto_stop(self):
         now = datetime.now()

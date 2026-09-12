@@ -3,3 +3,5 @@ openpyxl>=3.1
 requests>=2.31
 openai>=1.40
 pyside6-essentials>=6.6
+google-api-python-client>=2.100    # 구글 시트 읽기/쓰기(Sheets API v4)
+google-auth>=2.30                  # 서비스계정 인증

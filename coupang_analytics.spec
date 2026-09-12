@@ -14,11 +14,17 @@
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 datas, binaries, hiddenimports = [], [], []
-for _pkg in ("playwright",):
+# playwright(node 드라이버) + 구글 API 클라이언트(디스커버리 문서·google_auth 등)를 통째로 포함한다.
+# ⚠ googleapiclient 는 static_discovery=True 로 쓰므로 번들된 discovery_cache/documents(sheets.v4.json)가
+#   반드시 포함돼야 런타임 네트워크 없이 동작한다 → collect_all 로 datas 확보.
+for _pkg in ("playwright", "googleapiclient", "google_auth_httplib2"):
     _d, _b, _h = collect_all(_pkg)
     datas += _d
     binaries += _b
     hiddenimports += _h
+# google.oauth2 / google.auth 는 네임스페이스 패키지 → 서브모듈을 명시 수집(hidden import 누락 방지).
+hiddenimports += collect_submodules("google.auth")
+hiddenimports += collect_submodules("google.oauth2")
 hiddenimports += collect_submodules("coupang_analytics")
 
 a = Analysis(

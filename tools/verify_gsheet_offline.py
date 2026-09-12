@@ -1,0 +1,175 @@
+"""구글 시트 통합(Phase 1·2·3a·3c) 오프라인 회귀 검증 — 네트워크·구글 인증 없이 실제 로직 실행.
+
+검증 범위(가짜 아님, 실제 함수 호출):
+  1) 관리대장 rows 파싱(`parse_input_rows`) + **상태 컬럼**으로 삭제/판매중지 감지 + 비번 rows 추출.
+  2) PC 엑셀 파싱(`parse_input_list`) 회귀 — 취소선 + 상태 컬럼 동시 감지.
+  3) `계정목록` 동기화 계획(`plan_sync`) — 그룹 내 신규 삽입·새 계정 맨아래·삭제=상태만·마케팅열 값 미기록.
+  4) 마케팅 역방향 머지(`read_marketing`/`apply_marketing`) — 직원 입력 우선, 미입력 스킵, 시트 없으면 빈 dict.
+
+라이브(서비스계정+실제 시트) 검증은 사무실에서만. 실행: python tools/verify_gsheet_offline.py
+"""
+from __future__ import annotations
+
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except AttributeError:
+    pass
+
+import openpyxl  # noqa: E402
+from openpyxl.styles import Font  # noqa: E402
+
+from coupang_analytics import gsheet_index as gi  # noqa: E402
+from coupang_analytics.gsheet_index import DATA_START0, DISCONTINUED, ExistingRow, IndexRow  # noqa: E402
+from coupang_analytics.input_list import (Account, Product,  # noqa: E402
+                                          parse_input_list, parse_input_rows, parse_password_rows)
+
+_HEAD = ["사업자", "상품명(클릭 이동)", "계정ID", "마케팅 시작일", "마케팅 종료일", "모니터링 종료일", "상태"]
+
+
+def _ok(msg: str) -> None:
+    print(f"  ✓ {msg}")
+
+
+def t1_ledger_rows() -> None:
+    print("[1] 관리대장 rows 파싱 + 상태 컬럼 감지")
+    rows = [
+        ["old", "pw", "대표A", "사업A", "acc1", "상품X"],                       # 잔여 예시행(무시)
+        ["대표자명", "비밀번호", "대표자명", "사업자명", "계정아이디", "상품명", "상태",
+         "마케팅시작일", "마케팅종료일", "모니터링종료일"],
+        ["홍길동", "pass1", "홍길동", "가게1", "id_a", "텀블러", "정상", "2026-09-01", "2026-09-30", "2026-10-31"],
+        ["", "", "", "", "", "보온병", "판매중지"],                              # 상태=판매중지 → 상품 제외
+        ["김철수", "pass2", "김철수", "가게2", "id_b", "우산", "판매중"],          # '판매중'=유지
+        ["이영희", "sec9", "이영희", "가게3", "id_c", "장갑", "삭제"],            # 계정행 상태=삭제 → 계정 제외
+    ]
+    il = parse_input_rows(rows)
+    assert [a.account_id for a in il.accounts] == ["id_a", "id_b"], [a.account_id for a in il.accounts]
+    assert il.accounts[0].products[0].mkt_mon == "2026-10-31"
+    assert any("보온병" in s for s in il.struck) and any("id_c" in s for s in il.struck)
+    pw = parse_password_rows(rows)
+    assert pw["id_a"] == "pass1" and pw["id_b"] == "pass2"
+    _ok("계정 2개(id_c 삭제·보온병 판매중지 제외), '판매중' 유지, 비번 추출")
+
+
+def t2_file_regression() -> None:
+    print("[2] PC 엑셀 파싱 회귀(취소선 + 상태)")
+    p = os.path.join(tempfile.gettempdir(), "verify_ledger.xlsx")
+    wb = openpyxl.Workbook(); ws = wb.active
+    ws.append(["대표자명", "사업자명", "계정아이디", "비밀번호", "상품명", "상태"])
+    ws.append(["홍길동", "가게1", "id1", "pw1", "텀블러", "정상"])
+    ws.append(["", "", "", "", "해지상품", "판매중지"])            # 상태 제외
+    ws.append(["김철수", "가게2", "id2", "pw2", "우산", "정상"])
+    ws.append(["이영", "가게3", "id3", "pw3", "장갑", "정상"])     # 계정ID 취소선 → 계정 제외
+    ws.cell(5, 3).font = Font(strike=True)
+    wb.save(p)
+    il = parse_input_list(p)
+    os.remove(p)
+    assert [a.account_id for a in il.accounts] == ["id1", "id2"], [a.account_id for a in il.accounts]
+    assert any("해지상품" in s for s in il.struck) and any("id3" in s for s in il.struck)
+    _ok("취소선(id3)·상태(해지상품) 동시 감지, 계정 2개")
+
+
+def _R(acct, prod, key, status="예정"):
+    return IndexRow(business=f"biz_{acct}", product=prod, account_id=acct, status=status, key=key)
+
+
+def _touched_data_mkt(req) -> set:
+    uc = req.get("updateCells")
+    if not uc or uc["start"].get("rowIndex", 0) < DATA_START0:
+        return set()
+    start = uc["start"]["columnIndex"]; ncol = len(uc["rows"][0]["values"])
+    return {c for c in range(start, start + ncol) if c in (3, 4, 5)}
+
+
+def t3_index_sync() -> None:
+    print("[3] 계정목록 동기화 계획(plan_sync) + 마케팅열 값 미기록")
+    existing = [ExistingRow(2, "A", "kA1"), ExistingRow(3, "A", "kA2"), ExistingRow(4, "B", "kB3")]
+    desired = [_R("A", "상품1", "kA1", "마케팅중"), _R("A", "상품4", "kA4"),
+               _R("B", "상품3", "kB3"), _R("C", "상품5", "kC5")]
+    plan = gi.plan_sync(existing, desired)
+    kinds = {}
+    for g, r in plan.updates: kinds[g] = ("upd", r.key)
+    for g, r in plan.inserts: kinds[g] = ("new", r.key)
+    for g in plan.discontinue: kinds[g] = ("disc", None)
+    assert kinds[DATA_START0 + 0] == ("upd", "kA1")
+    assert kinds[DATA_START0 + 1] == ("disc", None)          # kA2 사라짐 → 판매중지(행 보존)
+    assert kinds[DATA_START0 + 2] == ("new", "kA4")          # A 그룹 끝 삽입
+    assert kinds[DATA_START0 + 3] == ("upd", "kB3")
+    assert kinds[DATA_START0 + 4] == ("new", "kC5")          # 새 계정 맨 아래
+    reqs = gi._build_requests_for_plan(99, plan)
+    ins = [r["insertDimension"]["range"]["startIndex"] for r in reqs if "insertDimension" in r]
+    assert ins == sorted(ins) == [DATA_START0 + 2, DATA_START0 + 4], ins
+    assert not [c for r in reqs for c in _touched_data_mkt(r)], "마케팅열 값 기록 침범"
+    _ok("그룹내 삽입·새계정 맨아래·삭제=상태만·삽입 인덱스 오름차순·마케팅 D~F 값 미기록")
+
+
+class _FakeClient:
+    def __init__(self, values): self._v = values; self.batches = []
+    def sheet_titles(self): return ["계정목록"] if self._v else []
+    def ensure_sheet(self, name): return 7
+    def read_grid(self, sheet, notes=False): return self._v, [[None] * len(r) for r in self._v]
+    def batch_update(self, reqs): self.batches.append(reqs); return {}
+
+
+def t3b_full_and_incremental() -> None:
+    print("[3b] sync_index 전체빌드 + 증분(FakeClient)")
+    desired = [_R("A", "상품1", gi.marketing_key("A", "상품1"), "마케팅중"),
+               _R("A", "상품4", gi.marketing_key("A", "상품4")),
+               _R("B", "상품3", gi.marketing_key("B", "상품3"))]
+    fc = _FakeClient([])
+    p = gi.sync_index(fc, desired)
+    assert p.inserts and not p.updates and any("mergeCells" in r for r in fc.batches[0])
+    assert not [c for r in fc.batches[0] for c in _touched_data_mkt(r)]
+    _ok("빈 시트 → 전체 생성(제목 병합·마케팅 값 미기록)")
+
+    existing_vals = [
+        ["계정목록 · 상품 3개"], _HEAD,
+        ["biz_A", "상품1", "A", "2026-09-01", "2026-09-30", "", "마케팅중"],
+        ["biz_A", "상품2", "A", "", "", "", "예정"],
+        ["biz_B", "상품3", "B", "", "", "", "예정"],
+    ]
+    fc2 = _FakeClient(existing_vals)
+    p2 = gi.sync_index(fc2, desired)
+    assert len(p2.inserts) == 1 and p2.inserts[0][1].product == "상품4"
+    assert len(p2.discontinue) == 1                          # 상품2 사라짐
+    _ok("기존 시트 → 증분(상품4 신규 삽입, 상품2 판매중지)")
+
+
+def t4_marketing_merge() -> None:
+    print("[4] 마케팅 역방향 머지(read_marketing/apply_marketing)")
+    values = [
+        ["계정목록 · 상품 3개"], _HEAD,
+        ["가게A", "텀블러", "idA", "2026-09-01", "2026-09-30", "2026-10-31", "마케팅중"],
+        ["가게A", "보온병", "idA", "", "", "", "예정"],        # 마케팅 없음 → 스킵
+        ["가게B", "우산", "idB", "2026-09-10", "", "", "예정"],
+    ]
+    fc = _FakeClient(values)
+    m = gi.read_marketing(fc)
+    assert gi.marketing_key("idA", "텀블러") in m and gi.marketing_key("idA", "보온병") not in m
+    accts = [Account("idA", "대표A", "가게A", products=[Product("텀블러"), Product("보온병")]),
+             Account("idB", "대표B", "가게B", products=[Product("우산")])]
+    n = gi.apply_marketing(accts, m)
+    assert n == 2
+    assert accts[0].products[0].mkt_start == "2026-09-01" and accts[0].products[0].mkt_mon == "2026-10-31"
+    assert accts[0].products[1].mkt_start == "" and accts[1].products[0].mkt_start == "2026-09-10"
+    assert gi.read_marketing(_FakeClient([])) == {}          # 시트 없으면 빈 dict
+    _ok("직원 입력 우선 반영(2개), 미입력 스킵, 시트 없으면 빈 dict")
+
+
+def main() -> int:
+    print("=== 구글 시트 통합 오프라인 검증 ===")
+    for fn in (t1_ledger_rows, t2_file_regression, t3_index_sync, t3b_full_and_incremental, t4_marketing_merge):
+        fn()
+    print("=== 전부 통과 ===")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

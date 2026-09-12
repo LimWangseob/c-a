@@ -99,10 +99,11 @@ def _column_index(header: list[str]) -> dict[str, int]:
         idx[name] = header.index(name)
     if config.IN_COL_REPRESENTATIVE in header:      # 대표자명은 선택
         idx[config.IN_COL_REPRESENTATIVE] = header.index(config.IN_COL_REPRESENTATIVE)
-    norm = [h.lower().replace(" ", "") for h in header]   # 마케팅 컬럼(선택)은 별칭으로 탐색
+    norm = [h.lower().replace(" ", "") for h in header]   # 마케팅·상태 컬럼(선택)은 별칭으로 탐색
     for key, aliases in (("mkt_start", config.IN_ALIASES_MKT_START),
                          ("mkt_end", config.IN_ALIASES_MKT_END),
-                         ("mkt_mon", config.IN_ALIASES_MKT_MON)):
+                         ("mkt_mon", config.IN_ALIASES_MKT_MON),
+                         ("status", config.IN_ALIASES_STATUS)):
         i = _alias_index(norm, aliases)
         if i is not None:
             idx[key] = i
@@ -167,6 +168,18 @@ def _is_discontinued(name: str) -> bool:
     return any(m in n for m in _DISCONTINUED)
 
 
+def _status_discontinued(status) -> bool:
+    """관리대장 '상태' 컬럼 값이 판매중지/삭제 계열이면 True.
+
+    구글시트(Sheets API) 읽기는 취소선을 못 읽으므로, 상태 컬럼 값으로 계정/상품 제외를 판정한다.
+    부분일치(예 '판매중지'·'일시중지'·'삭제됨'). 빈 값·'정상'·'판매중'·'판매부진'은 제외 아님.
+    """
+    n = str(status).replace(" ", "") if status is not None else ""
+    if not n:
+        return False
+    return any(m in n for m in config.IN_STATUS_DISCONTINUED)
+
+
 def _cell_struck(ws, row_no: int, col0: int | None) -> bool:
     """그 셀에 취소선(strike) 서식이 있으면 True. 취소선 = 해지·품절·판매중지 → 제외 표시."""
     if col0 is None:
@@ -192,14 +205,21 @@ def _load_for_parse(path):
         return wb[wb.sheetnames[0]], False
 
 
-def parse_input_list(path: str | Path) -> InputList:
-    ws, strike_ok = _load_for_parse(path)   # strike_ok=False면 취소선 자동감지 불가(한컴 스타일 비호환)
-    rows = list(ws.iter_rows(values_only=True))
-    required = (config.IN_COL_BUSINESS, config.IN_COL_ACCOUNT_ID, config.IN_COL_PRODUCT)
-    header, hrow = _find_header_row(rows, lambda h: all(name in h for name in required))
+_REQUIRED = (config.IN_COL_BUSINESS, config.IN_COL_ACCOUNT_ID, config.IN_COL_PRODUCT)
+
+
+def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False) -> InputList:
+    """계정/상품 그리드(값 2차원)를 파싱하는 **공용 코어** — 파일(openpyxl)·구글시트(API rows) 공용.
+
+    - `strike_fn(row_no_1based, col0)->bool`: 취소선 감지기(파일 경로만 제공, API는 None).
+    - 제외(해지/판매중지) 감지 = **취소선(있으면) 또는 상태 컬럼 값(IN_STATUS_DISCONTINUED) 또는 상품명 마커**.
+      → 구글시트는 취소선을 못 읽으므로 **상태 컬럼**이 주 감지원(사용자 지정).
+    - `emit_strike_warning`: 파일인데 취소선을 못 읽었을 때만 경고 추가(API 경로는 불필요 → False).
+    """
+    header, hrow = _find_header_row(rows, lambda h: all(name in h for name in _REQUIRED))
     if hrow < 0:
-        missing = [n for n in required if not any(n in [_norm(c) for c in r] for r in rows[:_HEADER_SCAN_ROWS])]
-        raise ValueError(f"입력 파일 상단 {_HEADER_SCAN_ROWS}행에서 헤더를 찾지 못했습니다. "
+        missing = [n for n in _REQUIRED if not any(n in [_norm(c) for c in r] for r in rows[:_HEADER_SCAN_ROWS])]
+        raise ValueError(f"입력 상단 {_HEADER_SCAN_ROWS}행에서 헤더를 찾지 못했습니다. "
                          f"누락 필수 컬럼: {', '.join(missing) or '(부분 일치)'}")
     idx = _column_index(header)
     i_rep = idx.get(config.IN_COL_REPRESENTATIVE)   # 선택(없으면 None → 라벨 폴백에서만 무시)
@@ -207,32 +227,39 @@ def parse_input_list(path: str | Path) -> InputList:
     i_acct, i_prod = idx[config.IN_COL_ACCOUNT_ID], idx[config.IN_COL_PRODUCT]
     i_opt = i_vid = i_pid = None                     # 옵션/vid/pid 미파싱(입력 정리 — 라이브에서 vid 확보)
     i_ms, i_me, i_mm = idx.get("mkt_start"), idx.get("mkt_end"), idx.get("mkt_mon")   # 마케팅(선택)
+    i_status = idx.get("status")                     # 상태 컬럼(선택) — 판매중지/삭제 감지
+
+    def _struck_cell(row_no: int, col0) -> bool:
+        return bool(strike_fn(row_no, col0)) if strike_fn is not None else False
 
     accounts: list[Account] = []
     by_id: dict[str, Account] = {}          # 같은 계정ID 재등장 시 상품을 이어 붙이기 위한 색인
     errors: list[str] = []
-    struck: list[str] = []                   # 취소선으로 제외한 계정/상품
+    struck: list[str] = []                   # 제외(취소선/상태/판매중지)된 계정·상품
     current_rep = ""
     current_acct: Account | None = None
     current_prod: Product | None = None
-    acct_cancelled = False                    # 현재 계정이 취소선(해지) → 아래 상품·옵션 전부 제외
-    prod_cancelled = False                    # 현재 상품이 취소선(품절/중지) → 아래 옵션 제외
+    acct_cancelled = False                    # 현재 계정이 해지/삭제 → 아래 상품·옵션 전부 제외
+    prod_cancelled = False                    # 현재 상품이 품절/중지 → 아래 옵션 제외
 
     for row_no, row in enumerate(rows[hrow + 1:], start=hrow + 2):
         rep, biz = _norm(_cell(row, i_rep)), _norm(_cell(row, i_biz))
         acct, prod = _norm(_cell(row, i_acct)), _norm(_cell(row, i_prod))
         opt = _norm(_cell(row, i_opt))
         vids, pids = _split_ids(_cell(row, i_vid)), _split_ids(_cell(row, i_pid))
+        status_disc = _status_discontinued(_cell(row, i_status)) if i_status is not None else False
 
         if rep:
             current_rep = rep
         if acct:
-            if strike_ok and _cell_struck(ws, row_no, i_acct):   # 취소선 계정 = 해지/취소 → 계정 전체 제외
+            # 계정 제외 = 상태 컬럼(판매중지/삭제) 또는 취소선(파일). → 계정 전체 제외.
+            if status_disc or _struck_cell(row_no, i_acct):
                 _finalize(current_prod)
                 acct_cancelled = True
                 prod_cancelled = False
                 current_acct = current_prod = None
-                struck.append(f"계정 '{acct}'({biz or current_rep}) — 취소선(해지)")
+                reason = "상태=판매중지/삭제" if status_disc else "취소선(해지)"
+                struck.append(f"계정 '{acct}'({biz or current_rep}) — {reason}")
             else:
                 acct_cancelled = False
                 prod_cancelled = False
@@ -246,15 +273,16 @@ def parse_input_list(path: str | Path) -> InputList:
                     current_acct = Account(acct, current_rep, biz)
                     by_id[acct] = current_acct
                     accounts.append(current_acct)
-        if acct_cancelled:                      # 취소된 계정 아래 행은 전부 건너뜀
+        if acct_cancelled:                      # 제외된 계정 아래 행은 전부 건너뜀
             continue
         if prod:
             _finalize(current_prod)             # 이전 상품 마감(옵션 없으면 기본옵션)
-            # 판매중지(텍스트 마커) 또는 취소선 상품 → 추적 제외
-            if _is_discontinued(prod) or (strike_ok and _cell_struck(ws, row_no, i_prod)):
+            # 상품 제외 = 상태 컬럼 / 상품명 마커 / 취소선 중 하나라도 → 추적 제외
+            if status_disc or _is_discontinued(prod) or _struck_cell(row_no, i_prod):
                 prod_cancelled = True
                 current_prod = None
-                reason = "판매중지" if _is_discontinued(prod) else "취소선(품절/중지)"
+                reason = ("상태=판매중지/삭제" if status_disc else
+                          "판매중지" if _is_discontinued(prod) else "취소선(품절/중지)")
                 struck.append(f"상품 '{prod}' — {reason}")
             else:
                 prod_cancelled = False
@@ -265,7 +293,7 @@ def parse_input_list(path: str | Path) -> InputList:
                     errors.append(f"{row_no}행: 소속 계정 없이 상품 '{prod}'")
                 else:
                     current_acct.products.append(current_prod)
-        if prod_cancelled:                      # 취소된 상품 아래 옵션 행 건너뜀
+        if prod_cancelled:                      # 제외된 상품 아래 옵션 행 건너뜀
             continue
         # 옵션 행 (옵션명 또는 vid 가 있으면 현재 상품의 옵션)
         if opt or vids or pids:
@@ -275,11 +303,69 @@ def parse_input_list(path: str | Path) -> InputList:
                 current_prod.options.append(Option(opt, vids, pids))
     _finalize(current_prod)
 
-    if not strike_ok:   # 취소선을 못 읽었음을 알림(수동 확인 유도). 값 파싱은 정상.
-        struck.append("⚠ 취소선 자동감지 불가(엑셀 스타일 비호환) — 해지/품절 계정·상품은 수동 확인 필요")
+    if emit_strike_warning:   # 파일인데 취소선을 못 읽었음을 알림(수동 확인 유도). 값 파싱은 정상.
+        struck.append("⚠ 취소선 자동감지 불가(엑셀 스타일 비호환) — 해지/품절은 '상태' 컬럼 또는 수동 확인 필요")
     # 리포트 기준 시드: 상품/옵션/ID는 판매분석 리포트가 제공하므로 계정만 있으면 유효.
     valid = [a for a in accounts if a.account_id]
     return InputList(accounts=valid, errors=errors, struck=struck)
+
+
+def parse_input_list(path: str | Path) -> InputList:
+    """PC 엑셀(관리대장 다운로드본) 파싱. 취소선(있으면)+상태 컬럼으로 해지/판매중지 감지."""
+    ws, strike_ok = _load_for_parse(path)   # strike_ok=False면 취소선 자동감지 불가(한컴 스타일 비호환)
+    rows = list(ws.iter_rows(values_only=True))
+    strike_fn = (lambda row_no, col0: _cell_struck(ws, row_no, col0)) if strike_ok else None
+    return _parse_grid(rows, strike_fn=strike_fn, emit_strike_warning=not strike_ok)
+
+
+def parse_input_rows(rows: list) -> InputList:
+    """구글시트(Sheets API) 값 격자 → InputList. 취소선 미지원 → **상태 컬럼**으로 판매중지/삭제 감지."""
+    return _parse_grid([list(r) for r in rows], strike_fn=None, emit_strike_warning=False)
+
+
+def parse_password_rows(rows: list) -> dict[str, str]:
+    """구글시트 값 격자에서 {계정아이디: 비밀번호} 추출(관리대장 rows 재사용, 파일 재조회 없음).
+
+    비번은 관리대장(입력)에만 존재 → 읽는 즉시 DPAPI 저장·메모리 폐기가 호출부 책임(결과시트엔 저장 안 함).
+    """
+    def _match(header: list[str]) -> bool:
+        norm = [h.lower().replace(" ", "") for h in header]
+        return _alias_index(norm, _ID_ALIASES) is not None and _alias_index(norm, _PW_ALIASES) is not None
+
+    header, hrow = _find_header_row(rows, _match)
+    if hrow < 0:
+        return {}                                   # 비번 컬럼 없으면 빈 dict(치명 아님 — credstore 기존값 사용)
+    norm = [h.lower().replace(" ", "") for h in header]
+    i_id, i_pw = _alias_index(norm, _ID_ALIASES), _alias_index(norm, _PW_ALIASES)
+    out: dict[str, str] = {}
+    for row in rows[hrow + 1:]:
+        aid = _norm(_cell(row, i_id))
+        raw = _cell(row, i_pw)
+        pw = str(raw) if raw is not None else ""
+        if aid and pw:
+            out[aid] = pw
+    return out
+
+
+def read_ledger_rows(url_or_id: str, *, store=None, sa_path=None) -> tuple[str, list]:
+    """관리대장(구글시트)을 서비스계정으로 열어 **본체 시트의 값 격자**를 (시트명, rows)로 반환.
+
+    본체 = 필수 헤더(사업자명·계정아이디·상품명)를 가진 시트. '셀독'·'리스트'가 든 시트명을 우선 조회해
+    API 호출을 최소화한다. 못 찾으면 ValueError(사유 명시 — fallback 금지).
+    """
+    from . import gsheet_api   # 지연 임포트(구글 라이브러리 미설치 환경에서 파일 파싱만 쓸 때 영향 없게)
+    client = gsheet_api.GSheetClient(url_or_id, store=store, sa_path=sa_path)
+    titles = client.sheet_titles()
+    if not titles:
+        raise ValueError("스프레드시트에 시트가 없습니다.")
+    ordered = sorted(titles, key=lambda t: 0 if ("셀독" in t or "리스트" in t) else 1)
+    for t in ordered:
+        rows = client.read_values(t)
+        _, hrow = _find_header_row(rows, lambda h: all(name in h for name in _REQUIRED))
+        if hrow >= 0:
+            return t, rows
+    raise ValueError("관리대장에서 필수 헤더(사업자명·계정아이디·상품명)를 가진 시트를 찾지 못했습니다 "
+                     f"(확인한 시트: {', '.join(titles)}).")
 
 
 class InputValidationError(Exception):
