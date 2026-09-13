@@ -25,11 +25,21 @@ HEADER_ROW0 = 1        # 헤더가 있는 0-based 행(=시트 2행). 0행=제목
 DATA_START0 = 2        # 데이터 시작 0-based 행(=시트 3행)
 DISCONTINUED = "⛔ 판매중지"
 INDEX_SHEET_NAME = "계정목록"   # 결과 구글시트의 계정목록 시트명(openpyxl '계정 목록'과 구분 — 공백 없음)
-_MKT_FILL = {"red": 1.0, "green": 0.949, "blue": 0.8}     # FFF2CC — 헤더 D~F(입력열 안내). 데이터 행은 밴드색
-_HEAD_FILL = {"red": 0.851, "green": 0.882, "blue": 0.949}  # D9E9FA 헤더
-# 사업자별 바탕색 밴딩(시각 구분) — 자동열 A·B·C·G에만 적용(D~F 마케팅 안내색은 그대로). 사업자마다 번갈아.
-_BAND_FILLS = ({"red": 1.0, "green": 1.0, "blue": 1.0},          # 밴드0 = 흰색
-               {"red": 0.925, "green": 0.949, "blue": 0.976})    # 밴드1 = 연한 파랑회색(ECF2FA)
+# 헤더행(제목) = **전체 열 동일 색**(사용자 지정)으로, 데이터 행(은은한 밴드색)보다 진하게 해 명확히 구분.
+# 굵은 글씨(_header_request).
+_HEAD_FILL = {"red": 0.718, "green": 0.788, "blue": 0.910}  # B7C9E8 헤더 전체(진한 청회색)
+# 사업자별 바탕색 밴딩(시각 구분) — **행 전체(A~G) 동일 색**, 사업자마다 다른 색으로 순환.
+# 사업자 등장 순서 band(0,1,2,…)를 팔레트 길이로 나눈 나머지에 매핑 → 인접 사업자는 항상 다른 색.
+# **화려하지 않게 저채도(명도 높은 은은한 톤)** — 사업자 구분만 되면 충분(사용자 지정). 새 사업자가
+# 팔레트 수를 넘으면 색이 다시 순환한다. 헤더(_HEAD_FILL/_MKT_FILL)는 이보다 진해 데이터 행과 구분됨.
+_BAND_FILLS = ({"red": 0.933, "green": 0.941, "blue": 0.949},   # 회색      EEF0F2
+               {"red": 0.902, "green": 0.937, "blue": 0.933},   # 청록빛회색 E6EFEE
+               {"red": 0.929, "green": 0.945, "blue": 0.902},   # 연두빛회색 EDF1E6
+               {"red": 0.953, "green": 0.933, "blue": 0.894},   # 베이지     F3EEE4
+               {"red": 0.925, "green": 0.918, "blue": 0.949},   # 라벤더빛   ECEAF2
+               {"red": 0.953, "green": 0.914, "blue": 0.925},   # 분홍빛회색 F3E9EC
+               {"red": 0.906, "green": 0.933, "blue": 0.961},   # 하늘빛회색 E7EEF5
+               {"red": 0.957, "green": 0.925, "blue": 0.902})   # 살구빛회색 F4ECE6
 
 
 def _band_fill(band: int) -> dict:
@@ -198,10 +208,9 @@ def _header_request(sheet_id: int) -> dict:
     """헤더행(2행)을 현재 `_HEADS` 라벨·서식으로 (재)기록. 전체생성·증분 모두에서 호출해 라벨 변경
     (예 '마케팅 시작일'→'체험단 시작일')이 **기존 시트에도** 반영되게 한다(증분은 헤더를 안 건드렸던 문제 보완)."""
     head_vals = []
-    for c, h in enumerate(_HEADS):
-        fill = _MKT_FILL if COL_MKT_START <= c <= COL_MKT_MON else _HEAD_FILL
+    for h in _HEADS:                                  # 제목줄 전체 동일 색(_HEAD_FILL) — 열마다 안 다르게
         head_vals.append({**_s(h), "userEnteredFormat": {
-            "textFormat": {"bold": True}, "horizontalAlignment": "CENTER", "backgroundColor": fill}})
+            "textFormat": {"bold": True}, "horizontalAlignment": "CENTER", "backgroundColor": _HEAD_FILL}})
     return {"updateCells": {
         "start": {"sheetId": sheet_id, "rowIndex": HEADER_ROW0, "columnIndex": 0},
         "rows": [{"values": head_vals}], "fields": "userEnteredValue,userEnteredFormat"}}
