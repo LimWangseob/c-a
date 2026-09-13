@@ -211,7 +211,7 @@ _REQUIRED = (config.IN_COL_BUSINESS, config.IN_COL_ACCOUNT_ID, config.IN_COL_PRO
 def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False) -> InputList:
     """계정/상품 그리드(값 2차원)를 파싱하는 **공용 코어** — 파일(openpyxl)·구글시트(API rows) 공용.
 
-    - `strike_fn(row_no_1based, col0)->bool`: 취소선 감지기(파일=openpyxl, 구글시트=read_grid_struck; 없으면 None).
+    - `strike_fn(row_no_1based, col0)->bool`: 취소선 감지기(파일=openpyxl, 구글시트=read_strike_grid; 없으면 None).
     - 제외(해지/판매중지) 감지 = **취소선(있으면) 또는 상태 컬럼 값(IN_STATUS_DISCONTINUED) 또는 상품명 마커**.
       → 파일·구글시트 **양쪽 다 취소선을 읽는다**(구글시트도 Sheets API로 취소선 조회 가능). 상태 컬럼은 병행 감지원.
     - `emit_strike_warning`: 파일인데 취소선을 못 읽었을 때만 경고 추가(API 경로는 불필요 → False).
@@ -321,7 +321,7 @@ def parse_input_list(path: str | Path) -> InputList:
 def parse_input_rows(rows: list, strike_grid: list | None = None) -> InputList:
     """구글시트(Sheets API) 값 격자 → InputList. 제외 감지 = **취소선(strike_grid 있으면) 또는 상태 컬럼**.
 
-    strike_grid: read_grid_struck 가 준 [행][열] bool 격자(rows 와 인덱스 정렬). None 이면 상태 컬럼만 사용.
+    strike_grid: read_strike_grid 가 준 [행][열] bool 격자(rows 와 인덱스 정렬). None 이면 상태 컬럼만 사용.
     """
     def strike_fn(row_no: int, col0) -> bool:   # row_no=1based 시트행 → 격자 인덱스 row_no-1
         r = row_no - 1
@@ -372,9 +372,11 @@ def read_ledger_rows(url_or_id: str, *, store=None, sa_path=None) -> tuple[str, 
         raise ValueError("스프레드시트에 시트가 없습니다.")
     ordered = sorted(titles, key=lambda t: 0 if ("셀독" in t or "리스트" in t) else 1)
     for t in ordered:
-        rows, strike_grid = client.read_grid_struck(t)
+        rows = client.read_values(t)                          # 값은 검증된 경로(대용량 시트 안전)
         _, hrow = _find_header_row(rows, lambda h: all(name in h for name in _REQUIRED))
         if hrow >= 0:
+            # 취소선은 사용된 행까지만 서식을 읽어 페이로드를 줄인다(관리대장 1000+행 전체 서식 = 과대·실패 위험)
+            strike_grid = client.read_strike_grid(t, max_rows=len(rows))
             return t, rows, strike_grid
     raise ValueError("관리대장에서 필수 헤더(사업자명·계정아이디·상품명)를 가진 시트를 찾지 못했습니다 "
                      f"(확인한 시트: {', '.join(titles)}).")

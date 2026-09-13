@@ -271,31 +271,27 @@ class GSheetClient:
             note_grid.append([c.get("note") for c in cells] if notes else [])
         return values, note_grid
 
-    def read_grid_struck(self, sheet: str) -> tuple[list[list[str]], list[list[bool]]]:
-        """시트의 (표시값 격자, 취소선 격자)를 한 번에 읽는다 — 관리대장 해지/판매중지 감지용.
+    def read_strike_grid(self, sheet: str, max_rows: int | None = None) -> list[list[bool]]:
+        """시트의 **취소선(strikethrough) 격자만** 읽는다 — 값은 read_values 로 따로 읽는다.
 
-        취소선(strikethrough)은 Sheets API로 **읽을 수 있다**(effectiveFormat.textFormat.strikethrough =
-        셀 전체 취소선, textFormatRuns = 셀 텍스트 일부 취소선). 한 셀이라도 취소선 신호가 있으면 True.
-        표시값 격자는 read_grid 와 동일(전 컬럼 formattedValue → 비밀번호 컬럼도 포함해 파싱 호환).
-        두 격자는 같은 rowData 에서 나오므로 [행][열] 인덱스가 서로 정렬된다. 빈 시트면 ([], []).
+        취소선은 Sheets API로 읽을 수 있다(effectiveFormat.textFormat.strikethrough=셀 전체,
+        textFormatRuns=셀 일부). 한 셀이라도 취소선 신호가 있으면 True.
+        ⚠️ 관리대장은 1000+행이라 **전체 서식을 includeGridData로 받으면 응답이 과대**해 느리거나 실패한다 →
+        `max_rows`(=사용된 행 수)를 주면 범위 '시트'!1:max_rows 로 **그 행까지만** 서식을 읽어 페이로드를 줄인다.
+        반환 격자는 read_values 의 행과 [행] 인덱스가 정렬된다(둘 다 시트 1행부터). 빈 시트면 [].
         """
-        fields = ("sheets.data.rowData.values(formattedValue,"
+        rng = f"'{sheet}'" if not max_rows else f"'{sheet}'!1:{max_rows}"
+        fields = ("sheets.data.rowData.values("
                   "effectiveFormat.textFormat.strikethrough,textFormatRuns.format.strikethrough)")
         try:
             resp = self._sheets().get(
-                spreadsheetId=self.spreadsheet_id, ranges=[f"'{sheet}'"],
+                spreadsheetId=self.spreadsheet_id, ranges=[rng],
                 includeGridData=True, fields=fields).execute()
         except Exception as exc:
             raise self._wrap(exc)
         data = resp.get("sheets", [{}])[0].get("data", [{}])
         row_data = (data[0] if data else {}).get("rowData", [])
-        values: list[list[str]] = []
-        strike_grid: list[list[bool]] = []
-        for row in row_data:
-            cells = row.get("values", [])
-            values.append([c.get("formattedValue", "") for c in cells])
-            strike_grid.append([_cell_strikethrough(c) for c in cells])
-        return values, strike_grid
+        return [[_cell_strikethrough(c) for c in row.get("values", [])] for row in row_data]
 
     def batch_update(self, requests: list[dict]) -> dict:
         """서식·구조 변경 요청 묶음(병합·색·테두리·틀고정·하이퍼링크 등)을 한 번에 적용.
