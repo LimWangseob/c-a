@@ -25,7 +25,7 @@ HEADER_ROW0 = 1        # 헤더가 있는 0-based 행(=시트 2행). 0행=제목
 DATA_START0 = 2        # 데이터 시작 0-based 행(=시트 3행)
 DISCONTINUED = "⛔ 판매중지"
 INDEX_SHEET_NAME = "계정목록"   # 결과 구글시트의 계정목록 시트명(openpyxl '계정 목록'과 구분 — 공백 없음)
-_MKT_FILL = {"red": 1.0, "green": 0.949, "blue": 0.8}     # FFF2CC 마케팅 입력열 안내색
+_MKT_FILL = {"red": 1.0, "green": 0.949, "blue": 0.8}     # FFF2CC — 헤더 D~F(입력열 안내). 데이터 행은 밴드색
 _HEAD_FILL = {"red": 0.851, "green": 0.882, "blue": 0.949}  # D9E9FA 헤더
 # 사업자별 바탕색 밴딩(시각 구분) — 자동열 A·B·C·G에만 적용(D~F 마케팅 안내색은 그대로). 사업자마다 번갈아.
 _BAND_FILLS = ({"red": 1.0, "green": 1.0, "blue": 1.0},          # 밴드0 = 흰색
@@ -180,13 +180,14 @@ def _insert_blank_row_request(sheet_id: int, grid_row: int) -> dict:
     }
 
 
-def _mkt_fill_request(sheet_id: int, grid_row: int) -> dict:
-    """신규 행의 마케팅 D~F에 안내색만 칠한다(값은 비움 — 직원이 입력)."""
+def _mkt_fill_request(sheet_id: int, grid_row: int, band: int) -> dict:
+    """행의 D~F(마케팅 입력열)를 그 사업자 밴드색으로 칠한다 → **행 전체 동일 바탕색**.
+    배경만 설정(값·다른 서식 불변)이라 직원 입력 D~F 값은 보존된다(repeatCell = updateCells 아님)."""
     return {
         "repeatCell": {
             "range": {"sheetId": sheet_id, "startRowIndex": grid_row, "endRowIndex": grid_row + 1,
                       "startColumnIndex": COL_MKT_START, "endColumnIndex": COL_MKT_MON + 1},
-            "cell": {"userEnteredFormat": {"backgroundColor": _MKT_FILL,
+            "cell": {"userEnteredFormat": {"backgroundColor": _band_fill(band),
                                            "horizontalAlignment": "CENTER"}},
             "fields": "userEnteredFormat.backgroundColor,userEnteredFormat.horizontalAlignment",
         }
@@ -213,9 +214,10 @@ def _build_requests_for_plan(sheet_id: int, plan: SyncPlan) -> list[dict]:
         reqs.append(_insert_blank_row_request(sheet_id, grid_row))
     for grid_row, row in plan.inserts:
         reqs += _auto_cells_request(sheet_id, grid_row, row)
-        reqs.append(_mkt_fill_request(sheet_id, grid_row))
+        reqs.append(_mkt_fill_request(sheet_id, grid_row, row.band))
     for grid_row, row in plan.updates:
         reqs += _auto_cells_request(sheet_id, grid_row, row)
+        reqs.append(_mkt_fill_request(sheet_id, grid_row, row.band))   # 기존 행 D~F도 밴드색으로(행 전체 동일)
     for grid_row in plan.discontinue:
         reqs.append(_status_only_request(sheet_id, grid_row, DISCONTINUED))
     return reqs
@@ -245,7 +247,7 @@ def _full_build_requests(sheet_id: int, desired: list[IndexRow]) -> list[dict]:
     for i, row in enumerate(desired):
         grid = DATA_START0 + i
         reqs += _auto_cells_request(sheet_id, grid, row)
-        reqs.append(_mkt_fill_request(sheet_id, grid))
+        reqs.append(_mkt_fill_request(sheet_id, grid, row.band))
     # 틀고정(제목·헤더 2행 + A~C 3열) + 열너비
     # 틀고정: 제목·헤더 2행만. ⚠ 열 고정은 넣지 않는다 — 제목이 A1:G1 병합이라 열 고정(예 3열)이 그 병합을
     # '일부만' 자르면 구글 시트가 400 거부(엑셀과 달리 병합 셀을 가로지르는 틀고정 불가). 계정목록은 7열뿐이라

@@ -638,7 +638,7 @@ def _count_unfilled_ranks(wb) -> int:
         if not date:
             continue
         for pname in wb.products_of(biz):
-            if not wb.product_vids(biz, pname):     # vid 없으면 측정 불가 → 백필 대상 아님
+            if not wb.product_vids(biz, pname):     # vid 없으면 측정 불가 → 보완 대상 아님
                 continue
             for kw in wb.product_keywords(biz, pname):
                 if not wb.is_rank_filled(biz, pname, kw, date):
@@ -649,7 +649,7 @@ def _count_unfilled_ranks(wb) -> int:
 def _measure_unfilled_once(wb, path, log) -> int:
     """공란 순위를 한 번 훑어 측정(브라우저 1개, vid 있는 상품의 공란 키워드만). 채운 수 반환.
 
-    ③ track_ranks_stage 자동 루프와 같은 방식(상품마다 저장·차단 감지 시 중단). 백필 라운드 1회에 해당.
+    ③ track_ranks_stage 자동 루프와 같은 방식(상품마다 저장·차단 감지 시 중단). 보완 라운드 1회에 해당.
     """
     filled = 0
     halted = False
@@ -675,14 +675,14 @@ def _measure_unfilled_once(wb, path, log) -> int:
                 except RankHalt as h:               # 차단 감지 → 부분결과만 기록하고 전면 중단
                     measured, halted = h.partial, True
                 except Exception as exc:
-                    log(f"  [순위백필] 측정 실패(공란) — {exc.__class__.__name__}: {str(exc)[:80]}")
+                    log(f"  [순위보완] 측정 실패(공란) — {exc.__class__.__name__}: {str(exc)[:80]}")
                     measured = {}
                 for kw in todo:
                     if kw not in measured:
                         continue
                     r = _best(measured.get(kw))
                     wb.set_keyword_rank(biz, pname, kw, date, r)
-                    log(f"  [순위백필] {biz} · {pname} '{kw}': {rank_label(r)}")
+                    log(f"  [순위보완] {biz} · {pname} '{kw}': {rank_label(r)}")
                     filled += 1
                 mi = cap.get("제품")
                 if mi is not None and getattr(mi, "name", "") and wb.set_display_name(biz, pname, mi.name):
@@ -704,28 +704,28 @@ def _backfill_ranks(wb, path, log, *, was_blocked: bool) -> None:
     remaining = _count_unfilled_ranks(wb)
     if remaining == 0:
         return
-    log(f"  [순위백필] 미처리 순위 {remaining}개 — 자동 재시도(최대 {config.RANK_BACKFILL_ROUNDS}회, "
+    log(f"  [순위보완] 미처리 순위 {remaining}개 — 자동 재시도(최대 {config.RANK_BACKFILL_ROUNDS}회, "
         f"라운드 간 {config.RANK_BACKFILL_COOLDOWN_SEC // 60}분 쿨다운·진전 없으면 중단)")
     for rnd in range(1, config.RANK_BACKFILL_ROUNDS + 1):
         if rnd > 1 or was_blocked:                  # 차단 뒤엔 즉시 재시도 무의미 → 쿨다운(IP 완화 시간)
-            log(f"  [순위백필] IP 쿨다운 {config.RANK_BACKFILL_COOLDOWN_SEC // 60}분 대기 후 재시도"
+            log(f"  [순위보완] IP 쿨다운 {config.RANK_BACKFILL_COOLDOWN_SEC // 60}분 대기 후 재시도"
                 f"(라운드 {rnd}/{config.RANK_BACKFILL_ROUNDS})…")
             time.sleep(config.RANK_BACKFILL_COOLDOWN_SEC)
         _reset_rank_state()                         # 새 라운드 = 이전 차단 플래그·서킷브레이커 초기화
         try:
             filled = _measure_unfilled_once(wb, path, log)
-        except Exception as exc:                    # 백필은 부가 — 어떤 예외도 전체 저장을 막지 않음
-            log(f"  [순위백필] 라운드 {rnd} 중단({exc.__class__.__name__}: {str(exc)[:80]}) — 남은 순위는 다음 실행")
+        except Exception as exc:                    # 보완은 부가 — 어떤 예외도 전체 저장을 막지 않음
+            log(f"  [순위보완] 라운드 {rnd} 중단({exc.__class__.__name__}: {str(exc)[:80]}) — 남은 순위는 다음 실행")
             return
         remaining = _count_unfilled_ranks(wb)
-        log(f"  [순위백필] 라운드 {rnd}: {filled}개 채움 · 남은 {remaining}개")
+        log(f"  [순위보완] 라운드 {rnd}: {filled}개 채움 · 남은 {remaining}개")
         if remaining == 0:
-            log("  [순위백필] 모든 순위 처리 완료")
+            log("  [순위보완] 모든 순위 처리 완료")
             return
         if filled == 0:                             # 진전 0 = IP 여전히 차단 추정 → 더 두드리지 않음
-            log("  [순위백필] 진전 없음(IP 여전히 차단 추정) — 중단. 남은 순위는 다음 실행/쉰 IP에서 이어서")
+            log("  [순위보완] 진전 없음(IP 여전히 차단 추정) — 중단. 남은 순위는 다음 실행/쉰 IP에서 이어서")
             return
-    log("  [순위백필] 재시도 상한 도달 — 남은 순위는 다음 실행에서 이어서")
+    log("  [순위보완] 재시도 상한 도달 — 남은 순위는 다음 실행에서 이어서")
 
 
 def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",

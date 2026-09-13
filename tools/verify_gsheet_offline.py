@@ -283,8 +283,13 @@ def t6_roster_from_workbook() -> None:
         for j, cell in enumerate(uc["rows"][0]["values"]):
             if cell.get("userEnteredFormat", {}).get("backgroundColor"):
                 bg_cols.add(start + j)
-    assert bg_cols == {0, 1, 2, 6}, bg_cols          # A·B·C·G만 배경, D~F(3,4,5) 없음
-    _ok("노출명·안정키·통계링크 + 사업자 밴드색(A·B·C·G만, D~F 불변)")
+    assert bg_cols == {0, 1, 2, 6}, bg_cols          # _auto_cells_request는 A·B·C·G 담당
+    # D~F는 _mkt_fill_request가 같은 밴드색으로(행 전체 동일 바탕색) + 값은 안 건드림(repeatCell)
+    mreq = gi._mkt_fill_request(1, DATA_START0, 1)
+    rc = mreq["repeatCell"]
+    assert rc["cell"]["userEnteredFormat"]["backgroundColor"] == gi._band_fill(1)
+    assert "userEnteredValue" not in str(rc["fields"])   # 배경/정렬만 — 값 미기록(직원 입력 보존)
+    _ok("노출명·안정키·통계링크 + 행 전체 사업자 밴드색(A~G, D~F는 값 보존한 채 배경만)")
 
 
 def _grow(c="", g=""):
