@@ -106,40 +106,59 @@ def _cdp(page):
         return None
 
 
-def _ime_run(cdp, syllables: list, delay) -> None:
-    """연속 한글 음절(**어절**)을 **하나의 조합 세션**으로 자모 단위 입력 후 **커밋 1회**.
-
-    각 자모마다 keydown(keyCode 229 Process + 물리키 code) + imeSetComposition(조합 텍스트) + keyup.
-    조합 텍스트 = 이미 친 음절들 + 현재 음절의 부분조합(예 맥→맥무→맥문…) → 어절 끝에 insertText 1회로 커밋.
-    ⇒ `compositionend`(isTrusted=false, CDP 한계)가 **음절마다(N개) → 어절당 1개**로 축소(탐지 스코어 누적 완화).
-    """
-    committed = ""                                   # 이 어절에서 지금까지 완성된 음절들(아직 커밋 전, 조합 접두)
-    for syl in syllables:
-        steps = _syllable_steps(syl)
-        if steps is None:                            # 음절 아님(방어) — 그대로 이어붙임
-            committed += syl
-            continue
-        for jamo, partial in steps:                  # 자모 하나씩: 조합 텍스트(접두+부분) 갱신
-            code, shift = _JAMO_KEY.get(jamo, ("", False))
-            mod = 8 if shift else 0                   # 8 = Shift(CDP modifiers 비트)
-            comp = committed + partial
-            try:
-                cdp.send("Input.dispatchKeyEvent",
-                         {"type": "rawKeyDown", "windowsVirtualKeyCode": 229, "code": code,
-                          "key": "Process", "modifiers": mod})
-                cdp.send("Input.imeSetComposition",
-                         {"text": comp, "selectionStart": len(comp), "selectionEnd": len(comp)})
-                cdp.send("Input.dispatchKeyEvent",
-                         {"type": "keyUp", "windowsVirtualKeyCode": 229, "code": code,
-                          "key": "Process", "modifiers": mod})
-            except Exception:
-                pass
-            time.sleep(delay())
-        committed += syl                             # 이 음절 완성 → 접두에 누적(조합은 계속 이어감)
+def _ime_key(cdp, jamo: str, comp: str) -> None:
+    """자모 1키 = keydown(keyCode 229 Process + 물리키 code) + imeSetComposition(조합 텍스트) + keyup."""
+    code, shift = _JAMO_KEY.get(jamo, ("", False))
+    mod = 8 if shift else 0                           # 8 = Shift(CDP modifiers 비트)
     try:
-        cdp.send("Input.insertText", {"text": committed})   # 어절 전체 커밋 1회(compositionend 1개)
+        cdp.send("Input.dispatchKeyEvent",
+                 {"type": "rawKeyDown", "windowsVirtualKeyCode": 229, "code": code,
+                  "key": "Process", "modifiers": mod})
+        cdp.send("Input.imeSetComposition",
+                 {"text": comp, "selectionStart": len(comp), "selectionEnd": len(comp)})
+        cdp.send("Input.dispatchKeyEvent",
+                 {"type": "keyUp", "windowsVirtualKeyCode": 229, "code": code,
+                  "key": "Process", "modifiers": mod})
     except Exception:
         pass
+
+
+def _ime_run(cdp, syllables: list, delay, per_syllable: bool) -> None:
+    """연속 한글 음절(**어절**)을 자모 단위로 조합 입력. 커밋 단위는 모드에 따라:
+
+    - per_syllable=False(**어절**): 어절 전체를 한 조합 세션으로 이어(맥→맥무→맥문…) 끝에 insertText 1회
+      → `compositionend`(isTrusted=false, CDP 한계)가 어절당 1개(빈도↓).
+    - per_syllable=True(**음절**): 음절마다 독립 조합(ㅁ→매→맥) 후 insertText 커밋 → 실제 IME 구조에 가깝지만
+      compositionend[F]가 음절 수만큼. (탐지 로직 미지 → 핫스팟 A/B 비교용 스위치)
+    각 자모 keydown 은 물리키 code + keyCode 229 Process(진짜 IME keydown 과 동일). compositionupdate 는 전부 trusted.
+    """
+    committed = ""                                   # 어절 모드: 지금까지 완성된 음절들(조합 접두). 음절 모드: 미사용
+    for syl in syllables:
+        steps = _syllable_steps(syl)
+        if steps is None:                            # 음절 아님(방어)
+            if per_syllable:
+                try:
+                    cdp.send("Input.insertText", {"text": syl})
+                except Exception:
+                    pass
+            else:
+                committed += syl
+            continue
+        for jamo, partial in steps:                  # 자모 하나씩: 조합 텍스트 갱신
+            _ime_key(cdp, jamo, partial if per_syllable else committed + partial)
+            time.sleep(delay())
+        if per_syllable:                             # 음절 모드 → 이 음절만 커밋(조합 접두 안 씀)
+            try:
+                cdp.send("Input.insertText", {"text": syl})
+            except Exception:
+                pass
+        else:
+            committed += syl                         # 어절 모드 → 접두에 누적(조합 계속 이어감)
+    if not per_syllable and committed:
+        try:
+            cdp.send("Input.insertText", {"text": committed})   # 어절 전체 커밋 1회
+        except Exception:
+            pass
 
 
 def type_focused(page, text: str, *, jamo: bool = True, delay=None) -> None:
@@ -150,22 +169,23 @@ def type_focused(page, text: str, *, jamo: bool = True, delay=None) -> None:
     delay = delay or human_key_delay
     need_ime = jamo and any(_is_hangul_syllable(c) for c in text)
     cdp = _cdp(page) if need_ime else None
+    per_syllable = (config.TYPE_JAMO_COMMIT_MODE == "syllable")   # 커밋 단위 스위치(어절 기본)
     try:
-        run: list = []                               # 연속 한글 음절(어절) 버퍼 — 한 조합 세션으로 처리
+        run: list = []                               # 연속 한글 음절(어절) 버퍼
         for ch in text:
             if cdp is not None and _is_hangul_syllable(ch):
                 run.append(ch)
                 continue
-            if run:                                  # 어절 끝(공백/영문/기호) → 지금까지 한글을 한 번에 조합·커밋
-                _ime_run(cdp, run, delay)
+            if run:                                  # 어절 끝(공백/영문/기호) → 지금까지 한글을 조합·커밋
+                _ime_run(cdp, run, delay, per_syllable)
                 run = []
             try:
                 page.keyboard.type(ch)               # 비한글(ASCII/공백/기호)은 실제 키입력
             except Exception:
                 pass
             time.sleep(delay())
-        if run:                                      # 마지막 어절 커밋
-            _ime_run(cdp, run, delay)
+        if run:                                      # 마지막 어절
+            _ime_run(cdp, run, delay, per_syllable)
     finally:
         if cdp is not None:
             try:
