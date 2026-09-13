@@ -213,7 +213,8 @@ def _load_results(browser: WingBrowser, keyword: str, page_no: int = 1,
         except Exception:
             html = browser.page.title() or ""
         if any(h in html for h in _BLOCK_HINTS) or any(h in html for h in _CHALLENGE_MARKERS):
-            raise RankBlocked(f"검색 차단됨(Akamai 챌린지): {url}")
+            blocked_url = SEARCH_URL.format(q=quote(keyword), page=page_no)
+            raise RankBlocked(f"검색 차단됨(Akamai 챌린지): {blocked_url}")
         return False  # 정상 페이지지만 상품 없음(빈 결과)
 
 
