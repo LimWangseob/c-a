@@ -13,7 +13,7 @@ import re
 import time
 from dataclasses import dataclass
 from typing import Callable
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from playwright.sync_api import TimeoutError as PWTimeout
 
@@ -23,6 +23,68 @@ from .browser import WingBrowser
 HOME_URL = "https://www.coupang.com/"
 SEARCH_URL = "https://www.coupang.com/np/search?q={q}&page={page}"
 _BLOCK_HINTS = ("죄송", "Denied", "Access", "제한된", "사용권한")   # '사용권한이 없습니다/제한된' 접근차단 페이지
+
+# ── 사람처럼 검색어 타이핑(붙여넣기 금지) ─────────────────────────────
+# ⚠️ 실측(사용자): 쿠팡 Akamai는 **붙여넣기/즉시 채움(비신뢰 input·value setter)** 을 짧은 쿼리로 감지해 차단하고,
+#    **실제 키보드로 한 글자씩** 친 입력(신뢰 키이벤트)만 통과시킨다. 그래서 검색어는 반드시 키보드로 타이핑한다.
+_SEARCH_BOX_SEL = "input[name='q'], input.headerSearchKeyword, #headerSearchKeyword"
+_FOCUS_CLEAR_JS = r"""() => {
+  const inputs = Array.from(document.querySelectorAll(
+      "input[name='q'], input.headerSearchKeyword, #headerSearchKeyword"));
+  const vis = inputs.find(i => i.offsetParent !== null) || inputs[0];
+  if (!vis) return false;
+  vis.focus();
+  try { vis.select(); } catch (e) {}
+  return true;
+}"""
+
+
+def _human_key_delay() -> float:
+    """한 글자 친 뒤 다음 글자까지의 간격(초) — 미세 랜덤 + 가끔 망설임. 붙여넣기(즉시)와 달리 자연스러운 리듬."""
+    d = random.uniform(0.07, 0.18)              # 기본 타건 간격(사람 타이핑 ~5~14타/초 범위)
+    if random.random() < 0.12:                  # 가끔 키 찾기/생각으로 멈칫(사람 패턴)
+        d += random.uniform(0.18, 0.45)
+    return d
+
+
+def human_type_query(page, text: str) -> bool:
+    """보이는 쿠팡 검색창에 text 를 **사람처럼 한 글자씩 실제 키보드로** 입력한다(붙여넣기 아님).
+
+    쿠팡은 붙여넣기(비신뢰 input·즉시 채움)를 감지해 차단하므로 신뢰 키이벤트로 친다.
+    한글은 음절 단위, 영문/숫자는 글자 단위(ASCII는 keydown/keypress/keyup까지 발생). 글자마다 **미세 랜덤 간격**.
+    기존 입력은 전체선택 후 지우고 새로 친다. 검색창을 못 찾으면 False(호출부가 URL 폴백).
+    """
+    try:
+        if not page.evaluate(_FOCUS_CLEAR_JS):
+            return False
+        page.keyboard.press("Control+a")        # 기존 입력 전체선택
+        page.keyboard.press("Delete")           # 지우고 새로 타이핑
+        for ch in text:
+            page.keyboard.type(ch)              # 한 글자(신뢰 키입력)
+            time.sleep(_human_key_delay())      # 글자마다 미세 랜덤 간격(사람 리듬)
+        return True
+    except Exception:
+        return False
+
+
+def _url_q(url: str) -> str:
+    """URL 의 q 파라미터(디코드·공백제거). 없으면 ''."""
+    m = re.search(r"[?&]q=([^&]+)", url or "")
+    return unquote(m.group(1)).replace(" ", "") if m else ""
+
+
+def _await_query_navigated(browser, keyword: str, timeout_ms: int = 8000) -> bool:
+    """타이핑+Enter 후 현재 페이지 URL 의 q 가 keyword 로 바뀔 때까지 대기(네비 완료 확인). 같아지면 True."""
+    want = keyword.replace(" ", "")
+    deadline = time.time() + timeout_ms / 1000.0
+    while time.time() < deadline:
+        try:
+            if _url_q(browser.page.evaluate("() => location.href")) == want:
+                return True
+        except Exception:
+            pass
+        time.sleep(0.15)
+    return False
 
 
 class RankBlocked(Exception):
@@ -101,14 +163,26 @@ def warmup(browser: WingBrowser) -> None:
     time.sleep(random.uniform(config.RANK_PAGE_DELAY_MIN, config.RANK_PAGE_DELAY_MAX))
 
 
-def _load_results(browser: WingBrowser, url: str, timeout: float = 6000, log=None) -> bool:
+def _load_results(browser: WingBrowser, keyword: str, page_no: int = 1,
+                  timeout: float = 6000, log=None) -> bool:
     """검색 결과를 로드. 상품이 뜨면 True, 결과 없음이면 False, 차단이면 RankBlocked.
 
-    상품은 정상 시 ~0.1초에 뜨므로 셀렉터 타임아웃은 짧게(6초) — 차단(챌린지 페이지)일 때 빨리 실패한다.
-    타임아웃 시 HTML에 Akamai 챌린지/차단 마커가 있으면 RankBlocked(단순 빈 결과와 구분).
+    **1페이지 = 검색창에 사람처럼 한 글자씩 타이핑 + Enter**(직접 URL 이동/붙여넣기 아님 = 쿠팡 키입력 체크 통과).
+    2페이지 이상(스캔 상한이 1페이지=60개를 넘을 때만·드묾)은 URL 이동으로 폴백. 검색창을 못 찾으면 URL 이동 폴백.
+    상품은 정상 시 ~0.1초에 뜨므로 셀렉터 타임아웃은 짧게(6초) — 차단 페이지일 때 빨리 실패. 차단 마커면 RankBlocked.
     """
     t0 = time.time()
-    browser.goto(url)
+    if page_no <= 1:                              # 사람처럼 검색창 타이핑 + Enter
+        if human_type_query(browser.page, keyword):
+            try:
+                browser.page.keyboard.press("Enter")
+                _await_query_navigated(browser, keyword)   # 네비 완료(URL q 일치) 대기
+            except Exception:
+                browser.goto(SEARCH_URL.format(q=quote(keyword), page=1))
+        else:                                     # 검색창 못 찾음 → URL 이동 폴백(최후)
+            browser.goto(SEARCH_URL.format(q=quote(keyword), page=1))
+    else:
+        browser.goto(SEARCH_URL.format(q=quote(keyword), page=page_no))
     t_goto = time.time() - t0
     try:
         browser.page.wait_for_selector(_ITEM_SEL, timeout=timeout)
@@ -175,7 +249,7 @@ def organic_ranks(browser: WingBrowser, keyword: str, matchers: dict[str, Callab
         _set_mobile(browser.page, True)
     try:
         while rank < max_rank and remaining:
-            if not _load_results(browser, SEARCH_URL.format(q=quote(keyword), page=page_no), log=log):
+            if not _load_results(browser, keyword, page_no, log=log):
                 break
             items = extract_items(browser.page)
             if not items:
@@ -385,7 +459,7 @@ def organic_rank(browser: WingBrowser, keyword: str, matches: Callable[[SearchIt
     rank = 0
     page_no = 1
     while rank < max_rank:
-        if not _load_results(browser, SEARCH_URL.format(q=quote(keyword), page=page_no)):
+        if not _load_results(browser, keyword, page_no):
             return None
         items = extract_items(browser.page)
         if not items:

@@ -23,7 +23,7 @@ from .kw_ai import KeywordAIError, recommend_title
 from .kw_recommend import (attack_priority, comp_from_idx, diagnose_exposure,
                            keyword_in_title, rank_label, select_keywords_light)
 from .kw_volume import NaverAdApi
-from .rank import RankBlocked, make_matcher, organic_ranks, organic_ranks_batch, warmup
+from .rank import RankBlocked, human_type_query, make_matcher, organic_ranks, organic_ranks_batch, warmup
 from .session_store import SessionStore
 from .workbook import OutputWorkbook
 
@@ -1136,32 +1136,13 @@ def _live_url(pg) -> str:
         return ""
 
 
-# 반자동 자동채움 — 뜬 창의 쿠팡 검색창(들)에 키워드만 미리 채운다. **제출·네비게이션은 안 함**(실제 검색은
-# 사람이 Enter). 자동 검색이 아니라 입력값 프리필이라 반자동 정책(사람이 직접 검색) 유지. 검색창은 반응형이라
-# 여러 개(name='q', class headerSearchKeyword) → 전부 채우고 보이는 것에 포커스해 바로 Enter 되게 한다.
-# React 제어 input 이라 네이티브 value setter + input 이벤트로 프레임워크 상태까지 갱신(안 하면 Enter 시 옛 값 제출).
-_PREFILL_JS = r"""(kw) => {
-  const inputs = Array.from(document.querySelectorAll(
-      "input[name='q'], input.headerSearchKeyword, #headerSearchKeyword"));
-  if (!inputs.length) return false;
-  const proto = window.HTMLInputElement && window.HTMLInputElement.prototype;
-  const setter = proto && Object.getOwnPropertyDescriptor(proto, 'value').set;
-  let focused = false;
-  for (const input of inputs) {
-    try {
-      if (setter) setter.call(input, kw); else input.value = kw;
-      input.dispatchEvent(new Event('input', {bubbles: true}));
-      input.dispatchEvent(new Event('change', {bubbles: true}));
-      if (!focused && input.offsetParent !== null) { input.focus(); focused = true; }
-    } catch (e) {}
-  }
-  if (!focused) { try { inputs[0].focus(); } catch (e) {} }
-  return true;
-}"""
-
-
+# 반자동 자동입력 — 뜬 창의 검색창에 키워드를 **사람처럼 한 글자씩 실제 키보드로** 친다(붙여넣기 아님).
+# ⚠️ 쿠팡은 붙여넣기/즉시 채움(비신뢰 input)을 감지해 차단하므로 반드시 타이핑(rank.human_type_query 재사용).
 def _prefill_search(browser, kw: str) -> bool:
-    """뜬 창의 검색창(들)에 kw 를 자동입력(제출 안 함). 성공 시 True(실패 시 복사 폴백 안내). browser.page 우선."""
+    """뜬 창의 보이는 검색창에 kw 를 **사람처럼 한 글자씩 실제 키보드로 타이핑**(붙여넣기 아님, 제출은 안 함).
+
+    ⚠️ 쿠팡은 붙여넣기/즉시 채움(비신뢰 input)을 감지해 차단하고 실제 키입력만 통과시킨다(실측) → 반드시 타이핑.
+    browser.page(앞 창) 우선, 실패 시 다른 탭. 성공 True(실패 시 호출부가 복사 폴백 안내)."""
     pages = _all_pages(browser)
     try:
         if browser.page in pages:
@@ -1170,7 +1151,7 @@ def _prefill_search(browser, kw: str) -> bool:
         pass
     for pg in pages:
         try:
-            if pg.evaluate(_PREFILL_JS, kw):
+            if human_type_query(pg, kw):
                 return True
         except Exception:
             continue
@@ -1418,13 +1399,14 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                     if should_stop() or halted:
                         break
                     browser.to_front()   # 키워드마다 창을 앞으로(다른 창에 가려 못 찾는 것 방지)
-                    filled = _prefill_search(browser, kw)   # 검색창에 키워드 자동입력
                     log(f"  🔎 [{biz}] {pname}  ({idx}/{len(todo)})")
+                    filled = _prefill_search(browser, kw)   # 사람처럼 한 글자씩 타이핑(붙여넣기 아님)
                     if autosubmit:
-                        # 붙여넣고 즉시 Enter=봇 패턴 → 입력 후 **글자수+기본여유**만큼 멈춤 뒤 제출(사람 타이핑 시간 모사).
-                        dwell = config.type_dwell(kw)
-                        log(f"     ⏎ 「{kw}」 자동입력됨 → {dwell:.1f}s 대기 후 자동검색(Enter) — 사람 타이핑속도 모사({len(kw)}자)")
-                        _interruptible_sleep(dwell, should_stop)   # 입력~Enter 사이 멈춤(log 생략=무음, 중지 반응 유지)
+                        # 타이핑이 이미 사람 리듬(글자별 미세 랜덤)을 재현 → 다 치고 **짧게 멈춘 뒤** 검색(사람 패턴).
+                        pause = random.uniform(0.5, 1.4)
+                        log(f"     ⌨ 「{kw}」 한 글자씩 자동 타이핑{'' if filled else '(검색창 못찾음→URL 폴백)'}"
+                            f" → {pause:.1f}s 뒤 자동검색(Enter)")
+                        _interruptible_sleep(pause, should_stop)   # 다 치고 잠깐 멈춤(중지 반응 유지)
                         if should_stop() or halted:
                             break
                         _submit_search(browser)              # 사람 대신 앱이 Enter(제출)
