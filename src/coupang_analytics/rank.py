@@ -17,7 +17,7 @@ from urllib.parse import quote, unquote
 
 from playwright.sync_api import TimeoutError as PWTimeout
 
-from . import config
+from . import config, human_typing
 from .browser import WingBrowser
 
 HOME_URL = "https://www.coupang.com/"
@@ -37,34 +37,51 @@ _FOCUS_CLEAR_JS = r"""() => {
   try { vis.select(); } catch (e) {}
   return true;
 }"""
+_READ_Q_JS = r"""() => {
+  const i = Array.from(document.querySelectorAll(
+      "input[name='q'], input.headerSearchKeyword, #headerSearchKeyword")).find(x => x.offsetParent !== null)
+      || document.querySelector("input[name='q']");
+  return i ? i.value : null;
+}"""
 
 
-def _human_key_delay() -> float:
-    """한 글자 친 뒤 다음 글자까지의 간격(초) — 미세 랜덤 + 가끔 망설임. 붙여넣기(즉시)와 달리 자연스러운 리듬."""
-    d = random.uniform(0.07, 0.18)              # 기본 타건 간격(사람 타이핑 ~5~14타/초 범위)
-    if random.random() < 0.12:                  # 가끔 키 찾기/생각으로 멈칫(사람 패턴)
-        d += random.uniform(0.18, 0.45)
-    return d
+def _typed_ok(page, text: str) -> bool:
+    """검색창의 현재 값이 text 와 같은가(조합 성공 검증). 공백 무시."""
+    try:
+        v = page.evaluate(_READ_Q_JS)
+    except Exception:
+        return False
+    return v is not None and str(v).replace(" ", "") == text.replace(" ", "")
 
 
-def human_type_query(page, text: str) -> bool:
-    """보이는 쿠팡 검색창에 text 를 **사람처럼 한 글자씩 실제 키보드로** 입력한다(붙여넣기 아님).
-
-    쿠팡은 붙여넣기(비신뢰 input·즉시 채움)를 감지해 차단하므로 신뢰 키이벤트로 친다.
-    한글은 음절 단위, 영문/숫자는 글자 단위(ASCII는 keydown/keypress/keyup까지 발생). 글자마다 **미세 랜덤 간격**.
-    기존 입력은 전체선택 후 지우고 새로 친다. 검색창을 못 찾으면 False(호출부가 URL 폴백).
-    """
+def _focus_clear(page) -> bool:
     try:
         if not page.evaluate(_FOCUS_CLEAR_JS):
             return False
         page.keyboard.press("Control+a")        # 기존 입력 전체선택
         page.keyboard.press("Delete")           # 지우고 새로 타이핑
-        for ch in text:
-            page.keyboard.type(ch)              # 한 글자(신뢰 키입력)
-            time.sleep(_human_key_delay())      # 글자마다 미세 랜덤 간격(사람 리듬)
         return True
     except Exception:
         return False
+
+
+def human_type_query(page, text: str) -> bool:
+    """보이는 쿠팡 검색창에 text 를 **사람처럼 한 글자씩 실제 키보드로** 입력한다(붙여넣기 아님).
+
+    한글은 **CDP IME 자모 단위 조합**(config.TYPE_JAMO_IME), 영문/숫자는 글자 단위 키입력. 글자마다 미세 랜덤 간격.
+    입력 후 **값을 검증**해 조합이 어긋나면 음절 단위 키입력으로 폴백한다(그래도 어긋나면 False→호출부 URL 폴백).
+    """
+    if not _focus_clear(page):
+        return False
+    human_typing.type_focused(page, text, jamo=config.TYPE_JAMO_IME)
+    if _typed_ok(page, text):
+        return True
+    if config.TYPE_JAMO_IME:                    # 자모 조합 어긋남 → 음절 단위 신뢰 키입력으로 폴백
+        if _focus_clear(page):
+            human_typing.type_focused(page, text, jamo=False)
+            if _typed_ok(page, text):
+                return True
+    return False
 
 
 def _url_q(url: str) -> str:

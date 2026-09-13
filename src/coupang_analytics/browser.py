@@ -373,6 +373,26 @@ class WingBrowser:
         except Exception as exc:
             log(f"  [자동입력] 로그인 상태 유지 체크 실패({exc.__class__.__name__}) — 계속 진행")
 
+    def _type_field(self, el, value: str) -> None:
+        """로그인 입력칸에 value 를 **사람처럼 한 글자씩 실제 키보드로** 친다(붙여넣기/fill 아님).
+
+        쿠팡은 붙여넣기(비신뢰 input)를 감지하므로 신뢰 키입력으로. 실패/불일치면 fill 로 폴백(로그인은 반드시 채워야 함).
+        ID/비번은 ASCII 라 IME 조합 불필요(jamo=False)."""
+        from . import human_typing
+        try:
+            el.click()
+            self.page.keyboard.press("Control+a")
+            self.page.keyboard.press("Delete")
+            human_typing.type_focused(self.page, value, jamo=False)
+            if el.input_value() == value:
+                return
+        except Exception:
+            pass
+        try:
+            el.fill(value)                     # 타이핑 실패/불일치 → 폴백(로그인 필수 입력)
+        except Exception:
+            pass
+
     def autofill_login(self, account_id: str, password: str, on_log=None) -> bool:
         """로그인 폼에 ID/비번 자동입력 후 제출. 폼(#username) 못 찾으면 False(수동 폴백)."""
         log = on_log or (lambda m: None)
@@ -385,8 +405,8 @@ class WingBrowser:
             p = fr.query_selector("#password")
             if not (u and p):
                 return False
-            u.click(); u.fill(account_id)
-            p.click(); p.fill(password)
+            self._type_field(u, account_id)   # 붙여넣기(fill) 아닌 **실제 키보드 타이핑**(쿠팡 키입력 체크 통과)
+            self._type_field(p, password)
             self._check_remember_me(fr, log)   # 로그인 상태 유지 → 인증쿠키 지속쿠키화(전원off 복원)
             btn = fr.query_selector("#kc-login")
             if btn:

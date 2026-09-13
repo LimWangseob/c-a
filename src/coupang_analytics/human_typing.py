@@ -1,0 +1,138 @@
+"""사람처럼 한 글자씩 실제 키보드로 입력 — 붙여넣기(비신뢰 input) 대신 **신뢰 키이벤트**.
+
+⚠️ 실측(사용자, 2026-09-13): 쿠팡 Akamai는 **붙여넣기/즉시 채움**(value setter·fill = isTrusted=false input,
+keydown 없음)을 짧은 쿼리로 감지해 차단하고, **실제 키보드로 한 글자씩** 친 입력만 통과시킨다.
+그래서 검색어·로그인 입력을 여기로 통일한다:
+- **한글** = CDP IME **자모 단위 조합**(자모마다 keyCode 229(Process) keydown + `Input.imeSetComposition`
+  으로 조합 텍스트 갱신(compositionupdate) → 음절 완성 시 `Input.insertText` 로 커밋(compositionend)).
+  실제 IME 타이핑과 같은 이벤트열(keydown 229 · compositionstart/update/end · input)을 낸다.
+- **영문/숫자/기호** = `page.keyboard.type(ch)`(ASCII는 keydown/keypress/keyup 발생).
+- 글자(자모)마다 **미세 랜덤 간격**(사람 타이핑 리듬). CDP/조합 실패는 조용히 무시(호출부가 값 검증·폴백).
+"""
+from __future__ import annotations
+
+import random
+import time
+
+# 한글 조합 테이블(유니코드 한글 음절 = 0xAC00 + 초성*588 + 중성*28 + 종성)
+_CHO = list("ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ")                       # 19
+_JUNG = list("ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ")                  # 21
+_JONG = [""] + list("ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄㅅㅆㅇㅈㅊㅋㅌㅍㅎ")   # 28(0=받침없음)
+# 복합 자모 → 기본 자모 키 2개(2벌식에서 두 번 눌러 만든다)
+_JUNG_PARTS = {"ㅘ": ("ㅗ", "ㅏ"), "ㅙ": ("ㅗ", "ㅐ"), "ㅚ": ("ㅗ", "ㅣ"), "ㅝ": ("ㅜ", "ㅓ"),
+               "ㅞ": ("ㅜ", "ㅔ"), "ㅟ": ("ㅜ", "ㅣ"), "ㅢ": ("ㅡ", "ㅣ")}
+_JONG_PARTS = {"ㄳ": ("ㄱ", "ㅅ"), "ㄵ": ("ㄴ", "ㅈ"), "ㄶ": ("ㄴ", "ㅎ"), "ㄺ": ("ㄹ", "ㄱ"),
+               "ㄻ": ("ㄹ", "ㅁ"), "ㄼ": ("ㄹ", "ㅂ"), "ㄽ": ("ㄹ", "ㅅ"), "ㄾ": ("ㄹ", "ㅌ"),
+               "ㄿ": ("ㄹ", "ㅍ"), "ㅀ": ("ㄹ", "ㅎ"), "ㅄ": ("ㅂ", "ㅅ")}
+_JUNG_COMBINE = {v: k for k, v in _JUNG_PARTS.items()}   # ('ㅗ','ㅏ') → 'ㅘ'
+_JONG_COMBINE = {v: k for k, v in _JONG_PARTS.items()}
+
+
+def human_key_delay() -> float:
+    """한 글자(자모) 친 뒤 다음까지 간격(초) — 미세 랜덤 + 가끔 망설임. 붙여넣기(즉시)와 다른 사람 리듬."""
+    d = random.uniform(0.06, 0.17)                  # 기본 타건 간격(사람 ~6~16타/초)
+    if random.random() < 0.12:                      # 가끔 키 찾기/생각으로 멈칫
+        d += random.uniform(0.18, 0.45)
+    return d
+
+
+def _is_hangul_syllable(ch: str) -> bool:
+    return 0xAC00 <= ord(ch) <= 0xD7A3
+
+
+def _decompose(syllable: str):
+    """한글 음절 → (초성, 중성, 종성|'')."""
+    code = ord(syllable) - 0xAC00
+    if not (0 <= code < 11172):
+        return None
+    return _CHO[code // 588], _JUNG[(code % 588) // 28], _JONG[code % 28]
+
+
+def _compose(cho: str, jung, jong) -> str:
+    """(초성, 중성|None, 종성|'') → 조합 문자(중성 없으면 초성 호환자모만)."""
+    if jung is None:
+        return cho                                   # 초성만 = 호환 자모(ㅁ 등)
+    ci, ji = _CHO.index(cho), _JUNG.index(jung)
+    ki = _JONG.index(jong) if jong else 0
+    return chr(0xAC00 + ci * 588 + ji * 28 + ki)
+
+
+def _syllable_partials(syllable: str):
+    """음절을 자모 키 순서대로 조합해가며 **각 키입력 후의 조합 텍스트** 리스트(마지막=완성 음절)."""
+    d = _decompose(syllable)
+    if not d:
+        return None
+    cho, jung, jong = d
+    partials = [_compose(cho, None, None)]           # 초성 입력 후
+    acc = []
+    for p in _JUNG_PARTS.get(jung, (jung,)):         # 중성(복합이면 2키)
+        acc.append(p)
+        jnow = acc[0] if len(acc) == 1 else _JUNG_COMBINE[tuple(acc)]
+        partials.append(_compose(cho, jnow, None))
+    if jong:
+        gacc = []
+        for p in _JONG_PARTS.get(jong, (jong,)):     # 종성(복합이면 2키)
+            gacc.append(p)
+            gnow = gacc[0] if len(gacc) == 1 else _JONG_COMBINE[tuple(gacc)]
+            partials.append(_compose(cho, jung, gnow))
+    return partials
+
+
+def _cdp(page):
+    try:
+        return page.context.new_cdp_session(page)
+    except Exception:
+        return None
+
+
+def _ime_syllable(cdp, syllable: str, delay) -> None:
+    """한 음절을 CDP IME로 자모 단위 조합 입력(각 자모: keydown229 + imeSetComposition) 후 커밋(insertText)."""
+    partials = _syllable_partials(syllable)
+    if partials is None:                             # 음절 아님 → 바로 삽입
+        try:
+            cdp.send("Input.insertText", {"text": syllable})
+        except Exception:
+            pass
+        time.sleep(delay())
+        return
+    for pt in partials:                              # 자모 하나씩: 조합 텍스트 갱신
+        try:
+            cdp.send("Input.dispatchKeyEvent",
+                     {"type": "rawKeyDown", "windowsVirtualKeyCode": 229, "key": "Process"})
+            cdp.send("Input.imeSetComposition",
+                     {"text": pt, "selectionStart": len(pt), "selectionEnd": len(pt)})
+            cdp.send("Input.dispatchKeyEvent",
+                     {"type": "keyUp", "windowsVirtualKeyCode": 229, "key": "Process"})
+        except Exception:
+            pass
+        time.sleep(delay())
+    try:
+        cdp.send("Input.insertText", {"text": syllable})   # 조합 커밋(compositionend + input)
+    except Exception:
+        pass
+
+
+def type_focused(page, text: str, *, jamo: bool = True, delay=None) -> None:
+    """**이미 포커스된** 입력요소에 text 를 한 글자씩 친다(한글=CDP IME 조합, ASCII=키입력, 글자마다 미세 랜덤 간격).
+
+    요소 포커스·기존값 삭제는 호출부 책임. 값 검증/폴백도 호출부가(여기선 예외를 삼키고 최대한 입력만).
+    """
+    delay = delay or human_key_delay
+    need_ime = jamo and any(_is_hangul_syllable(c) for c in text)
+    cdp = _cdp(page) if need_ime else None
+    try:
+        for ch in text:
+            if cdp is not None and _is_hangul_syllable(ch):
+                _ime_syllable(cdp, ch, delay)
+            else:
+                try:
+                    page.keyboard.type(ch)           # ASCII는 keydown/keypress/keyup 발생
+                except Exception:
+                    pass
+                time.sleep(delay())
+    finally:
+        if cdp is not None:
+            try:
+                cdp.detach()
+            except Exception:
+                pass
