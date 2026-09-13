@@ -184,9 +184,22 @@ def _mkt_fill_request(sheet_id: int, grid_row: int) -> dict:
     }
 
 
+def _header_request(sheet_id: int) -> dict:
+    """헤더행(2행)을 현재 `_HEADS` 라벨·서식으로 (재)기록. 전체생성·증분 모두에서 호출해 라벨 변경
+    (예 '마케팅 시작일'→'체험단 시작일')이 **기존 시트에도** 반영되게 한다(증분은 헤더를 안 건드렸던 문제 보완)."""
+    head_vals = []
+    for c, h in enumerate(_HEADS):
+        fill = _MKT_FILL if COL_MKT_START <= c <= COL_MKT_MON else _HEAD_FILL
+        head_vals.append({**_s(h), "userEnteredFormat": {
+            "textFormat": {"bold": True}, "horizontalAlignment": "CENTER", "backgroundColor": fill}})
+    return {"updateCells": {
+        "start": {"sheetId": sheet_id, "rowIndex": HEADER_ROW0, "columnIndex": 0},
+        "rows": [{"values": head_vals}], "fields": "userEnteredValue,userEnteredFormat"}}
+
+
 def _build_requests_for_plan(sheet_id: int, plan: SyncPlan) -> list[dict]:
     """증분 동기화 요청 묶음. 삽입은 최종 위치 오름차순으로(선삽입이 후위치 인덱스를 맞춰줌)."""
-    reqs: list[dict] = []
+    reqs: list[dict] = [_header_request(sheet_id)]   # 헤더 라벨 항상 최신화(행 1=헤더, 삽입 대상 밖이라 안전)
     for grid_row, _row in sorted(plan.inserts, key=lambda t: t[0]):
         reqs.append(_insert_blank_row_request(sheet_id, grid_row))
     for grid_row, row in plan.inserts:
@@ -218,15 +231,7 @@ def _full_build_requests(sheet_id: int, desired: list[IndexRow]) -> list[dict]:
                               "userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 14},
                                                     "horizontalAlignment": "CENTER"}}]}],
         "fields": "userEnteredValue,userEnteredFormat"}})
-    # 헤더(2행)
-    head_vals = []
-    for c, h in enumerate(_HEADS):
-        fill = _MKT_FILL if COL_MKT_START <= c <= COL_MKT_MON else _HEAD_FILL
-        head_vals.append({**_s(h), "userEnteredFormat": {
-            "textFormat": {"bold": True}, "horizontalAlignment": "CENTER", "backgroundColor": fill}})
-    reqs.append({"updateCells": {
-        "start": {"sheetId": sheet_id, "rowIndex": HEADER_ROW0, "columnIndex": 0},
-        "rows": [{"values": head_vals}], "fields": "userEnteredValue,userEnteredFormat"}})
+    reqs.append(_header_request(sheet_id))    # 헤더(2행) 라벨·서식
     # 데이터 행
     for i, row in enumerate(desired):
         grid = DATA_START0 + i
