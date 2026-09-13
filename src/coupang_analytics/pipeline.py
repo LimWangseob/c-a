@@ -1233,7 +1233,7 @@ def _wait_results_loaded(browser, kw: str, should_stop, timeout: float):
             if items:
                 return pg, False
             if _looks_blocked(pg):
-                blocked = True
+                return None, True     # 확정 차단 페이지 → 데드라인(40s) 안 기다리고 즉시 반환(빠른 반응)
         time.sleep(1.0)
     return None, blocked
 
@@ -1441,8 +1441,13 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                     if pg is None:
                         if autosubmit:
                             miss_streak += 1
-                            why = "차단 페이지 감지" if blocked else "결과 미로딩(차단 추정)"
-                            log(f"  [반자동] 「{kw}」 {why} — 공란. 연속 {miss_streak}/{config.RANK_SEMI_AUTO_MAX_MISS}")
+                            if blocked:   # 확정 차단 페이지(사용권한 없음)=IP 막힘 → 3회 안 기다리고 즉시 판정
+                                miss_streak = config.RANK_SEMI_AUTO_MAX_MISS
+                                log(f"  [반자동] 「{kw}」 쿠팡 접근차단(사용권한 없음) 감지 — **이 IP가 막혔습니다**. "
+                                    "휴대폰 핫스팟 등 **새 IP**에서 재실행하면 남은 것부터 이어서 조회됩니다")
+                            else:
+                                log(f"  [반자동] 「{kw}」 결과 미로딩(차단 추정) — 공란. "
+                                    f"연속 {miss_streak}/{config.RANK_SEMI_AUTO_MAX_MISS}")
                             if miss_streak >= config.RANK_SEMI_AUTO_MAX_MISS:
                                 # 하드 스톱 대신 **긴 쿨다운 후 자동 재개**(무인 장시간). 쿨다운 후에도 진전 0이
                                 # 반복되면(cooldowns 초과) 그때 당일 중단(IP 회복 불가 판단 — 무한 재시도 금지).
