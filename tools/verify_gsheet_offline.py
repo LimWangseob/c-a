@@ -128,7 +128,15 @@ def t3b_full_and_incremental() -> None:
     p = gi.sync_index(fc, desired)
     assert p.inserts and not p.updates and any("mergeCells" in r for r in fc.batches[0])
     assert not [c for r in fc.batches[0] for c in _touched_data_mkt(r)]
-    _ok("빈 시트 → 전체 생성(제목 병합·마케팅 값 미기록)")
+    # 구글 API 계약 방어(라이브에서 400으로 드러났던 버그 재발 방지):
+    valid_merge = {"MERGE_ALL", "MERGE_ROWS", "MERGE_COLUMNS"}
+    for r in fc.batches[0]:
+        if "mergeCells" in r:
+            assert r["mergeCells"]["mergeType"] in valid_merge, r["mergeCells"]["mergeType"]
+        if "updateSheetProperties" in r:   # 제목 A1:G1 병합과 충돌하는 열 고정 금지(부분 병합 틀고정=400)
+            gp = r["updateSheetProperties"]["properties"].get("gridProperties", {})
+            assert gp.get("frozenColumnCount", 0) == 0, gp
+    _ok("빈 시트 → 전체 생성(제목 병합=MERGE_ALL·열 고정 없음·마케팅 값 미기록)")
 
     existing_vals = [
         ["계정목록 · 상품 3개"], _HEAD,
@@ -190,6 +198,9 @@ def t5_stats_mirror() -> None:
         assert need in kinds, (need, kinds)
     gp = next(r for r in reqs if "updateSheetProperties" in r)["updateSheetProperties"]["properties"]["gridProperties"]
     assert gp["frozenRowCount"] == 1 and gp["frozenColumnCount"] == 7, gp   # freeze_panes 'H2'
+    for r in reqs:                       # 병합 타입 유효값(라이브 400 방지) — 통계는 7열 전체 고정이라 병합 안 잘림
+        if "mergeCells" in r:
+            assert r["mergeCells"]["mergeType"] in {"MERGE_ALL", "MERGE_ROWS", "MERGE_COLUMNS"}
     flat = str(next(r for r in reqs if "updateCells" in r))
     assert "#gid=7&range=A1" in flat and "계정 목록" in flat               # 복귀 링크 → 계정목록 gid
     _ok("전체교체 요청(병합해제·틀고정 H2·복귀 HYPERLINK) + 등록명 보존")

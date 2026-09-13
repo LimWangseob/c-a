@@ -210,7 +210,7 @@ def _full_build_requests(sheet_id: int, desired: list[IndexRow]) -> list[dict]:
     # 제목(A1:G1 병합)
     reqs.append({"mergeCells": {"range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1,
                                           "startColumnIndex": 0, "endColumnIndex": N_COLS},
-                                "mergeType": "MERGE_ROW"}})
+                                "mergeType": "MERGE_ALL"}})   # 제목 A1:G1 한 칸으로(‘MERGE_ROW’는 무효값)
     n_prod = sum(1 for d in desired if d.status != DISCONTINUED)
     reqs.append({"updateCells": {
         "start": {"sheetId": sheet_id, "rowIndex": 0, "columnIndex": 0},
@@ -233,9 +233,12 @@ def _full_build_requests(sheet_id: int, desired: list[IndexRow]) -> list[dict]:
         reqs += _auto_cells_request(sheet_id, grid, row)
         reqs.append(_mkt_fill_request(sheet_id, grid))
     # 틀고정(제목·헤더 2행 + A~C 3열) + 열너비
+    # 틀고정: 제목·헤더 2행만. ⚠ 열 고정은 넣지 않는다 — 제목이 A1:G1 병합이라 열 고정(예 3열)이 그 병합을
+    # '일부만' 자르면 구글 시트가 400 거부(엑셀과 달리 병합 셀을 가로지르는 틀고정 불가). 계정목록은 7열뿐이라
+    # 가로 스크롤이 거의 없어 열 고정 실익도 작다.
     reqs.append({"updateSheetProperties": {
         "properties": {"sheetId": sheet_id,
-                       "gridProperties": {"frozenRowCount": 2, "frozenColumnCount": 3}},
+                       "gridProperties": {"frozenRowCount": 2, "frozenColumnCount": 0}},
         "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount"}})
     for c, w in _COL_WIDTHS.items():
         reqs.append({"updateDimensionProperties": {
