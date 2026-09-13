@@ -173,15 +173,36 @@ def _parse_inventory(vi_props: list[dict]) -> dict[str, int]:
     return out
 
 
-def fetch_inventory(page, log=None) -> dict[str, int]:
-    """로켓그로스 재고현황 API(inventory-health-dashboard/search)를 **직접 fetch** → {옵션ID: 판매가능 재고수량}.
+def _parse_inventory_roster(vi_props: list[dict]) -> dict[str, str]:
+    """재고 search 의 viProperties → {옵션ID(vendorItemId): 등록상품명}. **판매 무관 전 로켓그로스 상품**.
 
+    상품명 = creturnConfigViewDto.productName(우선) 또는 listingDetails.vendorInventoryName(폴백).
+    그로스 상품은 판매 0이어도 재고 목록에 있어 vid·상품명을 준다(라이브 캡처 확인, bf0621) → vid 보강 소스."""
+    out: dict[str, str] = {}
+    for vp in vi_props:
+        oid = str(vp.get("vendorItemId") or "").strip()
+        if not oid:
+            continue
+        cr = vp.get("creturnConfigViewDto") or {}
+        ld = vp.get("listingDetails") or {}
+        name = str(cr.get("productName") or ld.get("vendorInventoryName") or "").strip()
+        if name:
+            out[oid] = name
+    return out
+
+
+def fetch_inventory(page, log=None) -> tuple[dict[str, int], dict[str, str]]:
+    """로켓그로스 재고현황 API(inventory-health-dashboard/search)를 **직접 fetch**.
+
+    반환: ({옵션ID: 판매가능 재고수량}, {옵션ID: 등록상품명}). 뒤의 상품명 맵은 **판매 무관 vid 보강 소스**
+    (그로스 상품은 판매 0이어도 재고 목록에 있어 vid·상품명을 준다 → 미매칭 대장 상품 vid 보강에 사용).
     page 는 **로그인된 wing.coupang.com 세션 페이지**(same-origin + 세션쿠키 + XSRF). 계약(RFM) 계정 전용
     — 개인(NORMAL) 계정은 로켓그로스 재고가 없어 빈 dict(정상). 비200/파싱실패는 InventoryFetchError.
     페이지네이션: pageNumber 로 넘기다가 **안 넘어가면(재고 API가 pageNumber 무시)** 큰 pageSize 로 전량 1회 재요청.
     ⚠ 상품별 재고를 빠짐없이 잡기 위함 — 재고 적은 옵션이 정렬 하위로 밀려 상위 100 밖에 있으면 그 상품 재고현황이 공란이 되던 문제 해결.
     """
     log = log or (lambda m: None)
+    names: dict[str, str] = {}   # {vid: 등록상품명} — 판매 무관 그로스 상품 roster(vid 보강용)
 
     def _fetch(page_size: int, page_num: int) -> tuple[list, int]:
         payload = {"paginationRequest": {"pageSize": page_size, "pageNumber": page_num,
@@ -220,6 +241,7 @@ def fetch_inventory(page, log=None) -> dict[str, int]:
             log(f"  [재고·진단] 상품식별 후보 필드: {hit or '없음 — vid 보강엔 다른 소스 필요'}")
         before = len(out)
         out.update(_parse_inventory(props))
+        names.update(_parse_inventory_roster(props))
         total = total or len(out)
         log(f"  [재고] search p{page_num + 1} — {len(props)}개 (누적 {len(out)}/{total})")
         if not props or len(out) >= total or len(out) == before:
@@ -233,13 +255,13 @@ def fetch_inventory(page, log=None) -> dict[str, int]:
             props, _ = _fetch(big, 0)
         except InventoryFetchError as exc:   # 큰 pageSize 거부 → 상위분 유지(회귀 없음)
             log(f"  [재고] ⚠ 전량 재요청 실패(pageSize {big}) — 상위 {len(out)}/{total}개만 유지 · {str(exc)[:80]}")
-            return out
+            return out, names
         full = _parse_inventory(props)
         if len(full) > len(out):
             log(f"  [재고] 전량 재요청(pageSize {big}) → {len(full)}개 확보(이전 상위 {len(out)}개)")
-            return full
+            return full, _parse_inventory_roster(props)
         log(f"  [재고] ⚠ 전량 재요청도 {len(full)}개 — 상위 {len(out)}/{total}개만 유지(무한루프 방지)")
-    return out
+    return out, names
 
 
 def _folder_snapshot(d: Path) -> list[str]:
@@ -429,24 +451,44 @@ def discover(page, date_from: str, date_to: str, log=None) -> tuple[list[Product
         else:
             log(f"  [수집] ⚠ 데이터 행 0개 — 해당 기간({date_from}~{date_to}) 판매분석 데이터가 없습니다"
                 "(그 기간 노출·판매 기록이 없거나 계정에 활성 상품 없음).")
+    products = _products_from_metrics(metrics)
+    for p in products:
+        # 입력 파일의 상품명이 아니라 **쿠팡에서 실제 판매 중인 상품 제목**(API productName)을 분석 대상으로 쓴다.
+        oms = [metrics[vid] for opt in p.options for vid in opt.vendor_item_ids if vid in metrics]
+        v = sum(o.views for o in oms); s = sum(o.sales for o in oms); vi = sum(o.visitors for o in oms)
+        log(f"  [상품] 쿠팡 판매상품 제목(키워드 분석 대상): {p.title}  [{p.kind}]")
+        log(f"         (옵션 {len(p.options)}개 · 해당일 노출 {v} · 판매 {s} · 방문 {vi})")
+    log(f"  [수집] 발견 상품 {len(products)}개 (옵션 {len(metrics)})")
+    return products, metrics
+
+
+def _products_from_metrics(metrics: dict) -> list[Product]:
+    """{옵션ID(vid): OptionMetric} → 상품 목록(등록상품ID/상품명으로 그룹, 옵션=vid). 지표 로깅 없음.
+
+    discover(지표+로그)와 fetch_sales_roster(vid 보강 전용, 지표 미사용)가 공유하는 순수 그룹핑."""
     groups: dict[str, list[OptionMetric]] = {}
     for m in metrics.values():
         groups.setdefault(m.item_id or m.product_name, []).append(m)
-    products: list[Product] = []
+    out: list[Product] = []
     for opts in groups.values():
         labels = _unique_labels(opts)
         options = [Option(label=lbl, vendor_item_ids=[o.option_id]) for lbl, o in zip(labels, opts)]
         title = _display_title(opts[0].product_name, opts)
         kind = kind_of(o.registration_type for o in opts)   # 로켓그로스/판매자배송/둘 다(API 자동 판별)
-        products.append(Product(name=opts[0].product_name, options=options, title=title, kind=kind))
-        # 입력 파일의 상품명이 아니라 **쿠팡에서 실제 판매 중인 상품 제목**(API productName)을 분석 대상으로 쓴다.
-        v = sum(o.views for o in opts)
-        s = sum(o.sales for o in opts)
-        vi = sum(o.visitors for o in opts)
-        log(f"  [상품] 쿠팡 판매상품 제목(키워드 분석 대상): {title}  [{kind}]")
-        log(f"         (옵션 {len(options)}개 · 해당일 노출 {v} · 판매 {s} · 방문 {vi})")
-    log(f"  [수집] 발견 상품 {len(products)}개 (옵션 {len(metrics)})")
-    return products, metrics
+        out.append(Product(name=opts[0].product_name, options=options, title=title, kind=kind))
+    return out
+
+
+def fetch_sales_roster(page, date_from: str, date_to: str, log=None) -> list[Product]:
+    """최근 기간 판매분석에서 **vid·상품명 roster 만** 확보(지표는 호출부가 쓰지 않음 — vid 보강 전용).
+
+    당일(D-1) 판매·방문이 0이라 당일 조회에 안 잡힌 대장 상품의 vid 를, 넓은 기간(config.SALES_VID_WINDOW_DAYS)
+    으로 확보하기 위함. vi-detail-search 는 그 기간에 조회/방문/판매가 있은 상품을 반환한다. ⚠ 여기서 얻은 지표는
+    넓은기간 합계라 **쓰지 않는다**(당일 지표만 기록). 비200/파싱실패는 SalesFetchError(호출부가 로그 후 계속)."""
+    log = log or (lambda m: None)
+    products = _products_from_metrics(fetch_sales_details(page, date_from, date_to, log))
+    log(f"  [수집·보강] 최근기간({date_from}~{date_to}) roster {len(products)}개 상품(vid 확보용, 지표 미반영)")
+    return products
 
 
 def save_discovered(account_id: str, products: list[Product]) -> Path:

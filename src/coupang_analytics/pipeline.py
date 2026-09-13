@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import random
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import config
@@ -242,9 +242,15 @@ def _measure_safe(browser, keywords, matchers, log, matched_out=None):
         return {}
 
 
-def _vid_matcher(vids):
-    """상품 고유ID(vendorItemId) 목록으로 검색결과 상품을 매칭 — ③ 순위조회는 product 객체 없이 vid만 안다."""
-    return {"제품": make_matcher(vendor_item_ids=set(str(v) for v in vids if v))}
+def _rank_matcher(vids, pname: str = ""):
+    """③ 순위 매칭 매처 — vid 있으면 vid로 **정확 매칭**, 없으면 **상품명(부분일치) 폴백**(DESIGN §2.1).
+
+    ⚠ 판매 0인 날은 vi-detail-search 가 그 상품을 안 줘서 vid 가 없을 수 있다(수집 자체는 정상 — 지표 0).
+    그런 상품도 건너뛰지 않고 상품명으로 순위를 추적한다(run_full 자체 경로 `_product_matcher` 와 동일 방침).
+    ③ 순위조회는 product 객체 없이 워크북의 (vid, 상품명)만 안다."""
+    vset = set(str(v) for v in vids if v)
+    return {"제품": make_matcher(vendor_item_ids=vset,
+                                 name_substr=None if vset else (pname or "").strip())}
 
 
 def _load_latest_wb(out: Path):
@@ -272,8 +278,8 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
     (반복 자동로그인 = IP 차단 유발이라, 세션 살아있는 계정을 먼저 다 수집). Akamai 차단 시 LoginBlocked.
     """
     from .collector import (discover, save_discovered,  # 지연 import
-                            fetch_inventory, InventoryFetchError)
-    from .product_match import scope_to_ledger
+                            fetch_inventory, fetch_sales_roster, InventoryFetchError, SalesFetchError)
+    from .product_match import scope_to_ledger, augment_unmatched
     from playwright.sync_api import TimeoutError as PWTimeout  # 판매데이터 없음 판별용
     pw = get_password(a.account_id) if get_password else None
     # 기본은 **창 숨김**(offscreen). 로그인/2차인증이 필요할 때만 잠깐 창을 띄운다.
@@ -364,18 +370,31 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
         # 로켓그로스 파트가 있는 상품(로켓그로스·둘다)이 있으면 같은 세션에서 재고현황도 직접조회
         # (판매자배송 전용 계정은 재고 없음 → 생략)
         inventory: dict[str, int] = {}
+        inv_names: dict[str, str] = {}
         if any(p.kind in config.KINDS_WITH_INVENTORY for p in products):
             try:
-                inventory = fetch_inventory(b.page, log)
+                inventory, inv_names = fetch_inventory(b.page, log)   # 재고 수량 + vid→상품명 roster(판매 무관)
                 log(f"  [{a.label}] 재고현황 {len(inventory)}개 옵션 조회")
             except InventoryFetchError as exc:   # 부가지표 — 실패해도 수집 전체는 진행(사유 명시)
                 log(f"  [{a.label}] ⚠ 재고현황 조회 실패(계속) — {str(exc)[:120]}")
+        # 추적 범위 = 입력 대장 상품(위탁 관리분)만. 당일 발견을 매칭해 노출제목·vid·구분 부여(지표는 당일 것).
+        tracked, n_match = scope_to_ledger(a.products, products)
+        # 대장에 있는데 당일 판매·방문 0이라 미매칭(vid 없음)인 상품 → 그로스 재고 vid + 최근 N일 판매분석 vid 로
+        # **정체(vid)만** 보강한다(지표는 당일 것만 기록 — 넓은기간 합계 미반영). 사용자 정책(2026-09-13).
+        if any(not any(o.vendor_item_ids for o in tp.options) for tp in tracked):
+            extra = _roster_from_names(inv_names, config.KIND_CONTRACT)   # 그로스 재고 roster(판매 무관 vid)
+            try:
+                d0 = (date.fromisoformat(date_to) - timedelta(days=config.SALES_VID_WINDOW_DAYS)).isoformat()
+                extra += fetch_sales_roster(b.page, d0, date_to, log)     # 최근 N일 vid+이름(지표 미반영)
+            except SalesFetchError as exc:   # 보강 실패는 비치명적 — 재고 roster 만으로 진행
+                log(f"  [{a.label}] ⚠ vid 보강 {config.SALES_VID_WINDOW_DAYS}일 조회 실패(계속) — {str(exc)[:100]}")
+            tracked, added = augment_unmatched(a.products, tracked, extra)
+            n_match += added
+            if added:
+                log(f"  [{a.label}] 당일 미매칭 {added}개 vid 보강(그로스 재고/최근 {config.SALES_VID_WINDOW_DAYS}일 · 지표는 당일 유지)")
         _persist_session(a, b, log)                                 # 세션 3요소+쿠키 영속(부가)
         session_state.observe_collection_done(a.account_id)         # 관측: 이 계정 수집 완료 시각
     save_discovered(a.account_id, products)
-    # 추적 범위 = 입력 대장 상품(위탁 관리분)만. 대장↔발견을 매칭해 노출제목·vid·구분 부여,
-    # 미매칭(휴면 등)은 대장명으로 추적(지표·재고 공란). 판매중지/취소선 상품은 입력 파싱에서 이미 제외됨.
-    tracked, n_match = scope_to_ledger(a.products, products)
     log(f"  [{a.label}] 발견 {len(products)}개 · 대장 {len(a.products)}개 → 추적 {len(tracked)}개(매칭 {n_match})")
     return Account(a.account_id, a.representative, a.business_name, tracked), metrics, inventory
 
@@ -409,6 +428,21 @@ def _inventory_by_product(products, inv_by_vid: dict) -> dict:
         if vals:
             out[p.name] = sum(vals)
     return out
+
+
+def _roster_from_names(names_by_vid: dict, kind: str) -> list:
+    """{옵션ID(vid): 등록상품명} → 매칭 후보 Product 목록(상품명으로 그룹, 옵션=vid).
+
+    그로스 재고에서 얻은 **판매 무관 vid·상품명**을 scope_to_ledger/augment_unmatched 후보로 만든다
+    (당일 판매 0인 그로스 상품의 vid 보강용). 지표는 없다 — 정체(vid) 보강 전용."""
+    from .input_list import Option, Product
+    by_name: dict[str, list[str]] = {}
+    for vid, nm in (names_by_vid or {}).items():
+        nm = (nm or "").strip()
+        if nm and vid:
+            by_name.setdefault(nm, []).append(str(vid))
+    return [Product(name=nm, title=nm, kind=kind,
+                    options=[Option("", [v]) for v in vids]) for nm, vids in by_name.items()]
 
 
 def _fill_product_metrics(wb, biz, product, metrics, inventory, date_iso, pname=None) -> None:
@@ -631,15 +665,13 @@ def _push_gsheet(wb, output_url: str | None, log) -> None:
 
 
 def _count_unfilled_ranks(wb) -> int:
-    """오늘(각 사업자 최신일자) 기준 **아직 못 채운 순위 셀 수** — vid 없는 상품은 애초에 측정 불가라 제외."""
+    """오늘(각 사업자 최신일자) 기준 **아직 못 채운 순위 셀 수**(vid 없으면 상품명으로 매칭하므로 포함)."""
     n = 0
     for biz in wb.account_sheets():
         date = wb.latest_date(biz)
         if not date:
             continue
         for pname in wb.products_of(biz):
-            if not wb.product_vids(biz, pname):     # vid 없으면 측정 불가 → 보완 대상 아님
-                continue
             for kw in wb.product_keywords(biz, pname):
                 if not wb.is_rank_filled(biz, pname, kw, date):
                     n += 1
@@ -664,14 +696,14 @@ def _measure_unfilled_once(wb, path, log) -> int:
             for pname in wb.products_of(biz):
                 vids = wb.product_vids(biz, pname)
                 keywords = wb.product_keywords(biz, pname)
-                if not (vids and keywords):
+                if not keywords:                        # vid 없어도 상품명으로 매칭(건너뛰지 않음)
                     continue
                 todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
                 if not todo:
                     continue
                 cap: dict = {}
                 try:
-                    measured = _measure(browser, todo, _vid_matcher(vids), log, matched_out=cap)
+                    measured = _measure(browser, todo, _rank_matcher(vids, pname), log, matched_out=cap)
                 except RankHalt as h:               # 차단 감지 → 부분결과만 기록하고 전면 중단
                     measured, halted = h.partial, True
                 except Exception as exc:
@@ -1072,7 +1104,7 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
         log(f"  [모드] 사람속도 직렬 네비게이션(검색 간격 {config.RANK_NAV_DELAY_MIN_SEC}"
             f"~{config.RANK_NAV_DELAY_MAX_SEC}s) — 버스트 없이 차단 회피. 차단 감지 시 즉시 중단(이어서 재개)")
     halted = False
-    novid_products = 0    # vid 없어 순위 매칭 불가로 건너뛴 상품 수(집계 → 종료 시 안내)
+    noname_products = 0   # vid·상품명 모두 없어(이례) 측정 못 한 상품 수(집계 → 종료 시 안내)
     with WingBrowser(profile_dir=_PROFILE, offscreen=True) as browser:
         warmup(browser)
         for biz in wb.account_sheets():
@@ -1086,19 +1118,18 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
                 keywords = wb.product_keywords(biz, pname)
                 if not keywords:
                     continue
-                if not vids:
-                    # vid 없으면 검색결과에서 내 상품을 정확히 지목 불가 → 조용히 건너뛰지 않고 이유를 남긴다.
-                    # vid 는 ①판매수집(WING 로그인)에서만 확보(대장엔 vid 없음).
-                    novid_products += 1
-                    log(f"  [건너뜀] {biz} · {pname} — vendorItemId 없음(①판매수집 미완) → 순위 공란")
+                if not vids and not (pname or "").strip():   # 매칭 근거(vid·상품명) 전무 → 측정 불가(이례)
+                    noname_products += 1
                     continue
                 # 이미 채워진 키워드는 건너뜀 = **중단 지점부터 이어서**(당일 재작업 시 남은 것만)
                 todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
                 if not todo:
                     continue
+                if not vids:   # 판매 0 등으로 vid 없음 → 상품명(부분일치)으로 매칭(건너뛰지 않음)
+                    log(f"  [순위] {biz} · {pname} — vid 없음(판매 0 등) → 상품명으로 매칭")
                 cap: dict = {}
                 try:
-                    measured = _measure(browser, todo, _vid_matcher(vids), log, matched_out=cap)
+                    measured = _measure(browser, todo, _rank_matcher(vids, pname), log, matched_out=cap)
                 except RankHalt as h:              # 차단 감지 → 부분결과만 기록하고 전면 중단
                     measured = h.partial
                     halted = True
@@ -1119,9 +1150,8 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
                     break
     wb.apply_style()   # 저장본 서식 항상 표준으로 고정
     wb.save(path)
-    if novid_products:
-        log(f"  [안내] vid(vendorItemId) 없는 상품 {novid_products}개는 순위 공란으로 남았습니다 — "
-            "이 상품들은 ①판매수집(WING 로그인)으로 vid를 확보해야 순위조회가 됩니다(대장 입력엔 vid 없음).")
+    if noname_products:
+        log(f"  [안내] vid·상품명이 모두 없는 상품 {noname_products}개는 매칭 근거가 없어 순위 공란입니다(이례).")
     if halted:
         log("== ⛔ 노출순위 중단(쿠팡 검색 차단 감지) — 진행분 저장됨. "
             "쉰 IP/시간에 다시 실행하면 남은 것부터 이어서 조회합니다 ==")
@@ -1387,7 +1417,7 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
     halted = False        # 자동제출 서킷브레이커(연속 차단/미감지) → 당일 전면 중단
     miss_streak = 0       # 자동제출 연속 실패 수(성공 시 0으로 리셋)
     cooldowns = 0         # 차단 감지 쿨다운 진입 횟수(진전 있으면 0으로 리셋) — 무한 재시도 방지
-    novid_products = 0    # vid 없어 순위 매칭 불가로 건너뛴 상품 수(집계 → 종료 시 안내)
+    noname_products = 0   # vid·상품명 모두 없어(이례) 측정 못 한 상품 수(집계 → 종료 시 안내)
     if autosubmit:
         log("== 반자동(자동검색) 노출순위 시작 — 앱이 키워드 자동입력+Enter까지 수행(손 안 대도 됨). "
             f"키워드 간 {config.RANK_NAV_DELAY_MIN_SEC}~{config.RANK_NAV_DELAY_MAX_SEC}s 간격, "
@@ -1426,16 +1456,15 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                 keywords = wb.product_keywords(biz, pname)
                 if not keywords:
                     continue
-                if not vids:
-                    # vid(vendorItemId)가 없으면 검색결과에서 내 상품을 정확히 지목할 수 없어 순위 매칭 불가.
-                    # vid 는 ①판매수집(WING 로그인)에서만 확보된다 → 조용히 건너뛰지 않고 이유를 남긴다(집계).
-                    novid_products += 1
-                    log(f"  [건너뜀] {biz} · {pname} — vendorItemId 없음(①판매수집 미완) → 순위 공란")
+                if not vids and not (pname or "").strip():   # 매칭 근거(vid·상품명) 전무 → 측정 불가(이례)
+                    noname_products += 1
                     continue
                 todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
                 if not todo:
                     continue
-                matcher = _vid_matcher(vids)
+                if not vids:   # 판매 0 등으로 vid 없음 → 상품명(부분일치)으로 매칭(건너뛰지 않음)
+                    log(f"  [순위] {biz} · {pname} — vid 없음(판매 0 등) → 상품명으로 매칭")
+                matcher = _rank_matcher(vids, pname)
                 for idx, kw in enumerate(todo, 1):
                     if should_stop() or halted:
                         break
@@ -1511,9 +1540,8 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                         time.sleep(random.uniform(config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC))
     wb.apply_style()
     wb.save(path)
-    if novid_products:
-        log(f"  [안내] vid(vendorItemId) 없는 상품 {novid_products}개는 순위 공란으로 남았습니다 — "
-            "이 상품들은 ①판매수집(WING 로그인)으로 vid를 확보해야 순위조회가 됩니다(대장 입력엔 vid 없음).")
+    if noname_products:
+        log(f"  [안내] vid·상품명이 모두 없는 상품 {noname_products}개는 매칭 근거가 없어 순위 공란입니다(이례).")
     if halted:
         log("== ⛔ 반자동(자동검색) 중단(차단 추정) — 진행분 저장됨. 쉰 시간/IP에 다시 실행하면 이어서 조회 ==")
     else:

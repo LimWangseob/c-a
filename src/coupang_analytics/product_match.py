@@ -103,3 +103,36 @@ def scope_to_ledger(ledger: list[Product], discovered: list[Product]) -> tuple[l
             out.append(Product(name=lp.name, title=lp.name, kind=config.KIND_PERSONAL, options=[Option("")],
                                mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon))
     return out, len(res)
+
+
+def augment_unmatched(ledger: list[Product], tracked: list[Product],
+                      extra: list[Product]) -> tuple[list[Product], int]:
+    """이미 매칭된 상품은 **그대로 두고**, vid 없는(미매칭) 대장 상품만 extra 후보와 매칭해 vid·노출명·구분을 채운다.
+
+    당일 발견으로 못 잡은 상품(당일 판매·방문 0)을 최근기간 판매분석·그로스 재고 roster(extra)로 보강할 때 쓴다.
+    ⚠ 지표는 호출부가 당일 것만 기록하므로 여기선 **정체(vid/이름/구분)만** 채운다(넓은기간 지표 미반영).
+    반환: (보강된 tracked, 새로 vid 채운 개수). tracked/ledger 는 1:1 이며 그 정렬을 유지한다."""
+    idxs = [i for i, tp in enumerate(tracked)
+            if not any(o.vendor_item_ids for o in tp.options)]   # vid 없는(미매칭) 대장 상품 위치
+    if not idxs or not extra:
+        return tracked, 0
+    # 이미 당일 매칭에 쓰인 vid 는 후보에서 제외 — 유사 상품 2개에 같은 vid 를 중복 배정하지 않게(정체성 유일).
+    used = {v for tp in tracked for o in tp.options for v in o.vendor_item_ids}
+    extra = [d for d in extra if not (used & {v for o in d.options for v in o.vendor_item_ids})]
+    if not extra:
+        return tracked, 0
+    sub = [ledger[i] for i in idxs]
+    res = _assign(sub, extra)                                    # {sub_pos: 매칭된 extra Product}
+    out = list(tracked)
+    added = 0
+    for pos, i in enumerate(idxs):
+        d = res.get(pos)
+        if d is None:
+            continue
+        lp = ledger[i]
+        out[i] = Product(
+            name=_title(d), title=_title(d), kind=d.kind,
+            options=[Option(o.label, list(o.vendor_item_ids), list(o.product_ids)) for o in d.options],
+            mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon)   # 대장 마케팅 이월
+        added += 1
+    return out, added
