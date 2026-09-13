@@ -630,6 +630,104 @@ def _push_gsheet(wb, output_url: str | None, log) -> None:
             "(xlsx 마스터·스냅샷은 정상 저장됨) ==")
 
 
+def _count_unfilled_ranks(wb) -> int:
+    """오늘(각 사업자 최신일자) 기준 **아직 못 채운 순위 셀 수** — vid 없는 상품은 애초에 측정 불가라 제외."""
+    n = 0
+    for biz in wb.account_sheets():
+        date = wb.latest_date(biz)
+        if not date:
+            continue
+        for pname in wb.products_of(biz):
+            if not wb.product_vids(biz, pname):     # vid 없으면 측정 불가 → 백필 대상 아님
+                continue
+            for kw in wb.product_keywords(biz, pname):
+                if not wb.is_rank_filled(biz, pname, kw, date):
+                    n += 1
+    return n
+
+
+def _measure_unfilled_once(wb, path, log) -> int:
+    """공란 순위를 한 번 훑어 측정(브라우저 1개, vid 있는 상품의 공란 키워드만). 채운 수 반환.
+
+    ③ track_ranks_stage 자동 루프와 같은 방식(상품마다 저장·차단 감지 시 중단). 백필 라운드 1회에 해당.
+    """
+    filled = 0
+    halted = False
+    with WingBrowser(profile_dir=_PROFILE, offscreen=True) as browser:
+        warmup(browser)
+        for biz in wb.account_sheets():
+            if halted:
+                break
+            date = wb.latest_date(biz)
+            if not date:
+                continue
+            for pname in wb.products_of(biz):
+                vids = wb.product_vids(biz, pname)
+                keywords = wb.product_keywords(biz, pname)
+                if not (vids and keywords):
+                    continue
+                todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
+                if not todo:
+                    continue
+                cap: dict = {}
+                try:
+                    measured = _measure(browser, todo, _vid_matcher(vids), log, matched_out=cap)
+                except RankHalt as h:               # 차단 감지 → 부분결과만 기록하고 전면 중단
+                    measured, halted = h.partial, True
+                except Exception as exc:
+                    log(f"  [순위백필] 측정 실패(공란) — {exc.__class__.__name__}: {str(exc)[:80]}")
+                    measured = {}
+                for kw in todo:
+                    if kw not in measured:
+                        continue
+                    r = _best(measured.get(kw))
+                    wb.set_keyword_rank(biz, pname, kw, date, r)
+                    log(f"  [순위백필] {biz} · {pname} '{kw}': {rank_label(r)}")
+                    filled += 1
+                mi = cap.get("제품")
+                if mi is not None and getattr(mi, "name", "") and wb.set_display_name(biz, pname, mi.name):
+                    log(f"  [노출명] 계약상품명 갱신 → {mi.name}")
+                wb.save(path)                        # 상품마다 저장(중단돼도 보존)
+                if halted:
+                    break
+    return filled
+
+
+def _backfill_ranks(wb, path, log, *, was_blocked: bool) -> None:
+    """전체실행 후 남은 공란 순위를 **쿨다운을 두고 자동 재시도**(진전 없으면 중단 — IP 하드플래그 판단).
+
+    ⚠️ 안티차단 원칙: 차단 뒤 즉시 두드리면 IP만 탄다 → 라운드 사이에 긴 쿨다운(RANK_BACKFILL_COOLDOWN_SEC)
+    으로 IP flag가 완화될 시간을 준 뒤에만 재시도. 한 라운드가 0개 진전이면 즉시 중단(다음 실행/쉰 IP로).
+    """
+    if not config.RANK_BACKFILL:
+        return
+    remaining = _count_unfilled_ranks(wb)
+    if remaining == 0:
+        return
+    log(f"  [순위백필] 미처리 순위 {remaining}개 — 자동 재시도(최대 {config.RANK_BACKFILL_ROUNDS}회, "
+        f"라운드 간 {config.RANK_BACKFILL_COOLDOWN_SEC // 60}분 쿨다운·진전 없으면 중단)")
+    for rnd in range(1, config.RANK_BACKFILL_ROUNDS + 1):
+        if rnd > 1 or was_blocked:                  # 차단 뒤엔 즉시 재시도 무의미 → 쿨다운(IP 완화 시간)
+            log(f"  [순위백필] IP 쿨다운 {config.RANK_BACKFILL_COOLDOWN_SEC // 60}분 대기 후 재시도"
+                f"(라운드 {rnd}/{config.RANK_BACKFILL_ROUNDS})…")
+            time.sleep(config.RANK_BACKFILL_COOLDOWN_SEC)
+        _reset_rank_state()                         # 새 라운드 = 이전 차단 플래그·서킷브레이커 초기화
+        try:
+            filled = _measure_unfilled_once(wb, path, log)
+        except Exception as exc:                    # 백필은 부가 — 어떤 예외도 전체 저장을 막지 않음
+            log(f"  [순위백필] 라운드 {rnd} 중단({exc.__class__.__name__}: {str(exc)[:80]}) — 남은 순위는 다음 실행")
+            return
+        remaining = _count_unfilled_ranks(wb)
+        log(f"  [순위백필] 라운드 {rnd}: {filled}개 채움 · 남은 {remaining}개")
+        if remaining == 0:
+            log("  [순위백필] 모든 순위 처리 완료")
+            return
+        if filled == 0:                             # 진전 0 = IP 여전히 차단 추정 → 더 두드리지 않음
+            log("  [순위백필] 진전 없음(IP 여전히 차단 추정) — 중단. 남은 순위는 다음 실행/쉰 IP에서 이어서")
+            return
+    log("  [순위백필] 재시도 상한 도달 — 남은 순위는 다음 실행에서 이어서")
+
+
 def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
              ai_key: str | None = None, date_from: str | None = None, date_to: str | None = None,
              get_password=None, resume: bool = False, carry_forward: bool = False,
@@ -826,6 +924,9 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
             gone = wb.reconcile_account(biz, [])   # 대장에 없는 계정 → 전 상품 판매중지
             if gone:
                 log(f"== [{biz}] 대장에서 사라진 계정 → 상품 {len(gone)}개 판매중지 표기 ==")
+
+    if not skip_ranks:   # 노출순위 미처리분(차단 등으로 공란) 자동 재시도 — 쿨다운 두고, 진전 없으면 중단
+        _backfill_ranks(wb, partial, log, was_blocked=_RANK_HALT["stop"])
 
     # 통계 마스터 갱신 + 그날 스냅샷 저장
     snapshot = _snapshot_path(out, now)
