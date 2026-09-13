@@ -3,6 +3,13 @@
 > 정책·구조의 단일 기준 문서. 코드보다 이 문서가 우선한다.
 > §8 미확정 항목은 실제 페이지 1회 분석 후 확정한다.
 
+## 0-1. 최신 반영 요약 (2026-09-13 — 재실행 멱등·vid 보강·순위 폴백)
+
+- **재실행 멱등(판매수집 스킵):** `run_full` 이 계정 수집 완료 시 워크북 숨김시트 `_계정정보`에 **"오늘(일자라벨) 판매수집 완료" 스탬프**를 남긴다(`workbook.mark_sales_collected`/`has_sales`/`sales_collected_on`). 같은 날 재실행 시 스탬프 있는 계정은 **로그인·수집 생략**(위탁계정 재로그인 최소화·IP 보호). 진행파일이 지워져도 마스터에 영속. 날짜가 바뀌면 스탬프 불일치로 자동 재수집. 판매지표는 0/공란도 정상이라 **값으로 판정 불가 → 명시 스탬프**로 판정. 판매 스킵 계정의 키워드 미보유분은 로그인 없이 보완(`_select_keywords_for_skipped`), 순위 미기입분은 `_backfill_ranks`.
+- **vid 보강 = 당일 판매0 상품도 vid 확보(기존 판매분석·재고 API만, 카탈로그 API 미도입):** `vi-detail-search`(판매분석)는 조회기간에 **조회/방문/판매가 있은 상품만** 반환한다(캡처 실증: `sold=0`이어도 `views>0`이면 vid 포함). ∴ **당일(D-1) 완전 무활동 상품은 vid 없음.** 정책(사용자 확정 2026-09-13): ①당일 판매정보 있으면 그대로 vid+지표 ②대장에 있는데 당일 미매칭이면 **최근 `SALES_VID_WINDOW_DAYS`(=30)일 판매분석**으로 vid 확보 ③**30일 조회분 지표는 반영 금지**(지표는 당일 것만) ④**그로스는 재고 API(`inventory-health-dashboard`)로 vid+상품명 확보**(판매 무관, `creturnConfigViewDto.productName`). 구현: `collector.fetch_sales_roster`(vid·상품명 roster)·`_parse_inventory_roster`·`fetch_inventory→(수량, vid→상품명)`, `product_match.augment_unmatched`(미매칭만 보강·매칭분 불변·중복 vid 방지), `pipeline._login_and_discover`+`_roster_from_names`.
+- **③ 노출순위 매칭 폴백:** vid 없으면 건너뛰지 않고 **상품명(부분일치) 폴백**(`_rank_matcher`, DESIGN §2.1). 자동·반자동·백필 전 경로 통일(`run_full` 자체 경로 `_product_matcher`와 동일 방침).
+- **상태 라벨:** 계정목록 상태 `마케팅중`→`체험단중`(체험단 헤더와 일관).
+
 ## 0. 최신 반영 요약 (2026-09-04)
 
 이 문서의 일부 옛 서술(§4의 storage_state·session.py, §5.1 일자루프, §9의 mapping.py 등)은

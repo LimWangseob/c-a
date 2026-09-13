@@ -3,7 +3,27 @@
 > 새 세션 읽기 순서: **이 문서(§0 최신 세션 먼저) → `CLAUDE.md`(제약·함정) → `designs/KEYWORD_SELECTION.md`·`designs/DESIGN.md`(SSOT) → 메모리(`MEMORY.md`)**.
 > 이 문서는 **지금 이어서 할 일** 중심의 연속성 문서다. §1~ 이하 상당수는 **구(舊) 서식 시절 서술**이라 셀독 서식으로 대체된 부분이 있음 — 충돌 시 **§0과 메모리(`seldoc-output-format`·`input-ledger-format`·`inventory-api-rfm-search`)가 우선**.
 
-## 0. 최신 세션 (2026-09-11) — ⭐새 세션은 여기부터
+## 0. 최신 세션 (2026-09-13) — ⭐새 세션은 여기부터
+
+> 커밋: `c9b2c4f`(재실행 스킵+체크박스) → `a01c01d`(vid 보강+순위 폴백). 상태 라벨 `체험단중`은 이미 반영됨(`65fdca3`). 작업트리 clean.
+
+**이번 세션 완료(전부 커밋)**:
+1. **재실행 멱등(판매수집 스킵)** `c9b2c4f`: `run_full` 이 계정 수집 완료 시 워크북 숨김시트 `_계정정보`(3열)에 **"오늘 판매수집 완료" 날짜 스탬프**(`workbook.mark_sales_collected`/`has_sales`/`sales_collected_on`). 같은 날 재실행 → 스탬프 계정 **로그인·수집 생략**(진행파일 지워져도 마스터에 영속, 날짜 바뀌면 자동 재수집). 판매 스킵 계정 키워드 미보유분은 로그인 없이 보완(`_select_keywords_for_skipped`). ⚠ 판매지표 0/공란은 정상이라 **값이 아닌 스탬프로 "수집됨" 판정**.
+2. **실행모드 체크박스 통일** `c9b2c4f`: app_qt 실행모드(이어쓰기/처음부터) QRadioButton→QCheckBox(수집기간과 동일 배타 그룹). `rb_append/rb_fresh`→`cb_append/cb_fresh`.
+3. **vid 보강 — 당일 판매0 상품도 vid 확보** `a01c01d`(사용자 정책 확정): `vi-detail-search`는 **조회기간 조회/방문/판매 있은 상품만** 반환(캡처 실증 `_capture_sales_gbseller808`: sold=0·views=3·vid有). ∴ 당일(D-1) 완전무활동 상품은 vid 없음. 해결=①당일 있으면 그대로 ②대장에 있는데 미매칭이면 **최근 30일(`config.SALES_VID_WINDOW_DAYS`) 판매분석**으로 vid ③**30일 지표는 미반영**(당일만) ④**그로스는 재고 API로 vid+상품명**(판매무관, `creturnConfigViewDto.productName`, 캡처 `_capture_inventory_bf0621` 실증). 구현: `collector`(`_products_from_metrics`분리·`fetch_sales_roster`·`_parse_inventory_roster`·`fetch_inventory→(수량,vid→상품명)`), `product_match.augment_unmatched`(미매칭만·매칭분 불변·중복 vid 방지), `pipeline._login_and_discover`+`_roster_from_names`.
+4. **③ 순위 상품명 폴백** `a01c01d`: vid 없으면 건너뛰지 말고 **상품명 부분일치**(`_vid_matcher`→`_rank_matcher(vids, pname)`), 자동·반자동·백필 전 경로. '①판매수집 미완' 오탐 로그 제거.
+
+**검증(오프라인)**: 실제 캡처 JSON(재고 vid→상품명·판매0 vid 포함)·augment 합성·재실행 스킵 3시나리오·스탬프 왕복 통과. `simulate_pipeline` 9/9, pyflakes 신규 0. (⚠ `simulate_stages`는 실제 순위 sleep으로 대화중 미완주 — 코드무관.)
+
+**⏭ 다음 세션 최우선(라이브=사무실)**:
+- **vid 보강 라이브 검증**: 상품 있는 계정으로 ① 판매수집 → 로그에 `당일 미매칭 N개 vid 보강(그로스 재고/최근 30일 …)` 확인, vid 없던 상품(예 웰빙곳간 알부민 프리미엄 맥스 120정)이 vid 확보되는지. 그로스 상품은 재고도 채워지는지.
+- **재실행 스킵 라이브 확인**: 오전 ① 후 다시 ① → `오늘(…) 판매수집 완료됨 → 로그인·수집 생략` 로그.
+- **순위 상품명 폴백**: vid 여전히 없는 개인상품이 상품명으로 순위 잡히는지(핫스팟 IP 필요 — 사무실 IP 순위차단 이력).
+- (미결) 순위 라이브는 깨끗한 IP(핫스팟) 필요(사무실 IP Akamai 차단 이력).
+
+**앱 재시작 필요**(코드 반영). 검증도구=`python tools/simulate_pipeline.py`, `python -m pyflakes src/coupang_analytics/`.
+
+## 0-A2. 최신 세션 (2026-09-11) — 이전
 
 > 이 세션은 무인 운용(로그인·순위)·재개·서식을 대거 손봤다. 커밋: `c81b428`→`1ea1839`→`d7bf642`→`52195d7`→`80e18db`→`75f804d`→`6203f3c`.
 
