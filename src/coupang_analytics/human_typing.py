@@ -106,35 +106,38 @@ def _cdp(page):
         return None
 
 
-def _ime_syllable(cdp, syllable: str, delay) -> None:
-    """한 음절을 CDP IME로 자모 단위 조합 입력 후 커밋. 각 자모마다:
-    keydown(keyCode 229 Process + **물리키 code**) + imeSetComposition(조합 텍스트) + keyup. 음절 끝에 insertText 커밋.
-    keydown 에 물리키 code(2벌식)를 실어 진짜 IME keydown 처럼 보이게 한다."""
-    steps = _syllable_steps(syllable)
-    if steps is None:                                # 음절 아님 → 바로 삽입
-        try:
-            cdp.send("Input.insertText", {"text": syllable})
-        except Exception:
-            pass
-        time.sleep(delay())
-        return
-    for jamo, pt in steps:                           # 자모 하나씩: 조합 텍스트 갱신
-        code, shift = _JAMO_KEY.get(jamo, ("", False))
-        mod = 8 if shift else 0                       # 8 = Shift(CDP modifiers 비트)
-        try:
-            cdp.send("Input.dispatchKeyEvent",
-                     {"type": "rawKeyDown", "windowsVirtualKeyCode": 229, "code": code,
-                      "key": "Process", "modifiers": mod})
-            cdp.send("Input.imeSetComposition",
-                     {"text": pt, "selectionStart": len(pt), "selectionEnd": len(pt)})
-            cdp.send("Input.dispatchKeyEvent",
-                     {"type": "keyUp", "windowsVirtualKeyCode": 229, "code": code,
-                      "key": "Process", "modifiers": mod})
-        except Exception:
-            pass
-        time.sleep(delay())
+def _ime_run(cdp, syllables: list, delay) -> None:
+    """연속 한글 음절(**어절**)을 **하나의 조합 세션**으로 자모 단위 입력 후 **커밋 1회**.
+
+    각 자모마다 keydown(keyCode 229 Process + 물리키 code) + imeSetComposition(조합 텍스트) + keyup.
+    조합 텍스트 = 이미 친 음절들 + 현재 음절의 부분조합(예 맥→맥무→맥문…) → 어절 끝에 insertText 1회로 커밋.
+    ⇒ `compositionend`(isTrusted=false, CDP 한계)가 **음절마다(N개) → 어절당 1개**로 축소(탐지 스코어 누적 완화).
+    """
+    committed = ""                                   # 이 어절에서 지금까지 완성된 음절들(아직 커밋 전, 조합 접두)
+    for syl in syllables:
+        steps = _syllable_steps(syl)
+        if steps is None:                            # 음절 아님(방어) — 그대로 이어붙임
+            committed += syl
+            continue
+        for jamo, partial in steps:                  # 자모 하나씩: 조합 텍스트(접두+부분) 갱신
+            code, shift = _JAMO_KEY.get(jamo, ("", False))
+            mod = 8 if shift else 0                   # 8 = Shift(CDP modifiers 비트)
+            comp = committed + partial
+            try:
+                cdp.send("Input.dispatchKeyEvent",
+                         {"type": "rawKeyDown", "windowsVirtualKeyCode": 229, "code": code,
+                          "key": "Process", "modifiers": mod})
+                cdp.send("Input.imeSetComposition",
+                         {"text": comp, "selectionStart": len(comp), "selectionEnd": len(comp)})
+                cdp.send("Input.dispatchKeyEvent",
+                         {"type": "keyUp", "windowsVirtualKeyCode": 229, "code": code,
+                          "key": "Process", "modifiers": mod})
+            except Exception:
+                pass
+            time.sleep(delay())
+        committed += syl                             # 이 음절 완성 → 접두에 누적(조합은 계속 이어감)
     try:
-        cdp.send("Input.insertText", {"text": syllable})   # 조합 커밋(compositionend + input)
+        cdp.send("Input.insertText", {"text": committed})   # 어절 전체 커밋 1회(compositionend 1개)
     except Exception:
         pass
 
@@ -148,15 +151,21 @@ def type_focused(page, text: str, *, jamo: bool = True, delay=None) -> None:
     need_ime = jamo and any(_is_hangul_syllable(c) for c in text)
     cdp = _cdp(page) if need_ime else None
     try:
+        run: list = []                               # 연속 한글 음절(어절) 버퍼 — 한 조합 세션으로 처리
         for ch in text:
             if cdp is not None and _is_hangul_syllable(ch):
-                _ime_syllable(cdp, ch, delay)
-            else:
-                try:
-                    page.keyboard.type(ch)           # ASCII는 keydown/keypress/keyup 발생
-                except Exception:
-                    pass
-                time.sleep(delay())
+                run.append(ch)
+                continue
+            if run:                                  # 어절 끝(공백/영문/기호) → 지금까지 한글을 한 번에 조합·커밋
+                _ime_run(cdp, run, delay)
+                run = []
+            try:
+                page.keyboard.type(ch)               # 비한글(ASCII/공백/기호)은 실제 키입력
+            except Exception:
+                pass
+            time.sleep(delay())
+        if run:                                      # 마지막 어절 커밋
+            _ime_run(cdp, run, delay)
     finally:
         if cdp is not None:
             try:
