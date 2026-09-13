@@ -205,6 +205,47 @@ class OutputWorkbook:
                 return _norm(ws.cell(r, 2).value)
         return ""
 
+    def mark_sales_collected(self, biz: str, date_label: str) -> None:
+        """이 계정의 '판매수집 완료(오늘=date_label 컬럼)' 스탬프를 숨김 계정정보 시트 3열에 기록.
+
+        판매지표는 0/공란도 정상(판매데이터 없음)이라 값으로 '수집됨'을 판정할 수 없으므로, **명시적 스탬프**로
+        기록한다. 같은 날 재실행이 이 스탬프를 보고 그 계정의 로그인·수집을 생략한다(진행파일이 지워져도 마스터에
+        영속). date_label 은 워크북 일자 컬럼 라벨(yy.mm.dd 또는 from~to)과 동일 문자열."""
+        label = _norm(date_label)
+        if not label:
+            return
+        if _ACCT_SHEET in self.wb.sheetnames:
+            ws = self.wb[_ACCT_SHEET]
+        else:
+            ws = self.wb.create_sheet(_ACCT_SHEET)
+            ws.sheet_state = "hidden"
+            ws.cell(1, 1, "사업자"); ws.cell(1, 2, "계정ID")
+        if _norm(ws.cell(1, 3).value) != "판매수집일":
+            ws.cell(1, 3, "판매수집일")
+        for r in range(2, ws.max_row + 1):
+            if _norm(ws.cell(r, 1).value) == biz:
+                ws.cell(r, 3, label); return
+        row = ws.max_row + 1
+        ws.cell(row, 1, biz); ws.cell(row, 3, label)
+
+    def sales_collected_on(self, biz: str) -> str:
+        """그 계정에 마지막으로 기록된 판매수집일 라벨(없으면 '')."""
+        if _ACCT_SHEET not in self.wb.sheetnames:
+            return ""
+        ws = self.wb[_ACCT_SHEET]
+        if _norm(ws.cell(1, 3).value) != "판매수집일":
+            return ""
+        for r in range(2, ws.max_row + 1):
+            if _norm(ws.cell(r, 1).value) == biz:
+                return _norm(ws.cell(r, 3).value)
+        return ""
+
+    def has_sales(self, biz: str, date_label: str) -> bool:
+        """그 계정의 판매수집이 date_label(오늘 컬럼) 기준으로 이미 완료됐는가(재실행 스킵 근거).
+
+        다른 날 라벨이면 False(자동으로 그날 새로 수집) → 날짜가 바뀌면 스탬프가 달라 재수집된다."""
+        return bool(_norm(date_label)) and self.sales_collected_on(biz) == _norm(date_label)
+
     def is_rank_filled(self, biz: str, product: str, keyword: str, date_iso: str) -> bool:
         row = self._kw_row.get((biz, product, keyword))
         col = self._date_col.get(biz, {}).get(date_iso)

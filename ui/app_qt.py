@@ -423,19 +423,20 @@ class App(QtWidgets.QMainWindow):
         # 실행 모드 — 팝업 3택 대신 화면에서 선택(이어쓰기=누적 / 처음부터=새 통계). 실행 시 예/아니오만 확인.
         moderow = QtWidgets.QHBoxLayout()
         moderow.addWidget(QtWidgets.QLabel("실행 모드:"))
-        self.rb_append = QtWidgets.QRadioButton("이어쓰기(누적)")
-        self.rb_append.setChecked(True)
-        self.rb_append.setToolTip("기존 통계 마스터에 오늘 날짜 컬럼을 추가합니다(키워드 동결, 시계열 누적).\n"
+        # 수집 기간(cb_today/cb_range)과 동일한 체크박스 스타일로 통일 — 체크박스지만 배타 그룹으로 하나만 선택.
+        self.cb_append = QtWidgets.QCheckBox("이어쓰기(누적)")
+        self.cb_append.setChecked(True)
+        self.cb_append.setToolTip("기존 통계 마스터에 오늘 날짜 컬럼을 추가합니다(키워드 동결, 시계열 누적).\n"
                                   "같은 날 미완료분이 있으면 완료 계정을 건너뛰고 이어서 진행합니다.")
-        self.rb_fresh = QtWidgets.QRadioButton("처음부터(새 통계)")
-        self.rb_fresh.setToolTip("기존 통계 마스터를 백업한 뒤 빈 통계로 새로 시작합니다.\n"
+        self.cb_fresh = QtWidgets.QCheckBox("처음부터(새 통계)")
+        self.cb_fresh.setToolTip("기존 통계 마스터를 백업한 뒤 빈 통계로 새로 시작합니다.\n"
                                  "⚠ 누적 시계열이 끊깁니다 — 첫 수집이나 키워드 전면 재선정 때만 사용하세요.")
-        self._mode_group = QtWidgets.QButtonGroup(self)
+        self._mode_group = QtWidgets.QButtonGroup(self)   # 체크박스지만 하나만 선택(상호배타)
         self._mode_group.setExclusive(True)
-        self._mode_group.addButton(self.rb_append)
-        self._mode_group.addButton(self.rb_fresh)
-        moderow.addWidget(self.rb_append)
-        moderow.addWidget(self.rb_fresh)
+        self._mode_group.addButton(self.cb_append)
+        self._mode_group.addButton(self.cb_fresh)
+        moderow.addWidget(self.cb_append)
+        moderow.addWidget(self.cb_fresh)
         moderow.addStretch(1)
         rv.addLayout(moderow)
         optrow = QtWidgets.QHBoxLayout()
@@ -956,7 +957,7 @@ class App(QtWidgets.QMainWindow):
         #  · 처음부터(새 통계): carry_forward=False → 기존 마스터 백업 후 새로 시작.
         #  · 이어쓰기: 같은 날 미완료분이 있으면 이어서(완료 계정 건너뜀), 아니면 마스터에 오늘 컬럼 추가.
         #    (resumable_progress 는 '오늘 시작분'만 반환 → 날짜가 바뀌면 자동으로 새 오늘 컬럼.)
-        fresh = self.rb_fresh.isChecked()
+        fresh = self.cb_fresh.isChecked()
         resume = carry = False
         meta = None if fresh else resumable_progress()
         if fresh:

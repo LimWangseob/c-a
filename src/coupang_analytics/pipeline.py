@@ -728,6 +728,33 @@ def _backfill_ranks(wb, path, log, *, was_blocked: bool) -> None:
     log("  [순위보완] 재시도 상한 도달 — 남은 순위는 다음 실행에서 이어서")
 
 
+def _select_keywords_for_skipped(wb, save_path, accounts, naver, ai_key, log) -> None:
+    """판매수집을 건너뛴(이미 오늘 수집됨) 계정의 상품 중 **키워드가 비어 있는 것만** 선정(로그인 없이).
+
+    전체실행 재실행에서 판매는 스킵하되 ②키워드가 빠지지 않게 하는 보완 단계. 기존 키워드가 있는 상품은
+    **동결**(건드리지 않음). select_keywords_stage(②)와 동일 로직(워크북 상품명 시드, 순위 조회 없음).
+    로그인 브라우저는 이미 닫혔으므로 순위 브라우저 1개만 연다(중첩 금지 준수)."""
+    biz_names = {a.label for a in accounts}
+    targets = [(biz, pname) for biz in wb.account_sheets() if biz in biz_names
+               for pname in wb.products_of(biz) if not wb.product_keywords(biz, pname)]
+    if not targets:
+        return
+    log(f"== 판매수집 스킵 계정의 키워드 미보유 상품 {len(targets)}개 선정(로그인 없이) ==")
+    with WingBrowser(profile_dir=_PROFILE, offscreen=True) as browser:
+        warmup(browser)
+        for biz, pname in targets:
+            try:
+                tracks = select_keywords_light(pname, naver, ai_key, browser=browser, log=log,
+                                               measure_ranks=None)
+                wb.add_product_keywords(biz, pname, [t.keyword for t in tracks])
+                for t in tracks:
+                    wb.set_keyword_search(biz, pname, t.keyword, t.volume)
+                log(f"  [키워드] {biz} · {pname} → {[t.keyword for t in tracks]}")
+            except Exception as exc:   # 한 상품 실패가 나머지·순위보완을 안 막게 격리
+                log(f"  [키워드] {biz} · {pname} 선정 실패(건너뜀) — {exc.__class__.__name__}: {str(exc)[:80]}")
+        wb.save(save_path)
+
+
 def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
              ai_key: str | None = None, date_from: str | None = None, date_to: str | None = None,
              get_password=None, resume: bool = False, carry_forward: bool = False,
@@ -850,6 +877,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
                                      col_label, grow, log, partial)
         else:                                        # 대장 상품 0개 → Chrome 개방 생략, 시트도 생략
             log(f"  [{a.label}] 대장 상품 0개 — 시트·키워드·순위 생략")
+        wb.mark_sales_collected(a.label, col_label)   # 오늘 판매수집 완료 스탬프(같은 날 재실행 시 로그인·수집 생략 근거)
         done.add(a.account_id)                    # 이 계정 완료 확정
         _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks)
         wb.save(partial)
@@ -858,9 +886,17 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     # ── 1차 패스: 세션 살아있는 계정 먼저 수집(로그인 없음 → 차단 위험 0). 세션 만료는 로그인 대기열로. ──
     #   반복 자동로그인이 Akamai IP 차단을 유발하므로, 로그인 없는 계정을 먼저 다 확보한다.
     login_needed: list[tuple[int, Account]] = []
+    sales_skipped: list[Account] = []             # 오늘 판매수집 이미 완료 → 로그인·수집 생략한 계정(키워드 보완 대상)
     for i, a in enumerate(accounts, 1):
         if a.account_id in done:                  # 완료 계정 → 건너뜀
             log(f"== [{i}/{total}] {a.label} — 이미 완료, 건너뜀 ==")
+            continue
+        if wb.has_sales(a.label, col_label):      # 오늘 판매수집 이미 완료(스탬프) → 로그인·수집 생략(재실행)
+            log(f"== [{i}/{total}] {a.label} — 오늘({col_label}) 판매수집 완료됨 → 로그인·수집 생략(재실행). "
+                "키워드는 미보유분만 보완·순위는 미기입분만 조회 ==")
+            done.add(a.account_id)
+            _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks)
+            sales_skipped.append(a)
             continue
         if carry and wb.has_marketing():          # 마케팅 설정됐을 때만 주기 게이팅(미설정=현행 매일 유지)
             due, why = wb.account_due(a.label, date_to)
@@ -924,6 +960,11 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
             gone = wb.reconcile_account(biz, [])   # 대장에 없는 계정 → 전 상품 판매중지
             if gone:
                 log(f"== [{biz}] 대장에서 사라진 계정 → 상품 {len(gone)}개 판매중지 표기 ==")
+
+    # 판매수집을 건너뛴(이미 오늘 수집됨) 계정도 키워드가 비어 있으면 선정(로그인 없이·워크북 기반).
+    # 전체실행(①②③) 재실행에서 판매는 스킵하되 ②키워드가 빠지지 않게 한다(①판매수집 전용은 키워드 단계 없음).
+    if sales_skipped and not keywords_off:
+        _select_keywords_for_skipped(wb, partial, sales_skipped, naver, ai_key, log)
 
     if not skip_ranks:   # 노출순위 미처리분(차단 등으로 공란) 자동 재시도 — 쿨다운 두고, 진전 없으면 중단
         _backfill_ranks(wb, partial, log, was_blocked=_RANK_HALT["stop"])
