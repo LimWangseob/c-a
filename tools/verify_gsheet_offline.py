@@ -32,7 +32,7 @@ from coupang_analytics.input_list import (Account, Product,  # noqa: E402
                                           parse_input_list, parse_input_rows, parse_password_rows)
 from coupang_analytics.workbook import OutputWorkbook  # noqa: E402
 
-_HEAD = ["사업자", "상품명(클릭 이동)", "계정ID", "마케팅 시작일", "마케팅 종료일", "모니터링 종료일", "상태"]
+_HEAD = ["사업자", "상품명(클릭 이동)", "계정ID", "체험단 시작일", "체험단 종료일", "모니터링 종료일", "상태"]
 
 
 def _ok(msg: str) -> None:

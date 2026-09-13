@@ -2,7 +2,7 @@
 
 스키마(기존 openpyxl `계정 목록`과 동일 7열, designs/GSHEET_UNIFIED.md 확정):
     A 사업자 | B 상품명(클릭 이동·노출명·통계시트 하이퍼링크) | C 계정ID |
-    D 마케팅 시작일 | E 마케팅 종료일 | F 모니터링 종료일 | G 상태
+    D 체험단 시작일 | E 체험단 종료일 | F 모니터링 종료일 | G 상태
 
 - **자동 열 = A·B·C·G** (프로그램이 씀). **직원 입력 열 = D·E·F**(온라인 편집) → 프로그램이 **절대 안 씀**.
 - 신규 상품은 **계정별 그룹 맨 마지막**에 `insertDimension`으로 빈 행을 끼워 넣는다(기존 마케팅 행은
@@ -199,7 +199,7 @@ def _build_requests_for_plan(sheet_id: int, plan: SyncPlan) -> list[dict]:
     return reqs
 
 
-_HEADS = ["사업자", "상품명(클릭 이동)", "계정ID", "마케팅 시작일", "마케팅 종료일", "모니터링 종료일", "상태"]
+_HEADS = ["사업자", "상품명(클릭 이동)", "계정ID", "체험단 시작일", "체험단 종료일", "모니터링 종료일", "상태"]
 _COL_WIDTHS = {COL_BUSINESS: 150, COL_PRODUCT: 300, COL_ACCOUNT: 110,
                COL_MKT_START: 95, COL_MKT_END: 95, COL_MKT_MON: 100, COL_STATUS: 90}
 

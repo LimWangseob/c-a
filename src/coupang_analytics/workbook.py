@@ -52,7 +52,8 @@ _ACCT_SHEET = "_계정정보"  # 숨김 시트: (사업자)→계정ID 매핑. �
 _MKT_SHEET = "_마케팅"     # 숨김 시트: (사업자,상품)→마케팅 시작·종료·모니터링종료. 계정목록 입력을 보존(재생성돼도 유지)
 _DISC_SHEET = "_중단"      # 숨김 시트: (사업자,상품) 판매중지/삭제(대장에서 사라짐) 표기. 데이터는 보존, 표시만 구분
 _SPECIAL_SHEETS = (_META_SHEET, _INDEX_SHEET, _ACCT_SHEET, _MKT_SHEET, _DISC_SHEET)
-_MKT_COLS = ("마케팅 시작일", "마케팅 종료일", "모니터링 종료일")   # 계정목록 편집 열(사용자 입력)
+_MKT_COLS = ("체험단 시작일", "체험단 종료일", "모니터링 종료일")   # 계정목록 편집 열(직원 입력 = 체험단 기간)
+_MKT_COLS_LEGACY0 = "마케팅 시작일"   # 옛 라벨('마케팅 시작일') — 기존 마스터 계정목록에서 값 회수 시 인식용
 
 
 def _norm(v) -> str:
@@ -859,7 +860,7 @@ class OutputWorkbook:
         if _INDEX_SHEET not in self.wb.sheetnames:
             return
         ws = self.wb[_INDEX_SHEET]
-        if _norm(ws.cell(2, 4).value) != _MKT_COLS[0]:   # 새 레이아웃(마케팅 열)일 때만 회수(옛 레이아웃 오독 방지)
+        if _norm(ws.cell(2, 4).value) not in (_MKT_COLS[0], _MKT_COLS_LEGACY0):   # 현재/옛 라벨 레이아웃만 회수
             return
         for r in range(3, ws.max_row + 1):
             biz = _norm(ws.cell(r, 1).value)
