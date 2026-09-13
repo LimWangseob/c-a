@@ -23,6 +23,8 @@
 
 **앱 재시작 필요**(코드 반영). 검증도구=`python tools/simulate_pipeline.py`, `python -m pyflakes src/coupang_analytics/`.
 
+**🔒 차단회피 타이핑(직전 세션 `69ae85b`~`70426e3`, 이번에 설계서 정식화)**: 쿠팡 검색어·로그인 입력은 **붙여넣기 금지·한 글자씩 실제 키보드**(한글=CDP IME 자모조합+물리키code+랜덤간격/망설임/긴멈춤, 영문=키입력, 입력후 '글자수+2초' 멈춤 뒤 Enter). 커밋단위 스위치 `TYPE_JAMO_COMMIT_MODE`(어절/음절, 핫스팟 A/B용). **상세=`designs/DESIGN.md §4.8` + 메모리 [[coupang-blocks-paste-requires-typing]]**. ⚠ 타이핑이 차단을 실제 완화하는지는 **깨끗한 IP(핫스팟)**에서만 판별(사무실 IP는 입력방식 무관 차단).
+
 ## 0-A2. 최신 세션 (2026-09-11) — 이전
 
 > 이 세션은 무인 운용(로그인·순위)·재개·서식을 대거 손봤다. 커밋: `c81b428`→`1ea1839`→`d7bf642`→`52195d7`→`80e18db`→`75f804d`→`6203f3c`.

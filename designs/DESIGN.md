@@ -9,6 +9,7 @@
 - **vid 보강 = 당일 판매0 상품도 vid 확보(기존 판매분석·재고 API만, 카탈로그 API 미도입):** `vi-detail-search`(판매분석)는 조회기간에 **조회/방문/판매가 있은 상품만** 반환한다(캡처 실증: `sold=0`이어도 `views>0`이면 vid 포함). ∴ **당일(D-1) 완전 무활동 상품은 vid 없음.** 정책(사용자 확정 2026-09-13): ①당일 판매정보 있으면 그대로 vid+지표 ②대장에 있는데 당일 미매칭이면 **최근 `SALES_VID_WINDOW_DAYS`(=30)일 판매분석**으로 vid 확보 ③**30일 조회분 지표는 반영 금지**(지표는 당일 것만) ④**그로스는 재고 API(`inventory-health-dashboard`)로 vid+상품명 확보**(판매 무관, `creturnConfigViewDto.productName`). 구현: `collector.fetch_sales_roster`(vid·상품명 roster)·`_parse_inventory_roster`·`fetch_inventory→(수량, vid→상품명)`, `product_match.augment_unmatched`(미매칭만 보강·매칭분 불변·중복 vid 방지), `pipeline._login_and_discover`+`_roster_from_names`.
 - **③ 노출순위 매칭 폴백:** vid 없으면 건너뛰지 않고 **상품명(부분일치) 폴백**(`_rank_matcher`, DESIGN §2.1). 자동·반자동·백필 전 경로 통일(`run_full` 자체 경로 `_product_matcher`와 동일 방침).
 - **상태 라벨:** 계정목록 상태 `마케팅중`→`체험단중`(체험단 헤더와 일관).
+- **검색어·로그인 입력 = 사람 타이핑(붙여넣기 금지):** Akamai가 붙여넣기(비신뢰 input)를 차단 → **한 글자씩 실제 키보드**(한글=CDP IME 자모 조합·물리키 code·랜덤 간격+망설임/긴멈춤, 영문=키입력). 검색·로그인 공용. **상세=§4.8**(핵심 차단회피 로직).
 
 ## 0. 최신 반영 요약 (2026-09-04)
 
@@ -177,6 +178,28 @@
 ### 4.7 검증된 사실 (라이브)
 - 2026-09-05: **자동입력 로그인이 창 없이(숨김) + 2차인증 없이 성공** 확인(`✅ 로그인 완료`). 판매상품 없는 계정은 `판매분석 데이터 없음 — 정상`으로 처리(오류 아님).
 - 2차인증은 **위치/환경 기반 조건부(step-up)** — 신뢰 환경은 없이 통과, 낯선 환경은 요구(그때만 창 표시). 인증번호 5회 오류 시 계정 잠금 → 자동 재시도 금지(§4.3 error 즉시중단).
+
+### 4.8 검색어·로그인 입력 = 사람 타이핑(붙여넣기 금지, 차단 회피 — 🔒 2026-09-13 실측 고정)
+
+> **원인(실측):** 쿠팡 Akamai는 **붙여넣기/즉시 채움**(value setter·`fill` = `isTrusted=false` input, keydown 없음)을
+> 짧은 쿼리로 감지해 **차단**하고, **실제 키보드로 한 글자씩** 친 신뢰 키이벤트 입력만 통과시킨다.
+> 그래서 **쿠팡 검색어(③ 자동·반자동)와 로그인 입력을 모두 사람 타이핑으로 통일**한다.
+> 구현: `human_typing.type_focused` (← `rank.human_type_query` ← ③ 검색 경로·로그인 자동입력 공용). 지문위조 아님(정상 입력 재현).
+
+- **한글 = CDP IME 자모 단위 조합**: 자모마다 `keyCode 229`(Process) keydown + **2벌식 자모→물리키 `code`** 부여 +
+  `Input.imeSetComposition`(조합 텍스트 갱신 = `compositionupdate`, trusted) → 완성 시 `Input.insertText` 커밋(`compositionend`).
+  실제 IME 타이핑과 같은 이벤트열(keydown 229 · compositionstart/update/end · input)을 낸다.
+- **영문/숫자/기호 = `page.keyboard.type(ch)`**(신뢰 keydown/keypress/keyup).
+- **글자(자모)마다 미세 랜덤 간격**(사람 리듬): `TYPE_KEY_DELAY_MIN~MAX`(0.14~0.38s, 평균 ~0.26s = 초중급 3~4타/초)
+  \+ 확률적 **망설임**(`TYPE_HESITATE_PROB`=0.22 → +0.25~0.75s) + 드문 **긴 멈춤**(`TYPE_LONGPAUSE_PROB`=0.05 → +0.8~1.6s).
+- **조합 커밋 단위 스위치**(`TYPE_JAMO_COMMIT_MODE`): `"eojeol"`(기본 — 어절 전체를 한 조합으로 이어 끝에 1회 커밋 →
+  `compositionend`[isTrusted=false, CDP 한계] 빈도↓) vs `"syllable"`(음절마다 커밋 = 실제 IME 구조에 가까우나 compositionend[F] 다수).
+  탐지 로직 미지 → **핫스팟 A/B 비교용** 스위치(값 조정은 config 수동).
+- **입력 후 실행(Enter) 전 사람 멈춤**(`config.type_dwell` = 글자수×`TYPE_DWELL_PER_CHAR_SEC`(1.0) + `TYPE_DWELL_BASE_SEC`(2.0)
+  = '글자수+2초'): 채우자마자 제출=봇 패턴 회피(사용자 관찰).
+- **폴백 안전**: `TYPE_JAMO_IME=True`(자모 IME) → 값 검증 실패 시 음절 단위 신뢰 키입력 → 그래도 실패면 URL 폴백([rank.human_type_query]).
+  compositionend만 isTrusted=false(CDP 한계), 자모 keydown·compositionupdate는 trusted. 한글 keydown이 막히면 이 CDP IME가 유일 경로.
+- 관련 커밋(구현 순): `69ae85b`(붙여넣기 폐지→타이핑) → `ed1665c`(CDP IME 자모조합·로그인 동일) → `7165852`(초중급 속도·조합 keydown 물리키 code) → `aee1b9d`(어절 단위 커밋) → `70426e3`(어절/음절 커밋 스위치).
 
 ## 5. 파이프라인
 
