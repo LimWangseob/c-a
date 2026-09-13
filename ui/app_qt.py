@@ -287,6 +287,23 @@ class App(QtWidgets.QMainWindow):
         g.addWidget(self.gs_input_edit, 1, 1)
         g.addLayout(in_btns, 1, 2)
 
+        # 2.5) 기본 입력 소스 — 시작(무인 자동로드)이 어느 쪽을 쓸지. 구글시트=기본, PC 엑셀=선택.
+        cur_src = st.value("input/source", "", type=str)
+        if cur_src not in ("gsheet", "file"):
+            cur_src = "gsheet"                        # 미설정 = 구글시트 기본(사용자 지정)
+            st.setValue("input/source", cur_src)
+        self.src_gsheet_radio = QtWidgets.QRadioButton("구글시트 관리대장(기본)")
+        self.src_file_radio = QtWidgets.QRadioButton("PC 엑셀(선택)")
+        self.src_gsheet_radio.setChecked(cur_src == "gsheet")
+        self.src_file_radio.setChecked(cur_src == "file")
+        self.src_gsheet_radio.toggled.connect(self._on_input_source_changed)
+        src_box = QtWidgets.QHBoxLayout()
+        src_box.addWidget(self.src_gsheet_radio)
+        src_box.addWidget(self.src_file_radio)
+        src_box.addStretch(1)
+        g.addWidget(QtWidgets.QLabel("기본 입력 소스"), 2, 0)
+        g.addLayout(src_box, 2, 1, 1, 2)
+
         # 3) 결과(출력) 링크
         self.gs_output_edit = QtWidgets.QLineEdit(st.value("gsheet/output_url", "", type=str))
         self.gs_output_edit.setPlaceholderText("결과 구글시트 링크 또는 ID (계정목록·통계를 여기에 씀 — 서비스계정 '편집자' 공유)")
@@ -294,9 +311,9 @@ class App(QtWidgets.QMainWindow):
             lambda: st.setValue("gsheet/output_url", self.gs_output_edit.text().strip()))
         out_chk = QtWidgets.QPushButton("연결 확인")
         out_chk.clicked.connect(lambda: self._check_gsheet("output"))
-        g.addWidget(QtWidgets.QLabel("결과(출력) 링크"), 2, 0)
-        g.addWidget(self.gs_output_edit, 2, 1)
-        g.addWidget(out_chk, 2, 2)
+        g.addWidget(QtWidgets.QLabel("결과(출력) 링크"), 3, 0)
+        g.addWidget(self.gs_output_edit, 3, 1)
+        g.addWidget(out_chk, 3, 2)
         return card
 
     def _kw_tab(self):
@@ -625,6 +642,13 @@ class App(QtWidgets.QMainWindow):
         self._store_passwords_from(path, quiet=True)
         return True
 
+    def _on_input_source_changed(self, _checked=None) -> None:
+        """기본 입력 소스 라디오 변경 → input/source 영속(다음 시작 자동로드가 이 값을 따른다)."""
+        src = "gsheet" if self.src_gsheet_radio.isChecked() else "file"
+        QtCore.QSettings("coupang-analytics", "ui").setValue("input/source", src)
+        self.log(f"[입력] 기본 입력 소스 = {'구글시트 관리대장' if src == 'gsheet' else 'PC 엑셀'}"
+                 + ("" if src == "gsheet" else " — 구글시트는 여전히 '관리대장에서 불러오기'로 수동 사용 가능"))
+
     def load_input_from_gsheet(self):
         """설정 탭에 등록한 관리대장(구글시트) 링크를 서비스계정으로 읽어 입력으로 적용(수동 버튼).
 
@@ -650,6 +674,8 @@ class App(QtWidgets.QMainWindow):
         st = QtCore.QSettings("coupang-analytics", "ui")
         st.setValue("gsheet/input_url", url)
         st.setValue("input/source", "gsheet")       # 무인 자동로드가 구글시트를 우선하도록 표시
+        if getattr(self, "src_gsheet_radio", None) is not None:
+            self.src_gsheet_radio.setChecked(True)   # 기본 입력 소스 라디오도 구글시트로 동기화
         return True
 
     def _auto_load_input(self) -> bool:
