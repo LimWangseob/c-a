@@ -493,10 +493,12 @@ class App(tk.Tk):
                                    "결과 파일이 없습니다. ① 판매수집을 먼저 실행해 상품을 수집하세요.")
             return
         naver_creds, key = self.naver_creds, self.ai_key
+        gs_out = _shared_setting("gsheet", "output_url")
         self.log("[키워드 선정] 시작 — 순위 조회 없이 키워드만 선정(로그인 불필요)")
 
         def task():
-            return select_keywords_stage(NaverAdApi(naver_creds), key, grow=False, on_log=self.log)
+            return select_keywords_stage(NaverAdApi(naver_creds), key, grow=False, on_log=self.log,
+                                         gsheet_output_url=gs_out)
         self.run_bg(task, on_done=self._pipeline_done, btn=self.kw_btn)
 
     def do_track_ranks(self, semi: bool = True):
@@ -511,9 +513,11 @@ class App(tk.Tk):
         self.track_stop_btn.config(state="normal")
         self.log("[반자동 순위] 시작 — 뜬 창에서 안내 키워드를 직접 검색하세요(중지: '반자동 중지')")
         should_stop = self._semi_stop.is_set
+        gs_out = _shared_setting("gsheet", "output_url")
 
         def task_semi():
-            return track_ranks_stage(semi=True, should_stop=should_stop, on_log=self.log)
+            return track_ranks_stage(semi=True, should_stop=should_stop, on_log=self.log,
+                                     gsheet_output_url=gs_out)
 
         def done(p):
             self.track_stop_btn.config(state="disabled")

@@ -1019,7 +1019,8 @@ class App(QtWidgets.QMainWindow):
                                  grow_keywords=False, skip_ranks=True, keywords_off=False, on_log=self.log,
                                  gsheet_output_url=gs_out)
                 if not stop.is_set():
-                    track_ranks_stage(semi=True, should_stop=stop.is_set, on_log=self.log)
+                    track_ranks_stage(semi=True, should_stop=stop.is_set, on_log=self.log,
+                                      gsheet_output_url=gs_out)
                 # (결과는 구글 시트 통합으로 결과시트에 직접 반영 — rclone 업로드 제거)
             except Exception as exc:                # 무인: 어떤 오류도 앱을 매달아두지 않게 로그 후 종료로
                 self.log(f"[무인] 실행 중 오류: {exc.__class__.__name__}: {exc}")
@@ -1061,10 +1062,12 @@ class App(QtWidgets.QMainWindow):
             return
         grow = self.cb_grow.isChecked()
         naver_creds, key = self.naver_creds, self.ai_key
+        gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
         self.log("[키워드 선정] 시작 — 순위 조회 없이 키워드만 선정(로그인 불필요)")
 
         def task():
-            return select_keywords_stage(NaverAdApi(naver_creds), key, grow=grow, on_log=self.log)
+            return select_keywords_stage(NaverAdApi(naver_creds), key, grow=grow, on_log=self.log,
+                                         gsheet_output_url=gs_out)
         self.run_bg(task, on_done=self._pipeline_done, btn=self.kw_btn)
 
     def do_track_ranks(self, semi: bool = True):
@@ -1079,9 +1082,11 @@ class App(QtWidgets.QMainWindow):
         self.track_stop_btn.setEnabled(True)
         self.log("[반자동 순위] 시작 — 뜬 창에서 로그에 안내되는 키워드를 직접 검색하세요(중지: '반자동 중지')")
         should_stop = self._semi_stop.is_set
+        gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
 
         def task_semi():
-            return track_ranks_stage(semi=True, should_stop=should_stop, on_log=self.log)
+            return track_ranks_stage(semi=True, should_stop=should_stop, on_log=self.log,
+                                     gsheet_output_url=gs_out)
         self.run_bg(task_semi, on_done=self._pipeline_done, btn=self.track_semi_btn)
 
     def _stop_semi(self):

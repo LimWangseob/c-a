@@ -849,7 +849,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
 
 
 def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = "output",
-                          grow: bool = False, on_log=None) -> Path | None:
+                          grow: bool = False, on_log=None, gsheet_output_url: str | None = None) -> Path | None:
     """② 키워드 선정 전용 — 최신 워크북 로드, 상품별 키워드(**순위 조회 없음**) 선정·기록. 로그인 불필요.
 
     ①(판매수집)로 상품이 이미 워크북에 있어야 한다. 기존 키워드가 있으면 동결(grow=True면 상한 내 발굴
@@ -899,12 +899,13 @@ def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = 
             wb.save(path)
     wb.apply_style()   # 추가한 키워드 행까지 표준 서식 고정(시트간 서식 섞임 방지)
     wb.save(path)
+    _push_gsheet(wb, gsheet_output_url, log)   # ② 개별 실행도 결과 구글시트에 반영(키워드 갱신)
     log("== 키워드 선정 완료 ==")
     return path
 
 
 def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
-                      should_stop=None) -> Path | None:
+                      should_stop=None, gsheet_output_url: str | None = None) -> Path | None:
     """③ 노출순위 조회 전용 — 최신 워크북 로드, 상품(고유ID)+키워드로 순위 측정·기록. 로그인 불필요.
 
     ①(상품ID)·②(키워드)가 이미 워크북에 있어야 한다. 상품마다 저장된 vendorItemId 로 검색결과에서 내
@@ -920,7 +921,9 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
         log("== 순위 조회: 결과 워크북이 없습니다 — 먼저 ①②를 실행하세요 ==")
         return None
     if semi:
-        return _track_ranks_semi(wb, path, log, should_stop or (lambda: False))
+        result = _track_ranks_semi(wb, path, log, should_stop or (lambda: False))
+        _push_gsheet(wb, gsheet_output_url, log)   # ③ 반자동 순위 채운 뒤 결과 구글시트에도 반영
+        return result
     log(f"== 노출순위 조회 시작 — {path.name} ==")
     _reset_rank_state()          # 이번 실행 차단 플래그·서킷브레이커(cooldown) 초기화
     if config.RANK_NAV_SERIAL:
@@ -980,8 +983,9 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
     if halted:
         log("== ⛔ 노출순위 중단(쿠팡 검색 차단 감지) — 진행분 저장됨. "
             "쉰 IP/시간에 다시 실행하면 남은 것부터 이어서 조회합니다 ==")
-        return path
-    log("== 노출순위 조회 완료 ==")
+    else:
+        log("== 노출순위 조회 완료 ==")
+    _push_gsheet(wb, gsheet_output_url, log)   # ③ 자동 순위 채운 뒤 결과 구글시트에도 반영(차단 중단이어도 진행분 반영)
     return path
 
 
