@@ -73,6 +73,20 @@ class InventoryFetchError(Exception):
     """로켓그로스 재고현황 API 직접조회 실패(비200·파싱실패 등). 계약 계정에만 존재."""
 
 
+def kind_of(registration_types) -> str:
+    """옵션들의 registration_type 목록 → 상품 구분(순수·테스트 가능).
+
+    RFM=로켓그로스, NORMAL=판매자배송. 전부 RFM=로켓그로스 · RFM 없음=판매자배송 · **RFM과 NORMAL 섞임=둘 다**
+    (한 상품을 로켓그로스와 판매자배송으로 동시 운영). NORMAL 명시가 있어야 '둘 다'로 본다(빈 값은 판매자배송으로).
+    """
+    types = list(registration_types)
+    has_rfm = any(t == "RFM" for t in types)
+    has_seller = any(t == "NORMAL" for t in types)
+    if has_rfm and has_seller:
+        return config.KIND_BOTH
+    return config.KIND_CONTRACT if has_rfm else config.KIND_PERSONAL
+
+
 def _num(value) -> int:
     """지표 정수화(응답은 3.0 같은 실수). None/빈값은 0."""
     if value in (None, ""):
@@ -423,9 +437,7 @@ def discover(page, date_from: str, date_to: str, log=None) -> tuple[list[Product
         labels = _unique_labels(opts)
         options = [Option(label=lbl, vendor_item_ids=[o.option_id]) for lbl, o in zip(labels, opts)]
         title = _display_title(opts[0].product_name, opts)
-        # 상품구분: 옵션 중 하나라도 RFM(로켓그로스)이면 계약, 아니면 개인(판매자배송) — API로 자동 판별.
-        kind = (config.KIND_CONTRACT if any(o.registration_type == "RFM" for o in opts)
-                else config.KIND_PERSONAL)
+        kind = kind_of(o.registration_type for o in opts)   # 로켓그로스/판매자배송/둘 다(API 자동 판별)
         products.append(Product(name=opts[0].product_name, options=options, title=title, kind=kind))
         # 입력 파일의 상품명이 아니라 **쿠팡에서 실제 판매 중인 상품 제목**(API productName)을 분석 대상으로 쓴다.
         v = sum(o.views for o in opts)

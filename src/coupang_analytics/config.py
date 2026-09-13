@@ -9,10 +9,13 @@ M_VIEWS = "노출량"        # 계약 노출량(조회수)
 M_INVENTORY = "재고현황"   # 판매가능 재고수량 — **로켓그로스(계약)만** 해당(rfm-inventory)
 M_RANK = "노출 순위"      # 키워드별 오가닉 순위(PC)
 # 기본 지표 = 판매량·방문자·노출량(계약/개인 공통). 재고현황은 로켓그로스(계약)에만 추가.
-CONTRACT_METRICS = (M_SALES, M_VISITORS, M_VIEWS, M_INVENTORY)  # 계약=로켓그로스(재고 포함)
-PERSONAL_METRICS = (M_SALES, M_VISITORS, M_VIEWS)              # 개인=판매자배송(재고 없음)
-KIND_CONTRACT = "계약 상품"
-KIND_PERSONAL = "개인 상품"
+CONTRACT_METRICS = (M_SALES, M_VISITORS, M_VIEWS, M_INVENTORY)  # 로켓그로스(재고 포함)
+PERSONAL_METRICS = (M_SALES, M_VISITORS, M_VIEWS)              # 판매자배송(재고 없음)
+# 상품 구분(배송/판매 방식) — API registration_type 로 자동 판별(RFM=로켓그로스, NORMAL=판매자배송).
+KIND_CONTRACT = "로켓그로스"          # 옵션이 전부 RFM(로켓그로스)
+KIND_PERSONAL = "판매자배송"          # 옵션에 RFM 없음(판매자배송)
+KIND_BOTH = "로켓그로스+판매자배송"   # 한 상품에 RFM 옵션과 NORMAL 옵션이 **섞임**(둘 다 운영)
+KINDS_WITH_INVENTORY = (KIND_CONTRACT, KIND_BOTH)   # 재고현황 행·조회 대상(로켓그로스 파트 존재)
 # 상품 이름칸 표시: 1줄=쿠팡 full 상품제목, 2줄=상품 인식코드(vendorItemId). 두 값을 한 셀에 담되
 # **보이지 않는 구분자(U+2063 INVISIBLE SEPARATOR)**로 나눈다. 상품 키(=시계열 정체성)는 항상
 # 이 구분자 앞부분(=순수 상품명). ⚠️ 상품명 자체에 내부 개행('\n')이 들어있는 경우가 실제로 있어

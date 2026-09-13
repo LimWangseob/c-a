@@ -361,9 +361,10 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
                 log(f"  [{a.label}] 판매분석 데이터 없음 — 정상(수집할 상품 없음), 건너뜀")
                 session_state.observe_collection_empty(a.account_id)
                 return None, {}, {}
-        # 로켓그로스(계약) 상품이 있으면 같은 세션에서 재고현황도 직접조회(개인계정은 재고 없음 → 생략)
+        # 로켓그로스 파트가 있는 상품(로켓그로스·둘다)이 있으면 같은 세션에서 재고현황도 직접조회
+        # (판매자배송 전용 계정은 재고 없음 → 생략)
         inventory: dict[str, int] = {}
-        if any(p.kind == config.KIND_CONTRACT for p in products):
+        if any(p.kind in config.KINDS_WITH_INVENTORY for p in products):
             try:
                 inventory = fetch_inventory(b.page, log)
                 log(f"  [{a.label}] 재고현황 {len(inventory)}개 옵션 조회")

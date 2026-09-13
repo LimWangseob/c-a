@@ -25,6 +25,7 @@ except AttributeError:
 import openpyxl  # noqa: E402
 
 from coupang_analytics import config  # noqa: E402
+from coupang_analytics.collector import kind_of  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics.input_list import parse_input_list  # noqa: E402
 from coupang_analytics.kw_recommend import select_keywords_light  # noqa: E402
@@ -121,6 +122,28 @@ def t1_report_parse():
     _ok("리포트 2옵션 파싱 정상 (OPT100 노출111/판매9/방문55, OPT200 노출222/판매4/방문88)")
 
 
+def t1_kind():
+    print("[7] 상품 구분(로켓그로스/판매자배송/둘 다) 판별 + 워크북 재고행·라벨 마이그레이션")
+    # kind_of 3분기(API registration_type)
+    assert kind_of(["RFM", "RFM"]) == config.KIND_CONTRACT           # 전부 RFM=로켓그로스
+    assert kind_of(["NORMAL"]) == config.KIND_PERSONAL               # RFM 없음=판매자배송
+    assert kind_of([""]) == config.KIND_PERSONAL                     # 빈값=판매자배송
+    assert kind_of(["RFM", "NORMAL"]) == config.KIND_BOTH            # 섞임=둘 다
+    _ok(f"kind_of: RFM→{config.KIND_CONTRACT} · NORMAL→{config.KIND_PERSONAL} · 섞임→{config.KIND_BOTH}")
+    # 둘 다(로켓그로스+판매자배송) 블록은 재고현황 행 포함(로켓그로스 파트)
+    wb = OutputWorkbook.empty()
+    wb.ensure_product_block("가게A", "상품B", config.KIND_BOTH, ["키워드1"])
+    assert wb.has_product("가게A", "상품B")
+    assert (wb._metric_row.get(("가게A", "상품B", config.M_INVENTORY)) is not None), "둘 다=재고행 있어야"
+    # 라벨 마이그레이션: 기존 블록에 구분이 바뀌면 A열 라벨만 최신화(구조 불변)
+    ws = wb.wb["가게A"]
+    hdr = next(r for r in wb._date_rows["가게A"])
+    assert ws.cell(hdr, 1).value == config.KIND_BOTH
+    wb.ensure_product_block("가게A", "상품B", config.KIND_CONTRACT, ["키워드1"])   # 재호출=라벨만 갱신
+    assert ws.cell(hdr, 1).value == config.KIND_CONTRACT, "구분 라벨 최신화 실패"
+    _ok("둘 다 블록=재고행 포함 · 재호출 시 구분 라벨 최신화(마이그레이션)")
+
+
 # ── Tier2 (외부 네트워크·AI, 로그인 아님) ─────────────────────
 def t2_keywords(store, il):
     print("[6] 키워드 Phase B 실제 실행 (AI 앵커→네이버확장→AI판정→점수압축→AI종합선정, 브라우저 없이)")
@@ -162,6 +185,7 @@ def main():
     t1_workbook()
     store = t1_credstore()
     t1_report_parse()
+    t1_kind()
     t2_keywords(store, il)
     print("=" * 60)
     print("  [완료] 로그인 불필요 부분 실증 종료")

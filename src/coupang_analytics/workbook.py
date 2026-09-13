@@ -223,12 +223,29 @@ class OutputWorkbook:
         self._date_rows[biz] = []
         return ws
 
+    def _update_kind_label(self, biz: str, product: str, kind: str) -> None:
+        """기존 블록의 **구분 라벨(A열)만** 최신화(구조 변경 없음). 라벨 문구 변경(마이그레이션: '계약 상품'→
+        '로켓그로스' 등)·구분 변경(로켓그로스→둘 다) 반영. 재고행 유무 등 구조는 그대로(기존 로켓그로스/둘 다는
+        이미 재고행 보유). 헤더행을 찾아 A셀 값만 바꾼다(A:B 세로병합 앵커=헤더행 A셀이라 표시 갱신됨)."""
+        kind = _norm(kind)
+        if not kind or biz not in self.wb.sheetnames:
+            return
+        ws = self.wb[biz]
+        for r in self._date_rows.get(biz, []):
+            if _key(ws.cell(r, _COL_NAME).value) == product:
+                if _norm(ws.cell(r, _COL_KIND).value) != kind:
+                    ws.cell(r, _COL_KIND, kind)
+                return
+
     def ensure_product_block(self, biz: str, product: str, kind: str, keywords: list[str]) -> None:
-        """상품 블록이 없으면 생성(계약=CONTRACT_METRICS/개인=PERSONAL_METRICS + 키워드 순위행)."""
+        """상품 블록이 없으면 생성(로켓그로스·둘다=CONTRACT_METRICS[재고 포함]/판매자배송=PERSONAL_METRICS +
+        키워드 순위행). 이미 있으면 **구분 라벨만 최신화**(문구 마이그레이션·구분 변경 반영)."""
         if self.has_product(biz, product):
+            self._update_kind_label(biz, product, kind)
             return
         ws = self.ensure_account(biz)
-        metrics = config.CONTRACT_METRICS if kind == config.KIND_CONTRACT else config.PERSONAL_METRICS
+        metrics = (config.CONTRACT_METRICS if kind in config.KINDS_WITH_INVENTORY
+                   else config.PERSONAL_METRICS)
         r = (ws.max_row + 2) if ws.max_row > 1 else 3      # 블록 사이 빈 줄
         # 상품 헤더행: A=구분, C=상품명, G=날짜, H~=기존 일자 라벨
         ws.cell(r, _COL_KIND, kind)
