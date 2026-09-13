@@ -86,6 +86,37 @@ def t1b_ledger_strike() -> None:
     _ok("셀/부분 취소선 파싱 + 취소선-only 제외(상태 컬럼 없음) + None이면 하위호환")
 
 
+def t1c_real_ledger_shape() -> None:
+    print("[1c] 실제 셀독리스트 구조 재현 — 행1 잔여값·행2 헤더·식별열 세로병합(상속)·우측 컬럼·취소선·판매상태")
+    # 실측 구조(토탈셀러_셀독 관리 대장): 좌측에 관리열들, 우측에 대표자명/사업자명/계정아이디/비밀번호/상품명/판매상태.
+    # 계정 식별열(대표자명·사업자명·계정아이디·비밀번호)은 그 계정의 여러 상품 행에 걸쳐 **세로 병합** →
+    # 다운로드 xlsx/Sheets API 모두 **상단 행에만 값**, 아래 행은 빈칸 → 파서의 '빈 계정칸=상속'이 그룹핑.
+    H = ["구분", "담당자", "대표자명", "사업자명", "계정아이디", "비밀번호", "상품명", "판매상태"]
+    rows = [
+        ["0", "박명진", "totalseller@x", "", "id@stray", "pw@stray", "", ""],   # 행1 잔여 예시값(무시)
+        H,                                                                       # 행2 헤더
+        ["0", "박명진", "송창호", "웰빙곳간", "wellbing", "pw1", "볶은맥문동환", ""],   # 계정A 첫 상품(식별열 값)
+        ["",  "",     "",     "",       "",         "",    "알부민맥스",   ""],   # 병합 상속(빈 계정칸)
+        ["",  "",     "",     "",       "",         "",    "커큐민플러스", "판매중지"],  # 상태=판매중지 → 상품 제외
+        ["",  "",     "",     "",       "",         "",    "퀘르세틴",     ""],   # 취소선 → 상품 제외
+        ["0", "박명진", "이재필", "커스텀존", "unipang",  "pw2", "불멍화로",     ""],   # 계정B 첫 상품
+        ["",  "",     "",     "",       "",         "",    "NMN정",       ""],   # 병합 상속
+    ]
+    W = len(H)
+    strike = [[False] * W for _ in rows]
+    strike[5][6] = True                              # '퀘르세틴' 상품명 취소선(col 6)
+    il = parse_input_rows(rows, strike)
+    got = {a.account_id: [p.name for p in a.products] for a in il.accounts}
+    assert list(got.keys()) == ["wellbing", "unipang"], list(got.keys())
+    assert got["wellbing"] == ["볶은맥문동환", "알부민맥스"], got["wellbing"]   # 판매중지·취소선 2개 제외
+    assert got["unipang"] == ["불멍화로", "NMN정"], got["unipang"]
+    assert il.accounts[0].business_name == "웰빙곳간" and il.accounts[0].representative == "송창호"
+    assert any("커큐민플러스" in s for s in il.struck) and any("퀘르세틴" in s for s in il.struck)
+    pw = parse_password_rows(rows)
+    assert pw.get("wellbing") == "pw1" and pw.get("unipang") == "pw2", pw
+    _ok("행2 헤더·세로병합 상속·취소선+판매상태 동시제외·계정식별·비번(우측 컬럼)까지 실구조 재현 통과")
+
+
 def t2_file_regression() -> None:
     print("[2] PC 엑셀 파싱 회귀(취소선 + 상태)")
     p = os.path.join(tempfile.gettempdir(), "verify_ledger.xlsx")
@@ -285,7 +316,7 @@ def t7_staff_keywords_merge() -> None:
 
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
-    for fn in (t1_ledger_rows, t1b_ledger_strike, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
+    for fn in (t1_ledger_rows, t1b_ledger_strike, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
                t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook, t7_staff_keywords_merge):
         fn()
     print("=== 전부 통과 ===")
