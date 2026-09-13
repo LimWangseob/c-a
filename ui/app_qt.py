@@ -14,7 +14,7 @@ import threading
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -116,13 +116,13 @@ QRadioButton::indicator:hover { border: 2px solid #0d9488; }
 QRadioButton::indicator:checked { border: 5px solid #0d9488; background: #ffffff; }
 QRadioButton:checked { color: #0d9488; font-weight: 700; }
 
-/* 체크박스 — 네모, 선택 시 파란 채움 + 굵은 파란 글씨 */
+/* 체크박스 — 빈 네모(흰 바탕·회색 테두리), 선택 시 파란 채움 + 흰색 체크마크 */
 QCheckBox { background: transparent; padding: 4px; spacing: 8px; }
-QCheckBox::indicator { width: 17px; height: 17px; border-radius: 4px;
-    border: 2px solid #64748b; background: #ffffff; }
-QCheckBox::indicator:hover { border: 2px solid #0d9488; }
-QCheckBox::indicator:checked { border: 2px solid #0d9488; background: #0d9488; }
-QCheckBox:checked { color: #0d9488; font-weight: 700; }
+QCheckBox::indicator { width: 18px; height: 18px; border-radius: 4px;
+    border: 2px solid #9aa7b6; background: #ffffff; }
+QCheckBox::indicator:hover { border: 2px solid #2563eb; }
+QCheckBox::indicator:checked { border: 2px solid #2563eb; background: #2563eb; image: url(__CHECK_ICON__); }
+QCheckBox:checked { color: #1f2937; font-weight: 600; }
 
 /* 스크롤바 — Win11 얇은 스타일 */
 QScrollBar:vertical { background: transparent; width: 12px; margin: 2px; }
@@ -1131,11 +1131,37 @@ class App(QtWidgets.QMainWindow):
 
 
 
+def _check_icon_path() -> str:
+    """흰색 체크마크 PNG를 임시폴더에 1회 생성하고 경로(슬래시)를 반환 — 체크박스 선택 시 표시 이미지.
+
+    QSS는 data URI를 못 받으므로 런타임 생성 파일을 참조한다. 생성 실패 시 ""(파란 채움만·체크 없음).
+    QApplication 생성 후(QPixmap 사용 가능) 호출할 것.
+    """
+    try:
+        path = Path(QtCore.QDir.tempPath()) / "coupang_check.png"
+        s = 18
+        pm = QtGui.QPixmap(s, s)
+        pm.fill(QtCore.Qt.transparent)
+        p = QtGui.QPainter(pm)
+        p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        pen = QtGui.QPen(QtGui.QColor("#ffffff"))
+        pen.setWidthF(2.2)
+        pen.setCapStyle(QtCore.Qt.RoundCap)
+        pen.setJoinStyle(QtCore.Qt.RoundJoin)
+        p.setPen(pen)
+        p.drawPolyline(QtGui.QPolygonF([QtCore.QPointF(4, 9.5), QtCore.QPointF(7.5, 13), QtCore.QPointF(14, 5)]))
+        p.end()
+        pm.save(str(path), "PNG")
+        return str(path).replace("\\", "/")
+    except Exception:
+        return ""
+
+
 def main():
     set_workdir()                   # .exe 더블클릭 대비 — 상대경로(output·data)가 exe 폴더에서 해석되게 CWD 고정
     auto = "--auto" in sys.argv     # 무인 자동 실행(작업 스케줄러가 18:00에 이 인자로 실행)
     app = QtWidgets.QApplication(sys.argv)
-    app.setStyleSheet(_QSS)
+    app.setStyleSheet(_QSS.replace("__CHECK_ICON__", _check_icon_path()))
     try:                            # Chrome 필수(실제 Chrome+CDP 정책) — 없으면 크래시 대신 안내 후 종료
         find_chrome()
     except FileNotFoundError:
