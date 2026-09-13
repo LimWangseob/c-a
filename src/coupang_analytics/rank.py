@@ -22,7 +22,7 @@ from .browser import WingBrowser
 
 HOME_URL = "https://www.coupang.com/"
 SEARCH_URL = "https://www.coupang.com/np/search?q={q}&page={page}"
-_BLOCK_HINTS = ("죄송", "Denied", "Access", "제한된")
+_BLOCK_HINTS = ("죄송", "Denied", "Access", "제한된", "사용권한")   # '사용권한이 없습니다/제한된' 접근차단 페이지
 
 
 class RankBlocked(Exception):
