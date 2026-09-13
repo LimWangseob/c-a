@@ -14,6 +14,21 @@ from __future__ import annotations
 import random
 import time
 
+from . import config
+
+# 2벌식 자모 → 물리 키 code(+shift 여부). 조합 keydown 에 실어 진짜 IME keydown(code=물리키)처럼 보이게 한다.
+_JAMO_KEY = {
+    "ㅂ": ("KeyQ", False), "ㅈ": ("KeyW", False), "ㄷ": ("KeyE", False), "ㄱ": ("KeyR", False),
+    "ㅅ": ("KeyT", False), "ㅛ": ("KeyY", False), "ㅕ": ("KeyU", False), "ㅑ": ("KeyI", False),
+    "ㅐ": ("KeyO", False), "ㅔ": ("KeyP", False), "ㅁ": ("KeyA", False), "ㄴ": ("KeyS", False),
+    "ㅇ": ("KeyD", False), "ㄹ": ("KeyF", False), "ㅎ": ("KeyG", False), "ㅗ": ("KeyH", False),
+    "ㅓ": ("KeyJ", False), "ㅏ": ("KeyK", False), "ㅣ": ("KeyL", False), "ㅋ": ("KeyZ", False),
+    "ㅌ": ("KeyX", False), "ㅊ": ("KeyC", False), "ㅍ": ("KeyV", False), "ㅠ": ("KeyB", False),
+    "ㅜ": ("KeyN", False), "ㅡ": ("KeyM", False),
+    "ㅃ": ("KeyQ", True), "ㅉ": ("KeyW", True), "ㄸ": ("KeyE", True), "ㄲ": ("KeyR", True),
+    "ㅆ": ("KeyT", True), "ㅒ": ("KeyO", True), "ㅖ": ("KeyP", True),
+}
+
 # 한글 조합 테이블(유니코드 한글 음절 = 0xAC00 + 초성*588 + 중성*28 + 종성)
 _CHO = list("ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ")                       # 19
 _JUNG = list("ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ")                  # 21
@@ -29,10 +44,16 @@ _JONG_COMBINE = {v: k for k, v in _JONG_PARTS.items()}
 
 
 def human_key_delay() -> float:
-    """한 글자(자모) 친 뒤 다음까지 간격(초) — 미세 랜덤 + 가끔 망설임. 붙여넣기(즉시)와 다른 사람 리듬."""
-    d = random.uniform(0.06, 0.17)                  # 기본 타건 간격(사람 ~6~16타/초)
-    if random.random() < 0.12:                      # 가끔 키 찾기/생각으로 멈칫
-        d += random.uniform(0.18, 0.45)
+    """한 자모/글자 친 뒤 다음까지 간격(초) — **초중급자 타이핑 속도**(느리고 불규칙). config 로 조절.
+
+    기본 타건 간격 + 가끔 '망설임'(키 찾기) + 드물게 '긴 멈춤'(생각). 붙여넣기(즉시)와 확연히 다른 사람 리듬.
+    """
+    d = random.uniform(config.TYPE_KEY_DELAY_MIN, config.TYPE_KEY_DELAY_MAX)
+    r = random.random()
+    if r < config.TYPE_LONGPAUSE_PROB:              # 드물게 긴 멈춤(생각·다음 글자 떠올림)
+        d += random.uniform(config.TYPE_LONGPAUSE_MIN, config.TYPE_LONGPAUSE_MAX)
+    elif r < config.TYPE_LONGPAUSE_PROB + config.TYPE_HESITATE_PROB:   # 가끔 망설임(키 찾기)
+        d += random.uniform(config.TYPE_HESITATE_MIN, config.TYPE_HESITATE_MAX)
     return d
 
 
@@ -57,25 +78,25 @@ def _compose(cho: str, jung, jong) -> str:
     return chr(0xAC00 + ci * 588 + ji * 28 + ki)
 
 
-def _syllable_partials(syllable: str):
-    """음절을 자모 키 순서대로 조합해가며 **각 키입력 후의 조합 텍스트** 리스트(마지막=완성 음절)."""
+def _syllable_steps(syllable: str):
+    """음절을 자모 키 순서로 조합 — 각 키입력의 **(누른 자모, 그 후 조합 텍스트)** 리스트(마지막=완성 음절)."""
     d = _decompose(syllable)
     if not d:
         return None
     cho, jung, jong = d
-    partials = [_compose(cho, None, None)]           # 초성 입력 후
+    steps = [(cho, _compose(cho, None, None))]       # 초성 키
     acc = []
     for p in _JUNG_PARTS.get(jung, (jung,)):         # 중성(복합이면 2키)
         acc.append(p)
         jnow = acc[0] if len(acc) == 1 else _JUNG_COMBINE[tuple(acc)]
-        partials.append(_compose(cho, jnow, None))
+        steps.append((p, _compose(cho, jnow, None)))
     if jong:
         gacc = []
         for p in _JONG_PARTS.get(jong, (jong,)):     # 종성(복합이면 2키)
             gacc.append(p)
             gnow = gacc[0] if len(gacc) == 1 else _JONG_COMBINE[tuple(gacc)]
-            partials.append(_compose(cho, jung, gnow))
-    return partials
+            steps.append((p, _compose(cho, jung, gnow)))
+    return steps
 
 
 def _cdp(page):
@@ -86,23 +107,29 @@ def _cdp(page):
 
 
 def _ime_syllable(cdp, syllable: str, delay) -> None:
-    """한 음절을 CDP IME로 자모 단위 조합 입력(각 자모: keydown229 + imeSetComposition) 후 커밋(insertText)."""
-    partials = _syllable_partials(syllable)
-    if partials is None:                             # 음절 아님 → 바로 삽입
+    """한 음절을 CDP IME로 자모 단위 조합 입력 후 커밋. 각 자모마다:
+    keydown(keyCode 229 Process + **물리키 code**) + imeSetComposition(조합 텍스트) + keyup. 음절 끝에 insertText 커밋.
+    keydown 에 물리키 code(2벌식)를 실어 진짜 IME keydown 처럼 보이게 한다."""
+    steps = _syllable_steps(syllable)
+    if steps is None:                                # 음절 아님 → 바로 삽입
         try:
             cdp.send("Input.insertText", {"text": syllable})
         except Exception:
             pass
         time.sleep(delay())
         return
-    for pt in partials:                              # 자모 하나씩: 조합 텍스트 갱신
+    for jamo, pt in steps:                           # 자모 하나씩: 조합 텍스트 갱신
+        code, shift = _JAMO_KEY.get(jamo, ("", False))
+        mod = 8 if shift else 0                       # 8 = Shift(CDP modifiers 비트)
         try:
             cdp.send("Input.dispatchKeyEvent",
-                     {"type": "rawKeyDown", "windowsVirtualKeyCode": 229, "key": "Process"})
+                     {"type": "rawKeyDown", "windowsVirtualKeyCode": 229, "code": code,
+                      "key": "Process", "modifiers": mod})
             cdp.send("Input.imeSetComposition",
                      {"text": pt, "selectionStart": len(pt), "selectionEnd": len(pt)})
             cdp.send("Input.dispatchKeyEvent",
-                     {"type": "keyUp", "windowsVirtualKeyCode": 229, "key": "Process"})
+                     {"type": "keyUp", "windowsVirtualKeyCode": 229, "code": code,
+                      "key": "Process", "modifiers": mod})
         except Exception:
             pass
         time.sleep(delay())
