@@ -27,6 +27,13 @@ DISCONTINUED = "⛔ 판매중지"
 INDEX_SHEET_NAME = "계정목록"   # 결과 구글시트의 계정목록 시트명(openpyxl '계정 목록'과 구분 — 공백 없음)
 _MKT_FILL = {"red": 1.0, "green": 0.949, "blue": 0.8}     # FFF2CC 마케팅 입력열 안내색
 _HEAD_FILL = {"red": 0.851, "green": 0.882, "blue": 0.949}  # D9E9FA 헤더
+# 사업자별 바탕색 밴딩(시각 구분) — 자동열 A·B·C·G에만 적용(D~F 마케팅 안내색은 그대로). 사업자마다 번갈아.
+_BAND_FILLS = ({"red": 1.0, "green": 1.0, "blue": 1.0},          # 밴드0 = 흰색
+               {"red": 0.925, "green": 0.949, "blue": 0.976})    # 밴드1 = 연한 파랑회색(ECF2FA)
+
+
+def _band_fill(band: int) -> dict:
+    return _BAND_FILLS[(band or 0) % len(_BAND_FILLS)]
 
 
 @dataclass
@@ -39,6 +46,7 @@ class IndexRow:
     key: str                 # 안정 매칭 키(계정ID+vid 앵커). 노출명이 바뀌어도 불변
     link_gid: int | None = None   # B 하이퍼링크 대상 통계시트 gid
     link_row: int | None = None   # B 하이퍼링크 대상 행(상품 블록 헤더)
+    band: int = 0            # 사업자 등장 순서 인덱스 → 바탕색 밴딩(사업자별 시각 구분)
 
 
 @dataclass
@@ -130,22 +138,23 @@ def _product_cell(row: IndexRow) -> dict:
 
 def _auto_cells_request(sheet_id: int, grid_row: int, row: IndexRow) -> list[dict]:
     """A·B·C(+A열 키 메모)와 G(상태)만 쓰는 updateCells 요청(마케팅 D~F는 건드리지 않음)."""
+    bg = {"backgroundColor": _band_fill(row.band)}   # 사업자별 밴드색(A·B·C·G만 — D~F 마케팅색 불변)
     abc = {
         "updateCells": {
             "start": {"sheetId": sheet_id, "rowIndex": grid_row, "columnIndex": COL_BUSINESS},
             "rows": [{"values": [
-                {**_s(row.business), "note": row.key},   # 안정 키를 A열 메모에 보존
-                _product_cell(row),
-                _s(row.account_id),
+                {**_s(row.business), "note": row.key, "userEnteredFormat": bg},   # 안정 키를 A열 메모에 보존
+                {**_product_cell(row), "userEnteredFormat": bg},
+                {**_s(row.account_id), "userEnteredFormat": bg},
             ]}],
-            "fields": "userEnteredValue,note",
+            "fields": "userEnteredValue,note,userEnteredFormat.backgroundColor",
         }
     }
     g = {
         "updateCells": {
             "start": {"sheetId": sheet_id, "rowIndex": grid_row, "columnIndex": COL_STATUS},
-            "rows": [{"values": [_s(row.status)]}],
-            "fields": "userEnteredValue",
+            "rows": [{"values": [{**_s(row.status), "userEnteredFormat": bg}]}],
+            "fields": "userEnteredValue,userEnteredFormat.backgroundColor",
         }
     }
     return [abc, g]
@@ -326,15 +335,18 @@ def roster_from_workbook(wb, stats_gids: dict[str, int]) -> list[IndexRow]:
     - B 하이퍼링크 = 그 사업자 통계 시트 gid(`stats_gids`) + 블록 헤더행(있을 때만).
     """
     rows: list[IndexRow] = []
+    band_by_biz: dict[str, int] = {}                 # 사업자 등장 순서 → 밴드 인덱스(사업자별 바탕색)
     for biz, prod, hdr, has_sheet in wb.product_roster():
         acct = wb.account_id_of(biz)
         registered = wb.registered_name(biz, prod) or prod
         key = marketing_key(acct, registered)
         linkable = bool(has_sheet and prod and hdr)
         gid = stats_gids.get(biz) if linkable else None
+        band = band_by_biz.setdefault(biz, len(band_by_biz))
         rows.append(IndexRow(business=biz, product=prod, account_id=acct,
                              status=wb.status_of(biz, prod, has_sheet), key=key,
-                             link_gid=gid, link_row=(hdr if (linkable and gid is not None) else None)))
+                             link_gid=gid, link_row=(hdr if (linkable and gid is not None) else None),
+                             band=band))
     return rows
 
 

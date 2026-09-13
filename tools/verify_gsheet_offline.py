@@ -274,7 +274,17 @@ def t6_roster_from_workbook() -> None:
     assert r0.product == "스텐 텀블러 500ml"                              # B=노출명(표시)
     assert r0.key == gi.marketing_key("idA", "텀블러")                    # 안정키=계정ID+등록명(노출명 아님)
     assert r0.link_gid == 42 and r0.link_row is not None
-    _ok("노출명 표시·안정키=등록명 기반·통계시트 링크(gid+헤더행)")
+    # 사업자별 바탕색 밴딩: 밴드 교차(짝/홀) + 자동열(A·B·C·G)에만 배경, D~F(마케팅)는 미접촉
+    assert gi._band_fill(0) != gi._band_fill(1) and gi._band_fill(0) == gi._band_fill(2)
+    reqs = gi._auto_cells_request(1, DATA_START0, IndexRow("사업B", "상품", "idB", "예정", "k", band=1))
+    bg_cols = set()
+    for rq in reqs:
+        uc = rq["updateCells"]; start = uc["start"]["columnIndex"]
+        for j, cell in enumerate(uc["rows"][0]["values"]):
+            if cell.get("userEnteredFormat", {}).get("backgroundColor"):
+                bg_cols.add(start + j)
+    assert bg_cols == {0, 1, 2, 6}, bg_cols          # A·B·C·G만 배경, D~F(3,4,5) 없음
+    _ok("노출명·안정키·통계링크 + 사업자 밴드색(A·B·C·G만, D~F 불변)")
 
 
 def _grow(c="", g=""):
