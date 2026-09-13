@@ -1320,7 +1320,13 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                     filled = _prefill_search(browser, kw)   # 검색창에 키워드 자동입력
                     log(f"  🔎 [{biz}] {pname}  ({idx}/{len(todo)})")
                     if autosubmit:
-                        log(f"     ⏎ 「{kw}」 자동입력→자동검색(Enter) 실행 — 결과 대기 중")
+                        # 붙여넣고 즉시 Enter=봇 패턴 → 입력 후 사람같은 멈춤(무작위) 뒤 제출(차단 회피).
+                        dwell = random.uniform(config.RANK_SEMI_TYPE_DWELL_MIN_SEC,
+                                               config.RANK_SEMI_TYPE_DWELL_MAX_SEC)
+                        log(f"     ⏎ 「{kw}」 자동입력됨 → {dwell:.1f}s 대기 후 자동검색(Enter) — 사람속도 모사")
+                        _interruptible_sleep(dwell, should_stop)   # 입력~Enter 사이 멈춤(log 생략=무음, 중지 반응 유지)
+                        if should_stop() or halted:
+                            break
                         _submit_search(browser)              # 사람 대신 앱이 Enter(제출)
                         pg, blocked = _wait_results_loaded(
                             browser, kw, should_stop, config.RANK_SEMI_AUTO_WAIT_SEC)
