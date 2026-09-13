@@ -643,8 +643,8 @@ class App(QtWidgets.QMainWindow):
 
     def _apply_input_gsheet(self, url: str) -> bool:
         """관리대장 구글시트 → InputList 적용 + 비번 DPAPI 저장(수동/무인 공용). 실패는 예외로 올림."""
-        title, rows = read_ledger_rows(url, store=self.creds_store)
-        il = parse_input_rows(rows)
+        title, rows, strike_grid = read_ledger_rows(url, store=self.creds_store)
+        il = parse_input_rows(rows, strike_grid)
         self._set_input_list(il, f"[구글시트] {title}")
         self._store_passwords_map(parse_password_rows(rows), quiet=True)
         st = QtCore.QSettings("coupang-analytics", "ui")

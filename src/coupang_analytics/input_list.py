@@ -171,7 +171,7 @@ def _is_discontinued(name: str) -> bool:
 def _status_discontinued(status) -> bool:
     """관리대장 '상태' 컬럼 값이 판매중지/삭제 계열이면 True.
 
-    구글시트(Sheets API) 읽기는 취소선을 못 읽으므로, 상태 컬럼 값으로 계정/상품 제외를 판정한다.
+    취소선과 **병행**하는 감지원 — 취소선이 없어도 이 컬럼 값으로 계정/상품 제외를 판정한다(둘 중 하나면 제외).
     부분일치(예 '판매중지'·'일시중지'·'삭제됨'). 빈 값·'정상'·'판매중'·'판매부진'은 제외 아님.
     """
     n = str(status).replace(" ", "") if status is not None else ""
@@ -211,9 +211,9 @@ _REQUIRED = (config.IN_COL_BUSINESS, config.IN_COL_ACCOUNT_ID, config.IN_COL_PRO
 def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False) -> InputList:
     """계정/상품 그리드(값 2차원)를 파싱하는 **공용 코어** — 파일(openpyxl)·구글시트(API rows) 공용.
 
-    - `strike_fn(row_no_1based, col0)->bool`: 취소선 감지기(파일 경로만 제공, API는 None).
+    - `strike_fn(row_no_1based, col0)->bool`: 취소선 감지기(파일=openpyxl, 구글시트=read_grid_struck; 없으면 None).
     - 제외(해지/판매중지) 감지 = **취소선(있으면) 또는 상태 컬럼 값(IN_STATUS_DISCONTINUED) 또는 상품명 마커**.
-      → 구글시트는 취소선을 못 읽으므로 **상태 컬럼**이 주 감지원(사용자 지정).
+      → 파일·구글시트 **양쪽 다 취소선을 읽는다**(구글시트도 Sheets API로 취소선 조회 가능). 상태 컬럼은 병행 감지원.
     - `emit_strike_warning`: 파일인데 취소선을 못 읽었을 때만 경고 추가(API 경로는 불필요 → False).
     """
     header, hrow = _find_header_row(rows, lambda h: all(name in h for name in _REQUIRED))
@@ -318,9 +318,20 @@ def parse_input_list(path: str | Path) -> InputList:
     return _parse_grid(rows, strike_fn=strike_fn, emit_strike_warning=not strike_ok)
 
 
-def parse_input_rows(rows: list) -> InputList:
-    """구글시트(Sheets API) 값 격자 → InputList. 취소선 미지원 → **상태 컬럼**으로 판매중지/삭제 감지."""
-    return _parse_grid([list(r) for r in rows], strike_fn=None, emit_strike_warning=False)
+def parse_input_rows(rows: list, strike_grid: list | None = None) -> InputList:
+    """구글시트(Sheets API) 값 격자 → InputList. 제외 감지 = **취소선(strike_grid 있으면) 또는 상태 컬럼**.
+
+    strike_grid: read_grid_struck 가 준 [행][열] bool 격자(rows 와 인덱스 정렬). None 이면 상태 컬럼만 사용.
+    """
+    def strike_fn(row_no: int, col0) -> bool:   # row_no=1based 시트행 → 격자 인덱스 row_no-1
+        r = row_no - 1
+        if not strike_grid or r < 0 or r >= len(strike_grid) or col0 is None:
+            return False
+        srow = strike_grid[r]
+        return bool(srow[col0]) if 0 <= col0 < len(srow) else False
+
+    return _parse_grid([list(r) for r in rows],
+                       strike_fn=(strike_fn if strike_grid else None), emit_strike_warning=False)
 
 
 def parse_password_rows(rows: list) -> dict[str, str]:
@@ -347,11 +358,12 @@ def parse_password_rows(rows: list) -> dict[str, str]:
     return out
 
 
-def read_ledger_rows(url_or_id: str, *, store=None, sa_path=None) -> tuple[str, list]:
-    """관리대장(구글시트)을 서비스계정으로 열어 **본체 시트의 값 격자**를 (시트명, rows)로 반환.
+def read_ledger_rows(url_or_id: str, *, store=None, sa_path=None) -> tuple[str, list, list]:
+    """관리대장(구글시트)을 서비스계정으로 열어 **본체 시트의 (값 격자, 취소선 격자)** 를 (시트명, rows, strike_grid)로 반환.
 
     본체 = 필수 헤더(사업자명·계정아이디·상품명)를 가진 시트. '셀독'·'리스트'가 든 시트명을 우선 조회해
     API 호출을 최소화한다. 못 찾으면 ValueError(사유 명시 — fallback 금지).
+    취소선(strike_grid)은 파일 파서와 동일하게 해지/판매중지 감지에 쓴다(상태 컬럼과 OR).
     """
     from . import gsheet_api   # 지연 임포트(구글 라이브러리 미설치 환경에서 파일 파싱만 쓸 때 영향 없게)
     client = gsheet_api.GSheetClient(url_or_id, store=store, sa_path=sa_path)
@@ -360,10 +372,10 @@ def read_ledger_rows(url_or_id: str, *, store=None, sa_path=None) -> tuple[str, 
         raise ValueError("스프레드시트에 시트가 없습니다.")
     ordered = sorted(titles, key=lambda t: 0 if ("셀독" in t or "리스트" in t) else 1)
     for t in ordered:
-        rows = client.read_values(t)
+        rows, strike_grid = client.read_grid_struck(t)
         _, hrow = _find_header_row(rows, lambda h: all(name in h for name in _REQUIRED))
         if hrow >= 0:
-            return t, rows
+            return t, rows, strike_grid
     raise ValueError("관리대장에서 필수 헤더(사업자명·계정아이디·상품명)를 가진 시트를 찾지 못했습니다 "
                      f"(확인한 시트: {', '.join(titles)}).")
 

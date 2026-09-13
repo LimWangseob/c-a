@@ -91,6 +91,17 @@ def service_account_email(store: CredStore | None = None) -> str | None:
     return info.get("client_email") if info else None
 
 
+def _cell_strikethrough(cell: dict) -> bool:
+    """Sheets API 셀(dict)에 취소선이 있으면 True — 셀 전체(effectiveFormat) 또는 일부(textFormatRuns)."""
+    ef = (cell.get("effectiveFormat") or {}).get("textFormat") or {}
+    if ef.get("strikethrough"):
+        return True
+    for run in cell.get("textFormatRuns") or []:
+        if (run.get("format") or {}).get("strikethrough"):
+            return True
+    return False
+
+
 class GSheetClient:
     """서비스계정으로 인증된 Sheets API v4 클라이언트(스프레드시트 1개 대상).
 
@@ -259,6 +270,32 @@ class GSheetClient:
             values.append([c.get("formattedValue", "") for c in cells])
             note_grid.append([c.get("note") for c in cells] if notes else [])
         return values, note_grid
+
+    def read_grid_struck(self, sheet: str) -> tuple[list[list[str]], list[list[bool]]]:
+        """시트의 (표시값 격자, 취소선 격자)를 한 번에 읽는다 — 관리대장 해지/판매중지 감지용.
+
+        취소선(strikethrough)은 Sheets API로 **읽을 수 있다**(effectiveFormat.textFormat.strikethrough =
+        셀 전체 취소선, textFormatRuns = 셀 텍스트 일부 취소선). 한 셀이라도 취소선 신호가 있으면 True.
+        표시값 격자는 read_grid 와 동일(전 컬럼 formattedValue → 비밀번호 컬럼도 포함해 파싱 호환).
+        두 격자는 같은 rowData 에서 나오므로 [행][열] 인덱스가 서로 정렬된다. 빈 시트면 ([], []).
+        """
+        fields = ("sheets.data.rowData.values(formattedValue,"
+                  "effectiveFormat.textFormat.strikethrough,textFormatRuns.format.strikethrough)")
+        try:
+            resp = self._sheets().get(
+                spreadsheetId=self.spreadsheet_id, ranges=[f"'{sheet}'"],
+                includeGridData=True, fields=fields).execute()
+        except Exception as exc:
+            raise self._wrap(exc)
+        data = resp.get("sheets", [{}])[0].get("data", [{}])
+        row_data = (data[0] if data else {}).get("rowData", [])
+        values: list[list[str]] = []
+        strike_grid: list[list[bool]] = []
+        for row in row_data:
+            cells = row.get("values", [])
+            values.append([c.get("formattedValue", "") for c in cells])
+            strike_grid.append([_cell_strikethrough(c) for c in cells])
+        return values, strike_grid
 
     def batch_update(self, requests: list[dict]) -> dict:
         """서식·구조 변경 요청 묶음(병합·색·테두리·틀고정·하이퍼링크 등)을 한 번에 적용.

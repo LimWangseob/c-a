@@ -59,6 +59,33 @@ def t1_ledger_rows() -> None:
     _ok("계정 2개(id_c 삭제·보온병 판매중지 제외), '판매중' 유지, 비번 추출")
 
 
+def t1b_ledger_strike() -> None:
+    print("[1b] 관리대장 취소선(Sheets API strike_grid) 감지 — 상태 컬럼 없이도 제외")
+    from coupang_analytics.gsheet_api import _cell_strikethrough
+    # 셀 dict 파싱: 셀 전체 취소선 / 부분(run) 취소선 / 없음
+    assert _cell_strikethrough({"effectiveFormat": {"textFormat": {"strikethrough": True}}}) is True
+    assert _cell_strikethrough({"textFormatRuns": [{"format": {"strikethrough": True}}]}) is True
+    assert _cell_strikethrough({"formattedValue": "정상"}) is False
+    # 상태 컬럼이 아예 없는 대장 — 취소선만으로 제외 판정
+    rows = [
+        ["대표자명", "사업자명", "계정아이디", "상품명"],
+        ["홍길동", "가게1", "id_a", "텀블러"],
+        ["", "", "", "보온병"],                 # 상품명 취소선 → 상품 제외
+        ["이영희", "가게3", "id_c", "장갑"],     # 계정ID 취소선 → 계정 제외
+    ]
+    W = len(rows[0])
+    strike = [[False] * W for _ in rows]
+    strike[2][3] = True                          # '보온병' 상품명 칸(col 3) 취소선
+    strike[3][2] = True                          # 'id_c' 계정ID 칸(col 2) 취소선
+    il = parse_input_rows(rows, strike)
+    assert [a.account_id for a in il.accounts] == ["id_a"], [a.account_id for a in il.accounts]
+    assert any("보온병" in s for s in il.struck) and any("id_c" in s for s in il.struck)
+    # strike_grid 미제공(None)이면 취소선 무시 → 전부 유지(하위호환)
+    il2 = parse_input_rows(rows)
+    assert [a.account_id for a in il2.accounts] == ["id_a", "id_c"]
+    _ok("셀/부분 취소선 파싱 + 취소선-only 제외(상태 컬럼 없음) + None이면 하위호환")
+
+
 def t2_file_regression() -> None:
     print("[2] PC 엑셀 파싱 회귀(취소선 + 상태)")
     p = os.path.join(tempfile.gettempdir(), "verify_ledger.xlsx")
@@ -258,7 +285,7 @@ def t7_staff_keywords_merge() -> None:
 
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
-    for fn in (t1_ledger_rows, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
+    for fn in (t1_ledger_rows, t1b_ledger_strike, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
                t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook, t7_staff_keywords_merge):
         fn()
     print("=== 전부 통과 ===")

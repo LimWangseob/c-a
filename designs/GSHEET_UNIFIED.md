@@ -130,8 +130,9 @@
 ### Phase 2 — 입력(관리대장) 읽기 → 파이프라인 연결 (✅ 코어 완료 2026-09-13)
 - [x] `input_list.py` 리팩터: 공용 코어 `_parse_grid`(파일·API rows 공용) + `parse_input_rows(rows)` +
       `parse_password_rows(rows)` + `read_ledger_rows(url)`(서비스계정으로 본체 시트 자동선택·값 읽기).
-- [x] **삭제/판매중지 감지 = 관리대장 '상태' 컬럼**(사용자 지정). `IN_ALIASES_STATUS`/`IN_STATUS_DISCONTINUED`.
-      구글시트는 취소선을 못 읽으므로 상태값(판매중지·삭제·해지·중지 등 부분일치)으로 제외. 파일 경로는 취소선+상태 병행.
+- [x] **삭제/판매중지 감지 = 취소선 또는 관리대장 '상태' 컬럼**(둘 중 하나면 제외). `IN_ALIASES_STATUS`/`IN_STATUS_DISCONTINUED`.
+      구글시트도 취소선을 **읽는다**(`GSheetClient.read_grid_struck` → Sheets API `effectiveFormat.textFormat.strikethrough`
+      + `textFormatRuns`). 파일·구글시트 양쪽 다 **취소선+상태 병행**(동작 일치). 상태값=판매중지·삭제·해지·중지 등 부분일치.
       '판매중'·'판매부진'·'정상'은 제외 아님(검증됨). 계정행 상태=계정 전체 제외, 상품행 상태=그 상품 제외.
 - [x] UI: 설정 탭 "관리대장에서 불러오기" 버튼(등록 링크를 서비스계정으로 읽어 입력 적용, 비번 즉시 DPAPI).
       `input/source=gsheet` 표시 → 무인 자동로드가 구글시트 우선(실패 시 PC 엑셀 폴백). PC 입력 병존 유지.
@@ -251,8 +252,8 @@ workbook.py 상품블록 서식 → batchUpdate(일자 가로누적·키워드 �
 **완료(오프라인 검증됨, 라이브는 사무실 필요):**
 - Phase 1 — `src/coupang_analytics/gsheet_api.py`(서비스계정 인증·GSheetClient read/write/ensure_sheet/
   batch_update/read_grid·check_access·403/404/429 한국어). SA키=credstore `__gsheet_sa__`. 설정 가이드=`docs/GSHEET_SETUP.md`.
-- Phase 2 — `input_list.py`: `_parse_grid`(공용)·`parse_input_rows`·`parse_password_rows`·`read_ledger_rows`.
-  **삭제/판매중지=관리대장 '상태' 컬럼**(`config.IN_ALIASES_STATUS`/`IN_STATUS_DISCONTINUED`).
+- Phase 2 — `input_list.py`: `_parse_grid`(공용)·`parse_input_rows(rows, strike_grid=)`·`parse_password_rows`·`read_ledger_rows`.
+  **삭제/판매중지=취소선(`read_grid_struck`) 또는 관리대장 '상태' 컬럼**(`config.IN_ALIASES_STATUS`/`IN_STATUS_DISCONTINUED`).
 - Phase 3a — `src/coupang_analytics/gsheet_index.py`: `계정목록` 동기화(IndexRow/plan_sync/sync_index).
   자동열(A·B·C·G)만·신규는 계정그룹 맨끝 insertDimension·삭제=상태만 ⛔·**마케팅 D~F 값 미접촉**·안정키 A열 note.
 - Phase 3c — `gsheet_index.read_marketing`/`apply_marketing` + UI `_merge_output_marketing`(입력 로드 후 자동 병합).
