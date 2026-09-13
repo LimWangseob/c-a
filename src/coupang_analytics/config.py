@@ -40,10 +40,16 @@ RANK_SCAN_MAX_SEMI = 300
 # 플래그 위험이 있어(원래 반자동을 사람 검색으로 둔 이유), **키워드 사이 사람속도 간격(RANK_NAV_DELAY) + 차단
 # 감지 시 즉시 중단(연속 실패 RANK_SEMI_AUTO_MAX_MISS회)**로 계정을 태우지 않게 한다. False 면 예전처럼 사람이 Enter.
 RANK_SEMI_AUTOSUBMIT = True
-# ⚠️ **입력~Enter 사이 사람같은 멈춤**(초). 붙여넣고 즉시 Enter=봇 패턴 → 차단 위험↑(사용자 관찰).
-# 검색창에 자동입력한 뒤 이 시간만큼 무작위 대기 후 Enter 제출(사람이 타이핑하고 잠깐 보는 시간 모사).
-RANK_SEMI_TYPE_DWELL_MIN_SEC = 3
-RANK_SEMI_TYPE_DWELL_MAX_SEC = 7
+# ⚠️ **검색어 입력 후 실행(Enter/요청)까지 사람같은 멈춤**(초). 붙여넣고 즉시 실행=봇 패턴 → 차단 위험↑
+# (사용자 관찰). 대기 = **글자수 × 초당타이핑 + 기본여유**(사람이 타이핑하는 시간 모사, 무작위 아님·사용자 지정).
+# 예: 5글자 → 5×1.0 + 2.0 = 7초 (= '글자수 + 2초'). ①②③ 쿠팡 검색어 입력 경로 **공용**(반자동 Enter·자동완성).
+TYPE_DWELL_BASE_SEC = 2.0      # 기본 여유(초)
+TYPE_DWELL_PER_CHAR_SEC = 1.0  # 글자당 추가(초) — '글자수 + 2초' = 글자당 1초 + 기본 2초
+
+
+def type_dwell(text) -> float:
+    """검색어 입력 후 실행까지 사람같은 멈춤(초) = 글자수 × 초당타이핑 + 기본여유. 무작위 아님(사용자 지정)."""
+    return len(str(text or "")) * TYPE_DWELL_PER_CHAR_SEC + TYPE_DWELL_BASE_SEC
 RANK_SEMI_AUTO_MAX_MISS = 3   # 자동제출 후 연속 미감지/차단 이 횟수면 '차단 감지'로 보고 쿨다운(아래) 진입
 RANK_SEMI_AUTO_WAIT_SEC = 40  # 자동제출 1건의 결과 로딩 최대 대기(초). 넘으면 미감지로 카운트
 # 차단 감지 시 **하드 스톱 대신 긴 쿨다운 후 자동 재개**(무인 장시간 운용 — 자리 비운 새 4시간 방치 방지).

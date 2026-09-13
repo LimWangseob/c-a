@@ -14,6 +14,9 @@ same-origin fetch가 된다(호출 전 rank.warmup 등으로 홈을 먼저 연�
 from __future__ import annotations
 
 import json
+import time
+
+from . import config
 
 
 class SuggestError(Exception):
@@ -62,6 +65,8 @@ def collect_suggestions(browser, seeds, log=None) -> list[str]:
     """
     seen: dict[str, None] = {}
     for seed in seeds:
+        # 시드마다 **글자수+2초** 사람 타이핑 간격 후 호출(②①의 쿠팡 접촉도 몰아치지 않게 — 차단 회피, 사용자 요청).
+        time.sleep(config.type_dwell(seed))
         got = fetch_suggestions(browser, seed)
         for kw in got:
             if kw not in seen:
