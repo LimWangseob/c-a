@@ -92,7 +92,7 @@ def _touched_data_mkt(req) -> set:
 def t3_index_sync() -> None:
     print("[3] 계정목록 동기화 계획(plan_sync) + 마케팅열 값 미기록")
     existing = [ExistingRow(2, "A", "kA1"), ExistingRow(3, "A", "kA2"), ExistingRow(4, "B", "kB3")]
-    desired = [_R("A", "상품1", "kA1", "마케팅중"), _R("A", "상품4", "kA4"),
+    desired = [_R("A", "상품1", "kA1", "체험단중"), _R("A", "상품4", "kA4"),
                _R("B", "상품3", "kB3"), _R("C", "상품5", "kC5")]
     plan = gi.plan_sync(existing, desired)
     kinds = {}
@@ -121,7 +121,7 @@ class _FakeClient:
 
 def t3b_full_and_incremental() -> None:
     print("[3b] sync_index 전체빌드 + 증분(FakeClient)")
-    desired = [_R("A", "상품1", gi.marketing_key("A", "상품1"), "마케팅중"),
+    desired = [_R("A", "상품1", gi.marketing_key("A", "상품1"), "체험단중"),
                _R("A", "상품4", gi.marketing_key("A", "상품4")),
                _R("B", "상품3", gi.marketing_key("B", "상품3"))]
     fc = _FakeClient([])
@@ -140,7 +140,7 @@ def t3b_full_and_incremental() -> None:
 
     existing_vals = [
         ["계정목록 · 상품 3개"], _HEAD,
-        ["biz_A", "상품1", "A", "2026-09-01", "2026-09-30", "", "마케팅중"],
+        ["biz_A", "상품1", "A", "2026-09-01", "2026-09-30", "", "체험단중"],
         ["biz_A", "상품2", "A", "", "", "", "예정"],
         ["biz_B", "상품3", "B", "", "", "", "예정"],
     ]
@@ -155,7 +155,7 @@ def t4_marketing_merge() -> None:
     print("[4] 마케팅 역방향 머지(read_marketing/apply_marketing)")
     values = [
         ["계정목록 · 상품 3개"], _HEAD,
-        ["가게A", "텀블러", "idA", "2026-09-01", "2026-09-30", "2026-10-31", "마케팅중"],
+        ["가게A", "텀블러", "idA", "2026-09-01", "2026-09-30", "2026-10-31", "체험단중"],
         ["가게A", "보온병", "idA", "", "", "", "예정"],        # 마케팅 없음 → 스킵
         ["가게B", "우산", "idB", "2026-09-10", "", "", "예정"],
     ]

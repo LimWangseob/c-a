@@ -563,7 +563,7 @@ class OutputWorkbook:
                     ws.cell(hr, _COL_NAME).value = self._display_name(ws.title, nm)
                 # 마케팅: 이 상품의 기간·상태 + 마케팅기간(시작~종료)에 해당하는 일자 컬럼 집합(배경색용)
                 mstart, mend, _mmon = self.marketing_of(ws.title, nm)
-                is_mkt = self._mkt_status(mstart, mend, _mmon) == "마케팅중"
+                is_mkt = self._mkt_status(mstart, mend, _mmon) == "체험단중"
                 is_disc = self.is_discontinued(ws.title, nm)   # 대장에서 사라짐 = 판매중지 표기
                 mcols: set[int] = set()
                 _s, _e = _parse_date(mstart), _parse_date(mend)
@@ -597,13 +597,13 @@ class OutputWorkbook:
                             cell(ws, r, c, fill=(f_kwhead if head else None), fnt=bold, align=wrap)
                         cell(ws, r, _COL_SEARCH, fill=(f_kwhead if head else None), num=not head)
                         cell(ws, r, _COL_METRIC, fill=(f_kwhead if head else f_label))
-                        if head:   # 비고 자리(소헤더 G): 판매중지 > 마케팅중 > 비고 (멱등 재계산)
+                        if head:   # 비고 자리(소헤더 G): 판매중지 > 체험단중 > 비고 (멱등 재계산)
                             gm = ws.cell(r, _COL_METRIC)
                             if is_disc:
                                 gm.value = "⛔ 판매중지"
                                 gm.font = Font(name=self._FN, size=11, bold=True, color="808080")
                             elif is_mkt:
-                                gm.value = "🔴 마케팅중"
+                                gm.value = "🔴 체험단중"
                                 gm.font = Font(name=self._FN, size=11, bold=True, color="C00000")
                             else:
                                 gm.value = _LABEL_NOTE
@@ -738,19 +738,19 @@ class OutputWorkbook:
 
     @staticmethod
     def _mkt_status(start: str, end: str, mon: str) -> str:
-        """오늘 기준 마케팅 상태: 예정/마케팅중/모니터링/종료/''(미설정)."""
+        """오늘 기준 체험단 상태: 예정/체험단중/모니터링/종료/''(미설정)."""
         s, e, m = _parse_date(start), _parse_date(end), _parse_date(mon)
         today = _date.today()
         if s and today < s:
             return "예정"
         if s and e and s <= today <= e:
-            return "마케팅중"
+            return "체험단중"
         if e and m and e < today <= m:
             return "모니터링"
         if m and today > m:
             return "종료"
         if (s or e or m):
-            return "마케팅중" if (s and e and s <= today <= e) else ""
+            return "체험단중" if (s and e and s <= today <= e) else ""
         return ""
 
     # ── 수집 주기(마케팅 기반) ────────────────────────────────
@@ -821,7 +821,7 @@ class OutputWorkbook:
 
     def status_of(self, biz: str, product: str, has_sheet: bool = True) -> str:
         """계정목록 상태 열(G) 값 — openpyxl `_build_index` 규칙과 동일:
-        판매중지 > (미수집) > 마케팅 상태(예정/마케팅중/모니터링/종료/'')."""
+        판매중지 > (미수집) > 체험단 상태(예정/체험단중/모니터링/종료/'')."""
         if has_sheet and product and self.is_discontinued(biz, product):
             return "⛔ 판매중지"
         if not has_sheet:
@@ -890,7 +890,7 @@ class OutputWorkbook:
         bold = Font(name=self._FN, size=11, bold=True)
         link_font = Font(name=self._FN, size=11, color="0563C1", underline="single")
         gray_font = Font(name=self._FN, size=11, color="9AA7B6")   # 미수집(옅게)
-        red_bold = Font(name=self._FN, size=11, bold=True, color="C00000")   # 마케팅중 상태
+        red_bold = Font(name=self._FN, size=11, bold=True, color="C00000")   # 체험단중 상태
         title_font = Font(name=self._FN, size=14, bold=True)
         thin = Side(style="thin", color="BFBFBF")
         box = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -928,7 +928,7 @@ class OutputWorkbook:
             for c, v in ((4, start), (5, end), (6, mon)):   # 마케팅(관리대장 값 표시)
                 x = ws.cell(r, c, v); x.font = font; x.alignment = center; x.border = box; x.fill = mkt_fill
             st = ws.cell(r, 7, status); st.alignment = center; st.border = box
-            st.font = (red_bold if status == "마케팅중"
+            st.font = (red_bold if status == "체험단중"
                        else (gray_font if status in ("미수집", "종료", "⛔ 판매중지") else font))
             for c in (1, 2, 3):
                 ws.cell(r, c).alignment = left if c == 2 else center

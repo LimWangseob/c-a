@@ -35,7 +35,7 @@ class IndexRow:
     business: str            # A
     product: str             # B 표시명(노출명)
     account_id: str          # C
-    status: str              # G 예: 예정/마케팅중/모니터링/종료/미수집/⛔ 판매중지
+    status: str              # G 예: 예정/체험단중/모니터링/종료/미수집/⛔ 판매중지
     key: str                 # 안정 매칭 키(계정ID+vid 앵커). 노출명이 바뀌어도 불변
     link_gid: int | None = None   # B 하이퍼링크 대상 통계시트 gid
     link_row: int | None = None   # B 하이퍼링크 대상 행(상품 블록 헤더)
