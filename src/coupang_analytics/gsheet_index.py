@@ -70,7 +70,7 @@ class ExistingRow:
 class SyncPlan:
     updates: list[tuple[int, IndexRow]]      # (최종 0-based 행, 데이터) — 기존 매칭행 자동열 갱신
     inserts: list[tuple[int, IndexRow]]      # (최종 0-based 행, 데이터) — 신규(빈 행 삽입 후 기록)
-    discontinue: list[int]                   # 최종 0-based 행 — 상태만 ⛔ 판매중지
+    discontinue: list[tuple[int, str]]       # (최종 0-based 행, 계정ID) — 상태만 ⛔ + 사업자 밴드색만
     total_rows: int                          # 최종 데이터 행 수(검증용)
 
 
@@ -126,7 +126,7 @@ def plan_sync(existing: list[ExistingRow], desired: list[IndexRow]) -> SyncPlan:
             if d is not None:
                 updates.append((grid, d))                 # 자동열 갱신(노출명/상태 변동 반영)
             else:
-                discontinue.append(grid)                  # 관리대장에서 사라짐 → 상태만 ⛔
+                discontinue.append((grid, e.account_id))  # 관리대장에서 사라짐 → 상태 ⛔ + 밴드색만
         else:
             inserts.append((grid, obj))                   # type: ignore[arg-type]
     return SyncPlan(updates=updates, inserts=inserts, discontinue=discontinue, total_rows=len(slots))
@@ -204,6 +204,19 @@ def _mkt_fill_request(sheet_id: int, grid_row: int, band: int) -> dict:
     }
 
 
+def _row_band_fill_request(sheet_id: int, grid_row: int, band: int) -> dict:
+    """행 **전체(A~G)** 를 사업자 밴드색으로 칠한다(배경만 = 값 보존). 판매중지 행도 사업자별 동일색
+    유지용 — 값은 안 건드리므로 ⛔ 상태·마케팅 D~F 값 모두 보존된다."""
+    return {
+        "repeatCell": {
+            "range": {"sheetId": sheet_id, "startRowIndex": grid_row, "endRowIndex": grid_row + 1,
+                      "startColumnIndex": 0, "endColumnIndex": N_COLS},
+            "cell": {"userEnteredFormat": {"backgroundColor": _band_fill(band)}},
+            "fields": "userEnteredFormat.backgroundColor",
+        }
+    }
+
+
 def _header_request(sheet_id: int) -> dict:
     """헤더행(2행)을 현재 `_HEADS` 라벨·서식으로 (재)기록. 전체생성·증분 모두에서 호출해 라벨 변경
     (예 '마케팅 시작일'→'체험단 시작일')이 **기존 시트에도** 반영되게 한다(증분은 헤더를 안 건드렸던 문제 보완)."""
@@ -216,8 +229,13 @@ def _header_request(sheet_id: int) -> dict:
         "rows": [{"values": head_vals}], "fields": "userEnteredValue,userEnteredFormat"}}
 
 
-def _build_requests_for_plan(sheet_id: int, plan: SyncPlan) -> list[dict]:
-    """증분 동기화 요청 묶음. 삽입은 최종 위치 오름차순으로(선삽입이 후위치 인덱스를 맞춰줌)."""
+def _build_requests_for_plan(sheet_id: int, plan: SyncPlan,
+                             band_by_acct: dict[str, int] | None = None) -> list[dict]:
+    """증분 동기화 요청 묶음. 삽입은 최종 위치 오름차순으로(선삽입이 후위치 인덱스를 맞춰줌).
+
+    band_by_acct: 계정ID→밴드(desired 로스터에서). 판매중지 행을 그 사업자 밴드색으로 칠하는 데 쓴다
+    (계정이 로스터에서 완전히 사라졌으면 밴드 없음 → 색은 그대로 두고 상태만 갱신)."""
+    band_by_acct = band_by_acct or {}
     reqs: list[dict] = [_header_request(sheet_id)]   # 헤더 라벨 항상 최신화(행 1=헤더, 삽입 대상 밖이라 안전)
     for grid_row, _row in sorted(plan.inserts, key=lambda t: t[0]):
         reqs.append(_insert_blank_row_request(sheet_id, grid_row))
@@ -227,8 +245,10 @@ def _build_requests_for_plan(sheet_id: int, plan: SyncPlan) -> list[dict]:
     for grid_row, row in plan.updates:
         reqs += _auto_cells_request(sheet_id, grid_row, row)
         reqs.append(_mkt_fill_request(sheet_id, grid_row, row.band))   # 기존 행 D~F도 밴드색으로(행 전체 동일)
-    for grid_row in plan.discontinue:
+    for grid_row, acct in plan.discontinue:
         reqs.append(_status_only_request(sheet_id, grid_row, DISCONTINUED))
+        if acct in band_by_acct:                     # 판매중지 행도 사업자 밴드색(행 전체 동일) — 값 보존
+            reqs.append(_row_band_fill_request(sheet_id, grid_row, band_by_acct[acct]))
     return reqs
 
 
@@ -374,5 +394,6 @@ def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME
         return SyncPlan(updates=[], inserts=[(DATA_START0 + i, d) for i, d in enumerate(desired)],
                         discontinue=[], total_rows=len(desired))
     plan = plan_sync(existing, desired)
-    client.batch_update(_build_requests_for_plan(sheet_id, plan))
+    band_by_acct = {r.account_id: r.band for r in desired}   # 판매중지 행도 사업자 밴드색으로 칠하기 위함
+    client.batch_update(_build_requests_for_plan(sheet_id, plan, band_by_acct))
     return plan

@@ -27,7 +27,7 @@ import openpyxl  # noqa: E402
 from openpyxl.styles import Font  # noqa: E402
 
 from coupang_analytics import config, gsheet_index as gi, gsheet_stats  # noqa: E402
-from coupang_analytics.gsheet_index import DATA_START0, DISCONTINUED, ExistingRow, IndexRow  # noqa: E402
+from coupang_analytics.gsheet_index import DATA_START0, ExistingRow, IndexRow  # noqa: E402
 from coupang_analytics.input_list import (Account, Product,  # noqa: E402
                                           parse_input_list, parse_input_rows, parse_password_rows)
 from coupang_analytics.workbook import OutputWorkbook  # noqa: E402
@@ -156,17 +156,26 @@ def t3_index_sync() -> None:
     kinds = {}
     for g, r in plan.updates: kinds[g] = ("upd", r.key)
     for g, r in plan.inserts: kinds[g] = ("new", r.key)
-    for g in plan.discontinue: kinds[g] = ("disc", None)
+    for g, _acct in plan.discontinue: kinds[g] = ("disc", None)
     assert kinds[DATA_START0 + 0] == ("upd", "kA1")
     assert kinds[DATA_START0 + 1] == ("disc", None)          # kA2 사라짐 → 판매중지(행 보존)
     assert kinds[DATA_START0 + 2] == ("new", "kA4")          # A 그룹 끝 삽입
     assert kinds[DATA_START0 + 3] == ("upd", "kB3")
     assert kinds[DATA_START0 + 4] == ("new", "kC5")          # 새 계정 맨 아래
-    reqs = gi._build_requests_for_plan(99, plan)
+    band_by_acct = {r.account_id: r.band for r in desired}
+    reqs = gi._build_requests_for_plan(99, plan, band_by_acct)
     ins = [r["insertDimension"]["range"]["startIndex"] for r in reqs if "insertDimension" in r]
     assert ins == sorted(ins) == [DATA_START0 + 2, DATA_START0 + 4], ins
     assert not [c for r in reqs for c in _touched_data_mkt(r)], "마케팅열 값 기록 침범"
-    _ok("그룹내 삽입·새계정 맨아래·삭제=상태만·삽입 인덱스 오름차순·마케팅 D~F 값 미기록")
+    # 판매중지 행(kA2, DATA_START0+1)도 사업자 밴드색으로 행 전체(A~G) 배경만 칠함(값 보존)
+    disc_row = DATA_START0 + 1
+    fullrow_bg = [r for r in reqs if "repeatCell" in r
+                  and r["repeatCell"]["range"].get("startRowIndex") == disc_row
+                  and r["repeatCell"]["range"].get("startColumnIndex", 0) == 0
+                  and r["repeatCell"]["range"].get("endColumnIndex") == gi.N_COLS]
+    assert len(fullrow_bg) == 1, "판매중지 행 전체 밴드색 누락"
+    assert fullrow_bg[0]["repeatCell"]["fields"] == "userEnteredFormat.backgroundColor"  # 값 미기록
+    _ok("그룹내 삽입·새계정 맨아래·판매중지=상태+사업자밴드색(값보존)·삽입 오름차순·마케팅 D~F 값 미기록")
 
 
 class _FakeClient:
