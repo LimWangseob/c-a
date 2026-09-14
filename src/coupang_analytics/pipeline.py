@@ -15,6 +15,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import config
+from . import human_mouse
 from .browser import WING_URL, WingBrowser
 from .input_list import Account, InputList, InputValidationError, validate_input_list
 from . import wing_session
@@ -1222,6 +1223,7 @@ def _prefill_search(browser, kw: str) -> bool:
         pass
     for pg in pages:
         try:
+            human_mouse.approach_search(pg)   # 타이핑 직전 커서를 검색창으로(사람처럼)
             if human_type_query(pg, kw):
                 return True
         except Exception:
@@ -1531,6 +1533,7 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                         continue
                     miss_streak = 0    # 성공 → 연속 실패 리셋
                     cooldowns = 0      # 진전 발생 → 쿨다운 카운터도 리셋(IP 살아있음)
+                    human_mouse.browse_serp(pg)   # 결과를 사람처럼 훑어봄(호버·스크롤, 클릭 없음)
                     try:
                         # 반자동은 로드된 페이지 1장만 읽는다 → 50위 상한 없이 오가닉 전부를 세어 **50위 초과도 실제 등수 기록**.
                         res = parse_serp_rank(pg, matcher, max_rank=config.RANK_SCAN_MAX_SEMI)

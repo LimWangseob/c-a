@@ -17,7 +17,7 @@ from urllib.parse import quote, unquote
 
 from playwright.sync_api import TimeoutError as PWTimeout
 
-from . import config, human_typing
+from . import config, human_mouse, human_typing
 from .browser import WingBrowser
 
 HOME_URL = "https://www.coupang.com/"
@@ -190,6 +190,7 @@ def _load_results(browser: WingBrowser, keyword: str, page_no: int = 1,
     """
     t0 = time.time()
     if page_no <= 1:                              # 사람처럼 검색창 타이핑 + Enter
+        human_mouse.approach_search(browser.page)   # 타이핑 직전 커서를 검색창으로(사람처럼)
         if human_type_query(browser.page, keyword):
             try:
                 browser.page.keyboard.press("Enter")
@@ -206,6 +207,7 @@ def _load_results(browser: WingBrowser, keyword: str, page_no: int = 1,
         t_sel = time.time() - t0 - t_goto
         if log and (t_goto > 5.0 or t_sel > 5.0):   # 평상시엔 조용, 환경적 지연(느림)만 경고
             log(f"    [느림] 페이지 로딩 goto {t_goto:.1f}s + 셀렉터 {t_sel:.1f}s (쿠팡 응답 지연)")
+        human_mouse.browse_serp(browser.page)        # 결과를 사람처럼 훑어봄(호버·스크롤, 클릭 없음)
         return True
     except PWTimeout:
         try:
