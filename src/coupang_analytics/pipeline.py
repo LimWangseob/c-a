@@ -270,31 +270,36 @@ class LoginBlocked(Exception):
     """Akamai 로그인 차단(Access Denied) — 서킷브레이커 카운트 대상."""
 
 
-def _login_and_discover(a: Account, date_from, date_to, get_password, log, login: bool = True):
+def _login_and_discover(a: Account, date_from, date_to, get_password, log, login: bool = True,
+                        semi: bool = False):
     """계정 하나: (필요시) 로그인 → **같은 신선한 세션**에서 즉시 판매분석 발견 + 지표.
 
     반환: (report_account[활동 상품만] | None, {옵션ID: OptionMetric}, {옵션ID: 재고수량}).
     로그인 미완료면 (None, {}, {}) 반환 → 호출부가 건너뛰고 다음 계정으로(막힘 없음).
     login=False(세션우선 1차): 세션 없으면 자동제출하지 않고 **NeedLogin** 을 던져 뒤로 미룬다
     (반복 자동로그인 = IP 차단 유발이라, 세션 살아있는 계정을 먼저 다 수집). Akamai 차단 시 LoginBlocked.
+    semi=True(**반자동 판매수집**): 창을 **처음부터 보이게**(offscreen=False) 띄우고 **무인 아님**(사람이
+    2차인증/직접로그인 처리)으로 로그인 → 그 신뢰 창에서 수집. ③ 반자동과 같은 '보이는 신뢰 세션' 방식.
     """
     from .collector import (discover, save_discovered,  # 지연 import
                             fetch_inventory, fetch_sales_roster, InventoryFetchError, SalesFetchError)
     from .product_match import scope_to_ledger, augment_unmatched
     from playwright.sync_api import TimeoutError as PWTimeout  # 판매데이터 없음 판별용
     pw = get_password(a.account_id) if get_password else None
-    # 기본은 **창 숨김**(offscreen). 로그인/2차인증이 필요할 때만 잠깐 창을 띄운다.
-    with WingBrowser(profile_dir=account_profile(a.account_id), offscreen=True) as b:
+    # 기본은 **창 숨김**(offscreen). 반자동(semi)이면 처음부터 보이게 띄운다(사람이 2차인증 처리).
+    with WingBrowser(profile_dir=account_profile(a.account_id), offscreen=not semi) as b:
+        if semi:
+            b.show()
         b.goto(WING_URL)
         b.page.wait_for_timeout(1500)
         if b.authenticated():
-            log(f"  [{a.label}] 세션 재사용 → 이미 로그인됨 (창 안 뜸)")
+            log(f"  [{a.label}] 세션 재사용 → 이미 로그인됨" + (" (보이는 창)" if semi else " (창 안 뜸)"))
             session_state.observe_session_ok(a.account_id, final_url=b.page.url)   # 관측(제어흐름 불변)
         elif not login:            # 세션우선 1차 패스 — 자동제출 안 하고 로그인 대기열로 미룸
             session_state.observe_reauth_required(a.account_id, final_url=b.page.url)
             raise NeedLogin()
         else:
-            unattended = config.LOGIN_UNATTENDED
+            unattended = config.LOGIN_UNATTENDED and not semi   # 반자동이면 사람 대기(무인 아님)
             shown = {"v": False}
 
             def _need_user():   # 2차인증·봇챌린지 등 사람이 꼭 필요할 때
@@ -792,6 +797,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
              ai_key: str | None = None, date_from: str | None = None, date_to: str | None = None,
              get_password=None, resume: bool = False, carry_forward: bool = False,
              grow_keywords: bool = False, skip_ranks: bool = False, redo_today: bool = False,
+             sales_semi: bool = False,
              keywords_off: bool = False, on_log=None, gsheet_output_url: str | None = None) -> Path:
     """계정별 end-to-end 완결 + **같은 날 이어서 하기** + **통계 마스터 이어쓰기(cross-day)**.
 
@@ -978,7 +984,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         log(f"== [{i}/{total}] {a.label} (계정ID: {a.account_id}) — 로그인 시도 ==")
         try:
             report_acc, metrics, inv_by_vid = _login_and_discover(
-                a, date_from, date_to, get_password, log, login=True)
+                a, date_from, date_to, get_password, log, login=True, semi=sales_semi)
             blocks = 0                            # 로그인 성공 → 연속 차단 카운터 리셋
             _finish(a, report_acc, metrics, inv_by_vid)
         except LoginBlocked:                      # Akamai 차단 → 서킷브레이커 카운트

@@ -394,6 +394,12 @@ class App(QtWidgets.QMainWindow):
         self.sales_btn = QtWidgets.QPushButton("① 판매수집")
         self.sales_btn.clicked.connect(lambda: self.do_run_full(keywords_off=True))
         top.addWidget(self.sales_btn)
+        self.sales_semi_btn = QtWidgets.QPushButton("① 판매수집(반자동)")
+        self.sales_semi_btn.setToolTip(
+            "보이는 Chrome 창을 띄우고 로그인(ID/비번 자동입력, 2차인증은 사람)한 뒤\n"
+            "그 신뢰 창에서 판매수집합니다. 무인 오프스크린 자동로그인 차단을 피합니다(사무실 권장).")
+        self.sales_semi_btn.clicked.connect(lambda: self.do_run_full(keywords_off=True, sales_semi=True))
+        top.addWidget(self.sales_semi_btn)
         self.kw_btn = QtWidgets.QPushButton("② 키워드 선정")
         self.kw_btn.clicked.connect(self.do_select_keywords)
         top.addWidget(self.kw_btn)
@@ -940,7 +946,7 @@ class App(QtWidgets.QMainWindow):
             return d, d
         return self.from_edit.text().strip(), self.to_edit.text().strip()
 
-    def do_run_full(self, keywords_off: bool = False):
+    def do_run_full(self, keywords_off: bool = False, sales_semi: bool = False):
         if self.input_list is None:
             QtWidgets.QMessageBox.warning(self, "입력 필요", "설정 탭에서 입력 엑셀을 먼저 여세요.")
             return
@@ -954,7 +960,7 @@ class App(QtWidgets.QMainWindow):
         # 날짜를 직접 지정(어제 자동이 아님)하면 순위 조회 제외 = 그 날짜 판매데이터만 채움(차단 회피)
         skip_ranks = not self.cb_today.isChecked()
         n = sum(len(a.products) for a in self.input_list.accounts)
-        title = "① 판매수집" if keywords_off else "전체 실행"
+        title = ("① 판매수집(반자동)" if sales_semi else "① 판매수집") if keywords_off else "전체 실행"
         # 실행 모드 3택 → 여기선 예/아니오만 확인.
         #  · ① 이어서 하기: 오늘 진행분 있으면 이어서(완료 계정 건너뜀), 아니면 마스터에 오늘 컬럼 추가.
         #  · ② 오늘 처음(다시): carry_forward + redo_today → 오늘 컬럼·완료스탬프 초기화 후 전 계정 재수집(어제까지 유지).
@@ -997,13 +1003,16 @@ class App(QtWidgets.QMainWindow):
             (" · 순위 제외(판매데이터만)" if skip_ranks and not resume else "")
         self.log(f"[{'판매수집' if keywords_off else '전체실행'}] {mode_txt}시작 — 상품 {n}개, 기간 {df}~{dt}"
                  f"{' · 새 키워드 발굴 추가' if grow else ''}{stage_txt}")
-        btn = self.sales_btn if keywords_off else self.pipeline_btn
+        btn = (self.sales_semi_btn if sales_semi else self.sales_btn) if keywords_off else self.pipeline_btn
+        if sales_semi:
+            self.log("[① 반자동] 보이는 창에서 로그인(2차인증은 직접) 후 판매수집합니다 — 창이 뜨면 두세요")
 
         def task():
             naver = NaverAdApi(naver_creds)
             return run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
                             get_password=self._account_pw, resume=resume, carry_forward=carry,
                             grow_keywords=grow, skip_ranks=skip_ranks, redo_today=redo_today,
+                            sales_semi=sales_semi,
                             keywords_off=keywords_off, on_log=self.log, gsheet_output_url=gs_out)
         self.run_bg(task, on_done=self._pipeline_done, btn=btn)
 

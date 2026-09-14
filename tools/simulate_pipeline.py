@@ -49,7 +49,7 @@ class _FakeBrowser:
     def __exit__(self, *exc): return False
 
 
-def _fake_login_and_discover(a, date_from, date_to, get_password, log, login=True):
+def _fake_login_and_discover(a, date_from, date_to, get_password, log, login=True, semi=False):
     if a.account_id in _STATE["block_login"]:      # Akamai 차단 계정
         if not login:
             raise P.NeedLogin()                    # 1차: 세션 없음 → 대기열

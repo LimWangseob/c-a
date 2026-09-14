@@ -364,6 +364,9 @@ class App(tk.Tk):
         self.sales_btn = ttk.Button(topbar, text="① 판매수집",
                                     command=lambda: self.do_run_full(keywords_off=True))
         self.sales_btn.pack(side="left", padx=(0, 4))
+        self.sales_semi_btn = ttk.Button(topbar, text="① 판매수집(반자동)",
+                                         command=lambda: self.do_run_full(keywords_off=True, sales_semi=True))
+        self.sales_semi_btn.pack(side="left", padx=(0, 4))
         self.kw_btn = ttk.Button(topbar, text="② 키워드 선정", command=self.do_select_keywords)
         self.kw_btn.pack(side="left", padx=4)
         # ③ 순위(자동, 비로그인 검색)은 차단 위험이 커 현실성이 없어 제거(사용자 요청). 반자동만 유지.
@@ -427,7 +430,7 @@ class App(tk.Tk):
             return d, d
         return self.from_var.get().strip(), self.to_var.get().strip()
 
-    def do_run_full(self, keywords_off: bool = False):
+    def do_run_full(self, keywords_off: bool = False, sales_semi: bool = False):
         if self.input_list is None:
             messagebox.showwarning("입력 필요", "설정 탭에서 입력 엑셀을 먼저 여세요.")
             return
@@ -442,7 +445,7 @@ class App(tk.Tk):
         # 날짜를 직접 지정(당일 자동이 아님)하면 순위 조회 제외 = 그 날짜 판매데이터만 채움(차단 회피)
         skip_ranks = self.collect_mode.get() != "today"
         n = sum(len(a.products) for a in self.input_list.accounts)
-        title = "① 판매수집" if keywords_off else "전체 실행"
+        title = ("① 판매수집(반자동)" if sales_semi else "① 판매수집") if keywords_off else "전체 실행"
         # 실행 모드 3택 → 여기선 예/아니오만 확인.
         #  · resume(이어서): 오늘 진행분 있으면 이어서(완료 계정 건너뜀), 아니면 마스터에 오늘 컬럼 추가.
         #  · redo(오늘 처음/다시): carry + redo_today → 오늘 컬럼·완료스탬프 초기화 후 전 계정 재수집(어제까지 유지).
@@ -483,13 +486,15 @@ class App(tk.Tk):
             (" · 순위 제외(판매데이터만)" if skip_ranks and not resume else "")
         self.log(f"[{'판매수집' if keywords_off else '전체실행'}] {mode_txt}시작 — 상품 {n}개, 기간 {df}~{dt}"
                  f"{' · 새 키워드 발굴 추가' if grow else ''}{stage_txt}")
-        btn = self.sales_btn if keywords_off else self.pipeline_btn
+        btn = (self.sales_semi_btn if sales_semi else self.sales_btn) if keywords_off else self.pipeline_btn
+        if sales_semi:
+            self.log("[① 반자동] 보이는 창에서 로그인(2차인증은 직접) 후 판매수집 — 창이 뜨면 두세요")
 
         def task():
             naver = NaverAdApi(naver_creds)
             return run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
                             get_password=self._account_pw, resume=resume, carry_forward=carry,
-                            grow_keywords=grow, skip_ranks=skip_ranks, redo_today=redo_today,
+                            grow_keywords=grow, skip_ranks=skip_ranks, redo_today=redo_today, sales_semi=sales_semi,
                             keywords_off=keywords_off, on_log=self.log, gsheet_output_url=gs_out)
         self.run_bg(task, on_done=self._pipeline_done, btn=btn)
 
