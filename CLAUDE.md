@@ -33,7 +33,7 @@ python ui/app_qt.py     # 기본 UI = PySide6(Qt) + Windows 11 Fluent 스타일
 
 ## 제약 (보안·정책)
 - **🔒 로그인 정책 고정(DESIGN §4 — 변경 금지)**: **실제 Chrome + CDP 자동입력만.** ⛔ HTTP 폼-POST 위장 로그인(`requests`+UA/sec-ch-ua/Sec-Fetch 위장 + Akamai `_abck` 재생, 옛 `http_login.py` 방식) **도입 금지**(정책 위반 + 라이브에서 Akamai 차단으로 실제 불가). 브라우저는 **기본 숨김**(offscreen), 2차인증 등 사람 필요 시에만 **로그로 예고 후** 표시. **rank_browser와 로그인 브라우저를 동시에 열지 말 것**(sync playwright 는 한 스레드에 1개 — 중첩 시 "asyncio loop" 에러). `WingBrowser.__enter__`는 실행 전 그 프로필의 **잔여 Chrome 자동 정리**(프로필 잠금→포트 미개방 방지). 판매데이터 없음은 **정상 처리**(오류 아님).
-- **지문 위조(stealth/fingerprint spoofing) 코드 금지** — 계정정지 위험 + 분류기 차단. 실제 Chrome 수동/자동입력만.
+- **지문/TLS 위조(stealth/fingerprint spoofing) = 하드 금지 아님·소유자 판단(2026-09-14 정정)**. 자기 상품 순위 확인은 위법 아님. 단 **정직한 실무 조언(소유자 보호)**: Akamai가 지문 불일치를 가장 잘 잡아 **위탁계정 밴 위험이 최대**(샵마인도 미사용=실제 Chromium) → 안전·유효한 것부터(실제 타이핑·마우스 입력 재현=허용·구현됨), 지문 쪽은 필요 시 비핵심 컨텍스트 테스트+협의로 신중히. Claude가 일방적으로 금지하지 말 것.
 - 폼에 `incogniaRequestToken`(Incognia 기기지문) + Akamai → **자동입력 100% 통과 보장 없음**. 2차인증/CAPTCHA는 열린 창에서 사람이 처리(수동 폴백).
 - 비밀번호 = **DPAPI로 이 PC 전용 암호화**(`%LOCALAPPDATA%\coupang-analytics\creds.json`). 공유 파일·git·출력물에 평문 금지.
 - 쿠키 주입한 새 브라우저는 판매분석 데이터API가 Akamai에 막힘 → **수집은 사람이 로그인한 그 세션/프로필 재사용에서만**.
