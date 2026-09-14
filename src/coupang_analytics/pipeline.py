@@ -791,13 +791,16 @@ def _select_keywords_for_skipped(wb, save_path, accounts, naver, ai_key, log) ->
 def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
              ai_key: str | None = None, date_from: str | None = None, date_to: str | None = None,
              get_password=None, resume: bool = False, carry_forward: bool = False,
-             grow_keywords: bool = False, skip_ranks: bool = False,
+             grow_keywords: bool = False, skip_ranks: bool = False, redo_today: bool = False,
              keywords_off: bool = False, on_log=None, gsheet_output_url: str | None = None) -> Path:
     """계정별 end-to-end 완결 + **같은 날 이어서 하기** + **통계 마스터 이어쓰기(cross-day)**.
 
-    실행 모드(하루 1회 실행 전제):
-    - **새 통계(fresh)**: `carry_forward=False`. 빈 워크북에서 상품마다 키워드를 선정(첫날). 마스터가
-      이미 있으면 보관(백업)한 뒤 새로 시작한다.
+    실행 모드(3택, UI 실행모드와 대응):
+    - **① 이어서 하기**: `resume`(오늘 진행분 있으면 이어서·완료계정 건너뜀) 또는 `carry_forward`(마스터에
+      오늘 컬럼 추가). 어제까지 유지.
+    - **② 오늘 처음(다시) 하기**: `redo_today=True`(+carry_forward). 어제까지 유지하되 **오늘 컬럼·완료
+      스탬프를 초기화**하고 전 계정을 오늘분 처음부터 재수집(완료계정도 다시). 키워드는 동결.
+    - **③ 전체 새로 시작(fresh)**: `carry_forward=False`. 마스터가 있으면 보관(백업) 뒤 빈 워크북으로 새로.
     - **통계 이어쓰기(carry_forward=True)**: 마스터(`쿠팡데이타분석_통계.xlsx`)를 불러와 **기존 키워드를
       동결**하고 오늘 날짜 컬럼만 채운다(시계열 의미 유지). `grow_keywords=True`면 상한(KW_MAX_TRACK) 안에서
       상품당 하루 최대 KW_ADD_PER_DAY개 **새 키워드만 발굴 추가**(기존은 절대 제거 안 함).
@@ -851,7 +854,8 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
             log("== 통계 마스터가 없어 '새 통계'로 시작합니다 ==")
         if carry:
             wb = OutputWorkbook.load(master)   # 기존 통계 이어쓰기(키워드 동결 + 오늘 컬럼)
-            log(f"== 통계 이어쓰기 — 마스터 로드, 오늘({date_to}) 컬럼 추가"
+            log(f"== {'오늘 처음(다시) 하기' if redo_today else '통계 이어쓰기'} — 마스터 로드, "
+                f"오늘 컬럼{' 초기화 후 재수집' if redo_today else ' 추가'}"
                 f"{' · 새 키워드 발굴 추가' if grow else ' · 키워드 동결'} ==")
         else:
             if not carry_forward and master.exists():   # 명시적 '새 통계' → 기존 마스터 보관(백업)
@@ -884,6 +888,11 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     else:
         col_label = f"{date_from}~{date_to}"
     log(f"== 수집 대상 구간(컬럼): {col_label} ==")
+    if redo_today and carry:      # ② 오늘 처음(다시): 오늘 컬럼·완료스탬프 초기화 → 전 계정 오늘분 재수집
+        c1 = wb.reset_date_column(col_label)
+        c2 = wb.clear_sales_stamps()
+        wb.save(partial)          # 초기화분을 진행파일에도 반영(크래시 복구 기준선)
+        log(f"  [오늘 초기화] 오늘({col_label}) 컬럼 값 {c1}칸·완료스탬프 {c2}계정 해제 — 전 계정 재수집(어제까지 유지)")
 
     accounts = input_list.accounts
     total = len(accounts)

@@ -255,6 +255,36 @@ class OutputWorkbook:
         # (새 규칙에선 스캔밖=50위로 기록하므로 '-'는 측정 안 된 잔재).
         return self.wb[biz].cell(row=row, column=col).value not in (None, "", "-")
 
+    def clear_sales_stamps(self) -> int:
+        """모든 계정의 '판매수집 완료' 스탬프(`_계정정보` 3열)를 해제 → '오늘 처음(다시)' 재수집 시
+        오늘 이미 완료한 계정도 다시 수집(has_sales 가 False 가 됨). 해제한 계정 수 반환."""
+        if _ACCT_SHEET not in self.wb.sheetnames:
+            return 0
+        ws = self.wb[_ACCT_SHEET]
+        n = 0
+        for r in range(2, ws.max_row + 1):
+            if _norm(ws.cell(r, 3).value):
+                ws.cell(r, 3).value = None
+                n += 1
+        return n
+
+    def reset_date_column(self, date_label: str) -> int:
+        """그 날짜 컬럼(`date_label`=일자 라벨 예 '26.09.14')의 **지표·순위 값만** 공란화 — 날짜 라벨·다른
+        날짜·상품명/키워드는 불변. 컬럼이 아직 없으면 no-op(**새 컬럼 만들지 않음**). '오늘 처음(다시)'에서
+        오늘 컬럼을 초기화해 전 계정·상품을 처음부터 다시 채우게 한다(어제까지 유지). ⚠ `date_label`은
+        `ensure_date`가 쓰는 라벨과 동일 문자열이어야 매칭됨(ISO 아님)."""
+        cleared = 0
+        for rowmap in (self._metric_row, self._kw_row):
+            for key, row in list(rowmap.items()):
+                col = self._date_col.get(key[0], {}).get(date_label)
+                if col is None:
+                    continue
+                cell = self.wb[key[0]].cell(row=row, column=col)
+                if cell.value not in (None, ""):
+                    cell.value = None
+                    cleared += 1
+        return cleared
+
     # ── 생성 ─────────────────────────────────────────────────
     def ensure_account(self, biz: str):
         if biz in self.wb.sheetnames:

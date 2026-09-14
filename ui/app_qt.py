@@ -420,23 +420,25 @@ class App(QtWidgets.QMainWindow):
         desc.setObjectName("muted")
         desc.setWordWrap(True)
         rv.addWidget(desc)
-        # 실행 모드 — 팝업 3택 대신 화면에서 선택(이어쓰기=누적 / 처음부터=새 통계). 실행 시 예/아니오만 확인.
+        # 실행 모드 — 화면에서 3택(하나만 선택). 실행 시 예/아니오만 확인.
         moderow = QtWidgets.QHBoxLayout()
         moderow.addWidget(QtWidgets.QLabel("실행 모드:"))
-        # 수집 기간(cb_today/cb_range)과 동일한 체크박스 스타일로 통일 — 체크박스지만 배타 그룹으로 하나만 선택.
-        self.cb_append = QtWidgets.QCheckBox("이어쓰기(누적)")
-        self.cb_append.setChecked(True)
-        self.cb_append.setToolTip("기존 통계 마스터에 오늘 날짜 컬럼을 추가합니다(키워드 동결, 시계열 누적).\n"
-                                  "같은 날 미완료분이 있으면 완료 계정을 건너뛰고 이어서 진행합니다.")
-        self.cb_fresh = QtWidgets.QCheckBox("처음부터(새 통계)")
-        self.cb_fresh.setToolTip("기존 통계 마스터를 백업한 뒤 빈 통계로 새로 시작합니다.\n"
-                                 "⚠ 누적 시계열이 끊깁니다 — 첫 수집이나 키워드 전면 재선정 때만 사용하세요.")
+        # 체크박스지만 배타 그룹으로 하나만 선택.
+        self.cb_resume = QtWidgets.QCheckBox("이어서 하기")
+        self.cb_resume.setChecked(True)
+        self.cb_resume.setToolTip("오전에 하다 만 작업을 이어서 완료합니다(이미 끝낸 계정·상품은 건너뜀).\n"
+                                  "어제까지 통계는 그대로 유지, 오늘 컬럼만 마저 채웁니다. [기본]")
+        self.cb_redo = QtWidgets.QCheckBox("오늘 처음(다시) 하기")
+        self.cb_redo.setToolTip("오늘 수집한 것을 지우고 오늘 것만 처음부터 다시 수집합니다(완료분 포함 전부).\n"
+                                "어제까지 통계·키워드는 그대로 유지됩니다.")
+        self.cb_newall = QtWidgets.QCheckBox("전체 새로 시작")
+        self.cb_newall.setToolTip("⚠ 지금까지 전체 통계를 백업파일로 보관하고 완전히 빈 통계로 새로 시작합니다.\n"
+                                  "누적 시계열이 끊깁니다 — 첫 수집이나 키워드 전면 재선정 때만 사용하세요.")
         self._mode_group = QtWidgets.QButtonGroup(self)   # 체크박스지만 하나만 선택(상호배타)
         self._mode_group.setExclusive(True)
-        self._mode_group.addButton(self.cb_append)
-        self._mode_group.addButton(self.cb_fresh)
-        moderow.addWidget(self.cb_append)
-        moderow.addWidget(self.cb_fresh)
+        for cb in (self.cb_resume, self.cb_redo, self.cb_newall):
+            self._mode_group.addButton(cb)
+            moderow.addWidget(cb)
         moderow.addStretch(1)
         rv.addLayout(moderow)
         optrow = QtWidgets.QHBoxLayout()
@@ -953,26 +955,34 @@ class App(QtWidgets.QMainWindow):
         skip_ranks = not self.cb_today.isChecked()
         n = sum(len(a.products) for a in self.input_list.accounts)
         title = "① 판매수집" if keywords_off else "전체 실행"
-        # 실행 모드는 화면 라디오로 선택(팝업 3택 제거) → 여기선 예/아니오만 확인.
-        #  · 처음부터(새 통계): carry_forward=False → 기존 마스터 백업 후 새로 시작.
-        #  · 이어쓰기: 같은 날 미완료분이 있으면 이어서(완료 계정 건너뜀), 아니면 마스터에 오늘 컬럼 추가.
-        #    (resumable_progress 는 '오늘 시작분'만 반환 → 날짜가 바뀌면 자동으로 새 오늘 컬럼.)
-        fresh = self.cb_fresh.isChecked()
-        resume = carry = False
-        meta = None if fresh else resumable_progress()
-        if fresh:
-            mode_desc = "처음부터(새 통계) — ⚠ 기존 통계 마스터는 백업 후 새로 시작(누적 시계열 끊김)"
+        # 실행 모드 3택 → 여기선 예/아니오만 확인.
+        #  · ① 이어서 하기: 오늘 진행분 있으면 이어서(완료 계정 건너뜀), 아니면 마스터에 오늘 컬럼 추가.
+        #  · ② 오늘 처음(다시): carry_forward + redo_today → 오늘 컬럼·완료스탬프 초기화 후 전 계정 재수집(어제까지 유지).
+        #  · ③ 전체 새로 시작: carry_forward=False → 기존 마스터 백업 후 빈 통계로 새로.
+        newall = self.cb_newall.isChecked()
+        redo = self.cb_redo.isChecked()
+        resume = carry = redo_today = False
+        meta = resumable_progress() if not (newall or redo) else None   # 이어서만 오늘 진행분 재개
+        if newall:
+            mode_desc = "전체 새로 시작 — ⚠ 기존 통계 마스터는 백업 후 빈 통계로 새로(누적 시계열 끊김)"
+        elif redo:
+            if master_exists():
+                carry = True
+                redo_today = True
+                mode_desc = f"오늘 처음(다시) 하기 — 오늘({dt}) 초기화 후 전 계정 재수집(어제까지 유지·키워드 동결)"
+            else:
+                mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음), 기간 {df}~{dt}"
         elif meta:
             resume = True
             carry = bool(meta.get("carry", False))
             df, dt = meta["date_from"], meta["date_to"]
-            mode_desc = f"이어쓰기 — 같은 날 미완료분 이어서(완료 {len(meta['done'])}개 건너뜀), 기간 {df}~{dt}"
+            mode_desc = f"이어서 하기 — 오늘 미완료분 이어서(완료 {len(meta['done'])}개 건너뜀), 기간 {df}~{dt}"
         elif master_exists():
             carry = True
-            mode_desc = f"이어쓰기 — 오늘({dt}) 컬럼 추가(키워드 동결)"
+            mode_desc = f"이어서 하기 — 오늘({dt}) 컬럼 추가(키워드 동결)"
         else:
             mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음), 기간 {df}~{dt}"
-        grow = carry and self.cb_grow.isChecked()   # 발굴 추가는 통계 이어쓰기 때만 의미
+        grow = carry and not redo_today and self.cb_grow.isChecked()   # 발굴 추가는 이어쓰기 때만
         # 단일 확인 팝업 — 실행 여부(예/아니오)만.
         confirm = (f"{mode_desc}\n대상: 상품 {n}개"
                    f"{' · 새 키워드 발굴 추가' if grow else ''}\n\n실행할까요?")
@@ -981,7 +991,8 @@ class App(QtWidgets.QMainWindow):
             return
         input_list, naver_creds, key = self.input_list, self.naver_creds, self.ai_key
         gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
-        mode_txt = "이어서 " if resume else ("통계이어쓰기 " if carry else "새통계 ")
+        mode_txt = ("오늘다시 " if redo_today else "이어서 ") if (resume or redo_today) else \
+                   ("통계이어쓰기 " if carry else "새통계 ")
         stage_txt = " · ①판매수집(키워드·순위 없음)" if keywords_off else \
             (" · 순위 제외(판매데이터만)" if skip_ranks and not resume else "")
         self.log(f"[{'판매수집' if keywords_off else '전체실행'}] {mode_txt}시작 — 상품 {n}개, 기간 {df}~{dt}"
@@ -992,7 +1003,7 @@ class App(QtWidgets.QMainWindow):
             naver = NaverAdApi(naver_creds)
             return run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
                             get_password=self._account_pw, resume=resume, carry_forward=carry,
-                            grow_keywords=grow, skip_ranks=skip_ranks,
+                            grow_keywords=grow, skip_ranks=skip_ranks, redo_today=redo_today,
                             keywords_off=keywords_off, on_log=self.log, gsheet_output_url=gs_out)
         self.run_bg(task, on_done=self._pipeline_done, btn=btn)
 

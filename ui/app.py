@@ -381,15 +381,17 @@ class App(tk.Tk):
             "계정마다 [로그인→판매분석→키워드→PC·모바일 순위]를 완결하고 통합 엑셀에 누적 저장합니다. "
             "로그인은 창 없이 자동, 2차인증 필요할 때만 창이 뜹니다(로그로 예고). 진행상황은 아래 로그에서 확인."
         ), wraplength=980).pack(anchor="w", padx=6, pady=(0, 6))
-        # 실행 모드 — 팝업 3택 대신 화면에서 선택(이어쓰기=누적 / 처음부터=새 통계). 실행 시 예/아니오만 확인.
+        # 실행 모드 — 화면에서 3택(하나만 선택). 실행 시 예/아니오만 확인.
         moderow = ttk.Frame(tab)
         moderow.pack(fill="x", padx=10, pady=(2, 2))
-        self.run_mode = tk.StringVar(value="append")
+        self.run_mode = tk.StringVar(value="resume")   # resume | redo | newall
         ttk.Label(moderow, text="실행 모드:").pack(side="left")
-        ttk.Radiobutton(moderow, text="이어쓰기(누적)", variable=self.run_mode,
-                        value="append").pack(side="left", padx=(8, 0))
-        ttk.Radiobutton(moderow, text="처음부터(새 통계)", variable=self.run_mode,
-                        value="fresh").pack(side="left", padx=(8, 4))
+        ttk.Radiobutton(moderow, text="이어서 하기", variable=self.run_mode,
+                        value="resume").pack(side="left", padx=(8, 0))
+        ttk.Radiobutton(moderow, text="오늘 처음(다시) 하기", variable=self.run_mode,
+                        value="redo").pack(side="left", padx=(8, 0))
+        ttk.Radiobutton(moderow, text="전체 새로 시작", variable=self.run_mode,
+                        value="newall").pack(side="left", padx=(8, 4))
         self.grow_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(moderow, text="새 키워드 발굴 추가 (이어쓰기 시, 상한 7개·하루 2개)",
                         variable=self.grow_var).pack(side="left", padx=(16, 0))
@@ -441,25 +443,33 @@ class App(tk.Tk):
         skip_ranks = self.collect_mode.get() != "today"
         n = sum(len(a.products) for a in self.input_list.accounts)
         title = "① 판매수집" if keywords_off else "전체 실행"
-        # 실행 모드는 화면 라디오로 선택(팝업 3택 제거) → 여기선 예/아니오만 확인.
-        #  · 처음부터(새 통계): carry_forward=False → 기존 마스터 백업 후 새로 시작.
-        #  · 이어쓰기: 같은 날 미완료분 있으면 이어서(완료 계정 건너뜀), 아니면 마스터에 오늘 컬럼 추가.
-        fresh = self.run_mode.get() == "fresh"
-        resume = carry = False
-        meta = None if fresh else resumable_progress()
-        if fresh:
-            mode_desc = "처음부터(새 통계) — ⚠ 기존 통계 마스터는 백업 후 새로 시작(누적 시계열 끊김)"
+        # 실행 모드 3택 → 여기선 예/아니오만 확인.
+        #  · resume(이어서): 오늘 진행분 있으면 이어서(완료 계정 건너뜀), 아니면 마스터에 오늘 컬럼 추가.
+        #  · redo(오늘 처음/다시): carry + redo_today → 오늘 컬럼·완료스탬프 초기화 후 전 계정 재수집(어제까지 유지).
+        #  · newall(전체 새로): carry_forward=False → 기존 마스터 백업 후 빈 통계로 새로.
+        mode = self.run_mode.get()
+        newall, redo = mode == "newall", mode == "redo"
+        resume = carry = redo_today = False
+        meta = resumable_progress() if not (newall or redo) else None
+        if newall:
+            mode_desc = "전체 새로 시작 — ⚠ 기존 통계 마스터는 백업 후 빈 통계로 새로(누적 시계열 끊김)"
+        elif redo:
+            if master_exists():
+                carry = redo_today = True
+                mode_desc = f"오늘 처음(다시) 하기 — 오늘({dt}) 초기화 후 전 계정 재수집(어제까지 유지·키워드 동결)"
+            else:
+                mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음), 기간 {df}~{dt}"
         elif meta:
             resume = True
             carry = bool(meta.get("carry", False))
             df, dt = meta["date_from"], meta["date_to"]
-            mode_desc = f"이어쓰기 — 같은 날 미완료분 이어서(완료 {len(meta['done'])}개 건너뜀), 기간 {df}~{dt}"
+            mode_desc = f"이어서 하기 — 오늘 미완료분 이어서(완료 {len(meta['done'])}개 건너뜀), 기간 {df}~{dt}"
         elif master_exists():
             carry = True
-            mode_desc = f"이어쓰기 — 오늘({dt}) 컬럼 추가(키워드 동결)"
+            mode_desc = f"이어서 하기 — 오늘({dt}) 컬럼 추가(키워드 동결)"
         else:
             mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음), 기간 {df}~{dt}"
-        grow = carry and self.grow_var.get()   # 발굴 추가는 통계 이어쓰기 때만 의미
+        grow = carry and not redo_today and self.grow_var.get()   # 발굴 추가는 이어쓰기 때만
         if not messagebox.askyesno(f"{title} 확인",
                                    f"{mode_desc}\n대상: 상품 {n}개"
                                    f"{' · 새 키워드 발굴 추가' if grow else ''}\n\n실행할까요?"):
@@ -467,7 +477,8 @@ class App(tk.Tk):
             return
         input_list, naver_creds, key = self.input_list, self.naver_creds, self.ai_key
         gs_out = _shared_setting("gsheet", "output_url")   # app_qt에 등록된 결과 구글시트 링크(있으면 반영)
-        mode_txt = "이어서 " if resume else ("통계이어쓰기 " if carry else "새통계 ")
+        mode_txt = ("오늘다시 " if redo_today else "이어서 ") if (resume or redo_today) else \
+                   ("통계이어쓰기 " if carry else "새통계 ")
         stage_txt = " · ①판매수집(키워드·순위 없음)" if keywords_off else \
             (" · 순위 제외(판매데이터만)" if skip_ranks and not resume else "")
         self.log(f"[{'판매수집' if keywords_off else '전체실행'}] {mode_txt}시작 — 상품 {n}개, 기간 {df}~{dt}"
@@ -478,7 +489,7 @@ class App(tk.Tk):
             naver = NaverAdApi(naver_creds)
             return run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
                             get_password=self._account_pw, resume=resume, carry_forward=carry,
-                            grow_keywords=grow, skip_ranks=skip_ranks,
+                            grow_keywords=grow, skip_ranks=skip_ranks, redo_today=redo_today,
                             keywords_off=keywords_off, on_log=self.log, gsheet_output_url=gs_out)
         self.run_bg(task, on_done=self._pipeline_done, btn=btn)
 
