@@ -416,7 +416,9 @@ class App(QtWidgets.QMainWindow):
         top.addWidget(self.track_stop_btn)
         self.pipeline_btn = QtWidgets.QPushButton("전체 실행(①→②→③)")
         self.pipeline_btn.setObjectName("accent")
-        self.pipeline_btn.clicked.connect(lambda: self.do_run_full(keywords_off=False))
+        self.pipeline_btn.setToolTip("①은 보이는 창에서 로그인(반자동, 2차인증은 사람)합니다.\n"
+                                     "②노출측정·③순위는 공개검색이라 IP가 뜨거우면 막힐 수 있습니다.")
+        self.pipeline_btn.clicked.connect(lambda: self.do_run_full(keywords_off=False, sales_semi=True))
         top.addWidget(self.pipeline_btn)
         top.addStretch(1)
         rv.addLayout(top)
@@ -960,7 +962,8 @@ class App(QtWidgets.QMainWindow):
         # 날짜를 직접 지정(어제 자동이 아님)하면 순위 조회 제외 = 그 날짜 판매데이터만 채움(차단 회피)
         skip_ranks = not self.cb_today.isChecked()
         n = sum(len(a.products) for a in self.input_list.accounts)
-        title = ("① 판매수집(반자동)" if sales_semi else "① 판매수집") if keywords_off else "전체 실행"
+        title = (("① 판매수집(반자동)" if sales_semi else "① 판매수집") if keywords_off
+                 else ("전체 실행(① 반자동 로그인)" if sales_semi else "전체 실행"))
         # 실행 모드 3택 → 여기선 예/아니오만 확인.
         #  · ① 이어서 하기: 오늘 진행분 있으면 이어서(완료 계정 건너뜀), 아니면 마스터에 오늘 컬럼 추가.
         #  · ② 오늘 처음(다시): carry_forward + redo_today → 오늘 컬럼·완료스탬프 초기화 후 전 계정 재수집(어제까지 유지).

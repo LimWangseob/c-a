@@ -377,7 +377,7 @@ class App(tk.Tk):
                                          state="disabled")
         self.track_stop_btn.pack(side="left", padx=4)
         self.pipeline_btn = ttk.Button(topbar, text="전체 실행(①→②③)",
-                                       command=lambda: self.do_run_full(keywords_off=False),
+                                       command=lambda: self.do_run_full(keywords_off=False, sales_semi=True),
                                        style="Accent.TButton")
         self.pipeline_btn.pack(side="left", padx=(4, 0))
         ttk.Label(run, justify="left", foreground="#64748b", text=(
@@ -445,7 +445,8 @@ class App(tk.Tk):
         # 날짜를 직접 지정(당일 자동이 아님)하면 순위 조회 제외 = 그 날짜 판매데이터만 채움(차단 회피)
         skip_ranks = self.collect_mode.get() != "today"
         n = sum(len(a.products) for a in self.input_list.accounts)
-        title = ("① 판매수집(반자동)" if sales_semi else "① 판매수집") if keywords_off else "전체 실행"
+        title = (("① 판매수집(반자동)" if sales_semi else "① 판매수집") if keywords_off
+                 else ("전체 실행(① 반자동 로그인)" if sales_semi else "전체 실행"))
         # 실행 모드 3택 → 여기선 예/아니오만 확인.
         #  · resume(이어서): 오늘 진행분 있으면 이어서(완료 계정 건너뜀), 아니면 마스터에 오늘 컬럼 추가.
         #  · redo(오늘 처음/다시): carry + redo_today → 오늘 컬럼·완료스탬프 초기화 후 전 계정 재수집(어제까지 유지).
