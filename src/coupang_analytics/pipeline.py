@@ -1418,6 +1418,7 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
     miss_streak = 0       # 자동제출 연속 실패 수(성공 시 0으로 리셋)
     cooldowns = 0         # 차단 감지 쿨다운 진입 횟수(진전 있으면 0으로 리셋) — 무한 재시도 방지
     noname_products = 0   # vid·상품명 모두 없어(이례) 측정 못 한 상품 수(집계 → 종료 시 안내)
+    measured_any = False  # 첫 검색 전엔 대기 없음·마지막 검색 뒤에도 대기 없음(간격은 '검색 사이'에만)
     if autosubmit:
         log("== 반자동(자동검색) 노출순위 시작 — 앱이 키워드 자동입력+Enter까지 수행(손 안 대도 됨). "
             f"키워드 간 {config.RANK_NAV_DELAY_MIN_SEC}~{config.RANK_NAV_DELAY_MAX_SEC}s 간격, "
@@ -1468,6 +1469,13 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                 for idx, kw in enumerate(todo, 1):
                     if should_stop() or halted:
                         break
+                    if measured_any and autosubmit:
+                        # 검색 **사이** 사람속도 간격(버스트 없이 차단 회피). 검색 앞에 두어 마지막 검색 뒤엔
+                        # 대기 안 함(자투리 제거). 중단형이라 대기 중 '반자동 중지'도 즉시 반응.
+                        d = random.uniform(config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC)
+                        _interruptible_sleep(d, should_stop)
+                        if should_stop() or halted:
+                            break
                     browser.to_front()   # 키워드마다 창을 앞으로(다른 창에 가려 못 찾는 것 방지)
                     log(f"  🔎 [{biz}] {pname}  ({idx}/{len(todo)})")
                     filled = _prefill_search(browser, kw)   # 사람처럼 한 글자씩 타이핑(붙여넣기 아님)
@@ -1480,6 +1488,7 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                         if should_stop() or halted:
                             break
                         _submit_search(browser)              # 사람 대신 앱이 Enter(제출)
+                        measured_any = True                  # 실제 검색 발생 → 다음 키워드는 '검색 사이' 간격 적용
                         pg, blocked = _wait_results_loaded(
                             browser, kw, should_stop, config.RANK_SEMI_AUTO_WAIT_SEC)
                     else:
@@ -1535,9 +1544,7 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                         log(f"  [노출명] 계약상품명 갱신 → {mi.name}")
                         pname = mi.name.strip()   # 이후 저장도 새 이름으로
                     wb.save(path)
-                    if autosubmit and not (should_stop() or halted):
-                        # 키워드 사이 사람속도 간격(버스트 없이 차단 회피). 다음 상품 마지막 키워드면 굳이 안 쉬어도 무방하나 단순화.
-                        time.sleep(random.uniform(config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC))
+                    # (키워드 사이 간격은 루프 상단에서 '검색 앞'에 적용 — 마지막 검색 뒤 자투리 대기 제거)
     wb.apply_style()
     wb.save(path)
     if noname_products:
