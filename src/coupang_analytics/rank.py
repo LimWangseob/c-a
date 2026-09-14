@@ -224,27 +224,44 @@ def _load_results(browser: WingBrowser, keyword: str, page_no: int = 1,
 _CHALLENGE_MARKERS = ("sec-if-cpt-container", "behavioral-content", "_sec/cp_challenge")
 
 
-# 모바일 에뮬레이션(안드로이드 Chrome) — 모바일 노출순위 조회용
-_MOBILE_UA = ("Mozilla/5.0 (Linux; Android 14; SM-S928N) AppleWebKit/537.36 "
-              "(KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36")
-_PC_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-          "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36")
+def _chrome_major(page) -> str:
+    """실제 실행 중인 Chrome 의 메이저 버전(예 '153'). 지문 **정합**(하드코딩 불일치 제거)용."""
+    try:
+        m = re.search(r"Chrome/(\d+)", page.evaluate("navigator.userAgent") or "")
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return "153"   # 폴백(2026-09-14 실측 기준)
 
 
 def _set_mobile(page, on: bool) -> None:
-    """CDP로 모바일 기기 에뮬레이션 On/Off(UA·화면·터치). 실제 창은 화면 밖(offscreen)."""
+    """CDP로 모바일 기기 에뮬레이션 On/Off. **UA/클라이언트힌트 정합(2026-09-14)**:
+    - Off(PC) = UA 를 **안 건드림** → 네이티브(실제 Chrome) UA·userAgentData 그대로 = 완전 정합.
+    - On(모바일) = UA 를 **실제 크롬 버전에 맞춰** 생성 + `userAgentMetadata`(클라이언트힌트)도 함께 설정
+      → UA 문자열 ↔ sec-ch-ua 불일치 제거(옛 하드코딩 Chrome/150 지뢰 제거). ⚠ 모바일은 현재 미사용
+      (`config.RANK_INCLUDE_MOBILE=False`)이나, 켜질 때를 위해 정합만 확보.
+    지문 '위조'가 아니라 **실제 브라우저 값에 맞추는 정합**(가짜 버전·불일치 금지)."""
     cdp = page.context.new_cdp_session(page)
     try:
         if on:
+            major = _chrome_major(page)
+            ua = (f"Mozilla/5.0 (Linux; Android 14; SM-S928N) AppleWebKit/537.36 "
+                  f"(KHTML, like Gecko) Chrome/{major}.0.0.0 Mobile Safari/537.36")
+            meta = {"brands": [{"brand": "Chromium", "version": major},
+                               {"brand": "Google Chrome", "version": major},
+                               {"brand": "Not?A_Brand", "version": "99"}],
+                    "fullVersion": f"{major}.0.0.0", "platform": "Android", "platformVersion": "14",
+                    "architecture": "", "model": "SM-S928N", "mobile": True}
             cdp.send("Emulation.setDeviceMetricsOverride",
                      {"width": 412, "height": 915, "deviceScaleFactor": 3, "mobile": True})
             cdp.send("Emulation.setUserAgentOverride",
-                     {"userAgent": _MOBILE_UA, "platform": "Android"})
+                     {"userAgent": ua, "platform": "Linux armv8l", "userAgentMetadata": meta})
             cdp.send("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 5})
         else:
             cdp.send("Emulation.clearDeviceMetricsOverride")
-            cdp.send("Emulation.setUserAgentOverride", {"userAgent": _PC_UA})
             cdp.send("Emulation.setTouchEmulationEnabled", {"enabled": False})
+            # PC 는 UA 오버라이드 안 함 = 네이티브(실제) UA·클라이언트힌트 유지(정합).
     finally:
         cdp.detach()
 
