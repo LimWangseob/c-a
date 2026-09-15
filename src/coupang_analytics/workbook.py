@@ -520,6 +520,23 @@ class OutputWorkbook:
         v = self.wb[biz].cell(row, col).value
         return v if v not in (None, "") else None
 
+    def inventory_by_biz(self) -> dict:
+        """{사업자norm: [(상품명, 재고), …]} — 재고 있는 상품만. 관리대장 역기록 **유사도 매칭**용.
+
+        상품명 = 등록상품명(있으면·대장 원본명) 우선, 없으면 현재(노출)명. 대장 상품명과 노출명이 달라도
+        (예: 대장 '…30포' vs 노출 '…') 호출부가 사업자 안에서 유사도로 최적 매칭한다."""
+        out: dict = {}
+        for biz in self.account_sheets():
+            items = []
+            for p in self.products_of(biz):
+                inv = self.product_inventory(biz, p)
+                if inv is None:
+                    continue
+                items.append((self.registered_name(biz, p) or p, inv))
+            if items:
+                out[_norm(biz)] = items
+        return out
+
     def inventory_by_registered_name(self) -> dict:
         """{(사업자norm, 등록상품명key): 최신 재고} — 관리대장 '그로스 재고' 역기록 매칭용.
 
