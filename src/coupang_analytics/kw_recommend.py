@@ -214,6 +214,24 @@ def _assemble_candidates(title: str, naver: NaverAdApi, ai_key: str | None, gene
             for c in _timed(log, "네이버 2단계연관", naver.related_keywords_multi, exp_seeds):
                 if c.total >= config.KW_TRACK_MIN_VOLUME:
                     pool.setdefault(c.keyword, c)
+    # 띄어쓰기 변형 합치기 — **쿠팡은 띄어쓰기 유무를 동일 검색어로 취급**하므로 한 표기만 추적한다
+    # (두 형태를 다 넣으면 추적 슬롯·쿠팡 태그칸만 낭비). 같은 정규형(공백제거)이 여럿이면 **네이버 검색량이
+    # 큰 표기**를 남긴다(네이버는 표기별로 조회수를 별개 집계 → 큰 쪽이 상품명 본문에 쓸 대표 표기).
+    # 단 상품 정체성(core·identities·anchors) 표기는 시계열 키 안정을 위해 보존 우선.
+    identity_raw = {t for t in ([core] + identities + anchors) if t}
+    by_norm: dict[str, KeywordVolume] = {}
+    for c in pool.values():
+        k = _norm(c.keyword)
+        keep = by_norm.get(k)
+        if keep is None:
+            by_norm[k] = c
+            continue
+        keep_id, c_id = keep.keyword in identity_raw, c.keyword in identity_raw
+        if (c_id and not keep_id) or (c_id == keep_id and c.total > keep.total):
+            by_norm[k] = c
+    if log and len(by_norm) < len(pool):
+        log(f"  [띄어쓰기병합] 후보 {len(pool)}개 → {len(by_norm)}개(변형 합침·검색량 큰 표기 유지)")
+    pool = {c.keyword: c for c in by_norm.values()}
     # judge 전 후보 축소(토큰 절감) — **상품 인접어(정체성 토큰 포함) 우선 → 검색량** 순으로 상위 KW_JUDGE_POOL_N개.
     # 순수 검색량 컷은 거대 broad 어(고검색이나 어차피 judge가 DROP)가 상위를 차지해 정작 중검색 상품어를
     # 밀어내므로 금지. 상품 자기 정체성(core+identities+anchors)은 인접+강제포함(니치 저검색 자기 이름 보호).
@@ -266,10 +284,11 @@ def select_keywords_light(title: str, naver: NaverAdApi, ai_key: str | None,
     """
     core, use, identities, _attributes, _anchors, relevant, tiers, matches = _assemble_candidates(
         title, naver, ai_key, generate=True, browser=browser, log=log)
-    if exclude:   # 통계 유지 중 발굴 추가 — 이미 추적 중인 키워드는 후보에서 제외(새 것만 뽑음)
-        relevant = [c for c in relevant if c.keyword not in exclude]
-        tiers = {k: v for k, v in tiers.items() if k not in exclude}
-        matches = {k: v for k, v in matches.items() if k not in exclude}
+    if exclude:   # 통계 유지 중 발굴 추가 — 이미 추적 중인 키워드는 후보에서 제외(새 것만 뽑음).
+        ex_norm = {_norm(e) for e in exclude}   # 띄어쓰기 무시(쿠팡 동일취급) — '캠핑 타프'↔'캠핑타프' 중복추가 방지
+        relevant = [c for c in relevant if _norm(c.keyword) not in ex_norm]
+        tiers = {k: v for k, v in tiers.items() if _norm(k) not in ex_norm}
+        matches = {k: v for k, v in matches.items() if _norm(k) not in ex_norm}
     if not relevant:
         return []
     # (2) 부분점수로 압축 — 요청량·IP차단 제어 위해 상위 소수만 쿠팡 노출 측정
