@@ -42,6 +42,7 @@ python ui/app_qt.py     # 기본 UI = PySide6(Qt) + Windows 11 Fluent 스타일
 
 ## 현재 상태
 - v1 완성·운용 중. 3단계(①판매수집(로그인) ②키워드선정 ③순위조회) 분리, 계정단위 end-to-end, 재개(`진행중.xlsx`+`.json`)·통계 마스터 이어쓰기·서킷브레이커 구현.
+- **전체실행 = ①반자동 → ②키워드선정(노출측정 없음) → ③반자동, offscreen 전무(2026-09-15).** UI `do_run_full`의 전체실행 분기가 `run_full(keywords_off=True, sales_semi=True, skip_ranks=True)`(①반자동 판매만) → `select_keywords_stage()`(②) → `track_ranks_stage(semi=True)`(③반자동)를 순차 호출. 근거=09-15 라이브 실증(warm IP서 offscreen 자동 0/237 vs visible 자동타이핑 237/237). **① 판매수집 버튼은 반자동 1개**(무인 offscreen 버튼 삭제). `_backfill_ranks`는 `not skip_ranks and not keywords_off`로 가드(사문화). 무인 `--auto`는 `skip_ranks=True`→`_finish`에서 `browser=None`이라 노출측정 없음(이미 안전). SSOT=`designs/DESIGN.md §0-0`.
 - **순위조회 = 자동 + 반자동**: 자동=비로그인 검색(차단 시 중단·다음 실행이 이어서, 쿨다운 900s·MAX 2). **반자동(현재 기본 autosubmit)**=앱이 신뢰 세션 창에서 키워드를 **한 글자씩 자동 타이핑+Enter까지 자동**(손 안 대도 됨) → 화면만 읽어 순위 산출(최대 300위). `RANK_SEMI_AUTOSUBMIT=False`면 옛 방식(사람이 Enter). 차단 시 **하드중단이 아니라 쿨다운-재개**(`RANK_SEMI_COOLDOWN_SEC=1800`×`MAX=4`, 초과 시 당일중단). 매칭 시 계약상품명을 검색결과 **정확 노출명으로 갱신**(정체성=vendorItemId 앵커라 이름 바뀌어도 시계열 키 안정).
 - **검색 간격 = `RANK_NAV_DELAY_MIN/MAX_SEC`(현재 45~75s, `config.py`에서만 조정 — 설정탭 입력 UI 없음)**. 90~150(과보수)에서 하향(2026-09-14 실측: 밤샘 대기가 총시간 ~86%). 무차단 유지 시 30~50 추가 하향 검토(단계적).
 - 라이브 검증됨: 비로그인 순위·오프라인 파싱·**반자동 밤샘 무인 완주(2026-09-14: 22계정·271키워드·10.5h·차단 0건, 48개 1~50위, vid없는 상품 상품명 폴백 작동)**. **로그인/판매수집 라이브는 사무실에서만**(2차인증 위치기반 §아래, 위탁계정이라 무리한 로그인 금지). ⚠ 순위 라이브는 **핫스팟(깨끗한 IP)** 권장(사무실 IP Akamai 차단 이력).

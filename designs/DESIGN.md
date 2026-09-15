@@ -3,7 +3,14 @@
 > 정책·구조의 단일 기준 문서. 코드보다 이 문서가 우선한다.
 > §8 미확정 항목은 실제 페이지 1회 분석 후 확정한다.
 
-## 0-0. 최신 반영 요약 (2026-09-14 — 순위 간격 단축·계정목록 서식·버그수정)
+## 0-0. 최신 반영 요약 (2026-09-15 — 전체실행 오프스크린 추방·① 버튼 단일화)
+
+- **전체실행 = ①반자동 → ②키워드선정(노출측정 없음) → ③반자동 순위, offscreen 전무(소유자 지시 2026-09-15).** 근거=09-15 새벽 라이브 실증: warm IP에서 **offscreen 자동(노출측정·순위백필)은 0/237 전멸**, **visible 자동타이핑(반자동)은 237/237 완주**(경로가 결정적). 구현=UI 조합(`do_run_full`의 전체실행 분기): `run_full(keywords_off=True, sales_semi=True, skip_ranks=True)`(①반자동 판매만) → `select_keywords_stage()`(②, 이미 `measure_ranks=None`=노출측정 없음) → `track_ranks_stage(semi=True, should_stop=…)`(③반자동). **run_full 내부 순위/측정 로직은 미변경**(keywords_off=True가 그 코드를 통째 건너뛰어 노출측정·백필 원천 차단). '반자동 중지' 버튼이 전체실행 ③단계도 중지. app_qt·app.py 동일.
+- **① 판매수집 버튼 단일화:** 무인 offscreen `① 판매수집` 버튼 **삭제**(차단 취약), `① 판매수집(반자동)`을 `① 판매수집`으로 개칭(`sales_semi_btn` 변수명은 유지, 반자동만).
+- **백필 방어 가드:** `pipeline.py`의 `_backfill_ranks` 호출을 `if not skip_ranks and not keywords_off`로 — ①판매수집(keywords_off)은 순위백필을 절대 안 함(과거 resume가 skip_ranks=False 상속 시 헛도는 offscreen 백필을 유발하던 잠재버그 차단). 실질적으로 offscreen 순위경로(`_backfill_ranks`/`_measure_unfilled_once`)는 이제 어느 실행에서도 호출되지 않음(사문화·코드는 잔존).
+- **참고(정정 2026-09-15): 무인 `--auto`는 노출측정 없음 — 이미 안전.** `--auto`(`start_auto`)는 `run_full(skip_ranks=True)`로 실행되고, `_finish`의 `if skip_ranks or keywords_off:` 분기가 참이라 **순위 브라우저를 안 열고 `browser=None`으로** 키워드 단계를 돈다(`pipeline.py:916-920`). `browser=None`이면 `_process_account`의 `measure(...)`(노출측정, `pipeline.py:581`)가 호출되지 않는다 → **노출측정·IP소모 없음.** (어제 첫 전체실행 232340의 노출측정 IP소모는 그때 `skip_ranks=False`—당일 체크박스 ON—였기 때문이며 `--auto`와 무관.)
+
+## 0-0b. 최신 반영 요약 (2026-09-14 — 순위 간격 단축·계정목록 서식·버그수정)
 
 - **순위 검색 간격 하향 = `RANK_NAV_DELAY_MIN/MAX_SEC` 90~150 → 45~75(평균 120→60s).** 근거=밤샘 반자동 실측(271키워드·10.5h·**차단 0건**)에서 대기가 총시간의 ~86% → 과보수 판정. 예상 총시간 10.5h→~6h. **무차단 유지 시 다음 단계 30~50 검토(단계적 하향)**. ⚠ **이 값은 오직 `config.py`에서 조정** — 설정탭의 순위 간격/쿨다운 입력 UI는 과거 잠시 있었으나 **삭제됨**(app_qt에 관련 위젯 없음). "실행 중 설정탭 조정 가능"이라 안내 금지.
 - **반자동 대기 로직 개선:** 검색 간 대기를 `time.sleep`(비중단) → **`_interruptible_sleep`(중단 반응) + '검색 앞'으로 이동**(`_track_ranks_semi`의 `measured_any` 게이트) → 대기 중 '반자동 중지' 즉시 반응 + **첫 검색 전·마지막 검색 뒤 자투리 대기 제거**.

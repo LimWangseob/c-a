@@ -361,10 +361,8 @@ class App(tk.Tk):
         topbar = ttk.Frame(run)
         topbar.pack(anchor="w", fill="x", padx=6, pady=6)
         # 단계별 실행 — ① 로그인 판매수집(상품ID·지표·재고) / ② 키워드 선정 / ③ 노출순위(②③ 로그인 불필요)
-        self.sales_btn = ttk.Button(topbar, text="① 판매수집",
-                                    command=lambda: self.do_run_full(keywords_off=True))
-        self.sales_btn.pack(side="left", padx=(0, 4))
-        self.sales_semi_btn = ttk.Button(topbar, text="① 판매수집(반자동)",
+        # ① 판매수집 = 반자동만(보이는 신뢰 창 로그인). 무인 offscreen 방식은 차단 취약으로 폐지(사용자 요청).
+        self.sales_semi_btn = ttk.Button(topbar, text="① 판매수집",
                                          command=lambda: self.do_run_full(keywords_off=True, sales_semi=True))
         self.sales_semi_btn.pack(side="left", padx=(0, 4))
         self.kw_btn = ttk.Button(topbar, text="② 키워드 선정", command=self.do_select_keywords)
@@ -376,7 +374,7 @@ class App(tk.Tk):
         self.track_stop_btn = ttk.Button(topbar, text="반자동 중지", command=self._stop_semi,
                                          state="disabled")
         self.track_stop_btn.pack(side="left", padx=4)
-        self.pipeline_btn = ttk.Button(topbar, text="전체 실행(①→②③)",
+        self.pipeline_btn = ttk.Button(topbar, text="전체 실행(①반자동→②→③반자동)",
                                        command=lambda: self.do_run_full(keywords_off=False, sales_semi=True),
                                        style="Accent.TButton")
         self.pipeline_btn.pack(side="left", padx=(4, 0))
@@ -487,17 +485,42 @@ class App(tk.Tk):
             (" · 순위 제외(판매데이터만)" if skip_ranks and not resume else "")
         self.log(f"[{'판매수집' if keywords_off else '전체실행'}] {mode_txt}시작 — 상품 {n}개, 기간 {df}~{dt}"
                  f"{' · 새 키워드 발굴 추가' if grow else ''}{stage_txt}")
-        btn = (self.sales_semi_btn if sales_semi else self.sales_btn) if keywords_off else self.pipeline_btn
-        if sales_semi:
-            self.log("[① 반자동] 보이는 창에서 로그인(2차인증은 직접) 후 판매수집 — 창이 뜨면 두세요")
+        btn = self.sales_semi_btn if keywords_off else self.pipeline_btn
+        self.log("[① 반자동] 보이는 창에서 로그인(2차인증은 직접) 후 판매수집 — 창이 뜨면 두세요")
+        # 전체실행은 오프스크린을 전혀 안 쓴다: ①반자동 판매수집 → ②키워드선정(노출측정 없음) → ③반자동 순위.
+        stop = None
+        if not keywords_off:
+            self._semi_stop = threading.Event()
+            self.track_stop_btn.config(state="normal")
+            stop = self._semi_stop
 
         def task():
             naver = NaverAdApi(naver_creds)
-            return run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
+            # ① 반자동 판매수집 — 순위·키워드·노출측정 전무(offscreen 미사용)
+            snap = run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
                             get_password=self._account_pw, resume=resume, carry_forward=carry,
-                            grow_keywords=grow, skip_ranks=skip_ranks, redo_today=redo_today, sales_semi=sales_semi,
-                            keywords_off=keywords_off, on_log=self.log, gsheet_output_url=gs_out)
-        self.run_bg(task, on_done=self._pipeline_done, btn=btn)
+                            grow_keywords=False, skip_ranks=True, redo_today=redo_today,
+                            sales_semi=True, keywords_off=True, on_log=self.log, gsheet_output_url=gs_out)
+            if keywords_off:                        # ① 단독 실행 → 판매데이터만 채우고 종료
+                return snap
+            if stop is not None and stop.is_set():
+                return snap
+            # ② 키워드 선정 — 공개검색(노출측정) 없이 AI 선정만(로그인 불필요·동결분 유지)
+            self.log("[전체실행] ② 키워드 선정 — 노출측정 없이 AI 선정(동결분 유지)")
+            select_keywords_stage(naver, key, grow=grow, on_log=self.log, gsheet_output_url=gs_out)
+            if stop is not None and stop.is_set():
+                return snap
+            # ③ 반자동 순위 — 보이는 창에서 자동 타이핑·검색(차단 회피)
+            self.log("[전체실행] ③ 반자동 순위 — 보이는 창 자동 타이핑(중지: '반자동 중지')")
+            return track_ranks_stage(semi=True,
+                                     should_stop=(stop.is_set if stop is not None else (lambda: False)),
+                                     on_log=self.log, gsheet_output_url=gs_out)
+
+        def done(p):
+            if not keywords_off:
+                self.track_stop_btn.config(state="disabled")
+            self._pipeline_done(p)
+        self.run_bg(task, on_done=done, btn=btn)
 
     def do_select_keywords(self):
         """② 키워드 선정 — 로그인 불필요. 최신 결과 워크북 상품에 키워드만 채운다(순위 없음)."""
@@ -552,8 +575,11 @@ class App(tk.Tk):
     def _pipeline_done(self, path):
         # 팝업 창 없이 로그에만 상태 기록(갑작스러운 창으로 놀라지 않도록)
         self.log("=" * 50)
-        self.log("[전체실행] ✅ 완료 — 통합 엑셀 생성됨")
-        self.log(f"[전체실행] 파일: {path}")
+        if path:
+            self.log("[전체실행] ✅ 완료 — 통합 엑셀 생성됨")
+            self.log(f"[전체실행] 파일: {path}")
+        else:
+            self.log("[전체실행] ⏹ 종료(중지 요청 또는 결과 없음) — 진행분은 저장됨")
         self.log("=" * 50)
 
     def _build_log(self):

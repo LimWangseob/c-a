@@ -1014,7 +1014,9 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     if sales_skipped and not keywords_off:
         _select_keywords_for_skipped(wb, partial, sales_skipped, naver, ai_key, log)
 
-    if not skip_ranks:   # 노출순위 미처리분(차단 등으로 공란) 자동 재시도 — 쿨다운 두고, 진전 없으면 중단
+    if not skip_ranks and not keywords_off:   # 노출순위 미처리분 자동 재시도(쿨다운·진전없으면 중단).
+        # ⚠ keywords_off(①판매수집 전용)는 순위를 절대 다루지 않으므로 백필도 하지 않는다(과거 resume가
+        #    skip_ranks=False를 물려받으면 ①이 헛도는 offscreen 백필을 시도하던 잠재버그 방지).
         _backfill_ranks(wb, partial, log, was_blocked=_RANK_HALT["stop"])
 
     # 통계 마스터 갱신 + 그날 스냅샷 저장

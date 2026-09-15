@@ -391,13 +391,11 @@ class App(QtWidgets.QMainWindow):
         rv = QtWidgets.QVBoxLayout(run)
         top = QtWidgets.QHBoxLayout()
         # 단계별 실행 — ① 로그인 판매수집(상품ID·지표·재고), ② 키워드 선정(순위 없음), ③ 노출순위 조회
-        self.sales_btn = QtWidgets.QPushButton("① 판매수집")
-        self.sales_btn.clicked.connect(lambda: self.do_run_full(keywords_off=True))
-        top.addWidget(self.sales_btn)
-        self.sales_semi_btn = QtWidgets.QPushButton("① 판매수집(반자동)")
+        # ① 판매수집 = 반자동만(보이는 신뢰 창 로그인). 무인 offscreen 방식은 차단에 취약해 폐지(사용자 요청).
+        self.sales_semi_btn = QtWidgets.QPushButton("① 판매수집")
         self.sales_semi_btn.setToolTip(
             "보이는 Chrome 창을 띄우고 로그인(ID/비번 자동입력, 2차인증은 사람)한 뒤\n"
-            "그 신뢰 창에서 판매수집합니다. 무인 오프스크린 자동로그인 차단을 피합니다(사무실 권장).")
+            "그 신뢰 창에서 판매수집합니다(반자동). 무인 오프스크린 자동로그인 차단을 피합니다.")
         self.sales_semi_btn.clicked.connect(lambda: self.do_run_full(keywords_off=True, sales_semi=True))
         top.addWidget(self.sales_semi_btn)
         self.kw_btn = QtWidgets.QPushButton("② 키워드 선정")
@@ -414,10 +412,10 @@ class App(QtWidgets.QMainWindow):
         self.track_stop_btn.setEnabled(False)
         self.track_stop_btn.clicked.connect(self._stop_semi)
         top.addWidget(self.track_stop_btn)
-        self.pipeline_btn = QtWidgets.QPushButton("전체 실행(①→②→③)")
+        self.pipeline_btn = QtWidgets.QPushButton("전체 실행(①반자동→②→③반자동)")
         self.pipeline_btn.setObjectName("accent")
-        self.pipeline_btn.setToolTip("①은 보이는 창에서 로그인(반자동, 2차인증은 사람)합니다.\n"
-                                     "②노출측정·③순위는 공개검색이라 IP가 뜨거우면 막힐 수 있습니다.")
+        self.pipeline_btn.setToolTip("①판매수집(반자동 로그인) → ②키워드 선정(노출측정 없음) → ③순위(반자동 자동타이핑).\n"
+                                     "오프스크린 공개검색을 안 써 차단을 피합니다. ③ 중 '반자동 중지'로 멈출 수 있습니다.")
         self.pipeline_btn.clicked.connect(lambda: self.do_run_full(keywords_off=False, sales_semi=True))
         top.addWidget(self.pipeline_btn)
         top.addStretch(1)
@@ -1006,17 +1004,37 @@ class App(QtWidgets.QMainWindow):
             (" · 순위 제외(판매데이터만)" if skip_ranks and not resume else "")
         self.log(f"[{'판매수집' if keywords_off else '전체실행'}] {mode_txt}시작 — 상품 {n}개, 기간 {df}~{dt}"
                  f"{' · 새 키워드 발굴 추가' if grow else ''}{stage_txt}")
-        btn = (self.sales_semi_btn if sales_semi else self.sales_btn) if keywords_off else self.pipeline_btn
-        if sales_semi:
-            self.log("[① 반자동] 보이는 창에서 로그인(2차인증은 직접) 후 판매수집합니다 — 창이 뜨면 두세요")
+        btn = self.sales_semi_btn if keywords_off else self.pipeline_btn
+        self.log("[① 반자동] 보이는 창에서 로그인(2차인증은 직접) 후 판매수집합니다 — 창이 뜨면 두세요")
+        # 전체실행은 오프스크린을 전혀 안 쓴다: ①반자동 판매수집 → ②키워드선정(노출측정 없음) → ③반자동 순위.
+        stop = None
+        if not keywords_off:
+            self._semi_stop = threading.Event()
+            self.track_stop_btn.setEnabled(True)
+            stop = self._semi_stop
 
         def task():
             naver = NaverAdApi(naver_creds)
-            return run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
+            # ① 반자동 판매수집 — 순위·키워드·노출측정 전무(offscreen 미사용)
+            snap = run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
                             get_password=self._account_pw, resume=resume, carry_forward=carry,
-                            grow_keywords=grow, skip_ranks=skip_ranks, redo_today=redo_today,
-                            sales_semi=sales_semi,
-                            keywords_off=keywords_off, on_log=self.log, gsheet_output_url=gs_out)
+                            grow_keywords=False, skip_ranks=True, redo_today=redo_today,
+                            sales_semi=True, keywords_off=True, on_log=self.log,
+                            gsheet_output_url=gs_out)
+            if keywords_off:                        # ① 단독 실행 → 판매데이터만 채우고 종료
+                return snap
+            if stop is not None and stop.is_set():
+                return snap
+            # ② 키워드 선정 — 공개검색(노출측정) 없이 AI 선정만(로그인 불필요·동결분 유지)
+            self.log("[전체실행] ② 키워드 선정 — 노출측정 없이 AI 선정(동결분 유지)")
+            select_keywords_stage(naver, key, grow=grow, on_log=self.log, gsheet_output_url=gs_out)
+            if stop is not None and stop.is_set():
+                return snap
+            # ③ 반자동 순위 — 보이는 창에서 자동 타이핑·검색(차단 회피)
+            self.log("[전체실행] ③ 반자동 순위 — 보이는 창 자동 타이핑(중지: '반자동 중지')")
+            return track_ranks_stage(semi=True,
+                                     should_stop=(stop.is_set if stop is not None else (lambda: False)),
+                                     on_log=self.log, gsheet_output_url=gs_out)
         self.run_bg(task, on_done=self._pipeline_done, btn=btn)
 
     # ── 무인 자동 실행(--auto, 18:00 시작 → 06:00 자동 종료) ───────
@@ -1149,8 +1167,11 @@ class App(QtWidgets.QMainWindow):
 
     def _pipeline_done(self, path):
         self.log("=" * 50)
-        self.log("[전체실행] ✅ 완료 — 통합 엑셀 생성됨")
-        self.log(f"[전체실행] 파일: {path}")
+        if path:
+            self.log("[전체실행] ✅ 완료 — 통합 엑셀 생성됨")
+            self.log(f"[전체실행] 파일: {path}")
+        else:
+            self.log("[전체실행] ⏹ 종료(중지 요청 또는 결과 없음) — 진행분은 저장됨")
         self.log("=" * 50)
 
 
