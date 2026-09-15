@@ -4,6 +4,7 @@
 새 서식 워크북(시트=사업자, 상품블록 계약/개인, 키워드 노출순위, 일자 누적)·재개·동결·발굴을 검증한다.
 
 시나리오: 1)정상 전체실행 2)크래시→이어서 3)로그인 실패 계정 건너뛰기 4)통계 이어쓰기(동결)+발굴추가
+  … 10)새 전체실행 조합(①반자동 판매만→②키워드선정(노출측정 없음)→③반자동 순위 + 백필가드).
 실행: python tools/simulate_pipeline.py
 """
 from __future__ import annotations
@@ -102,6 +103,22 @@ def _fake_organic_ranks(browser, kw, matchers, max_rank=None, mobile=False, log=
             matched_out[lbl] = SearchItem(is_ad=False, product_id="pid1", vendor_item_id="v1",
                                           name=_SERP_NAME)
     return {lbl: 3 for lbl in matchers}
+
+
+def _fake_track_ranks_semi(wb, path, log, should_stop):
+    """③ 반자동 순위 대체 — 실제 브라우저 타이핑 없이 미기입 키워드에 순위 3 기록.
+
+    _track_ranks_semi(wb, path, log, should_stop) 시그니처와 동일. 계정별 최신 일자에 채운다."""
+    for biz in wb.account_sheets():
+        date = wb.latest_date(biz)
+        if not date:
+            continue
+        for pname in wb.products_of(biz):
+            for kw in wb.product_keywords(biz, pname):
+                if not wb.is_rank_filled(biz, pname, kw, date):
+                    wb.set_keyword_rank(biz, pname, kw, date, 3)
+    wb.save(path)
+    return path
 
 
 def _install_fakes():
@@ -353,6 +370,50 @@ def scenario_display_name_rename():
            "load 후에도 (사업자,정확명) 키로 키워드 조회됨(키 안정)")
 
 
+def scenario_full_composition():
+    """새 전체실행 = do_run_full 전체실행 분기의 3단계 조합(2026-09-15, offscreen 추방).
+
+    ①run_full(keywords_off=True,sales_semi=True,skip_ranks=True)=판매만 → ②select_keywords_stage()=키워드
+    (노출측정 없음) → ③track_ranks_stage(semi=True)=반자동 순위. 각 단계가 워크북을 올바르게 진전시키는지,
+    그리고 ①(keywords_off)이 offscreen 순위백필을 절대 안 하는지(가드) 검증."""
+    print("[시나리오 10] 새 전체실행 조합 — ①반자동(판매만)→②키워드선정→③반자동 순위 + 백필가드")
+    _STATE.update(select_calls=0, crash_at=None, error_at=None)
+    backfill_calls = {"n": 0}
+    orig_backfill, orig_semi = P._backfill_ranks, P._track_ranks_semi
+    P._backfill_ranks = lambda *a, **k: backfill_calls.__setitem__("n", backfill_calls["n"] + 1)
+    P._track_ranks_semi = _fake_track_ranks_semi
+    try:
+        d = Path(tempfile.mkdtemp())
+        il = _accounts(["a1", "b1"])
+        # ① 반자동 판매수집만 — 키워드·순위·백필 없음
+        snap = P.run_full(il, naver=None, out_dir=str(d), ai_key="sim",
+                          date_from="2026-09-14", date_to="2026-09-14", resume=False,
+                          carry_forward=False, grow_keywords=False, skip_ranks=True,
+                          redo_today=False, sales_semi=True, keywords_off=True, on_log=lambda m: None)
+        _check(snap.exists(), "① 최종본 생성")
+        _check(_has_value(snap, 7), "① 판매량(7) 기록됨")
+        _check(_keywords_in(snap) == set(), "① 단계엔 키워드 없음(키워드는 ②)")
+        _check(not _has_value(snap, "3위"), "① 단계엔 순위 없음(순위는 ③)")
+        _check(backfill_calls["n"] == 0, "① keywords_off는 순위백필 안 함")
+        # ② 키워드 선정 — 노출측정(measure_ranks) 없이 AI 선정만
+        p2 = P.select_keywords_stage(naver=None, ai_key="sim", out_dir=str(d),
+                                     grow=False, on_log=lambda m: None)
+        _check(_keywords_in(p2) == {"kw1", "kw2"}, "② 키워드 선정됨(kw1·kw2)")
+        _check(not _has_value(p2, "3위"), "② 단계엔 순위 없음(순위는 ③)")
+        # ③ 반자동 순위
+        p3 = P.track_ranks_stage(out_dir=str(d), semi=True, on_log=lambda m: None)
+        _check(_has_value(p3, "3위"), "③ 반자동 순위(3위) 기록됨")
+        # 가드 직접 검증: keywords_off=True면 skip_ranks=False여도 백필 안 함(옛 잠재버그 차단)
+        backfill_calls["n"] = 0
+        d2 = Path(tempfile.mkdtemp())
+        P.run_full(_accounts(["a1"]), naver=None, out_dir=str(d2), ai_key="sim",
+                   date_from="2026-09-14", date_to="2026-09-14", resume=False,
+                   skip_ranks=False, keywords_off=True, sales_semi=True, on_log=lambda m: None)
+        _check(backfill_calls["n"] == 0, "가드: keywords_off=True는 skip_ranks=False여도 백필 안 함")
+    finally:
+        P._backfill_ranks, P._track_ranks_semi = orig_backfill, orig_semi
+
+
 def main():
     _install_fakes()
     config.LOGIN_PACE_MIN_SEC = 0   # 시뮬은 로그인 페이싱 sleep 없이(즉시)
@@ -373,6 +434,7 @@ def main():
     scenario_session_first()
     scenario_circuit_breaker()
     scenario_display_name_rename()
+    scenario_full_composition()
     print("=" * 60)
     print("  [완료] 모든 시나리오 통과")
     print("=" * 60)
