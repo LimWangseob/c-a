@@ -338,18 +338,47 @@ class OutputWorkbook:
         ws.cell(r, _COL_SEARCH, _LABEL_SEARCH)
         ws.cell(r, _COL_METRIC, _LABEL_NOTE)
         # 키워드 순위행
-        for kw in dict.fromkeys(keywords):
+        kws = list(dict.fromkeys(keywords))
+        for kw in kws:
             r += 1
             ws.cell(r, _COL_NAME, kw)
             ws.cell(r, _COL_METRIC, config.M_RANK)
             self._kw_row[(biz, product, kw)] = r
+        # 키워드가 KW_TRACK_N(=4) 미만이면 **빈 순위행**으로 채워 블록의 키워드행 구조를 항상 유지한다
+        # (키워드 없어도 4행 유지·공란 OK — 사용자 요구 2026-09-15). 이름 공란 + M_RANK 인 빈 행은
+        # _kw_row 에 안 잡혀 '키워드 없음'으로 판정되므로, ② 키워드선정이 그 상품을 선정하고
+        # add_product_keywords 가 새 행을 만들기 전에 이 빈 행부터 채운다(블록 팽창 방지).
+        for _ in range(config.KW_TRACK_N - len(kws)):
+            r += 1
+            ws.cell(r, _COL_METRIC, config.M_RANK)   # 이름 공란 + M_RANK = 빈 키워드 순위행
         self.set_registered_name(biz, product)   # 생성 시점의 이름 = 등록상품명(이후 노출명으로 바뀌어도 보존)
 
-    def add_product_keywords(self, biz: str, product: str, keywords: list[str]) -> list[str]:
-        """기존 상품 블록에 새 키워드 순위행 추가(통계 유지 중 발굴 추가). 반환: 실제 추가분.
+    def _kw_block_rows(self, biz: str, product: str) -> list[tuple[int, str]]:
+        """이 상품 블록의 **모든 키워드 순위행**(M_RANK 라벨) → [(행번호, 이름), …] 오름차순.
 
-        블록 끝(다음 상품 헤더 직전)에 삽입하기 어려우므로, 순위행을 그 상품의 마지막 키워드행 아래에
-        openpyxl insert_rows 로 끼워 넣고 인덱스를 재구성한다. 없던 키워드만 추가.
+        이름이 빈 항목 = ensure_product_block 이 4행 유지용으로 채운 **빈 순위행**.
+        블록 범위 = 이 상품의 마지막 지표행 다음 ~ 다음 블록 헤더 직전(없으면 시트 끝).
+        """
+        ws = self.wb[biz]
+        metric_rows = [self._metric_row[(biz, product, m)] for m in _ALL_METRICS
+                       if (biz, product, m) in self._metric_row]
+        if not metric_rows:
+            return []
+        start = max(metric_rows) + 1
+        headers = sorted(r for r in self._date_rows.get(biz, []) if r > start)
+        end = (headers[0] - 1) if headers else ws.max_row
+        rows: list[tuple[int, str]] = []
+        for r in range(start, end + 1):
+            if _norm(ws.cell(r, _COL_METRIC).value) == config.M_RANK:
+                rows.append((r, _key(ws.cell(r, _COL_NAME).value)))
+        return rows
+
+    def add_product_keywords(self, biz: str, product: str, keywords: list[str]) -> list[str]:
+        """상품 블록에 새 키워드 추가. **빈 순위행부터 채우고**, 모자라면 새 행 삽입. 반환: 실제 추가분.
+
+        ensure_product_block 이 4행 유지용으로 만든 빈 순위행(이름 공란)을 먼저 재사용해 블록이
+        4행을 넘겨 팽창하는 것을 막는다. 빈 행보다 키워드가 많으면 마지막 순위행 아래에 insert_rows 로
+        끼워 넣는다. 없던 키워드만 추가.
         """
         have = set(self.product_keywords(biz, product))
         add = [kw for kw in dict.fromkeys(keywords) if kw and kw not in have]
@@ -359,16 +388,26 @@ class OutputWorkbook:
         # ⚠ insert_rows 는 병합셀이 있으면 데이터(상품명·키워드)를 손상시킨다 → 삽입 전 병합 전부 해제
         # (호출부가 이후 apply_style 로 표준 재병합). 이게 run1 계정 이름/키워드 유실의 근본 원인이었음.
         _unmerge_all(ws)
-        # 기존 키워드 있으면 그 마지막 행 아래, 없으면(② 단계로 처음 채움) 소헤더행(마지막 지표행+1) 아래
-        last_kw_row = max(self._kw_row[(biz, product, kw)] for kw in have) if have else \
-            (max(self._metric_row[(biz, product, m)] for m in _ALL_METRICS
-                 if (biz, product, m) in self._metric_row) + 1)
-        ws.insert_rows(last_kw_row + 1, amount=len(add))
-        for i, kw in enumerate(add, 1):
-            row = last_kw_row + i
-            ws.cell(row, _COL_NAME, kw)
+        block = self._kw_block_rows(biz, product)          # (행, 이름) — 이름 빈 것 = 빈 순위행
+        blanks = [r for r, name in block if not name]
+        i = 0
+        for row in blanks:                                 # ① 빈 순위행부터 채움(행 삽입 없음)
+            if i >= len(add):
+                break
+            ws.cell(row, _COL_NAME, add[i])
             ws.cell(row, _COL_METRIC, config.M_RANK)
-        self._reindex()   # 행 이동됐으니 전체 재인덱스(정확성 우선)
+            i += 1
+        remaining = add[i:]
+        if remaining:                                      # ② 빈 행보다 많으면 마지막 순위행 아래 삽입
+            last_kw_row = max((r for r, _ in block), default=None)
+            if last_kw_row is None:                        # 순위행이 아예 없던 옛 블록 → 소헤더행(지표행+1) 아래
+                last_kw_row = max(self._metric_row[(biz, product, m)] for m in _ALL_METRICS
+                                  if (biz, product, m) in self._metric_row) + 1
+            ws.insert_rows(last_kw_row + 1, amount=len(remaining))
+            for j, kw in enumerate(remaining, 1):
+                ws.cell(last_kw_row + j, _COL_NAME, kw)
+                ws.cell(last_kw_row + j, _COL_METRIC, config.M_RANK)
+        self._reindex()   # 행 채움·이동 반영 전체 재인덱스(정확성 우선)
         return add
 
     # ── 일자 컬럼 ────────────────────────────────────────────
