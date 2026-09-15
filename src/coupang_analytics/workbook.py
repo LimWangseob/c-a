@@ -380,8 +380,18 @@ class OutputWorkbook:
         4행을 넘겨 팽창하는 것을 막는다. 빈 행보다 키워드가 많으면 마지막 순위행 아래에 insert_rows 로
         끼워 넣는다. 없던 키워드만 추가.
         """
-        have = set(self.product_keywords(biz, product))
-        add = [kw for kw in dict.fromkeys(keywords) if kw and kw not in have]
+        # 띄어쓰기·대소문자 무시 dedup — **쿠팡은 띄어쓰기 유무를 동일 검색어로 취급**하므로 이미 추적 중인
+        # 키워드의 다른 표기('캠핑타프'↔'캠핑 타프')는 추가하지 않는다(선정 단계와 동일 원칙, 시트 미러링에도
+        # 변형 중복이 재유입되지 않게). 들어온 표기는 **그대로** 적재(선정된 띄어쓰기 형태가 시트에 반영됨).
+        def _sp(s) -> str:
+            return str(s).replace(" ", "").casefold()
+        seen = {_sp(e) for e in self.product_keywords(biz, product)}
+        add = []
+        for kw in dict.fromkeys(keywords):
+            if not kw or _sp(kw) in seen:
+                continue
+            seen.add(_sp(kw))
+            add.append(kw)
         if not add:
             return []
         ws = self.wb[biz]
