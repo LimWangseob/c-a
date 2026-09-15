@@ -410,6 +410,30 @@ class OutputWorkbook:
         self._reindex()   # 행 채움·이동 반영 전체 재인덱스(정확성 우선)
         return add
 
+    def pad_keyword_rows(self, biz: str, product: str, min_rows: int | None = None) -> int:
+        """이 상품의 키워드 순위행이 `min_rows`(기본 KW_TRACK_N=4) 미만이면 **빈 순위행**으로 채운다.
+
+        키워드 없어도(또는 4개 미만이어도) 블록 키워드행을 항상 4행 유지(공란 OK — 사용자 요구 2026-09-15).
+        ② 키워드선정으로도 키워드가 안 나온 상품(브랜드명뿐이라 앵커 추출 실패 등)·옛 0행 블록에 쓴다.
+        추가한 빈 행 수 반환(0이면 변경 없음).
+        """
+        min_rows = config.KW_TRACK_N if min_rows is None else min_rows
+        block = self._kw_block_rows(biz, product)
+        need = min_rows - len(block)
+        if need <= 0:
+            return 0
+        ws = self.wb[biz]
+        _unmerge_all(ws)   # insert_rows 전 병합 해제(데이터 손상 방지, 이후 apply_style 재병합)
+        last_kw_row = max((r for r, _ in block), default=None)
+        if last_kw_row is None:                            # 순위행이 아예 없던 옛 블록 → 소헤더행(지표행+1) 아래
+            last_kw_row = max(self._metric_row[(biz, product, m)] for m in _ALL_METRICS
+                              if (biz, product, m) in self._metric_row) + 1
+        ws.insert_rows(last_kw_row + 1, amount=need)
+        for j in range(1, need + 1):
+            ws.cell(last_kw_row + j, _COL_METRIC, config.M_RANK)   # 이름 공란 + M_RANK = 빈 키워드 순위행
+        self._reindex()
+        return need
+
     # ── 일자 컬럼 ────────────────────────────────────────────
     def ensure_date(self, biz: str, date_iso: str) -> int:
         cols = self._date_col.setdefault(biz, {})

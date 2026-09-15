@@ -1089,6 +1089,10 @@ def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = 
                 except Exception as exc:   # 한 상품 실패(AI·네이버 400 등)가 나머지 상품·계정 선정을 안 막게 격리
                     log(f"  [{biz}] {pname} 키워드 선정 실패(건너뜀) — {exc.__class__.__name__}: {str(exc)[:80]}")
             wb.save(path)
+    # 키워드가 KW_TRACK_N(=4) 미만인 상품(선정 실패·옛 0행 블록 등)은 빈 순위행으로 4행 유지(사용자 요구 2026-09-15).
+    padded = sum(wb.pad_keyword_rows(biz, p) for biz in wb.account_sheets() for p in wb.products_of(biz))
+    if padded:
+        log(f"  [키워드행] 4행 미만 상품에 빈 순위행 {padded}개 추가(키워드 없어도 4행 유지·공란)")
     wb.apply_style()   # 추가한 키워드 행까지 표준 서식 고정(시트간 서식 섞임 방지)
     wb.save(path)
     _push_gsheet(wb, gsheet_output_url, log)   # ② 개별 실행도 결과 구글시트에 반영(키워드 갱신)
