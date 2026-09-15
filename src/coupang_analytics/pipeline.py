@@ -646,6 +646,31 @@ def _pull_gsheet_keywords(wb, output_url: str | None, log) -> None:
         log(f"== [구글시트] 직원 키워드 읽기 실패: {exc.__class__.__name__}: {exc} (AI 선정으로 진행) ==")
 
 
+def push_ledger_inventory(input_url: str | None, log, out_dir: str = "output") -> None:
+    """관리대장(**입력** 구글시트)의 '그로스 재고' 컬럼을 최신 마스터 재고로 역기록(전체실행·무인 종료 시).
+
+    최신 마스터 워크북을 직접 로드해 재고를 뽑는다(단계들이 이미 저장 완료한 뒤 호출). 입력 URL 없거나 SA
+    미등록이면 조용히 생략(정상). SA에 관리대장 편집권한 없으면 403 → **로그로 명시**하고 비치명(수집·결과시트는
+    이미 저장됨). 직원 입력 다른 컬럼은 미접촉(그로스재고 셀만 갱신·미매칭·개인상품은 기존값 보존).
+    """
+    if not input_url:
+        return
+    try:
+        from . import gsheet_api, input_list
+        wb, _ = _load_latest_wb(Path(out_dir))
+        if wb is None:
+            return
+        if not gsheet_api.load_sa_info():
+            return
+        client = gsheet_api.GSheetClient(input_url)
+        n = input_list.write_ledger_inventory(client, wb, on_log=log)
+        if n:
+            log(f"== [관리대장] 그로스 재고 역기록 완료 — {n}개 상품(입력 대장 AD컬럼) ==")
+    except Exception as exc:
+        log(f"== [관리대장] 그로스 재고 역기록 실패(비치명 — SA 편집권한 확인): "
+            f"{exc.__class__.__name__}: {str(exc)[:120]} ==")
+
+
 def _push_gsheet(wb, output_url: str | None, log) -> None:
     """완성된 openpyxl 마스터를 결과 구글시트로 반영 — 통계 시트 미러링 + 계정목록 증분 동기화.
 

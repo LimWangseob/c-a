@@ -5,6 +5,8 @@
 
 ## 0-0. 최신 반영 요약 (2026-09-15 — 전체실행 오프스크린 추방·① 버튼 단일화)
 
+- **관리대장 '그로스 재고' 역기록(사용자 요구 2026-09-15):** 전체실행·무인(`--auto`) 종료 시, 수집한 재고현황을 **입력 관리대장(셀독리스트 시트)의 `AD` "그로스 재고 (…기준)" 컬럼**에 써넣는다. `pipeline.push_ledger_inventory(input_url, log)` → `input_list.write_ledger_inventory(client, wb)`: 최신 마스터 로드 → (사업자, 상품명)↔**워크북 등록상품명(vid 앵커라 노출명 바뀌어도 등록명으로 매칭)** → 그 상품 행 `AD` 셀만 갱신. **미매칭·개인상품·미수집·비상품 행은 기존값 보존**(직원 입력 다른 컬럼 절대 미접촉), 헤더 라벨을 `그로스 재고 (자동갱신 MM.DD)`로 갱신(‘8.26 기준’ 정적문구 대체). AD 데이터열+헤더 = 쓰기 2회. **대상은 `AD`(‘기준’ 컬럼)이며 `BW` ‘그로스재고’ 아님(사용자 확정).** ⚠ **SA에 관리대장 편집권한 필요**(없으면 403 → 로그로 명시·비치명, 수집·결과시트는 이미 저장). app_qt 전체실행(`do_run_full`)·`start_auto` 배선(입력 URL=QSettings `gsheet/input_url`). 검증=오프라인 모의(갱신·보존·헤더)+simulate 10/10.
+
 - **전체실행 = ①반자동 → ②키워드선정(노출측정 없음) → ③반자동 순위, offscreen 전무(소유자 지시 2026-09-15).** 근거=09-15 새벽 라이브 실증: warm IP에서 **offscreen 자동(노출측정·순위백필)은 0/237 전멸**, **visible 자동타이핑(반자동)은 237/237 완주**(경로가 결정적). 구현=UI 조합(`do_run_full`의 전체실행 분기): `run_full(keywords_off=True, sales_semi=True, skip_ranks=True)`(①반자동 판매만) → `select_keywords_stage()`(②, 이미 `measure_ranks=None`=노출측정 없음) → `track_ranks_stage(semi=True, should_stop=…)`(③반자동). **run_full 내부 순위/측정 로직은 미변경**(keywords_off=True가 그 코드를 통째 건너뛰어 노출측정·백필 원천 차단). '반자동 중지' 버튼이 전체실행 ③단계도 중지. app_qt·app.py 동일.
 - **① 판매수집 버튼 단일화:** 무인 offscreen `① 판매수집` 버튼 **삭제**(차단 취약), `① 판매수집(반자동)`을 `① 판매수집`으로 개칭(`sales_semi_btn` 변수명은 유지, 반자동만).
 - **백필 방어 가드:** `pipeline.py`의 `_backfill_ranks` 호출을 `if not skip_ranks and not keywords_off`로 — ①판매수집(keywords_off)은 순위백필을 절대 안 함(과거 resume가 skip_ranks=False 상속 시 헛도는 offscreen 백필을 유발하던 잠재버그 차단). 실질적으로 offscreen 순위경로(`_backfill_ranks`/`_measure_unfilled_once`)는 이제 어느 실행에서도 호출되지 않음(사문화·코드는 잔존).

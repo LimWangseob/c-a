@@ -510,6 +510,31 @@ class OutputWorkbook:
             return ""
         return _norm(self.wb[_META_SHEET].cell(row, 6).value)
 
+    def product_inventory(self, biz: str, product: str):
+        """이 상품의 **최신 일자 재고현황**(로켓그로스). 재고행 없거나(개인상품)·값 없으면 None. 관리대장 역기록용."""
+        date = self.latest_date(biz)
+        row = self._metric_row.get((biz, product, config.M_INVENTORY))
+        col = self._date_col.get(biz, {}).get(date) if date else None
+        if row is None or col is None:
+            return None
+        v = self.wb[biz].cell(row, col).value
+        return v if v not in (None, "") else None
+
+    def inventory_by_registered_name(self) -> dict:
+        """{(사업자norm, 등록상품명key): 최신 재고} — 관리대장 '그로스 재고' 역기록 매칭용.
+
+        정체성은 vendorItemId 앵커라 ③이 노출명으로 바꿔도, **등록상품명(대장 원본명)** 으로 되돌려
+        대장의 상품명(AA)과 매칭한다(등록명 없으면 현재 블록명으로 폴백). 재고 있는 상품만 포함."""
+        out: dict = {}
+        for biz in self.account_sheets():
+            for p in self.products_of(biz):
+                inv = self.product_inventory(biz, p)
+                if inv is None:
+                    continue
+                reg = self.registered_name(biz, p) or p
+                out[(_norm(biz), _norm(reg))] = inv
+        return out
+
     def _display_name(self, biz: str, name: str) -> str:
         """이름칸 표시값 = **1줄 상품제목 + (보이지 않는 구분자) + 2줄 상품 인식코드(vendorItemId)**.
 

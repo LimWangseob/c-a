@@ -30,7 +30,7 @@ from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
 from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_credentials_file  # noqa: E402
 from coupang_analytics.pipeline import (_interruptible_sleep, master_exists,  # noqa: E402
-                                        resumable_progress, run_full,
+                                        push_ledger_inventory, resumable_progress, run_full,
                                         select_keywords_stage, track_ranks_stage)
 from coupang_analytics.rank import make_matcher, organic_rank, warmup  # noqa: E402
 
@@ -1032,9 +1032,13 @@ class App(QtWidgets.QMainWindow):
                 return snap
             # ③ 반자동 순위 — 보이는 창에서 자동 타이핑·검색(차단 회피)
             self.log("[전체실행] ③ 반자동 순위 — 보이는 창 자동 타이핑(중지: '반자동 중지')")
-            return track_ranks_stage(semi=True,
-                                     should_stop=(stop.is_set if stop is not None else (lambda: False)),
-                                     on_log=self.log, gsheet_output_url=gs_out)
+            result = track_ranks_stage(semi=True,
+                                       should_stop=(stop.is_set if stop is not None else (lambda: False)),
+                                       on_log=self.log, gsheet_output_url=gs_out)
+            # 입력 관리대장의 '그로스 재고'(AD) 컬럼을 수집 재고로 역기록(SA 편집권한 필요·없으면 로그 후 비치명)
+            gs_in = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/input_url", "", type=str).strip()
+            push_ledger_inventory(gs_in, self.log)
+            return result
         self.run_bg(task, on_done=self._pipeline_done, btn=btn)
 
     # ── 무인 자동 실행(--auto, 18:00 시작 → 06:00 자동 종료) ───────
@@ -1098,6 +1102,9 @@ class App(QtWidgets.QMainWindow):
                 if not stop.is_set():
                     track_ranks_stage(semi=True, should_stop=stop.is_set, on_log=self.log,
                                       gsheet_output_url=gs_out)
+                # 입력 관리대장의 '그로스 재고'(AD) 컬럼을 수집 재고로 역기록(SA 편집권한 필요·없으면 비치명)
+                gs_in = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/input_url", "", type=str).strip()
+                push_ledger_inventory(gs_in, self.log)
                 # (결과는 구글 시트 통합으로 결과시트에 직접 반영 — rclone 업로드 제거)
             except Exception as exc:                # 무인: 어떤 오류도 앱을 매달아두지 않게 로그 후 종료로
                 self.log(f"[무인] 실행 중 오류: {exc.__class__.__name__}: {exc}")

@@ -310,6 +310,64 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
     return InputList(accounts=valid, errors=errors, struck=struck)
 
 
+def write_ledger_inventory(client, wb, on_log=None, *, sheet: str = "셀독리스트") -> int:
+    """관리대장(입력 구글시트)의 **'그로스 재고 (…기준)' 컬럼(AD)** 을 워크북 최신 재고로 역기록. 갱신 상품 수 반환.
+
+    - 대상 컬럼 = 헤더에 '그로스'+'재고'+'기준' 인 컬럼(‘그로스재고최소수량’·BW ‘그로스재고’와 구분). 사용자 확정.
+    - `parse_input_rows` 와 **동일 규칙**으로 행을 훑어(계정아이디 행에서 사업자 추적, 상품명 행=상품),
+      (현재 사업자, 상품명)→워크북 최신 재고 매칭 → 그 상품 행의 AD 셀만 갱신.
+    - **미매칭·재고 없음(개인상품·미수집)·비상품 행은 기존값 보존**(공란으로 안 덮음, 직원 다른 컬럼 미접촉).
+    - 헤더 라벨을 '그로스 재고 (자동갱신 MM.DD)'로 갱신(‘8.26 기준’ 정적문구 제거). AD 데이터열 + 헤더 = 쓰기 2회.
+    - ⚠ 서비스계정(SA)에 이 관리대장 **편집 권한**이 있어야 씀(없으면 403 → 호출부가 비치명 처리).
+    """
+    from datetime import datetime
+    from openpyxl.utils import get_column_letter
+    log = on_log or (lambda m: None)
+    values, _ = client.read_grid(sheet)
+    if not values:
+        log(f"  [관리대장] '{sheet}' 시트가 비어 역기록 생략")
+        return 0
+    header, hrow = _find_header_row(values, lambda h: all(n in h for n in _REQUIRED))
+    if hrow < 0:
+        log("  [관리대장] 헤더(사업자명·계정아이디·상품명) 못 찾음 — 역기록 생략")
+        return 0
+    idx = _column_index(header)
+    i_biz, i_acct, i_prod = idx[config.IN_COL_BUSINESS], idx[config.IN_COL_ACCOUNT_ID], idx[config.IN_COL_PRODUCT]
+
+    def _nz(s: str) -> str:
+        return str(s or "").replace("\n", "").replace(" ", "")
+    ad = next((i for i, c in enumerate(header)
+               if "그로스" in _nz(c) and "재고" in _nz(c) and "기준" in _nz(c)), None)
+    if ad is None:
+        log("  [관리대장] '그로스 재고 (…기준)' 컬럼을 못 찾아 역기록 생략")
+        return 0
+
+    inv_map = wb.inventory_by_registered_name()          # {(사업자, 등록상품명): 재고}
+    first = hrow + 1                                      # 0-based 첫 데이터행
+    col_out: list[list] = []
+    cur_biz = ""
+    updated = 0
+    for r in range(first, len(values)):
+        row = values[r]
+        biz, acct, prod = _norm(_cell(row, i_biz)), _norm(_cell(row, i_acct)), _norm(_cell(row, i_prod))
+        if acct and biz:                                 # 계정 행 → 이후 상품의 소속 사업자
+            cur_biz = biz
+        existing = _cell(row, ad)
+        new = existing
+        if prod:
+            inv = inv_map.get((_norm(cur_biz), _norm(prod)))
+            if inv is not None:
+                new = inv
+                updated += 1
+        col_out.append([new if new not in (None,) else ""])
+    letter = get_column_letter(ad + 1)                   # 0-based → 열문자
+    client.write_values(sheet, col_out, start=f"{letter}{first + 1}")     # 첫 데이터행(1-based)
+    client.write_values(sheet, [[f"그로스 재고 (자동갱신 {datetime.now():%m.%d})"]],
+                        start=f"{letter}{hrow + 1}")     # 헤더 라벨 = 갱신일자
+    log(f"  [관리대장] '그로스 재고'({letter}열) 갱신 — {updated}개 상품 재고 기록(미매칭·개인상품은 기존값 보존)")
+    return updated
+
+
 def parse_input_list(path: str | Path) -> InputList:
     """PC 엑셀(관리대장 다운로드본) 파싱. 취소선(있으면)+상태 컬럼으로 해지/판매중지 감지."""
     ws, strike_ok = _load_for_parse(path)   # strike_ok=False면 취소선 자동감지 불가(한컴 스타일 비호환)
