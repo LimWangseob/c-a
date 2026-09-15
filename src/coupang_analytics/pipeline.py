@@ -270,6 +270,12 @@ class LoginBlocked(Exception):
     """Akamai 로그인 차단(Access Denied) — 서킷브레이커 카운트 대상."""
 
 
+class LoginCredentialError(Exception):
+    """비밀번호 오류·계정잠금·휴면 등 **확정 자격 실패**(#input-error). 재시도·재제출 금지
+    (재제출이 5회 오류 계정잠금을 유발 — 위탁계정). 호출부는 이 계정을 '처리됨'으로 표시해
+    같은 실행·야간 재개가 다시 제출하지 않게 한다. 사용자 지시(2026-09-15): 비번 1회 오류면 재시도 안 함."""
+
+
 def _login_and_discover(a: Account, date_from, date_to, get_password, log, login: bool = True,
                         semi: bool = False):
     """계정 하나: (필요시) 로그인 → **같은 신선한 세션**에서 즉시 판매분석 발견 + 지표.
@@ -325,11 +331,13 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
             _grace = config.LOGIN_BLOCK_GRACE_SEC if unattended else 60.0
             ok = b.wait_for_login(timeout=_wait_to, on_log=log, tag=a.account_id,
                                   on_need_user=_need_user, blocked_grace=_grace)
-            if not ok and unattended and pw and config.LOGIN_SEMI_ON_BLOCK:
-                # ── 반자동(무인) 1회 재시도 ── 무인 오프스크린 자동입력이 차단/폼정체로 실패하면, 창을
-                # 화면에 띄우고 앱이 사람처럼 자동입력·클릭으로 **딱 1번** 더 시도한다(사용자 선택).
-                # ⚠ 제출이 1회 추가되므로(5회 오류=계정잠금·위탁계정) **계정당·실행당 정확히 1회**로 제한.
-                # Akamai IP 접근차단은 이걸로도 대부분 못 뚫는다(지문위조 금지) — 소프트 차단(폼 정체)에만 기대.
+            # 비밀번호 오류·계정잠금·휴면(#input-error=classify_login 'error') = **확정 자격 실패**.
+            # 사용자 지시(2026-09-15): 비번 1회 오류면 **재시도·재제출 금지**(재제출이 5회 오류 계정잠금 유발).
+            cred_fail = (not ok) and b.classify_login()[0] == "error"
+            if not ok and not cred_fail and unattended and pw and config.LOGIN_SEMI_ON_BLOCK:
+                # ── 반자동(무인) 1회 재시도 ── 무인 오프스크린 자동입력이 **소프트 차단/폼 정체**로 실패하면
+                # (비번오류는 위 cred_fail 로 이미 배제), 창을 띄우고 앱이 자동입력·클릭으로 **딱 1번** 더 시도.
+                # ⚠ 제출이 1회 추가되므로 **계정당·실행당 정확히 1회**로 제한. Akamai IP 차단은 이걸로도 대부분 못 뚫음.
                 log(f"  [{a.label}] 로그인 차단/미완료 → 반자동 1회 재시도(창 표시, 앱이 자동입력·클릭)")
                 b.show()
                 b.goto(WING_URL)                      # 신선 로그인 폼으로 리다이렉트 유도
@@ -342,6 +350,7 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
                                           blocked_grace=_grace)
                 log(f"  [{a.label}] 반자동 재시도 {'성공' if ok else '실패 — 이 계정 건너뜀'}")
                 b.hide()
+                cred_fail = (not ok) and b.classify_login()[0] == "error"   # 재시도가 비번오류를 드러냈을 때도 재큐 금지
             if not ok:
                 code, detail = b.classify_login()
                 ftype = session_state.failure_type_of(code, detail)   # 세분 실패분류(탐지코드는 불변)
@@ -349,6 +358,10 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
                 if code == "blocked":   # Akamai 차단 → 서킷브레이커가 세도록 신호
                     log(f"  [{a.label}] Akamai 로그인 차단 — 이 계정 건너뜀")
                     raise LoginBlocked()
+                if cred_fail:           # 비번오류/계정잠금/휴면 → 재시도 금지(계정잠금 방지), 이번 주기 완료처리
+                    log(f"  [{a.label}] 로그인 거부(비밀번호 오류/계정 상태: {detail[:60]}) — "
+                        "재시도 안 함(계정잠금 방지), 이 계정 건너뜀")
+                    raise LoginCredentialError(a.account_id)
                 log(f"  [{a.label}] 로그인 미완료 — 이 계정 건너뜀")
                 return None, {}, {}
             session_state.observe_auth_success(a.account_id, final_url=b.page.url)
@@ -1015,6 +1028,11 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         except LoginBlocked:                      # Akamai 차단 → 서킷브레이커 카운트
             blocks += 1
             log(f"  [{a.label}] 로그인 차단 누적 {blocks}/{config.LOGIN_BLOCK_CIRCUIT}")
+        except LoginCredentialError:              # 비번오류/계정잠금 → 재시도 금지: '처리됨'으로 표시해
+            done.add(a.account_id)                # 야간 재개·같은 날 재실행이 비번을 다시 제출하지 않게(계정잠금 방지).
+            _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks)
+            log(f"  [{a.label}] 비밀번호 오류/계정 상태로 건너뜀 — 자동 재시도 안 함(계정잠금 방지). "
+                "관리대장에서 비번 수정 후 새 실행(다음 날/진행분 초기화)에서 재시도됨")
         except Exception as exc:
             first = (str(exc).splitlines() or [""])[0][:250]
             log(f"  [{a.label}] 처리 오류: {exc.__class__.__name__}: {first} — 건너뜀")
