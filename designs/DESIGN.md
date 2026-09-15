@@ -11,6 +11,7 @@
 - **전체실행 = ①반자동 → ②키워드선정(노출측정 없음) → ③반자동 순위, offscreen 전무(소유자 지시 2026-09-15).** 근거=09-15 새벽 라이브 실증: warm IP에서 **offscreen 자동(노출측정·순위백필)은 0/237 전멸**, **visible 자동타이핑(반자동)은 237/237 완주**(경로가 결정적). 구현=UI 조합(`do_run_full`의 전체실행 분기): `run_full(keywords_off=True, sales_semi=True, skip_ranks=True)`(①반자동 판매만) → `select_keywords_stage()`(②, 이미 `measure_ranks=None`=노출측정 없음) → `track_ranks_stage(semi=True, should_stop=…)`(③반자동). **run_full 내부 순위/측정 로직은 미변경**(keywords_off=True가 그 코드를 통째 건너뛰어 노출측정·백필 원천 차단). '반자동 중지' 버튼이 전체실행 ③단계도 중지. app_qt·app.py 동일.
 - **① 판매수집 버튼 단일화:** 무인 offscreen `① 판매수집` 버튼 **삭제**(차단 취약), `① 판매수집(반자동)`을 `① 판매수집`으로 개칭(`sales_semi_btn` 변수명은 유지, 반자동만).
 - **백필 방어 가드:** `pipeline.py`의 `_backfill_ranks` 호출을 `if not skip_ranks and not keywords_off`로 — ①판매수집(keywords_off)은 순위백필을 절대 안 함(과거 resume가 skip_ranks=False 상속 시 헛도는 offscreen 백필을 유발하던 잠재버그 차단). 실질적으로 offscreen 순위경로(`_backfill_ranks`/`_measure_unfilled_once`)는 이제 어느 실행에서도 호출되지 않음(사문화·코드는 잔존).
+- **키워드 띄어쓰기 변형 합치기(사용자 정리 2026-09-15):** 쿠팡은 띄어쓰기 유무를 동일 검색어로 취급(공식 가이드=한 형태만 입력) → 두 표기 다 추적하면 KW_TRACK_N 슬롯·쿠팡 태그칸 낭비. `kw_recommend._assemble_candidates`가 judge 직전 **공백제거·casefold 정규형이 같은 후보를 합쳐 한 표기만 유지**(네이버 검색량 큰 표기 대표·정체성 core/identities는 보존 우선). `select_keywords_light`의 `exclude`(top-up)·`workbook.add_product_keywords`도 공백무시 dedup(들어온 표기는 그대로 적재→선정된 띄어쓰기 형태가 구글시트 미러링에 반영). 실측: 마스터·라이브시트 408키워드 전부 무공백·중복0. 상세 KEYWORD_SELECTION.md·[[keyword-methodology-ai-anchor]].
 - **무인 `--auto`도 전체실행과 동일 반자동 조합(2026-09-15 개정).** `start_auto`가 `run_full(keywords_off=True, sales_semi=True, skip_ranks=True)`[①반자동 판매만] → `select_keywords_stage()`[②] → `track_ranks_stage(semi=True)`[③] 순차 호출(**offscreen 전무·노출측정 없음**). **무인이어도 처리 방식은 반자동**(보이는 신뢰 창 자동입력 로그인=Akamai 통과율↑). 2차인증은 사무실(신뢰 IP)이면 없이 통과, 낯선 환경서 뜨면 사람이 없어 그 계정만 건너뜀(멈춤 없음·차단/2차인증 계정은 `LOGIN_NIGHT_RESUME`로 30분 후 1회 재개). **작업 스케줄러가 특정 시각에 `--auto`로 실행**(설계 의도=18:00 시작·`_schedule_auto_stop`로 06:00 자동 종료; `app_qt.py:1207 auto="--auto" in sys.argv`). 앱은 "사용자 로그온 시에만 실행"으로 등록(반자동 창 표시 위해).
 - **키워드 없어도 4 순위행 유지 + 빈 상품 키워드 선정(사용자 요구 2026-09-15):** ①전체실행은 키워드 없는 상품(신규 발견 옵션 등)에 대해 ②가 키워드를 산정하고 ③가 순위를 채운다(새 전체실행 ①→②→③가 이미 커버). 그리고 **`workbook.ensure_product_block`은 키워드가 `KW_TRACK_N`(=4) 미만이면 이름 공란 + `M_RANK` 인 빈 순위행으로 4행을 채워** 블록의 키워드행 구조를 항상 유지한다(키워드 없어도 4행·공란 OK). 빈 행은 `_kw_row`에 안 잡혀 '키워드 없음'으로 판정→②가 선정하며, `add_product_keywords`는 새 행 삽입 전 **빈 행부터 재사용**해 블록이 4행을 넘겨 팽창하는 것을 막는다(`_kw_block_rows` 헬퍼 신설). 검증=집중테스트(빈4·재사용·2+3=5·왕복)+simulate 10/10. 나아가 **빈행 대신 실제 키워드로 채우기(2026-09-15 추가 요구)**: `select_keywords_stage`가 **4개 미만 상품을 `KW_TRACK_N`까지 보충 선정**(기존 동결키워드 제외·부족분 want=KW_TRACK_N-len개만·grow면 상한 KW_MAX_TRACK 유지)한 뒤, 그래도 못 채운 자리만 `pad_keyword_rows`로 빈행 패딩 → **4행을 최대한 실제 키워드로** 채우고 불가한 것만 공란. 4개 이상은 동결(스킵). `pad_keyword_rows(min_rows=KW_TRACK_N)` 신설. **적용완료(2026-09-15, ② 라이브 2회)**: 전 상품 4행(순위행 4=102상품·5=1) · 실제 키워드 4개=100상품, 실키워드 4미만은 **2상품뿐**(와사비잎 3=니치라 관련후보 소진·토탈사이언스 0=브랜드명뿐 AI앵커 추출불가→수동 필요)·마스터 저장·구글시트 28시트 반영.
 
@@ -46,7 +47,7 @@
   쿠키주입 새 브라우저는 Akamai 403 → **수집은 사람이 로그인한 그 세션**에서만(불변).
 - **키워드 = AI 앵커+판정(OpenAI ChatGPT).** `title_seeds` 토큰 폴백 폐지. AI 키 없으면 `KeywordAIError`
   로 중단. 상세는 KEYWORD_SELECTION.md. AI 제공자는 **Claude→OpenAI 전환**(credstore `__openai__`).
-- **경쟁강도 = 네이버쇼핑 상품수÷검색량**(선택 키, `kw_shopping`). 키워드 선정·부가지표에 반영.
+- **경쟁강도 = ⛔소스 소멸**(네이버쇼핑 검색 API가 2026-07-31 종료 → `kw_shopping` 죽은 엔드포인트). 현재 선정은 수요순만(경쟁강도 공란), 대안=쿠팡 총상품수 보류.
 - **상품명 추천**(`kw_ai.recommend_title`): 선정 키워드로 검색 최적화 상품명 생성(SEO 규칙).
 - **출력 부가 지표:** 노출순위 키워드마다 `월검색량·모바일비중·상품수·경쟁강도` 행 추가(참고용).
 - **노출순위 PC·모바일 분리(2026-09-05):** 지표를 `노출순위(PC)` + `노출순위(모바일)` 두 행으로 기록.
@@ -56,9 +57,7 @@
   실행 전 **그 프로필의 잔여 Chrome 자동 정리**(포트 미개방 방지), 판매데이터 없음=정상 처리, 세션 킵얼라이브(선택).
   ⚠️ **run_full 중첩 sync_playwright 버그 수정**: rank_browser 를 계정 loop 밖에서 열지 않고 로그인 브라우저가
   닫힌 뒤 계정마다 별도로 연다(Playwright 는 한 스레드에 sync 인스턴스 1개만 허용).
-- **수집 고도화(예정):** 엑셀 다운로드 대신 **로그인 세션 쿠키로 내부 웹 API(`vi-detail-search` 계열)
-  직접 호출**(쿠팡 OpenAPI 키 불필요 — 세션 쿠키 인증). 스펙 확정용 `tools/capture_sales_xhr.py` 로
-  사무실 세션에서 XHR 1회 캡처 후 collector 전환. (ShopMine 실증 분석 결과 = .NET + Edge WebView2 임베디드
+- **수집 고도화(완료):** 판매분석은 **로그인 세션 쿠키로 내부 웹 API(`vi-detail-search`) 직접 호출**이 이미 **주 수집 경로**(`collector.fetch_sales_details`, `x-xsrf-token` 필요), 엑셀 다운로드는 폴백. (ShopMine 실증 분석 결과 = .NET + Edge WebView2 임베디드
   Chromium + 세션영속 + 쿠키 직접 HTTP; 지문위조 아님 → 같은 계열로 우리도 채택 가능. 상세는 메모리
   `shopmine-architecture`.)
 - **쿠팡 OpenAPI(참고):** 판매자별 HMAC 키(위탁이라 타계정 키 발급 불가) + **1키/판매자·2연동업체 불가**.
@@ -90,17 +89,12 @@
 | 대표자명 | 필수 | 검증·그룹 (여러 계정이 한 대표자 소속 가능) |
 | 사업자명 | 필수 | 검증·라벨 |
 | 계정아이디 | 필수 | 로그인 ID / 계정 블록 시작 마커 |
-| 상품명 | 필수 | 추적 대상 상품 (옵션 행들의 헤더) |
-| 옵션 | 선택 | 옵션명(색상 등). 옵션별 추적 시 상품 아래 옵션 행 나열 (별칭: 옵션명/option) |
-| vendorItemId | 선택 | **정확 순위 매칭용** 옵션의 vendorItemId. 한 옵션에 여러 개면 콤마 구분 (별칭: 옵션ID) |
-| productId | 선택 | 보조 매칭(상품ID) |
+| 상품명 | 필수 | 추적 대상 상품 |
 
-**계층:** 대표자명(1) → 사업자명·계정아이디(N) → 상품명(N) → **옵션(N)**.
-**파싱 규칙:** `계정아이디` 채운 행=새 계정, `상품명` 채운 행=새 상품, 그 아래 `옵션`(+vendorItemId) 행=그 상품의 옵션.
-옵션 행이 없으면 상품에 **기본 옵션 1개(라벨 "")**. `대표자명` 비면 위 값 상속.
-→ 산출: `Account{ products:[Product{name, options:[Option{label, vendor_item_ids[], product_ids[]}]}] }`.
-**순위 매칭:** 옵션의 vendorItemId가 있으면 **ID로 정확 매칭**(유사·동일 이름 무관), 없으면 상품명(부분일치) 폴백.
-**비밀번호는 이 파일에 없다(의도적).**
+**⚠️ 정정(현재 구현):** 실제 관리대장엔 옵션/vendorItemId/productId 컬럼이 **없고, 입력 파서도 이를 파싱하지 않는다**(`input_list.py`: `i_opt=i_vid=i_pid=None`). **가져오는 값=사업자·계정아이디·상품명(필수 3개)**(대표자명 선택). **vid/pid는 입력이 아니라 라이브 판매수집에서 확보**(`collector.fetch_sales_details`/`fetch_sales_roster`). [[input-ledger-format]]
+**계층:** 대표자명(1) → 사업자명·계정아이디(N) → 상품명(N). 관리대장은 계정식별열이 상품행에 세로병합 → **빈 계정칸=상속**으로 그룹핑.
+**순위 매칭:** 라이브 확보한 vendorItemId(앵커)가 있으면 ID로 정확 매칭, 없으면 상품명(부분일치) 폴백.
+**비밀번호는 결과물에 없다(입력 관리대장에만·DPAPI로 이관).**
 
 ### 2.2 자격증명 파일 + 로컬 저장소 (PC별, 비공유) — 파일 기반 자동로그인
 
@@ -288,11 +282,10 @@
 
 - **로그인은 반드시 사람이, 실제 Chrome에서.** Playwright가 '띄운' 브라우저는 webdriver 흔적으로 로그인 무한루프.
   → **실제 Chrome을 `--remote-debugging-port`로 구동(자동화/위장 플래그 없음) + 사람이 직접 로그인** = 통과 확인.
-- **세션 저장:** 로그인 후 `storage_state`(쿠키 32개)를 `session_{계정}.json`으로 저장. (프로필은 세션쿠키를
-  메모리에만 둬 재기동 시 유지 안 됨 → **storage_state 파일이 durable 저장소**)
-- **수집은 headless 불가.** headless+쿠키는 페이지는 열리나 **데이터 API가 403**(Akamai). 
-  → **실제 Chrome(오프라인 창, 화면 밖 위치) + 저장쿠키 주입(CDP `add_cookies`)** 으로 수집 = 로그인 통과 확인.
-- **재로그인:** 저장쿠키 만료 시에만 사람이 재로그인. 그 전까진 쿠키 재주입으로 무인 수집.
+- **⚠️ 정정(현재 구현, §0 line 44):** 아래 `storage_state`/쿠키주입 서술은 **폐지**. 현재는 **계정별 영속 Chrome 프로필** + 로그인 세션 3요소(WebSessionId·PCID·OAuthTokenRequestState)+쿠키를 **`SessionStore`(계정별 JSON·DPAPI 암호화)** 에 영속·복원(`session_store.py`/`wing_session.py`). 아래 두 줄은 역사적 기록.
+- **세션 저장(옛):** 로그인 후 `storage_state`(쿠키 32개)를 `session_{계정}.json`으로 저장.
+- **수집은 headless 불가.** headless+쿠키는 페이지는 열리나 **데이터 API가 403**(Akamai). → **실제 Chrome(오프라인 창) + 사람이 로그인한 그 세션/프로필 재사용**으로 수집(쿠키 주입 새 브라우저는 API가 막힘).
+- **재로그인:** 세션 만료 시에만 사람이 재로그인(쿠팡 세션은 하루내 만료 경향 [[coupang-session-short-lived]]).
 - **2차 인증(폰):** 새 기기/위치 최초 로그인 시 쿠팡이 휴대폰 2차 인증을 요구할 수 있음. 수동 로그인이라
   사람이 인증코드 입력해 통과(자동화 무관). 익숙한 환경(사무실)에서는 안 뜰 수 있음. 세션 저장 후엔 재인증 불필요.
 - 판매분석 URL: `wing.coupang.com/tenants/business-insight/sales-analysis`. 내부 API: `/tenants/rfm-ss/api/...`.
@@ -325,36 +318,41 @@
 
 ```
 src/coupang_analytics/
-  config.py       # [완료] 상수·정책값·컬럼명 (부가지표 SUPP_METRICS 포함)
-  input_list.py   # [완료] 입력 분석용 엑셀 파싱 (계정·상품 계층)
-  report.py       # [완료] 상품별 리포트 파싱 (옵션ID 단위)
-  workbook.py     # [완료] 출력 워크북 시드·일자 컬럼 read/write + 키워드 부가지표 행
-  credstore.py    # [완료] PC별 비번/키 DPAPI 암호화 저장·조회
-  browser.py      # [완료·라이브검증] 실제 Chrome+CDP, 프로필 재사용, authenticated()/classify_login()
-  rank.py         # [완료·라이브검증] Q2 검색 순위 (warmup+광고제외+차단감지, 옵션별)
-  kw_ai.py        # [완료] OpenAI: 앵커추출·관련성쇼핑성판정·상품명추천 (KEYWORD_SELECTION.md)
-  kw_volume.py    # [완료·검증] 네이버 검색광고 API: 연관키워드+검색량
-  kw_shopping.py  # [완료] 네이버쇼핑 API: 상품수→경쟁강도(선택)
-  kw_metrics.py   # [완료] 쿠팡 1P 경쟁(로켓비율·광고수) — '추천 탭' 전용
-  kw_recommend.py # [완료·검증] 키워드 선정(앵커+판정+세부/경쟁강도) + 추천
-  pipeline.py     # [완료] run_full: 계정단위 로그인→발견→키워드→순위 완결 + 이어서 하기
-  collector.py    # [완료] Q1 판매분석 발견/다운로드 (직접 XHR 호출로 전환 예정)
+  config.py       # 상수·정책값·컬럼명 (부가지표 SUPP_METRICS 포함)
+  input_list.py   # 입력 파싱(엑셀/구글대장 read_ledger_rows·parse_input_rows) + 그로스 재고 역기록(write_ledger_inventory·유사도매칭 _best_inventory_match)
+  report.py       # 상품별 리포트 파싱(옵션ID 단위·엑셀 폴백)
+  collector.py    # 판매분석 API 직접조회 fetch_sales_details(vi-detail-search POST) 주경로 + 엑셀 다운로드 폴백 + vid 로스터·재고 API
+  workbook.py     # 출력 워크북 시드·일자 컬럼 + 키워드 부가지표 행 + 등록상품명 보존·재고 매칭 공급(inventory_by_biz)
+  credstore.py    # PC별 비번/키 DPAPI 암호화
+  browser.py      # 실제 Chrome+CDP(WingBrowser), 프로필 재사용, authenticated()
+  rank.py         # 비로그인 오가닉 순위(광고제외·차단감지·옵션별)
+  human_typing.py / human_mouse.py  # 한글자 타이핑(CDP IME) · 사람같은 마우스/스크롤(RANK_HUMAN_INTERACT)
+  kw_ai.py        # OpenAI: analyze/generate/judge/select_keywords·recommend_title (KEYWORD_SELECTION.md)
+  kw_volume.py    # 네이버 검색광고 API: 연관키워드+검색량
+  kw_suggest.py   # 쿠팡 자동완성(=연관검색어) collect_suggestions (rank 세션 same-origin fetch)
+  kw_shopping.py  # ⛔죽은 엔드포인트(네이버쇼핑 API 2026-07-31 종료·미사용)
+  kw_metrics.py   # 쿠팡 1P 경쟁(로켓비율·광고수) — '추천 탭' 전용
+  kw_recommend.py # 키워드 선정(4소스 후보→판정→Score→AI선정·띄어쓰기 dedup) + 추천
+  pipeline.py     # run_full·select_keywords_stage·track_ranks_stage·push_ledger_inventory·_push_gsheet
+  gsheet_api.py   # 서비스계정 Sheets API v4(GSheetClient read/write/read_grid/ensure_sheets/batch_update)
+  gsheet.py       # 공개시트 xlsx export 읽기 폴백
+  gsheet_index.py # 결과 '계정목록' 증분 동기화(sync_index·plan_sync·read/apply_marketing·roster_from_workbook)
+  gsheet_stats.py # 사업자별 통계 시트 = openpyxl 마스터 미러링(push_statistics) + 직원 키워드 역머지(read/merge_staff_keywords)
+  session_store.py / wing_session.py / session_state.py  # 로그인 세션 3요소+쿠키 DPAPI 영속·복원
+  product_match.py # 대장↔발견 상품 매칭(scope_to_ledger·augment_unmatched)
 ui/
-  app.py          # [완료] 설정(키 입력) + 키워드추천·상품명추천·순위조회 + 전체실행(통합엑셀·이어서)
-삭제됨: mapping.py, session.py (내부명매핑·storage_state 폐지)
+  app_qt.py       # [기본 UI] PySide6(Qt)+Windows11 Fluent — 설정/키워드추천/순위조회/전체실행 탭
+  app.py          # [폴백] Tkinter(동일 기능·PySide6 부재 시, winreg로 QSettings 공유)
+삭제됨: mapping.py, session.py (내부명매핑·storage_state 폐지 → SessionStore로 대체)
 tools/
-  simulate_pipeline.py / verify_offline.py / verify_rank_live.py / verify_discover_live.py
-  capture_sales_xhr.py  # 로그인 세션의 판매분석 내부 XHR 캡처(직접호출 스펙 확정용)
+  simulate_pipeline.py(모킹 10시나리오) / verify_offline.py / verify_gsheet_offline.py(7종) / verify_rank_live.py
 ```
 
-**전체 실행 흐름(확정):** `run_full` 이 계정마다 [로그인(프로필 재사용/자동입력) → 판매분석 **발견**
-(collector.discover: 옵션·vendorItemId·지표) → (AI 앵커+판정) 키워드 자동선정(`KW_TRACK_N`개, 경쟁강도) →
-옵션별 오가닉 순위] 를 완결하고 다음 계정으로. **통합 워크북 1개**에 누적 + 계정마다 중간 저장 + 이어서 하기.
-파일명 `쿠팡데이타분석_yymmdd_HHMMSS.xlsx`(`output/`). 순위 매칭은 옵션 vendorItemId(있으면 정확) 또는 상품명 폴백.
-**수집 경로 전환 예정:** 엑셀 다운로드 → 로그인 세션 쿠키로 내부 XHR 직접 호출(§12, `capture_sales_xhr.py`로 스펙 확정 후).
-**라이브 검증 남음:** 실제 로그인+판매분석 수집·경쟁강도는 사무실 세션에서(2차인증 위치기반).
+**전체 실행 흐름(확정, 2026-09-15 개정):** 전체실행 = **①반자동 판매 → ②키워드선정 → ③반자동 순위**(단계별 순차, §0-0). run_full(①)은 계정마다 [로그인→판매분석 발견(collector: 옵션·vendorItemId·지표)]을 완결하고 다음 계정으로, 그 뒤 select_keywords_stage(②)가 전 상품 키워드, track_ranks_stage(③)가 전 상품 순위. **통합 워크북 1개**에 누적 + 계정마다 중간 저장 + 이어서 하기. 파일명 `쿠팡데이타분석_yymmdd_HHMMSS.xlsx`. 순위 매칭=vendorItemId(라이브 확보, 있으면 정확) 또는 상품명 폴백.
+**수집 경로(완료):** 판매분석 = 내부 API 직접조회(`vi-detail-search`)가 **주경로**, 엑셀 다운로드는 폴백.
+**라이브 검증 남음:** 실제 로그인+판매수집은 사무실 세션에서(2차인증 위치기반).
 
-기술: Python 3.10+, Playwright + 실제 Chrome, openpyxl, **OpenAI/네이버 API**, **Tkinter(GUI)** + PyInstaller(.exe).
+기술: Python 3.10+, Playwright + 실제 Chrome, openpyxl, **OpenAI/네이버 API**, **PySide6(기본)/Tkinter(폴백) GUI** + PyInstaller(.exe).
 규칙: 파일 800줄 / 함수 100줄 상한, fallback(무음 None/except pass) 금지.
 
 ## 10. 오류·검증·운영 정책 (확정)
@@ -379,8 +377,8 @@ tools/
 - 노출순위는 **오늘만** 측정 가능(과거 소급 불가) → 과거 일자 공란
 - 실행 범위=입력 파일 계정 / 선택 실행(계정·상품·키워드)
 - 파일명=`쿠팡데이타분석_yymmdd_시분초` / 실패·미노출=공란 / 같은 상품명=계정별 분리
-- 노출순위=광고 제외 통합순위, 100위까지(설정 조정 가능, 탐지 회피 지연) / 광고성과=수집 안 함
-- 순위 상품 매칭: 현재 상품명 부분일치(첫 매칭). 유사·일반명은 부정확 → collector의 옵션ID(공개 vendorItemId)로 정확매칭 예정
+- 노출순위=광고 제외 통합순위. **자동=50위까지(`RANK_SCAN_MAX=50`)·반자동=로드된 페이지 실측 등수(최대 300)**, 50위 밖은 "50위밖"(미노출 아님·사용자 결정 추가검색 안 함) / 광고성과=수집 안 함
+- 순위 상품 매칭: 라이브 확보한 vendorItemId(앵커)로 정확 매칭·상품명 부분일치 폴백(구현 완료). vid 앵커라 노출명이 바뀌어도 시계열 키 안정.
 
 ## 13. 버전 로드맵
 
