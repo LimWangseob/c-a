@@ -1039,10 +1039,12 @@ class App(QtWidgets.QMainWindow):
 
     # ── 무인 자동 실행(--auto, 18:00 시작 → 06:00 자동 종료) ───────
     def start_auto(self):
-        """무인 자동 실행 — 팝업 없이 ①판매수집+②키워드(자동순위 제외) → ③반자동 순위, 06:00 자동 종료.
+        """무인 자동 실행 — 팝업 없이 **①반자동 판매수집 → ②키워드선정 → ③반자동 순위**, 06:00 자동 종료.
 
-        사람 개입 0: 입력·키 자동 로드, 확인 팝업 없음, 로그인 차단·2차인증 계정은 건너뜀(멈추지 않음),
-        순위는 반자동 autosubmit(자동입력→자동검색→읽기, 차단 시 쿨다운/자동재개). 절전은 실행 동안 방지.
+        무인이어도 **처리 방식은 전부 반자동**(전체실행과 동일 조합·offscreen 전무): ①은 보이는 신뢰 창에서
+        자동입력 로그인(Akamai 통과율↑), ②는 로그인 없이 쿠팡 자동완성+네이버+AI 선정, ③은 autosubmit 순위.
+        사람 개입 0 전제: 입력·키 자동 로드, 확인 팝업 없음, 로그인 차단·2차인증 계정은 건너뜀(멈추지 않음),
+        차단 시 쿨다운/자동재개. 절전은 실행 동안 방지. (2차인증은 사무실=신뢰 IP면 없이 통과.)
         """
         self.log("== [무인 자동 실행] 시작 ==")
         _prevent_sleep(True)
@@ -1061,7 +1063,7 @@ class App(QtWidgets.QMainWindow):
             df, dt = meta["date_from"], meta["date_to"]
         self._semi_stop = threading.Event()
         n = sum(len(a.products) for a in self.input_list.accounts)
-        self.log(f"[무인] ①판매수집+②키워드(자동순위 제외) → ③반자동 순위 · 상품 {n}개 · 기간 {df}~{dt} · "
+        self.log(f"[무인] ①반자동 판매수집 → ②키워드선정 → ③반자동 순위 · 상품 {n}개 · 기간 {df}~{dt} · "
                  f"{'이어서' if resume else ('이어쓰기' if carry else '새 통계')}")
         il, naver_creds, key, stop = self.input_list, self.naver_creds, self.ai_key, self._semi_stop
         gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
@@ -1069,12 +1071,15 @@ class App(QtWidgets.QMainWindow):
         def task():
             try:
                 naver = NaverAdApi(naver_creds)
+                # ① 반자동 판매수집(무인이어도 **처리 방식은 반자동** — 보이는 신뢰 창·실제 타이핑으로 Akamai 통과율↑).
+                #    2차인증은 사무실(신뢰 IP)이면 없이 통과; 낯선 환경서 뜨면 사람이 없어 그 계정만 건너뜀(멈춤 없음).
+                #    판매만(키워드·순위·노출측정 없음) → 이어서 ②③. 전체실행과 동일 조합(offscreen 전무).
                 run_full(il, naver, ai_key=key, date_from=df, date_to=dt,
                          get_password=self._account_pw, resume=resume, carry_forward=carry,
-                         grow_keywords=False, skip_ranks=True, keywords_off=False, on_log=self.log,
-                         gsheet_output_url=gs_out)
+                         grow_keywords=False, skip_ranks=True, sales_semi=True, keywords_off=True,
+                         on_log=self.log, gsheet_output_url=gs_out)
                 # 야간 1회 쿨다운-재개: 차단 등으로 미완료 계정이 남았으면(진행중 파일 잔존) 30분 쉬고
-                # **남은 계정만 1회 더** 시도(제출 총량 억제 = 위탁계정 잠금 방지, 무한 재시도 금지).
+                # **남은 계정만 1회 더** 시도(제출 총량 억제 = 위탁계정 잠금 방지, 무한 재시도 금지). 역시 반자동.
                 if (not stop.is_set() and config.LOGIN_NIGHT_RESUME and resumable_progress()):
                     mins = config.LOGIN_NIGHT_RESUME_COOLDOWN_SEC // 60
                     self.log(f"[무인] 차단 등 미완료 계정 남음 → {mins}분 쿨다운 후 1회 재개(남은 계정만)")
@@ -1084,8 +1089,12 @@ class App(QtWidgets.QMainWindow):
                         self.log("[무인] 쿨다운 종료 — 미완료 계정 로그인 재개(1회)")
                         run_full(il, naver, ai_key=key, date_from=df, date_to=dt,
                                  get_password=self._account_pw, resume=True, carry_forward=carry,
-                                 grow_keywords=False, skip_ranks=True, keywords_off=False, on_log=self.log,
-                                 gsheet_output_url=gs_out)
+                                 grow_keywords=False, skip_ranks=True, sales_semi=True, keywords_off=True,
+                                 on_log=self.log, gsheet_output_url=gs_out)
+                # ② 키워드 선정(노출측정 없음·로그인 불필요·부족분 4개까지 보충)
+                if not stop.is_set():
+                    select_keywords_stage(naver, key, grow=False, on_log=self.log, gsheet_output_url=gs_out)
+                # ③ 반자동 순위(autosubmit, 차단 시 쿨다운-재개)
                 if not stop.is_set():
                     track_ranks_stage(semi=True, should_stop=stop.is_set, on_log=self.log,
                                       gsheet_output_url=gs_out)
