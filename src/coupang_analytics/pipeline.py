@@ -1063,14 +1063,16 @@ def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = 
         for biz in wb.account_sheets():
             for pname in wb.products_of(biz):
                 existing = wb.product_keywords(biz, pname)
-                if existing and not grow:                  # 이미 키워드 있음(사람 입력 포함) → 동결, 스킵
+                # 채울 목표 = grow면 KW_MAX_TRACK(발굴 추가), 아니면 KW_TRACK_N(=4, 빈행 대신 실제 키워드로 채움).
+                # 부족분만 보충하고 목표치 이상이면 동결(스킵). '빈행도 키워드로 채우기' 요구(2026-09-15).
+                target = config.KW_MAX_TRACK if grow else config.KW_TRACK_N
+                want = (min(config.KW_ADD_PER_DAY, target - len(existing)) if grow
+                        else target - len(existing))
+                if existing and want <= 0:                 # 이미 목표치 이상(사람 입력 포함) → 동결, 스킵
                     log(f"  [{biz}] {pname} → 키워드 있음, 건너뜀(동결) {existing}")
                     continue
                 try:
-                    if grow and existing:                  # 상한 내 발굴 추가
-                        want = min(config.KW_ADD_PER_DAY, config.KW_MAX_TRACK - len(existing))
-                        if want <= 0:
-                            continue
+                    if existing:                           # 기존 키워드 + 부족분/발굴 보충(중복 제외, 최대 want개)
                         tracks = select_keywords_light(pname, naver, ai_key, browser=browser, log=log,
                                                        n=want, measure_ranks=None, exclude=set(existing))
                         new = [t for t in tracks if t.keyword not in existing][:want]
@@ -1078,8 +1080,10 @@ def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = 
                             wb.add_product_keywords(biz, pname, [t.keyword for t in new])
                             for t in new:
                                 wb.set_keyword_search(biz, pname, t.keyword, t.volume)
-                            log(f"  [{biz}] {pname} → 발굴 추가 {[t.keyword for t in new]}")
-                    else:                                  # 새 상품 → 선정
+                            log(f"  [{biz}] {pname} → 동결 {existing} + 보충 {[t.keyword for t in new]}")
+                        else:
+                            log(f"  [{biz}] {pname} → (동결·추가 후보 없음) {existing}")
+                    else:                                  # 새 상품 → 선정(최대 KW_TRACK_N)
                         tracks = select_keywords_light(pname, naver, ai_key, browser=browser,
                                                        log=log, measure_ranks=None)
                         wb.add_product_keywords(biz, pname, [t.keyword for t in tracks])
