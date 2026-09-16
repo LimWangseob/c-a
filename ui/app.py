@@ -422,11 +422,13 @@ class App(tk.Tk):
         self.to_entry.config(state=state)
 
     def _run_dates(self):
+        # (판매조회_from, 판매조회_to, 컬럼라벨_실행날짜). 판매는 전일(D-1), 컬럼 제목은 실제 작업한 날(app_qt 와 동일).
         if self.collect_mode.get() == "today":
-            # 쿠팡 판매분석은 당일 데이터를 익일 이후 생성 → '당일'은 확정된 어제(D-1) 기준(app_qt 와 동일).
-            d = (date.today() - timedelta(days=1)).isoformat()
-            return d, d
-        return self.from_var.get().strip(), self.to_var.get().strip()
+            today = date.today().isoformat()
+            d1 = (date.today() - timedelta(days=1)).isoformat()
+            return d1, d1, today
+        dt = self.to_var.get().strip()
+        return self.from_var.get().strip(), dt, dt
 
     def do_run_full(self, keywords_off: bool = False, sales_semi: bool = False):
         if self.input_list is None:
@@ -439,7 +441,7 @@ class App(tk.Tk):
             messagebox.showwarning("키 필요", "키워드 추출에 OpenAI(ChatGPT) API 키가 필요합니다. "
                                    "설정 탭에서 OpenAI API 키를 입력한 뒤 다시 실행하세요.")
             return
-        df, dt = self._run_dates()
+        df, dt, dlabel = self._run_dates()
         # 날짜를 직접 지정(당일 자동이 아님)하면 순위 조회 제외 = 그 날짜 판매데이터만 채움(차단 회피)
         skip_ranks = self.collect_mode.get() != "today"
         n = sum(len(a.products) for a in self.input_list.accounts)
@@ -465,6 +467,7 @@ class App(tk.Tk):
             resume = True
             carry = bool(meta.get("carry", False))
             df, dt = meta["date_from"], meta["date_to"]
+            dlabel = meta.get("date_label") or dlabel
             mode_desc = f"이어서 하기 — 오늘 미완료분 이어서(완료 {len(meta['done'])}개 건너뜀), 기간 {df}~{dt}"
         elif master_exists():
             carry = True
@@ -500,7 +503,8 @@ class App(tk.Tk):
             snap = run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
                             get_password=self._account_pw, resume=resume, carry_forward=carry,
                             grow_keywords=False, skip_ranks=True, redo_today=redo_today,
-                            sales_semi=True, keywords_off=True, on_log=self.log, gsheet_output_url=gs_out)
+                            sales_semi=True, date_label=dlabel, keywords_off=True, on_log=self.log,
+                            gsheet_output_url=gs_out)
             if keywords_off:                        # ① 단독 실행 → 판매데이터만 채우고 종료
                 return snap
             if stop is not None and stop.is_set():

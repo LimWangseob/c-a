@@ -17,6 +17,11 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+# 콘솔 없는 실행(작업 스케줄러의 무인 --auto = pythonw)에서 보조 명령(파워셸·taskkill·크롬 실행)이
+# 검은 콘솔창을 잠깐 띄웠다 닫는 것을 막는 플래그. 앱을 터미널에서 직접 켜면 이미 창이 있어 원래 안 뜨지만,
+# 무인 실행 땐 이게 없으면 명령마다 창이 깜빡인다. Windows 전용(다른 OS에선 0 = 효과 없음, GUI 창은 그대로 뜸).
+_NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 WING_URL = "https://wing.coupang.com/"
 # Keycloak SSO 인증 성공 후에만 설정되는 쿠키. (seller-uid 는 로그인 폼 단계에도 있어 오판 유발 → 제외)
 _AUTH_COOKIES = ("KEYCLOAK_IDENTITY",)
@@ -62,7 +67,8 @@ def _kill_profile_chrome(profile_dir: str) -> int:
     env["SM_PROFILE"] = profile_dir
     try:
         r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
-                           capture_output=True, text=True, timeout=15, env=env)
+                           capture_output=True, text=True, timeout=15, env=env,
+                           creationflags=_NO_CONSOLE)
     except Exception as exc:   # 정리 실패는 치명적 아님 — 사유만 남기고 진행(무음 아님)
         print(f"[browser] 잔여 Chrome 정리 건너뜀({exc.__class__.__name__})")
         return 0
@@ -87,7 +93,8 @@ def reap_orphan_chrome(data_dir: str = "data") -> int:
     env["SM_DATA"] = base
     try:
         r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
-                           capture_output=True, text=True, timeout=15, env=env)
+                           capture_output=True, text=True, timeout=15, env=env,
+                           creationflags=_NO_CONSOLE)
     except Exception as exc:   # 정리 실패는 치명적 아님 — 사유만 남기고 진행(무음 아님)
         print(f"[browser] 좀비 Chrome 정리 건너뜀({exc.__class__.__name__})")
         return 0
@@ -152,7 +159,7 @@ class WingBrowser:
             cx, cy = _center_pos(1200, 900)   # 로그인 창은 화면 정중앙
             args += [f"--window-position={cx},{cy}", "--window-size=1200,900"]
         args.append("about:blank")
-        self._proc = subprocess.Popen(args)
+        self._proc = subprocess.Popen(args, creationflags=_NO_CONSOLE)
         # ⚠ 24/365 상시가동 안정성: __enter__ 도중 예외가 나면 파이썬은 __exit__ 를 부르지 않는다 →
         # 이미 띄운 Chrome(_proc)·playwright 가 좀비로 남아 상시가동 중 로그인 실패·포트경쟁이 반복되면
         # 계속 누적된다(reap_orphan_chrome 은 앱 시작 때만 돎). 그래서 실패 시 여기서 직접 정리 후 재전파.
@@ -225,7 +232,7 @@ class WingBrowser:
             return
         try:
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(self._proc.pid)],
-                           capture_output=True, timeout=15)
+                           capture_output=True, timeout=15, creationflags=_NO_CONSOLE)
         except Exception:
             try:
                 self._proc.kill()

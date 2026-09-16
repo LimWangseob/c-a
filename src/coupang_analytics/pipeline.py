@@ -118,10 +118,11 @@ def read_run_stage(out_dir: str | Path = "output") -> dict | None:
 
 
 def _save_progress(out_dir, date_from, date_to, started_at, done,
-                   carry=False, grow=False, skip=False) -> None:
+                   carry=False, grow=False, skip=False, date_label=None) -> None:
     _progress_path(out_dir).write_text(
         json.dumps({"date_from": date_from, "date_to": date_to, "started_at": started_at,
-                    "done": list(done), "carry": carry, "grow": grow, "skip": skip},
+                    "done": list(done), "carry": carry, "grow": grow, "skip": skip,
+                    "date_label": date_label},   # 컬럼 라벨=작업 실행날짜(판매조회 D-1과 분리) — 재개 시 동일 라벨 유지
                    ensure_ascii=False, indent=2),
         encoding="utf-8")
 
@@ -870,7 +871,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
              ai_key: str | None = None, date_from: str | None = None, date_to: str | None = None,
              get_password=None, resume: bool = False, carry_forward: bool = False,
              grow_keywords: bool = False, skip_ranks: bool = False, redo_today: bool = False,
-             sales_semi: bool = False,
+             sales_semi: bool = False, date_label: str | None = None,
              keywords_off: bool = False, on_log=None, gsheet_output_url: str | None = None) -> Path:
     """계정별 end-to-end 완결 + **같은 날 이어서 하기** + **통계 마스터 이어쓰기(cross-day)**.
 
@@ -919,6 +920,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         carry = bool(meta.get("carry", False))
         grow = bool(meta.get("grow", False))
         skip_ranks = bool(meta.get("skip", False))   # 재개 시 순위제외 모드도 그대로 유지
+        date_label = meta.get("date_label") or date_label   # 재개=원래 작업 실행날짜 라벨 유지(새벽 넘겨도 시작일 기준)
         wb = OutputWorkbook.load(partial)
         log(f"== 이어서 실행({'통계이어쓰기' if carry else '새통계'}) — 완료 {len(done)}개 건너뜀, "
             f"기간 {date_from}~{date_to} ==")
@@ -947,7 +949,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
             if p.exists():
                 p.unlink()
         wb.save(partial)                       # 크래시 복구 기준선(carry면 마스터 내용 포함)
-        _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks)
+        _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks, date_label)
 
     # 목차 로스터 — 입력 전체 계정(계정ID)을 등록해 **미수집 계정도 목차에 표시**(수집 현황 파악)
     for _a in input_list.accounts:
@@ -958,15 +960,21 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     if not keywords_off:                       # ①판매수집 전용은 키워드 단계가 없어 역머지 불필요
         _pull_gsheet_keywords(wb, gsheet_output_url, log)
 
-    # 일자 컬럼 라벨 = 서식과 동일한 yy.mm.dd(단일일). 범위면 from~to.
-    if date_from == date_to:
+    # 일자 컬럼 라벨 = **작업 실행날짜**(date_label). 판매데이터는 전일(D-1=date_from~date_to)에서 가져오지만
+    # 컬럼 제목은 실제 작업한 날로 적는다(새벽 넘겨도 시작일 기준). date_label 없으면(직접 날짜지정 등) date_to 로 폴백.
+    # 순위(③)는 같은 실행날짜 컬럼(latest_date)에 기록돼 '오늘 순위 + 전일 판매'가 한 컬럼에 나란히 쌓인다.
+    label_src = date_label or date_to
+    if date_from == date_to or date_label:
         try:
-            col_label = datetime.strptime(date_to, "%Y-%m-%d").strftime("%y.%m.%d")
+            col_label = datetime.strptime(label_src, "%Y-%m-%d").strftime("%m.%d")   # 년도 없는 '월.일'
         except ValueError:
-            col_label = date_to
+            col_label = label_src
     else:
         col_label = f"{date_from}~{date_to}"
-    log(f"== 수집 대상 구간(컬럼): {col_label} ==")
+    if date_label and date_label != date_to:   # 라벨(실행일)과 판매조회일(전일)이 다르면 둘 다 안내
+        log(f"== 컬럼(작업 실행날짜): {col_label} · 판매조회 {date_from}~{date_to}(전일) ==")
+    else:
+        log(f"== 수집 대상 구간(컬럼): {col_label} ==")
     if redo_today and carry:      # ② 오늘 처음(다시): 오늘 컬럼·완료스탬프 초기화 → 전 계정 오늘분 재수집
         c1 = wb.reset_date_column(col_label)
         c2 = wb.clear_sales_stamps()
@@ -1000,7 +1008,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
             log(f"  [{a.label}] 대장 상품 0개 — 시트·키워드·순위 생략")
         wb.mark_sales_collected(a.label, col_label)   # 오늘 판매수집 완료 스탬프(같은 날 재실행 시 로그인·수집 생략 근거)
         done.add(a.account_id)                    # 이 계정 완료 확정
-        _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks)
+        _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks, date_label)
         wb.save(partial)
         log(f"  [{a.label}] 완료 — 진행 {len(done)}/{total} (진행 저장: {partial.name})")
 
@@ -1016,7 +1024,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
             log(f"== [{i}/{total}] {a.label} — 오늘({col_label}) 판매수집 완료됨 → 로그인·수집 생략(재실행). "
                 "키워드는 미보유분만 보완·순위는 미기입분만 조회 ==")
             done.add(a.account_id)
-            _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks)
+            _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks, date_label)
             sales_skipped.append(a)
             continue
         if carry and wb.has_marketing():          # 마케팅 설정됐을 때만 주기 게이팅(미설정=현행 매일 유지)
@@ -1024,7 +1032,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
             if not due:
                 log(f"== [{i}/{total}] {a.label} — {why} → 오늘 수집 안 함(로그인 생략) ==")
                 done.add(a.account_id)            # 오늘은 의도적 스킵으로 '처리됨'(완주 판정·재개 일관)
-                _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks)
+                _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks, date_label)
                 continue
         log(f"== [{i}/{total}] {a.label} (계정ID: {a.account_id}) ==")
         try:   # 한 계정의 어떤 오류(수집·워크북쓰기)도 전체를 막지 않게 계정 전체를 격리
@@ -1065,7 +1073,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
             log(f"  [{a.label}] 로그인 차단 누적 {blocks}/{config.LOGIN_BLOCK_CIRCUIT}")
         except LoginCredentialError:              # 비번오류/계정잠금 → 재시도 금지: '처리됨'으로 표시해
             done.add(a.account_id)                # 야간 재개·같은 날 재실행이 비번을 다시 제출하지 않게(계정잠금 방지).
-            _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks)
+            _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks, date_label)
             log(f"  [{a.label}] 비밀번호 오류/계정 상태로 건너뜀 — 자동 재시도 안 함(계정잠금 방지). "
                 "관리대장에서 비번 수정 후 새 실행(다음 날/진행분 초기화)에서 재시도됨")
         except Exception as exc:
@@ -1107,7 +1115,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     # 같은 날 재실행이 '미완료분만' 이어서 처리하게 한다(완료 계정은 done 으로 자동 건너뜀).
     # 날짜가 바뀌면 resumable_progress 가 '오늘 아님'으로 무시 → 자동으로 처음부터.
     if uncollected:
-        _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks)
+        _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks, date_label)
         wb.save(partial)     # 재개 기준선(완료분 반영)
         log(f"== 미완료 {len(uncollected)}개 남음 — 진행분 유지(같은 날 재실행 시 그 계정만 이어서) ==")
     else:

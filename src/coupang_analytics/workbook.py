@@ -69,16 +69,20 @@ def _key(v) -> str:
 
 
 def _parse_date(s):
-    """마케팅 날짜 문자열 → date(못 읽으면 None). YYYY-MM-DD·YY.MM.DD·YYYY/MM/DD·MM/DD(올해) 등 허용."""
+    """날짜 문자열 → date(못 읽으면 None). YYYY-MM-DD·YY.MM.DD·**MM.DD(년도 없음·올해)**·YYYY/MM/DD·MM/DD 등 허용.
+
+    ⚠ 일자 컬럼 라벨은 2026-09-16부터 **년도 없는 '월.일'(예 09.16)** 로 적는다(사용자 요청·당분간).
+    '월.일'은 올해로 해석(연말/연초 경계는 당분간 미고려 — 필요 시 년도 복원)."""
     s = _norm(s)
     if not s:
         return None
     if isinstance(s, (_dt, _date)):
         return s.date() if isinstance(s, _dt) else s
-    for fmt in ("%Y-%m-%d", "%Y.%m.%d", "%y.%m.%d", "%Y/%m/%d", "%y/%m/%d", "%m/%d", "%m-%d"):
+    no_year = ("%m/%d", "%m-%d", "%m.%d")   # 년도 없는 표기 → 올해로 보정
+    for fmt in ("%Y-%m-%d", "%Y.%m.%d", "%y.%m.%d", "%Y/%m/%d", "%y/%m/%d", "%m.%d", "%m/%d", "%m-%d"):
         try:
             d = _dt.strptime(s, fmt).date()
-            return d.replace(year=_date.today().year) if fmt in ("%m/%d", "%m-%d") else d
+            return d.replace(year=_date.today().year) if fmt in no_year else d
         except ValueError:
             continue
     return None
@@ -445,16 +449,106 @@ class OutputWorkbook:
         return need
 
     # ── 일자 컬럼 ────────────────────────────────────────────
-    def ensure_date(self, biz: str, date_iso: str) -> int:
+    def _append_date_col(self, biz: str, date_iso: str) -> int:
+        """일자 라벨 하나를 그 사업자 시트의 **맨 오른쪽**에 새 컬럼으로 추가(헤더행 전부에 라벨 기록)."""
         cols = self._date_col.setdefault(biz, {})
-        if date_iso in cols:
-            return cols[date_iso]
         col = max(cols.values(), default=_FIRST_DATE - 1) + 1
         cols[date_iso] = col
         ws = self.wb[biz]
         for r in self._date_rows.get(biz, []):    # 모든 날짜 헤더행에 라벨 기록(블록마다 헤더 반복)
             ws.cell(r, col, date_iso)
         return col
+
+    def ensure_date(self, biz: str, date_iso: str) -> int:
+        """일자 컬럼 확보. 새 컬럼이 **직전 최신일보다 하루 넘게 뒤**면 그 사이 **빠진 달력일을 빈 컬럼으로**
+        먼저 채운 뒤(실행 안 한 날도 날짜만 있고 값은 공란) 요청 일자 컬럼을 만든다 — 시계열이 일자별로
+        끊기지 않게 한다(§'미실행 날짜=날짜 표기+공란'). 단일일(yy.mm.dd) 라벨에만 적용, 범위 라벨은 그대로 추가."""
+        cols = self._date_col.setdefault(biz, {})
+        if date_iso in cols:
+            return cols[date_iso]
+        new_d = _parse_date(date_iso)
+        if new_d is not None:
+            prior = [d for d in (_parse_date(k) for k in cols) if d is not None]
+            latest = max(prior) if prior else None
+            if latest is not None and new_d > latest:   # 앞으로 진행 → 그 사이 빠진 날 빈 컬럼으로 채움
+                gap = latest + _td(days=1)
+                while gap < new_d:
+                    lbl = gap.strftime("%m.%d")   # 빠진 날 빈 컬럼 = 년도 없는 '월.일'
+                    if lbl not in cols:
+                        self._append_date_col(biz, lbl)
+                    gap += _td(days=1)
+        return self._append_date_col(biz, date_iso)
+
+    def normalize_date_columns(self, log=None) -> dict[str, list[str]]:
+        """모든 계정 시트의 일자 컬럼을 **시트별 첫 날~마지막 날 사이 모든 달력일**로 채우고 **날짜순 정렬**하며,
+        라벨을 **년도 없는 '월.일'(예 09.16)** 로 통일한다(사용자 요청·당분간).
+
+        - 실행 안 하거나 중단돼 빠진 날(예: 09.11)이 있으면 그 날짜 컬럼을 만들되 값은 **공란**으로 둔다.
+        - 신규 계정은 그 시트가 실제로 추적한 첫 날 이전으로 소급하지 않는다(시트별 min~max 내부 공백만).
+        - 물리 컬럼을 재배치 없이 안전하게 재구성(값을 (행,**날짜**)로 스냅샷 → H열부터 정렬 순서로 재기록).
+          라벨을 재포맷해도 값은 날짜로 매칭돼 유실·이동 없음. A~G(상품명·키워드·지표)는 손대지 않는다.
+        - 파싱 불가 라벨(범위 등)이 있는 시트는 **건드리지 않고 건너뛴다**(안전).
+        반환: {사업자: [새로 삽입된 날짜 라벨...]} — 소급 정리 요약. 정렬·재라벨만 바뀌고 삽입이 없어도 재구성한다.
+        서식은 이 함수가 손대지 않으므로 호출부가 이후 apply_style() 로 표준 서식을 재적용해야 한다.
+        """
+        _log = log or (lambda m: None)
+        added: dict[str, list[str]] = {}
+        for biz, cols in list(self._date_col.items()):
+            if biz not in self.wb.sheetnames or not cols:
+                continue
+            parsed = {lbl: _parse_date(lbl) for lbl in cols}
+            if any(d is None for d in parsed.values()):
+                _log(f"  [날짜정렬] {biz}: 파싱 불가 라벨 있음 → 건너뜀 {sorted(cols)}")
+                continue
+            # 날짜→기존 열(첫 등장). 라벨을 '월.일'로 재포맷하므로 값은 **날짜**로 스냅샷해 매칭한다.
+            date2col: dict = {}
+            for lbl, dd in sorted(parsed.items(), key=lambda kv: kv[1]):
+                date2col.setdefault(dd, cols[lbl])
+            days = sorted(date2col)
+            first, last = days[0], days[-1]
+            target_days: list = []
+            d = first
+            while d <= last:
+                target_days.append(d)
+                d += _td(days=1)
+            target = [dd.strftime("%m.%d") for dd in target_days]   # 년도 없는 '월.일'로 통일
+            old_labels_sorted = [lbl for lbl, _dd in sorted(parsed.items(), key=lambda kv: kv[1])]
+            old_cols_sorted = [cols[lbl] for lbl in old_labels_sorted]
+            # 이미 '월.일' 연속·정렬이고 물리 순서도 H부터 오름차순이면 변경 없음(멱등)
+            if target == old_labels_sorted \
+               and old_cols_sorted == list(range(_FIRST_DATE, _FIRST_DATE + len(old_cols_sorted))):
+                added[biz] = []
+                continue
+            ws = self.wb[biz]
+            max_row = ws.max_row
+            # 스냅샷: 기존 일자 컬럼의 모든 셀 값을 (행, 날짜)로 보존
+            snap: dict[tuple[int, object], object] = {}
+            used_cols = set(cols.values())
+            for r in range(1, max_row + 1):
+                for dd, c in date2col.items():
+                    v = ws.cell(r, c).value
+                    if v not in (None, ""):
+                        snap[(r, dd)] = v
+            header_rows = set(self._date_rows.get(biz, []))
+            # 기존 일자 영역 전부 비움(A~G= _FIRST_DATE 미만은 불변)
+            for r in range(1, max_row + 1):
+                for c in used_cols:
+                    ws.cell(r, c).value = None
+            # 정렬·연속 순서로 재기록(라벨=월.일)
+            new_map: dict[str, int] = {}
+            for i, dd in enumerate(target_days):
+                col = _FIRST_DATE + i
+                lbl = dd.strftime("%m.%d")
+                new_map[lbl] = col
+                for r in range(1, max_row + 1):
+                    if r in header_rows:
+                        ws.cell(r, col).value = lbl          # 헤더행 = 날짜 라벨(빠진 날도 표기)
+                    elif (r, dd) in snap:
+                        ws.cell(r, col).value = snap[(r, dd)]  # 기존 값 이식(없으면 공란)
+            self._date_col[biz] = new_map
+            old_days = set(days)
+            added[biz] = [dd.strftime("%m.%d") for dd in target_days if dd not in old_days]
+        return added
 
     # ── 값 기록 ──────────────────────────────────────────────
     def set_product_metric(self, biz: str, product: str, metric: str, date_iso: str, value) -> bool:
@@ -661,6 +755,9 @@ class OutputWorkbook:
     _FILL_MKT = "FCE4D6"      # 마케팅 기간 일자 컬럼 배경(연주황 — 캠페인 구간 구분)
 
     def apply_style(self) -> None:
+        # 서식 재적용 전에 일자 컬럼을 **시트별 첫날~마지막날 연속·날짜순**으로 정규화(빠진 날=날짜만 표기·값 공란).
+        # 멱등·값 보존이라 결과파일 저장 때마다 시계열이 일자별로 끊기지 않게 유지된다(§'미실행 날짜=공란').
+        self.normalize_date_columns()
         font = Font(name=self._FN, size=11)
         bold = Font(name=self._FN, size=11, bold=True)
         title_font = Font(name=self._FN, size=14, bold=True)

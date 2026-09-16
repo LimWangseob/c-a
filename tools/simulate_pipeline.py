@@ -256,7 +256,7 @@ def scenario_carry_forward():
     P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-09-02",
                date_to="2026-09-02", carry_forward=True, on_log=logs2.append)
     _check("(동결)" in "\n".join(logs2), "day2: 키워드 동결 로그")
-    _check(_date_headers(master) == {"26.09.01", "26.09.02"}, "day2: 2일치 날짜 누적")
+    _check(_date_headers(master) == {"09.01", "09.02"}, "day2: 2일치 날짜 누적")
     _check(_keywords_in(master) == {"kw1", "kw2"}, "day2: 키워드 변화 없음")
     # day3 발굴 추가
     logs3: list[str] = []
@@ -354,13 +354,13 @@ def scenario_display_name_rename():
     _check("상품-a1" not in names2, "day2: 옛 발견명 블록 사라짐(중복 아님)")
     _check(len(names2) == 1, f"day2: 상품 블록 1개 유지(중복 없음) — {names2}")
     _check(_keywords_in(master) == {"kw1", "kw2"}, "day2: 키워드 동결 유지(rename에도 보존)")
-    _check(_date_headers(master) == {"26.09.01", "26.09.02"}, "day2: 날짜 2일 누적")
+    _check(_date_headers(master) == {"09.01", "09.02"}, "day2: 날짜 2일 누적")
     # day3: 같은 vid → 이름 바뀐 블록을 vid 로 찾아 재사용(발견명 '상품-a1'로 와도 중복 생성 안 함)
     P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-09-03",
                date_to="2026-09-03", carry_forward=True, on_log=lambda m: None)
     names3 = _product_names(master, "비즈-a1")
     _check(len(names3) == 1 and _SERP_NAME in names3, f"day3: vid 앵커로 재사용(중복 없음) — {names3}")
-    _check(_date_headers(master) == {"26.09.01", "26.09.02", "26.09.03"}, "day3: 날짜 3일 누적")
+    _check(_date_headers(master) == {"09.01", "09.02", "09.03"}, "day3: 날짜 3일 누적")
     # 워크북 직접 검증 — set_display_name/resolve_block_name + save/load 왕복 키 안정
     from coupang_analytics.workbook import OutputWorkbook
     wb2 = OutputWorkbook.load(master)

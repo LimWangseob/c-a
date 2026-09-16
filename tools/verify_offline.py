@@ -81,7 +81,8 @@ def t1_workbook():
     assert "3위" in flat and 123 in flat and 1200 in flat, "값 재로드 실패"
     # 재로드 후 재개 조회(_reindex)도 실제로 동작하는지
     wb2 = OutputWorkbook.load(path)
-    assert wb2.is_rank_filled("비즈A", "상품A", "kw1", "2026-09-02")
+    # 저장 시 apply_style→normalize_date_columns 가 라벨을 년도 없는 '월.일'(09.02)로 통일 → 그 라벨로 조회.
+    assert wb2.is_rank_filled("비즈A", "상품A", "kw1", "09.02")
     assert wb2.product_keywords("비즈A", "상품A") == ["kw1", "kw2"]
     _ok(f"셀독 워크북 생성({size} bytes) → 재로드 → 값(순위3위·노출123·검색량1200)·재개조회 정상")
 

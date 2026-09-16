@@ -1003,11 +1003,18 @@ class App(QtWidgets.QMainWindow):
         self.to_edit.setEnabled(on)
 
     def _run_dates(self):
+        """(판매조회_from, 판매조회_to, 컬럼라벨_실행날짜) 반환.
+
+        쿠팡 판매분석은 당일 데이터를 익일 이후 생성 → **판매조회는 전일(D-1)**. 하지만 결과파일의
+        **컬럼 제목은 실제 작업한 날(오늘=실행날짜)**로 적는다(순위는 오늘 측정이므로 라벨과 일치, 판매는
+        전일 데이터가 그 컬럼에 함께 들어감). 새벽까지 이어져 날짜가 바뀌어도 이 값은 시작 시점에 한 번
+        정해져 실행날짜 기준으로 고정된다. 직접 날짜지정(순위 제외)은 그 날짜를 그대로 라벨로 쓴다."""
         if self.cb_today.isChecked():
-            # 쿠팡 판매분석은 당일 데이터를 익일 이후 생성 → '당일'은 데이터가 확정된 어제(D-1) 기준.
-            d = (date.today() - timedelta(days=1)).isoformat()
-            return d, d
-        return self.from_edit.text().strip(), self.to_edit.text().strip()
+            today = date.today().isoformat()
+            d1 = (date.today() - timedelta(days=1)).isoformat()
+            return d1, d1, today
+        dt = self.to_edit.text().strip()
+        return self.from_edit.text().strip(), dt, dt
 
     def do_run_full(self, keywords_off: bool = False, sales_semi: bool = False):
         if self.input_list is None:
@@ -1019,7 +1026,7 @@ class App(QtWidgets.QMainWindow):
         if not self.ai_key:
             QtWidgets.QMessageBox.warning(self, "키 필요", "키워드 추출에 OpenAI(ChatGPT) API 키가 필요합니다.")
             return
-        df, dt = self._run_dates()
+        df, dt, dlabel = self._run_dates()
         # 날짜를 직접 지정(어제 자동이 아님)하면 순위 조회 제외 = 그 날짜 판매데이터만 채움(차단 회피)
         skip_ranks = not self.cb_today.isChecked()
         n = sum(len(a.products) for a in self.input_list.accounts)
@@ -1082,7 +1089,7 @@ class App(QtWidgets.QMainWindow):
             snap = run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
                             get_password=self._account_pw, resume=resume, carry_forward=carry,
                             grow_keywords=False, skip_ranks=True, redo_today=redo_today,
-                            sales_semi=True, keywords_off=True, on_log=self.log,
+                            sales_semi=True, date_label=dlabel, keywords_off=True, on_log=self.log,
                             gsheet_output_url=gs_out)
             if keywords_off:                        # ① 단독 실행 → 판매데이터만 채우고 종료
                 return snap
@@ -1126,12 +1133,13 @@ class App(QtWidgets.QMainWindow):
             self.log("[무인] 네이버/OpenAI 키 미설정 — 설정 후 재시도. 종료")
             return self._auto_quit()
         self._schedule_auto_stop()                 # 06:00 자동 종료 예약
-        df, dt = self._run_dates()                 # 당일=어제(D-1)
+        df, dt, dlabel = self._run_dates()         # 판매조회=어제(D-1) · 컬럼라벨=실행날짜(오늘)
         meta = resumable_progress()
         resume = bool(meta)
         carry = bool(meta.get("carry", False)) if meta else master_exists()
         if resume:
             df, dt = meta["date_from"], meta["date_to"]
+            dlabel = meta.get("date_label") or dlabel
         self._semi_stop = threading.Event()
         n = sum(len(a.products) for a in self.input_list.accounts)
         self.log(f"[무인] ①반자동 판매수집 → ②키워드선정 → ③반자동 순위 · 상품 {n}개 · 기간 {df}~{dt} · "
@@ -1147,8 +1155,8 @@ class App(QtWidgets.QMainWindow):
                 #    판매만(키워드·순위·노출측정 없음) → 이어서 ②③. 전체실행과 동일 조합(offscreen 전무).
                 run_full(il, naver, ai_key=key, date_from=df, date_to=dt,
                          get_password=self._account_pw, resume=resume, carry_forward=carry,
-                         grow_keywords=False, skip_ranks=True, sales_semi=True, keywords_off=True,
-                         on_log=self.log, gsheet_output_url=gs_out)
+                         grow_keywords=False, skip_ranks=True, sales_semi=True, date_label=dlabel,
+                         keywords_off=True, on_log=self.log, gsheet_output_url=gs_out)
                 # 야간 1회 쿨다운-재개: 차단 등으로 미완료 계정이 남았으면(진행중 파일 잔존) 30분 쉬고
                 # **남은 계정만 1회 더** 시도(제출 총량 억제 = 위탁계정 잠금 방지, 무한 재시도 금지). 역시 반자동.
                 if (not stop.is_set() and config.LOGIN_NIGHT_RESUME and resumable_progress()):
@@ -1160,8 +1168,8 @@ class App(QtWidgets.QMainWindow):
                         self.log("[무인] 쿨다운 종료 — 미완료 계정 로그인 재개(1회)")
                         run_full(il, naver, ai_key=key, date_from=df, date_to=dt,
                                  get_password=self._account_pw, resume=True, carry_forward=carry,
-                                 grow_keywords=False, skip_ranks=True, sales_semi=True, keywords_off=True,
-                                 on_log=self.log, gsheet_output_url=gs_out)
+                                 grow_keywords=False, skip_ranks=True, sales_semi=True, date_label=dlabel,
+                                 keywords_off=True, on_log=self.log, gsheet_output_url=gs_out)
                 if not stop.is_set():
                     write_run_stage("sales")       # ① 완료 표시(재부팅 복구용)
                 # ② 키워드 선정(노출측정 없음·로그인 불필요·부족분 4개까지 보충)
@@ -1235,7 +1243,9 @@ class App(QtWidgets.QMainWindow):
         self._schedule_auto_stop()                 # 안전 백스톱(06:00 자동 종료)
         self._semi_stop = threading.Event()
         stop = self._semi_stop
-        df, dt = self._run_dates()
+        df, dt, dlabel = self._run_dates()
+        if prog:                                   # ①판매 진행중 = 원래 작업 실행날짜 라벨 유지(새벽 재부팅에도 시작일 기준)
+            dlabel = prog.get("date_label") or dlabel
         carry = master_exists()
         il, naver_creds, key = self.input_list, self.naver_creds, self.ai_key
         gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
@@ -1252,8 +1262,8 @@ class App(QtWidgets.QMainWindow):
                 if do_sales:                       # ① 판매수집 이어서(반자동·완료계정 건너뜀)
                     run_full(il, naver, ai_key=key, date_from=df, date_to=dt,
                              get_password=self._account_pw, resume=True, carry_forward=carry,
-                             grow_keywords=False, skip_ranks=True, sales_semi=True, keywords_off=True,
-                             on_log=self.log, gsheet_output_url=gs_out)
+                             grow_keywords=False, skip_ranks=True, sales_semi=True, date_label=dlabel,
+                             keywords_off=True, on_log=self.log, gsheet_output_url=gs_out)
                     if not stop.is_set():
                         write_run_stage("sales")
                 if not stop.is_set() and do_keywords:   # ② 키워드 선정(동결분 유지·부족분만)
