@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import sys
 import threading
 from datetime import date, datetime, timedelta
@@ -22,6 +23,7 @@ from coupang_analytics import config, keyword_store  # noqa: E402
 from coupang_analytics.apppaths import base_dir as app_base_dir, set_workdir  # noqa: E402
 from coupang_analytics.browser import WingBrowser, find_chrome, reap_orphan_chrome  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
+from coupang_analytics import detail_images  # noqa: E402
 from coupang_analytics import gsheet_api, gsheet_index  # noqa: E402
 from coupang_analytics.input_list import (parse_input_list, parse_input_rows,  # noqa: E402
                                            parse_password_file, parse_password_rows,
@@ -30,11 +32,14 @@ from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
 from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_credentials_file  # noqa: E402
 from coupang_analytics.pipeline import (_interruptible_sleep, master_exists,  # noqa: E402
-                                        push_ledger_inventory, resumable_progress, run_full,
-                                        select_keywords_stage, track_ranks_stage)
+                                        push_ledger_inventory, read_run_stage, resumable_progress,
+                                        run_full, select_keywords_stage, track_ranks_stage,
+                                        write_run_stage)
 from coupang_analytics.rank import make_matcher, organic_rank, warmup  # noqa: E402
 
 _PROFILE = "data/chrome-ui"
+_IMG_PROFILE = "data/chrome-images"   # 상세이미지 전용 Chrome 프로필(사용자가 여기 코팡 로그인 → warm 영속)
+_IMG_CDP_PORT = 9222                  # 그 Chrome 을 디버그포트로 띄워 앱이 CDP 로 붙는다(A안)
 
 # ── Windows 11 Fluent 스타일시트 (둥근 모서리·플랫·악센트) ──────────────────
 _QSS = """
@@ -183,7 +188,12 @@ class App(QtWidgets.QMainWindow):
         self._load_saved_secrets()
         self._auto_load_input()     # 마지막 사용 입력 엑셀 자동 로드(무인 실행·재시작 후 즉시 실행 가능)
         scr = self.screen().availableGeometry()
-        self.resize(min(1200, scr.width() - 80), min(1050, scr.height() - 80))
+        # 최대 크기 = 화면(작업영역)으로 제한 — 창이 화면보다 커지지 않게.
+        self.setMaximumSize(scr.width(), scr.height())
+        # 자유롭게 좌우·상하로 줄일 수 있게 최소 크기는 작게(내용은 스크롤/줄바꿈으로 수용).
+        self.setMinimumSize(min(720, scr.width()), min(480, scr.height()))
+        # 시작 크기 = 화면 안에서 적당히(화면이 작으면 화면에 맞춤).
+        self.resize(min(1100, scr.width()), min(900, scr.height()))
 
     # ── 레이아웃 ──────────────────────────────────────────────
     def _build_ui(self):
@@ -199,6 +209,7 @@ class App(QtWidgets.QMainWindow):
         self.tabs.addTab(self._settings_tab(), "설정")
         self.tabs.addTab(self._kw_tab(), "키워드 추천")
         self.tabs.addTab(self._rank_tab(), "순위 조회")
+        self.tabs.addTab(self._images_tab(), "상세 이미지")
         self.tabs.addTab(self._collect_tab(), "전체 실행")
         root.addWidget(self._log_panel(), 1)   # 로그가 남는 공간 전부
 
@@ -380,6 +391,58 @@ class App(QtWidgets.QMainWindow):
         v.addLayout(bar)
         v.addWidget(QtWidgets.QLabel(
             f"광고 제외 오가닉 순위를 조회합니다(상한 {config.RANK_SCAN_MAX}위, 밖이면 {config.RANK_SCAN_MAX}위). 로그인 불필요."))
+        v.addStretch(1)
+        return w
+
+    # ── 상세 이미지 탭(반자동: 사람이 창에서 상품을 열고 '이미지 추출') ──
+    def _images_tab(self):
+        w = QtWidgets.QWidget()
+        v = QtWidgets.QVBoxLayout(w)
+        v.setContentsMargins(12, 10, 12, 10)
+
+        card = self._card("상품 상세페이지 이미지 추출 (내 Chrome 세션에 붙어 추출 · 필요할 때 1건씩)")
+        cv = QtWidgets.QVBoxLayout(card)
+
+        img_desc = QtWidgets.QLabel(
+            "① '쿠팡용 크롬 실행' → 뜬 <b>내 Chrome</b>에서 (처음이면 쿠팡 로그인 후) <b>상품 상세페이지를 여세요</b>.<br>"
+            "② 상품이 화면에 뜬 상태에서 '이미지 추출' → 그 탭에서 대표+상세설명 이미지를 저장합니다.<br>"
+            "③ 다음 상품을 그 크롬에서 열고 또 '이미지 추출' — 필요할 때마다 반복.<br>"
+            "앱은 브라우저를 새로 띄우지 않고 내 로그인·warm 세션에 붙어 읽기만 하므로 차단(Access Denied)이 없습니다.")
+        img_desc.setWordWrap(True)   # 줄바꿈 자동 — 안 하면 한 줄로 붙어 창 최소폭이 과도하게 커짐
+        cv.addWidget(img_desc)
+
+        btns = QtWidgets.QHBoxLayout()
+        self.img_launch_btn = QtWidgets.QPushButton("쿠팡용 크롬 실행")
+        self.img_launch_btn.setToolTip(
+            f"디버그 포트({_IMG_CDP_PORT})로 전용 Chrome 을 띄웁니다(프로필 영속 — 한 번 로그인하면 유지).\n"
+            "그 창에서 상품을 여신 뒤 '이미지 추출'을 누르세요.")
+        self.img_launch_btn.clicked.connect(self.do_img_launch_chrome)
+        btns.addWidget(self.img_launch_btn)
+
+        self.img_extract_btn = QtWidgets.QPushButton("이미지 추출")
+        self.img_extract_btn.setObjectName("accent")
+        self.img_extract_btn.setToolTip("그 Chrome 에 지금 열려 있는 상품 상세페이지에서 대표+상세 이미지를 저장합니다.")
+        self.img_extract_btn.clicked.connect(self.do_img_extract)
+        btns.addWidget(self.img_extract_btn)
+        btns.addStretch(1)
+        cv.addLayout(btns)
+
+        fold = QtWidgets.QHBoxLayout()
+        fold.addWidget(QtWidgets.QLabel("저장 폴더:"))
+        self.img_dir_lbl = QtWidgets.QLabel(self._img_out_root())
+        self.img_dir_lbl.setStyleSheet("color:#556; ")
+        self.img_dir_lbl.setWordWrap(True)          # 긴 경로가 창 폭을 강제하지 않게
+        self.img_dir_lbl.setMinimumWidth(0)
+        fold.addWidget(self.img_dir_lbl, 1)
+        chg = QtWidgets.QPushButton("폴더 변경")
+        chg.clicked.connect(self._img_change_dir)
+        fold.addWidget(chg)
+        opn = QtWidgets.QPushButton("폴더 열기")
+        opn.clicked.connect(lambda: self._open_folder(self._img_out_root()))
+        fold.addWidget(opn)
+        cv.addLayout(fold)
+
+        v.addWidget(card)
         v.addStretch(1)
         return w
 
@@ -1023,11 +1086,13 @@ class App(QtWidgets.QMainWindow):
                             gsheet_output_url=gs_out)
             if keywords_off:                        # ① 단독 실행 → 판매데이터만 채우고 종료
                 return snap
+            write_run_stage("sales")                # ① 완료 표시(재부팅 복구: 여기부턴 ②③만)
             if stop is not None and stop.is_set():
                 return snap
             # ② 키워드 선정 — 공개검색(노출측정) 없이 AI 선정만(로그인 불필요·동결분 유지)
             self.log("[전체실행] ② 키워드 선정 — 노출측정 없이 AI 선정(동결분 유지)")
             select_keywords_stage(naver, key, grow=grow, on_log=self.log, gsheet_output_url=gs_out)
+            write_run_stage("ranks")                # ② 완료 표시(재부팅 복구: 여기부턴 ③만)
             if stop is not None and stop.is_set():
                 return snap
             # ③ 반자동 순위 — 보이는 창에서 자동 타이핑·검색(차단 회피)
@@ -1038,6 +1103,8 @@ class App(QtWidgets.QMainWindow):
             # 입력 관리대장의 '그로스 재고'(AD) 컬럼을 수집 재고로 역기록(SA 편집권한 필요·없으면 로그 후 비치명)
             gs_in = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/input_url", "", type=str).strip()
             push_ledger_inventory(gs_in, self.log)
+            if not (stop is not None and stop.is_set()):
+                write_run_stage("done")             # 전부 완료 표시(재부팅 복구 안 함)
             return result
         self.run_bg(task, on_done=self._pipeline_done, btn=btn)
 
@@ -1095,16 +1162,21 @@ class App(QtWidgets.QMainWindow):
                                  get_password=self._account_pw, resume=True, carry_forward=carry,
                                  grow_keywords=False, skip_ranks=True, sales_semi=True, keywords_off=True,
                                  on_log=self.log, gsheet_output_url=gs_out)
+                if not stop.is_set():
+                    write_run_stage("sales")       # ① 완료 표시(재부팅 복구용)
                 # ② 키워드 선정(노출측정 없음·로그인 불필요·부족분 4개까지 보충)
                 if not stop.is_set():
                     select_keywords_stage(naver, key, grow=False, on_log=self.log, gsheet_output_url=gs_out)
+                    write_run_stage("ranks")       # ② 완료 표시(재부팅 복구: 여기부턴 ③만)
                 # ③ 반자동 순위(autosubmit, 차단 시 쿨다운-재개)
                 if not stop.is_set():
                     track_ranks_stage(semi=True, should_stop=stop.is_set, on_log=self.log,
                                       gsheet_output_url=gs_out)
                 # 입력 관리대장의 '그로스 재고'(AD) 컬럼을 수집 재고로 역기록(SA 편집권한 필요·없으면 비치명)
                 gs_in = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/input_url", "", type=str).strip()
-                push_ledger_inventory(gs_in, self.log)
+                if not stop.is_set():
+                    push_ledger_inventory(gs_in, self.log)
+                    write_run_stage("done")        # 전부 완료 표시
                 # (결과는 구글 시트 통합으로 결과시트에 직접 반영 — rclone 업로드 제거)
             except Exception as exc:                # 무인: 어떤 오류도 앱을 매달아두지 않게 로그 후 종료로
                 self.log(f"[무인] 실행 중 오류: {exc.__class__.__name__}: {exc}")
@@ -1133,6 +1205,71 @@ class App(QtWidgets.QMainWindow):
     def _auto_quit(self):
         _prevent_sleep(False)
         QtWidgets.QApplication.quit()
+
+    # ── 재부팅 복구(--resume): 재부팅으로 끊긴 '오늘 작업'만 이어서(없으면 조용히 종료) ──
+    def start_resume(self):
+        """재부팅 후 자동 실행 — 오늘 중단된 전체실행/무인 작업이 있으면 **판매수집은 건너뛰고 순위부터**
+        이어서 완료한다(없으면 아무것도 안 하고 종료). 작업 스케줄러 '로그온 시' 트리거가 부른다.
+
+        판단: `read_run_stage()`(단계 마커)와 `resumable_progress()`(①판매 진행중 파일)로 어디까지 했는지 본다.
+          - 진행중 파일 있음 = ① 판매수집 중단 → ①부터 이어서(완료계정 건너뜀) + ②③.
+          - 마커 'sales'  = ①만 끝남 → ②③.
+          - 마커 'ranks'  = ②까지 끝남 → ③만.
+          - 마커 'done'/없음 & 진행중 없음 = 이어서 할 것 없음 → 종료.
+        재부팅 후 Windows 자동 로그인이 켜져 있어야 이 창(세션)이 떠서 동작한다(반자동은 잠긴 세션도 가능).
+        """
+        marker = read_run_stage()
+        prog = resumable_progress()
+        stage = marker.get("stage") if marker else None
+        if not prog and (stage is None or stage == "done"):
+            self.log("[재부팅 복구] 오늘 이어서 할 중단 작업이 없습니다 — 종료")
+            return self._auto_quit()
+        if self.input_list is None:
+            self.log("[재부팅 복구] 입력 엑셀/관리대장이 없어 이어서 불가 — 종료")
+            return self._auto_quit()
+        if self.naver_creds is None or not self.ai_key:
+            self.log("[재부팅 복구] 네이버/OpenAI 키 미설정 — 종료")
+            return self._auto_quit()
+
+        _prevent_sleep(True)
+        self._schedule_auto_stop()                 # 안전 백스톱(06:00 자동 종료)
+        self._semi_stop = threading.Event()
+        stop = self._semi_stop
+        df, dt = self._run_dates()
+        carry = master_exists()
+        il, naver_creds, key = self.input_list, self.naver_creds, self.ai_key
+        gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
+        gs_in = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/input_url", "", type=str).strip()
+
+        do_sales = bool(prog)                      # 판매수집 진행중이면 ①부터 이어서(완료계정 건너뜀)
+        do_keywords = do_sales or stage == "sales"  # ①했거나 마커가 'sales'면 ②부터, 'ranks'면 ③만
+        self.log(f"== [재부팅 복구] 오늘 중단분 이어서 — 단계마커={stage!r}, 판매진행중={bool(prog)} → "
+                 f"{'①판매+' if do_sales else ''}{'②키워드+' if do_keywords else ''}③순위 ==")
+
+        def task():
+            try:
+                naver = NaverAdApi(naver_creds)
+                if do_sales:                       # ① 판매수집 이어서(반자동·완료계정 건너뜀)
+                    run_full(il, naver, ai_key=key, date_from=df, date_to=dt,
+                             get_password=self._account_pw, resume=True, carry_forward=carry,
+                             grow_keywords=False, skip_ranks=True, sales_semi=True, keywords_off=True,
+                             on_log=self.log, gsheet_output_url=gs_out)
+                    if not stop.is_set():
+                        write_run_stage("sales")
+                if not stop.is_set() and do_keywords:   # ② 키워드 선정(동결분 유지·부족분만)
+                    select_keywords_stage(naver, key, grow=False, on_log=self.log, gsheet_output_url=gs_out)
+                    if not stop.is_set():
+                        write_run_stage("ranks")
+                if not stop.is_set():              # ③ 반자동 순위(이미 채워진 순위는 건너뜀)
+                    track_ranks_stage(semi=True, should_stop=stop.is_set, on_log=self.log,
+                                      gsheet_output_url=gs_out)
+                if not stop.is_set():              # 마무리: 그로스 재고 역기록 + 완료 표시
+                    push_ledger_inventory(gs_in, self.log)
+                    write_run_stage("done")
+            except Exception as exc:               # 복구도 무인이라 어떤 오류도 매달지 않고 로그 후 종료
+                self.log(f"[재부팅 복구] 실행 중 오류: {exc.__class__.__name__}: {exc}")
+            return None
+        self.run_bg(task, on_done=self._auto_done, btn=None)
 
     def do_select_keywords(self):
         """② 키워드 선정 — 로그인 불필요. 최신 결과 워크북 상품에 키워드만 채운다(순위 없음)."""
@@ -1181,6 +1318,91 @@ class App(QtWidgets.QMainWindow):
             self.log("[반자동 순위] 중지 요청 — 현재 키워드 처리 후 멈춥니다")
         self.track_stop_btn.setEnabled(False)
 
+    # ── 상세 이미지(반자동) ────────────────────────────────────
+    def _img_out_root(self) -> str:
+        """상세이미지 저장 루트(QSettings 영속). 기본 = <기준폴더>/output/상세이미지."""
+        st = QtCore.QSettings("coupang-analytics", "ui")
+        default = str(app_base_dir() / "output" / "상세이미지")
+        return st.value("dir/detail_images", default, type=str) or default
+
+    def _img_change_dir(self):
+        start = self._img_out_root()
+        d = QtWidgets.QFileDialog.getExistingDirectory(self, "상세이미지 저장 폴더 선택", start)
+        if d:
+            QtCore.QSettings("coupang-analytics", "ui").setValue("dir/detail_images", d)
+            self.img_dir_lbl.setText(d)
+
+    def _open_folder(self, path: str):
+        """폴더를 탐색기로 연다(없으면 생성). 파일 다운로드가 아니라 로컬 폴더 열기라 안전."""
+        try:
+            Path(path).mkdir(parents=True, exist_ok=True)
+            os.startfile(path)   # Windows 전용(앱이 Windows 데스크톱 GUI)
+        except Exception as exc:
+            self.log(f"[상세이미지] 폴더 열기 실패({exc.__class__.__name__}: {exc})")
+
+    @staticmethod
+    def _port_open(port: int) -> bool:
+        """localhost 포트가 열려 있는지(=디버그 Chrome 이 이미 떠 있는지) 빠르게 확인."""
+        import socket
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            return s.connect_ex(("127.0.0.1", port)) == 0
+
+    def do_img_launch_chrome(self):
+        """상세이미지용 Chrome 을 디버그포트로 실행(전용 프로필·영속). 이미 떠 있으면 안내만."""
+        if self._port_open(_IMG_CDP_PORT):
+            self.log(f"[상세이미지] 쿠팡용 크롬이 이미 실행 중입니다(포트 {_IMG_CDP_PORT}). "
+                     "그 창에서 상품을 열고 '이미지 추출'을 누르세요.")
+            return
+        from coupang_analytics.browser import _kill_profile_chrome
+        import subprocess
+        profile = str((app_base_dir() / _IMG_PROFILE).resolve())
+        try:
+            Path(profile).mkdir(parents=True, exist_ok=True)
+            killed = _kill_profile_chrome(profile)   # 그 프로필 잔여 Chrome 정리(포트 미개방 방지)
+            if killed:
+                self.log(f"[상세이미지] 이 프로필의 잔여 Chrome {killed}개 정리")
+            args = [
+                find_chrome(),
+                f"--remote-debugging-port={_IMG_CDP_PORT}",
+                f"--user-data-dir={profile}",
+                "--no-first-run", "--no-default-browser-check",
+                "--disable-session-crashed-bubble", "--hide-crash-restore-bubble",
+                "--disable-features=InfiniteSessionRestore",
+                "about:blank",
+            ]
+            subprocess.Popen(args)
+            self.log(f"[상세이미지] 쿠팡용 크롬을 띄웠습니다(포트 {_IMG_CDP_PORT}). "
+                     "처음이면 쿠팡 로그인 후, 상품 상세페이지를 열고 '이미지 추출'을 누르세요.")
+        except Exception as exc:
+            self.log(f"[상세이미지][오류] 크롬 실행 실패: {exc.__class__.__name__}: {exc}")
+
+    def do_img_extract(self):
+        """디버그포트로 떠 있는 내 Chrome 에 붙어(CDP) 현재 상품 탭에서 이미지 추출(1회, 백그라운드)."""
+        if not self._port_open(_IMG_CDP_PORT):
+            QtWidgets.QMessageBox.information(
+                self, "먼저 쿠팡용 크롬 실행",
+                "'쿠팡용 크롬 실행'으로 크롬을 띄우고, 그 창에서 상품 상세페이지를 연 뒤 추출하세요.")
+            return
+        out_root = self._img_out_root()
+        cdp_url = f"http://127.0.0.1:{_IMG_CDP_PORT}"
+        self.log("[상세이미지] 내 Chrome 세션에 붙어 현재 상품 탭에서 추출 중...")
+
+        def task():
+            return detail_images.extract_via_cdp(cdp_url, out_root, log=self.log)
+        self.run_bg(task, on_done=self._img_extract_done, btn=self.img_extract_btn)
+
+    def _img_extract_done(self, res):
+        """[GUI 스레드] 추출 결과 로그 + 저장폴더 열기."""
+        if res is None:
+            return
+        if res.gallery or res.detail:
+            self.log(f"[상세이미지] ✅ '{res.title[:40]}' — 대표 {len(res.gallery)} · "
+                     f"상세 {len(res.detail)}장 저장(실패 {res.skipped}) → {res.out_dir}")
+            self._open_folder(res.out_dir)
+        else:
+            self.log("[상세이미지] 추출된 이미지가 없습니다 — 상품 상세페이지가 열려 있는지 확인하세요.")
+
     def _pipeline_done(self, path):
         self.log("=" * 50)
         if path:
@@ -1221,12 +1443,13 @@ def _check_icon_path() -> str:
 def main():
     set_workdir()                   # .exe 더블클릭 대비 — 상대경로(output·data)가 exe 폴더에서 해석되게 CWD 고정
     auto = "--auto" in sys.argv     # 무인 자동 실행(작업 스케줄러가 18:00에 이 인자로 실행)
+    resume = "--resume" in sys.argv  # 재부팅 복구(작업 스케줄러 '로그온 시' 트리거) — 중단분만 이어서, 없으면 종료
     app = QtWidgets.QApplication(sys.argv)
     app.setStyleSheet(_QSS.replace("__CHECK_ICON__", _check_icon_path()))
     try:                            # Chrome 필수(실제 Chrome+CDP 정책) — 없으면 크래시 대신 안내 후 종료
         find_chrome()
     except FileNotFoundError:
-        if auto:
+        if auto or resume:
             print("[무인] Google Chrome 미설치 — 실행 불가")   # 무인: 대화상자 대신 로그
         else:
             QtWidgets.QMessageBox.critical(
@@ -1238,9 +1461,11 @@ def main():
     reaped = reap_orphan_chrome()   # 이전 실행이 강제종료·크래시로 남긴 좀비 Chrome 정리(누적 원천 차단)
     if reaped:
         print(f"[시작] 잔여(좀비) Chrome {reaped}개 정리함")
-    win = App(auto=auto)
+    win = App(auto=(auto or resume))
     win.show()
-    if auto:                        # 이벤트 루프 뜬 직후 무인 실행 자동 시작
+    if resume:                      # 재부팅 복구 — 오늘 중단분만 이어서(없으면 스스로 종료)
+        QtCore.QTimer.singleShot(1500, win.start_resume)
+    elif auto:                      # 이벤트 루프 뜬 직후 무인 실행 자동 시작
         QtCore.QTimer.singleShot(1500, win.start_auto)
     sys.exit(app.exec())
 

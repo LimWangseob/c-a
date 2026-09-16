@@ -3,6 +3,13 @@
 > 정책·구조의 단일 기준 문서. 코드보다 이 문서가 우선한다.
 > §8 미확정 항목은 실제 페이지 1회 분석 후 확정한다.
 
+## 0-00. 최신 반영 요약 (2026-09-16 — 상세이미지 추출·재부팅 복구·창 크기)
+
+- **재부팅 자동복구(사용자 요구 2026-09-16):** 야간 Windows 업데이트 재부팅으로 전체실행이 끊기는 것(09-16 01:29 실측, ③순위 59%서 중단) 대비. `pipeline.write_run_stage/read_run_stage` → `output/…_실행단계.json`(오늘 날짜+stage: `sales`=①완료·`ranks`=②완료·`done`). `do_run_full`(전체실행)·`start_auto`(무인)·`start_resume`이 단계마다 마커 기록. **`--resume` 모드**(`app_qt.start_resume`, main에서 `--resume` 인자): 마커+`resumable_progress`(①진행중 파일)로 판단 — 진행중있음→①부터, 마커`sales`→②③, `ranks`→③만, `done`/없음→**즉시 종료**. **핵심=판매수집(재로그인) 스킵**(위탁계정 재로그인 부담↓), ③은 이미 채워진 순위 건너뜀(멱등). 작업 스케줄러 **'로그온 시' 트리거=`--resume`**(`deploy/install_schedule.ps1` exe용·`install_schedule_py.bat/.ps1` python소스용). ⚠ 무인 동작 선결=**Windows "업데이트/재시작 후 자동 로그인 완료"** 켜야 세션 복원(반자동은 잠긴 세션도 CDP로 동작). 예방=업데이트 활성시간 17~9시. 검증=마커 read/write·복구 분기·"이어서 할 것 없음→종료"·simulate 10/10. SSOT=본 절+[[reboot-recovery]].
+- **상세페이지 이미지 추출(§5.3, A안 CDP attach):** 새 탭 "상세 이미지" — 사용자의 warm·로그인된 실제 Chrome(디버그포트 9222)에 붙어 대표+상세 이미지만 저장. 상세는 §5.3.
+- **창 크기(2026-09-16):** app_qt 창 **최대=화면 크기로 제한**+**좌우/상하 자유 리사이즈**(최소 720×480). '상세 이미지' 탭 안내 QLabel이 `<b>`(HTML 인식)+`\n`(HTML 줄바꿈 안 됨) 조합으로 한 줄이 돼 최소폭 2784px를 만들던 것을 `setWordWrap(True)`+`<br>`로 해결(→638px).
+- **스케줄러 스크립트 인코딩(2026-09-16):** .bat=ASCII만(관리자 확인 후 .ps1 호출), 한글은 .ps1(**UTF-8 BOM**)에만 — cmd↔PS 전달·PS5.1 CP949 오독으로 한글 작업이름/메시지 깨지던 것 해결. python소스 실행용 `install_schedule_py.bat`(우클릭 관리자 실행) 추가.
+
 ## 0-0. 최신 반영 요약 (2026-09-15 — 전체실행 오프스크린 추방·① 버튼 단일화)
 
 - **관리대장 '그로스 재고' 역기록(사용자 요구 2026-09-15):** 전체실행·무인(`--auto`) 종료 시, 수집한 재고현황을 **입력 관리대장(셀독리스트 시트)의 `AD` "그로스 재고 (…기준)" 컬럼**에 써넣는다. `pipeline.push_ledger_inventory(input_url, log)` → `input_list.write_ledger_inventory(client, wb)`: 최신 마스터 로드 → **매칭키=계정(사업자)+등록상품명 유사도** → 그 상품 행 `AD` 셀만 갱신. **미매칭·개인상품·미수집·비상품 행은 기존값 보존**(직원 입력 다른 컬럼 절대 미접촉), 헤더 라벨을 `그로스 재고 (자동갱신 MM.DD)`로 갱신(‘8.26 기준’ 정적문구 대체·재탐지=‘그로스’+‘재고’+‘기준|갱신’). AD 데이터열+헤더 = 쓰기 2회. **대상은 `AD`(‘기준’ 컬럼)이며 `BW` ‘그로스재고’ 아님(사용자 확정).**
@@ -252,6 +259,32 @@
 
 **전체실행 흐름(2026-09-15):** ①반자동 판매수집 → ②키워드 선정(**노출측정=offscreen 공개검색 없음**, 단 **쿠팡 자동완성=연관검색어는 사용**) → ③반자동 순위. **offscreen 전무.** UI `do_run_full` 조합(§0-0).
 
+### 5.3 상세페이지 이미지 추출 (CDP attach, ad-hoc — 2026-09-15)
+
+파이프라인과 **완전히 독립된** 업무용 보조 도구. 상품 상세페이지의 **대표/갤러리 + 상세설명 이미지만** 골라 저장.
+필요할 때 **1건씩** 수동 작업(배치 아님). 모듈 `src/coupang_analytics/detail_images.py`.
+
+- **🔒 방식 = A안 CDP attach(사용자 확정 2026-09-15)**: 앱이 **새 프로필로 코팡에 접근하면** 사무실 IP Akamai 가
+  콜드 세션을 **Access Denied**(홈조차 차단, 라이브 실증)로 막는다. 유일하게 확실히 안 막히는 경로 =
+  **사용자가 평소 쓰는 warm·로그인된 실제 Chrome 세션**. → 앱은 **브라우저를 띄우지 않는다**.
+  사용자가 디버그포트(`--remote-debugging-port=9222`)로 띄운 자기 Chrome 에서 상품을 연다. 앱은 그 Chrome 에
+  `extract_via_cdp()` 로 **붙어**(connect_over_cdp) 현재 상품 탭의 DOM만 읽고, 그 탭 세션 쿠키로 이미지만
+  내려받는다(추가 네비 0·차단 0). 읽고 나면 `pw.stop()` 으로 **연결만 해제**(사용자 Chrome 은 유지).
+  ⛔ 폐기: 앱이 새 프로필 WingBrowser 를 띄우고 홈 워밍업하는 방식(사무실 IP서 Access Denied).
+- **무엇을 고르나(실측 2026-09-15)**: **DOM 컨테이너 스코핑**이 핵심(순수 로직 `extract_from_page(page,…)` — 어떤
+  경로로 얻은 Playwright Page 든 동일 동작) —
+  - 상세설명 = `.product-detail-content, .vendor-item` 안 img(각 `.subType-IMAGE`). q89=원본폭(≈780) 그대로.
+  - 대표/갤러리 = `div.product-image` 안 img. 48x48썸네일+492x492메인이 같은 원본 → canonical(`vendor_inventory/{hash}`)
+    dedup, 크기토큰만 1000x1000ex로 키워 고해상도.
+  - ⚠ 추천상품·리뷰 사진도 **같은 vendor_inventory URL** → URL 필터 불가, 컨테이너 스코핑 필수.
+  - "상품정보 더보기" 펼침 + 끝까지 스크롤 후 읽어야 지연로딩 이미지가 다 붙는다.
+  - 상품 탭 자동탐색 `_pick_product_page`: 열린 탭 중 `/vp/products/` — 보이는(활성) 탭 우선, 없으면 마지막.
+- **저장**: `output/상세이미지/{상품ID}/`(설정 가능) — `gallery_NN.jpg`·`detail_NN.jpg`·`meta.json`. 완료 후 폴더 자동 열기.
+- **UI**: app_qt "상세 이미지" 탭 — [쿠팡용 크롬 실행](디버그포트·전용 영속 프로필 `data/chrome-images`) → 사용자가
+  그 Chrome 에서 (1회 로그인 후) 상품 열기 → [이미지 추출](run_bg 1회: CDP attach→탐색→추출→폴더 열기).
+- **라이브 검증(2026-09-15)**: 디버그포트 Chrome→CDP attach→상품 탭 자동탐색→대표 2(1000x1000)+상세 14(원본폭),
+  실패 0, 추천/리뷰 누출 0, `pw.stop()` 후 Chrome 실행 유지 확인.
+
 ## 6. 실행 (기간 입력, 스냅샷)
 
 - **입력: 검색 기간(from~to).** 그 기간의 각 일자 컬럼을 채운 출력 파일 생성(수동 실행).
@@ -327,6 +360,7 @@ src/coupang_analytics/
   credstore.py    # PC별 비번/키 DPAPI 암호화
   browser.py      # 실제 Chrome+CDP(WingBrowser), 프로필 재사용, authenticated()
   rank.py         # 비로그인 오가닉 순위(광고제외·차단감지·옵션별)
+  detail_images.py # 상세페이지 이미지 추출(반자동·ad-hoc): 대표+상세 이미지만 DOM 컨테이너 스코핑(§5.3)
   human_typing.py / human_mouse.py  # 한글자 타이핑(CDP IME) · 사람같은 마우스/스크롤(RANK_HUMAN_INTERACT)
   kw_ai.py        # OpenAI: analyze/generate/judge/select_keywords·recommend_title (KEYWORD_SELECTION.md)
   kw_volume.py    # 네이버 검색광고 API: 연관키워드+검색량
