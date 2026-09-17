@@ -226,6 +226,37 @@ def t1_representative_column():
     _ok("계정목록 헤더 8열(A=대표자)·데이터행 대표자 렌더·판매수집일(3열)과 무충돌·재로드 보존")
 
 
+def t1_delete_account():
+    print("[10] 삭제된 계정 완전 제거 (workbook.delete_account — 시트+메타 삭제)")
+    wb = OutputWorkbook.empty()
+    for biz, aid in (("가게A", "idA"), ("가게B", "idB")):
+        wb.set_account_id(biz, aid)
+        wb.set_representative(biz, "대표" + biz[-1])
+        wb.ensure_product_block(biz, "상품" + biz[-1], config.KIND_CONTRACT, ["kw"])
+        wb.set_product_vids(biz, "상품" + biz[-1], ["1" + biz[-1]])
+        wb.set_keyword_rank(biz, "상품" + biz[-1], "kw", "2026-09-17", 3)
+        wb.set_marketing(biz, "상품" + biz[-1], "2026-09-01", "", "")
+    assert "가게A" in wb.account_sheets() and "가게B" in wb.account_sheets()
+    # 가게A 완전 삭제
+    assert wb.delete_account("가게A") is True
+    assert "가게A" not in wb.account_sheets(), "시트 삭제 실패"
+    assert wb.account_id_of("가게A") == "" and wb.representative_of("가게A") == "", "계정정보 메타 잔존"
+    assert wb.product_vids("가게A", "상품A") == [], "상품ID 메타 잔존"
+    assert not wb.marketing_of("가게A", "상품A")[0], "마케팅 메타 잔존"
+    # 가게B는 온전
+    assert "가게B" in wb.account_sheets() and wb.account_id_of("가게B") == "idB"
+    assert wb.product_keywords("가게B", "상품B") == ["kw"]
+    # 저장/재로드 왕복(구조 정합)
+    d = Path(tempfile.mkdtemp()); path = d / "삭제.xlsx"
+    wb.apply_style(); wb.save(path)
+    wb2 = OutputWorkbook.load(path)
+    assert "가게A" not in wb2.account_sheets() and "가게B" in wb2.account_sheets()
+    idx = openpyxl.load_workbook(path)["계정 목록"]
+    bizs = {idx.cell(r, 2).value for r in range(3, idx.max_row + 1)}   # B열=사업자
+    assert "가게A" not in bizs and "가게B" in bizs, bizs
+    _ok("가게A 시트·이력·메타(계정정보/상품ID/마케팅) 완전 삭제·가게B 온전·계정목록에서도 사라짐")
+
+
 # ── Tier2 (외부 네트워크·AI, 로그인 아님) ─────────────────────
 def t2_keywords(store, il):
     print("[6] 키워드 Phase B 실제 실행 (AI 앵커→네이버확장→AI판정→점수압축→AI종합선정, 브라우저 없이)")
@@ -270,6 +301,7 @@ def main():
     t1_kind()
     t1_sale_status_flag()
     t1_representative_column()
+    t1_delete_account()
     t2_keywords(store, il)
     print("=" * 60)
     print("  [완료] 로그인 불필요 부분 실증 종료")

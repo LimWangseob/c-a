@@ -721,11 +721,13 @@ def push_ledger_inventory(input_url: str | None, log, out_dir: str = "output") -
             f"{exc.__class__.__name__}: {str(exc)[:120]} ==")
 
 
-def _push_gsheet(wb, output_url: str | None, log) -> None:
+def _push_gsheet(wb, output_url: str | None, log, removed_accounts=None) -> None:
     """완성된 openpyxl 마스터를 결과 구글시트로 반영 — 통계 시트 미러링 + 계정목록 증분 동기화.
 
     output_url 없거나 서비스계정 미등록이면 조용히 생략(정상 — 구글 통합 미사용). 반영 실패는 **로그로 명시**
     (조용한 무시 아님)하되 파이프라인을 죽이지 않는다: xlsx 마스터·스냅샷은 이미 저장됐다(오프라인 백업).
+    removed_accounts=[(사업자, 계정ID)…]: 관리대장에서 **줄이 사라진** 계정 → 결과 구글시트에서도 완전 삭제
+    (계정목록 행 + 통계 시트). '판매중지'로 남은 건 여기 없음(유지+경고).
     """
     if not output_url:
         return
@@ -735,6 +737,10 @@ def _push_gsheet(wb, output_url: str | None, log) -> None:
             log("== [구글시트] 서비스계정 키 미등록 — 결과 시트 반영 생략(xlsx는 저장됨) ==")
             return
         client = gsheet_api.GSheetClient(output_url)
+        if removed_accounts:   # 삭제된 계정 먼저 제거(행+시트) → 이후 미러링/동기화는 남은 것만 대상
+            d = gsheet_index.delete_accounts(client, removed_accounts, on_log=log)
+            if d:
+                log(f"== [구글시트] 삭제된 계정 정리 — {len(removed_accounts)}개(계정목록 행·통계 시트 제거) ==")
         gids = gsheet_stats.push_statistics(client, wb, on_log=log)          # 사업자별 통계 시트 전체 미러링
         roster = gsheet_index.roster_from_workbook(wb, gids)                 # 계정목록 로스터(등록명 기반 안정키)
         plan = gsheet_index.sync_index(client, roster)                      # 계정목록 증분(마케팅 D~F 보존)
@@ -1095,15 +1101,25 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         log(f"== ⚠ 로그인 못한 계정 {len(uncollected)}개(세션만료+Akamai차단): "
             f"{', '.join(a.label for a in uncollected)} — 쉰 IP(내일 등)에 재실행 시 수집됨 ==")
 
-    # 계정 단위 대조: 대장에서 통째로 사라진 계정(로그인 못한 계정 제외)의 상품 = 판매중지 표기.
-    # ⚠ 로그인 실패(uncollected)는 '사라짐'이 아니므로 제외(다음에 수집). 대장에 있는 계정만 active 로 본다.
+    # 계정 단위 대조(2026-09-17 정책): 관리대장에서 **줄이 완전히 사라진 계정 = 완전 삭제**(시트·이력·메타),
+    # 대장에 **줄은 남아있으나 비활성**(전 상품 판매중지 등)= 판매중지 표기(유지·경고 기능). 로그인 실패
+    # (uncollected)는 '사라짐' 아님 → 제외(다음에 수집). 삭제 판정 = **계정ID가 대장에 아예 없음**.
     active_biz = {a.label for a in input_list.accounts}
+    active_ids = input_list.ledger_account_ids            # 대장에 줄이 존재하는 계정ID(판매중지 포함)
     uncollected_biz = {a.label for a in uncollected}
-    for biz in wb.account_sheets():
-        if biz not in active_biz and biz not in uncollected_biz:
-            gone = wb.reconcile_account(biz, [])   # 대장에 없는 계정 → 전 상품 판매중지
+    removed_accounts: list[tuple[str, str]] = []          # (사업자, 계정ID) — 결과에서 완전 삭제한 계정
+    for biz in list(wb.account_sheets()):
+        if biz in active_biz or biz in uncollected_biz:
+            continue                                       # 활성(수집대상)·로그인 실패는 삭제/중지 대상 아님
+        aid = wb.account_id_of(biz)
+        if active_ids and aid and aid not in active_ids:   # 대장에 줄이 아예 없음 → 완전 삭제
+            if wb.delete_account(biz):
+                removed_accounts.append((biz, aid))
+                log(f"== [{biz}] 관리대장에서 삭제됨(줄 사라짐) → 결과 완전 삭제(시트·이력·메타) ==")
+        else:                                              # 대장에 남아있으나 비활성 → 판매중지(유지·경고)
+            gone = wb.reconcile_account(biz, [])
             if gone:
-                log(f"== [{biz}] 대장에서 사라진 계정 → 상품 {len(gone)}개 판매중지 표기 ==")
+                log(f"== [{biz}] 대장에 남았으나 비활성 → 상품 {len(gone)}개 판매중지 표기 ==")
 
     # 판매수집을 건너뛴(이미 오늘 수집됨) 계정도 키워드가 비어 있으면 선정(로그인 없이·워크북 기반).
     # 전체실행(①②③) 재실행에서 판매는 스킵하되 ②키워드가 빠지지 않게 한다(①판매수집 전용은 키워드 단계 없음).
@@ -1120,7 +1136,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     wb.apply_style()         # 가독성 서식(헤더 고정·상품 구분·정렬) — 최종본에만
     wb.save(master)          # 다음 날 이어쓸 마스터
     wb.save(snapshot)        # 그날 백업본(감사용)
-    _push_gsheet(wb, gsheet_output_url, log)   # 결과 구글시트 반영(통계 미러링 + 계정목록 동기화)
+    _push_gsheet(wb, gsheet_output_url, log, removed_accounts=removed_accounts)   # 결과 반영 + 삭제된 계정 정리
     # 진행 상태 정리 — 단, 이 실행에서 로그인 못한 계정이 **남았으면 진행분을 유지**해서
     # 같은 날 재실행이 '미완료분만' 이어서 처리하게 한다(완료 계정은 done 으로 자동 건너뜀).
     # 날짜가 바뀌면 resumable_progress 가 '오늘 아님'으로 무시 → 자동으로 처음부터.

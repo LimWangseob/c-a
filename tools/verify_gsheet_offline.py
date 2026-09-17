@@ -55,6 +55,8 @@ def t1_ledger_rows() -> None:
     ]
     il = parse_input_rows(rows)
     assert [a.account_id for a in il.accounts] == ["id_a", "id_b"], [a.account_id for a in il.accounts]
+    # 줄이 존재하는 계정ID는 모두 ledger_account_ids(삭제/판매중지 상태여도 '줄은 있음' → 완전삭제 대상 아님)
+    assert il.ledger_account_ids >= {"id_a", "id_b", "id_c"}, il.ledger_account_ids
     assert il.accounts[0].products[0].mkt_mon == "2026-10-31"
     assert any("보온병" in s for s in il.struck) and any("id_c" in s for s in il.struck)
     pw = parse_password_rows(rows)
@@ -183,9 +185,13 @@ def t3_index_sync() -> None:
 
 
 class _FakeClient:
-    def __init__(self, values): self._v = values; self.batches = []
-    def sheet_titles(self): return ["계정목록"] if self._v else []
-    def ensure_sheet(self, name): return 7
+    def __init__(self, values, titles=None):
+        self._v = values; self.batches = []
+        self._titles = titles if titles is not None else (["계정목록"] if values else [])
+        self._ids = {t: 100 + i for i, t in enumerate(self._titles)}
+    def sheet_titles(self): return list(self._titles)
+    def sheet_id(self, title): return self._ids.get(title)
+    def ensure_sheet(self, name): return self._ids.get(name, 7)
     def read_grid(self, sheet, notes=False): return self._v, [[None] * len(r) for r in self._v]
     def batch_update(self, reqs):
         self.batches.append(reqs)
@@ -242,6 +248,30 @@ def t3b_full_and_incremental() -> None:
     assert len(p3.inserts) == 1 and p3.inserts[0][1].product == "상품4"   # 삽입 후 위치 매칭 정상
     assert len(p3.discontinue) == 1
     _ok("옛 7열 시트 → 대표자 열 자동 삽입(마이그레이션) 후 증분 정상")
+
+
+def t3c_delete_accounts() -> None:
+    print("[3c] 삭제된 계정 완전 제거(delete_accounts) — 계정목록 행 + 통계 시트")
+    vals = [
+        ["계정목록 · 상품 3개"], list(_HEAD),
+        ["대표A", "가게A", "상품1", "idA", "", "", "", "예정"],
+        ["대표X", "가게X", "상품9", "idX", "", "", "", "예정"],     # 삭제 대상
+        ["대표B", "가게B", "상품3", "idB", "", "", "", "예정"],
+    ]
+    fc = _FakeClient(vals, titles=["계정목록", "가게A", "가게X", "가게B"])
+    n = gi.delete_accounts(fc, [("가게X", "idX")])
+    # 계정목록 행 삭제 요청 + 통계 시트 삭제 요청
+    del_rows = [r for b in fc.batches for r in b
+               if "deleteDimension" in r and r["deleteDimension"]["range"]["dimension"] == "ROWS"]
+    del_sheets = [r for b in fc.batches for r in b if "deleteSheet" in r]
+    assert len(del_rows) == 1, del_rows                                   # idX 행 1개
+    assert del_rows[0]["deleteDimension"]["range"]["startIndex"] == 3     # 0-based 격자행(가게X)
+    assert len(del_sheets) == 1 and del_sheets[0]["deleteSheet"]["sheetId"] == fc._ids["가게X"]
+    assert n == 2
+    # 삭제 안 할 계정은 안 건드림
+    assert not any(r for b in fc.batches for r in b if "deleteSheet" in r
+                   and r["deleteSheet"]["sheetId"] in (fc._ids["가게A"], fc._ids["가게B"]))
+    _ok("계정목록 idX 행 1개 + 통계 시트 '가게X' 삭제·타 계정 미접촉")
 
 
 def t4_marketing_merge() -> None:
@@ -370,7 +400,7 @@ def t7_staff_keywords_merge() -> None:
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
     for fn in (t1_ledger_rows, t1b_ledger_strike, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
-               t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook, t7_staff_keywords_merge):
+               t3c_delete_accounts, t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook, t7_staff_keywords_merge):
         fn()
     print("=== 전부 통과 ===")
     return 0

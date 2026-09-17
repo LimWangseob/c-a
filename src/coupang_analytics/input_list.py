@@ -57,6 +57,8 @@ class InputList:
     accounts: list[Account]
     errors: list[str]
     struck: list[str] = field(default_factory=list)   # 취소선으로 제외된 계정/상품(해지·품절·판매중지)
+    ledger_account_ids: set = field(default_factory=set)   # 관리대장에 **줄이 존재하는** 모든 계정ID
+    #  (판매중지/취소선 포함 — '줄이 사라진' 계정과 구분해 완전삭제 판정에 씀, 2026-09-17)
 
 
 def _norm(value) -> str:
@@ -236,6 +238,7 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
     by_id: dict[str, Account] = {}          # 같은 계정ID 재등장 시 상품을 이어 붙이기 위한 색인
     errors: list[str] = []
     struck: list[str] = []                   # 제외(취소선/상태/판매중지)된 계정·상품
+    ledger_ids: set = set()                   # 관리대장에 줄이 존재하는 모든 계정ID(판매중지/취소선 포함)
     current_rep = ""
     current_acct: Account | None = None
     current_prod: Product | None = None
@@ -252,6 +255,7 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
         if rep:
             current_rep = rep
         if acct:
+            ledger_ids.add(acct)   # 판매중지/취소선이어도 '줄은 존재' → 완전삭제 대상 아님
             # 계정 제외 = 상태 컬럼(판매중지/삭제) 또는 취소선(파일). → 계정 전체 제외.
             if status_disc or _struck_cell(row_no, i_acct):
                 _finalize(current_prod)
@@ -307,7 +311,7 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
         struck.append("⚠ 취소선 자동감지 불가(엑셀 스타일 비호환) — 해지/품절은 '상태' 컬럼 또는 수동 확인 필요")
     # 리포트 기준 시드: 상품/옵션/ID는 판매분석 리포트가 제공하므로 계정만 있으면 유효.
     valid = [a for a in accounts if a.account_id]
-    return InputList(accounts=valid, errors=errors, struck=struck)
+    return InputList(accounts=valid, errors=errors, struck=struck, ledger_account_ids=ledger_ids)
 
 
 def _tok(s: str) -> list:

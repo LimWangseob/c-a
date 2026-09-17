@@ -1140,6 +1140,31 @@ class OutputWorkbook:
             self.set_discontinued(biz, p, gone)
         return newly
 
+    def delete_account(self, biz: str) -> bool:
+        """관리대장에서 **줄이 완전히 사라진 계정**을 결과에서 완전 삭제 — 시트(시계열 이력)+모든 메타행.
+
+        ⚠ **되돌릴 수 없음**(그 사업자 통계 이력 소멸). 관리대장에 '상태=판매중지'로 **남아있는** 것과는 다르다
+        (그건 유지+경고). 호출부(pipeline)가 '관리대장에 계정ID가 아예 없음'을 확인한 뒤에만 호출한다.
+        지운 게 있으면 True. `_계정정보`·`_상품ID`·`_중단`·`_마케팅`의 해당 사업자 행도 모두 제거한다."""
+        biz = _norm(biz)
+        if not biz:
+            return False
+        removed = False
+        if biz in self.wb.sheetnames and biz not in _SPECIAL_SHEETS:
+            del self.wb[biz]
+            removed = True
+        for meta in (_META_SHEET, _DISC_SHEET, _MKT_SHEET, _ACCT_SHEET):
+            if meta not in self.wb.sheetnames:
+                continue
+            ws = self.wb[meta]
+            for r in range(ws.max_row, 1, -1):          # 아래→위(삭제 시 인덱스 안정)
+                if _norm(ws.cell(r, 1).value) == biz:
+                    ws.delete_rows(r)
+                    removed = True
+        if removed:
+            self._reindex()
+        return removed
+
     @staticmethod
     def _mkt_status(start: str, end: str, mon: str) -> str:
         """오늘 기준 체험단 상태: 예정/체험단중/모니터링/종료/''(미설정)."""

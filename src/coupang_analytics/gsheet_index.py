@@ -415,6 +415,48 @@ def _ensure_rep_column(client, sheet: str, sheet_id: int) -> None:
         "inheritFromBefore": False}}])
 
 
+def delete_accounts(client, removed, *, sheet: str = INDEX_SHEET_NAME, on_log=None) -> int:
+    """관리대장에서 **줄이 사라진 계정**을 결과 구글시트에서 완전 삭제 — 계정목록 행 + 그 사업자 통계 시트.
+
+    removed = [(사업자, 계정ID), …]. ⚠ 되돌릴 수 없음. '판매중지'로 남은 계정은 여기 오지 않는다(호출부가 구분).
+    계정목록 행은 **계정ID 열(헤더로 탐지)** 로 매칭해 아래→위로 deleteDimension(인덱스 안정). 삭제 요청 수 반환.
+    """
+    log = on_log or (lambda m: None)
+    if not removed:
+        return 0
+    ids = {str(a).strip() for _b, a in removed if str(a).strip()}
+    n = 0
+    titles = client.sheet_titles()
+    # 1) 계정목록 행 삭제(계정ID 열 헤더 탐지)
+    if ids and sheet in titles:
+        sid = client.sheet_id(sheet)
+        values, _ = client.read_grid(sheet)
+        if sid is not None and len(values) > HEADER_ROW0:
+            hdr = [str(h).strip() for h in values[HEADER_ROW0]]
+            c_acct = hdr.index("계정ID") if "계정ID" in hdr else None
+            if c_acct is not None:
+                del_rows = []
+                for gi in range(DATA_START0, len(values)):
+                    row = values[gi]
+                    acct = str(row[c_acct]).strip() if len(row) > c_acct and row[c_acct] else ""
+                    if acct in ids:
+                        del_rows.append(gi)
+                reqs = [{"deleteDimension": {"range": {"sheetId": sid, "dimension": "ROWS",
+                        "startIndex": gi, "endIndex": gi + 1}}} for gi in sorted(del_rows, reverse=True)]
+                if reqs:
+                    client.batch_update(reqs)      # 아래→위라 한 배치 내 인덱스 안정
+                    n += len(reqs)
+                    log(f"  [구글시트] 계정목록 행 {len(reqs)}개 삭제(삭제된 계정)")
+    # 2) 통계 시트 삭제(그 사업자 시트)
+    for biz, _a in removed:
+        sid = client.sheet_id(biz)
+        if sid is not None:
+            client.batch_update([{"deleteSheet": {"sheetId": sid}}])
+            n += 1
+            log(f"  [구글시트] 통계 시트 '{biz}' 삭제")
+    return n
+
+
 def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME) -> SyncPlan:
     """결과 구글시트의 `계정목록`을 원하는 로스터에 맞춰 생성/동기화하고 계획을 반환.
 
