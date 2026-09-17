@@ -316,8 +316,8 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
                         semi: bool = False):
     """계정 하나: (필요시) 로그인 → **같은 신선한 세션**에서 즉시 판매분석 발견 + 지표.
 
-    반환: (report_account[활동 상품만] | None, {옵션ID: OptionMetric}, {옵션ID: 재고수량}).
-    로그인 미완료면 (None, {}, {}) 반환 → 호출부가 건너뛰고 다음 계정으로(막힘 없음).
+    반환: (report_account[활동 상품만] | None, {옵션ID: OptionMetric}, {옵션ID: 재고수량},
+    {옵션ID: 판매중지여부}). 로그인 미완료면 (None, {}, {}, {}) 반환 → 호출부가 건너뛰고 다음 계정으로.
     login=False(세션우선 1차): 세션 없으면 자동제출하지 않고 **NeedLogin** 을 던져 뒤로 미룬다
     (반복 자동로그인 = IP 차단 유발이라, 세션 살아있는 계정을 먼저 다 수집). Akamai 차단 시 LoginBlocked.
     semi=True(**반자동 판매수집**): 창을 **처음부터 보이게**(offscreen=False) 띄우고 **무인 아님**(사람이
@@ -359,7 +359,7 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
                 # 무인 + 비번없음/자동입력실패 → 사람 개입 불가 → 건너뜀(창 안 띄움)
                 log(f"  [{a.label}] 무인 로그인 불가(비번 없음/자동입력 실패) — 건너뜀(나중에 반자동/수동)")
                 session_state.observe_reauth_required(a.account_id, final_url=b.page.url)
-                return None, {}, {}
+                return None, {}, {}, {}
             else:
                 _need_user()   # 비번 없음/자동입력 실패 → 직접 로그인해야 하니 창 표시
                 log(f"  [{a.label}] 직접 로그인이 필요해 창을 띄웠습니다")
@@ -399,7 +399,7 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
                         "재시도 안 함(계정잠금 방지), 이 계정 건너뜀")
                     raise LoginCredentialError(a.account_id)
                 log(f"  [{a.label}] 로그인 미완료 — 이 계정 건너뜀")
-                return None, {}, {}
+                return None, {}, {}, {}
             session_state.observe_auth_success(a.account_id, final_url=b.page.url)
             b.goto(WING_URL)                     # 신선 로그인 후 wing 안착(인증 리다이렉트 완료 대기)
             b.page.wait_for_timeout(1500)        # 페이지 안정 — discover fetch 가 진행중 네비에 중단(Failed to fetch)되는 것 방지
@@ -409,7 +409,7 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
         except PWTimeout:   # '엑셀 다운로드'/데이터 미표시 = 판매(수집) 상품 없음(정상)
             log(f"  [{a.label}] 판매분석 데이터 없음 — 정상(수집할 상품 없음), 건너뜀")
             session_state.observe_collection_empty(a.account_id)
-            return None, {}, {}
+            return None, {}, {}, {}
         except Exception as exc:   # 신선 로그인 직후 페이지 미안착 → fetch 중단(Failed to fetch). wing 재안착 후 1회 재시도
             if "Failed to fetch" not in str(exc):
                 raise
@@ -421,14 +421,15 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
             except PWTimeout:
                 log(f"  [{a.label}] 판매분석 데이터 없음 — 정상(수집할 상품 없음), 건너뜀")
                 session_state.observe_collection_empty(a.account_id)
-                return None, {}, {}
+                return None, {}, {}, {}
         # 로켓그로스 파트가 있는 상품(로켓그로스·둘다)이 있으면 같은 세션에서 재고현황도 직접조회
         # (판매자배송 전용 계정은 재고 없음 → 생략)
         inventory: dict[str, int] = {}
         inv_names: dict[str, str] = {}
+        inv_status: dict[str, bool] = {}   # {vid: 판매중지여부} — 대장↔쿠팡 판매상태 불일치 경고용
         if any(p.kind in config.KINDS_WITH_INVENTORY for p in products):
             try:
-                inventory, inv_names = fetch_inventory(b.page, log)   # 재고 수량 + vid→상품명 roster(판매 무관)
+                inventory, inv_names, inv_status = fetch_inventory(b.page, log)   # 재고 수량 + vid→상품명 roster + 판매상태
                 log(f"  [{a.label}] 재고현황 {len(inventory)}개 옵션 조회")
             except InventoryFetchError as exc:   # 부가지표 — 실패해도 수집 전체는 진행(사유 명시)
                 log(f"  [{a.label}] ⚠ 재고현황 조회 실패(계속) — {str(exc)[:120]}")
@@ -451,7 +452,7 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
         session_state.observe_collection_done(a.account_id)         # 관측: 이 계정 수집 완료 시각
     save_discovered(a.account_id, products)
     log(f"  [{a.label}] 발견 {len(products)}개 · 대장 {len(a.products)}개 → 추적 {len(tracked)}개(매칭 {n_match})")
-    return Account(a.account_id, a.representative, a.business_name, tracked), metrics, inventory
+    return Account(a.account_id, a.representative, a.business_name, tracked), metrics, inventory, inv_status
 
 
 def _persist_session(a: Account, b, log) -> None:
@@ -518,7 +519,7 @@ def _fill_product_metrics(wb, biz, product, metrics, inventory, date_iso, pname=
     wb.set_product_metric(biz, pname, config.M_SALES, date_iso, sales)
     wb.set_product_metric(biz, pname, config.M_VISITORS, date_iso, visitors)
     wb.set_product_metric(biz, pname, config.M_VIEWS, date_iso, views)
-    if product.kind == config.KIND_CONTRACT:   # 재고현황은 로켓그로스만
+    if product.kind in config.KINDS_WITH_INVENTORY:   # 재고현황 = 로켓그로스 + 둘다(로켓그로스 파트 있음)
         inv = inventory.get(product.name) if inventory else None
         if inv is not None:
             wb.set_product_metric(biz, pname, config.M_INVENTORY, date_iso, inv)
@@ -984,7 +985,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     accounts = input_list.accounts
     total = len(accounts)
 
-    def _finish(a: Account, report_acc, metrics, inv_by_vid) -> None:
+    def _finish(a: Account, report_acc, metrics, inv_by_vid, inv_status=None) -> None:
         """발견 결과를 워크북에 기록 + 진행 저장(1·2차 패스 공통). report_acc=None이면 무동작."""
         if report_acc is None:      # 로그인 미완료/데이터 없음 → 다음 계정(전체 안 막힘)
             return
@@ -1004,6 +1005,13 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
                     warmup(rank_browser)
                     _process_account(report_acc, wb, naver, ai_key, rank_browser, metrics, inventory,
                                      col_label, grow, log, partial)
+            # 판매상태 불일치 경고: 쿠팡 재고 판매상태맵을 마스터 전체 상품에 vid로 대조해 저장(멱등).
+            # 대장에서 빠진(판매중지 표기) 상품도 쿠팡 재고에 살아있으면 vid로 잡혀 "판매중"으로 채워진다.
+            # 상태맵은 ①판매수집 로그인 세션에서만 확보되므로(②③엔 없음) 여기서 1회 반영, 렌더는 apply_style이 담당.
+            if inv_status:
+                n_flag = wb.apply_sale_status(a.label, inv_status)
+                if n_flag:
+                    log(f"  [{a.label}] 쿠팡 판매상태 {n_flag}개 상품 반영(대장=판매중지·쿠팡=판매중이면 경고 표시)")
         else:                                        # 대장 상품 0개 → Chrome 개방 생략, 시트도 생략
             log(f"  [{a.label}] 대장 상품 0개 — 시트·키워드·순위 생략")
         wb.mark_sales_collected(a.label, col_label)   # 오늘 판매수집 완료 스탬프(같은 날 재실행 시 로그인·수집 생략 근거)
@@ -1036,9 +1044,9 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
                 continue
         log(f"== [{i}/{total}] {a.label} (계정ID: {a.account_id}) ==")
         try:   # 한 계정의 어떤 오류(수집·워크북쓰기)도 전체를 막지 않게 계정 전체를 격리
-            report_acc, metrics, inv_by_vid = _login_and_discover(
+            report_acc, metrics, inv_by_vid, inv_status = _login_and_discover(
                 a, date_from, date_to, get_password, log, login=False)
-            _finish(a, report_acc, metrics, inv_by_vid)
+            _finish(a, report_acc, metrics, inv_by_vid, inv_status)
         except NeedLogin:                         # 세션 없음 → 뒤로 미룸(자동제출 안 함)
             login_needed.append((i, a))
             log(f"  [{a.label}] 세션 만료 → 로그인 대기열(세션 있는 계정 먼저 수집 후 처리)")
@@ -1064,10 +1072,10 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         attempted += 1
         log(f"== [{i}/{total}] {a.label} (계정ID: {a.account_id}) — 로그인 시도 ==")
         try:
-            report_acc, metrics, inv_by_vid = _login_and_discover(
+            report_acc, metrics, inv_by_vid, inv_status = _login_and_discover(
                 a, date_from, date_to, get_password, log, login=True, semi=sales_semi)
             blocks = 0                            # 로그인 성공 → 연속 차단 카운터 리셋
-            _finish(a, report_acc, metrics, inv_by_vid)
+            _finish(a, report_acc, metrics, inv_by_vid, inv_status)
         except LoginBlocked:                      # Akamai 차단 → 서킷브레이커 카운트
             blocks += 1
             log(f"  [{a.label}] 로그인 차단 누적 {blocks}/{config.LOGIN_BLOCK_CIRCUIT}")

@@ -313,11 +313,36 @@ class OutputWorkbook:
                     ws.cell(r, _COL_KIND, kind)
                 return
 
+    def _add_metric_row(self, biz: str, product: str, metric: str) -> None:
+        """기존 블록에 빠진 지표행(예: 재고현황)을 상품 **지표행 맨 아래**(키워드 소헤더 위)에 끼워 넣는다.
+
+        구분이 개인→로켓그로스/둘다로 바뀌었는데 재고행이 없던 블록을 보정한다. insert_rows 는 병합셀이
+        있으면 데이터를 손상시키므로 삽입 전 병합을 모두 해제(호출부가 이후 apply_style 로 재병합)하고,
+        삽입 후 전체 재인덱스로 아래 행·블록 위치를 정확히 반영한다. 멱등(이미 있으면 호출부 가드로 미진입)."""
+        if biz not in self.wb.sheetnames:
+            return
+        metric_rows = [self._metric_row[(biz, product, m)] for m in _ALL_METRICS
+                       if (biz, product, m) in self._metric_row]
+        if not metric_rows:
+            return
+        ws = self.wb[biz]
+        _unmerge_all(ws)                       # insert_rows 전 병합 해제(데이터 손상 방지)
+        at = max(metric_rows) + 1              # 마지막 지표행 다음(키워드 소헤더 직전)
+        ws.insert_rows(at, amount=1)
+        ws.cell(at, _COL_METRIC, metric)
+        self._reindex()                        # 행 이동 반영 전체 재인덱스
+
     def ensure_product_block(self, biz: str, product: str, kind: str, keywords: list[str]) -> None:
         """상품 블록이 없으면 생성(로켓그로스·둘다=CONTRACT_METRICS[재고 포함]/판매자배송=PERSONAL_METRICS +
         키워드 순위행). 이미 있으면 **구분 라벨만 최신화**(문구 마이그레이션·구분 변경 반영)."""
         if self.has_product(biz, product):
             self._update_kind_label(biz, product, kind)
+            # 구분이 개인→로켓그로스/둘다로 바뀐 블록이 **재고현황 행 없이** 남아 재고가 기록될 자리가
+            # 없던 문제 보정: 로켓그로스 파트가 있는데 재고행이 없으면 지표행 맨 아래에 끼워 넣는다
+            # (이게 관리대장 '그로스 재고' 역기록이 일부 상품에서 공란이던 근본 원인, 2026-09-17).
+            if (kind in config.KINDS_WITH_INVENTORY
+                    and (biz, product, config.M_INVENTORY) not in self._metric_row):
+                self._add_metric_row(biz, product, config.M_INVENTORY)
             return
         ws = self.ensure_account(biz)
         metrics = (config.CONTRACT_METRICS if kind in config.KINDS_WITH_INVENTORY
@@ -567,6 +592,7 @@ class OutputWorkbook:
         ws.cell(1, 1, "사업자"); ws.cell(1, 2, "상품명"); ws.cell(1, 3, "상품ID(|구분)")
         ws.cell(1, 4, "키워드서명"); ws.cell(1, 5, "권고제목")   # ⑤ 제목 캐시(동결 상품 AI 재호출 생략)
         ws.cell(1, 6, "등록상품명")   # 대장 원본명(노출명으로 바뀌어도 불변) — 계정목록 안정키·3c 마케팅 매칭 기준
+        ws.cell(1, 7, "판매상태(쿠팡)")   # 쿠팡 재고 판매상태(판매중/부분판매중/판매중지) — 대장 판매중지와 대조해 경고 표시
         return ws
 
     def set_product_vids(self, biz: str, product: str, vids) -> None:
@@ -613,6 +639,58 @@ class OutputWorkbook:
         if row is None or _META_SHEET not in self.wb.sheetnames:
             return ""
         return _norm(self.wb[_META_SHEET].cell(row, 6).value)
+
+    def set_sale_status(self, biz: str, product: str, status: str) -> None:
+        """상품의 **쿠팡 실제 판매상태**(판매중/부분판매중/판매중지)를 숨김시트 7열에 저장.
+
+        status 가 빈값이면(미상) 저장하지 않는다(옛 값 유지 — 로그인 못한 실행이 기존 상태를 지우지 않게)."""
+        biz, product = _norm(biz), _key(product)
+        status = _norm(status)
+        if not (biz and product and status):
+            return
+        ws = self._meta_ws()
+        row = self._vid_row.get((biz, product))
+        if row is None:
+            row = ws.max_row + 1
+            ws.cell(row, 1, biz); ws.cell(row, 2, product)
+            self._vid_row[(biz, product)] = row
+        ws.cell(row, 7, status)
+
+    def sale_status(self, biz: str, product: str) -> str:
+        """저장된 쿠팡 판매상태(없으면 '' — 미상). 개인상품·미로그인 실행 등은 미상."""
+        row = self._vid_row.get((_norm(biz), _key(product)))
+        if row is None or _META_SHEET not in self.wb.sheetnames:
+            return ""
+        return _norm(self.wb[_META_SHEET].cell(row, 7).value)
+
+    def sale_active(self, biz: str, product: str) -> bool:
+        """쿠팡에서 **판매 가능 상태**(판매중 또는 부분판매중)면 True. 판매중지·미상은 False."""
+        return self.sale_status(biz, product) in ("판매중", "부분판매중")
+
+    def apply_sale_status(self, biz: str, status_by_vid: dict) -> int:
+        """쿠팡 재고 판매상태맵({vid: isSaleSuspended})을 그 사업자 **마스터 전체 상품**에 vid로 대조해 저장.
+
+        상품 정체성은 vendorItemId 앵커라, 대장에서 빠져 '판매중지' 표기된 상품도 쿠팡 재고에 살아있으면
+        그 vid 로 잡혀 실제 판매상태가 채워진다(그래야 대장↔쿠팡 불일치를 경고할 수 있음). 상품의 옵션(vid)
+        중 상태맵에 있는 것들만 보고: 전부 판매중지=판매중지·전부 아님=판매중·섞임=부분판매중·하나도 없음=미상(생략).
+        반환=상태를 채운 상품 수."""
+        if not status_by_vid:
+            return 0
+        biz = _norm(biz)
+        n = 0
+        for p in self.products_of(biz):
+            known = [status_by_vid[v] for v in self.product_vids(biz, p) if v in status_by_vid]
+            if not known:                     # 이 상품 옵션이 재고 상태맵에 없음 → 미상(기존 값 보존)
+                continue
+            if all(known):
+                st = "판매중지"
+            elif not any(known):
+                st = "판매중"
+            else:
+                st = "부분판매중"
+            self.set_sale_status(biz, p, st)
+            n += 1
+        return n
 
     def product_inventory(self, biz: str, product: str):
         """이 상품의 **최신 일자 재고현황**(로켓그로스). 재고행 없거나(개인상품)·값 없으면 None. 관리대장 역기록용."""
@@ -892,6 +970,17 @@ class OutputWorkbook:
                                 gm.value = _LABEL_NOTE
                         for c in range(_FIRST_DATE, maxc + 1):
                             cell(ws, r, c, fill=(mkt_fill if c in mcols else None))
+                    # 판매상태 불일치 경고: 대장=판매중지(is_disc)인데 쿠팡 실제=판매중/부분판매중이면
+                    # 판매중지 소헤더행(kh)의 **최신(맨 오른쪽) 날짜칸**에 "판매중"을 진한 적색·굵게(담당자 확인용).
+                    # 값+서식이 마스터에 들어가면 구글시트 미러링(worksheet_to_requests)으로 결과시트에도 그대로 반영.
+                    if is_disc and self.sale_active(ws.title, nm):
+                        _ld = self.latest_date(ws.title)
+                        _lc = self._date_col.get(ws.title, {}).get(_ld) if _ld else None
+                        if _lc:
+                            wc = ws.cell(kh, _lc)
+                            wc.value = "판매중"
+                            wc.font = Font(name=self._FN, size=11, bold=True, color="C00000")
+                            wc.alignment = center
                 # 상품 1개 구분 — 굵은 선. 상단=블록 첫 행 top(병합 top-left라 정상).
                 # 하단=다음(빈) 구분행의 top(시각적으로 마지막 행 하단선). ⚠ 마지막 블록은 end+1 행이
                 # 없어서 거기 테두리를 그리면 **빈 행이 새로 생긴다**(2상품 시트의 2번째 블록 하단 공백줄 버그).

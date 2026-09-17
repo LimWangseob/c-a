@@ -191,11 +191,30 @@ def _parse_inventory_roster(vi_props: list[dict]) -> dict[str, str]:
     return out
 
 
-def fetch_inventory(page, log=None) -> tuple[dict[str, int], dict[str, str]]:
+def _parse_inventory_status(vi_props: list[dict]) -> dict[str, bool]:
+    """재고 search 의 viProperties → {옵션ID(vendorItemId): 판매중지여부(isSaleSuspended)}.
+
+    listingDetails.isSaleSuspended = True → 그 옵션 판매중지, False → 판매중(라이브 캡처 확정).
+    한 상품(productId)에 옵션(vid) 여러 개면 호출부가 상품단위로 합쳐 판매중/부분판매중/판매중지를 판정한다.
+    필드가 없는 옵션(옛 응답/개인상품)은 넣지 않는다(미상 → 경고 안 뜸)."""
+    out: dict[str, bool] = {}
+    for vp in vi_props:
+        oid = str(vp.get("vendorItemId") or "").strip()
+        if not oid:
+            continue
+        ld = vp.get("listingDetails") or {}
+        susp = ld.get("isSaleSuspended")
+        if isinstance(susp, bool):
+            out[oid] = susp
+    return out
+
+
+def fetch_inventory(page, log=None) -> tuple[dict[str, int], dict[str, str], dict[str, bool]]:
     """로켓그로스 재고현황 API(inventory-health-dashboard/search)를 **직접 fetch**.
 
-    반환: ({옵션ID: 판매가능 재고수량}, {옵션ID: 등록상품명}). 뒤의 상품명 맵은 **판매 무관 vid 보강 소스**
-    (그로스 상품은 판매 0이어도 재고 목록에 있어 vid·상품명을 준다 → 미매칭 대장 상품 vid 보강에 사용).
+    반환: ({옵션ID: 판매가능 재고수량}, {옵션ID: 등록상품명}, {옵션ID: 판매중지여부}). 상품명 맵은
+    **판매 무관 vid 보강 소스**(그로스 상품은 판매 0이어도 재고 목록에 있어 vid·상품명을 준다 → 미매칭
+    대장 상품 vid 보강에 사용). 판매중지여부 맵은 대장↔쿠팡 판매상태 불일치 경고에 쓴다(isSaleSuspended).
     page 는 **로그인된 wing.coupang.com 세션 페이지**(same-origin + 세션쿠키 + XSRF). 계약(RFM) 계정 전용
     — 개인(NORMAL) 계정은 로켓그로스 재고가 없어 빈 dict(정상). 비200/파싱실패는 InventoryFetchError.
     페이지네이션: pageNumber 로 넘기다가 **안 넘어가면(재고 API가 pageNumber 무시)** 큰 pageSize 로 전량 1회 재요청.
@@ -203,6 +222,7 @@ def fetch_inventory(page, log=None) -> tuple[dict[str, int], dict[str, str]]:
     """
     log = log or (lambda m: None)
     names: dict[str, str] = {}   # {vid: 등록상품명} — 판매 무관 그로스 상품 roster(vid 보강용)
+    status: dict[str, bool] = {}  # {vid: isSaleSuspended} — 대장↔쿠팡 판매상태 불일치 경고용
 
     def _fetch(page_size: int, page_num: int) -> tuple[list, int]:
         payload = {"paginationRequest": {"pageSize": page_size, "pageNumber": page_num,
@@ -242,6 +262,7 @@ def fetch_inventory(page, log=None) -> tuple[dict[str, int], dict[str, str]]:
         before = len(out)
         out.update(_parse_inventory(props))
         names.update(_parse_inventory_roster(props))
+        status.update(_parse_inventory_status(props))
         total = total or len(out)
         log(f"  [재고] search p{page_num + 1} — {len(props)}개 (누적 {len(out)}/{total})")
         if not props or len(out) >= total or len(out) == before:
@@ -255,13 +276,13 @@ def fetch_inventory(page, log=None) -> tuple[dict[str, int], dict[str, str]]:
             props, _ = _fetch(big, 0)
         except InventoryFetchError as exc:   # 큰 pageSize 거부 → 상위분 유지(회귀 없음)
             log(f"  [재고] ⚠ 전량 재요청 실패(pageSize {big}) — 상위 {len(out)}/{total}개만 유지 · {str(exc)[:80]}")
-            return out, names
+            return out, names, status
         full = _parse_inventory(props)
         if len(full) > len(out):
             log(f"  [재고] 전량 재요청(pageSize {big}) → {len(full)}개 확보(이전 상위 {len(out)}개)")
-            return full, _parse_inventory_roster(props)
+            return full, _parse_inventory_roster(props), _parse_inventory_status(props)
         log(f"  [재고] ⚠ 전량 재요청도 {len(full)}개 — 상위 {len(out)}/{total}개만 유지(무한루프 방지)")
-    return out, names
+    return out, names, status
 
 
 def _folder_snapshot(d: Path) -> list[str]:

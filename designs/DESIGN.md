@@ -3,6 +3,14 @@
 > 정책·구조의 단일 기준 문서. 코드보다 이 문서가 우선한다.
 > §8 미확정 항목은 실제 페이지 1회 분석 후 확정한다.
 
+## 0-000. 최신 반영 요약 (2026-09-17 — 판매상태 경고·재고행 공란 수정)
+
+- **판매상태 불일치 경고(§2.3):** 대장=판매중지인데 쿠팡 실제=판매중/부분판매중이면 결과파일 최신 날짜칸에 "판매중" 적색·굵게. collector `_parse_inventory_status`(`isSaleSuspended`)→`fetch_inventory` 3튜플→pipeline `_login_and_discover` 4튜플·`_finish`의 `apply_sale_status`→workbook `_상품ID` 7열·`apply_style` 렌더→gsheet 미러링. 상세=§2.3.
+- **관리대장 그로스 재고 공란 버그 2건 수정:** 대장 AD열(그로스 재고)이 일부 로켓그로스 상품에서 공란이던 근본원인.
+  1. **재고행 마이그레이션 누락:** `ensure_product_block`이 이미 있는 블록의 구분이 **개인→로켓그로스/둘다로 바뀌어도 라벨만 갱신**하고 재고현황 행을 안 만들어, 로켓그로스인데 재고행 없는 블록이 생겼다(재고 저장 자리 없음→`product_inventory`=None→역기록 후보 아님→공란). → `workbook._add_metric_row`로 지표행 맨 아래 재고행 자동 추가(insert 전 unmerge·후 reindex·멱등).
+  2. **둘다(KIND_BOTH) 누락:** `_fill_product_metrics`가 재고를 `KIND_CONTRACT`만 기록하고 `KIND_BOTH`를 빠뜨려, 둘다 상품은 재고행이 있어도 값이 안 채워졌다 → `config.KINDS_WITH_INVENTORY`로 확대.
+  다음 ①판매수집 실행이 자동 치유(재고행 생성→수집값 기록→역기록). 실측 마스터 방치 블록 13개(웰빙곳간 10). 검증=`tools/verify_offline.py` [7].
+
 ## 0-00. 최신 반영 요약 (2026-09-16 — 상세이미지 추출·재부팅 복구·창 크기)
 
 - **재부팅 자동복구(사용자 요구 2026-09-16):** 야간 Windows 업데이트 재부팅으로 전체실행이 끊기는 것(09-16 01:29 실측, ③순위 59%서 중단) 대비. `pipeline.write_run_stage/read_run_stage` → `output/…_실행단계.json`(오늘 날짜+stage: `sales`=①완료·`ranks`=②완료·`done`). `do_run_full`(전체실행)·`start_auto`(무인)·`start_resume`이 단계마다 마커 기록. **`--resume` 모드**(`app_qt.start_resume`, main에서 `--resume` 인자): 마커+`resumable_progress`(①진행중 파일)로 판단 — 진행중있음→①부터, 마커`sales`→②③, `ranks`→③만, `done`/없음→**즉시 종료**. **핵심=판매수집(재로그인) 스킵**(위탁계정 재로그인 부담↓), ③은 이미 채워진 순위 건너뜀(멱등). 작업 스케줄러 **'로그온 시' 트리거=`--resume`**(`deploy/install_schedule.ps1` exe용·`install_schedule_py.bat/.ps1` python소스용). ⚠ 무인 동작 선결=**Windows "업데이트/재시작 후 자동 로그인 완료"** 켜야 세션 복원(반자동은 잠긴 세션도 CDP로 동작). 예방=업데이트 활성시간 17~9시. 검증=마커 read/write·복구 분기·"이어서 할 것 없음→종료"·simulate 10/10. SSOT=본 절+[[reboot-recovery]].
@@ -141,6 +149,13 @@
   **판매(쿠팡 통계)는 전일(D-1)에서 조회**해 같은 실행날짜 컬럼에 함께 넣는다(쿠팡이 당일 판매를 익일 확정하기 때문). 즉 한 컬럼 = "오늘 순위 + 전일 판매". `run_full(date_label=)`로 판매조회일(date_from~to=D-1)과 분리. UI `_run_dates()`가 (D-1, D-1, 실행날짜) 반환.
 - **새벽 넘겨도 시작일 기준**: `date_label`은 실행 시작 시점에 한 번 정해지고 진행중 파일(`date_label`)에 저장돼, 자정 지나 이어서/재부팅 재개해도 **원래 실행날짜 라벨 유지**.
 - **미실행/중단 날짜 = 날짜만 표기·값 공란**: 컬럼은 시트별 **첫 추적일~마지막일 사이 모든 달력일을 연속**으로 유지(`workbook.normalize_date_columns`, `apply_style` 저장 때마다 멱등 적용). 앞으로 실행 시 직전 최신일보다 하루 넘게 뒤면 그 사이 빠진 날을 **빈 컬럼**으로 자동 생성(`ensure_date` 갭필). 값·순위는 (행,날짜)로 보존돼 이동·유실 없음. 소급 정리 도구 `tools/normalize_dates.py`(백업 후 실행). ⚠ 신규 계정은 첫 추적일 이전으로 소급 안 함. ⚠ 과거 D-1 라벨 컬럼은 재라벨하지 않음(앞으로만 실행날짜 규칙) → 전환 경계에 빈 하루가 생길 수 있음(정상).
+
+**판매상태 불일치 경고(확정 2026-09-17):** 관리대장과 쿠팡 실제 판매상태가 어긋나면 담당자가 정정하도록 결과파일에 표시한다.
+- **판정:** 그 상품이 결과파일에서 **판매중지(대장에서 빠짐 = `is_discontinued`)** 인데, 쿠팡 실제 판매상태가 **판매중/부분판매중**이면 불일치.
+- **쿠팡 상태 출처:** 로켓그로스 재고 API(`inventory-health-dashboard/search`)의 `viProperties[].listingDetails.isSaleSuspended`(bool). collector `_parse_inventory_status`가 `{vid: 판매중지여부}` 맵을 만들고, `fetch_inventory`가 (재고, 상품명, **판매상태**) 3튜플로 반환. ①판매수집 로그인 세션에서만 확보(②③엔 없음).
+- **상품단위 판정:** 상품의 옵션(vid) 중 상태맵에 있는 것들만 보고 — 전부 중지=`판매중지`·전부 아님=`판매중`·섞임=`부분판매중`·하나도 없음=미상(생략). `workbook.apply_sale_status(biz, {vid:suspended})`가 **마스터 전체 상품에 vid로 대조**해 숨김시트 `_상품ID` 7열에 저장. ⚠ 대장에서 빠진(판매중지 표기) 상품도 쿠팡 재고에 살아있으면 그 vid로 잡혀 상태가 채워진다(그래야 불일치를 잡음). 파이프라인 `_finish`가 계정마다 1회 호출.
+- **표시:** `apply_style`이 판매중지 소헤더행(G=`⛔ 판매중지`)의 **최신(맨 오른쪽) 날짜칸**에 `판매중`을 **진한 적색(C00000)·굵게** 렌더(멱등). 값+서식이 마스터에 들어가 구글시트 미러링(`gsheet_stats.worksheet_to_requests`)으로 결과시트에도 그대로 반영.
+- ⚠ **판매자배송(개인) 상품 한계:** isSaleSuspended는 로켓그로스 재고 API에만 있어 개인상품은 미상(경고 안 뜸). 필요 시 `vendor-inventory/list` 신규 fetch(2단계 숙제).
 
 **파일명·저장(확정):** 새로 만들 때 `쿠팡데이타분석_yymmdd_시분초.xlsx`.
 **이어쓰기/신규(확정):** 실행 시작 시 기존 출력 파일이 있으면 **"이어서 기록할지"를 사용자에게 묻는다**.

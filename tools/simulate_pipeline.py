@@ -59,9 +59,10 @@ def _fake_login_and_discover(a, date_from, date_to, get_password, log, login=Tru
         raise P.NeedLogin()                        # 1차: 세션 만료 → 대기열(2차 로그인 시 정상)
     if a.account_id == _LOGIN_FAIL_ID:
         log(f"  [{a.business_name}] 로그인 미완료 — 건너뜀(가짜)")
-        return None, {}, {}
+        return None, {}, {}, {}
     metrics: dict[str, OptionMetric] = {}
     inventory: dict[str, int] = {}
+    inv_status: dict[str, bool] = {}   # {vid: isSaleSuspended} — 계약 상품은 쿠팡 '판매중'(=False) 가정
     for product in a.products:
         rt = "RFM" if product.kind == config.KIND_CONTRACT else "NORMAL"
         for opt in product.options:
@@ -71,8 +72,9 @@ def _fake_login_and_discover(a, date_from, date_to, get_password, log, login=Tru
                                             views=100, sales=7, visitors=50, registration_type=rt)
                 if product.kind == config.KIND_CONTRACT:   # 계약 상품만 재고현황(가짜)
                     inventory[vid] = 42
+                    inv_status[vid] = False                 # 쿠팡 실제 = 판매중
     log(f"  [{a.business_name}] 발견(가짜) 상품 {len(a.products)}개")
-    return Account(a.account_id, a.representative, a.business_name, a.products), metrics, inventory
+    return Account(a.account_id, a.representative, a.business_name, a.products), metrics, inventory, inv_status
 
 
 def _fake_keywords(title, naver, ai_key=None, n=None, browser=None, log=None,

@@ -143,6 +143,66 @@ def t1_kind():
     wb.ensure_product_block("가게A", "상품B", config.KIND_CONTRACT, ["키워드1"])   # 재호출=라벨만 갱신
     assert ws.cell(hdr, 1).value == config.KIND_CONTRACT, "구분 라벨 최신화 실패"
     _ok("둘 다 블록=재고행 포함 · 재호출 시 구분 라벨 최신화(마이그레이션)")
+    # 개인→로켓그로스 마이그레이션 = **재고행 자동 추가**(역기록 공란 근본원인 수정, 2026-09-17)
+    wb.ensure_product_block("가게A", "상품P", config.KIND_PERSONAL, ["kwP"])
+    assert ("가게A", "상품P", config.M_INVENTORY) not in wb._metric_row, "개인은 재고행 없어야"
+    wb.ensure_product_block("가게A", "상품P", config.KIND_CONTRACT, ["kwP"])   # 구분 변경
+    assert ("가게A", "상품P", config.M_INVENTORY) in wb._metric_row, "개인→로켓그로스=재고행 추가돼야"
+    assert wb.set_product_metric("가게A", "상품P", config.M_INVENTORY, "2026-09-16", 99)
+    assert wb.product_inventory("가게A", "상품P") == 99, "추가된 재고행에 값 기록 실패"
+    wb.ensure_product_block("가게A", "상품P", config.KIND_CONTRACT, ["kwP"])   # 멱등(중복 안 생김)
+    assert sum(1 for k in wb._metric_row
+               if k[:2] == ("가게A", "상품P") and k[2] == config.M_INVENTORY) == 1, "재고행 중복"
+    _ok("개인→로켓그로스 재호출 시 재고행 자동 추가·값 기록·멱등(공란 역기록 수정)")
+
+
+def t1_sale_status_flag():
+    print("[8] 판매상태 불일치 경고 (collector 상태파서 + workbook 판정·렌더, 실제 xlsx I/O)")
+    from coupang_analytics.collector import _parse_inventory_status
+    # 상태 파서: listingDetails.isSaleSuspended(bool)만 채택, 필드없음·vid없음은 제외(미상)
+    props = [{"vendorItemId": "V1", "listingDetails": {"isSaleSuspended": False}},
+             {"vendorItemId": "V2", "listingDetails": {"isSaleSuspended": True}},
+             {"vendorItemId": "V3", "listingDetails": {}},          # 필드 없음 → 제외
+             {"listingDetails": {"isSaleSuspended": False}}]        # vid 없음 → 제외
+    assert _parse_inventory_status(props) == {"V1": False, "V2": True}, "상태 파서 오류"
+    # 상품단위 판정: 전부중지=판매중지·전부아님=판매중·섞임=부분판매중·맵에없음=미상
+    wb = OutputWorkbook.empty()
+    biz = "비즈판정"
+    for nm, vids in [("판매중품", ["A1", "A2"]), ("부분품", ["B1", "B2"]),
+                     ("중지품", ["C1"]), ("미상품", ["D1"])]:
+        wb.ensure_product_block(biz, nm, config.KIND_CONTRACT, ["kw"])
+        wb.set_product_vids(biz, nm, vids)
+    wb.apply_sale_status(biz, {"A1": False, "A2": False, "B1": False, "B2": True, "C1": True})
+    assert wb.sale_status(biz, "판매중품") == "판매중"
+    assert wb.sale_status(biz, "부분품") == "부분판매중"
+    assert wb.sale_status(biz, "중지품") == "판매중지"
+    assert wb.sale_status(biz, "미상품") == ""            # 맵에 vid 없음 → 미상(빈값·기존 보존)
+    _ok("상태파서·상품단위 판정(판매중/부분판매중/판매중지/미상) 정상")
+    # 렌더 왕복: 대장=판매중지 + 쿠팡=판매중 → 최신 날짜칸에 '판매중' 적색·굵게 (멱등)
+    d = Path(tempfile.mkdtemp())
+    wb2 = OutputWorkbook.empty()
+    bz, nm = "비즈렌더", "손세정기"
+    wb2.ensure_product_block(bz, nm, config.KIND_CONTRACT, ["소독"])
+    wb2.set_product_vids(bz, nm, ["Z1"])
+    wb2.set_keyword_rank(bz, nm, "소독", "2026-09-16", 5)   # 날짜 컬럼 생성
+    wb2.set_discontinued(bz, nm, True)                       # 대장에서 빠짐 = 판매중지
+    wb2.apply_sale_status(bz, {"Z1": False})                 # 쿠팡 실제 = 판매중
+    path = d / "판매상태.xlsx"
+    wb2.apply_style(); wb2.save(path)
+    ws = openpyxl.load_workbook(path)[bz]
+    kh = next(r for r in range(1, ws.max_row + 1)
+              if str(ws.cell(r, 7).value or "").strip() == "⛔ 판매중지")
+    warn = ws.cell(kh, ws.max_column)
+    assert warn.value == "판매중", f"경고셀 값={warn.value!r}"
+    rgb = warn.font.color.rgb if warn.font and warn.font.color else None
+    assert warn.font.bold and str(rgb).endswith("C00000"), f"서식 미적용(rgb={rgb})"
+    # 멱등: 재로드→apply_style 재적용에도 유지
+    wb3 = OutputWorkbook.load(path); wb3.apply_style(); wb3.save(path)
+    ws3 = openpyxl.load_workbook(path)[bz]
+    kh3 = next(r for r in range(1, ws3.max_row + 1)
+               if str(ws3.cell(r, 7).value or "").strip() == "⛔ 판매중지")
+    assert ws3.cell(kh3, ws3.max_column).value == "판매중", "멱등 재적용 실패"
+    _ok(f"대장=판매중지+쿠팡=판매중 → 최신 날짜칸 '판매중'(적색 {rgb}·굵게) 렌더·멱등 확인")
 
 
 # ── Tier2 (외부 네트워크·AI, 로그인 아님) ─────────────────────
@@ -187,6 +247,7 @@ def main():
     store = t1_credstore()
     t1_report_parse()
     t1_kind()
+    t1_sale_status_flag()
     t2_keywords(store, il)
     print("=" * 60)
     print("  [완료] 로그인 불필요 부분 실증 종료")
