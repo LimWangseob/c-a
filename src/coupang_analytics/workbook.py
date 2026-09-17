@@ -209,6 +209,38 @@ class OutputWorkbook:
                 return _norm(ws.cell(r, 2).value)
         return ""
 
+    def set_representative(self, biz: str, representative: str) -> None:
+        """(사업자)→대표자명 을 숨김 계정정보 시트 **4열**에 저장(계정목록 대표자 컬럼 표시용).
+
+        ⚠ 3열은 이미 '판매수집일'(mark_sales_collected)이 쓰므로 4열을 쓴다(충돌 방지).
+        관리대장에 대표자명 항목이 있어 입력파싱(Account.representative)으로 넘어온다. 빈값이면 기존값 보존."""
+        rep = _norm(representative)
+        if not rep:
+            return
+        if _ACCT_SHEET in self.wb.sheetnames:
+            ws = self.wb[_ACCT_SHEET]
+        else:
+            ws = self.wb.create_sheet(_ACCT_SHEET)
+            ws.sheet_state = "hidden"
+            ws.cell(1, 1, "사업자"); ws.cell(1, 2, "계정ID")
+        if _norm(ws.cell(1, 4).value) != "대표자":
+            ws.cell(1, 4, "대표자")
+        for r in range(2, ws.max_row + 1):
+            if _norm(ws.cell(r, 1).value) == biz:
+                ws.cell(r, 4, rep); return
+        row = ws.max_row + 1
+        ws.cell(row, 1, biz); ws.cell(row, 4, rep)
+
+    def representative_of(self, biz: str) -> str:
+        """저장된 대표자명(없으면 '' — 옛 마스터엔 없을 수 있음). 계정정보 시트 4열(3열=판매수집일과 구분)."""
+        if _ACCT_SHEET not in self.wb.sheetnames:
+            return ""
+        ws = self.wb[_ACCT_SHEET]
+        for r in range(2, ws.max_row + 1):
+            if _norm(ws.cell(r, 1).value) == biz:
+                return _norm(ws.cell(r, 4).value)
+        return ""
+
     def mark_sales_collected(self, biz: str, date_label: str) -> None:
         """이 계정의 '판매수집 완료(오늘=date_label 컬럼)' 스탬프를 숨김 계정정보 시트 3열에 기록.
 
@@ -409,11 +441,11 @@ class OutputWorkbook:
         4행을 넘겨 팽창하는 것을 막는다. 빈 행보다 키워드가 많으면 마지막 순위행 아래에 insert_rows 로
         끼워 넣는다. 없던 키워드만 추가.
         """
-        # 띄어쓰기·대소문자 무시 dedup — **쿠팡은 띄어쓰기 유무를 동일 검색어로 취급**하므로 이미 추적 중인
-        # 키워드의 다른 표기('캠핑타프'↔'캠핑 타프')는 추가하지 않는다(선정 단계와 동일 원칙, 시트 미러링에도
-        # 변형 중복이 재유입되지 않게). 들어온 표기는 **그대로** 적재(선정된 띄어쓰기 형태가 시트에 반영됨).
+        # 띄어쓰기·대소문자는 **유의미**(2026-09-17 정책 되돌림): 쿠팡에서 '캠핑타프'와 '캠핑 타프'의
+        # 노출순위가 달라 별개 키워드로 추적한다 → **완전 동일한 표기(strip 후 문자열 일치)만** 중복 제거.
+        # 그래야 직원이 결과 시트에 넣은 띄어쓰기 변형도 무시되지 않고 그대로 추가·추적된다.
         def _sp(s) -> str:
-            return str(s).replace(" ", "").casefold()
+            return str(s).strip()
         seen = {_sp(e) for e in self.product_keywords(biz, product)}
         add = []
         for kw in dict.fromkeys(keywords):
@@ -1228,19 +1260,29 @@ class OutputWorkbook:
 
     def _sync_marketing_from_index(self) -> None:
         """재생성 전에 **현재 계정목록(가시)의 마케팅 입력을 숨김시트로 회수**(사용자 입력 보존).
-        레이아웃 고정: 3행부터 A=사업자 B=상품 D=시작 E=종료 F=모니터링종료."""
+
+        열 위치를 **헤더(2행)로 탐지**한다 → 대표자 컬럼 추가로 열이 밀린 신규 레이아웃과, 대표자 없던 옛
+        레이아웃 모두에서 사업자/상품/체험단 열을 정확히 찾아 회수한다(전환 시 사용자 입력 유실 방지)."""
         if _INDEX_SHEET not in self.wb.sheetnames:
             return
         ws = self.wb[_INDEX_SHEET]
-        if _norm(ws.cell(2, 4).value) not in (_MKT_COLS[0], _MKT_COLS_LEGACY0):   # 현재/옛 라벨 레이아웃만 회수
+        # 헤더행(2행)에서 각 컬럼 위치 파악(1-based). 라벨이 있어야 그 열을 읽는다.
+        hdr = {_norm(ws.cell(2, c).value): c for c in range(1, ws.max_column + 1)}
+        c_biz = hdr.get("사업자")
+        c_prod = next((hdr[h] for h in hdr if h.startswith("상품명")), None)
+        c_start = hdr.get(_MKT_COLS[0]) or hdr.get(_MKT_COLS_LEGACY0)
+        c_end = hdr.get(_MKT_COLS[1])
+        c_mon = hdr.get(_MKT_COLS[2])
+        if not (c_biz and c_prod and c_start):   # 마케팅 레이아웃이 아니면 회수 생략
             return
         for r in range(3, ws.max_row + 1):
-            biz = _norm(ws.cell(r, 1).value)
-            prod = _key(ws.cell(r, 2).value)
+            biz = _norm(ws.cell(r, c_biz).value)
+            prod = _key(ws.cell(r, c_prod).value)
             if not biz:
                 continue
-            start, end, mon = (_norm(ws.cell(r, 4).value), _norm(ws.cell(r, 5).value),
-                               _norm(ws.cell(r, 6).value))
+            start = _norm(ws.cell(r, c_start).value)
+            end = _norm(ws.cell(r, c_end).value) if c_end else ""
+            mon = _norm(ws.cell(r, c_mon).value) if c_mon else ""
             if start or end or mon:
                 self.set_marketing(biz, prod, start, end, mon)
 
@@ -1273,42 +1315,43 @@ class OutputWorkbook:
         n_prod = sum(1 for _b, p, _h, hs in rows if hs and p)
 
         ws.cell(1, 1, f"{_INDEX_SHEET} · 상품 {n_prod}개").font = title_font
-        ws.merge_cells("A1:G1")
+        ws.merge_cells("A1:H1")                            # 대표자 컬럼 추가로 8열(A~H)
         ws.cell(1, 1).alignment = center
-        # 마케팅 3열은 **관리대장에서 입력**(원본) → 여기선 표시. 헤더 안내로 (관리대장) 표기.
-        heads = ["사업자", "상품명(클릭 이동)", "계정ID",
+        # 열: 1 대표자 · 2 사업자 · 3 상품명 · 4 계정ID · 5~7 체험단(관리대장 입력·표시) · 8 상태.
+        heads = ["대표자", "사업자", "상품명(클릭 이동)", "계정ID",
                  _MKT_COLS[0], _MKT_COLS[1], _MKT_COLS[2], "상태"]
         for c, h in enumerate(heads, 1):
             x = ws.cell(2, c, h)
             x.font = bold; x.alignment = center; x.border = box
-            x.fill = mkt_fill if 4 <= c <= 6 else head_fill   # 4~6열=마케팅(관리대장 값 표시)
+            x.fill = mkt_fill if 5 <= c <= 7 else head_fill   # 5~7열=마케팅(관리대장 값 표시)
         for r, (biz, prod, hdr, has_sheet) in enumerate(rows, start=3):
-            ws.cell(r, 1, biz).font = font if has_sheet else gray_font
-            pcell = ws.cell(r, 2, prod if prod else ("(미수집)" if not has_sheet else "(상품없음)"))
+            ws.cell(r, 1, self.representative_of(biz)).font = font if has_sheet else gray_font
+            ws.cell(r, 2, biz).font = font if has_sheet else gray_font
+            pcell = ws.cell(r, 3, prod if prod else ("(미수집)" if not has_sheet else "(상품없음)"))
             if has_sheet and prod and hdr:      # 상품 블록으로 점프(헤더행)
                 pcell.hyperlink = Hyperlink(ref=pcell.coordinate,
                                             location=f"'{biz.replace(chr(39), chr(39) * 2)}'!A{hdr}")
                 pcell.font = link_font
             else:
                 pcell.font = gray_font
-            ws.cell(r, 3, self.account_id_of(biz)).font = font if has_sheet else gray_font
+            ws.cell(r, 4, self.account_id_of(biz)).font = font if has_sheet else gray_font
             start, end, mon = self.marketing_of(biz, prod)
             if has_sheet and prod and self.is_discontinued(biz, prod):
                 status = "⛔ 판매중지"
             else:
                 status = self._mkt_status(start, end, mon) if has_sheet else "미수집"
-            for c, v in ((4, start), (5, end), (6, mon)):   # 마케팅(관리대장 값 표시)
+            for c, v in ((5, start), (6, end), (7, mon)):   # 마케팅(관리대장 값 표시)
                 x = ws.cell(r, c, v); x.font = font; x.alignment = center; x.border = box; x.fill = mkt_fill
-            st = ws.cell(r, 7, status); st.alignment = center; st.border = box
+            st = ws.cell(r, 8, status); st.alignment = center; st.border = box
             st.font = (red_bold if status == "체험단중"
                        else (gray_font if status in ("미수집", "종료", "⛔ 판매중지") else font))
-            for c in (1, 2, 3):
-                ws.cell(r, c).alignment = left if c == 2 else center
+            for c in (1, 2, 3, 4):
+                ws.cell(r, c).alignment = left if c == 3 else center
                 ws.cell(r, c).border = box
-        for c, w in {1: 22, 2: 40, 3: 15, 4: 13, 5: 13, 6: 14, 7: 10}.items():
+        for c, w in {1: 16, 2: 22, 3: 40, 4: 15, 5: 13, 6: 13, 7: 14, 8: 10}.items():
             ws.column_dimensions[get_column_letter(c)].width = w
         ws.row_dimensions[1].height = 21
-        ws.freeze_panes = "D3"                            # 제목·헤더 + 사업자/상품/계정ID 고정(가로 스크롤 시)
+        ws.freeze_panes = "E3"                            # 제목·헤더 + 대표자/사업자/상품/계정ID 고정(가로 스크롤 시)
         # '항상 고정': 첫 탭(index 0) + **파일 열면 항상 목차가 선택된 채로 열리게** 활성 시트로 지정.
         try:
             self.wb.active = self.wb.index(ws)

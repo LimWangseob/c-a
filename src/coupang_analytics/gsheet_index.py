@@ -1,10 +1,11 @@
 """출력 결과 구글시트의 `계정목록` 시트 생성·동기화 (Sheets API).
 
-스키마(기존 openpyxl `계정 목록`과 동일 7열, designs/GSHEET_UNIFIED.md 확정):
-    A 사업자 | B 상품명(클릭 이동·노출명·통계시트 하이퍼링크) | C 계정ID |
-    D 체험단 시작일 | E 체험단 종료일 | F 모니터링 종료일 | G 상태
+스키마(기존 openpyxl `계정 목록`과 동일 8열, designs/GSHEET_UNIFIED.md 확정):
+    A 대표자 | B 사업자 | C 상품명(클릭 이동·노출명·통계시트 하이퍼링크) | D 계정ID |
+    E 체험단 시작일 | F 체험단 종료일 | G 모니터링 종료일 | H 상태
 
-- **자동 열 = A·B·C·G** (프로그램이 씀). **직원 입력 열 = D·E·F**(온라인 편집) → 프로그램이 **절대 안 씀**.
+- **자동 열 = A·B·C·D·H** (프로그램이 씀). **직원 입력 열 = E·F·G**(온라인 편집) → 프로그램이 **절대 안 씀**.
+- 대표자(A)는 2026-09-17 추가. 기존 7열 시트는 sync 시 **A에 빈 열 1개 삽입**으로 자동 마이그레이션(모든 값·메모·서식이 오른쪽으로 밀려 새 위치와 정확히 일치).
 - 신규 상품은 **계정별 그룹 맨 마지막**에 `insertDimension`으로 빈 행을 끼워 넣는다(기존 마케팅 행은
   통째로 아래로 밀리며 D~F 값·서식 그대로 보존 = 동시편집 안전). 관리대장에서 사라진 상품은 행을 지우지
   않고 **상태만 '⛔ 판매중지'**로(데이터 보존, 옵션 B). 다시 나타나면 상태 원복.
@@ -17,10 +18,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 # 열 인덱스(0-based)
-COL_BUSINESS, COL_PRODUCT, COL_ACCOUNT = 0, 1, 2
-COL_MKT_START, COL_MKT_END, COL_MKT_MON = 3, 4, 5
-COL_STATUS = 6
-N_COLS = 7
+COL_REP = 0                                    # 대표자(2026-09-17 추가)
+COL_BUSINESS, COL_PRODUCT, COL_ACCOUNT = 1, 2, 3
+COL_MKT_START, COL_MKT_END, COL_MKT_MON = 4, 5, 6
+COL_STATUS = 7
+N_COLS = 8
 HEADER_ROW0 = 1        # 헤더가 있는 0-based 행(=시트 2행). 0행=제목.
 DATA_START0 = 2        # 데이터 시작 0-based 행(=시트 3행)
 DISCONTINUED = "⛔ 판매중지"
@@ -49,14 +51,15 @@ def _band_fill(band: int) -> dict:
 @dataclass
 class IndexRow:
     """계정목록 한 행의 **자동 열** 데이터(프로그램 산출). 마케팅 3열은 여기 없다(직원 소유)."""
-    business: str            # A
-    product: str             # B 표시명(노출명)
-    account_id: str          # C
-    status: str              # G 예: 예정/체험단중/모니터링/종료/미수집/⛔ 판매중지
+    business: str            # B
+    product: str             # C 표시명(노출명)
+    account_id: str          # D
+    status: str              # H 예: 예정/체험단중/모니터링/종료/미수집/⛔ 판매중지
     key: str                 # 안정 매칭 키(계정ID+vid 앵커). 노출명이 바뀌어도 불변
-    link_gid: int | None = None   # B 하이퍼링크 대상 통계시트 gid
-    link_row: int | None = None   # B 하이퍼링크 대상 행(상품 블록 헤더)
+    link_gid: int | None = None   # C 하이퍼링크 대상 통계시트 gid
+    link_row: int | None = None   # C 하이퍼링크 대상 행(상품 블록 헤더)
     band: int = 0            # 사업자 등장 순서 인덱스 → 바탕색 밴딩(사업자별 시각 구분)
+    representative: str = ""  # A 대표자(관리대장 대표자명)
 
 
 @dataclass
@@ -147,27 +150,28 @@ def _product_cell(row: IndexRow) -> dict:
 
 
 def _auto_cells_request(sheet_id: int, grid_row: int, row: IndexRow) -> list[dict]:
-    """A·B·C(+A열 키 메모)와 G(상태)만 쓰는 updateCells 요청(마케팅 D~F는 건드리지 않음)."""
-    bg = {"backgroundColor": _band_fill(row.band)}   # 사업자별 밴드색(A·B·C·G만 — D~F 마케팅색 불변)
-    abc = {
+    """A·B·C·D(+B열=사업자 셀에 키 메모)와 H(상태)만 쓰는 updateCells 요청(마케팅 E~G는 건드리지 않음)."""
+    bg = {"backgroundColor": _band_fill(row.band)}   # 사업자별 밴드색(A·B·C·D·H만 — E~G 마케팅색 불변)
+    abcd = {
         "updateCells": {
-            "start": {"sheetId": sheet_id, "rowIndex": grid_row, "columnIndex": COL_BUSINESS},
+            "start": {"sheetId": sheet_id, "rowIndex": grid_row, "columnIndex": COL_REP},
             "rows": [{"values": [
-                {**_s(row.business), "note": row.key, "userEnteredFormat": bg},   # 안정 키를 A열 메모에 보존
-                {**_product_cell(row), "userEnteredFormat": bg},
-                {**_s(row.account_id), "userEnteredFormat": bg},
+                {**_s(row.representative), "userEnteredFormat": bg},              # A 대표자
+                {**_s(row.business), "note": row.key, "userEnteredFormat": bg},   # B 사업자 + 안정 키 메모
+                {**_product_cell(row), "userEnteredFormat": bg},                  # C 상품명(링크)
+                {**_s(row.account_id), "userEnteredFormat": bg},                  # D 계정ID
             ]}],
             "fields": "userEnteredValue,note,userEnteredFormat.backgroundColor",
         }
     }
-    g = {
+    h = {
         "updateCells": {
             "start": {"sheetId": sheet_id, "rowIndex": grid_row, "columnIndex": COL_STATUS},
             "rows": [{"values": [{**_s(row.status), "userEnteredFormat": bg}]}],
             "fields": "userEnteredValue,userEnteredFormat.backgroundColor",
         }
     }
-    return [abc, g]
+    return [abcd, h]
 
 
 def _status_only_request(sheet_id: int, grid_row: int, status: str) -> dict:
@@ -252,8 +256,9 @@ def _build_requests_for_plan(sheet_id: int, plan: SyncPlan,
     return reqs
 
 
-_HEADS = ["사업자", "상품명(클릭 이동)", "계정ID", "체험단 시작일", "체험단 종료일", "모니터링 종료일", "상태"]
-_COL_WIDTHS = {COL_BUSINESS: 150, COL_PRODUCT: 300, COL_ACCOUNT: 110,
+_HEADS = ["대표자", "사업자", "상품명(클릭 이동)", "계정ID", "체험단 시작일", "체험단 종료일", "모니터링 종료일", "상태"]
+_MKT_LABELS = (_HEADS[COL_MKT_START], _HEADS[COL_MKT_END], _HEADS[COL_MKT_MON])   # 체험단 3열 헤더 라벨
+_COL_WIDTHS = {COL_REP: 110, COL_BUSINESS: 150, COL_PRODUCT: 300, COL_ACCOUNT: 110,
                COL_MKT_START: 95, COL_MKT_END: 95, COL_MKT_MON: 100, COL_STATUS: 90}
 
 
@@ -324,20 +329,32 @@ def read_marketing(client, *, sheet: str = INDEX_SHEET_NAME) -> dict[str, tuple[
     if sheet not in client.sheet_titles():
         return {}
     values, notes = client.read_grid(sheet, notes=True)
+    if len(values) <= HEADER_ROW0:
+        return {}
+    # 열 위치를 **헤더(2행) 라벨로 탐지** — 대표자 컬럼 추가로 밀린 신규 레이아웃과 옛 레이아웃 모두 안전.
+    hdr = [str(h).strip() for h in values[HEADER_ROW0]]
+
+    def _col(label):
+        return hdr.index(label) if label in hdr else None
+
+    c_start, c_end, c_mon = _col(_MKT_LABELS[0]), _col(_MKT_LABELS[1]), _col(_MKT_LABELS[2])
+    c_biz, c_acct = _col("사업자"), _col("계정ID")
+    c_prod = next((i for i, h in enumerate(hdr) if h.startswith("상품명")), None)
+    if c_start is None:                     # 마케팅 열이 없으면(레이아웃 이상) 빈 dict
+        return {}
 
     def _cell(row, c):
-        return row[c] if len(row) > c else ""
+        return row[c] if (c is not None and len(row) > c) else ""
 
     out: dict[str, tuple[str, str, str]] = {}
     for gi in range(DATA_START0, len(values)):
         row = values[gi]
-        start = _cell(row, COL_MKT_START)
-        end = _cell(row, COL_MKT_END)
-        mon = _cell(row, COL_MKT_MON)
+        start, end, mon = _cell(row, c_start), _cell(row, c_end), _cell(row, c_mon)
         if not (start or end or mon):
             continue
-        note = notes[gi][COL_BUSINESS] if (gi < len(notes) and len(notes[gi]) > COL_BUSINESS) else None
-        key = note or _synth_key(_cell(row, COL_ACCOUNT), _cell(row, COL_PRODUCT))
+        note = (notes[gi][c_biz] if (c_biz is not None and gi < len(notes)
+                                     and len(notes[gi]) > c_biz) else None)
+        key = note or _synth_key(_cell(row, c_acct), _cell(row, c_prod))
         out[key] = (start, end, mon)
     return out
 
@@ -377,8 +394,25 @@ def roster_from_workbook(wb, stats_gids: dict[str, int]) -> list[IndexRow]:
         rows.append(IndexRow(business=biz, product=prod, account_id=acct,
                              status=wb.status_of(biz, prod, has_sheet), key=key,
                              link_gid=gid, link_row=(hdr if (linkable and gid is not None) else None),
-                             band=band))
+                             band=band, representative=wb.representative_of(biz)))
     return rows
+
+
+def _ensure_rep_column(client, sheet: str, sheet_id: int) -> None:
+    """기존 7열(대표자 없음) 계정목록을 8열로 **자동 마이그레이션** — A에 빈 열 1개 삽입(2026-09-17).
+
+    insertDimension(COLUMNS 0) 은 모든 값·메모·서식·직원 마케팅을 오른쪽으로 밀어 새 위치와 정확히
+    일치시킨다(안정 키 메모도 옛 A '사업자'→새 B '사업자'로 이동 = COL_BUSINESS 와 일치). 이미 대표자
+    열이면 no-op. 헤더/데이터가 없으면(신규 시트) 생략 → full build 가 새 레이아웃으로 만든다."""
+    values, _ = client.read_grid(sheet)
+    if len(values) <= HEADER_ROW0:
+        return
+    hdr = [str(h).strip() for h in (values[HEADER_ROW0] or [])]
+    if hdr and len(hdr) > COL_REP and hdr[COL_REP] == _HEADS[COL_REP]:
+        return                                        # 이미 대표자 열 있음
+    client.batch_update([{"insertDimension": {
+        "range": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 1},
+        "inheritFromBefore": False}}])
 
 
 def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME) -> SyncPlan:
@@ -387,6 +421,7 @@ def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME
     비어 있으면 전체 생성, 아니면 증분(자동열만 갱신·신규 삽입·판매중지 표기). 마케팅 D~F는 안 건드린다.
     """
     sheet_id = client.ensure_sheet(sheet)
+    _ensure_rep_column(client, sheet, sheet_id)   # 옛 7열 시트면 A에 대표자 빈 열 삽입(멱등) → 아래 읽기는 새 레이아웃
     existing = _read_existing(client, sheet)
     if not existing:
         client.batch_update(_full_build_requests(sheet_id, desired))

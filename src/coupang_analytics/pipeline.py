@@ -952,9 +952,10 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         wb.save(partial)                       # 크래시 복구 기준선(carry면 마스터 내용 포함)
         _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks, date_label)
 
-    # 목차 로스터 — 입력 전체 계정(계정ID)을 등록해 **미수집 계정도 목차에 표시**(수집 현황 파악)
+    # 목차 로스터 — 입력 전체 계정(계정ID·대표자명)을 등록해 **미수집 계정도 목차에 표시**(수집 현황 파악)
     for _a in input_list.accounts:
         wb.set_account_id(_a.label, _a.account_id)
+        wb.set_representative(_a.label, _a.representative)   # 계정목록 대표자 컬럼 표시용(관리대장 대표자명)
 
     # 직원이 결과 통계 시트에 직접 넣은 키워드를 역머지(값 있으면 그 상품은 AI 선정 대신 동결). 미러링 전에 워크북에
     # 들어가야 종료 시 전체 교체돼도 보존된다. 새 상품(블록 없음)은 대상 아님(첫 수집 후 시트가 생겨야 입력 가능).
@@ -990,6 +991,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         if report_acc is None:      # 로그인 미완료/데이터 없음 → 다음 계정(전체 안 막힘)
             return
         wb.set_account_id(a.label, a.account_id)   # 목차 계정ID 표시용(비번은 저장 안 함)
+        wb.set_representative(a.label, a.representative)   # 계정목록 대표자 컬럼(관리대장 대표자명)
         # 자동완성(키워드 후보)·순위 모두 비로그인 쿠팡 세션이 필요하다. 로그인 브라우저가 닫힌 뒤 별도로
         # 연다(중첩 금지 — sync playwright 충돌 방지). 활동 상품이 있을 때만 열고, 그 한 세션에서
         # 키워드 선정(자동완성)→순위까지 재사용한다(warmup 먼저 = 쿠팡 오리진 로드, same-origin fetch).

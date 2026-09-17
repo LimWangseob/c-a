@@ -3,6 +3,12 @@
 > 정책·구조의 단일 기준 문서. 코드보다 이 문서가 우선한다.
 > §8 미확정 항목은 실제 페이지 1회 분석 후 확정한다.
 
+## 0-0000. 최신 반영 요약 (2026-09-17 — 대표자 컬럼·띄어쓰기 유의미·키워드 처리)
+
+- **계정목록 대표자 컬럼:** 구글시트 `계정목록`·엑셀 `계정 목록` 둘 다 **A=대표자** 추가(열 순서 대표자·사업자·상품명·계정ID·체험단3·상태, 8열). 대표자=관리대장 대표자명(`wb.set_representative`/`representative_of`, `_계정정보` 4열 — 3열 판매수집일과 구분). 구글시트 자동열 A·B·C·D·H, 안정키 메모=B(사업자), 직원 마케팅 E~G 미접촉. 옛 7열 구글시트는 `gsheet_index._ensure_rep_column`이 A에 빈 열 자동 삽입해 마이그레이션(값·메모·서식·마케팅 우측 이동), `read_marketing`은 헤더 라벨로 열 탐지. 엑셀 `_sync_marketing_from_index`도 헤더 기반. SSOT=`designs/GSHEET_UNIFIED.md §5`.
+- **키워드 띄어쓰기 = 유의미(2026-09-15 병합 되돌림):** 쿠팡에서 '캠핑타프'≠'캠핑 타프'(노출순위 다름) → 별개 키워드로 선정·적재·검색. `kw_recommend._assemble_candidates` 병합 제거·`exclude` 정확표기 제외, `workbook.add_product_keywords` dedup을 strip 후 정확일치로. 순위 검색은 원래부터 공백 그대로 타이핑. 완전 동일만 중복 제거·앞으로만 적용. SSOT=`designs/KEYWORD_SELECTION.md`.
+- **키워드 처리(요구 확인):** 결과파일 키워드 4개 중 **채워진 것만 순위검색·공란은 보존(삭제 안 함)**, 직원이 4개 초과로 추가한 키워드도 **모두 검색**(product_keywords 무캡·add_product_keywords 무캡), 4개 미만은 빈 순위행 유지. 기존 동작이나 위 띄어쓰기 수정으로 직원 추가 변형도 이제 검색된다.
+
 ## 0-000. 최신 반영 요약 (2026-09-17 — 판매상태 경고·재고행 공란 수정)
 
 - **판매상태 불일치 경고(§2.3):** 대장=판매중지인데 쿠팡 실제=판매중/부분판매중이면 결과파일 최신 날짜칸에 "판매중" 적색·굵게. collector `_parse_inventory_status`(`isSaleSuspended`)→`fetch_inventory` 3튜플→pipeline `_login_and_discover` 4튜플·`_finish`의 `apply_sale_status`→workbook `_상품ID` 7열·`apply_style` 렌더→gsheet 미러링. 상세=§2.3.

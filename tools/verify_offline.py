@@ -205,6 +205,27 @@ def t1_sale_status_flag():
     _ok(f"대장=판매중지+쿠팡=판매중 → 최신 날짜칸 '판매중'(적색 {rgb}·굵게) 렌더·멱등 확인")
 
 
+def t1_representative_column():
+    print("[9] 계정목록 대표자 컬럼 (workbook set/representative_of + _build_index A열, 실제 xlsx I/O)")
+    wb = OutputWorkbook.empty()
+    wb.set_account_id("가게A", "idA")
+    wb.set_representative("가게A", "홍길동")
+    wb.mark_sales_collected("가게A", "09.17")   # 3열=판매수집일과 4열=대표자 충돌 없어야
+    assert wb.representative_of("가게A") == "홍길동", "대표자 저장/조회 실패(3열 판매수집일과 충돌?)"
+    assert wb.has_sales("가게A", "09.17"), "판매수집일(3열) 손상"
+    wb.ensure_product_block("가게A", "텀블러", config.KIND_CONTRACT, ["텀블러"])
+    wb.set_keyword_rank("가게A", "텀블러", "텀블러", "2026-09-17", 3)
+    d = Path(tempfile.mkdtemp()); path = d / "대표자.xlsx"
+    wb.apply_style(); wb.save(path)
+    ws = openpyxl.load_workbook(path)["계정 목록"]
+    heads = [ws.cell(2, c).value for c in range(1, 9)]
+    assert heads[0] == "대표자" and heads[1] == "사업자" and heads[3] == "계정ID" and heads[7] == "상태", heads
+    assert ws.cell(3, 1).value == "홍길동" and ws.cell(3, 2).value == "가게A" and ws.cell(3, 4).value == "idA"
+    wb2 = OutputWorkbook.load(path)
+    assert wb2.representative_of("가게A") == "홍길동" and wb2.has_sales("가게A", "09.17")
+    _ok("계정목록 헤더 8열(A=대표자)·데이터행 대표자 렌더·판매수집일(3열)과 무충돌·재로드 보존")
+
+
 # ── Tier2 (외부 네트워크·AI, 로그인 아님) ─────────────────────
 def t2_keywords(store, il):
     print("[6] 키워드 Phase B 실제 실행 (AI 앵커→네이버확장→AI판정→점수압축→AI종합선정, 브라우저 없이)")
@@ -248,6 +269,7 @@ def main():
     t1_report_parse()
     t1_kind()
     t1_sale_status_flag()
+    t1_representative_column()
     t2_keywords(store, il)
     print("=" * 60)
     print("  [완료] 로그인 불필요 부분 실증 종료")

@@ -32,7 +32,10 @@ from coupang_analytics.input_list import (Account, Product,  # noqa: E402
                                           parse_input_list, parse_input_rows, parse_password_rows)
 from coupang_analytics.workbook import OutputWorkbook  # noqa: E402
 
-_HEAD = ["사업자", "상품명(클릭 이동)", "계정ID", "체험단 시작일", "체험단 종료일", "모니터링 종료일", "상태"]
+_HEAD = ["대표자", "사업자", "상품명(클릭 이동)", "계정ID",
+         "체험단 시작일", "체험단 종료일", "모니터링 종료일", "상태"]   # 2026-09-17 대표자 컬럼 추가(8열)
+_HEAD_OLD7 = ["사업자", "상품명(클릭 이동)", "계정ID",
+              "체험단 시작일", "체험단 종료일", "모니터링 종료일", "상태"]   # 마이그레이션 대상 옛 7열
 
 
 def _ok(msg: str) -> None:
@@ -144,7 +147,8 @@ def _touched_data_mkt(req) -> set:
     if not uc or uc["start"].get("rowIndex", 0) < DATA_START0:
         return set()
     start = uc["start"]["columnIndex"]; ncol = len(uc["rows"][0]["values"])
-    return {c for c in range(start, start + ncol) if c in (3, 4, 5)}
+    mkt = (gi.COL_MKT_START, gi.COL_MKT_END, gi.COL_MKT_MON)   # 마케팅(체험단) 직원 입력 열
+    return {c for c in range(start, start + ncol) if c in mkt}
 
 
 def t3_index_sync() -> None:
@@ -183,7 +187,13 @@ class _FakeClient:
     def sheet_titles(self): return ["계정목록"] if self._v else []
     def ensure_sheet(self, name): return 7
     def read_grid(self, sheet, notes=False): return self._v, [[None] * len(r) for r in self._v]
-    def batch_update(self, reqs): self.batches.append(reqs); return {}
+    def batch_update(self, reqs):
+        self.batches.append(reqs)
+        for r in reqs:   # 마이그레이션 재현: A열(0) 컬럼 삽입 → 모든 행 오른쪽으로 밀림(값 유지)
+            ins = r.get("insertDimension")
+            if ins and ins["range"].get("dimension") == "COLUMNS" and ins["range"].get("startIndex") == 0:
+                self._v = [[""] + list(row) for row in self._v]
+        return {}
 
 
 def t3b_full_and_incremental() -> None:
@@ -206,25 +216,41 @@ def t3b_full_and_incremental() -> None:
     _ok("빈 시트 → 전체 생성(제목 병합=MERGE_ALL·열 고정 없음·마케팅 값 미기록)")
 
     existing_vals = [
-        ["계정목록 · 상품 3개"], _HEAD,
-        ["biz_A", "상품1", "A", "2026-09-01", "2026-09-30", "", "체험단중"],
-        ["biz_A", "상품2", "A", "", "", "", "예정"],
-        ["biz_B", "상품3", "B", "", "", "", "예정"],
+        ["계정목록 · 상품 3개"], list(_HEAD),
+        ["대표A", "biz_A", "상품1", "A", "2026-09-01", "2026-09-30", "", "체험단중"],
+        ["대표A", "biz_A", "상품2", "A", "", "", "", "예정"],
+        ["대표B", "biz_B", "상품3", "B", "", "", "", "예정"],
     ]
     fc2 = _FakeClient(existing_vals)
     p2 = gi.sync_index(fc2, desired)
     assert len(p2.inserts) == 1 and p2.inserts[0][1].product == "상품4"
     assert len(p2.discontinue) == 1                          # 상품2 사라짐
-    _ok("기존 시트 → 증분(상품4 신규 삽입, 상품2 판매중지)")
+    _ok("기존 시트(8열) → 증분(상품4 신규 삽입, 상품2 판매중지)")
+
+    # 옛 7열 시트 → 대표자 컬럼 자동 마이그레이션(A에 빈 열 삽입 후 증분)
+    old_vals = [
+        ["계정목록 · 상품 3개"], list(_HEAD_OLD7),
+        ["biz_A", "상품1", "A", "2026-09-01", "2026-09-30", "", "체험단중"],
+        ["biz_A", "상품2", "A", "", "", "", "예정"],
+        ["biz_B", "상품3", "B", "", "", "", "예정"],
+    ]
+    fc3 = _FakeClient(old_vals)
+    p3 = gi.sync_index(fc3, desired)
+    inserted_col = any("insertDimension" in r and r["insertDimension"]["range"].get("dimension") == "COLUMNS"
+                       for batch in fc3.batches for r in batch)
+    assert inserted_col, "옛 7열 → 대표자 열 삽입(마이그레이션) 누락"
+    assert len(p3.inserts) == 1 and p3.inserts[0][1].product == "상품4"   # 삽입 후 위치 매칭 정상
+    assert len(p3.discontinue) == 1
+    _ok("옛 7열 시트 → 대표자 열 자동 삽입(마이그레이션) 후 증분 정상")
 
 
 def t4_marketing_merge() -> None:
     print("[4] 마케팅 역방향 머지(read_marketing/apply_marketing)")
     values = [
-        ["계정목록 · 상품 3개"], _HEAD,
-        ["가게A", "텀블러", "idA", "2026-09-01", "2026-09-30", "2026-10-31", "체험단중"],
-        ["가게A", "보온병", "idA", "", "", "", "예정"],        # 마케팅 없음 → 스킵
-        ["가게B", "우산", "idB", "2026-09-10", "", "", "예정"],
+        ["계정목록 · 상품 3개"], list(_HEAD),
+        ["대표A", "가게A", "텀블러", "idA", "2026-09-01", "2026-09-30", "2026-10-31", "체험단중"],
+        ["대표A", "가게A", "보온병", "idA", "", "", "", "예정"],        # 마케팅 없음 → 스킵
+        ["대표B", "가게B", "우산", "idB", "2026-09-10", "", "", "예정"],
     ]
     fc = _FakeClient(values)
     m = gi.read_marketing(fc)
@@ -243,6 +269,7 @@ def _sample_workbook() -> OutputWorkbook:
     """작은 실제 OutputWorkbook — 계정 1·상품 1(계약)·키워드 2·값 채움 후 서식 적용."""
     wb = OutputWorkbook.empty()
     wb.set_account_id("가게A", "idA")
+    wb.set_representative("가게A", "홍길동")
     wb.ensure_product_block("가게A", "텀블러", config.KIND_CONTRACT, ["텀블러", "보온 텀블러"])
     wb.set_product_vids("가게A", "텀블러", ["111", "222"])
     wb.set_product_metric("가게A", "텀블러", config.CONTRACT_METRICS[0], "2026-09-12", 5)
@@ -280,7 +307,8 @@ def t6_roster_from_workbook() -> None:
     roster = gi.roster_from_workbook(wb, {"가게A": 42})
     r0 = next(r for r in roster if r.product)
     assert r0.business == "가게A" and r0.account_id == "idA"
-    assert r0.product == "스텐 텀블러 500ml"                              # B=노출명(표시)
+    assert r0.representative == "홍길동"                                  # A=대표자(관리대장)
+    assert r0.product == "스텐 텀블러 500ml"                              # C=노출명(표시)
     assert r0.key == gi.marketing_key("idA", "텀블러")                    # 안정키=계정ID+등록명(노출명 아님)
     assert r0.link_gid == 42 and r0.link_row is not None
     # 사업자별 바탕색 밴딩: 인접 사업자는 다른 색 + 팔레트 길이마다 순환(행 전체 A~G 동일색)
@@ -293,8 +321,8 @@ def t6_roster_from_workbook() -> None:
         for j, cell in enumerate(uc["rows"][0]["values"]):
             if cell.get("userEnteredFormat", {}).get("backgroundColor"):
                 bg_cols.add(start + j)
-    assert bg_cols == {0, 1, 2, 6}, bg_cols          # _auto_cells_request는 A·B·C·G 담당
-    # D~F는 _mkt_fill_request가 같은 밴드색으로(행 전체 동일 바탕색) + 값은 안 건드림(repeatCell)
+    assert bg_cols == {0, 1, 2, 3, 7}, bg_cols       # _auto_cells_request는 A·B·C·D·H 담당(대표자 추가)
+    # E~G는 _mkt_fill_request가 같은 밴드색으로(행 전체 동일 바탕색) + 값은 안 건드림(repeatCell)
     mreq = gi._mkt_fill_request(1, DATA_START0, 1)
     rc = mreq["repeatCell"]
     assert rc["cell"]["userEnteredFormat"]["backgroundColor"] == gi._band_fill(1)
