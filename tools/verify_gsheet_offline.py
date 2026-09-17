@@ -140,8 +140,9 @@ def t2_file_regression() -> None:
     _ok("취소선(id3)·상태(해지상품) 동시 감지, 계정 2개")
 
 
-def _R(acct, prod, key, status="예정"):
-    return IndexRow(business=f"biz_{acct}", product=prod, account_id=acct, status=status, key=key)
+def _R(acct, prod, key, status="예정", rep=None):
+    return IndexRow(business=f"biz_{acct}", product=prod, account_id=acct, status=status, key=key,
+                    representative=(rep if rep is not None else f"대표_{acct}"))
 
 
 def _touched_data_mkt(req) -> set:
@@ -169,11 +170,12 @@ def t3_index_sync() -> None:
     assert kinds[DATA_START0 + 3] == ("upd", "kB3")
     assert kinds[DATA_START0 + 4] == ("new", "kC5")          # 새 계정 맨 아래
     band_by_acct = {r.account_id: r.band for r in desired}
-    reqs = gi._build_requests_for_plan(99, plan, band_by_acct)
+    rep_by_acct = {r.account_id: r.representative for r in desired}
+    reqs = gi._build_requests_for_plan(99, plan, band_by_acct, rep_by_acct)
     ins = [r["insertDimension"]["range"]["startIndex"] for r in reqs if "insertDimension" in r]
     assert ins == sorted(ins) == [DATA_START0 + 2, DATA_START0 + 4], ins
     assert not [c for r in reqs for c in _touched_data_mkt(r)], "마케팅열 값 기록 침범"
-    # 판매중지 행(kA2, DATA_START0+1)도 사업자 밴드색으로 행 전체(A~G) 배경만 칠함(값 보존)
+    # 판매중지 행(kA2, DATA_START0+1)도 계정 밴드색으로 행 전체(A~H) 배경만 칠함(값 보존)
     disc_row = DATA_START0 + 1
     fullrow_bg = [r for r in reqs if "repeatCell" in r
                   and r["repeatCell"]["range"].get("startRowIndex") == disc_row
@@ -181,7 +183,13 @@ def t3_index_sync() -> None:
                   and r["repeatCell"]["range"].get("endColumnIndex") == gi.N_COLS]
     assert len(fullrow_bg) == 1, "판매중지 행 전체 밴드색 누락"
     assert fullrow_bg[0]["repeatCell"]["fields"] == "userEnteredFormat.backgroundColor"  # 값 미기록
-    _ok("그룹내 삽입·새계정 맨아래·판매중지=상태+사업자밴드색(값보존)·삽입 오름차순·마케팅 D~F 값 미기록")
+    # 판매중지 행 A(대표자) 셀은 그 계정 대표자로 채워짐(공란 방지) — 값+밴드색만
+    rep_cells = [r for r in reqs if "updateCells" in r
+                 and r["updateCells"]["start"].get("rowIndex") == disc_row
+                 and r["updateCells"]["start"].get("columnIndex") == gi.COL_REP]
+    assert len(rep_cells) == 1, "판매중지 행 대표자 채움 누락"
+    assert rep_cells[0]["updateCells"]["rows"][0]["values"][0]["userEnteredValue"]["stringValue"] == "대표_A"
+    _ok("그룹내 삽입·새계정 맨아래·판매중지=상태+계정밴드색+대표자채움(공란방지)·마케팅 E~G 값 미기록")
 
 
 class _FakeClient:
