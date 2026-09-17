@@ -10,8 +10,11 @@ $ErrorActionPreference = 'SilentlyContinue'
 $targets = Get-ScheduledTask | Where-Object {
     $argStr = (($_.Actions | ForEach-Object { [string]$_.Arguments }) -join ' ')
     $exeStr = (($_.Actions | ForEach-Object { [string]$_.Execute })   -join ' ')
+    # Match OUR tasks by their launch args (--auto / --resume). Covers both the dev/python
+    # deployment (python + app_qt) and the packaged EXE deployment (a .exe launched with those
+    # app-specific args). No non-ASCII here, so cp949 misreads cannot corrupt this file.
     (($argStr -match '(^|\s)--auto(\s|$)') -or ($argStr -match '(^|\s)--resume(\s|$)')) -and
-    (($exeStr -match 'python') -or ($argStr -match 'app_qt'))
+    (($exeStr -match 'python') -or ($argStr -match 'app_qt') -or ($exeStr -match '(?i)\.exe(\s|"|$)'))
 }
 
 if (-not $targets) {
