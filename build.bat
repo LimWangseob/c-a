@@ -21,6 +21,7 @@ copy /Y "%~dp0deploy\install_schedule.bat" "dist\쿠팡애널리틱스\" >nul
 copy /Y "%~dp0deploy\install_schedule.ps1" "dist\쿠팡애널리틱스\" >nul
 copy /Y "%~dp0deploy\uninstall_schedule.bat" "dist\쿠팡애널리틱스\" >nul
 copy /Y "%~dp0deploy\uninstall_schedule.ps1" "dist\쿠팡애널리틱스\" >nul
+copy /Y "%~dp0deploy\첫실행_설정안내.txt" "dist\쿠팡애널리틱스\" >nul
 copy /Y "%~dp0INSTALL.md" "dist\쿠팡애널리틱스\" >nul
 echo.
 echo 완료!
