@@ -78,8 +78,7 @@ def _assign(ledger: list[Product], discovered: list[Product]) -> dict[int, Produ
     brand = {t for t, c in dc.items() if c >= thr}
     # IDF 가중 = 계정 코퍼스(발견 제목 + 대장명) 기반 → 규격·브랜드어(정·30포 등) 눌러 상품 핵심어 부각
     w = _build_idf([_title(d) for d in discovered] + [lp.name for lp in ledger])
-    ndisc = [_norm(_title(d)) for d in discovered]
-    dtoks = [{t for t in _tokens(_title(d)) if t not in brand} for d in discovered]
+    ndisc = [_norm(_title(d)) for d in discovered]   # 공백 제거 발견제목 — 정체성 매칭은 띄어쓰기 무관(부분일치)
 
     qualified: list[tuple[int, float, int, int]] = []   # (괄호정확?, 재현율, 대장i, 발견i)
     for li, lp in enumerate(ledger):
@@ -98,8 +97,10 @@ def _assign(ledger: list[Product], discovered: list[Product]) -> dict[int, Produ
             continue                                    # 순수 코드명 등 → 미매칭(공란)
         pden = sum(w(t) for t in ptoks) or 1.0
         top = max(ptoks, key=lambda t: (w(t), len(t)))   # 최고가중(희소=핵심) 토큰, IDF 동점이면 긴 토큰
-        scored = sorted(((sum(w(t) for t in (ptoks & dtoks[di])) / pden, di)
-                         for di in range(len(discovered)) if top in dtoks[di]), reverse=True)
+        # 핵심 게이트=핵심어가 발견제목(공백 제거)에 부분일치 + IDF 재현율(대장 토큰이 발견제목에 부분일치).
+        # 공백 제거 부분일치라 쿠팡 붙여쓰기 제목('루바브치커리뿌리추출물')도 대장 띄어쓰기와 매칭된다.
+        scored = sorted(((sum(w(t) for t in ptoks if t in ndisc[di]) / pden, di)
+                         for di in range(len(discovered)) if top in ndisc[di]), reverse=True)
         if not scored:
             continue                                    # 핵심어를 담은 발견상품 없음 → 미매칭
         best, best_di = scored[0]
