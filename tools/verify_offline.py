@@ -226,6 +226,43 @@ def t1_representative_column():
     _ok("계정목록 헤더 8열(A=대표자)·데이터행 대표자 렌더·판매수집일(3열)과 무충돌·재로드 보존")
 
 
+def t1_product_match_precision():
+    print("[11] 대장↔쿠팡 정밀 매칭 (product_match — 오매칭 차단·미달=미매칭 공란)")
+    from coupang_analytics.input_list import Option, Product
+    from coupang_analytics.product_match import scope_to_ledger
+
+    def disc(title, vid, kind=config.KIND_CONTRACT):
+        return Product(name=title, title=title, kind=kind, options=[Option("", [vid], [])])
+
+    # 발견(쿠팡) = 관리 상품 + 비관리(직접판매) 상품 섞임
+    discovered = [
+        disc("웰빙곳간 활력 볶은 맥문동 환 프리미엄 30포 국산", "v_maek"),      # 관리(맥문동)
+        disc("웰빙곳간 프리미엄 사과초모식초 애플사이다비니거 600mg", "v_sacho"),  # 비관리(사과초모식초)
+        disc("웰빙곳간 프리미엄 베타글루칸 MAX 4개월분 베타글루칸분말 88%", "v_beta"),  # 관리(베타글루칸)
+        disc("블루투스 이어폰 프로", "v_ear1"),                                # 애매쌍 A
+        disc("블루투스 이어폰 라이트", "v_ear2"),                              # 애매쌍 B
+    ]
+    ledger = [
+        Product(name="웰빙곳간 활력 볶은 맥문동 환 프리미엄 30포"),   # → v_maek (핵심어 맥문동)
+        Product(name="웰빙곳간 베타글루칸 프리미엄 MAX 120정"),       # → v_beta (핵심어 베타글루칸)
+        Product(name="웰빙곳간 동결건조 로얄제리 120정"),            # 핵심어(로얄제리) 발견에 없음 → 미매칭
+        Product(name="블루투스 이어폰"),                            # A·B 동점 → 애매 → 미매칭
+    ]
+    tracked, n = scope_to_ledger(ledger, discovered)
+    vids = [sorted(v for o in tp.options for v in o.vendor_item_ids) for tp in tracked]
+    assert vids[0] == ["v_maek"], f"맥문동 매칭 실패: {vids[0]}"
+    assert vids[1] == ["v_beta"], f"베타글루칸 매칭 실패: {vids[1]}"
+    assert vids[2] == [], "핵심어 없는 상품이 매칭됨(오매칭)"
+    assert vids[3] == [], "애매쌍이 매칭됨(마진 미달인데 매칭)"
+    # 비관리 상품(사과초모식초)은 어떤 대장 행에도 안 붙음
+    assert not any("v_sacho" in vs for vs in vids), "비관리 상품이 대장에 붙음(오매칭)"
+    assert n == 2, f"매칭 수 {n} (기대 2)"
+    # 미매칭 행은 대장명으로 추적(공란 통계) — 이름 보존
+    assert tracked[2].name == "웰빙곳간 동결건조 로얄제리 120정"
+    assert tracked[3].name == "블루투스 이어폰"
+    _ok("핵심어 게이트·마진으로 오매칭 차단(비관리·애매 미매칭=공란)·정매칭 2건·미매칭은 대장명 유지")
+
+
 def t1_delete_account():
     print("[10] 삭제된 계정 완전 제거 (workbook.delete_account — 시트+메타 삭제)")
     wb = OutputWorkbook.empty()
@@ -302,6 +339,7 @@ def main():
     t1_sale_status_flag()
     t1_representative_column()
     t1_delete_account()
+    t1_product_match_precision()
     t2_keywords(store, il)
     print("=" * 60)
     print("  [완료] 로그인 불필요 부분 실증 종료")

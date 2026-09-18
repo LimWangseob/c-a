@@ -1,13 +1,17 @@
 """입력 대장 상품 ↔ 쿠팡 발견(등록) 상품 매칭 → **추적 범위를 대장 상품으로 한정**.
 
-정책(확정): 추적 대상 = 입력 대장에 있는 상품(위탁 관리분)만. 판매분석에 잡힌 그 외 등록상품은
-관리 대상이 아니라 제외한다. 대장 상품명은 보통 `내부코드명 (괄호=실제 노출제목)` 형태다.
-- 괄호에 전체 노출제목이 있으면 발견 제목과 **정확 매칭**(가장 신뢰).
-- 없으면 **브랜드(계정 공통어) 제외 + 띄어쓰기 제거 부분일치**(한글 띄어쓰기 변형 흡수).
+정책(확정): 추적 대상 = 입력 대장에 있는 상품(위탁 관리분)만. 판매분석·상품조회에 잡힌 그 외 등록상품
+(소유자 직접판매 등)은 관리 대상이 아니라 제외한다. 쿠팡 상품조회로는 위탁/직접이 구분 안 되므로 **대장이
+유일 기준**인데, 대장명이 쿠팡 등록명과 100% 일치하지 않을 수 있다. 대장 상품명은 보통 `내부코드명
+(괄호=실제 노출제목)` 형태다.
+- **정밀 우선 매칭(2026-09-18)**: 괄호 노출제목 정확일치 = 최우선. 아니면 **대장 핵심어(IDF 최고 토큰)를
+  발견제목이 포함** + **핵심어 IDF 재현율·2등 마진** 통과 시에만 매칭. 미달이면 **미매칭**으로 둔다 —
+  흔한 단어 하나로 **비관리 상품에 잘못 붙는(오매칭)** 것보다 통계 공란이 안전(소유자 지시).
 - 한 발견상품은 한 대장상품에만 배정(유일 배정)해 1:다 오매칭을 막는다.
 
 매칭되면 발견 상품의 **노출제목·vid·구분(계약/개인)** 을 부여(시트 표시=노출제목).
-매칭 안 되면(휴면 등) 대장명으로 추적한다 — 판매지표·재고는 공란, 키워드·순위는 대장명 기준.
+매칭 안 되면(휴면·이름 상이 등) 대장명으로 추적한다 — 판매지표·재고는 공란, 키워드·순위는 대장명 기준.
+한 번 vid 가 잡히면 이후 실행은 vid 앵커(`workbook.resolve_block_name`)로 안정 식별한다.
 """
 from __future__ import annotations
 
@@ -15,11 +19,20 @@ import re
 from collections import Counter
 
 from . import config
-from .input_list import Option, Product
+from .input_list import Option, Product, _build_idf
 
 _STOP = {"프리미엄", "정품", "1위", "추천", "신형", "max", "plus", "premium", "ml", "mg",
          "세트", "대형", "소형", "중형"}
 _CODE_TAIL = re.compile(r"[A-Za-z]{1,5}-?\d{2,}[A-Za-z0-9]*$")   # 토큰 끝 관리코드 제거(손세정기YG0187)
+# 규격·수량 토큰(숫자로 시작하는 단위) 제거 — 상품 정체성이 아니므로 핵심어/재현율에서 뺀다.
+# 예: 120정·30포·600mg·4개월분·88%·25t. ⚠ '3d프린트'처럼 단위가 4자 이상이면 정체성으로 보고 유지.
+_SPEC = re.compile(r"^\d+[가-힣a-zA-Z%]{0,3}$")
+
+# 정밀 매칭 임계(2026-09-18, 정밀 우선) — 대장명이 쿠팡명과 100% 일치하지 않아도 **확신 있는 것만** 매칭하고
+# 애매하면 미매칭(대장명 추적·통계 공란)으로 둔다. 엉뚱한(비관리) 상품에 붙이는 것보다 공란이 안전.
+#   RECALL_MIN = 대장 상품 핵심어(IDF 가중)의 재현율 하한, MARGIN = 최고-차선 재현율 마진.
+_RECALL_MIN = 0.55
+_MARGIN = 0.15
 
 
 def _norm(s) -> str:
@@ -36,7 +49,7 @@ def _tokens(name: str) -> list[str]:
     out = []
     for t in re.split(r"[\s/+,]+", s):
         t = _CODE_TAIL.sub("", t.strip()).lower()
-        if len(t) >= 2 and t not in _STOP and not t.isdigit():
+        if len(t) >= 2 and t not in _STOP and not t.isdigit() and not _SPEC.match(t):
             out.append(t)
     return out
 
@@ -46,38 +59,61 @@ def _title(p: Product) -> str:
 
 
 def _assign(ledger: list[Product], discovered: list[Product]) -> dict[int, Product]:
-    """{대장 index: 발견 Product}. 유일 배정(점수 높은 쌍부터, 대장·발견 각각 1회)."""
+    """{대장 index: 발견 Product}. **정밀 우선 매칭**(2026-09-18) — 확신 있는 쌍만, 대장·발견 각 1회 유일 배정.
+
+    쿠팡 상품조회로는 위탁/직접이 구분 안 되므로 대장이 유일 기준인데, 대장명이 쿠팡명과 100% 일치하지
+    않을 수 있다. 흔한 단어 하나로 **비관리 상품에 잘못 붙는(오매칭)** 것을 막기 위해:
+      ① 괄호 노출제목 정확일치 = 최우선(신뢰 최고),
+      ② 아니면 **대장 상품의 핵심어(IDF 최고 토큰)를 발견제목이 반드시 포함**(핵심 게이트) +
+         **핵심어 IDF 재현율 ≥ RECALL_MIN** + **최고-차선 마진 ≥ MARGIN**일 때만 매칭,
+      ③ 미달 = 미매칭(호출부가 대장명으로 추적·통계 공란) — 엉뚱한 데이터보다 공란이 안전.
+    """
     if not discovered:
         return {}
-    # 브랜드 = 발견 제목의 60%+(또는 3건+)에 등장하는 토큰(계정 브랜드: YULIFE·디프·HB153 등)
+    # 브랜드 = 발견 제목의 60%+(또는 3건+)에 등장하는 토큰(계정 브랜드: YULIFE·디프·HB153 등) → 핵심어에서 제외
     dc: Counter = Counter()
     for d in discovered:
         dc.update(set(_tokens(_title(d))))
     thr = max(3, int(len(discovered) * 0.6))
     brand = {t for t, c in dc.items() if c >= thr}
+    # IDF 가중 = 계정 코퍼스(발견 제목 + 대장명) 기반 → 규격·브랜드어(정·30포 등) 눌러 상품 핵심어 부각
+    w = _build_idf([_title(d) for d in discovered] + [lp.name for lp in ledger])
     ndisc = [_norm(_title(d)) for d in discovered]
-    dtoks = [[t for t in _tokens(_title(d)) if t not in brand and len(t) >= 2] for d in discovered]
+    dtoks = [{t for t in _tokens(_title(d)) if t not in brand} for d in discovered]
 
-    pairs: list[tuple[int, int, int]] = []      # (점수, 대장i, 발견i)
+    qualified: list[tuple[int, float, int, int]] = []   # (괄호정확?, 재현율, 대장i, 발견i)
     for li, lp in enumerate(ledger):
         par = _norm(_paren(lp.name))
-        ltoks = [t for t in _tokens(lp.name) if t not in brand]
-        nlp = _norm(lp.name)
-        for di, _d in enumerate(discovered):
-            nd = ndisc[di]
-            if par and (par == nd or par in nd or nd in par):
-                sc = 1000                                   # 괄호 전체제목 = 정확 매칭
-            else:
-                sc = sum(len(t) for t in ltoks if t in nd)  # 대장 토큰이 발견제목(공백제거)에 부분일치
-                sc += sum(len(t) for t in dtoks[di] if t in nlp and t not in ltoks)  # 역방향(복합어 흡수)
-            if sc > 0:
-                pairs.append((sc, li, di))
-    pairs.sort(reverse=True)
+        # ① 괄호 노출제목 정확일치(대장 형식 '코드 (노출제목)')
+        if par:
+            hit = next((di for di in range(len(discovered))
+                        if par == ndisc[di] or par in ndisc[di] or ndisc[di] in par), None)
+            if hit is not None:
+                qualified.append((1, 1.0, li, hit))
+                continue
+        # ② 핵심어 게이트 + IDF 재현율 + 마진. 괄호가 있으면 그 노출제목 토큰으로, 없으면 대장명 토큰으로.
+        core_text = _paren(lp.name) or lp.name
+        ptoks = {t for t in _tokens(core_text) if t not in brand} or set(_tokens(core_text))
+        if not ptoks:
+            continue                                    # 순수 코드명 등 → 미매칭(공란)
+        pden = sum(w(t) for t in ptoks) or 1.0
+        top = max(ptoks, key=lambda t: (w(t), len(t)))   # 최고가중(희소=핵심) 토큰, IDF 동점이면 긴 토큰
+        scored = sorted(((sum(w(t) for t in (ptoks & dtoks[di])) / pden, di)
+                         for di in range(len(discovered)) if top in dtoks[di]), reverse=True)
+        if not scored:
+            continue                                    # 핵심어를 담은 발견상품 없음 → 미매칭
+        best, best_di = scored[0]
+        second = scored[1][0] if len(scored) > 1 else 0.0
+        if best >= _RECALL_MIN and (best - second) >= _MARGIN:
+            qualified.append((0, best, li, best_di))
+        # else: 애매/약함 → 미매칭(공란, 오매칭 방지)
+
+    qualified.sort(reverse=True)                          # 괄호정확 우선, 그 다음 재현율 높은 순
     used_l: set[int] = set()
     used_d: set[int] = set()
     res: dict[int, Product] = {}
-    for sc, li, di in pairs:
-        if li in used_l or di in used_d or sc < 2:
+    for _paren_exact, _sc, li, di in qualified:
+        if li in used_l or di in used_d:
             continue
         res[li] = discovered[di]
         used_l.add(li)
