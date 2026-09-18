@@ -1,0 +1,3 @@
+# Windows 스크립트는 반드시 CRLF 유지 — cmd.exe는 LF .bat 를 오파싱한다(글자 단위로 쪼개짐).
+*.bat text eol=crlf
+*.ps1 text eol=crlf

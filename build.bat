@@ -16,7 +16,7 @@ if errorlevel 1 goto :err
 echo.
 echo [3/3] 설치·무인 예약 스크립트 복사...
 copy /Y "%~dp0deploy\설치.bat" "dist\쿠팡애널리틱스\" >nul
-copy /Y "%~dp0deploy\설치.ps1" "dist\쿠팡애널리틱스\" >nul
+copy /Y "%~dp0deploy\install.ps1" "dist\쿠팡애널리틱스\" >nul
 copy /Y "%~dp0deploy\install_schedule.bat" "dist\쿠팡애널리틱스\" >nul
 copy /Y "%~dp0deploy\install_schedule.ps1" "dist\쿠팡애널리틱스\" >nul
 copy /Y "%~dp0deploy\uninstall_schedule.bat" "dist\쿠팡애널리틱스\" >nul

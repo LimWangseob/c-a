@@ -1,5 +1,5 @@
 @echo off
-chcp 65001 >nul
+cd /d "%~dp0"
 REM === Unregister scheduler tasks (nightly + reboot-resume) ===
 REM Usage: right-click this file - "Run as administrator"
 
