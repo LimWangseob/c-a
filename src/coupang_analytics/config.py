@@ -229,3 +229,21 @@ RP_COL_OPTION_ID = "옵션 ID"
 RP_COL_VIEWS = "조회"        # → 노출건수
 RP_COL_SALES = "판매량"      # → 판매건수
 RP_COL_VISITORS = "방문자"   # → 방문자건수
+
+
+# ── 표준 로그 포맷 (모든 로그 싱크 공통: GUI·CLI 도구) ─────────────
+#   표준 = "[YYYY-MM-DD HH:MM:SS.mmm] 메시지"
+#   - 날짜+시분초+밀리초 → 정렬 가능·grep 가능·단계별 소요시간(ms) 분석 가능.
+#   - 메시지 본문 규칙(별도): 상품/옵션 단위 로그는 vid= 태그를 넣어 grep vid=<값> 으로 추적.
+import datetime as _datetime
+
+
+def log_ts() -> str:
+    """표준 로그 타임스탬프 문자열 'YYYY-MM-DD HH:MM:SS.mmm'."""
+    n = _datetime.datetime.now()
+    return f"{n:%Y-%m-%d %H:%M:%S}.{n.microsecond // 1000:03d}"
+
+
+def format_log(msg: str) -> str:
+    """표준 로그 한 줄 = '[타임스탬프] 메시지'. 모든 로그 싱크가 이 함수로 한 줄을 만든다."""
+    return f"[{log_ts()}] {msg}"

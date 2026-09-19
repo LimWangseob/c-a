@@ -39,7 +39,7 @@ def main() -> int:
     print(f"[백업] {bak.name}")
 
     wb = OutputWorkbook.load(master)
-    added = wb.normalize_date_columns(log=print)
+    added = wb.normalize_date_columns(log=lambda m: print(config.format_log(m)))   # 표준 로그 포맷
     wb.apply_style()   # apply_style 자체도 normalize 를 부르지만(멱등) 서식 재적용 목적으로 호출
     wb.save(master)
 

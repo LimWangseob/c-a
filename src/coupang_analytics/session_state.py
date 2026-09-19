@@ -178,7 +178,7 @@ def _apply(account_id: str, event_type: str, *, state: str | None = None,
                 (now, account_id, event_type, failure_type, _safe_url(final_url),
                  http_status, (None if auth_redirect is None else int(auth_redirect)), elapsed_ms))
     except Exception as exc:   # 관측 실패는 치명적 아님 — 사유만 남기고 진행
-        print(f"[세션관측] 기록 실패({exc.__class__.__name__}: {str(exc)[:80]}) — 수집엔 영향 없음")
+        print(config.format_log(f"[세션관측] 기록 실패({exc.__class__.__name__}: {str(exc)[:80]}) — 수집엔 영향 없음"))
 
 
 # ── 파이프라인/킵얼라이브에서 부르는 관측 훅 ──────────────────────

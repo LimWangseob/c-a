@@ -646,7 +646,7 @@ class App(tk.Tk):
     def log(self, msg: str):
         def append():
             tag = self._log_tag(msg)
-            self.log_text.insert("end", msg + "\n", (tag,) if tag else ())
+            self.log_text.insert("end", config.format_log(msg) + "\n", (tag,) if tag else ())   # 표준 로그 포맷
             # 24/365 상시가동 메모리 방지: 최근 N줄만 유지(오래된 줄 폐기). Text 는 무한 누적된다.
             lines = int(self.log_text.index("end-1c").split(".")[0])
             if lines > config.UI_LOG_MAX_LINES:

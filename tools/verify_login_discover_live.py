@@ -28,12 +28,18 @@ try:
 except AttributeError:
     pass
 
+from coupang_analytics import config  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics.input_list import parse_input_list  # noqa: E402
 from coupang_analytics.pipeline import _login_and_discover  # noqa: E402
 
 _REAL_INPUT = Path(r"D:\토탈셀러\셀독\토탈셀러_셀독 관리 대장 (3).xlsx")
 _DAYS = 7
+
+
+def _log(msg: str) -> None:
+    """표준 로그 포맷으로 출력(config.format_log = '[YYYY-MM-DD HH:MM:SS.mmm] 메시지')."""
+    print(config.format_log(msg))
 
 
 def _load_input():
@@ -102,17 +108,18 @@ def main():
 
     # ⚠ 읽기 전용: 마스터/구글시트를 건드리지 않는다(정체·지표만 조회·출력). vid 출처 변경(상품조회/수정)
     # 실동작·판매상태(productStatus) 확인용. 4튜플 = (계정, {vid:지표}, {vid:재고}, {vid:판매상태}).
-    report_acc, metrics, inv_by_vid, sale_status = _login_and_discover(a, date_from, date_to, get_pw, print)
+    # 표준 로그 포맷(_log)으로 파이프라인 로그를 받는다 → 모든 줄에 [YYYY-MM-DD HH:MM:SS.mmm] 시각.
+    report_acc, metrics, inv_by_vid, sale_status = _login_and_discover(a, date_from, date_to, get_pw, _log)
 
     print("-" * 60)
     if report_acc is None:
-        print("  [결과] 로그인 미완료 → 수집 못 함 (위 [로그인감지] 로그가 원인)")
+        _log("[결과] 로그인 미완료 → 수집 못 함 (위 [로그인감지] 로그가 원인)")
         return
     multi = [p for p in report_acc.products if len(p.options) > 1]
     novid = [p for p in report_acc.products if not any(o.vendor_item_ids for o in p.options)]
-    print(f"  [실증] 추적 상품 {len(report_acc.products)}개(대장 매칭) · "
-          f"다중옵션 {len(multi)}개 · vid 미확보 {len(novid)}개 · 판매지표 옵션 {len(metrics)}개")
-    print("  [vid 출처=상품조회/수정] 각 상품 옵션별 vid·판매상태·지표 (grep 키=vid=…):")
+    _log(f"[실증] 추적 상품 {len(report_acc.products)}개(대장 매칭) · "
+         f"다중옵션 {len(multi)}개 · vid 미확보 {len(novid)}개 · 판매지표 옵션 {len(metrics)}개")
+    _log("[vid 출처=상품조회/수정] 각 상품 옵션별 vid·판매상태·지표 (grep 키=vid=…):")
     for p in report_acc.products:
         for o in p.options:
             vid = o.vendor_item_ids[0] if o.vendor_item_ids else ""
@@ -121,17 +128,17 @@ def main():
             metric_txt = f"노출 {m.views}·판매 {m.sales}·방문 {m.visitors}" if m else "지표 0(당일 판매·노출 없음)"
             inv_txt = f"·재고 {inv_by_vid[vid]}" if (vid and vid in inv_by_vid) else ""
             lbl = f"({o.label})" if o.label else ""
-            print(f"        vid={vid or '없음'} [{p.kind}] {p.name[:30]}{lbl} "
-                  f"판매상태={st or '미상'} {metric_txt}{inv_txt}")
+            _log(f"  vid={vid or '없음'} [{p.kind}] {p.name[:30]}{lbl} "
+                 f"판매상태={st or '미상'} {metric_txt}{inv_txt}")
     # 판매상태(§2.3): 상품조회 productStatus(판매자배송 포함 전 상품) 또는 폴백 RFM isSaleSuspended
     print("-" * 60)
     if sale_status:
         from collections import Counter
         vals = Counter(str(v) for v in sale_status.values())
-        print(f"  [판매상태] vid {len(sale_status)}개 판정 — 분포: {dict(vals)}")
-        print("            (원문→해석 대응은 위 '[상품조회] 판매상태 원문→해석' 로그 확인)")
+        _log(f"[판매상태] vid {len(sale_status)}개 판정 — 분포: {dict(vals)}")
+        _log("           (원문→해석 대응은 위 '[상품조회] 판매상태 원문→해석' 로그 확인)")
     else:
-        print("  [판매상태] 없음 (상품조회 실패+로켓그로스 없음 등)")
+        _log("[판매상태] 없음 (상품조회 실패+로켓그로스 없음 등)")
     # 재고현황(RFM) — 계약(로켓그로스) 상품만. 옵션(vid)별 재고를 상품단위로 합산해 확인.
     inv_by_product: dict[str, int] = {}
     for p in report_acc.products:
@@ -140,13 +147,13 @@ def main():
             inv_by_product[p.name] = sum(vals)
     print("-" * 60)
     if inv_by_vid:
-        print(f"  [재고] 옵션(vid) {len(inv_by_vid)}개 · 상품 {len(inv_by_product)}개 (판매가능 수량)")
+        _log(f"[재고] 옵션(vid) {len(inv_by_vid)}개 · 상품 {len(inv_by_product)}개 (판매가능 수량)")
         for name, qty in list(inv_by_product.items())[:8]:
-            print(f"        · {name[:40]} → 재고 {qty}")
+            _log(f"  · {name[:40]} → 재고 {qty}")
     else:
-        print("  [재고] 재고현황 없음 (개인계정이거나 계약상품 미보유/조회 실패)")
+        _log("[재고] 재고현황 없음 (개인계정이거나 계약상품 미보유/조회 실패)")
     print("=" * 60)
-    print("  [완료] 로그인→상품조회/수정(vid)+판매분석(지표) 라이브 실 테스트 (읽기 전용·마스터 미변경)")
+    _log("[완료] 로그인→상품조회/수정(vid)+판매분석(지표) 라이브 실 테스트 (읽기 전용·마스터 미변경)")
     print("=" * 60)
 
 

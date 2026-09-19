@@ -596,8 +596,7 @@ class App(QtWidgets.QMainWindow):
 
     def _append_log(self, msg: str):
         color = _LOG_COLORS.get(self._log_tag(msg), "#e2e8f0")
-        _now = datetime.now()   # [실행일자_시분초_1/60초] — 단계별 소요시간까지 보이게 프레임(00~59) 추가
-        ts = f"{_now:%Y%m%d_%H%M%S}_{_now.microsecond * 60 // 1_000_000:02d}"
+        ts = config.log_ts()   # 표준 포맷 'YYYY-MM-DD HH:MM:SS.mmm'(config.format_log 과 동일 규칙)
         stamp = html.escape(f"[{ts}] ")
         safe = html.escape(msg).replace(" ", "&nbsp;")
         self.log_console.append(

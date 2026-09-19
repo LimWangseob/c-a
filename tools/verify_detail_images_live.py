@@ -27,7 +27,7 @@ except AttributeError:
     pass
 
 from coupang_analytics.browser import WingBrowser  # noqa: E402
-from coupang_analytics import detail_images  # noqa: E402
+from coupang_analytics import config, detail_images  # noqa: E402
 
 _PROFILE = ROOT / "data" / "chrome-images"
 _HOME = "https://www.coupang.com/"
@@ -46,7 +46,7 @@ def main():
     url = args[0]
 
     def log(m):
-        print(m)
+        print(config.format_log(m))   # 표준 로그 포맷([YYYY-MM-DD HH:MM:SS.mmm] 메시지)
 
     with WingBrowser(profile_dir=str(_PROFILE), offscreen=False) as b:
         log("[워밍업] 쿠팡 홈 방문(_abck 확보)...")

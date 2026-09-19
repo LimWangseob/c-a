@@ -17,6 +17,8 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+from . import config
+
 # 콘솔 없는 실행(작업 스케줄러의 무인 --auto = pythonw)에서 보조 명령(파워셸·taskkill·크롬 실행)이
 # 검은 콘솔창을 잠깐 띄웠다 닫는 것을 막는 플래그. 앱을 터미널에서 직접 켜면 이미 창이 있어 원래 안 뜨지만,
 # 무인 실행 땐 이게 없으면 명령마다 창이 깜빡인다. Windows 전용(다른 OS에선 0 = 효과 없음, GUI 창은 그대로 뜸).
@@ -70,7 +72,7 @@ def _kill_profile_chrome(profile_dir: str) -> int:
                            capture_output=True, text=True, timeout=15, env=env,
                            creationflags=_NO_CONSOLE)
     except Exception as exc:   # 정리 실패는 치명적 아님 — 사유만 남기고 진행(무음 아님)
-        print(f"[browser] 잔여 Chrome 정리 건너뜀({exc.__class__.__name__})")
+        print(config.format_log(f"[browser] 잔여 Chrome 정리 건너뜀({exc.__class__.__name__})"))
         return 0
     return r.stdout.count("K")
 
@@ -96,7 +98,7 @@ def reap_orphan_chrome(data_dir: str = "data") -> int:
                            capture_output=True, text=True, timeout=15, env=env,
                            creationflags=_NO_CONSOLE)
     except Exception as exc:   # 정리 실패는 치명적 아님 — 사유만 남기고 진행(무음 아님)
-        print(f"[browser] 좀비 Chrome 정리 건너뜀({exc.__class__.__name__})")
+        print(config.format_log(f"[browser] 좀비 Chrome 정리 건너뜀({exc.__class__.__name__})"))
         return 0
     return r.stdout.count("K")
 
@@ -142,7 +144,7 @@ class WingBrowser:
         Path(self.profile_dir).mkdir(parents=True, exist_ok=True)
         killed = _kill_profile_chrome(self.profile_dir)   # 이 프로필의 잔여 Chrome 정리(포트 미개방 방지)
         if killed:
-            print(f"[browser] 이 프로필의 잔여 Chrome {killed}개 정리(프로필 잠금 해제)")
+            print(config.format_log(f"[browser] 이 프로필의 잔여 Chrome {killed}개 정리(프로필 잠금 해제)"))
             time.sleep(1.0)
         self.port = self.port or _free_port()   # 빈 포트 자동 할당(충돌 방지)
         args = [
@@ -186,7 +188,7 @@ class WingBrowser:
             if self._pw:
                 self._pw.stop()
         except Exception as e:  # CDP 연결 해제 실패는 사유만 남기고 계속
-            print(f"[browser 정리] pw {e.__class__.__name__}")
+            print(config.format_log(f"[browser 정리] pw {e.__class__.__name__}"))
         self._kill_tree()
 
     # ── 창 숨김/표시 (실행 중 위치 이동 — headless 아님, Akamai 통과 유지) ──
@@ -209,7 +211,7 @@ class WingBrowser:
         try:
             self.page.bring_to_front()   # CDP Target 활성화 → 창이 앞으로
         except Exception as exc:
-            print(f"[browser] to_front 스킵({exc.__class__.__name__})")
+            print(config.format_log(f"[browser] to_front 스킵({exc.__class__.__name__})"))
 
     def hide(self) -> None:
         """창을 화면 밖으로 이동(숨김). 실제 Chrome 은 살아있어 세션·Akamai 통과 유지."""
@@ -237,7 +239,7 @@ class WingBrowser:
             try:
                 self._proc.kill()
             except Exception as e:
-                print(f"[browser 정리] kill {e.__class__.__name__}")
+                print(config.format_log(f"[browser 정리] kill {e.__class__.__name__}"))
 
     # ── 동작 ────────────────────────────────────────────────
     def goto(self, url: str, timeout: float = 30000) -> str:
@@ -343,7 +345,7 @@ class WingBrowser:
                 pass
             return base
         except Exception as exc:
-            print(f"[snapshot_login] 실패({exc.__class__.__name__})")
+            print(config.format_log(f"[snapshot_login] 실패({exc.__class__.__name__})"))
             return None
 
     def _login_frame(self, timeout_ms: int = 20000):

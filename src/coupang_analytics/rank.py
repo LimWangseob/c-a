@@ -175,7 +175,7 @@ def warmup(browser: WingBrowser) -> None:
         if keep:
             browser.context.add_cookies(keep)    # Akamai 신뢰 쿠키만 되살림(차단 회피)
     except Exception as exc:
-        print(f"[rank] 쿠키 정리 건너뜀({exc.__class__.__name__})")
+        print(config.format_log(f"[rank] 쿠키 정리 건너뜀({exc.__class__.__name__})"))
     browser.goto(HOME_URL)
     time.sleep(random.uniform(config.RANK_PAGE_DELAY_MIN, config.RANK_PAGE_DELAY_MAX))
 
