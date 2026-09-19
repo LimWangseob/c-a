@@ -603,12 +603,21 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
         base = product.name                            # 등록상품명(vendor-inventory) = 블록 기준명
         vids_all = [oid for o in opts for oid in o.vendor_item_ids]
         rep_name = _block_name(base, opts[0].label if multi else "")
-        # 정체성/마이그레이션: 기존(옛 노출명·합산) 블록을 vid 로 찾아 대표 옵션 블록명으로 정규화(과거 이력 승계).
-        # set_display_name(노출명 교체)은 중단했으므로, 이 한 번의 등록명 정규화로 이후 이름이 안정된다.
-        old = wb.resolve_block_name(biz, vids_all)
+        # ── 정체성/마이그레이션(소유자 2026-09-20: vid=상품당 1개) ──
+        # ① **같은 vid** = 같은 상품 → 기존 블록 승계 + 이름을 등록상품명으로 정규화(set_display_name 은 중단됐으니
+        #    이 한 번만). ② **등록상품명은 같은데 vid 가 다른**(교집합 없는) 옛 블록 = 정체성 바뀜 → **이전 데이터
+        #    삭제하고 새로 시작**(잘못된 이력 승계 방지). 첫 적용 때 vid 출처가 바뀌어 값이 달라진 경우가 여기 해당.
+        vidset = set(vids_all)
+        old = wb.resolve_block_name(biz, vids_all)   # 새 vid 와 교집합 있는 기존 블록(같은 vid)
         if old and old != rep_name and not wb.has_product(biz, rep_name):
             if wb.set_display_name(biz, old, rep_name):
-                log(f"  [정체성] 기존 블록 '{old}' → '{rep_name}'(등록상품명·과거 이력 승계)")
+                log(f"  [정체성] 기존 블록 '{old}' → '{rep_name}'(같은 vid·과거 이력 승계·이름 정규화)")
+        for stale in wb.blocks_with_registered_name(biz, base):
+            stored = set(wb.product_vids(biz, stale))
+            if vidset and stored and not (vidset & stored):   # 저장 vid 가 **있는데** 새 vid 와 완전히 다름 → 삭제
+                if wb.delete_product_block(biz, stale):
+                    log(f"  [정체성] '{stale}' vid 변경(이전 {sorted(stored)} → {vids_all}) "
+                        "→ 이전 데이터 삭제·새로 시작")
         # 수집 주기·마케팅은 상품(대표) 단위. 오늘 대상 아니면 이 상품의 모든 옵션 블록을 오늘치 생략.
         if product.mkt_start or product.mkt_end or product.mkt_mon:   # 대장에 마케팅 값 있을 때만 반영
             wb.set_marketing(biz, rep_name, product.mkt_start, product.mkt_end, product.mkt_mon)

@@ -145,6 +145,13 @@ def _accounts(ids) -> InputList:
     return InputList(accounts=accts, errors=[])
 
 
+def _account_one_vid(vid: str, name: str = "상품-a1") -> InputList:
+    """상품 1개·옵션 1개(vid 지정) 계정 — vid 변경 마이그레이션 검증용."""
+    opt = Option(label="", vendor_item_ids=[vid], product_ids=[])
+    prod = Product(name=name, options=[opt], kind=config.KIND_CONTRACT)
+    return InputList(accounts=[Account("a1", "대표-a1", "비즈-a1", [prod])], errors=[])
+
+
 def _account_multi_option() -> InputList:
     """2옵션(베이지/그레이) 로켓그로스 상품 1개 계정 — 옵션 분리 검증용."""
     opts = [Option(label="베이지", vendor_item_ids=["vid-beige"], product_ids=[]),
@@ -449,6 +456,28 @@ def scenario_option_split():
     _check(wb.product_keywords("비즈-m1", sec) == [], "2차 키워드 없음")
 
 
+def scenario_vid_change_reset():
+    print("[시나리오 12] vid 변경 시 이전 데이터 삭제·새로 시작(첫 적용 마이그레이션)")
+    _STATE.update(select_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    d = Path(tempfile.mkdtemp())
+    master = P._master_path(d)
+    from coupang_analytics.workbook import OutputWorkbook
+    # day1: 상품-a1, vid=OLD → 09.01 이력 생성
+    P.run_full(_account_one_vid("vidOLD"), naver=None, out_dir=str(d), ai_key="sim",
+               date_from="2026-09-01", date_to="2026-09-01", resume=False, on_log=lambda m: None)
+    wb1 = OutputWorkbook.load(master)
+    _check(wb1.product_vids("비즈-a1", "상품-a1") == ["vidOLD"], "day1: vid=OLD 저장")
+    _check(wb1.product_keywords("비즈-a1", "상품-a1") == ["kw1", "kw2"], "day1: 키워드 있음")
+    # day2: 같은 상품명, vid=NEW(다름) → 이전 데이터 삭제하고 새로 시작(09.01 이력 소멸)
+    P.run_full(_account_one_vid("vidNEW"), naver=None, out_dir=str(d), ai_key="sim",
+               date_from="2026-09-02", date_to="2026-09-02", carry_forward=True, on_log=lambda m: None)
+    wb2 = OutputWorkbook.load(master)
+    _check(wb2.product_vids("비즈-a1", "상품-a1") == ["vidNEW"], "day2: vid=NEW로 교체")
+    names = _product_names(master, "비즈-a1")
+    _check(names.count("상품-a1") == 1, f"블록 1개(중복 없음) — {names}")
+    _check(_date_headers(master) == {"09.02"}, f"이전(09.01) 데이터 삭제·새 날짜만 — {_date_headers(master)}")
+
+
 def main():
     _install_fakes()
     config.LOGIN_PACE_MIN_SEC = 0   # 시뮬은 로그인 페이싱 sleep 없이(즉시)
@@ -471,6 +500,7 @@ def main():
     scenario_display_name_rename()
     scenario_full_composition()
     scenario_option_split()
+    scenario_vid_change_reset()
     print("=" * 60)
     print("  [완료] 모든 시나리오 통과")
     print("=" * 60)

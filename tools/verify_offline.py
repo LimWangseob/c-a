@@ -331,6 +331,22 @@ def t1_vid_source_option_split():
     wb4 = OutputWorkbook.load(p2)
     assert wb4.product_vids(biz, base) == ["v_beige", "v_gray"], "재로드 후 이관 vid 유실"
     _ok("마이그레이션: 옛 블록 → 등록상품명 정규화(vid·키워드·과거 순위 승계)·재로드 보존")
+    # 단일 블록 삭제(vid 변경 시 이전 데이터 리셋용) — 대상만 삭제·나머지 블록 온전·재로드 보존
+    wb5 = OutputWorkbook.empty()
+    bz2 = "리셋가게"
+    for nm, vid in [("유지품", "K1"), ("삭제품", "K2")]:
+        wb5.ensure_product_block(bz2, nm, config.KIND_CONTRACT, ["kw"], registered=nm)
+        wb5.set_product_vids(bz2, nm, [vid])
+        wb5.set_keyword_rank(bz2, nm, "kw", "09.01", 4)
+    assert wb5.blocks_with_registered_name(bz2, "삭제품") == ["삭제품"], "등록명 매칭 조회 오류"
+    assert wb5.delete_product_block(bz2, "삭제품"), "블록 삭제 실패"
+    assert "삭제품" not in wb5.products_of(bz2), "삭제 블록 잔존"
+    assert wb5.product_vids(bz2, "삭제품") == [], "삭제 블록 vid 잔존(메타)"
+    assert "유지품" in wb5.products_of(bz2) and wb5.product_vids(bz2, "유지품") == ["K1"], "다른 블록 손상"
+    p3 = d / "리셋.xlsx"; wb5.apply_style(); wb5.save(p3)
+    wb6 = OutputWorkbook.load(p3)
+    assert wb6.products_of(bz2) == ["유지품"] and wb6.product_vids(bz2, "유지품") == ["K1"], "재로드 후 삭제/유지 불일치"
+    _ok("단일 블록 삭제(delete_product_block): 대상만 제거·나머지 온전·메타 정리·재로드 보존")
 
 
 def t1_delete_account():

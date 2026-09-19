@@ -1260,6 +1260,47 @@ class OutputWorkbook:
             self._reindex()
         return removed
 
+    def blocks_with_registered_name(self, biz: str, reg: str) -> list[str]:
+        """이 사업자에서 **등록상품명(reg)** 에 해당하는 기존 블록 이름들(블록명==reg 또는 registered_name==reg).
+
+        vid 출처가 바뀌어 vid 값이 달라졌을 때, 같은 등록상품명의 옛 블록을 찾아 정리(삭제)하는 데 쓴다."""
+        biz, reg = _norm(biz), _key(reg)
+        if not reg:
+            return []
+        out: list[str] = []
+        for p in self.products_of(biz):
+            if p == reg or self.registered_name(biz, p) == reg:
+                out.append(p)
+        return out
+
+    def delete_product_block(self, biz: str, product: str) -> bool:
+        """상품 블록 **하나**를 그 사업자 시트에서 완전 삭제(시계열 이력 포함)+메타행 제거. 시트 자체는 유지.
+
+        ⚠ **되돌릴 수 없음**(그 블록 이력 소멸). vid 출처 변경 첫 적용 시 **vid 가 바뀐**(정체성이 달라진) 옛
+        블록을 지우고 새로 시작할 때 쓴다(잘못된 이력 승계 방지, 소유자 2026-09-20). 블록 범위=헤더행~다음
+        블록 헤더 직전(마지막이면 시트 끝). insert/delete 는 병합셀 손상 방지로 _unmerge_all 후 수행·전체 재인덱스."""
+        biz, product = _norm(biz), _key(product)
+        if biz not in self.wb.sheetnames:
+            return False
+        ws = self.wb[biz]
+        headers = sorted(self._date_rows.get(biz, []))
+        hr = next((r for r in headers if _key(ws.cell(r, _COL_NAME).value) == product), None)
+        if hr is None:
+            return False
+        later = [r for r in headers if r > hr]
+        end = (min(later) - 1) if later else ws.max_row   # 다음 블록 헤더 직전(사이 빈 줄 포함) 또는 시트 끝
+        _unmerge_all(ws)                                   # 병합 해제 후 삭제(데이터 손상 방지, 이후 apply_style 재병합)
+        ws.delete_rows(hr, end - hr + 1)
+        for meta in (_META_SHEET, _DISC_SHEET, _MKT_SHEET):   # (biz, product) 메타행 제거
+            if meta not in self.wb.sheetnames:
+                continue
+            mws = self.wb[meta]
+            for r in range(mws.max_row, 1, -1):
+                if _norm(mws.cell(r, 1).value) == biz and _key(mws.cell(r, 2).value) == product:
+                    mws.delete_rows(r)
+        self._reindex()
+        return True
+
     @staticmethod
     def _mkt_status(start: str, end: str, mon: str) -> str:
         """오늘 기준 체험단 상태: 예정/체험단중/모니터링/종료/''(미설정)."""
