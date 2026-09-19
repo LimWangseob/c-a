@@ -9,6 +9,7 @@
 > - ✅ **1단계(collector)**: `collector.fetch_vendor_inventory`(same-origin fetch + x-xsrf-token, page 1→N 페이지네이션) + `VendorInventoryListing`/`VendorInventoryOption` 데이터 구조 + `_parse_vendor_inventory` 파서. 옵션은 `valid=INVALID` 포함 그대로 파싱(폐기는 다운스텝 판단).
 > - ✅ **2단계(매칭)**: `collector.products_from_vendor_inventory`(리스팅→발견 Product, 둘다=RFM만·kind '둘다' 보존, 그룹키=`vendorInventoryId`) → 기존 정밀매칭 `product_match.scope_to_ledger`/`augment_unmatched` 재사용(코드 무변경).
 > - ⬜ 3단계(workbook 옵션 분리 블록)·4(vid=gsheet 저장)·5(소스 조인)·6(pipeline 배선)·7(판매상태 경고 개선)·8(검증) 남음.
+> - **3~6단계 = 하나의 정체성 재설계(소유자 2026-09-20 결정: gsheet-only)·설계 확정 후 새 세션에서 구현.** ⚠**핵심 모순 소유자 택1 선행**: 통계 시트는 마스터의 **전체 교체 미러**라, vid를 마스터에 안 두면 gsheet 통계에 나타날 수 없음 → (A·권장) vid를 통계 이름칸에 보이게 렌더(숨김 `_상품ID`만 폐지·마스터 셀엔 표시값) / (B) 별도 보조 gsheet 시트(마스터 vid 부재·오프라인 gsheet 의존) / (C) 미러 비교체(복잡). 블록 정체성=등록상품명+옵션라벨(등록명 안정이라 cross-day vid 불필요, 단 `set_display_name` 노출명 교체 중단 필요). 상세 설계·단계별 변경·마이그레이션=[[feature-vid-source-from-product-list]].
 >
 > SSOT 메모=[[feature-vid-source-from-product-list]].
 
