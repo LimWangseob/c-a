@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import shutil
 import time
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
@@ -42,6 +43,13 @@ _DOWNLOAD_WAIT_S = 150     # 비동기 리포트 생성·다운로드 폴링(최
 _SALES_API = "https://wing.coupang.com/tenants/rfm-ss/api/business-insight/vi-detail-search"
 # 로켓그로스 재고현황(판매가능 재고수량) — 재고관리 페이지가 부르는 데이터 API(라이브 캡처 확정).
 _INVENTORY_API = "https://wing.coupang.com/tenants/rfm-inventory/inventory-health-dashboard/search"
+# 상품조회/수정(전 상품·전 옵션 나열) — vid 출처. '상품조회/수정' 화면이 부르는 데이터 API(라이브 캡처 확정 2026-09-20).
+#   POST /tenants/seller-web/v2/vendor-inventory/search
+#   응답 봉투 {success, data:{productList:[…], pagination:{page,countPerPage,totalCount,totalPages}}, message}
+#   리스팅=productName·vendorInventoryId·registrationType·productStatus·status·vendorInventoryItems[]
+#   옵션=vendorItemId(=vid)·itemName·registrationType·valid·status·salePrice·vendorInventoryItemId
+# vi-detail-search 는 **당일 판매활동 상품만** 잡히지만 이 API 는 판매 유무 무관 전 상품을 준다 → vid 출처.
+_VENDOR_INVENTORY_API = "https://wing.coupang.com/tenants/seller-web/v2/vendor-inventory/search"
 _PAGE_SIZE = 20            # 실측 정상값(캡처와 동일). 크게(200) 주면 서버가 400 → 검증된 20 유지, 페이지네이션으로 커버
 _INV_PAGE_SIZE = 100       # 재고 search 1차 페이지 크기(검증된 안전값). pageNumber 무시(안 넘어감) 시 아래 큰 pageSize 로 전량 재요청
 _INV_PAGE_MAX = 2000       # 페이지 미진행 시 전량 1회 재요청할 최대 pageSize(주석: 재고 search 는 큰 pageSize 허용·실제개수로 축소)
@@ -63,6 +71,22 @@ async (payload) => {
 """
 _FETCH_JS = _POST_JSON_JS % _SALES_API
 _INV_FETCH_JS = _POST_JSON_JS % _INVENTORY_API
+_VI_FETCH_JS = _POST_JSON_JS % _VENDOR_INVENTORY_API
+
+_VI_PAGE_SIZE = 50         # 상품조회 countPerPage(캡처와 동일값). page 1→totalPages 반복.
+# 전량 수집 핵심 파라미터(캡처 확정): exposureStatus="ALL"(아이템위너 누락 방지)·salesMethod="ALL"·
+# productStatus=["ALL"]·displayDeletedProduct=false. sortMethod 는 결과 순서만 바꾼다.
+_VI_SEARCH_BASE = {
+    "searchKeywordType": "ALL", "searchKeywords": "", "salesMethod": "ALL",
+    "productStatus": ["ALL"], "exposureStatus": "ALL", "exposureStatuses": [],
+    "displayDeletedProduct": False, "displayCategoryCodes": [],
+    "saleEndDateSearchType": "ALL", "shippingFeeSearchType": "ALL", "shippingMethod": "ALL",
+    "stockSearchType": "ALL", "bundledShippingSearchType": "ALL", "upBundleSearchOption": "ALL",
+    "qualityEnhanceTypes": [], "coupangAttributeOptimized": False,
+    "listingStartTime": None, "listingEndTime": None,
+    "sortMethod": "SORT_BY_ITEM_LEVEL_UNIT_SOLD", "locale": "ko_KR",
+    "countPerPage": _VI_PAGE_SIZE,
+}
 
 
 class SalesFetchError(Exception):
@@ -71,6 +95,40 @@ class SalesFetchError(Exception):
 
 class InventoryFetchError(Exception):
     """로켓그로스 재고현황 API 직접조회 실패(비200·파싱실패 등). 계약 계정에만 존재."""
+
+
+class VendorInventoryFetchError(Exception):
+    """상품조회/수정(vendor-inventory/search) 직접조회 실패(비200·success=false·파싱실패 등). vid 출처."""
+
+
+@dataclass
+class VendorInventoryOption:
+    """상품조회/수정 응답의 옵션(vendorInventoryItems[]) 레벨 필드.
+
+    vendor_item_id 가 vid(정체성) — 이후 시계열 추적의 앵커. registration_type 으로 둘다 판별
+    (한 리스팅에 RFM·NORMAL 옵션 혼재 → RFM 만 채택). valid=="INVALID" 는 필터 후보(호출부가 결정)."""
+    vendor_item_id: str          # 옵션ID = vid(정체성 앵커)
+    item_name: str               # 옵션명(색상/사이즈/등급 라벨)
+    registration_type: str       # NORMAL(판매자배송)/RFM(로켓그로스) — 옵션 단위 둘다 판별
+    valid: str = ""              # VALID / INVALID (필터 후보)
+    status: str = ""            # 옵션 승인/상태
+    sale_price: int = 0          # 판매가
+    vendor_inventory_item_id: str = ""   # 등록옵션ID(내부)
+
+
+@dataclass
+class VendorInventoryListing:
+    """상품조회/수정 응답의 리스팅(productList[]) 레벨 필드 + 옵션 목록.
+
+    product_name=등록상품명(대장 매칭키) · vendor_inventory_id=등록상품ID(내부, 옵션 그룹핑키).
+    ⚠노출상품ID(productId)는 이 응답에 없음 → 그룹핑은 vendor_inventory_id 로(리스팅 단위).
+    product_status=ON_SALE/PARTIAL_ON_SALE/판매중지 — NORMAL 포함 전상품 판매상태(경고 개선 소스)."""
+    product_name: str            # 등록상품명(대장 매칭키)
+    vendor_inventory_id: str     # 등록상품ID(내부) = 옵션 그룹핑키
+    registration_type: str       # 리스팅 레벨 등록타입
+    product_status: str          # ON_SALE / PARTIAL_ON_SALE(부분판매중) / 판매중지
+    status: str = ""            # APPROVED 등
+    options: list[VendorInventoryOption] = field(default_factory=list)
 
 
 def kind_of(registration_types) -> str:
@@ -285,6 +343,83 @@ def fetch_inventory(page, log=None) -> tuple[dict[str, int], dict[str, str], dic
     return out, names, status
 
 
+def _parse_vendor_inventory(product_list: list[dict]) -> list[VendorInventoryListing]:
+    """vendor-inventory/search 의 productList → [VendorInventoryListing].
+
+    옵션은 **필터 없이 그대로** 담는다(valid=INVALID 포함) — 폐기·합산은 다운스텝(product_match/workbook)이
+    판단(수집 단계는 데이터를 있는 그대로 반영·조용한 폴백 금지). vendor_item_id 없는 옵션만 건너뛴다."""
+    out: list[VendorInventoryListing] = []
+    for p in product_list:
+        options: list[VendorInventoryOption] = []
+        for it in (p.get("vendorInventoryItems") or []):
+            vid = str(it.get("vendorItemId") or "").strip()
+            if not vid:
+                continue
+            options.append(VendorInventoryOption(
+                vendor_item_id=vid,
+                item_name=str(it.get("itemName") or "").strip(),
+                registration_type=str(it.get("registrationType") or "").strip(),
+                valid=str(it.get("valid") or "").strip(),
+                status=str(it.get("status") or "").strip(),
+                sale_price=_num(it.get("salePrice")),
+                vendor_inventory_item_id=str(it.get("vendorInventoryItemId") or "").strip(),
+            ))
+        out.append(VendorInventoryListing(
+            product_name=str(p.get("productName") or "").strip(),
+            vendor_inventory_id=str(p.get("vendorInventoryId") or "").strip(),
+            registration_type=str(p.get("registrationType") or "").strip(),
+            product_status=str(p.get("productStatus") or "").strip(),
+            status=str(p.get("status") or "").strip(),
+            options=options,
+        ))
+    return out
+
+
+def fetch_vendor_inventory(page, log=None) -> list[VendorInventoryListing]:
+    """상품조회/수정 데이터 API(vendor-inventory/search)를 **직접 fetch**해 전 상품·전 옵션 목록 반환.
+
+    vi-detail-search 가 당일 판매활동 상품만 잡는 것과 달리 이 API 는 **판매 유무 무관 계정의 전 등록상품**을
+    나열한다 → 당일 판매 0 상품도 등록상품명 매칭으로 정확한 vid 확보 가능(vid 출처). NORMAL(판매자배송)
+    상품도 포함해 판매상태(productStatus)를 준다.
+
+    page 는 **로그인된 wing.coupang.com 세션 페이지**여야 한다(same-origin + 세션쿠키 + XSRF 토큰).
+    페이지네이션(data.pagination.totalPages)을 따라 page 1→N 을 모은다. 비200/success=false/파싱실패는
+    VendorInventoryFetchError. ⚠재고(stockQuantity)는 이 소스에서 쓰지 않는다(등록시 임의값·부정확) —
+    재고는 fetch_inventory(RFM API)만 사용."""
+    log = log or (lambda m: None)
+    all_listings: list[VendorInventoryListing] = []
+    page_num = 1
+    while True:
+        payload = dict(_VI_SEARCH_BASE, page=page_num)
+        res = page.evaluate(_VI_FETCH_JS, payload)
+        status, body = res.get("status"), res.get("body", "")
+        if status != 200:
+            raise VendorInventoryFetchError(
+                f"vendor-inventory/search 응답 status={status}"
+                f"{' (XSRF 토큰 없음)' if not res.get('hasToken') else ''} — page {page_num}"
+                f" · 응답본문: {str(body)[:300]}")
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise VendorInventoryFetchError(f"vendor-inventory/search 응답 JSON 파싱 실패: {exc}") from exc
+        if data.get("success") is False:
+            raise VendorInventoryFetchError(
+                f"vendor-inventory/search success=false — page {page_num} · message={data.get('message')!r}")
+        d = data.get("data") or {}
+        product_list = d.get("productList") or []
+        listings = _parse_vendor_inventory(product_list)
+        all_listings.extend(listings)
+        pg = d.get("pagination") or {}
+        total_pages = int(pg.get("totalPages") or 1)
+        opt_count = sum(len(l.options) for l in listings)
+        log(f"  [상품조회] vendor-inventory/search p{page_num}/{total_pages} — 상품 {len(listings)}개"
+            f"(옵션 {opt_count}, 누적 상품 {len(all_listings)}, 총 {pg.get('totalCount', '?')})")
+        if not product_list or page_num >= total_pages:
+            break
+        page_num += 1
+    return all_listings
+
+
 def _folder_snapshot(d: Path) -> list[str]:
     """폴더 내 파일명+크기 목록(진단용)."""
     try:
@@ -414,18 +549,23 @@ def _body_head(page) -> str:
         return f"<본문읽기실패:{exc.__class__.__name__}>"
 
 
-def _unique_labels(opts: list[OptionMetric]) -> list[str]:
-    """옵션 라벨을 유일하게. 단일 옵션은 "" (상품 전체), 복수는 옵션명(빈/중복은 ID 보정)."""
-    if len(opts) == 1:
-        return [""]
+def _uniquify_labels(raw: list[str]) -> list[str]:
+    """라벨 문자열들을 유일하게(중복이면 '_' 덧붙임). 단일 옵션 처리는 호출부 몫."""
     labels, seen = [], set()
-    for o in opts:
-        lbl = o.option_name or o.option_id[-4:]
+    for r in raw:
+        lbl = r
         while lbl in seen:
             lbl += "_"
         seen.add(lbl)
         labels.append(lbl)
     return labels
+
+
+def _unique_labels(opts: list[OptionMetric]) -> list[str]:
+    """옵션 라벨을 유일하게. 단일 옵션은 "" (상품 전체), 복수는 옵션명(빈/중복은 ID 보정)."""
+    if len(opts) == 1:
+        return [""]
+    return _uniquify_labels([o.option_name or o.option_id[-4:] for o in opts])
 
 
 def _display_title(product_name: str, opts: list[OptionMetric]) -> str:
@@ -497,6 +637,46 @@ def _products_from_metrics(metrics: dict) -> list[Product]:
         title = _display_title(opts[0].product_name, opts)
         kind = kind_of(o.registration_type for o in opts)   # 로켓그로스/판매자배송/둘 다(API 자동 판별)
         out.append(Product(name=opts[0].product_name, options=options, title=title, kind=kind))
+    return out
+
+
+def products_from_vendor_inventory(listings: list[VendorInventoryListing],
+                                   log=None) -> list[Product]:
+    """상품조회/수정 리스팅 → **발견 Product 목록**(대장 매칭용). vi-detail-search 대체 vid 출처.
+
+    리스팅 1개 = Product 1개(그룹키=vendor_inventory_id — 이 응답에 productId 없음). 옵션(vid)=Option.
+    당일 판매 0 상품도 나오므로(전 상품 나열) 대장 상품 vid 를 누락 없이 확보한다.
+
+    **둘다(RFM+NORMAL 혼재) 리스팅은 로켓그로스(RFM) 옵션만** 채택한다(vid·통계를 로켓그로스로 —
+    소유자 §0-00000; 같은 옵션이 NORMAL·RFM 2 vid 로 존재해 판매자배송분을 빼야 중복 제거). 단 구분(kind)은
+    **원본 전 옵션으로 판별**해 '둘다'를 보존한다(재고행 대상·표기 유지). vid 없는 옵션·옵션 0개 리스팅은 제외.
+    ⚠재고(stockQuantity)는 이 소스에서 안 씀 — 재고는 fetch_inventory(RFM API)만.
+    """
+    log = log or (lambda m: None)
+    out: list[Product] = []
+    dropped_norm = 0
+    skipped = 0
+    for listing in listings:
+        if not listing.options:
+            skipped += 1
+            continue
+        kind = kind_of(o.registration_type for o in listing.options)   # 전 옵션 판별(둘다 보존)
+        opts = listing.options
+        if kind == config.KIND_BOTH:
+            rfm = [o for o in listing.options if o.registration_type == "RFM"]
+            dropped_norm += len(listing.options) - len(rfm)
+            opts = rfm or listing.options            # 안전판: RFM 0개면(이론상 없음) 원본 유지
+        labels = [""] if len(opts) == 1 else _uniquify_labels(
+            [o.item_name or o.vendor_item_id[-4:] for o in opts])
+        options = [Option(label=lbl, vendor_item_ids=[o.vendor_item_id])
+                   for lbl, o in zip(labels, opts)]
+        name = listing.product_name
+        out.append(Product(name=name, options=options, title=name, kind=kind))
+    if dropped_norm:
+        log(f"  [상품조회] 둘다 상품 판매자배송(NORMAL) 옵션 {dropped_norm}개 제외(vid=로켓그로스만)")
+    if skipped:
+        log(f"  [상품조회] 옵션 없는 리스팅 {skipped}개 제외")
+    log(f"  [상품조회] 발견 상품 {len(out)}개(판매 무관 전 상품·vid 출처)")
     return out
 
 

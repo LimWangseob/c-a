@@ -3,9 +3,14 @@
 > 정책·구조의 단일 기준 문서. 코드보다 이 문서가 우선한다.
 > §8 미확정 항목은 실제 페이지 1회 분석 후 확정한다.
 
-## 0-00000. 최신 반영 요약 (2026-09-20 — VID 출처 변경 확정 설계·⚠미구현·승인 후 착수)
+## 0-00000. 최신 반영 요약 (2026-09-20 — VID 출처 변경 확정 설계·⚠부분 구현 중·pipeline 미배선)
 
-> ⚠ **아래는 확정된 설계·API 스펙이며 아직 코드에 반영되지 않았다(미구현).** 현재 동작은 여전히 vid 출처=판매분석(`vi-detail-search`). 승인 후 착수한다. SSOT 메모=[[feature-vid-source-from-product-list]].
+> ⚠ **아래는 확정된 설계·API 스펙이다. 구현 착수(소유자 승인)했으나 아직 pipeline 에 배선하지 않아 현재 동작은 여전히 vid 출처=판매분석(`vi-detail-search`).** 진행 상황:
+> - ✅ **1단계(collector)**: `collector.fetch_vendor_inventory`(same-origin fetch + x-xsrf-token, page 1→N 페이지네이션) + `VendorInventoryListing`/`VendorInventoryOption` 데이터 구조 + `_parse_vendor_inventory` 파서. 옵션은 `valid=INVALID` 포함 그대로 파싱(폐기는 다운스텝 판단).
+> - ✅ **2단계(매칭)**: `collector.products_from_vendor_inventory`(리스팅→발견 Product, 둘다=RFM만·kind '둘다' 보존, 그룹키=`vendorInventoryId`) → 기존 정밀매칭 `product_match.scope_to_ledger`/`augment_unmatched` 재사용(코드 무변경).
+> - ⬜ 3단계(workbook 옵션 분리 블록)·4(vid=gsheet 저장)·5(소스 조인)·6(pipeline 배선)·7(판매상태 경고 개선)·8(검증) 남음.
+>
+> SSOT 메모=[[feature-vid-source-from-product-list]].
 
 - **VID 최초 출처 변경(핵심 요구, 소유자 2026-09-19):** vid를 판매분석(`vi-detail-search`, **당일 판매활동 상품만** 잡힘 → 판매 0 상품 vid 누락→재고 공란·오매칭의 근본원인)이 아니라 **상품조회/수정(`vendor-inventory/search`, 전 상품·전 옵션 나열)** 에서 **등록상품명 매칭으로 확보**한다. 이후 vid를 정체성 앵커로 고정.
 - **⭐API 스펙(2026-09-20 소유자 실캡처, 사무실PC DevTools):** 구현 자료 전부 확보·추가 캡처 불필요.
@@ -396,7 +401,7 @@
   **광고=항목 내 `<span>광고</span>`**, ID는 href `/vp/products/{productId}?...&vendorItemId=..`, 페이지 `?page=N`.
   headless·직접접근 차단 → **실제 Chrome + 홈페이지 warmup** 후 통과. 차단 시 `RankBlocked`(공란). rank.py 라이브 검증.
 - **F. 로그인 대상 검증 소스** — 윙 화면에서 사업자명/대표자명/계정ID 노출 위치 (판매자정보 페이지)
-- **G. (해결·미구현) 상품조회/수정 데이터 API** — `POST /tenants/seller-web/v2/vendor-inventory/search`, 요청 본문·응답 필드 전부 확보(2026-09-20 실캡처). vid 출처 변경의 소스. 스펙·설계=§0-00000, [[feature-vid-source-from-product-list]]. 구현은 승인 후.
+- **G. (구현 중·pipeline 미배선) 상품조회/수정 데이터 API** — `POST /tenants/seller-web/v2/vendor-inventory/search`, 요청 본문·응답 필드 전부 확보(2026-09-20 실캡처). vid 출처 변경의 소스. **1·2단계 착수 완료**(`collector.fetch_vendor_inventory`·`products_from_vendor_inventory` + 기존 정밀매칭 재사용, pipeline 미배선이라 현재 동작 무영향). 스펙·설계=§0-00000, [[feature-vid-source-from-product-list]].
 
 ## 9. 아키텍처 (모듈)
 
