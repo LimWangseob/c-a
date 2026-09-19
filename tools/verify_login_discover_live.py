@@ -30,7 +30,7 @@ except AttributeError:
 
 from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics.input_list import parse_input_list  # noqa: E402
-from coupang_analytics.pipeline import _login_and_discover, _inventory_by_product  # noqa: E402
+from coupang_analytics.pipeline import _login_and_discover  # noqa: E402
 
 _REAL_INPUT = Path(r"D:\토탈셀러\셀독\토탈셀러_셀독 관리 대장 (3).xlsx")
 _DAYS = 7
@@ -93,8 +93,12 @@ def main():
         m = metrics.get(oid) if oid else None
         s = f"노출 {m.views}/판매 {m.sales}/방문 {m.visitors}" if m else "(지표 없음)"
         print(f"        - {p.name[:34]} [옵션 {len(p.options)}] 대표 {s}")
-    # 재고현황(Phase2 rfm-inventory) — 계약(로켓그로스) 상품만. 상품단위 vid 합산 결과 확인.
-    inv_by_product = _inventory_by_product(report_acc.products, inv_by_vid)
+    # 재고현황(Phase2 rfm-inventory) — 계약(로켓그로스) 상품만. 옵션(vid)별 재고를 상품단위로 합산해 확인.
+    inv_by_product: dict[str, int] = {}
+    for p in report_acc.products:
+        vals = [inv_by_vid[oid] for opt in p.options for oid in opt.vendor_item_ids if oid in inv_by_vid]
+        if vals:
+            inv_by_product[p.name] = sum(vals)
     print("-" * 60)
     if inv_by_vid:
         print(f"  [재고] 옵션(vid) {len(inv_by_vid)}개 · 상품 {len(inv_by_product)}개 (판매가능 수량)")

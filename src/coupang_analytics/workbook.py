@@ -46,7 +46,7 @@ _LABEL_KEYWORD = "키워드"
 _LABEL_SEARCH = "검색량"
 _LABEL_NOTE = "비고"
 _ALL_METRICS = frozenset(config.CONTRACT_METRICS + config.PERSONAL_METRICS)
-_META_SHEET = "_상품ID"   # 숨김 시트: (사업자,상품)→고유ID(vendorItemId) 매핑. ③ 순위조회가 상품 매칭에 사용
+_META_SHEET = "_상품ID"   # 숨김 시트: (사업자,상품)→등록상품명·판매상태·제목캐시. ⚠vid(3열)는 폐지—vid 출처=헤더 이름칸(A)
 _INDEX_SHEET = "계정 목록"  # 첫 시트: 전 계정(사업자) 목록 + 하이퍼링크 점프 + 요약(계정 100개도 탐색 쉽게)
 _ACCT_SHEET = "_계정정보"  # 숨김 시트: (사업자)→계정ID 매핑. 목차에 계정ID 표시용(⚠ 비밀번호는 절대 저장 안 함)
 _MKT_SHEET = "_마케팅"     # 숨김 시트: (사업자,상품)→마케팅 시작·종료·모니터링종료. 계정목록 입력을 보존(재생성돼도 유지)
@@ -66,6 +66,21 @@ def _key(v) -> str:
     상품 정체성(시계열 키)은 항상 구분자(`config.NAME_ID_SEP`) 앞부분이다. 구분자가 없으면(순수 이름·
     키워드 셀) `_norm` 과 동일하게 동작해 기존 키를 그대로 보존한다. 상품명 내부 개행은 손대지 않는다."""
     return _norm(v).split(config.NAME_ID_SEP, 1)[0]
+
+
+def _vids_from_cell(v) -> list[str]:
+    """이름칸 표시값의 **'VID : a / b' 꼬리**에서 vid 목록을 파싱한다(없으면 빈 리스트).
+
+    vid 의 유일 출처(source of truth) = 헤더 C셀 표시값(소유자 확정 (A)). `_display_name` 이 렌더한
+    `"{이름}{SEP}\nVID : a / b"` 를 역파싱한다 — 구분자 뒤 → 콜론 뒤 → '/' 분리. 구분자 없으면(순수
+    이름·키워드 셀) vid 없음."""
+    s = _norm(v)
+    if config.NAME_ID_SEP not in s:
+        return []
+    tail = s.split(config.NAME_ID_SEP, 1)[1]
+    if ":" in tail:                       # "\nVID : a / b" → 콜론 뒤가 vid 목록
+        tail = tail.split(":", 1)[1]
+    return [x.strip() for x in tail.split("/") if x.strip()]
 
 
 def _parse_date(s):
@@ -98,7 +113,8 @@ class OutputWorkbook:
         self._date_rows: dict[str, list[int]] = {}              # {사업자: [날짜 헤더행...]}
         self._metric_row: dict[tuple[str, str, str], int] = {}  # {(사업자,상품,지표): 행}
         self._kw_row: dict[tuple[str, str, str], int] = {}      # {(사업자,상품,키워드): 행}
-        self._vid_row: dict[tuple[str, str], int] = {}          # {(사업자,상품): _상품ID 시트 행}
+        self._vid_row: dict[tuple[str, str], int] = {}          # {(사업자,상품): _상품ID 시트 행(등록명·판매상태·제목캐시)}
+        self._block_vids: dict[tuple[str, str], list[str]] = {}  # {(사업자,상품): vid 목록} — 헤더 이름칸 'VID :' 꼬리에서 복원(출처=(A))
         self._reindex()
 
     # ── 생성/로드/저장 ────────────────────────────────────────
@@ -121,6 +137,7 @@ class OutputWorkbook:
     def _reindex(self) -> None:
         self._date_col.clear(); self._date_rows.clear()
         self._metric_row.clear(); self._kw_row.clear(); self._vid_row.clear()
+        self._block_vids.clear()
         for ws in self.wb.worksheets:
             if ws.title in (_INDEX_SHEET, _ACCT_SHEET, _MKT_SHEET, _DISC_SHEET):  # 특수시트 = 데이터 아님
                 continue
@@ -137,11 +154,15 @@ class OutputWorkbook:
             for r in range(1, ws.max_row + 1):
                 # 이름칸엔 표시용 vid 꼬리가 붙을 수 있으므로 **키(순수 상품명)** 로 복원해 읽는다.
                 # (키워드 셀엔 구분자가 없어 _key == _norm — 무해.)
-                name = _key(ws.cell(r, _COL_NAME).value)
+                raw_name = ws.cell(r, _COL_NAME).value
+                name = _key(raw_name)
                 metric = _norm(ws.cell(r, _COL_METRIC).value)
                 if metric == _LABEL_DATE:                       # 상품 헤더행 → 새 상품
                     cur_prod = name
                     self._date_rows[biz].append(r)
+                    vids = _vids_from_cell(raw_name)            # 이름칸 'VID :' 꼬리 → vid 출처(A)
+                    if vids:
+                        self._block_vids[(biz, cur_prod)] = vids
                     for c in range(_FIRST_DATE, ws.max_column + 1):
                         d = _norm(ws.cell(r, c).value)
                         if d:
@@ -345,6 +366,19 @@ class OutputWorkbook:
                     ws.cell(r, _COL_KIND, kind)
                 return
 
+    def _render_block_name(self, biz: str, product: str) -> None:
+        """블록 헤더 C셀을 표시값(순수명 + 'VID :' 꼬리)으로 **즉시 렌더**(멱등).
+
+        vid 출처(A)가 헤더 C셀이므로, set_product_vids 가 apply_style(맨 끝 1회)을 기다리지 않고 즉시
+        렌더해야 상품별 중간저장·재개·②③ 로드에서 vid 가 유실되지 않는다. 헤더행은 _date_rows 로 찾는다."""
+        if biz not in self.wb.sheetnames:
+            return
+        ws = self.wb[biz]
+        for r in self._date_rows.get(biz, []):
+            if _key(ws.cell(r, _COL_NAME).value) == product:
+                ws.cell(r, _COL_NAME, self._display_name(biz, product))
+                return
+
     def _add_metric_row(self, biz: str, product: str, metric: str) -> None:
         """기존 블록에 빠진 지표행(예: 재고현황)을 상품 **지표행 맨 아래**(키워드 소헤더 위)에 끼워 넣는다.
 
@@ -364,9 +398,15 @@ class OutputWorkbook:
         ws.cell(at, _COL_METRIC, metric)
         self._reindex()                        # 행 이동 반영 전체 재인덱스
 
-    def ensure_product_block(self, biz: str, product: str, kind: str, keywords: list[str]) -> None:
+    def ensure_product_block(self, biz: str, product: str, kind: str, keywords: list[str],
+                             *, rank_rows: bool = True, registered: str | None = None) -> None:
         """상품 블록이 없으면 생성(로켓그로스·둘다=CONTRACT_METRICS[재고 포함]/판매자배송=PERSONAL_METRICS +
-        키워드 순위행). 이미 있으면 **구분 라벨만 최신화**(문구 마이그레이션·구분 변경 반영)."""
+        키워드 순위행). 이미 있으면 **구분 라벨만 최신화**(문구 마이그레이션·구분 변경 반영).
+
+        - rank_rows=False: **키워드 소헤더·순위행을 생략**(판매지표행만). 다중옵션 상품의 2번째 이후 옵션
+          블록용 — 순위는 리스팅 단위라 옵션 공통이므로 대표 옵션 블록만 순위행을 갖는다(소유자 확정).
+        - registered: 등록상품명(대장 원본명) 기준값. 다중옵션 2차 블록은 이름이 '등록명 (라벨)' 이지만
+          등록상품명은 **라벨 없는 기준명**을 보존해야 대장 매칭이 유지된다(기본=product)."""
         if self.has_product(biz, product):
             self._update_kind_label(biz, product, kind)
             # 구분이 개인→로켓그로스/둘다로 바뀐 블록이 **재고현황 행 없이** 남아 재고가 기록될 자리가
@@ -392,27 +432,29 @@ class OutputWorkbook:
             r += 1
             ws.cell(r, _COL_METRIC, m)
             self._metric_row[(biz, product, m)] = r
-        # 키워드 소헤더
-        r += 1
-        ws.cell(r, _COL_KIND, biz)
-        ws.cell(r, _COL_NAME, _LABEL_KEYWORD)
-        ws.cell(r, _COL_SEARCH, _LABEL_SEARCH)
-        ws.cell(r, _COL_METRIC, _LABEL_NOTE)
-        # 키워드 순위행
-        kws = list(dict.fromkeys(keywords))
-        for kw in kws:
+        if rank_rows:            # 다중옵션 2차 블록(rank_rows=False)은 키워드·순위행 없음(판매지표만)
+            # 키워드 소헤더
             r += 1
-            ws.cell(r, _COL_NAME, kw)
-            ws.cell(r, _COL_METRIC, config.M_RANK)
-            self._kw_row[(biz, product, kw)] = r
-        # 키워드가 KW_TRACK_N(=4) 미만이면 **빈 순위행**으로 채워 블록의 키워드행 구조를 항상 유지한다
-        # (키워드 없어도 4행 유지·공란 OK — 사용자 요구 2026-09-15). 이름 공란 + M_RANK 인 빈 행은
-        # _kw_row 에 안 잡혀 '키워드 없음'으로 판정되므로, ② 키워드선정이 그 상품을 선정하고
-        # add_product_keywords 가 새 행을 만들기 전에 이 빈 행부터 채운다(블록 팽창 방지).
-        for _ in range(config.KW_TRACK_N - len(kws)):
-            r += 1
-            ws.cell(r, _COL_METRIC, config.M_RANK)   # 이름 공란 + M_RANK = 빈 키워드 순위행
-        self.set_registered_name(biz, product)   # 생성 시점의 이름 = 등록상품명(이후 노출명으로 바뀌어도 보존)
+            ws.cell(r, _COL_KIND, biz)
+            ws.cell(r, _COL_NAME, _LABEL_KEYWORD)
+            ws.cell(r, _COL_SEARCH, _LABEL_SEARCH)
+            ws.cell(r, _COL_METRIC, _LABEL_NOTE)
+            # 키워드 순위행
+            kws = list(dict.fromkeys(keywords))
+            for kw in kws:
+                r += 1
+                ws.cell(r, _COL_NAME, kw)
+                ws.cell(r, _COL_METRIC, config.M_RANK)
+                self._kw_row[(biz, product, kw)] = r
+            # 키워드가 KW_TRACK_N(=4) 미만이면 **빈 순위행**으로 채워 블록의 키워드행 구조를 항상 유지한다
+            # (키워드 없어도 4행 유지·공란 OK — 사용자 요구 2026-09-15). 이름 공란 + M_RANK 인 빈 행은
+            # _kw_row 에 안 잡혀 '키워드 없음'으로 판정되므로, ② 키워드선정이 그 상품을 선정하고
+            # add_product_keywords 가 새 행을 만들기 전에 이 빈 행부터 채운다(블록 팽창 방지).
+            for _ in range(config.KW_TRACK_N - len(kws)):
+                r += 1
+                ws.cell(r, _COL_METRIC, config.M_RANK)   # 이름 공란 + M_RANK = 빈 키워드 순위행
+        # 생성 시점의 이름 = 등록상품명(이후 노출명으로 바뀌어도 보존). 다중옵션 2차 블록은 라벨 없는 기준명 저장.
+        self.set_registered_name(biz, product, registered or product)
 
     def _kw_block_rows(self, biz: str, product: str) -> list[tuple[int, str]]:
         """이 상품 블록의 **모든 키워드 순위행**(M_RANK 라벨) → [(행번호, 이름), …] 오름차순.
@@ -433,6 +475,28 @@ class OutputWorkbook:
             if _norm(ws.cell(r, _COL_METRIC).value) == config.M_RANK:
                 rows.append((r, _key(ws.cell(r, _COL_NAME).value)))
         return rows
+
+    def has_keyword_section(self, biz: str, product: str) -> bool:
+        """이 블록에 **키워드 소헤더**('키워드' 행)가 있는가(대표·단일옵션=True, **다중옵션 2차 블록=False**).
+
+        2차 옵션 블록은 판매정보만이라 키워드 소헤더·순위행이 없다(rank_rows=False). ② 키워드선정·
+        pad_keyword_rows 가 2차 블록을 건너뛰는 판정에 쓴다(잘못된 키워드 삽입·행 팽창 방지). 소헤더 유무로
+        보므로 순위행이 0개인 옛 블록(소헤더는 있음)은 True(정상적으로 채워짐)와 구분된다."""
+        if biz not in self.wb.sheetnames:
+            return False
+        ws = self.wb[biz]
+        metric_rows = [self._metric_row[(biz, product, m)] for m in _ALL_METRICS
+                       if (biz, product, m) in self._metric_row]
+        if not metric_rows:
+            return False
+        start = max(metric_rows) + 1
+        headers = sorted(r for r in self._date_rows.get(biz, []) if r > start)
+        end = (headers[0] - 1) if headers else ws.max_row
+        for r in range(start, end + 1):
+            if (_key(ws.cell(r, _COL_NAME).value) == _LABEL_KEYWORD
+                    and _norm(ws.cell(r, _COL_METRIC).value) == _LABEL_NOTE):
+                return True
+        return False
 
     def add_product_keywords(self, biz: str, product: str, keywords: list[str]) -> list[str]:
         """상품 블록에 새 키워드 추가. **빈 순위행부터 채우고**, 모자라면 새 행 삽입. 반환: 실제 추가분.
@@ -489,6 +553,8 @@ class OutputWorkbook:
         추가한 빈 행 수 반환(0이면 변경 없음).
         """
         min_rows = config.KW_TRACK_N if min_rows is None else min_rows
+        if not self.has_keyword_section(biz, product):   # 다중옵션 2차 블록(판매정보만) → 순위행 없음, 건너뜀
+            return 0
         block = self._kw_block_rows(biz, product)
         need = min_rows - len(block)
         if need <= 0:
@@ -621,41 +687,57 @@ class OutputWorkbook:
             return self.wb[_META_SHEET]
         ws = self.wb.create_sheet(title=_META_SHEET)
         ws.sheet_state = "hidden"
-        ws.cell(1, 1, "사업자"); ws.cell(1, 2, "상품명"); ws.cell(1, 3, "상품ID(|구분)")
+        ws.cell(1, 1, "사업자"); ws.cell(1, 2, "상품명"); ws.cell(1, 3, "(미사용)")   # 옛 vid열 — 폐지(vid=헤더 이름칸)
         ws.cell(1, 4, "키워드서명"); ws.cell(1, 5, "권고제목")   # ⑤ 제목 캐시(동결 상품 AI 재호출 생략)
         ws.cell(1, 6, "등록상품명")   # 대장 원본명(노출명으로 바뀌어도 불변) — 계정목록 안정키·3c 마케팅 매칭 기준
         ws.cell(1, 7, "판매상태(쿠팡)")   # 쿠팡 재고 판매상태(판매중/부분판매중/판매중지) — 대장 판매중지와 대조해 경고 표시
         return ws
 
     def set_product_vids(self, biz: str, product: str, vids) -> None:
-        """상품의 고유ID(vendorItemId) 목록을 숨김 시트에 저장(③ 순위조회의 상품 매칭용)."""
+        """상품의 고유ID(vendorItemId) 목록을 저장(③ 순위조회의 상품 매칭용).
+
+        vid 출처(A)=헤더 C셀. 인메모리 인덱스(_block_vids)를 갱신하고 헤더 이름칸을 즉시 렌더해
+        영속한다(숨김 `_상품ID` 3열 저장 폐지). 빈 목록이면 no-op(기존 값 보존)."""
         vids = [str(v) for v in dict.fromkeys(vids) if v]
         if not vids:
             return
-        ws = self._meta_ws()
-        row = self._vid_row.get((biz, product))
-        if row is None:
-            row = ws.max_row + 1
-            ws.cell(row, 1, biz); ws.cell(row, 2, product)
-            self._vid_row[(biz, product)] = row
-        ws.cell(row, 3, "|".join(vids))
+        biz, product = _norm(biz), _key(product)
+        self._block_vids[(biz, product)] = vids
+        self._render_block_name(biz, product)   # 헤더 C셀 'VID :' 꼬리 즉시 렌더(중간저장/재개/②③ 유실 방지)
 
     def product_vids(self, biz: str, product: str) -> list[str]:
-        """저장된 상품 고유ID 목록(없으면 빈 리스트)."""
-        row = self._vid_row.get((biz, product))
-        if row is None or _META_SHEET not in self.wb.sheetnames:
-            return []
-        v = self.wb[_META_SHEET].cell(row, 3).value
-        return [x for x in str(v).split("|") if x] if v else []
+        """저장된 상품 고유ID 목록(없으면 빈 리스트). 출처=헤더 이름칸(_reindex 가 복원한 _block_vids)."""
+        return list(self._block_vids.get((_norm(biz), _key(product)), []))
 
-    def set_registered_name(self, biz: str, product: str) -> None:
+    def sibling_vids(self, biz: str, product: str) -> list[str]:
+        """이 블록과 **같은 등록상품명(리스팅)** 을 공유하는 모든 옵션 블록의 vid **합집합**.
+
+        다중옵션 상품은 옵션(vid)마다 블록이 갈리지만, 검색 노출순위는 **리스팅 단위**(옵션 공통)라 검색결과의
+        아이템위너가 어느 옵션이든 잡아야 순위를 놓치지 않는다. ③ 순위조회는 대표 블록에만 순위를 달지만
+        매칭은 이 합집합으로 한다(정확 순위 매일 = 최우선 요구). 단일옵션은 자기 vid 만 반환."""
+        biz = _norm(biz)
+        reg = self.registered_name(biz, product) or _key(product)
+        out: list[str] = []
+        for (b, p), vids in self._block_vids.items():
+            if b != biz:
+                continue
+            if (self.registered_name(b, p) or p) != reg:
+                continue
+            for v in vids:
+                if v not in out:
+                    out.append(v)
+        return out
+
+    def set_registered_name(self, biz: str, product: str, name: str | None = None) -> None:
         """상품 블록의 **등록상품명**(대장 원본명)을 숨김시트에 최초 1회 보존(노출명으로 바뀌어도 불변).
 
         계정목록(구글시트) 안정키 `marketing_key(계정ID+등록상품명)`·3c 마케팅 역머지 매칭의 기준(§7).
-        이미 값이 있으면 덮지 않는다(이름 변경·재호출에도 최초 등록명 유지)."""
+        이미 값이 있으면 덮지 않는다(이름 변경·재호출에도 최초 등록명 유지). name 을 주면 그 값을 저장하고
+        (다중옵션 2차 블록=라벨 없는 기준명), 없으면 블록명(product)을 저장한다."""
         biz, product = _norm(biz), _key(product)
         if not (biz and product):
             return
+        name = _key(name) if name else product
         ws = self._meta_ws()
         row = self._vid_row.get((biz, product))
         if row is None:
@@ -663,7 +745,7 @@ class OutputWorkbook:
             ws.cell(row, 1, biz); ws.cell(row, 2, product)
             self._vid_row[(biz, product)] = row
         if not _norm(ws.cell(row, 6).value):
-            ws.cell(row, 6, product)
+            ws.cell(row, 6, name)
 
     def registered_name(self, biz: str, product: str) -> str:
         """저장된 등록상품명(없으면 '' — 옛 마스터엔 없을 수 있음, 호출부가 노출명으로 폴백)."""
@@ -785,8 +867,9 @@ class OutputWorkbook:
         want = {str(v) for v in vids if v}
         if not want:
             return None
-        for (b, p) in list(self._vid_row):
-            if b == biz and want & set(self.product_vids(b, p)):
+        biz = _norm(biz)
+        for (b, p), pv in list(self._block_vids.items()):
+            if b == biz and want & set(pv):
                 return p
         return None
 
@@ -807,11 +890,14 @@ class OutputWorkbook:
             return False
         if any(k[0] == biz and k[1] == new_name for k in self._metric_row):
             return False   # 새 이름이 이미 다른 상품 블록 → 병합 방지, 갱신 생략
-        ws.cell(header, _COL_NAME, new_name)
         self._metric_row = {((b, new_name, m) if (b == biz and p == product) else (b, p, m)): v
                             for (b, p, m), v in self._metric_row.items()}
         self._kw_row = {((b, new_name, kw) if (b == biz and p == product) else (b, p, kw)): v
                         for (b, p, kw), v in self._kw_row.items()}
+        # vid 인덱스도 키 이동(출처=헤더 C셀이므로, 이동 후 표시값에 'VID :' 꼬리를 다시 붙여 렌더)
+        self._block_vids = {((b, new_name) if (b == biz and p == product) else (b, p)): v
+                            for (b, p), v in self._block_vids.items()}
+        ws.cell(header, _COL_NAME, self._display_name(biz, new_name))
         row = self._vid_row.pop((biz, product), None)
         if row is not None:
             if _META_SHEET in self.wb.sheetnames:

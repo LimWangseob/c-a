@@ -145,6 +145,14 @@ def _accounts(ids) -> InputList:
     return InputList(accounts=accts, errors=[])
 
 
+def _account_multi_option() -> InputList:
+    """2옵션(베이지/그레이) 로켓그로스 상품 1개 계정 — 옵션 분리 검증용."""
+    opts = [Option(label="베이지", vendor_item_ids=["vid-beige"], product_ids=[]),
+            Option(label="그레이", vendor_item_ids=["vid-gray"], product_ids=[])]
+    prod = Product(name="캠핑타프", options=opts, kind=config.KIND_CONTRACT)
+    return InputList(accounts=[Account("m1", "대표-m1", "비즈-m1", [prod])], errors=[])
+
+
 def _sheets(path: Path) -> set[str]:
     # 계정(사업자) 시트만 — 특수 시트(상품ID·목차·계정정보)는 제외
     return set(openpyxl.load_workbook(path).sheetnames) - {"_상품ID", "목차", "계정 목록", "_계정정보", "_마케팅"}
@@ -339,37 +347,38 @@ def _product_names(path: Path, sheet: str) -> list[str]:
 
 
 def scenario_display_name_rename():
-    print("[시나리오 9] 실제 노출명 갱신 + vid 앵커(중복방지) + save/load 왕복")
+    print("[시나리오 9] 블록 이름=등록상품명 고정(노출명 교체 중단) + vid 앵커 + save/load 왕복")
     _STATE.update(select_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
     d = Path(tempfile.mkdtemp())
-    accts = _accounts(["a1"])                      # 계약 상품 1개(vid-a1)
+    accts = _accounts(["a1"])                      # 계약 상품 1개(단일옵션·vid-a1) → 블록명=등록상품명 '상품-a1'
     master = P._master_path(d)
-    # day1: 새 상품 선정(신규 경로 → 아직 rename 안 함, 발견명 '상품-a1')
+    # day1: 새 상품 선정 → 블록명 = 등록상품명 '상품-a1'
     P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim",
                date_from="2026-09-01", date_to="2026-09-01", resume=False, on_log=lambda m: None)
-    _check("상품-a1" in _product_names(master, "비즈-a1"), "day1: 발견명 '상품-a1' 블록")
-    # day2: 동결(기존 경로) → 순위측정에서 매칭 항목의 정확 노출명으로 계약상품명 갱신
+    _check("상품-a1" in _product_names(master, "비즈-a1"), "day1: 등록상품명 '상품-a1' 블록")
+    # day2: 동결 → 순위측정에서 노출명(_SERP_NAME)을 봐도 **블록명은 등록상품명으로 고정**(교체 중단)
     P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-09-02",
                date_to="2026-09-02", carry_forward=True, on_log=lambda m: None)
     names2 = _product_names(master, "비즈-a1")
-    _check(_SERP_NAME in names2, f"day2: 계약상품명이 정확 노출명으로 갱신({names2})")
-    _check("상품-a1" not in names2, "day2: 옛 발견명 블록 사라짐(중복 아님)")
-    _check(len(names2) == 1, f"day2: 상품 블록 1개 유지(중복 없음) — {names2}")
-    _check(_keywords_in(master) == {"kw1", "kw2"}, "day2: 키워드 동결 유지(rename에도 보존)")
+    _check(names2 == ["상품-a1"], f"day2: 블록명 등록상품명 유지(노출명 교체 안 함) — {names2}")
+    _check(_SERP_NAME not in names2, "day2: 노출명으로 안 바뀜(set_display_name 중단)")
+    _check(_keywords_in(master) == {"kw1", "kw2"}, "day2: 키워드 동결 유지")
     _check(_date_headers(master) == {"09.01", "09.02"}, "day2: 날짜 2일 누적")
-    # day3: 같은 vid → 이름 바뀐 블록을 vid 로 찾아 재사용(발견명 '상품-a1'로 와도 중복 생성 안 함)
+    # day3: 같은 vid·같은 등록상품명 → 같은 블록 재사용(중복 생성 없음)
     P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-09-03",
                date_to="2026-09-03", carry_forward=True, on_log=lambda m: None)
     names3 = _product_names(master, "비즈-a1")
-    _check(len(names3) == 1 and _SERP_NAME in names3, f"day3: vid 앵커로 재사용(중복 없음) — {names3}")
+    _check(names3 == ["상품-a1"], f"day3: 등록상품명 블록 재사용(중복 없음) — {names3}")
     _check(_date_headers(master) == {"09.01", "09.02", "09.03"}, "day3: 날짜 3일 누적")
-    # 워크북 직접 검증 — set_display_name/resolve_block_name + save/load 왕복 키 안정
+    # 워크북 직접 검증 — vid 출처=헤더 이름칸(_block_vids) + save/load 왕복 키 안정
     from coupang_analytics.workbook import OutputWorkbook
     wb2 = OutputWorkbook.load(master)
-    _check(wb2.resolve_block_name("비즈-a1", ["vid-a1"]) == _SERP_NAME,
-           "resolve_block_name: vid로 정확명 블록 조회")
-    _check(wb2.product_keywords("비즈-a1", _SERP_NAME) == ["kw1", "kw2"],
-           "load 후에도 (사업자,정확명) 키로 키워드 조회됨(키 안정)")
+    _check(wb2.resolve_block_name("비즈-a1", ["vid-a1"]) == "상품-a1",
+           "resolve_block_name: vid로 등록상품명 블록 조회")
+    _check(wb2.product_vids("비즈-a1", "상품-a1") == ["vid-a1"],
+           "product_vids: 헤더 이름칸에서 vid 복원(숨김시트 아님)")
+    _check(wb2.product_keywords("비즈-a1", "상품-a1") == ["kw1", "kw2"],
+           "load 후에도 (사업자,등록상품명) 키로 키워드 조회됨(키 안정)")
 
 
 def scenario_full_composition():
@@ -416,6 +425,30 @@ def scenario_full_composition():
         P._backfill_ranks, P._track_ranks_semi = orig_backfill, orig_semi
 
 
+def scenario_option_split():
+    print("[시나리오 11] 다중옵션 → 옵션별 블록 분리(대표=키워드/순위·2차=판매정보만)")
+    _STATE.update(select_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    d = Path(tempfile.mkdtemp())
+    master = P._master_path(d)
+    P.run_full(_account_multi_option(), naver=None, out_dir=str(d), ai_key="sim",
+               date_from="2026-09-01", date_to="2026-09-01", resume=False, on_log=lambda m: None)
+    names = _product_names(master, "비즈-m1")
+    rep, sec = "캠핑타프 (베이지)", "캠핑타프 (그레이)"   # 다중옵션은 대표 포함 모든 옵션에 라벨(등록명+옵션라벨)
+    _check(rep in names, f"대표 블록=등록명+첫옵션라벨 '{rep}' — {names}")
+    _check(sec in names, f"2차 옵션 블록=등록명+라벨 '{sec}' — {names}")
+    _check(len(names) == 2, f"블록 2개(옵션 2개) — {names}")
+    from coupang_analytics.workbook import OutputWorkbook
+    wb = OutputWorkbook.load(master)
+    _check(wb.has_keyword_section("비즈-m1", rep), "대표=키워드 구역 있음")
+    _check(not wb.has_keyword_section("비즈-m1", sec), "2차=키워드 구역 없음(판매정보만)")
+    _check(wb.product_vids("비즈-m1", rep) == ["vid-beige"], "대표 vid=첫 옵션")
+    _check(wb.product_vids("비즈-m1", sec) == ["vid-gray"], "2차 vid=그 옵션")
+    _check(sorted(wb.sibling_vids("비즈-m1", rep)) == ["vid-beige", "vid-gray"],
+           "sibling_vids=리스팅 전 옵션 합집합(③ 순위 매칭 놓침 방지)")
+    _check(wb.product_keywords("비즈-m1", rep) == ["kw1", "kw2"], "대표 키워드 선정됨")
+    _check(wb.product_keywords("비즈-m1", sec) == [], "2차 키워드 없음")
+
+
 def main():
     _install_fakes()
     config.LOGIN_PACE_MIN_SEC = 0   # 시뮬은 로그인 페이싱 sleep 없이(즉시)
@@ -437,6 +470,7 @@ def main():
     scenario_circuit_breaker()
     scenario_display_name_rename()
     scenario_full_composition()
+    scenario_option_split()
     print("=" * 60)
     print("  [완료] 모든 시나리오 통과")
     print("=" * 60)

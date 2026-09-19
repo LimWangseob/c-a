@@ -263,6 +263,50 @@ def t1_product_match_precision():
     _ok("핵심어 게이트·마진으로 오매칭 차단(비관리·애매 미매칭=공란)·정매칭 2건·미매칭은 대장명 유지")
 
 
+def t1_vid_source_option_split():
+    print("[12] VID 출처=이름칸 + 옵션 분리 블록 + 마이그레이션 (workbook, 실제 xlsx I/O)")
+    d = Path(tempfile.mkdtemp())
+    biz = "옵션가게"
+    base = "캠핑 타프 그늘막"
+    rep, sec = base, f"{base} (그레이)"
+    wb = OutputWorkbook.empty()
+    # 대표(첫 옵션)=키워드+순위행 / 2차 옵션=판매정보만(rank_rows=False)·등록상품명 기준명 공유
+    wb.ensure_product_block(biz, rep, config.KIND_CONTRACT, ["타프"], rank_rows=True, registered=base)
+    wb.set_product_vids(biz, rep, ["v_beige"])
+    wb.ensure_product_block(biz, sec, config.KIND_CONTRACT, [], rank_rows=False, registered=base)
+    wb.set_product_vids(biz, sec, ["v_gray"])
+    assert wb.has_keyword_section(biz, rep), "대표 블록에 키워드 구역 없음"
+    assert not wb.has_keyword_section(biz, sec), "2차 옵션 블록에 키워드 구역이 생김(순위행 없어야)"
+    # ③ 리스팅 순위 매칭 = 같은 등록상품명 두 블록의 vid 합집합
+    assert sorted(wb.sibling_vids(biz, rep)) == ["v_beige", "v_gray"], f"sibling_vids 합집합 오류: {wb.sibling_vids(biz, rep)}"
+    assert sorted(wb.sibling_vids(biz, sec)) == ["v_beige", "v_gray"], "2차 블록 sibling_vids 오류"
+    # vid 출처=이름칸 → 숨김시트 3열 미사용 + 재로드 왕복 복원
+    path = d / "옵션.xlsx"
+    wb.apply_style(); wb.save(path)
+    meta = openpyxl.load_workbook(path)["_상품ID"]
+    col3 = [meta.cell(r, 3).value for r in range(2, meta.max_row + 1)]
+    assert all(not v for v in col3), f"숨김시트 3열에 vid 잔존(폐지 대상): {col3}"
+    wb2 = OutputWorkbook.load(path)
+    assert wb2.product_vids(biz, rep) == ["v_beige"], f"대표 vid 이름칸 복원 실패: {wb2.product_vids(biz, rep)}"
+    assert wb2.product_vids(biz, sec) == ["v_gray"], "2차 vid 이름칸 복원 실패"
+    assert sorted(wb2.sibling_vids(biz, rep)) == ["v_beige", "v_gray"], "재로드 후 sibling_vids 오류"
+    _ok("옵션 분리(대표=키워드+순위·2차=판매정보만)·sibling_vids 합집합·vid 출처=이름칸(숨김3열 폐지) 재로드 왕복")
+    # 마이그레이션: 옛 블록(옛 이름·전 옵션 vid·키워드·과거 순위) → 대표 등록상품명으로 정규화(이력 승계)
+    wb3 = OutputWorkbook.empty()
+    old = "옛노출명 캠핑타프"
+    wb3.ensure_product_block(biz, old, config.KIND_CONTRACT, ["타프", "그늘막"], registered=base)
+    wb3.set_product_vids(biz, old, ["v_beige", "v_gray"])
+    wb3.set_keyword_rank(biz, old, "타프", "09.01", 5)          # 과거 이력
+    assert wb3.set_display_name(biz, old, base), "마이그레이션 리네임 실패"
+    assert wb3.product_vids(biz, base) == ["v_beige", "v_gray"], f"리네임 후 vid 이동 실패: {wb3.product_vids(biz, base)}"
+    assert wb3.product_keywords(biz, base) == ["타프", "그늘막"], "리네임에 키워드(이력) 보존 실패"
+    assert old not in wb3.products_of(biz), "옛 블록명 잔존(중복)"
+    p2 = d / "마이그.xlsx"; wb3.apply_style(); wb3.save(p2)
+    wb4 = OutputWorkbook.load(p2)
+    assert wb4.product_vids(biz, base) == ["v_beige", "v_gray"], "재로드 후 이관 vid 유실"
+    _ok("마이그레이션: 옛 블록 → 등록상품명 정규화(vid·키워드·과거 순위 승계)·재로드 보존")
+
+
 def t1_delete_account():
     print("[10] 삭제된 계정 완전 제거 (workbook.delete_account — 시트+메타 삭제)")
     wb = OutputWorkbook.empty()
@@ -340,6 +384,7 @@ def main():
     t1_representative_column()
     t1_delete_account()
     t1_product_match_precision()
+    t1_vid_source_option_split()
     t2_keywords(store, il)
     print("=" * 60)
     print("  [완료] 로그인 불필요 부분 실증 종료")

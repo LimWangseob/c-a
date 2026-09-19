@@ -3,15 +3,20 @@
 > 정책·구조의 단일 기준 문서. 코드보다 이 문서가 우선한다.
 > §8 미확정 항목은 실제 페이지 1회 분석 후 확정한다.
 
-## 0-00000. 최신 반영 요약 (2026-09-20 — VID 출처 변경 확정 설계·⚠부분 구현 중·pipeline 미배선)
+## 0-00000. 최신 반영 요약 (2026-09-20 — VID 출처 변경 3~6단계 구현 완료·오프라인 검증 통과·라이브 확인 남음)
 
-> ⚠ **아래는 확정된 설계·API 스펙이다. 구현 착수(소유자 승인)했으나 아직 pipeline 에 배선하지 않아 현재 동작은 여전히 vid 출처=판매분석(`vi-detail-search`).** 진행 상황:
-> - ✅ **1단계(collector)**: `collector.fetch_vendor_inventory`(same-origin fetch + x-xsrf-token, page 1→N 페이지네이션) + `VendorInventoryListing`/`VendorInventoryOption` 데이터 구조 + `_parse_vendor_inventory` 파서. 옵션은 `valid=INVALID` 포함 그대로 파싱(폐기는 다운스텝 판단).
-> - ✅ **2단계(매칭)**: `collector.products_from_vendor_inventory`(리스팅→발견 Product, 둘다=RFM만·kind '둘다' 보존, 그룹키=`vendorInventoryId`) → 기존 정밀매칭 `product_match.scope_to_ledger`/`augment_unmatched` 재사용(코드 무변경).
-> - ⬜ 3단계(workbook 옵션 분리 블록)·4(vid=gsheet 저장)·5(소스 조인)·6(pipeline 배선)·7(판매상태 경고 개선)·8(검증) 남음.
-> - **3~6단계 = 하나의 정체성 재설계(소유자 2026-09-20 결정: gsheet-only)·설계 확정·새 세션에서 구현.** ✅**핵심 모순 (A) 확정**: 통계 시트는 마스터의 **전체 교체 미러**라 vid를 마스터에 안 두면 gsheet 통계에 못 나타남 → **(A)** vid 출처=통계 블록 **이름칸 표시값** "VID : …"(마스터 셀에 보이는 값으로 남김·숨김 `_상품ID` vid 3열 폐지·③이 이름칸 파싱). 블록 정체성=등록상품명+옵션라벨(등록명 안정이라 cross-day vid 불필요, 단 `set_display_name` 노출명 교체 중단 필요). 상세 설계·단계별 변경·마이그레이션=[[feature-vid-source-from-product-list]].
+> ✅ **1~6단계 코드 구현 완료·오프라인 검증 3종 통과(simulate·verify_offline[12]·verify_gsheet). ⚠라이브(로그인·실제 마스터) 확인은 사무실 세션 필요.** 진행 상황:
+> - ✅ **1단계(collector)**: `fetch_vendor_inventory`(same-origin fetch + x-xsrf-token, page 1→N) + `VendorInventoryListing`/`VendorInventoryOption` + `_parse_vendor_inventory`(valid=INVALID 포함).
+> - ✅ **2단계(매칭)**: `products_from_vendor_inventory`(둘다=RFM만·kind '둘다' 보존·그룹키 `vendorInventoryId`) → 정밀매칭 `scope_to_ledger`/`augment_unmatched` 재사용.
+> - ✅ **3단계(vid 출처 반전)**: vid 출처=헤더 이름칸 'VID :' 꼬리. 인메모리 `_block_vids`(`_reindex`가 이름칸 파싱으로 채움)·`product_vids`=이름칸 읽기·`set_product_vids`=이름칸 즉시 렌더·숨김 `_상품ID` vid 3열 폐지(무손실 이관: 기존 마스터 이름칸에 이미 'VID :' 있음).
+> - ✅ **4단계(옵션 분리 블록)**: `ensure_product_block(..., rank_rows=, registered=)` — 다중옵션 2차 블록은 순위행 없음(판매정보만). `has_keyword_section`(2차 판정)·`pad_keyword_rows`/②가 2차 건너뜀.
+> - ✅ **5단계(소스 조인·set_display_name 중단)**: `_fill_product_metrics`=옵션(블록) vid별 지표(노출/판매/방문=vi-detail·재고=RFM). ③ 매칭=`sibling_vids`(같은 등록상품명 옵션 vid 합집합, 아이템위너 놓침 방지). set_display_name(노출명 교체) **중단**(블록명=등록상품명+옵션라벨 고정).
+> - ✅ **6단계(pipeline 배선·옵션 루프·마이그레이션)**: `_login_and_discover`가 `fetch_vendor_inventory`를 vid 출처로(폴백=판매분석 발견). `_process_account`가 상품→옵션 블록 분해(대표=첫 옵션·키워드+순위·과거 이력 승계 / 2차=지표만). 마이그레이션: 기존(옛 노출명·합산) 블록을 vid로 찾아 대표 옵션 블록명으로 정규화(과거 이력 승계) → 옛 블록 오판·중복 차단.
+> - ⏸ **7단계(판매상태 productStatus화)=보류**(선택 개선·기존 RFM `isSaleSuspended` 방식 유지). NORMAL 상품 미상 한계는 남음(위험 대비 이득 낮아 다음 기회).
+> - ✅ **8단계(검증)**: `verify_offline[12]`(옵션 분리·vid 이름칸 왕복·숨김3열 폐지·마이그레이션)·`simulate[11]`(다중옵션 end-to-end)·`simulate[9]`(노출명 교체 중단) 통과.
+> - **블록 이름 = 쿠팡 등록상품명 + 옵션라벨**(다중옵션만·단일옵션=등록상품명). **기존 다중옵션 전환 = 대표(첫) 옵션이 과거 합산 이력 승계**(소유자 2026-09-20 확정). vid 출처=(A) 이름칸.
 >
-> SSOT 메모=[[feature-vid-source-from-product-list]].
+> SSOT 메모=[[feature-vid-source-from-product-list]]. ⚠라이브 검증(사무실)에서 실제 API 응답 필드·마이그레이션 실동작 최종 확인 필요.
 
 - **VID 최초 출처 변경(핵심 요구, 소유자 2026-09-19):** vid를 판매분석(`vi-detail-search`, **당일 판매활동 상품만** 잡힘 → 판매 0 상품 vid 누락→재고 공란·오매칭의 근본원인)이 아니라 **상품조회/수정(`vendor-inventory/search`, 전 상품·전 옵션 나열)** 에서 **등록상품명 매칭으로 확보**한다. 이후 vid를 정체성 앵커로 고정.
 - **⭐API 스펙(2026-09-20 소유자 실캡처, 사무실PC DevTools):** 구현 자료 전부 확보·추가 캡처 불필요.

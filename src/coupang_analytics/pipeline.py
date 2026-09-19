@@ -324,7 +324,8 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
     2차인증/직접로그인 처리)으로 로그인 → 그 신뢰 창에서 수집. ③ 반자동과 같은 '보이는 신뢰 세션' 방식.
     """
     from .collector import (discover, save_discovered,  # 지연 import
-                            fetch_inventory, fetch_sales_roster, InventoryFetchError, SalesFetchError)
+                            fetch_inventory, fetch_sales_roster, InventoryFetchError, SalesFetchError,
+                            fetch_vendor_inventory, products_from_vendor_inventory, VendorInventoryFetchError)
     from .product_match import scope_to_ledger, augment_unmatched
     from playwright.sync_api import TimeoutError as PWTimeout  # 판매데이터 없음 판별용
     pw = get_password(a.account_id) if get_password else None
@@ -404,12 +405,23 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
             b.goto(WING_URL)                     # 신선 로그인 후 wing 안착(인증 리다이렉트 완료 대기)
             b.page.wait_for_timeout(1500)        # 페이지 안정 — discover fetch 가 진행중 네비에 중단(Failed to fetch)되는 것 방지
             b.hide()   # 로그인 끝나면 다시 숨김
+        # ── vid·옵션·상품 = 상품조회/수정(전 상품·전 옵션 나열, 당일 판매 0 상품도 포함). 폴백=판매분석 발견 ──
+        # (vi-detail-search 는 당일 판매활동 상품만 잡혀 판매 0 상품 vid 누락 → 상품조회/수정으로 vid 출처 교체)
+        vendor_products = None
         try:
-            products, metrics = discover(b.page, date_from, date_to, log)   # 같은 세션에서 즉시 수집
-        except PWTimeout:   # '엑셀 다운로드'/데이터 미표시 = 판매(수집) 상품 없음(정상)
-            log(f"  [{a.label}] 판매분석 데이터 없음 — 정상(수집할 상품 없음), 건너뜀")
-            session_state.observe_collection_empty(a.account_id)
-            return None, {}, {}, {}
+            vendor_products = products_from_vendor_inventory(fetch_vendor_inventory(b.page, log), log)
+        except VendorInventoryFetchError as exc:
+            log(f"  [{a.label}] ⚠ 상품조회/수정(vid 출처) 실패 → 판매분석 발견으로 폴백 — {str(exc)[:120]}")
+        # ── 지표(노출/판매/방문자) = 판매분석(vi-detail-search). 상품은 위 vendor_products 로 대체 ──
+        try:
+            products, metrics = discover(b.page, date_from, date_to, log)   # 같은 세션에서 즉시 수집(지표)
+        except PWTimeout:   # '엑셀 다운로드'/데이터 미표시 = 당일 판매 상품 없음 — vendor_products 있으면 계속(vid만)
+            if vendor_products is None:
+                log(f"  [{a.label}] 판매분석·상품조회 모두 데이터 없음 — 건너뜀")
+                session_state.observe_collection_empty(a.account_id)
+                return None, {}, {}, {}
+            log(f"  [{a.label}] 판매분석 당일 데이터 없음 — 상품조회/수정 상품만 추적(vid 확보, 지표 0)")
+            products, metrics = [], {}
         except Exception as exc:   # 신선 로그인 직후 페이지 미안착 → fetch 중단(Failed to fetch). wing 재안착 후 1회 재시도
             if "Failed to fetch" not in str(exc):
                 raise
@@ -419,9 +431,14 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
             try:
                 products, metrics = discover(b.page, date_from, date_to, log)
             except PWTimeout:
-                log(f"  [{a.label}] 판매분석 데이터 없음 — 정상(수집할 상품 없음), 건너뜀")
-                session_state.observe_collection_empty(a.account_id)
-                return None, {}, {}, {}
+                if vendor_products is None:
+                    log(f"  [{a.label}] 판매분석·상품조회 모두 데이터 없음 — 건너뜀")
+                    session_state.observe_collection_empty(a.account_id)
+                    return None, {}, {}, {}
+                log(f"  [{a.label}] 판매분석 당일 데이터 없음 — 상품조회/수정 상품만 추적(vid 확보, 지표 0)")
+                products, metrics = [], {}
+        if vendor_products is not None:
+            products = vendor_products   # vid 출처 = 상품조회/수정(전 상품·전 옵션). 지표는 metrics(vi-detail)로 조인
         # 로켓그로스 파트가 있는 상품(로켓그로스·둘다)이 있으면 같은 세션에서 재고현황도 직접조회
         # (판매자배송 전용 계정은 재고 없음 → 생략)
         inventory: dict[str, int] = {}
@@ -470,22 +487,6 @@ def _persist_session(a: Account, b, log) -> None:
         log(f"  [세션] 영속 스킵 — {exc.__class__.__name__}: {str(exc)[:60]}")
 
 
-def _inventory_by_product(products, inv_by_vid: dict) -> dict:
-    """{옵션ID(vendorItemId): 재고수량} → {상품명: 상품의 모든 vid 재고 합산}.
-
-    한 상품(productId)에 vendorItem 여러 개면(재등록 등) 판매가능 재고를 합산해 상품단위 재고현황으로.
-    매칭되는 vid가 하나도 없으면 그 상품은 넣지 않음(재고현황 공란).
-    """
-    out: dict[str, int] = {}
-    if not inv_by_vid:
-        return out
-    for p in products:
-        vals = [inv_by_vid[oid] for opt in p.options for oid in opt.vendor_item_ids if oid in inv_by_vid]
-        if vals:
-            out[p.name] = sum(vals)
-    return out
-
-
 def _roster_from_names(names_by_vid: dict, kind: str) -> list:
     """{옵션ID(vid): 등록상품명} → 매칭 후보 Product 목록(상품명으로 그룹, 옵션=vid).
 
@@ -501,28 +502,26 @@ def _roster_from_names(names_by_vid: dict, kind: str) -> list:
                     options=[Option("", [v]) for v in vids]) for nm, vids in by_name.items()]
 
 
-def _fill_product_metrics(wb, biz, product, metrics, inventory, date_iso, pname=None) -> None:
-    """상품단위 판매지표 기록 — 기본 판매량/방문자/노출량(계약·개인 공통), 재고현황은 로켓그로스(계약)만.
+def _fill_product_metrics(wb, biz, pname, vids, kind, metrics, inv_by_vid, date_iso) -> None:
+    """**옵션(블록) 단위** 판매지표 기록 — 판매량/방문자/노출량(공통), 재고현황은 로켓그로스(계약·둘다)만.
 
-    옵션 지표를 상품 단위로 합산한다. 재고현황(판매가능 수량)은 inventory[상품명](Phase2 rfm-inventory)에서.
-    pname = 워크북 블록 이름(정확 노출명으로 갱신됐을 수 있음). inventory 는 발견명(product.name)으로 키.
-    """
-    pname = pname or product.name
+    vids = 이 블록에 속한 옵션ID 목록(단일옵션·판매자배송=상품 전 옵션, 다중옵션=그 옵션 하나). 지표는
+    vi-detail-search(metrics: vid→OptionMetric)에서, 재고는 RFM 재고 API(inv_by_vid: vid→수량)에서 vid 로
+    조인해 이 블록 vid 들만 합산한다(옵션 분리 시 옵션별 개별 표시). 재고행은 kind 가 로켓그로스/둘다일 때만."""
     views = sales = visitors = 0
-    for opt in product.options:
-        for oid in opt.vendor_item_ids:
-            m = metrics.get(oid)
-            if m:
-                views += m.views
-                sales += m.sales
-                visitors += m.visitors
+    for oid in vids:
+        m = metrics.get(oid)
+        if m:
+            views += m.views
+            sales += m.sales
+            visitors += m.visitors
     wb.set_product_metric(biz, pname, config.M_SALES, date_iso, sales)
     wb.set_product_metric(biz, pname, config.M_VISITORS, date_iso, visitors)
     wb.set_product_metric(biz, pname, config.M_VIEWS, date_iso, views)
-    if product.kind in config.KINDS_WITH_INVENTORY:   # 재고현황 = 로켓그로스 + 둘다(로켓그로스 파트 있음)
-        inv = inventory.get(product.name) if inventory else None
-        if inv is not None:
-            wb.set_product_metric(biz, pname, config.M_INVENTORY, date_iso, inv)
+    if kind in config.KINDS_WITH_INVENTORY:   # 재고현황 = 로켓그로스 + 둘다(로켓그로스 파트 있음)
+        vals = [inv_by_vid[oid] for oid in vids if inv_by_vid and oid in inv_by_vid]
+        if vals:
+            wb.set_product_metric(biz, pname, config.M_INVENTORY, date_iso, sum(vals))
 
 
 def _log_diagnose(product, track_info, ai_key, log, wb=None, biz=None, roles=None, pname=None) -> None:
@@ -562,113 +561,139 @@ def _log_diagnose(product, track_info, ai_key, log, wb=None, biz=None, roles=Non
     log(f"  [제목] 커버리지 {cov}% → 권고: {rec or '(생성실패)'}")
 
 
-def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inventory,
+def _block_name(base: str, label: str) -> str:
+    """블록 이름 = 등록상품명 + 옵션라벨(있을 때). 단일옵션·판매자배송(label='')은 등록상품명 그대로.
+
+    다중옵션 상품을 옵션(vid)별 블록으로 분리할 때 각 블록의 이름을 만든다(소유자 확정: 쿠팡 등록상품명 +
+    옵션라벨). 등록상품명은 안정 키(노출 SERP명 아님)라 cross-day 시계열이 안 끊긴다."""
+    label = (label or "").strip()
+    return f"{base} ({label})" if label else base
+
+
+def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid,
                      date_iso, grow, log, save_path, skip_ranks: bool = False,
                      keywords_off: bool = False) -> None:
-    """계정(시트) 하나: 상품마다 [키워드 동결/선정 → 순위(PC) → 상품지표+재고 → 진단로그] 후 저장.
+    """계정(시트) 하나: 상품마다 **옵션 블록**을 만들고 [대표=키워드/순위/지표, 2차=지표만] 기록·저장.
 
-    - 기존 상품(시트에 키워드 있음): **키워드 동결**, 순위만 조회(grow=True면 상한 내 발굴 추가).
-    - 새 상품: AI 선정 + 선정단계 순위 재사용. 순위는 상품 단위(옵션 통합, PC).
-    - skip_ranks=True(날짜 지정 수집): 쿠팡 순위 조회를 제외(browser=None). 키워드는 있으면 재사용,
-      없으면 순위 없이(네이버+AI 부분점수) 선정. 판매지표·재고만 채운다(차단 회피).
-    - keywords_off=True(① 판매수집 단계): 키워드·순위 없이 지표·재고·상품ID만 기록(키워드는 ②, 순위는 ③).
+    다중옵션 상품은 옵션(vid)별 블록으로 분리한다 — **대표(첫 옵션)** 만 키워드 동결/선정·순위(리스팅 단위)를
+    담고, 나머지 옵션 블록은 판매정보(지표·재고)만(순위행 없음). 단일옵션은 대표 하나(기존과 동일).
+    - 기존 상품(대표 블록에 키워드 있음): **키워드 동결**, 순위만 조회(grow=True면 상한 내 발굴 추가).
+    - 새 상품: AI 선정 + 선정단계 순위 재사용. 순위 매칭은 리스팅 전 옵션 vid(놓침 방지).
+    - skip_ranks=True(날짜 지정 수집): 쿠팡 순위 조회를 제외(browser=None). 판매지표·재고만.
+    - keywords_off=True(① 판매수집 단계): 모든 옵션 블록에 지표·재고·vid만(키워드는 ②, 순위는 ③).
     상품마다 save_path 저장 → 도중 끊겨도 이어감.
     """
+    from .input_list import Option
     biz = report_acc.label   # 시트명 = 사업자명, 없으면 대표자명·계정ID(빈 시트명 KeyError 방지)
     wb.ensure_account(biz)
-    seen_products: list[str] = []          # 이번 대장에 존재한 상품(블록명) — 대조로 판매중지 감지
+    seen_products: list[str] = []          # 이번 대장에 존재한 옵션 블록명 — 대조로 판매중지 감지
     for product in report_acc.products:
         title = product.display_title
         kind = product.kind or config.KIND_PERSONAL
-        vids0 = [oid for opt in product.options for oid in opt.vendor_item_ids]
-        # 상품 정체성 = vendorItemId 앵커. 이미 있는 블록(③이 정확 노출명으로 바꿔뒀을 수 있음)을 vid 로
-        # 찾아 그 이름으로 이어간다(발견명이 매일 달라도 중복 블록·시계열 단절 방지). 없으면 발견명 사용.
-        pname = wb.resolve_block_name(biz, vids0) or product.name
-        seen_products.append(pname)        # 대장에 있음(수집주기로 오늘 스킵돼도 '있음'으로 집계)
+        opts = list(product.options) or [Option("")]
+        multi = len(opts) > 1                           # 옵션 라벨은 **다중옵션에만** 붙인다(단일옵션=등록상품명 그대로)
+        base = product.name                            # 등록상품명(vendor-inventory) = 블록 기준명
+        vids_all = [oid for o in opts for oid in o.vendor_item_ids]
+        rep_name = _block_name(base, opts[0].label if multi else "")
+        # 정체성/마이그레이션: 기존(옛 노출명·합산) 블록을 vid 로 찾아 대표 옵션 블록명으로 정규화(과거 이력 승계).
+        # set_display_name(노출명 교체)은 중단했으므로, 이 한 번의 등록명 정규화로 이후 이름이 안정된다.
+        old = wb.resolve_block_name(biz, vids_all)
+        if old and old != rep_name and not wb.has_product(biz, rep_name):
+            if wb.set_display_name(biz, old, rep_name):
+                log(f"  [정체성] 기존 블록 '{old}' → '{rep_name}'(등록상품명·과거 이력 승계)")
+        # 수집 주기·마케팅은 상품(대표) 단위. 오늘 대상 아니면 이 상품의 모든 옵션 블록을 오늘치 생략.
         if product.mkt_start or product.mkt_end or product.mkt_mon:   # 대장에 마케팅 값 있을 때만 반영
-            wb.set_marketing(biz, pname, product.mkt_start, product.mkt_end, product.mkt_mon)
-            # (대장이 비어 있으면 덮어쓰지 않음 → 사용자가 마스터 계정목록에 직접 넣은 값 보존)
-        # 상품 단위 수집 주기(마케팅 설정 있을 때만): 오늘 대상 아닌 상품은 오늘치 기록 생략(마케팅 상품만 매일).
+            wb.set_marketing(biz, rep_name, product.mkt_start, product.mkt_end, product.mkt_mon)
         if wb.has_marketing():
-            _due, _why = wb.product_due(biz, pname, date_iso)
+            _due, _why = wb.product_due(biz, rep_name, date_iso)
             if not _due:
                 log(f"  [{title}] {_why} — 오늘 수집 생략(상품 주기)")
+                for o in opts:
+                    seen_products.append(_block_name(base, o.label if multi else ""))   # 있음(오늘 스킵돼도 '있음')
                 continue
-        if keywords_off:                               # ① 판매수집 단계 — 지표·재고·상품ID만
-            wb.ensure_product_block(biz, pname, kind, wb.product_keywords(biz, pname))
-            wb.set_product_vids(biz, pname, vids0)
-            _fill_product_metrics(wb, biz, product, metrics, inventory, date_iso, pname)
-            wb.save(save_path)
-            continue
-        pmatcher = {"제품": _product_matcher(product)}
+        # ── 옵션 블록 루프: 대표(i==0)만 키워드/순위, 나머지는 판매정보만 ──
+        for i, opt in enumerate(opts):
+            is_rep = (i == 0)
+            pname = _block_name(base, opt.label if multi else "")
+            opt_vids = list(opt.vendor_item_ids)
+            seen_products.append(pname)
+            if keywords_off or not is_rep:
+                # ① 판매수집 단계, 또는 다중옵션 2차 블록 → 지표·재고·vid만(키워드/순위 없음, rank_rows=is_rep)
+                wb.ensure_product_block(biz, pname, kind, wb.product_keywords(biz, pname),
+                                        rank_rows=is_rep, registered=base)
+                wb.set_product_vids(biz, pname, opt_vids)
+                _fill_product_metrics(wb, biz, pname, opt_vids, kind, metrics, inv_by_vid, date_iso)
+                wb.save(save_path)
+                continue
+            # ── 대표 옵션(단일옵션 포함): 키워드 동결/선정 → 순위 → 지표 → 진단 ──
+            pmatcher = {"제품": _product_matcher(product)}   # 순위 매칭 = 리스팅 전 옵션 vid(아이템위너 놓침 방지)
 
-        def measure(kws, _m=pmatcher, _cap=None):
-            return _measure_safe(browser, kws, _m, log, matched_out=_cap)   # 순위 실패해도 판매데이터 완주
+            def measure(kws, _m=pmatcher, _cap=None):
+                return _measure_safe(browser, kws, _m, log, matched_out=_cap)   # 순위 실패해도 판매데이터 완주
 
-        measure_cb = measure if (browser is not None and not skip_ranks) else None
-        cap: dict = {}   # 매칭된 검색결과 항목(정확 노출명) 회수용
-        try:   # 한 상품의 키워드 선정 실패(AI 깨진 JSON·네이버 400 등)가 계정 전체를 막지 않게 격리
-            existing = wb.product_keywords(biz, pname)
-            if existing:                                   # 기존 상품 → 키워드 동결
-                keywords = list(existing)
-                wb.ensure_product_block(biz, pname, kind, keywords)   # no-op
-                if grow and len(existing) < config.KW_MAX_TRACK and browser is not None:
-                    want = min(config.KW_ADD_PER_DAY, config.KW_MAX_TRACK - len(existing))
-                    found = select_keywords_light(title, naver, ai_key, browser=browser, log=log,
-                                                  n=want, measure_ranks=measure, exclude=set(existing))
-                    add = [t for t in found if t.keyword not in existing][:want]
-                    if add:
-                        wb.add_product_keywords(biz, pname, [t.keyword for t in add])
-                        for t in add:
-                            wb.set_keyword_search(biz, pname, t.keyword, t.volume)
-                        keywords += [t.keyword for t in add]
-                        log(f"  [키워드] {title} → 동결 {existing} + 발굴 {[t.keyword for t in add]}")
+            measure_cb = measure if (browser is not None and not skip_ranks) else None
+            cap: dict = {}   # 매칭된 검색결과 항목(노출명) 회수용
+            try:   # 한 상품의 키워드 선정 실패(AI 깨진 JSON·네이버 400 등)가 계정 전체를 막지 않게 격리
+                existing = wb.product_keywords(biz, pname)
+                if existing:                                   # 기존 상품 → 키워드 동결
+                    keywords = list(existing)
+                    wb.ensure_product_block(biz, pname, kind, keywords, registered=base)   # no-op
+                    if grow and len(existing) < config.KW_MAX_TRACK and browser is not None:
+                        want = min(config.KW_ADD_PER_DAY, config.KW_MAX_TRACK - len(existing))
+                        found = select_keywords_light(title, naver, ai_key, browser=browser, log=log,
+                                                      n=want, measure_ranks=measure, exclude=set(existing))
+                        add = [t for t in found if t.keyword not in existing][:want]
+                        if add:
+                            wb.add_product_keywords(biz, pname, [t.keyword for t in add])
+                            for t in add:
+                                wb.set_keyword_search(biz, pname, t.keyword, t.volume)
+                            keywords += [t.keyword for t in add]
+                            log(f"  [키워드] {title} → 동결 {existing} + 발굴 {[t.keyword for t in add]}")
+                        else:
+                            log(f"  [키워드] {title} → (동결) {keywords}")
                     else:
                         log(f"  [키워드] {title} → (동결) {keywords}")
-                else:
-                    log(f"  [키워드] {title} → (동결) {keywords}")
-                todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date_iso)]
-                measured = measure(todo, _cap=cap) if (browser is not None and todo) else {}
-                ranks = {kw: _best(measured.get(kw)) for kw in todo if kw in measured}  # 측정 실패는 공란
-                track_info = [(kw, 0, "", ranks.get(kw)) for kw in keywords]   # 동결분은 검색량/경쟁 미측정
-                roles = {}                                     # 동결 상품은 역할 재판정 안 함
-            else:                                          # 새 상품 → AI 선정(skip_ranks면 순위 없이 부분점수)
-                tracks = select_keywords_light(title, naver, ai_key, browser=browser, log=log,
-                                               measure_ranks=measure_cb)
-                keywords = [t.keyword for t in tracks]
-                wb.ensure_product_block(biz, pname, kind, keywords)
-                for t in tracks:
-                    wb.set_keyword_search(biz, pname, t.keyword, t.volume)
-                ranks = {t.keyword: t.exposure_best for t in tracks}          # 선정단계 순위 재사용
-                track_info = [(t.keyword, t.volume, t.comp_idx, t.exposure_best) for t in tracks]
-                roles = {t.keyword: t.role for t in tracks if t.role}         # ④ 역할(REP/SALES/GROWTH/DEFENSE)
-                log(f"  [키워드] {title} → {[f'{t.keyword}({t.role})' if t.role else t.keyword for t in tracks]}")
-        except Exception as exc:   # 이 상품만 건너뜀(판매지표·재고는 아래에서 계속 기록). 계정은 완주.
-            log(f"  [{biz}] {title} 키워드 처리 실패(건너뜀, 판매지표는 기록) — "
-                f"{exc.__class__.__name__}: {str(exc)[:80]}")
-            wb.ensure_product_block(biz, pname, kind, wb.product_keywords(biz, pname))
-            keywords, ranks, track_info, roles = [], {}, [], {}
+                    todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date_iso)]
+                    measured = measure(todo, _cap=cap) if (browser is not None and todo) else {}
+                    ranks = {kw: _best(measured.get(kw)) for kw in todo if kw in measured}  # 측정 실패는 공란
+                    track_info = [(kw, 0, "", ranks.get(kw)) for kw in keywords]   # 동결분은 검색량/경쟁 미측정
+                    roles = {}                                     # 동결 상품은 역할 재판정 안 함
+                else:                                          # 새 상품 → AI 선정(skip_ranks면 순위 없이 부분점수)
+                    tracks = select_keywords_light(title, naver, ai_key, browser=browser, log=log,
+                                                   measure_ranks=measure_cb)
+                    keywords = [t.keyword for t in tracks]
+                    wb.ensure_product_block(biz, pname, kind, keywords, registered=base)
+                    for t in tracks:
+                        wb.set_keyword_search(biz, pname, t.keyword, t.volume)
+                    ranks = {t.keyword: t.exposure_best for t in tracks}          # 선정단계 순위 재사용
+                    track_info = [(t.keyword, t.volume, t.comp_idx, t.exposure_best) for t in tracks]
+                    roles = {t.keyword: t.role for t in tracks if t.role}         # ④ 역할(REP/SALES/GROWTH/DEFENSE)
+                    log(f"  [키워드] {title} → {[f'{t.keyword}({t.role})' if t.role else t.keyword for t in tracks]}")
+            except Exception as exc:   # 이 상품만 건너뜀(판매지표·재고는 아래에서 계속 기록). 계정은 완주.
+                log(f"  [{biz}] {title} 키워드 처리 실패(건너뜀, 판매지표는 기록) — "
+                    f"{exc.__class__.__name__}: {str(exc)[:80]}")
+                wb.ensure_product_block(biz, pname, kind, wb.product_keywords(biz, pname), registered=base)
+                keywords, ranks, track_info, roles = [], {}, [], {}
 
-        if not skip_ranks:                             # 순위 기록(PC). 날짜지정 수집(skip_ranks)은 순위 제외
-            # 차단된 실행이면 미측정(None)을 '50위'로 위장 기록하지 않고 **공란**으로 남긴다 →
-            # is_rank_filled=False 유지 → 다음(쉰 IP) 실행이 그 순위만 재측정. (차단 아닌 실 미노출만 RANK_SCAN_MAX 기록)
-            blocked = _RANK_HALT["stop"]
-            for kw in keywords:                        # 이미 채워진 건 건너뜀
-                if kw not in ranks or wb.is_rank_filled(biz, pname, kw, date_iso):
-                    continue
-                if ranks.get(kw) is None and blocked:  # 차단으로 못 잰 값 → 공란(재측정 대상)
-                    continue
-                wb.set_keyword_rank(biz, pname, kw, date_iso, ranks.get(kw))
-                log(f"  [순위] '{kw}': {rank_label(ranks.get(kw))}")
-            mi = cap.get("제품")                        # 매칭된 항목 → 계약상품명을 검색결과 정확 노출명으로
-            if mi is not None and getattr(mi, "name", ""):
-                if wb.set_display_name(biz, pname, mi.name):
-                    log(f"  [노출명] 계약상품명 갱신 → {mi.name}")
-                    pname = mi.name.strip()            # 이후 저장도 새 이름으로
-        wb.set_product_vids(biz, pname, vids0)          # 상품 고유ID 저장(③ 순위조회 상품 매칭용)
-        _fill_product_metrics(wb, biz, product, metrics, inventory, date_iso, pname)
-        _log_diagnose(product, track_info, ai_key, log, wb=wb, biz=biz, roles=roles, pname=pname)
-        wb.save(save_path)
+            if not skip_ranks:                             # 순위 기록(PC). 날짜지정 수집(skip_ranks)은 순위 제외
+                # 차단된 실행이면 미측정(None)을 '50위'로 위장 기록하지 않고 **공란**으로 남긴다 →
+                # is_rank_filled=False 유지 → 다음(쉰 IP) 실행이 그 순위만 재측정.
+                blocked = _RANK_HALT["stop"]
+                for kw in keywords:                        # 이미 채워진 건 건너뜀
+                    if kw not in ranks or wb.is_rank_filled(biz, pname, kw, date_iso):
+                        continue
+                    if ranks.get(kw) is None and blocked:  # 차단으로 못 잰 값 → 공란(재측정 대상)
+                        continue
+                    wb.set_keyword_rank(biz, pname, kw, date_iso, ranks.get(kw))
+                    log(f"  [순위] '{kw}': {rank_label(ranks.get(kw))}")
+                # ⚠ set_display_name(노출명 교체) 중단 — 블록 이름을 등록상품명+옵션라벨로 고정(옵션 정체성 안정).
+                mi = cap.get("제품")                        # 노출명은 로그로만(블록명은 등록상품명 유지)
+                if mi is not None and getattr(mi, "name", ""):
+                    log(f"  [노출명] 검색결과 노출명 = {mi.name} (블록명은 등록상품명 고정)")
+            wb.set_product_vids(biz, pname, opt_vids)          # 대표 옵션 vid 저장(③은 sibling_vids 합집합으로 매칭)
+            _fill_product_metrics(wb, biz, pname, opt_vids, kind, metrics, inv_by_vid, date_iso)
+            _log_diagnose(product, track_info, ai_key, log, wb=wb, biz=biz, roles=roles, pname=pname)
+            wb.save(save_path)
     # 대장 대조: 이번 대장에 없던 마스터 블록 = 판매중지/삭제 표기(데이터 보존, 다시 나타나면 자동 해제)
     newly = wb.reconcile_account(biz, seen_products)
     if newly:
@@ -781,9 +806,9 @@ def _measure_unfilled_once(wb, path, log) -> int:
             if not date:
                 continue
             for pname in wb.products_of(biz):
-                vids = wb.product_vids(biz, pname)
+                vids = wb.sibling_vids(biz, pname)   # 리스팅 전 옵션 vid 합집합(아이템위너 놓침 방지)
                 keywords = wb.product_keywords(biz, pname)
-                if not keywords:                        # vid 없어도 상품명으로 매칭(건너뛰지 않음)
+                if not keywords:                        # 2차 옵션 블록(키워드 없음)·vid 없는 상품 건너뜀
                     continue
                 todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
                 if not todo:
@@ -803,9 +828,9 @@ def _measure_unfilled_once(wb, path, log) -> int:
                     wb.set_keyword_rank(biz, pname, kw, date, r)
                     log(f"  [순위보완] {biz} · {pname} '{kw}': {rank_label(r)}")
                     filled += 1
-                mi = cap.get("제품")
-                if mi is not None and getattr(mi, "name", "") and wb.set_display_name(biz, pname, mi.name):
-                    log(f"  [노출명] 계약상품명 갱신 → {mi.name}")
+                mi = cap.get("제품")                    # 노출명은 로그로만(블록명=등록상품명 고정, set_display_name 중단)
+                if mi is not None and getattr(mi, "name", ""):
+                    log(f"  [노출명] 검색결과 노출명 = {mi.name} (블록명은 등록상품명 고정)")
                 wb.save(path)                        # 상품마다 저장(중단돼도 보존)
                 if halted:
                     break
@@ -1002,16 +1027,15 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         # 연다(중첩 금지 — sync playwright 충돌 방지). 활동 상품이 있을 때만 열고, 그 한 세션에서
         # 키워드 선정(자동완성)→순위까지 재사용한다(warmup 먼저 = 쿠팡 오리진 로드, same-origin fetch).
         if report_acc.products:
-            inventory = _inventory_by_product(report_acc.products, inv_by_vid)
             if skip_ranks or keywords_off:
                 # 순위 제외(날짜지정) 또는 판매수집 전용(①): 쿠팡 순위 브라우저 안 열고(차단 접촉 0)
-                _process_account(report_acc, wb, naver, ai_key, None, metrics, inventory,
+                _process_account(report_acc, wb, naver, ai_key, None, metrics, inv_by_vid,
                                  col_label, grow, log, partial, skip_ranks=skip_ranks,
                                  keywords_off=keywords_off)
             else:
                 with WingBrowser(profile_dir=_PROFILE, offscreen=True) as rank_browser:
                     warmup(rank_browser)
-                    _process_account(report_acc, wb, naver, ai_key, rank_browser, metrics, inventory,
+                    _process_account(report_acc, wb, naver, ai_key, rank_browser, metrics, inv_by_vid,
                                      col_label, grow, log, partial)
             # 판매상태 불일치 경고: 쿠팡 재고 판매상태맵을 마스터 전체 상품에 vid로 대조해 저장(멱등).
             # 대장에서 빠진(판매중지 표기) 상품도 쿠팡 재고에 살아있으면 vid로 잡혀 "판매중"으로 채워진다.
@@ -1174,6 +1198,8 @@ def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = 
         warmup(browser)
         for biz in wb.account_sheets():
             for pname in wb.products_of(biz):
+                if not wb.has_keyword_section(biz, pname):   # 다중옵션 2차 블록(판매정보만) → 키워드 선정 대상 아님
+                    continue
                 existing = wb.product_keywords(biz, pname)
                 # 채울 목표 = grow면 KW_MAX_TRACK(발굴 추가), 아니면 KW_TRACK_N(=4, 빈행 대신 실제 키워드로 채움).
                 # 부족분만 보충하고 목표치 이상이면 동결(스킵). '빈행도 키워드로 채우기' 요구(2026-09-15).
@@ -1252,9 +1278,9 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
             if not date:
                 continue
             for pname in wb.products_of(biz):
-                vids = wb.product_vids(biz, pname)
+                vids = wb.sibling_vids(biz, pname)   # 리스팅 전 옵션 vid 합집합(아이템위너 놓침 방지)
                 keywords = wb.product_keywords(biz, pname)
-                if not keywords:
+                if not keywords:                     # 2차 옵션 블록(키워드 없음)은 순위 대상 아님
                     continue
                 if not vids and not (pname or "").strip():   # 매칭 근거(vid·상품명) 전무 → 측정 불가(이례)
                     noname_products += 1
@@ -1280,9 +1306,9 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
                     r = _best(measured.get(kw))       # 정상 측정: 미노출이면 '-', 노출이면 'N위'
                     wb.set_keyword_rank(biz, pname, kw, date, r)
                     log(f"  [{biz}] {pname} '{kw}': {rank_label(r)}")
-                mi = cap.get("제품")                   # 매칭된 항목 → 계약상품명 정확 노출명 갱신
-                if mi is not None and getattr(mi, "name", "") and wb.set_display_name(biz, pname, mi.name):
-                    log(f"  [노출명] 계약상품명 갱신 → {mi.name}")
+                mi = cap.get("제품")                   # 노출명은 로그로만(블록명=등록상품명 고정, set_display_name 중단)
+                if mi is not None and getattr(mi, "name", ""):
+                    log(f"  [노출명] 검색결과 노출명 = {mi.name} (블록명은 등록상품명 고정)")
                 wb.save(path)   # **상품마다 저장** → 중단돼도 여기까지 보존(재실행 시 이어서)
                 if halted:
                     break
@@ -1592,9 +1618,9 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                     break
                 if wb.has_marketing() and not wb.product_due(biz, pname, date)[0]:
                     continue                       # 상품 수집 주기(마케팅 상품만 매일) — 오늘 대상 아니면 순위도 생략
-                vids = wb.product_vids(biz, pname)
+                vids = wb.sibling_vids(biz, pname)   # 리스팅 전 옵션 vid 합집합(아이템위너 놓침 방지)
                 keywords = wb.product_keywords(biz, pname)
-                if not keywords:
+                if not keywords:                     # 2차 옵션 블록(키워드 없음)은 순위 대상 아님
                     continue
                 if not vids and not (pname or "").strip():   # 매칭 근거(vid·상품명) 전무 → 측정 불가(이례)
                     noname_products += 1
@@ -1680,9 +1706,8 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                     rank, mi = res.get("제품", (None, None))
                     wb.set_keyword_rank(biz, pname, kw, date, rank)
                     log(f"  ✅ 「{kw}」 순위 = {rank_label(rank)}  — 기록 완료({idx}/{len(todo)})")
-                    if mi is not None and getattr(mi, "name", "") and wb.set_display_name(biz, pname, mi.name):
-                        log(f"  [노출명] 계약상품명 갱신 → {mi.name}")
-                        pname = mi.name.strip()   # 이후 저장도 새 이름으로
+                    if mi is not None and getattr(mi, "name", ""):   # 노출명은 로그로만(블록명=등록상품명 고정)
+                        log(f"  [노출명] 검색결과 노출명 = {mi.name} (블록명은 등록상품명 고정)")
                     wb.save(path)
                     # (키워드 사이 간격은 루프 상단에서 '검색 앞'에 적용 — 마지막 검색 뒤 자투리 대기 제거)
     wb.apply_style()
