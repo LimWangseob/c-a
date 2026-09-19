@@ -782,23 +782,32 @@ class OutputWorkbook:
         return self.sale_status(biz, product) in ("판매중", "부분판매중")
 
     def apply_sale_status(self, biz: str, status_by_vid: dict) -> int:
-        """쿠팡 재고 판매상태맵({vid: isSaleSuspended})을 그 사업자 **마스터 전체 상품**에 vid로 대조해 저장.
+        """쿠팡 판매상태맵을 그 사업자 **마스터 전체 상품(블록)** 에 vid로 대조해 저장.
 
-        상품 정체성은 vendorItemId 앵커라, 대장에서 빠져 '판매중지' 표기된 상품도 쿠팡 재고에 살아있으면
-        그 vid 로 잡혀 실제 판매상태가 채워진다(그래야 대장↔쿠팡 불일치를 경고할 수 있음). 상품의 옵션(vid)
-        중 상태맵에 있는 것들만 보고: 전부 판매중지=판매중지·전부 아님=판매중·섞임=부분판매중·하나도 없음=미상(생략).
-        반환=상태를 채운 상품 수."""
+        status_by_vid 값 = **bool**(True=판매중지·RFM 재고 API `isSaleSuspended`) 또는 **문자열**('판매중'/
+        '부분판매중'/'판매중지'·상품조회/수정 `productStatus`, 판매자배송 포함 전 상품). bool 은 문자열로
+        정규화한다(True→판매중지·False→판매중). 상품 정체성은 vendorItemId 앵커라, 대장에서 빠져 '판매중지'
+        표기된 상품도 쿠팡에 살아있으면 그 vid 로 잡혀 실제 판매상태가 채워진다(대장↔쿠팡 불일치 경고 근거).
+        블록의 옵션(vid) 중 상태맵에 있는 것들만 보고: 전부 판매중지=판매중지·전부 판매중=판매중·그 외(섞임·
+        부분 포함)=부분판매중·하나도 없음=미상(생략). 반환=상태를 채운 상품 수."""
         if not status_by_vid:
             return 0
+
+        def _st(v) -> str:
+            if isinstance(v, bool):
+                return "판매중지" if v else "판매중"
+            return _norm(v)
+
         biz = _norm(biz)
         n = 0
         for p in self.products_of(biz):
-            known = [status_by_vid[v] for v in self.product_vids(biz, p) if v in status_by_vid]
-            if not known:                     # 이 상품 옵션이 재고 상태맵에 없음 → 미상(기존 값 보존)
+            known = [_st(status_by_vid[v]) for v in self.product_vids(biz, p) if v in status_by_vid]
+            known = [s for s in known if s]   # 빈값(미상) 제외
+            if not known:                     # 이 상품 옵션이 상태맵에 없음 → 미상(기존 값 보존)
                 continue
-            if all(known):
+            if all(s == "판매중지" for s in known):
                 st = "판매중지"
-            elif not any(known):
+            elif all(s == "판매중" for s in known):
                 st = "판매중"
             else:
                 st = "부분판매중"

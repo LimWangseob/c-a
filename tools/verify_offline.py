@@ -178,6 +178,32 @@ def t1_sale_status_flag():
     assert wb.sale_status(biz, "중지품") == "판매중지"
     assert wb.sale_status(biz, "미상품") == ""            # 맵에 vid 없음 → 미상(빈값·기존 보존)
     _ok("상태파서·상품단위 판정(판매중/부분판매중/판매중지/미상) 정상")
+    # 상품조회/수정 productStatus → 판매상태 매핑(판매자배송 포함 전 상품·방어적 해석)
+    from coupang_analytics.collector import (sale_status_of, sale_status_by_vid,
+                                             VendorInventoryListing, VendorInventoryOption)
+    assert sale_status_of("ON_SALE") == "판매중"
+    assert sale_status_of("PARTIAL_ON_SALE") == "부분판매중"
+    assert sale_status_of("판매중") == "판매중"
+    assert sale_status_of("SALE_STOP") == "판매중지"        # 미지 enum → 판매중지(안전한 실패=경보 누락)
+    assert sale_status_of("") == ""                          # 빈값=미상
+    # vid별 전개 + apply_sale_status 문자열 경로(판매자배송 NORMAL 상품도 상태 커버)
+    def _li(name, vid, status, rt="NORMAL"):
+        return VendorInventoryListing(product_name=name, vendor_inventory_id="g_" + vid,
+                                      registration_type=rt, product_status=status,
+                                      options=[VendorInventoryOption(vendor_item_id=vid, item_name="",
+                                                                     registration_type=rt)])
+    listings = [_li("판매자배송중지품", "N1", "판매중지", "NORMAL"),   # 개인상품도 판정됨(옛 한계 해소)
+                _li("판매자배송판매품", "N2", "ON_SALE", "NORMAL")]
+    smap = sale_status_by_vid(listings)
+    assert smap == {"N1": "판매중지", "N2": "판매중"}, f"vid별 전개 오류: {smap}"
+    wb2 = OutputWorkbook.empty()
+    for nm, vid in [("판매자배송중지품", "N1"), ("판매자배송판매품", "N2")]:
+        wb2.ensure_product_block("개인가게", nm, config.KIND_PERSONAL, ["kw"])
+        wb2.set_product_vids("개인가게", nm, [vid])
+    wb2.apply_sale_status("개인가게", smap)                  # 문자열 맵(productStatus)
+    assert wb2.sale_status("개인가게", "판매자배송중지품") == "판매중지"
+    assert wb2.sale_status("개인가게", "판매자배송판매품") == "판매중", "판매자배송 상품 판매상태 미커버(옛 한계)"
+    _ok("productStatus → 판매상태(판매자배송 포함 전 상품 커버)·apply_sale_status 문자열 경로 정상")
     # 렌더 왕복: 대장=판매중지 + 쿠팡=판매중 → 최신 날짜칸에 '판매중' 적색·굵게 (멱등)
     d = Path(tempfile.mkdtemp())
     wb2 = OutputWorkbook.empty()

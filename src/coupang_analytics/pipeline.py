@@ -317,7 +317,8 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
     """계정 하나: (필요시) 로그인 → **같은 신선한 세션**에서 즉시 판매분석 발견 + 지표.
 
     반환: (report_account[활동 상품만] | None, {옵션ID: OptionMetric}, {옵션ID: 재고수량},
-    {옵션ID: 판매중지여부}). 로그인 미완료면 (None, {}, {}, {}) 반환 → 호출부가 건너뛰고 다음 계정으로.
+    {옵션ID: 판매상태}). 4번째 판매상태맵 = 상품조회 productStatus 문자열(판매자배송 포함 전 상품)
+    또는 폴백 RFM isSaleSuspended(bool). 로그인 미완료면 (None, {}, {}, {}) → 호출부가 건너뛰고 다음 계정으로.
     login=False(세션우선 1차): 세션 없으면 자동제출하지 않고 **NeedLogin** 을 던져 뒤로 미룬다
     (반복 자동로그인 = IP 차단 유발이라, 세션 살아있는 계정을 먼저 다 수집). Akamai 차단 시 LoginBlocked.
     semi=True(**반자동 판매수집**): 창을 **처음부터 보이게**(offscreen=False) 띄우고 **무인 아님**(사람이
@@ -325,7 +326,8 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
     """
     from .collector import (discover, save_discovered,  # 지연 import
                             fetch_inventory, fetch_sales_roster, InventoryFetchError, SalesFetchError,
-                            fetch_vendor_inventory, products_from_vendor_inventory, VendorInventoryFetchError)
+                            fetch_vendor_inventory, products_from_vendor_inventory, VendorInventoryFetchError,
+                            sale_status_by_vid)
     from .product_match import scope_to_ledger, augment_unmatched
     from playwright.sync_api import TimeoutError as PWTimeout  # 판매데이터 없음 판별용
     pw = get_password(a.account_id) if get_password else None
@@ -408,8 +410,11 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
         # ── vid·옵션·상품 = 상품조회/수정(전 상품·전 옵션 나열, 당일 판매 0 상품도 포함). 폴백=판매분석 발견 ──
         # (vi-detail-search 는 당일 판매활동 상품만 잡혀 판매 0 상품 vid 누락 → 상품조회/수정으로 vid 출처 교체)
         vendor_products = None
+        vendor_status: dict[str, str] = {}   # {vid: 판매상태문자열} — 상품조회 productStatus(전 상품·판매자배송 포함)
         try:
-            vendor_products = products_from_vendor_inventory(fetch_vendor_inventory(b.page, log), log)
+            listings = fetch_vendor_inventory(b.page, log)
+            vendor_products = products_from_vendor_inventory(listings, log)
+            vendor_status = sale_status_by_vid(listings, log)   # 판매상태 출처(판매자배송까지 커버, §2.3)
         except VendorInventoryFetchError as exc:
             log(f"  [{a.label}] ⚠ 상품조회/수정(vid 출처) 실패 → 판매분석 발견으로 폴백 — {str(exc)[:120]}")
         # ── 지표(노출/판매/방문자) = 판매분석(vi-detail-search). 상품은 위 vendor_products 로 대체 ──
@@ -443,13 +448,16 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
         # (판매자배송 전용 계정은 재고 없음 → 생략)
         inventory: dict[str, int] = {}
         inv_names: dict[str, str] = {}
-        inv_status: dict[str, bool] = {}   # {vid: 판매중지여부} — 대장↔쿠팡 판매상태 불일치 경고용
+        rfm_status: dict[str, bool] = {}   # {vid: isSaleSuspended} — RFM 재고 API(로켓그로스만)
         if any(p.kind in config.KINDS_WITH_INVENTORY for p in products):
             try:
-                inventory, inv_names, inv_status = fetch_inventory(b.page, log)   # 재고 수량 + vid→상품명 roster + 판매상태
+                inventory, inv_names, rfm_status = fetch_inventory(b.page, log)   # 재고 수량 + vid→상품명 roster + 판매상태
                 log(f"  [{a.label}] 재고현황 {len(inventory)}개 옵션 조회")
             except InventoryFetchError as exc:   # 부가지표 — 실패해도 수집 전체는 진행(사유 명시)
                 log(f"  [{a.label}] ⚠ 재고현황 조회 실패(계속) — {str(exc)[:120]}")
+        # 판매상태 출처(§2.3 대장↔쿠팡 불일치 경고): 상품조회 productStatus(판매자배송 포함 전 상품) 우선,
+        # 없으면(상품조회 실패) RFM isSaleSuspended(로켓그로스만) 폴백. apply_sale_status 가 문자열·bool 둘 다 받음.
+        sale_status = vendor_status if vendor_status else rfm_status
         # 추적 범위 = 입력 대장 상품(위탁 관리분)만. 당일 발견을 매칭해 노출제목·vid·구분 부여(지표는 당일 것).
         tracked, n_match = scope_to_ledger(a.products, products)
         # 대장에 있는데 당일 판매·방문 0이라 미매칭(vid 없음)인 상품 → 그로스 재고 vid + 최근 N일 판매분석 vid 로
@@ -469,7 +477,7 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
         session_state.observe_collection_done(a.account_id)         # 관측: 이 계정 수집 완료 시각
     save_discovered(a.account_id, products)
     log(f"  [{a.label}] 발견 {len(products)}개 · 대장 {len(a.products)}개 → 추적 {len(tracked)}개(매칭 {n_match})")
-    return Account(a.account_id, a.representative, a.business_name, tracked), metrics, inventory, inv_status
+    return Account(a.account_id, a.representative, a.business_name, tracked), metrics, inventory, sale_status
 
 
 def _persist_session(a: Account, b, log) -> None:
