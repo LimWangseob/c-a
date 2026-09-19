@@ -36,17 +36,40 @@ _REAL_INPUT = Path(r"D:\토탈셀러\셀독\토탈셀러_셀독 관리 대장 (3
 _DAYS = 7
 
 
+def _load_input():
+    """앱(app_qt)과 **동일하게** 입력을 로드한다 — input/source=gsheet 면 관리대장 구글시트,
+    아니면 마지막 PC 엑셀(없으면 _REAL_INPUT). 반환 (InputList|None, 출처설명)."""
+    try:
+        from PySide6.QtCore import QSettings
+        st = QSettings("coupang-analytics", "ui")
+        src = st.value("input/source", "", type=str)
+        url = st.value("gsheet/input_url", "", type=str)
+        file_path = st.value("file/input", "", type=str)
+    except Exception:
+        src, url, file_path = "", "", ""
+    if src == "gsheet" and url:                       # 앱과 동일: 구글시트 관리대장 우선
+        from coupang_analytics.input_list import read_ledger_rows, parse_input_rows
+        title, rows, strike = read_ledger_rows(url, store=CredStore())
+        return parse_input_rows(rows, strike), f"구글시트 관리대장({title})"
+    path = file_path or (str(_REAL_INPUT) if _REAL_INPUT.exists() else "")
+    if path and Path(path).exists():
+        return parse_input_list(path), path
+    return None, None
+
+
 def main():
     args = sys.argv[1:]
     manual = "--manual" in args
     args = [x for x in args if x != "--manual"]
-    if not _REAL_INPUT.exists():
-        print(f"[중단] 입력 엑셀 없음: {_REAL_INPUT}")
+    try:
+        il, src_desc = _load_input()
+    except Exception as exc:
+        print(f"[중단] 입력(관리대장) 로드 실패: {exc.__class__.__name__}: {exc}")
         return
-    il = parse_input_list(str(_REAL_INPUT))
-    if not il.accounts:
-        print("[중단] 입력 엑셀에서 계정을 찾지 못함")
+    if il is None or not il.accounts:
+        print("[중단] 입력에서 계정을 찾지 못함 — 앱 설정 탭에서 관리대장(구글시트/PC엑셀)을 먼저 지정하세요.")
         return
+    print(f"[입력] {src_desc} — 계정 {len(il.accounts)}개")
 
     if args and args[0] == "--list":
         print("계정 목록(계정ID / 사업자명 / 상품수):")
@@ -77,23 +100,35 @@ def main():
     print("  → 잠시 후 로그인 창이 화면 중앙에 뜹니다. 2차 인증이 뜨면 그 창에서 처리하세요.")
     print("=" * 60)
 
-    report_acc, metrics, inv_by_vid = _login_and_discover(a, date_from, date_to, get_pw, print)
+    # ⚠ 읽기 전용: 마스터/구글시트를 건드리지 않는다(정체·지표만 조회·출력). vid 출처 변경(상품조회/수정)
+    # 실동작·판매상태(productStatus) 확인용. 4튜플 = (계정, {vid:지표}, {vid:재고}, {vid:판매상태}).
+    report_acc, metrics, inv_by_vid, sale_status = _login_and_discover(a, date_from, date_to, get_pw, print)
 
     print("-" * 60)
     if report_acc is None:
         print("  [결과] 로그인 미완료 → 수집 못 함 (위 [로그인감지] 로그가 원인)")
         return
-    active = [p for p in report_acc.products
-             if any((m := metrics.get(oid)) and (m.views or m.sales or m.visitors)
-                    for opt in p.options for oid in opt.vendor_item_ids)]
-    print(f"  [실증] 수집 성공 — 발견 상품 {len(report_acc.products)}개 · "
-          f"옵션(vendorItemId) {len(metrics)}개 · 활동 상품 {len(active)}개")
-    for p in report_acc.products[:5]:
+    multi = [p for p in report_acc.products if len(p.options) > 1]
+    novid = [p for p in report_acc.products if not any(o.vendor_item_ids for o in p.options)]
+    print(f"  [실증] 추적 상품 {len(report_acc.products)}개(대장 매칭) · "
+          f"다중옵션 {len(multi)}개 · vid 미확보 {len(novid)}개 · 판매지표 옵션 {len(metrics)}개")
+    print("  [vid 출처=상품조회/수정] 각 상품 옵션(vid)·구분·지표:")
+    for p in report_acc.products[:8]:
+        opt_desc = ", ".join(f"{o.label or '기본'}={','.join(o.vendor_item_ids) or '없음'}" for o in p.options[:4])
         oid = p.options[0].vendor_item_ids[0] if p.options and p.options[0].vendor_item_ids else None
         m = metrics.get(oid) if oid else None
-        s = f"노출 {m.views}/판매 {m.sales}/방문 {m.visitors}" if m else "(지표 없음)"
-        print(f"        - {p.name[:34]} [옵션 {len(p.options)}] 대표 {s}")
-    # 재고현황(Phase2 rfm-inventory) — 계약(로켓그로스) 상품만. 옵션(vid)별 재고를 상품단위로 합산해 확인.
+        s = f"대표 노출 {m.views}/판매 {m.sales}/방문 {m.visitors}" if m else "(당일 지표 0)"
+        print(f"        - {p.name[:34]} [{p.kind}] 옵션 {len(p.options)}: {opt_desc[:70]} · {s}")
+    # 판매상태(§2.3): 상품조회 productStatus(판매자배송 포함 전 상품) 또는 폴백 RFM isSaleSuspended
+    print("-" * 60)
+    if sale_status:
+        from collections import Counter
+        vals = Counter(str(v) for v in sale_status.values())
+        print(f"  [판매상태] vid {len(sale_status)}개 판정 — 분포: {dict(vals)}")
+        print("            (원문→해석 대응은 위 '[상품조회] 판매상태 원문→해석' 로그 확인)")
+    else:
+        print("  [판매상태] 없음 (상품조회 실패+로켓그로스 없음 등)")
+    # 재고현황(RFM) — 계약(로켓그로스) 상품만. 옵션(vid)별 재고를 상품단위로 합산해 확인.
     inv_by_product: dict[str, int] = {}
     for p in report_acc.products:
         vals = [inv_by_vid[oid] for opt in p.options for oid in opt.vendor_item_ids if oid in inv_by_vid]
@@ -102,12 +137,12 @@ def main():
     print("-" * 60)
     if inv_by_vid:
         print(f"  [재고] 옵션(vid) {len(inv_by_vid)}개 · 상품 {len(inv_by_product)}개 (판매가능 수량)")
-        for name, qty in inv_by_product.items():
+        for name, qty in list(inv_by_product.items())[:8]:
             print(f"        · {name[:40]} → 재고 {qty}")
     else:
         print("  [재고] 재고현황 없음 (개인계정이거나 계약상품 미보유/조회 실패)")
     print("=" * 60)
-    print("  [완료] 로그인→판매분석 수집 실 테스트 성공")
+    print("  [완료] 로그인→상품조회/수정(vid)+판매분석(지표) 라이브 실 테스트 (읽기 전용·마스터 미변경)")
     print("=" * 60)
 
 

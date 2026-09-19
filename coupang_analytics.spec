@@ -27,6 +27,12 @@ hiddenimports += collect_submodules("google.auth")
 hiddenimports += collect_submodules("google.oauth2")
 hiddenimports += collect_submodules("coupang_analytics")
 
+_EXCLUDES = [
+    "tkinter", "torch", "torchvision", "torchaudio", "scipy", "pandas",
+    "matplotlib", "botocore", "boto3", "IPython", "notebook", "sympy",
+]
+
+# 메인 GUI 앱(콘솔 없음).
 a = Analysis(
     ["ui/app_qt.py"],
     pathex=["src"],
@@ -35,13 +41,25 @@ a = Analysis(
     hiddenimports=hiddenimports,
     # 기본 UI=PySide6 → tkinter 폴백 제외. 나머지는 이 앱이 안 쓰는데 환경에 깔려 딸려오던 거대
     # 패키지들(torch 370MB·scipy·pandas·botocore 등) — 제외해 배포 용량을 크게 줄인다.
-    excludes=[
-        "tkinter", "torch", "torchvision", "torchaudio", "scipy", "pandas",
-        "matplotlib", "botocore", "boto3", "IPython", "notebook", "sympy",
-    ],
+    excludes=_EXCLUDES,
     noarchive=False,
 )
+# 라이브 진단(읽기전용·콘솔): 사무실 PC 에서 로그인→상품조회/수정(vid)+판매분석(지표)만 조회·출력하고
+# 마스터/구글시트는 건드리지 않는다. vid 출처 변경·판매상태(productStatus) 실동작 검증용(앱 실행 전 안전 점검).
+a_diag = Analysis(
+    ["tools/verify_login_discover_live.py"],
+    pathex=["src"],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
+    excludes=_EXCLUDES,
+    noarchive=False,
+)
+# 공유 의존성(playwright·google·PySide6 등) 중복 제거 — 진단 exe 는 앱 폴더의 사본을 참조한다.
+MERGE((a, "쿠팡애널리틱스", "쿠팡애널리틱스"), (a_diag, "쿠팡진단", "쿠팡진단"))
+
 pyz = PYZ(a.pure)
+pyz_diag = PYZ(a_diag.pure)
 exe = EXE(
     pyz,
     a.scripts,
@@ -51,4 +69,15 @@ exe = EXE(
     console=False,                 # 더블클릭 실행 — 콘솔 창 없음
     disable_windowed_traceback=False,
 )
-coll = COLLECT(exe, a.binaries, a.datas, name="쿠팡애널리틱스")
+exe_diag = EXE(
+    pyz_diag,
+    a_diag.scripts,
+    [],
+    exclude_binaries=True,
+    name="쿠팡진단",
+    console=True,                  # 진단 로그를 콘솔에 출력(읽기전용 점검용)
+    disable_windowed_traceback=False,
+)
+coll = COLLECT(exe, a.binaries, a.datas,
+               exe_diag, a_diag.binaries, a_diag.datas,
+               name="쿠팡애널리틱스")
