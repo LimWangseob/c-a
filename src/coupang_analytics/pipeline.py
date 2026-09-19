@@ -473,10 +473,17 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
             n_match += added
             if added:
                 log(f"  [{a.label}] 당일 미매칭 {added}개 vid 보강(그로스 재고/최근 {config.SALES_VID_WINDOW_DAYS}일 · 지표는 당일 유지)")
+        # ── 계정 요약(진행경과·오류추적): 소스별 개수 + 대장 매칭/미매칭(vid 없는 상품은 등록명으로 추적) ──
+        unmatched = [tp.name for tp in tracked if not any(o.vendor_item_ids for o in tp.options)]
+        vid_count = sum(len(o.vendor_item_ids) for tp in tracked for o in tp.options)
+        log(f"  [계정 {a.account_id}/{a.label}] 소스: 상품조회 {len(products)}상품 · 판매분석 {len(metrics)}옵션"
+            f" · 재고 {len(inventory)}vid · 판매상태 {len(sale_status)}vid")
+        log(f"  [계정 {a.account_id}/{a.label}] 대장 {len(a.products)} → 추적 {len(tracked)}"
+            f"(매칭 {n_match}·vid {vid_count}) · 미매칭(vid없음) {len(unmatched)}"
+            + (f": {[_short(n, 22) for n in unmatched[:10]]}{'…' if len(unmatched) > 10 else ''}" if unmatched else ""))
         _persist_session(a, b, log)                                 # 세션 3요소+쿠키 영속(부가)
         session_state.observe_collection_done(a.account_id)         # 관측: 이 계정 수집 완료 시각
-    save_discovered(a.account_id, products)
-    log(f"  [{a.label}] 발견 {len(products)}개 · 대장 {len(a.products)}개 → 추적 {len(tracked)}개(매칭 {n_match})")
+    save_discovered(a.account_id, products)   # (요약 로그는 위 with 블록에서 계정 단위로 남김)
     return Account(a.account_id, a.representative, a.business_name, tracked), metrics, inventory, sale_status
 
 
@@ -510,12 +517,28 @@ def _roster_from_names(names_by_vid: dict, kind: str) -> list:
                     options=[Option("", [v]) for v in vids]) for nm, vids in by_name.items()]
 
 
-def _fill_product_metrics(wb, biz, pname, vids, kind, metrics, inv_by_vid, date_iso) -> None:
-    """**옵션(블록) 단위** 판매지표 기록 — 판매량/방문자/노출량(공통), 재고현황은 로켓그로스(계약·둘다)만.
+def _vtag(vids) -> str:
+    """로그용 **vid 태그**(오류·진행 추적 키). 여러 개면 '/'로 잇고, 없으면 '없음'.
+
+    모든 상품/옵션 단위 로그 앞에 붙여 `grep vid=<값>` 으로 한 상품의 전 과정(수집→지표→키워드→순위→
+    오류)을 추적할 수 있게 한다. vid 없는(미매칭) 상품은 vid=없음 → 등록상품명으로 추적한다."""
+    vs = [str(v) for v in (vids or []) if v]
+    return "vid=" + ("/".join(vs) if vs else "없음")
+
+
+def _short(name: str, n: int = 30) -> str:
+    """로그용 상품명 축약(길면 …). 내부 개행 제거."""
+    s = " ".join(str(name or "").split())
+    return s if len(s) <= n else s[:n] + "…"
+
+
+def _fill_product_metrics(wb, biz, pname, vids, kind, metrics, inv_by_vid, date_iso, log=None) -> None:
+    """**옵션(블록) 단위** 판매지표 기록 + **vid 기준 데이터 로그**(오류·진행 추적).
 
     vids = 이 블록에 속한 옵션ID 목록(단일옵션·판매자배송=상품 전 옵션, 다중옵션=그 옵션 하나). 지표는
     vi-detail-search(metrics: vid→OptionMetric)에서, 재고는 RFM 재고 API(inv_by_vid: vid→수량)에서 vid 로
-    조인해 이 블록 vid 들만 합산한다(옵션 분리 시 옵션별 개별 표시). 재고행은 kind 가 로켓그로스/둘다일 때만."""
+    조인해 이 블록 vid 들만 합산한다. 재고행은 kind 가 로켓그로스/둘다일 때만. log 를 주면 vid·이름·구분·
+    노출/판매/방문/재고를 **한 줄**로 남기고, 지표 없는 vid(당일 판매 0 등)·재고 누락도 명시한다."""
     views = sales = visitors = 0
     for oid in vids:
         m = metrics.get(oid)
@@ -526,10 +549,19 @@ def _fill_product_metrics(wb, biz, pname, vids, kind, metrics, inv_by_vid, date_
     wb.set_product_metric(biz, pname, config.M_SALES, date_iso, sales)
     wb.set_product_metric(biz, pname, config.M_VISITORS, date_iso, visitors)
     wb.set_product_metric(biz, pname, config.M_VIEWS, date_iso, views)
+    inv_txt = ""
     if kind in config.KINDS_WITH_INVENTORY:   # 재고현황 = 로켓그로스 + 둘다(로켓그로스 파트 있음)
         vals = [inv_by_vid[oid] for oid in vids if inv_by_vid and oid in inv_by_vid]
         if vals:
             wb.set_product_metric(biz, pname, config.M_INVENTORY, date_iso, sum(vals))
+            inv_txt = f"·재고 {sum(vals)}"
+        else:
+            inv_txt = "·재고 없음(vid 재고맵에 없음)"   # 로켓그로스인데 재고 조회 안 됨 → 진단 단서
+    if log:
+        no_metric = [v for v in vids if v not in metrics]   # 당일 지표가 없는 vid(판매 0·미노출 등)
+        warn = f" ⚠지표없는vid {no_metric}" if no_metric else ""
+        log(f"    [지표] {_vtag(vids)} {_short(pname)} [{kind}] "
+            f"노출 {views}·판매 {sales}·방문 {visitors}{inv_txt}{warn}")
 
 
 def _log_diagnose(product, track_info, ai_key, log, wb=None, biz=None, roles=None, pname=None) -> None:
@@ -639,7 +671,7 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
                 wb.ensure_product_block(biz, pname, kind, wb.product_keywords(biz, pname),
                                         rank_rows=is_rep, registered=base)
                 wb.set_product_vids(biz, pname, opt_vids)
-                _fill_product_metrics(wb, biz, pname, opt_vids, kind, metrics, inv_by_vid, date_iso)
+                _fill_product_metrics(wb, biz, pname, opt_vids, kind, metrics, inv_by_vid, date_iso, log=log)
                 wb.save(save_path)
                 continue
             # ── 대표 옵션(단일옵션 포함): 키워드 동결/선정 → 순위 → 지표 → 진단 ──
@@ -665,11 +697,11 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
                             for t in add:
                                 wb.set_keyword_search(biz, pname, t.keyword, t.volume)
                             keywords += [t.keyword for t in add]
-                            log(f"  [키워드] {title} → 동결 {existing} + 발굴 {[t.keyword for t in add]}")
+                            log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → 동결 {existing} + 발굴 {[t.keyword for t in add]}")
                         else:
-                            log(f"  [키워드] {title} → (동결) {keywords}")
+                            log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → (동결) {keywords}")
                     else:
-                        log(f"  [키워드] {title} → (동결) {keywords}")
+                        log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → (동결) {keywords}")
                     todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date_iso)]
                     measured = measure(todo, _cap=cap) if (browser is not None and todo) else {}
                     ranks = {kw: _best(measured.get(kw)) for kw in todo if kw in measured}  # 측정 실패는 공란
@@ -685,9 +717,9 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
                     ranks = {t.keyword: t.exposure_best for t in tracks}          # 선정단계 순위 재사용
                     track_info = [(t.keyword, t.volume, t.comp_idx, t.exposure_best) for t in tracks]
                     roles = {t.keyword: t.role for t in tracks if t.role}         # ④ 역할(REP/SALES/GROWTH/DEFENSE)
-                    log(f"  [키워드] {title} → {[f'{t.keyword}({t.role})' if t.role else t.keyword for t in tracks]}")
+                    log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → {[f'{t.keyword}({t.role})' if t.role else t.keyword for t in tracks]}")
             except Exception as exc:   # 이 상품만 건너뜀(판매지표·재고는 아래에서 계속 기록). 계정은 완주.
-                log(f"  [{biz}] {title} 키워드 처리 실패(건너뜀, 판매지표는 기록) — "
+                log(f"  [오류] {_vtag(opt_vids)} {_short(title)} 키워드 처리 실패(건너뜀, 판매지표는 기록) — "
                     f"{exc.__class__.__name__}: {str(exc)[:80]}")
                 wb.ensure_product_block(biz, pname, kind, wb.product_keywords(biz, pname), registered=base)
                 keywords, ranks, track_info, roles = [], {}, [], {}
@@ -702,13 +734,13 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
                     if ranks.get(kw) is None and blocked:  # 차단으로 못 잰 값 → 공란(재측정 대상)
                         continue
                     wb.set_keyword_rank(biz, pname, kw, date_iso, ranks.get(kw))
-                    log(f"  [순위] '{kw}': {rank_label(ranks.get(kw))}")
+                    log(f"  [순위] {_vtag(opt_vids)} '{kw}': {rank_label(ranks.get(kw))}")
                 # ⚠ set_display_name(노출명 교체) 중단 — 블록 이름을 등록상품명+옵션라벨로 고정(옵션 정체성 안정).
                 mi = cap.get("제품")                        # 노출명은 로그로만(블록명은 등록상품명 유지)
                 if mi is not None and getattr(mi, "name", ""):
-                    log(f"  [노출명] 검색결과 노출명 = {mi.name} (블록명은 등록상품명 고정)")
+                    log(f"  [노출명] {_vtag(opt_vids)} 검색결과 노출명 = {_short(mi.name, 40)} (블록명은 등록상품명 고정)")
             wb.set_product_vids(biz, pname, opt_vids)          # 대표 옵션 vid 저장(③은 sibling_vids 합집합으로 매칭)
-            _fill_product_metrics(wb, biz, pname, opt_vids, kind, metrics, inv_by_vid, date_iso)
+            _fill_product_metrics(wb, biz, pname, opt_vids, kind, metrics, inv_by_vid, date_iso, log=log)
             _log_diagnose(product, track_info, ai_key, log, wb=wb, biz=biz, roles=roles, pname=pname)
             wb.save(save_path)
     # 대장 대조: 이번 대장에 없던 마스터 블록 = 판매중지/삭제 표기(데이터 보존, 다시 나타나면 자동 해제)

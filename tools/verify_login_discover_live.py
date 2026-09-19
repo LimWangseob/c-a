@@ -112,13 +112,17 @@ def main():
     novid = [p for p in report_acc.products if not any(o.vendor_item_ids for o in p.options)]
     print(f"  [실증] 추적 상품 {len(report_acc.products)}개(대장 매칭) · "
           f"다중옵션 {len(multi)}개 · vid 미확보 {len(novid)}개 · 판매지표 옵션 {len(metrics)}개")
-    print("  [vid 출처=상품조회/수정] 각 상품 옵션(vid)·구분·지표:")
-    for p in report_acc.products[:8]:
-        opt_desc = ", ".join(f"{o.label or '기본'}={','.join(o.vendor_item_ids) or '없음'}" for o in p.options[:4])
-        oid = p.options[0].vendor_item_ids[0] if p.options and p.options[0].vendor_item_ids else None
-        m = metrics.get(oid) if oid else None
-        s = f"대표 노출 {m.views}/판매 {m.sales}/방문 {m.visitors}" if m else "(당일 지표 0)"
-        print(f"        - {p.name[:34]} [{p.kind}] 옵션 {len(p.options)}: {opt_desc[:70]} · {s}")
+    print("  [vid 출처=상품조회/수정] 각 상품 옵션별 vid·판매상태·지표 (grep 키=vid=…):")
+    for p in report_acc.products:
+        for o in p.options:
+            vid = o.vendor_item_ids[0] if o.vendor_item_ids else ""
+            m = metrics.get(vid) if vid else None
+            st = sale_status.get(vid, "") if vid else ""
+            metric_txt = f"노출 {m.views}·판매 {m.sales}·방문 {m.visitors}" if m else "지표 0(당일 판매·노출 없음)"
+            inv_txt = f"·재고 {inv_by_vid[vid]}" if (vid and vid in inv_by_vid) else ""
+            lbl = f"({o.label})" if o.label else ""
+            print(f"        vid={vid or '없음'} [{p.kind}] {p.name[:30]}{lbl} "
+                  f"판매상태={st or '미상'} {metric_txt}{inv_txt}")
     # 판매상태(§2.3): 상품조회 productStatus(판매자배송 포함 전 상품) 또는 폴백 RFM isSaleSuspended
     print("-" * 60)
     if sale_status:
