@@ -3,6 +3,27 @@
 > 정책·구조의 단일 기준 문서. 코드보다 이 문서가 우선한다.
 > §8 미확정 항목은 실제 페이지 1회 분석 후 확정한다.
 
+## 0-00000. 최신 반영 요약 (2026-09-20 — VID 출처 변경 확정 설계·⚠미구현·승인 후 착수)
+
+> ⚠ **아래는 확정된 설계·API 스펙이며 아직 코드에 반영되지 않았다(미구현).** 현재 동작은 여전히 vid 출처=판매분석(`vi-detail-search`). 승인 후 착수한다. SSOT 메모=[[feature-vid-source-from-product-list]].
+
+- **VID 최초 출처 변경(핵심 요구, 소유자 2026-09-19):** vid를 판매분석(`vi-detail-search`, **당일 판매활동 상품만** 잡힘 → 판매 0 상품 vid 누락→재고 공란·오매칭의 근본원인)이 아니라 **상품조회/수정(`vendor-inventory/search`, 전 상품·전 옵션 나열)** 에서 **등록상품명 매칭으로 확보**한다. 이후 vid를 정체성 앵커로 고정.
+- **⭐API 스펙(2026-09-20 소유자 실캡처, 사무실PC DevTools):** 구현 자료 전부 확보·추가 캡처 불필요.
+  - 엔드포인트 `POST https://wing.coupang.com/tenants/seller-web/v2/vendor-inventory/search`, `Content-Type: application/json`, 세션 쿠키 + x-xsrf-token(=`vi-detail-search`와 동일 패턴).
+  - 요청 본문(JSON): `{searchKeywordType:"ALL", searchKeywords:"", salesMethod:"ALL", productStatus:["ALL"], exposureStatus:"ALL", exposureStatuses:[], displayDeletedProduct:false, displayCategoryCodes:[], saleEndDateSearchType:"ALL", shippingFeeSearchType:"ALL", shippingMethod:"ALL", stockSearchType:"ALL", bundledShippingSearchType:"ALL", upBundleSearchOption:"ALL", qualityEnhanceTypes:[], coupangAttributeOptimized:false, listingStartTime:null, listingEndTime:null, sortMethod:"SORT_BY_ITEM_LEVEL_UNIT_SOLD", locale:"ko_KR", countPerPage:50, page:1}`. ⚠전량 수집 핵심=`exposureStatus:"ALL"`(NON_ITEM_WINNER면 아이템위너 누락)·`salesMethod:"ALL"`·`productStatus:["ALL"]`·`displayDeletedProduct:false`.
+  - 페이지네이션: `page` 1→N, 응답 `pagination.totalPages`까지 반복(countPerPage=50).
+  - 응답 봉투 `{success:true, data:{productList:[…], pagination:{page,countPerPage,totalCount,totalPages}}, message}`.
+  - 리스팅(`productList[]`): `productName`=등록상품명(대장 매칭키)·`vendorInventoryId`=등록상품ID(내부)=옵션 그룹핑키·`registrationType`(NORMAL=판매자배송/RFM=로켓그로스)·`productStatus`(ON_SALE/PARTIAL_ON_SALE/판매중지)=판매상태(전상품·NORMAL포함)·`status`·`representativeImage`·`itemUnitSoldAgg`.
+  - 옵션(`vendorInventoryItems[]`): `vendorItemId`=vid(정체성)·`itemName`=옵션명(라벨)·`registrationType`=둘다판별(RFM만)·`valid`(VALID/INVALID)·`status`·`salePrice`·`stockQuantity`(**안 씀**).
+  - ⚠ **노출상품ID(productId)는 응답에 없음** → 그룹핑은 `vendorInventoryId`로. 순위는 검색결과서 vid 매칭이라 productId 불요.
+- **재고는 이 소스에서 제외(소유자 2026-09-20):** 상품조회/수정 화면 재고는 **등록시 임의 입력값이라 부정확** → 재고=RFM 재고 API(`inventory-health-dashboard/search`)만 사용. 이 소스는 **vid·옵션·판매방식·상태·매칭 전용**.
+- **소스 역할 분담(확정):** vid·옵션명·판매방식·상태·등록상품명=vendor-inventory/search / 재고=RFM 재고 API(로켓그로스만) / 일자별 노출·판매·**방문자**=vi-detail-search(방문자는 이 소스에만 있음).
+- **옵션 분리(소유자 확정):** ①**다중옵션 상품에만** 적용(단일옵션은 기존 유지) ②옵션(vid)별 통계표 1 set·`vendorInventoryId`로 그룹 ③**대표 옵션=첫 옵션만 키워드+노출순위 유지**, 나머지 옵션 블록은 **판매정보만·순위 제외**(순위는 리스팅 단위라 옵션 공통) ④옵션 라벨(색상/사이즈/등급=`itemName`)을 상품명 옆 표기 ⑤행 3~4배 일부 증가 허용.
+- **둘다(로켓그로스+판매자배송) 처리:** 같은 상품에 RFM·NORMAL 옵션 공존 시 **`registrationType=="RFM"` 옵션만 채택**(vid·판매통계 모두), NORMAL 중복 옵션 제외.
+- **vid 저장 위치:** **구글시트 결과 파일에만 저장·읽기.** 숨김 `_상품ID` 시트/마스터 저장 금지(소유자 2026-09-19). ⚠②③ 오프라인 단계가 gsheet 의존 생김(설계 시 유의).
+- **대장 역기록 범위(소유자 확정):** vid·제목의 **대장 역기록은 금지**(관리대장은 읽기 전용 입력). 단 **그로스 재고 역기록(AD열)은 현행 유지**(대장에 재고 항목 존재·수정 대상).
+- **판매상태 경고 개선여지:** `productStatus`가 NORMAL 포함 전상품 커버 → §2.3의 판매자배송 미상 한계 해소 가능(현재는 RFM `isSaleSuspended`만).
+
 ## 0-0000. 최신 반영 요약 (2026-09-17 — 대표자 컬럼·띄어쓰기 유의미·키워드 처리)
 
 - **계정목록 대표자 컬럼:** 구글시트 `계정목록`·엑셀 `계정 목록` 둘 다 **A=대표자** 추가(열 순서 대표자·사업자·상품명·계정ID·체험단3·상태, 8열). 대표자=관리대장 대표자명(`wb.set_representative`/`representative_of`, `_계정정보` 4열 — 3열 판매수집일과 구분). 구글시트 자동열 A·B·C·D·H, 안정키 메모=B(사업자), 직원 마케팅 E~G 미접촉. 옛 7열 구글시트는 `gsheet_index._ensure_rep_column`이 A에 빈 열 자동 삽입해 마이그레이션(값·메모·서식·마케팅 우측 이동), `read_marketing`은 헤더 라벨로 열 탐지. 엑셀 `_sync_marketing_from_index`도 헤더 기반. SSOT=`designs/GSHEET_UNIFIED.md §5`.
@@ -163,7 +184,7 @@
 - **쿠팡 상태 출처:** 로켓그로스 재고 API(`inventory-health-dashboard/search`)의 `viProperties[].listingDetails.isSaleSuspended`(bool). collector `_parse_inventory_status`가 `{vid: 판매중지여부}` 맵을 만들고, `fetch_inventory`가 (재고, 상품명, **판매상태**) 3튜플로 반환. ①판매수집 로그인 세션에서만 확보(②③엔 없음).
 - **상품단위 판정:** 상품의 옵션(vid) 중 상태맵에 있는 것들만 보고 — 전부 중지=`판매중지`·전부 아님=`판매중`·섞임=`부분판매중`·하나도 없음=미상(생략). `workbook.apply_sale_status(biz, {vid:suspended})`가 **마스터 전체 상품에 vid로 대조**해 숨김시트 `_상품ID` 7열에 저장. ⚠ 대장에서 빠진(판매중지 표기) 상품도 쿠팡 재고에 살아있으면 그 vid로 잡혀 상태가 채워진다(그래야 불일치를 잡음). 파이프라인 `_finish`가 계정마다 1회 호출.
 - **표시:** `apply_style`이 판매중지 소헤더행(G=`⛔ 판매중지`)의 **최신(맨 오른쪽) 날짜칸**에 `판매중`을 **진한 적색(C00000)·굵게** 렌더(멱등). 값+서식이 마스터에 들어가 구글시트 미러링(`gsheet_stats.worksheet_to_requests`)으로 결과시트에도 그대로 반영.
-- ⚠ **판매자배송(개인) 상품 한계:** isSaleSuspended는 로켓그로스 재고 API에만 있어 개인상품은 미상(경고 안 뜸). 필요 시 `vendor-inventory/list` 신규 fetch(2단계 숙제).
+- ⚠ **판매자배송(개인) 상품 한계:** isSaleSuspended는 로켓그로스 재고 API에만 있어 개인상품은 미상(경고 안 뜸). **해소안(2026-09-20 스펙 확보·미구현):** `vendor-inventory/search` 응답의 `productStatus`(ON_SALE/PARTIAL_ON_SALE/판매중지)가 **NORMAL 포함 전상품** 판매상태를 주므로, VID 출처 변경(§0-00000) 구현 시 이 필드로 판정하면 판매자배송 상품도 경고 커버 가능.
 
 **파일명·저장(확정):** 새로 만들 때 `쿠팡데이타분석_yymmdd_시분초.xlsx`.
 **이어쓰기/신규(확정):** 실행 시작 시 기존 출력 파일이 있으면 **"이어서 기록할지"를 사용자에게 묻는다**.
@@ -375,6 +396,7 @@
   **광고=항목 내 `<span>광고</span>`**, ID는 href `/vp/products/{productId}?...&vendorItemId=..`, 페이지 `?page=N`.
   headless·직접접근 차단 → **실제 Chrome + 홈페이지 warmup** 후 통과. 차단 시 `RankBlocked`(공란). rank.py 라이브 검증.
 - **F. 로그인 대상 검증 소스** — 윙 화면에서 사업자명/대표자명/계정ID 노출 위치 (판매자정보 페이지)
+- **G. (해결·미구현) 상품조회/수정 데이터 API** — `POST /tenants/seller-web/v2/vendor-inventory/search`, 요청 본문·응답 필드 전부 확보(2026-09-20 실캡처). vid 출처 변경의 소스. 스펙·설계=§0-00000, [[feature-vid-source-from-product-list]]. 구현은 승인 후.
 
 ## 9. 아키텍처 (모듈)
 
