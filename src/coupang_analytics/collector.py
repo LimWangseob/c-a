@@ -106,11 +106,13 @@ class VendorInventoryOption:
     """상품조회/수정 응답의 옵션(vendorInventoryItems[]) 레벨 필드.
 
     vendor_item_id 가 vid(정체성) — 이후 시계열 추적의 앵커. registration_type 으로 둘다 판별
-    (한 리스팅에 RFM·NORMAL 옵션 혼재 → RFM 만 채택). valid=="INVALID" 는 필터 후보(호출부가 결정)."""
+    (한 리스팅에 RFM·NORMAL 옵션 혼재 → RFM 만 채택). ⚠ valid(VALID/INVALID)의 **의미는 미확정**
+    (캡처엔 값만·정의 없음). 삭제 상품은 요청 displayDeletedProduct=false 로 이미 제외되므로 INVALID≠폐기일
+    가능성이 큼 — 실데이터로 의미 파악 전엔 필터하지 않는다(라이브 로그로 관측)."""
     vendor_item_id: str          # 옵션ID = vid(정체성 앵커)
     item_name: str               # 옵션명(색상/사이즈/등급 라벨)
     registration_type: str       # NORMAL(판매자배송)/RFM(로켓그로스) — 옵션 단위 둘다 판별
-    valid: str = ""              # VALID / INVALID (필터 후보)
+    valid: str = ""              # VALID / INVALID (의미 미확정 — 라이브 관측 대상, 필터 안 함)
     status: str = ""            # 옵션 승인/상태
     sale_price: int = 0          # 판매가
     vendor_inventory_item_id: str = ""   # 등록옵션ID(내부)
@@ -384,8 +386,8 @@ def fetch_inventory(page, log=None) -> tuple[dict[str, int], dict[str, str], dic
 def _parse_vendor_inventory(product_list: list[dict]) -> list[VendorInventoryListing]:
     """vendor-inventory/search 의 productList → [VendorInventoryListing].
 
-    옵션은 **필터 없이 그대로** 담는다(valid=INVALID 포함) — 폐기·합산은 다운스텝(product_match/workbook)이
-    판단(수집 단계는 데이터를 있는 그대로 반영·조용한 폴백 금지). vendor_item_id 없는 옵션만 건너뛴다."""
+    옵션은 **필터 없이 그대로** 담는다(valid=INVALID 포함) — valid 의미가 미확정이라 필터/합산 판단은
+    다운스텝으로 미룬다(수집 단계는 데이터를 있는 그대로 반영·조용한 폴백 금지). vendor_item_id 없는 옵션만 건너뛴다."""
     out: list[VendorInventoryListing] = []
     for p in product_list:
         options: list[VendorInventoryOption] = []
@@ -714,6 +716,13 @@ def products_from_vendor_inventory(listings: list[VendorInventoryListing],
         log(f"  [상품조회] 둘다 상품 판매자배송(NORMAL) 옵션 {dropped_norm}개 제외(vid=로켓그로스만)")
     if skipped:
         log(f"  [상품조회] 옵션 없는 리스팅 {skipped}개 제외")
+    # valid=INVALID 옵션 관측 로그 — 이 필드의 **의미가 미확정**(캡처엔 값만·정의 없음)이라, 실데이터로
+    # 뜻을 파악하려고 개수+예시(상품명·옵션명·리스팅 판매상태)를 남긴다(라이브에서 INVALID 가 무엇인지 판단).
+    invalid = [(l.product_name, o.item_name, l.product_status)
+               for l in listings for o in l.options if o.valid == "INVALID"]
+    if invalid:
+        ex = [f"{nm[:14]}·{it[:10]}·상태={ps}" for nm, it, ps in invalid[:3]]
+        log(f"  [상품조회] valid=INVALID 옵션 {len(invalid)}개(의미 미확정·라이브 확인용) 예: {ex}")
     log(f"  [상품조회] 발견 상품 {len(out)}개(판매 무관 전 상품·vid 출처)")
     return out
 
