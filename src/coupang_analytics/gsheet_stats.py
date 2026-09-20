@@ -271,8 +271,6 @@ def read_staff_keywords(client, wb) -> dict[tuple[str, str], list[str]]:
             elif c == _LABEL_KEYWORD:                   # 키워드 소헤더 → 이 아래가 키워드 영역
                 in_kw = True
             elif in_kw and cur and c and c != _LABEL_KEYWORD:
-                if g == config.M_RANK_OFF:              # 추적 중단 키워드 = 담당자 활성 목록 아님(재활성 루프 방지)
-                    continue
                 out.setdefault((biz, cur), [])
                 if c not in out[(biz, cur)]:
                     out[(biz, cur)].append(c)
@@ -280,30 +278,30 @@ def read_staff_keywords(client, wb) -> dict[tuple[str, str], list[str]]:
 
 
 def merge_staff_keywords(client, wb, *, on_log=None) -> int:
-    """결과 통계 시트의 상품별 키워드를 워크북에 **동기화**(담당자 편집 반영). 반영 상품 수 반환.
+    """결과 통계 시트의 상품별 키워드를 워크북에 **동기화**(담당자 편집을 그대로 반영). 반영 상품 수 반환.
 
-    담당자가 구글시트 키워드 영역을 직접 편집한 것을 그대로 따른다:
-    - **추가**: 시트에 있는데 워크북에 없는 키워드 → 활성 추가(상품당 활성 상한 `KW_MAX_TRACK`).
-    - **재활성**: 지웠다가 다시 넣은 중단 키워드 → 재활성(과거 이력 유지).
-    - **중단**: 워크북엔 활성인데 담당자가 시트에서 지운 키워드 → **추적 중단**(행·과거값 보존, 검색만 제외).
-    ⚠ 안전장치: 그 상품 시트에서 활성 키워드가 **하나도 안 읽히면**(파싱 실패·빈 영역) 그 상품은 건드리지
-    않는다(오판으로 전부 중단하는 사고 방지). 실행 시작 시 호출 → 반영분이 워크북에 들어가 종료 시 미러링돼도 유지.
+    **소유자 확정(2026-09-20): 구글시트 셀 값이 기준.** 시트에 채워진 키워드 = 최종 추적 목록.
+    - **추가**: 시트에 있는데 워크북에 없는 키워드 → 추가(상품당 상한 `KW_MAX_TRACK`).
+    - **삭제**: 워크북엔 있는데 담당자가 시트에서 지운 키워드 → **행을 비운다**(과거 순위값도 함께 삭제·이력 보존 안 함).
+    변경여부 판단·재선정 없이 시트 값만 반영한다(빈 칸은 공란 유지·일부만 있으면 일부만).
+    ⚠ 안전장치: 그 상품 시트에서 키워드가 **하나도 안 읽히면**(파싱 실패·빈 영역) 그 상품은 건드리지 않는다
+    (오판으로 전부 삭제하는 사고 방지). 실행 시작 시 호출 → 반영분이 워크북에 들어가 종료 시 미러링돼도 유지.
     """
     log = on_log or (lambda m: None)
-    staff = read_staff_keywords(client, wb)     # {(biz,product): [활성 키워드…]} (중단 행은 이미 제외됨)
+    staff = read_staff_keywords(client, wb)     # {(biz,product): [시트에 채워진 키워드…]}
     n = 0
     for (biz, product), kws in staff.items():
-        want = list(dict.fromkeys(kws))          # 담당자가 남긴 = 최종 활성 목록
+        want = list(dict.fromkeys(kws))          # 시트 셀 값 = 최종 추적 목록
         if not wb.has_product(biz, product) or not want:
             continue                             # 상품 없음·빈 목록(파싱 실패 방지) → 스킵
-        before = wb.active_keywords(biz, product)
+        have = wb.product_keywords(biz, product)
         changed = False
-        # 1) 재활성 — 담당자가 다시 넣은 중단 키워드(이력 유지)
-        for kw in want:
-            if kw in wb.product_keywords(biz, product) and wb.is_keyword_inactive(biz, product, kw):
-                changed |= wb.set_keyword_active(biz, product, kw, True)
-        # 2) 추가 — 시트에 있는데 워크북에 아예 없는 키워드(활성 상한 내)
-        room = config.KW_MAX_TRACK - len(wb.active_keywords(biz, product))
+        # 삭제 — 워크북엔 있는데 시트에서 사라진 키워드(행 비움·이력 함께 삭제)
+        for kw in have:
+            if kw not in want:
+                changed |= wb.clear_keyword_row(biz, product, kw)
+        # 추가 — 시트에 있는데 워크북에 없는 키워드(상한 내)
+        room = config.KW_MAX_TRACK - len(wb.product_keywords(biz, product))
         add = [kw for kw in want if kw not in wb.product_keywords(biz, product)]
         capped = add[:max(0, room)]
         if capped:
@@ -311,11 +309,7 @@ def merge_staff_keywords(client, wb, *, on_log=None) -> int:
             changed = True
         if len(add) > len(capped):
             log(f"  [구글시트] '{biz}/{product}' 상한({config.KW_MAX_TRACK}) 초과분 제외: {add[len(capped):]}")
-        # 3) 중단 — 워크북엔 활성인데 담당자가 시트에서 지운 키워드(이력 보존·검색 제외)
-        for kw in before:
-            if kw not in want:
-                changed |= wb.set_keyword_active(biz, product, kw, False)
         if changed:
             n += 1
-            log(f"  [구글시트] '{biz}/{product}' 담당자 키워드 편집 반영 → 활성 {wb.active_keywords(biz, product)}")
+            log(f"  [구글시트] '{biz}/{product}' 담당자 키워드 반영 → {wb.product_keywords(biz, product)}")
     return n
