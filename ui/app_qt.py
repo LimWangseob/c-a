@@ -599,11 +599,15 @@ class App(QtWidgets.QMainWindow):
         ts = config.log_ts()   # 표준 포맷 'YYYY-MM-DD HH:MM:SS.mmm'(config.format_log 과 동일 규칙)
         stamp = html.escape(f"[{ts}] ")
         safe = html.escape(msg).replace(" ", "&nbsp;")
+        # 사용자가 위로 스크롤해 과거 로그를 보는 중이면 새 줄이 와도 맨 아래로 끌어내리지 않는다
+        # (맨 아래에 있을 때만 따라 내려감 = 자동 팔로우). 이래야 로그 스크롤이 실제로 작동한다.
+        sb = self.log_console.verticalScrollBar()
+        at_bottom = sb.value() >= sb.maximum() - 4
         self.log_console.append(
             f'<span style="color:#64748b">{stamp}</span>'
             f'<span style="color:{color}">{safe}</span>')
-        sb = self.log_console.verticalScrollBar()
-        sb.setValue(sb.maximum())
+        if at_bottom:
+            sb.setValue(sb.maximum())
         self._rotate_log_if_big()   # 상시가동 시 로그 파일 무한 증가(디스크) 방지 — 상한 넘으면 .1 로 회전
         with open(self._log_path, "a", encoding="utf-8") as fh:  # 파일 미러(실시간 tail용)
             fh.write(f"[{ts}] {msg}\n")
@@ -623,8 +627,21 @@ class App(QtWidgets.QMainWindow):
             pass
 
     def copy_log(self):
-        QtWidgets.QApplication.clipboard().setText(self.log_console.toPlainText())
-        self.log("[로그] 전체 복사됨 (클립보드)")
+        """화면(최근 N줄)이 아니라 **실행 로그 파일 전체**를 복사한다.
+
+        콘솔 위젯은 메모리 보호로 최근 config.UI_LOG_MAX_LINES 줄만 유지하지만, 전체 이력은 run_log
+        파일에 남는다(회전 시 직전 세대 .log.1 포함). 이 둘을 이어 붙여 **모든 로그**를 클립보드에 넣는다.
+        파일을 못 읽으면 화면 텍스트로 폴백."""
+        parts = []
+        for p in (self._log_path.with_suffix(".log.1"), self._log_path):   # 회전된 직전분 + 현재
+            try:
+                if p.exists():
+                    parts.append(p.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        text = "".join(parts).strip() or self.log_console.toPlainText()
+        QtWidgets.QApplication.clipboard().setText(text)
+        self.log(f"[로그] 전체 복사됨 — {len(text.splitlines())}줄 (클립보드)")
 
     # ── 백그라운드 실행(스레드 → 시그널로 완료 전달) ───────────
     def run_bg(self, task, on_done=None, btn=None):
