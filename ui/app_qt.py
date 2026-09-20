@@ -1481,7 +1481,69 @@ def _check_icon_path() -> str:
         return ""
 
 
+# ── 설정 이식(배포 패키지 무설정용) — 이 PC 설정을 내보내고, 새 PC에서 가져와 자동 적용 ──────
+# 담는 값: QSettings(구글시트 링크·입력소스) + credstore 키 3개(네이버·OpenAI·구글SA).
+# ⚠ 내보낸 파일은 **평문**(API/SA 키 포함) → 배포 zip 안에서만·설치 시 즉시 이 PC용 암호화(DPAPI) 후 삭제.
+# 계정 비밀번호는 담지 않는다(관리대장 '비밀번호' 컬럼에서 매 실행 자동 로드).
+_EXPORT_QKEYS = ("gsheet/input_url", "gsheet/output_url", "input/source")
+_EXPORT_CREDS = ("__naver__", "__openai__", "__gsheet_sa__")
+
+
+def _export_settings(path: str) -> None:
+    """이 PC의 설정(구글시트 링크·입력소스 + API/SA 키)을 평문 JSON 으로 내보낸다(배포 패키지 동봉용)."""
+    from coupang_analytics.credstore import CredStore
+    st = QtCore.QSettings("coupang-analytics", "ui")
+    cs = CredStore()
+    data = {"qsettings": {}, "credstore": {}}
+    for k in _EXPORT_QKEYS:
+        v = st.value(k, "", type=str)
+        if v:
+            data["qsettings"][k] = v
+    for k in _EXPORT_CREDS:
+        v = cs.get_password(k)
+        if v:
+            data["credstore"][k] = v
+    Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[설정 내보내기] {path} - 링크/소스 {len(data['qsettings'])}개, 키 {len(data['credstore'])}개(평문·배포 zip 전용)")
+
+
+def _import_settings(path: str) -> None:
+    """새 PC에서 내보낸 설정을 가져와 **이 PC 전용 암호화(DPAPI)** 로 저장하고 평문 파일을 삭제한다(무설정 설치)."""
+    from coupang_analytics.credstore import CredStore
+    p = Path(path)
+    if not p.exists():
+        print(f"[설정 가져오기] 설정 파일 없음(건너뜀): {path}")
+        return
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"[설정 가져오기] [주의] 설정 파일을 읽지 못함(건너뜀): {exc}")
+        return
+    st = QtCore.QSettings("coupang-analytics", "ui")
+    for k, v in (data.get("qsettings") or {}).items():
+        st.setValue(k, v)
+    st.sync()
+    cs = CredStore()
+    n = 0
+    for k, v in (data.get("credstore") or {}).items():
+        try:
+            cs.set_password(k, v); n += 1
+        except Exception as exc:
+            print(f"[설정 가져오기] [주의] 키 저장 실패({k}): {exc}")
+    try:
+        p.unlink()               # 평문 설정 파일 즉시 삭제(이 PC엔 암호화본만 남김)
+        deleted = "평문 파일 삭제함"
+    except OSError:
+        deleted = "[주의] 평문 파일 삭제 실패-수동 삭제 필요"
+    print(f"[설정 가져오기] 완료 - 링크/소스 {len(data.get('qsettings') or {})}개, 키 {n}개 이 PC용 암호화 저장, {deleted}")
+
+
 def main():
+    argv = sys.argv
+    if "--export-settings" in argv:      # 배포 패키지 만들 때(이 PC): 설정 평문 내보내기
+        _export_settings(argv[argv.index("--export-settings") + 1]); return
+    if "--import-settings" in argv:      # 새 PC 설치 시: 설정 가져와 암호화 저장 + 평문 삭제
+        _import_settings(argv[argv.index("--import-settings") + 1]); return
     set_workdir()                   # .exe 더블클릭 대비 — 상대경로(output·data)가 exe 폴더에서 해석되게 CWD 고정
     auto = "--auto" in sys.argv     # 무인 자동 실행(작업 스케줄러가 18:00에 이 인자로 실행)
     resume = "--resume" in sys.argv  # 재부팅 복구(작업 스케줄러 '로그온 시' 트리거) — 중단분만 이어서, 없으면 종료

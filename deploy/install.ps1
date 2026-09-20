@@ -94,6 +94,26 @@ if ($made.Count -gt 0) {
 }
 Write-Host ''
 
+# 3.5) 담겨온 설정 자동 적용(무설정 설치) — 구글시트 링크·입력소스 + 네이버/OpenAI/구글SA 키 ──
+$cfg = Join-Path $root '_설정값.json'
+if (Test-Path $cfg) {
+    Write-Host '[설정] 패키지에 담긴 설정 적용 중(구글시트 링크·API/SA 키)...'
+    try {
+        # GUI exe 라 Start-Process -Wait 로 헤드리스 실행 완료까지 대기. import 후 exe 가 평문 _설정값.json 삭제.
+        Start-Process -FilePath $exe -ArgumentList '--import-settings', $cfg -Wait -NoNewWindow
+        if (Test-Path $cfg) {
+            Write-Host "  [경고] 설정 파일이 남아있습니다 - 적용이 안 됐을 수 있습니다. 앱 설정 탭에서 확인하세요."
+            Write-Host "         (보안: 적용 후 이 파일은 평문이라 직접 삭제하세요: $cfg)"
+        } else {
+            Write-Host '  [확인] 설정 자동 적용 완료(이 PC용 암호화 저장·평문 파일 삭제). 설정 탭 재입력 불필요.'
+        }
+    } catch {
+        Write-Host "  [경고] 설정 자동 적용 실패: $($_.Exception.Message)"
+        Write-Host '         앱 실행 후 설정 탭에서 직접 입력하세요.'
+    }
+    Write-Host ''
+}
+
 # ── 야간 무인 자동실행 등록/해제 (예전 install_schedule / uninstall_schedule 통합) ──
 function Register-AutoTasks {
     # 1) 매일 18:00 무인 실행(--auto, 앱이 06:00 자동 종료)
@@ -124,7 +144,8 @@ function Unregister-AutoTasks {
 }
 
 Write-Host '[4/4] 야간 무인 자동실행(매일 18:00 시작 -> 06:00 종료)'
-Write-Host '      * 먼저 프로그램을 1회 실행해 입력(관리대장)·API 키를 넣어 두어야 무인이 동작합니다.'
+Write-Host '      * 설정(관리대장 링크·API 키)이 위에서 자동 적용됐으면 바로 무인 동작합니다.'
+Write-Host '        (자동 적용이 안 됐다면 프로그램을 1회 실행해 설정 탭에서 넣어 두세요.)'
 $ans = Read-Host '      등록=Y / 해제=R / 건너뛰기=N'
 if ($ans -match '^[Yy]') {
     try {
@@ -152,5 +173,6 @@ Write-Host ''
 Write-Host '=============================================='
 Write-Host '  설치 완료'
 Write-Host "  실행: 바탕화면의 '쿠팡 애널리틱스' 바로가기 더블클릭"
-Write-Host '  처음 1회 설정 탭에서 입력(관리대장)·API 키를 넣으세요(이 PC 전용 암호화 저장).'
+Write-Host '  설정(구글시트 링크·네이버/OpenAI/구글SA 키)은 자동 적용됐습니다 - 추가 입력 불필요.'
+Write-Host '  (Google Chrome 설치 필수 · 로그인 2차인증은 사무실 환경에서 잘 됩니다.)'
 Write-Host '=============================================='

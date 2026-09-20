@@ -23,6 +23,10 @@
 >   전부에서 호출(app_qt do_run_full·start_auto·start_resume·do_keywords·do_track_ranks / app.py do_run_full).
 > - **정밀 시뮬 stale 수정**: `tools/simulate_stages.py._rows`가 4행 유지용 **빈 순위행 패딩(2026-09-15)**을 키워드로
 >   오인하던 것 수정(이름 공란 제외) → 통과 18/0. (production 코드 아님, 검증 도구 정확화.)
+> - **무설정 배포(2026-09-20 소유자 요구)**: build.bat 이 이 PC 설정을 exe `--export-settings`로 `_설정값.json`(평문)에 담고
+>   폴더를 `쿠팡애널리틱스_배포.zip`으로 압축 → 새 PC=zip 풀고 `설치.bat` 하나. install.ps1 이 exe `--import-settings`로
+>   구글시트 링크·입력소스 + 네이버/OpenAI/구글SA 키를 그 PC용 DPAPI 재암호화 저장 + 평문 파일 자동 삭제(설정 탭 재입력 불필요).
+>   구현=`app_qt._export_settings`/`_import_settings`. ⚠_설정값.json·zip 은 키 평문 → 외부 공유 금지·설치 후 삭제(.gitignore 차단). 상세 [[exe-packaging-deploy]].
 
 ## 0-000000. 최신 반영 요약 (2026-09-20 후속 — 옵션 분리 위 5건: 계정목록 상품별·검색량 채움·마스터 복원·서식 그룹화·용어)
 
