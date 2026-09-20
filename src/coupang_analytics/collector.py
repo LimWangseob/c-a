@@ -148,12 +148,12 @@ def kind_of(registration_types) -> str:
 
 
 def sale_status_of(product_status: str) -> str:
-    """상품조회/수정 `productStatus` → 판매상태 문자열('판매중'/'부분판매중'/'판매중지'). 빈값이면 '' (미상).
+    """상품조회/수정 `productStatus` 원문 → 문자열 해석(관측·진단용). ⚠**판매상태 소스로 쓰지 말 것.**
 
-    ⚠ 쿠팡 원문 enum 을 확정 캡처하지 못해(라이브에서 로그로 확인) **방어적**으로 해석한다:
-    부분 판정 우선 → 명확히 '판매중'인 값만 판매중 → **그 외는 판매중지**. 이 방향이면 오판이 나도
-    거짓 경보(대장=판매중지인데 쿠팡=판매중으로 잘못 표시)가 아니라 **경보 누락**(안전한 실패)이 된다.
-    영문 enum(ON_SALE/PARTIAL_ON_SALE 등)·한글 표기 모두 대응."""
+    라이브 실측(2026-09-20 wellbing1107): productStatus 가 **전 옵션 SUSPENDED 상수**로 나와 판매중/중지를
+    구분 못 함(재고 있는 활성 상품도 SUSPENDED). 즉 이 필드는 화면의 '판매상태'와 다르다(승인/수명주기 계열
+    추정). **실제 판매상태 = RFM 재고 API `isSaleSuspended`**(collector.fetch_inventory·검증됨)만 사용한다.
+    이 함수는 productStatus 원문을 로그로 관측하는 용도로만 남긴다(SUSPENDED/DRAFT/REJECTED 등 확인)."""
     s = (product_status or "").strip()
     if not s:
         return ""
@@ -166,10 +166,10 @@ def sale_status_of(product_status: str) -> str:
 
 
 def sale_status_by_vid(listings: list["VendorInventoryListing"], log=None) -> dict[str, str]:
-    """{옵션ID(vid): 판매상태문자열} — 상품조회/수정 productStatus(**전 상품·판매자배송 포함**)를 옵션 vid 로 편다.
+    """{옵션ID(vid): productStatus 해석} — **관측·진단 로그 전용**(판매상태 소스 아님·[[sale_status_of]] 참고).
 
-    한 리스팅의 모든 옵션 vid 는 그 리스팅 productStatus 를 공유(리스팅 단위 상태). 값이 빈 리스팅은 제외.
-    관측한 **원문 productStatus → 해석** 대응표를 로그로 남긴다(라이브에서 실제 enum 확인 → 매핑 정합성 점검)."""
+    productStatus 는 라이브에서 판매중/중지를 구분 못 함(전 옵션 SUSPENDED 상수)으로 확인됨 → 실제 판매상태는
+    RFM isSaleSuspended 만 쓴다. 이 함수는 원문 productStatus 분포를 로그로 남겨(라이브 관측) 필드 성격 파악에만 쓴다."""
     out: dict[str, str] = {}
     seen: dict[str, str] = {}
     for listing in listings:
@@ -181,7 +181,8 @@ def sale_status_by_vid(listings: list["VendorInventoryListing"], log=None) -> di
             if o.vendor_item_id:
                 out[o.vendor_item_id] = st
     if log and seen:
-        log("  [상품조회] 판매상태 원문→해석: " + ", ".join(f"{k}={v}" for k, v in seen.items()))
+        log("  [상품조회] productStatus 관측(판매상태 아님·참고): "
+            + ", ".join(f"{k}={v}" for k, v in seen.items()))
     return out
 
 
