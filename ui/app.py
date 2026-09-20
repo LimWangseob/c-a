@@ -30,7 +30,8 @@ from coupang_analytics.input_list import parse_input_list, parse_password_file  
 from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
 from coupang_analytics.kw_shopping import NaverShopCredentials  # noqa: E402
-from coupang_analytics.pipeline import (master_exists, resumable_progress, run_full,  # noqa: E402
+from coupang_analytics.pipeline import (master_exists, restore_master_from_gsheet,  # noqa: E402
+                                        resumable_progress, run_full,
                                         select_keywords_stage, track_ranks_stage)
 from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_credentials_file  # noqa: E402
@@ -389,9 +390,9 @@ class App(tk.Tk):
         ttk.Label(moderow, text="실행 모드:").pack(side="left")
         ttk.Radiobutton(moderow, text="이어서 하기", variable=self.run_mode,
                         value="resume").pack(side="left", padx=(8, 0))
-        ttk.Radiobutton(moderow, text="오늘 처음(다시) 하기", variable=self.run_mode,
+        ttk.Radiobutton(moderow, text="오늘 것만 다시 수집", variable=self.run_mode,
                         value="redo").pack(side="left", padx=(8, 0))
-        ttk.Radiobutton(moderow, text="전체 새로 시작", variable=self.run_mode,
+        ttk.Radiobutton(moderow, text="통계 전체 초기화(백업 후)", variable=self.run_mode,
                         value="newall").pack(side="left", padx=(8, 4))
         self.grow_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(moderow, text="새 키워드 발굴 추가 (이어쓰기 시, 상한 7개·하루 2개)",
@@ -454,15 +455,20 @@ class App(tk.Tk):
         mode = self.run_mode.get()
         newall, redo = mode == "newall", mode == "redo"
         resume = carry = redo_today = False
+        # fix ③: 마스터가 없지만 결과 구글시트가 있으면 복원(첫 실행 오판·과거 통계 유실 방지). 초기화(newall)는 제외.
+        gs_out_early = _shared_setting("gsheet", "output_url")
+        if not newall and not master_exists() and gs_out_early:
+            self.log("[통계] 마스터가 없어 결과 구글시트에서 복원을 시도합니다…")
+            restore_master_from_gsheet("output", gs_out_early, self.log)
         meta = resumable_progress() if not (newall or redo) else None
         if newall:
-            mode_desc = "전체 새로 시작 — ⚠ 기존 통계 마스터는 백업 후 빈 통계로 새로(누적 시계열 끊김)"
+            mode_desc = "통계 전체 초기화(백업 후) — ⚠ 기존 통계 마스터는 백업 후 빈 통계로 새로(누적 시계열 끊김)"
         elif redo:
             if master_exists():
                 carry = redo_today = True
-                mode_desc = f"오늘 처음(다시) 하기 — 오늘({dt}) 초기화 후 전 계정 재수집(어제까지 유지·키워드 동결)"
+                mode_desc = f"오늘 것만 다시 수집 — 오늘({dt}) 초기화 후 전 계정 재수집(어제까지 유지·키워드 동결)"
             else:
-                mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음), 기간 {df}~{dt}"
+                mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음·구글시트 복원 불가), 기간 {df}~{dt}"
         elif meta:
             resume = True
             carry = bool(meta.get("carry", False))
@@ -473,7 +479,7 @@ class App(tk.Tk):
             carry = True
             mode_desc = f"이어서 하기 — 오늘({dt}) 컬럼 추가(키워드 동결)"
         else:
-            mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음), 기간 {df}~{dt}"
+            mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음·구글시트 복원 불가), 기간 {df}~{dt}"
         grow = carry and not redo_today and self.grow_var.get()   # 발굴 추가는 이어쓰기 때만
         if not messagebox.askyesno(f"{title} 확인",
                                    f"{mode_desc}\n대상: 상품 {n}개"

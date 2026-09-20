@@ -61,6 +61,71 @@ def master_exists(out_dir: str | Path = "output") -> bool:
     return _master_path(out_dir).exists()
 
 
+def restore_master_from_gsheet(out_dir: str | Path, url: str | None, on_log=None) -> bool:
+    """통계 마스터(_통계.xlsx)가 없을 때 **결과 구글시트(전체 미러)에서 통째로 내려받아 복원**.
+
+    다른 PC·재설치로 마스터가 없으면 '첫 실행'으로 오판해 과거 날짜 컬럼(시계열)을 유실한다 → 결과
+    구글시트가 있으면 export(xlsx)로 마스터를 복원해 이어쓴다(소유자 2026-09-20, fix ③).
+    ⚠ 구글시트는 **가시 시트(계정목록·사업자별 통계)만** 미러라 숨김 메타(_상품ID/_마케팅 등)는 없다
+    → 복원본은 과거 '값(시계열)'을 살리고, 숨김 메타는 다음 ①판매수집이 재구성(vid 재발견·대장 매칭).
+    성공=True(이어쓰기), 실패=사유 로그 후 False(정상 첫 실행 — fallback 금지 원칙에 따라 조용히 넘기지 않음).
+    """
+    log = on_log or (lambda m: None)
+    master = _master_path(out_dir)
+    if master.exists() or not url:
+        return False
+    try:
+        from . import gsheet
+        gsheet.download_xlsx(url, master)
+        OutputWorkbook.load(master)          # 유효한 워크북인지 확인(빈/손상 파일이면 예외 → 첫 실행)
+    except Exception as exc:
+        if master.exists():
+            try:
+                master.unlink()              # 손상 파일 잔재 제거(다음 저장이 깨끗한 첫 실행으로)
+            except OSError:
+                pass
+        log("== ⚠ 마스터가 없어 결과 구글시트에서 복원을 시도했으나 실패 — 새 통계로 시작합니다 "
+            f"({exc.__class__.__name__}: {str(exc)[:120]}) ==")
+        return False
+    log(f"== 마스터 파일이 없어 결과 구글시트에서 복원했습니다 → {master.name} "
+        "(과거 통계 이어쓰기 · 숨김 메타는 다음 판매수집이 재구성) ==")
+    return True
+
+
+def _fill_frozen_search_volumes(wb, biz: str, product: str, keywords: list[str],
+                                naver: NaverAdApi | None, log) -> int:
+    """동결 키워드 중 **검색량이 비어 있는 것만** 네이버 검색광고 API로 채운다(AI 불필요, fix ②).
+
+    키워드가 있으면 생성(선정)은 생략(동결)하되, 직원이 결과 시트에 직접 넣어 **검색량 칸이 공란**인
+    키워드는 네이버 월검색량으로 채운다(소유자 규칙 2026-09-20). 못 찾은 키워드는 공란 유지(날조 금지).
+    """
+    if naver is None or not keywords:
+        return 0
+
+    def _blank(v) -> bool:
+        return v is None or (isinstance(v, str) and not v.strip())
+
+    empties = [kw for kw in keywords if _blank(wb.keyword_search(biz, product, kw))]
+    if not empties:
+        return 0
+    try:
+        vols = naver.related_keywords_multi(empties)
+    except Exception as exc:   # 네이버 400/429 등이 동결 상품 처리를 막지 않게 격리(공란 유지)
+        log(f"  [검색량] {product} 동결 키워드 검색량 조회 실패(공란 유지) — "
+            f"{exc.__class__.__name__}: {str(exc)[:80]}")
+        return 0
+    norm = lambda s: str(s).replace(" ", "").lower()   # 네이버는 힌트 공백 제거·대소문자 무시로 조회
+    by = {norm(v.keyword): v.total for v in vols}
+    n = 0
+    for kw in empties:
+        vol = by.get(norm(kw))
+        if vol is not None and wb.set_keyword_search(biz, product, kw, vol):
+            n += 1
+    if n:
+        log(f"  [검색량] {product} 동결 키워드 {n}개 검색량 채움(네이버)")
+    return n
+
+
 def resumable_progress(out_dir: str | Path = "output") -> dict | None:
     """이어서 할 수 있는 진행 상태가 있으면 그 메타(dict)를, 없으면 None 반환.
 
@@ -710,6 +775,7 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
                             log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → (동결) {keywords}")
                     else:
                         log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → (동결) {keywords}")
+                    _fill_frozen_search_volumes(wb, biz, pname, keywords, naver, log)  # 검색량 공란만 네이버로 채움(fix ②)
                     todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date_iso)]
                     measured = measure(todo, _cap=cap) if (browser is not None and todo) else {}
                     ranks = {kw: _best(measured.get(kw)) for kw in todo if kw in measured}  # 측정 실패는 공란
@@ -1032,7 +1098,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         carry = carry_forward and master.exists()
         grow = grow_keywords and carry
         if carry_forward and not master.exists():
-            log("== 통계 마스터가 없어 '새 통계'로 시작합니다 ==")
+            log("== ⚠ 통계 마스터가 없어 '새 통계'로 시작합니다 — 결과 구글시트가 있으면 UI가 먼저 복원합니다 ==")
         if carry:
             wb = OutputWorkbook.load(master)   # 기존 통계 이어쓰기(키워드 동결 + 오늘 컬럼)
             log(f"== {'오늘 처음(다시) 하기' if redo_today else '통계 이어쓰기'} — 마스터 로드, "
@@ -1269,6 +1335,8 @@ def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = 
                 if not wb.has_keyword_section(biz, pname):   # 다중옵션 2차 블록(판매정보만) → 키워드 선정 대상 아님
                     continue
                 existing = wb.product_keywords(biz, pname)
+                if existing:   # 동결 키워드 중 검색량 공란만 네이버로 채움(직원 직접입력 키워드 등, fix ②)
+                    _fill_frozen_search_volumes(wb, biz, pname, existing, naver, log)
                 # 채울 목표 = grow면 KW_MAX_TRACK(발굴 추가), 아니면 KW_TRACK_N(=4, 빈행 대신 실제 키워드로 채움).
                 # 부족분만 보충하고 목표치 이상이면 동결(스킵). '빈행도 키워드로 채우기' 요구(2026-09-15).
                 target = config.KW_MAX_TRACK if grow else config.KW_TRACK_N

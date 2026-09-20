@@ -939,6 +939,14 @@ class OutputWorkbook:
         self.wb[biz].cell(row=row, column=_COL_SEARCH, value=volume)
         return True
 
+    def keyword_search(self, biz: str, product: str, keyword: str):
+        """저장된 키워드 월검색량(F열) — 없으면 None(미측정). 동결 키워드 중 **검색량 공란**을
+        네이버로 채울지 판정하는 데 쓴다(직원이 결과 시트에 직접 넣은 키워드는 검색량이 공란)."""
+        row = self._kw_row.get((biz, product, keyword))
+        if row is None:
+            return None
+        return self.wb[biz].cell(row=row, column=_COL_SEARCH).value
+
     def set_keyword_rank(self, biz: str, product: str, keyword: str, date_iso: str,
                          rank: int | None) -> bool:
         row = self._kw_row.get((biz, product, keyword))
@@ -992,14 +1000,15 @@ class OutputWorkbook:
 
         thick = Side(style="thick")
 
-        def edge(ws, maxc, row, side):
-            """상품 블록 경계(첫 행 상단/마지막 행 하단)에 굵은 선 — 상품 1개를 구분."""
+        def edge(ws, maxc, row, side, style=thick):
+            """상품 블록 경계(첫 행 상단/마지막 행 하단)에 선 — **그룹 바깥=굵은 선(thick), 같은
+            등록상품명 변형(옵션) 사이=얇은 선(thin)**. 변형 상품이 한 덩어리로 보이게 한다(fix ④)."""
             for c in range(1, maxc + 1):
                 b = ws.cell(row, c).border
                 ws.cell(row, c).border = Border(
                     left=b.left, right=b.right,
-                    top=thick if side == "top" else b.top,
-                    bottom=thick if side == "bottom" else b.bottom)
+                    top=style if side == "top" else b.top,
+                    bottom=style if side == "bottom" else b.bottom)
 
         for ws in self.wb.worksheets:
             if ws.title in _SPECIAL_SHEETS:              # 숨김 매핑·목차·계정정보 시트는 블록 서식 대상 아님
@@ -1042,6 +1051,12 @@ class OutputWorkbook:
             for c in range(_FIRST_DATE, maxc + 1):
                 ws.column_dimensions[get_column_letter(c)].width = 11
             headers = sorted(self._date_rows.get(ws.title, []))
+            # fix ④: 같은 등록상품명(변형/옵션) 블록을 한 그룹으로 묶어 그룹 바깥만 굵은 선. 옵션 블록은
+            # 생성 순서상 시트에서 인접하므로 **연속된 같은 등록명 = 한 그룹**으로 본다.
+            regs = []
+            for hr in headers:
+                _rnm = _key(ws.cell(hr, _COL_NAME).value)
+                regs.append(self.registered_name(ws.title, _rnm) or _rnm)
             for i, hr in enumerate(headers):
                 end = (headers[i + 1] - 2) if i + 1 < len(headers) else ws.max_row
                 # 이름칸 렌더링(멱등): 헤더 C = 1줄 상품제목 + (보이지 않는 구분자) + 2줄 vendorItemId.
@@ -1112,9 +1127,13 @@ class OutputWorkbook:
                 # 하단=다음(빈) 구분행의 top(시각적으로 마지막 행 하단선). ⚠ 마지막 블록은 end+1 행이
                 # 없어서 거기 테두리를 그리면 **빈 행이 새로 생긴다**(2상품 시트의 2번째 블록 하단 공백줄 버그).
                 # → 마지막 블록은 end 행 자체의 bottom 에 그려 새 행을 만들지 않는다.
-                edge(ws, maxc, hr, "top")
+                # fix ④: 같은 등록상품명(변형) 그룹 안 경계는 얇은 선, 그룹 바깥만 굵은 선.
+                group_start = (i == 0) or (regs[i] != regs[i - 1])
+                group_end = (i + 1 >= len(headers)) or (regs[i + 1] != regs[i])
+                edge(ws, maxc, hr, "top", thick if group_start else thin)
                 if i + 1 < len(headers):
-                    edge(ws, maxc, end + 1, "top")     # 사이 블록: 기존 구분 빈 행 상단선(비병합 행이라 정상)
+                    # 사이 블록 하단선(=구분 빈 행 상단선): 그룹 끝이면 굵게, 같은 그룹 변형 사이면 얇게
+                    edge(ws, maxc, end + 1, "top", thick if group_end else thin)
                 # 병합(마지막) — 세로/가로 병합은 서식·경계선 적용 뒤에
                 merge(ws, hr, 1, m_end, 2)
                 merge(ws, hr, _COL_NAME, m_end, _COL_SEARCH)
@@ -1394,9 +1413,21 @@ class OutputWorkbook:
         s, e, m = self.marketing_of(biz, product)
         return self._mkt_status(s, e, m)
 
+    def _is_secondary_option(self, biz: str, product: str) -> bool:
+        """다중옵션 상품의 **2차(비대표) 옵션 블록**인가 — 계정목록(상품별 로스터)에서 제외 대상.
+
+        2차 옵션 블록은 판매정보만이라 **키워드 소헤더가 없고**(rank_rows=False로 생성) 이름이
+        '등록상품명 (옵션라벨)'이다. 대표(첫 옵션)·단일옵션은 키워드 소헤더가 있어 제외되지 않는다.
+        소유자 확정(2026-09-20): 계정목록은 **상품별 1줄**(대표 옵션만), 옵션 분리는 통계 시트 안에서만."""
+        if self.has_keyword_section(biz, product):
+            return False
+        reg = self.registered_name(biz, product)
+        return bool(reg and product != reg)
+
     def _product_rows(self) -> list[tuple[str, str, int | None, bool]]:
         """계정 목록에 실을 상품 로스터 — (사업자, 상품, 그 상품 블록 헤더행|None, 데이터시트有無).
-        수집된 계정의 상품들 먼저(계정→상품 순), 그 뒤 미수집 계정(상품='')."""
+        수집된 계정의 상품들 먼저(계정→상품 순), 그 뒤 미수집 계정(상품='').
+        **다중옵션 2차 블록은 제외**(상품별 1줄=대표 옵션만, 소유자 2026-09-20)."""
         rows: list[tuple[str, str, int | None, bool]] = []
         for biz in self.account_sheets():
             hdr: dict[str, int] = {}
@@ -1404,7 +1435,7 @@ class OutputWorkbook:
                 nm = _key(self.wb[biz].cell(r, _COL_NAME).value)
                 if nm:
                     hdr.setdefault(nm, r)
-            prods = self.products_of(biz)
+            prods = [p for p in self.products_of(biz) if not self._is_secondary_option(biz, p)]
             if prods:
                 for p in prods:
                     rows.append((biz, p, hdr.get(p), True))

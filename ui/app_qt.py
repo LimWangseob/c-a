@@ -33,8 +33,8 @@ from coupang_analytics.kw_recommend import recommend, recommend_from_title  # no
 from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_credentials_file  # noqa: E402
 from coupang_analytics.pipeline import (_interruptible_sleep, master_exists,  # noqa: E402
                                         push_ledger_inventory, read_run_stage, resumable_progress,
-                                        run_full, select_keywords_stage, track_ranks_stage,
-                                        write_run_stage)
+                                        restore_master_from_gsheet, run_full, select_keywords_stage,
+                                        track_ranks_stage, write_run_stage)
 from coupang_analytics.rank import make_matcher, organic_rank, warmup  # noqa: E402
 
 _PROFILE = "data/chrome-ui"
@@ -497,10 +497,10 @@ class App(QtWidgets.QMainWindow):
         self.cb_resume.setChecked(True)
         self.cb_resume.setToolTip("오전에 하다 만 작업을 이어서 완료합니다(이미 끝낸 계정·상품은 건너뜀).\n"
                                   "어제까지 통계는 그대로 유지, 오늘 컬럼만 마저 채웁니다. [기본]")
-        self.cb_redo = QtWidgets.QCheckBox("오늘 처음(다시) 하기")
+        self.cb_redo = QtWidgets.QCheckBox("오늘 것만 다시 수집")
         self.cb_redo.setToolTip("오늘 수집한 것을 지우고 오늘 것만 처음부터 다시 수집합니다(완료분 포함 전부).\n"
                                 "어제까지 통계·키워드는 그대로 유지됩니다.")
-        self.cb_newall = QtWidgets.QCheckBox("전체 새로 시작")
+        self.cb_newall = QtWidgets.QCheckBox("통계 전체 초기화(백업 후)")
         self.cb_newall.setToolTip("⚠ 지금까지 전체 통계를 백업파일로 보관하고 완전히 빈 통계로 새로 시작합니다.\n"
                                   "누적 시계열이 끊깁니다 — 첫 수집이나 키워드 전면 재선정 때만 사용하세요.")
         self._mode_group = QtWidgets.QButtonGroup(self)   # 체크박스지만 하나만 선택(상호배타)
@@ -1055,16 +1055,22 @@ class App(QtWidgets.QMainWindow):
         newall = self.cb_newall.isChecked()
         redo = self.cb_redo.isChecked()
         resume = carry = redo_today = False
+        # fix ③: 마스터가 없지만 결과 구글시트가 있으면(다른 PC·재설치) 통째로 복원 → '첫 실행' 오판으로
+        # 과거 통계(날짜 컬럼)를 유실하지 않는다. '통계 전체 초기화(newall)'는 의도적 초기화라 복원하지 않는다.
+        gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
+        if not newall and not master_exists() and gs_out:
+            self.log("[통계] 마스터가 없어 결과 구글시트에서 복원을 시도합니다…")
+            restore_master_from_gsheet("output", gs_out, self.log)
         meta = resumable_progress() if not (newall or redo) else None   # 이어서만 오늘 진행분 재개
         if newall:
-            mode_desc = "전체 새로 시작 — ⚠ 기존 통계 마스터는 백업 후 빈 통계로 새로(누적 시계열 끊김)"
+            mode_desc = "통계 전체 초기화(백업 후) — ⚠ 기존 통계 마스터는 백업 후 빈 통계로 새로(누적 시계열 끊김)"
         elif redo:
             if master_exists():
                 carry = True
                 redo_today = True
-                mode_desc = f"오늘 처음(다시) 하기 — 오늘({dt}) 초기화 후 전 계정 재수집(어제까지 유지·키워드 동결)"
+                mode_desc = f"오늘 것만 다시 수집 — 오늘({dt}) 초기화 후 전 계정 재수집(어제까지 유지·키워드 동결)"
             else:
-                mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음), 기간 {df}~{dt}"
+                mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음·구글시트 복원 불가), 기간 {df}~{dt}"
         elif meta:
             resume = True
             carry = bool(meta.get("carry", False))
@@ -1074,7 +1080,7 @@ class App(QtWidgets.QMainWindow):
             carry = True
             mode_desc = f"이어서 하기 — 오늘({dt}) 컬럼 추가(키워드 동결)"
         else:
-            mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음), 기간 {df}~{dt}"
+            mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음·구글시트 복원 불가), 기간 {df}~{dt}"
         grow = carry and not redo_today and self.cb_grow.isChecked()   # 발굴 추가는 이어쓰기 때만
         # 단일 확인 팝업 — 실행 여부(예/아니오)만.
         confirm = (f"{mode_desc}\n대상: 상품 {n}개"
@@ -1083,7 +1089,6 @@ class App(QtWidgets.QMainWindow):
             self.log(f"[{title}] 취소됨")
             return
         input_list, naver_creds, key = self.input_list, self.naver_creds, self.ai_key
-        gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
         mode_txt = ("오늘다시 " if redo_today else "이어서 ") if (resume or redo_today) else \
                    ("통계이어쓰기 " if carry else "새통계 ")
         stage_txt = " · ①판매수집(키워드·순위 없음)" if keywords_off else \
@@ -1152,6 +1157,11 @@ class App(QtWidgets.QMainWindow):
         df, dt, dlabel = self._run_dates()         # 판매조회=어제(D-1) · 컬럼라벨=실행날짜(오늘)
         meta = resumable_progress()
         resume = bool(meta)
+        gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
+        # fix ③: 마스터가 없지만 결과 구글시트가 있으면 복원(무인이라 팝업 없이 자동) → 첫 실행 오판·과거 통계 유실 방지.
+        if not resume and not master_exists() and gs_out:
+            self.log("[무인] 마스터가 없어 결과 구글시트에서 복원을 시도합니다…")
+            restore_master_from_gsheet("output", gs_out, self.log)
         carry = bool(meta.get("carry", False)) if meta else master_exists()
         if resume:
             df, dt = meta["date_from"], meta["date_to"]
@@ -1161,7 +1171,6 @@ class App(QtWidgets.QMainWindow):
         self.log(f"[무인] ①반자동 판매수집 → ②키워드선정 → ③반자동 순위 · 상품 {n}개 · 기간 {df}~{dt} · "
                  f"{'이어서' if resume else ('이어쓰기' if carry else '새 통계')}")
         il, naver_creds, key, stop = self.input_list, self.naver_creds, self.ai_key, self._semi_stop
-        gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
 
         def task():
             try:
