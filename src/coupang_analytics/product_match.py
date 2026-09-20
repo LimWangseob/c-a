@@ -58,6 +58,20 @@ def _title(p: Product) -> str:
     return p.title or p.name
 
 
+def _spec_tokens(name: str) -> set:
+    """규격·수량 토큰 집합 — `_tokens` 가 정체성에서 **제외**하는 것(120정·30포·600mg·88%·순수숫자 등).
+
+    핵심어(상품 정체성)가 동점이라 어느 변형인지 못 가릴 때만 **타이브레이커**로 쓴다(예: 대장 '…정 120정'
+    ↔ 발견 '…정 120정' vs '…정'). 괄호(노출제목) 안은 무시하고 본문 토큰만. 소문자·strip 정규화."""
+    s = re.sub(r"[（(][^)）]*[)）]", " ", str(name).replace("\n", " "))
+    out = set()
+    for t in re.split(r"[\s/+,]+", s):
+        t = t.strip().lower()
+        if t and (t.isdigit() or _SPEC.match(t)):
+            out.add(t)
+    return out
+
+
 def _assign(ledger: list[Product], discovered: list[Product]) -> dict[int, Product]:
     """{대장 index: 발견 Product}. **정밀 우선 매칭**(2026-09-18) — 확신 있는 쌍만, 대장·발견 각 1회 유일 배정.
 
@@ -107,7 +121,17 @@ def _assign(ledger: list[Product], discovered: list[Product]) -> dict[int, Produ
         second = scored[1][0] if len(scored) > 1 else 0.0
         if best >= _RECALL_MIN and (best - second) >= _MARGIN:
             qualified.append((0, best, li, best_di))
-        # else: 애매/약함 → 미매칭(공란, 오매칭 방지)
+        elif best >= _RECALL_MIN:
+            # 애매(핵심어 재현율은 충분한데 **마진 미달** = 변형 상품 동점). 규격 타이브레이커로 확정 시도:
+            # 최고재현율 동률권(best 근방) 후보 중 **대장 규격토큰과 겹치는 후보가 정확히 1개**면 그것으로 확정.
+            # 규격은 정체성이 아니라 동점을 가르는 보조키로만 쓴다(핵심 정밀도 불변). 여전히 애매하면 미매칭.
+            lspec = _spec_tokens(core_text)
+            if lspec:
+                tied = [di for rc, di in scored if (best - rc) < _MARGIN]        # 동률권(마진 이내) 후보들
+                hit = [di for di in tied if lspec & _spec_tokens(_title(discovered[di]))]
+                if len(hit) == 1:
+                    qualified.append((0, best, li, hit[0]))                       # 규격으로 유일 확정
+        # else: 재현율 미달/규격도 애매 → 미매칭(공란, 오매칭 방지)
 
     qualified.sort(reverse=True)                          # 괄호정확 우선, 그 다음 재현율 높은 순
     used_l: set[int] = set()

@@ -287,6 +287,28 @@ def t1_product_match_precision():
     assert tracked[2].name == "웰빙곳간 동결건조 로얄제리 120정"
     assert tracked[3].name == "블루투스 이어폰"
     _ok("핵심어 게이트·마진으로 오매칭 차단(비관리·애매 미매칭=공란)·정매칭 2건·미매칭은 대장명 유지")
+    # 규격 타이브레이커: 핵심어 동점(변형)일 때 규격(120정/30포)으로 vid 확정 — 규격 다르면 각 변형에 정확 배정
+    disc2 = [
+        disc("웰빙곳간 루바브 치커리 뿌리 추출물 정 120정", "v_120"),   # 변형 A(120정)
+        disc("웰빙곳간 루바브 치커리 뿌리 추출물 정", "v_none"),        # 변형 B(규격 없음)
+        disc("웰빙곳간 퀘르세틴 브로멜라인 MAX 120정", "v_q120"),      # 퀘르세틴 120정
+        disc("웰빙곳간 퀘르세틴 브로멜라인 로얄 30포", "v_q30"),       # 퀘르세틴 30포
+    ]
+    led2 = [
+        Product(name="웰빙곳간 루바브 치커리 뿌리 추출물 정 120정"),   # → v_120 (규격 120정)
+        Product(name="웰빙곳간 퀘르세틴 브로멜라인 MAX 120정"),        # → v_q120 (규격 120정)
+        Product(name="웰빙곳간 퀘르세틴 브로멜라인 로얄 30포"),        # → v_q30  (규격 30포)
+    ]
+    t2, n2 = scope_to_ledger(led2, disc2)
+    v2 = [sorted(v for o in tp.options for v in o.vendor_item_ids) for tp in t2]
+    assert v2[0] == ["v_120"], f"루바브 규격 타이브레이커 실패: {v2[0]}"
+    assert v2[1] == ["v_q120"], f"퀘르세틴 120정 타이브레이커 실패: {v2[1]}"
+    assert v2[2] == ["v_q30"], f"퀘르세틴 30포 타이브레이커 실패: {v2[2]}"
+    # 규격이 서로를 못 가르면(둘 다 120정) 여전히 미매칭(오매칭 방지)
+    disc3 = [disc("웰빙곳간 진세노사이드 홍삼 120정", "v_h1"), disc("웰빙곳간 진세노사이드 홍삼정 120정", "v_h2")]
+    t3, _ = scope_to_ledger([Product(name="웰빙곳간 진세노사이드 홍삼 120정")], disc3)
+    assert not any(o.vendor_item_ids for o in t3[0].options), "규격 동일 애매쌍이 매칭됨(오매칭)"
+    _ok("규격 타이브레이커: 변형(120정/30포) vid 정확 확정·규격 동일 애매쌍은 미매칭 유지")
 
 
 def t1_vid_source_option_split():
