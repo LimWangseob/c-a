@@ -368,12 +368,14 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
                 log(f"  [{a.label}] 직접 로그인이 필요해 창을 띄웠습니다")
             _wait_to = config.LOGIN_UNATTENDED_WAIT_SEC if unattended else 300
             _grace = config.LOGIN_BLOCK_GRACE_SEC if unattended else 60.0
+            # skip_on_otp=True: 2차 인증(인증번호) 화면이 뜨면 **대기하지 않고 이 계정 건너뜀**(다음 계정 진행).
             ok = b.wait_for_login(timeout=_wait_to, on_log=log, tag=a.account_id,
-                                  on_need_user=_need_user, blocked_grace=_grace)
+                                  on_need_user=_need_user, blocked_grace=_grace, skip_on_otp=True)
             # 비밀번호 오류·계정잠금·휴면(#input-error=classify_login 'error') = **확정 자격 실패**.
             # 사용자 지시(2026-09-15): 비번 1회 오류면 **재시도·재제출 금지**(재제출이 5회 오류 계정잠금 유발).
             cred_fail = (not ok) and b.classify_login()[0] == "error"
-            if not ok and not cred_fail and unattended and pw and config.LOGIN_SEMI_ON_BLOCK:
+            otp_seen = (not ok) and b.classify_login()[0] == "otp"   # 2차인증 → 재시도 없이 건너뜀
+            if not ok and not cred_fail and not otp_seen and unattended and pw and config.LOGIN_SEMI_ON_BLOCK:
                 # ── 반자동(무인) 1회 재시도 ── 무인 오프스크린 자동입력이 **소프트 차단/폼 정체**로 실패하면
                 # (비번오류는 위 cred_fail 로 이미 배제), 창을 띄우고 앱이 자동입력·클릭으로 **딱 1번** 더 시도.
                 # ⚠ 제출이 1회 추가되므로 **계정당·실행당 정확히 1회**로 제한. Akamai IP 차단은 이걸로도 대부분 못 뚫음.
@@ -386,7 +388,7 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
                 elif b.autofill_login(a.account_id, pw, on_log=log):
                     ok = b.wait_for_login(timeout=config.LOGIN_SEMI_WAIT_SEC, on_log=log,
                                           tag=a.account_id, on_need_user=lambda: None,
-                                          blocked_grace=_grace)
+                                          blocked_grace=_grace, skip_on_otp=True)
                 log(f"  [{a.label}] 반자동 재시도 {'성공' if ok else '실패 — 이 계정 건너뜀'}")
                 b.hide()
                 cred_fail = (not ok) and b.classify_login()[0] == "error"   # 재시도가 비번오류를 드러냈을 때도 재큐 금지
@@ -401,6 +403,10 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
                     log(f"  [{a.label}] 로그인 거부(비밀번호 오류/계정 상태: {detail[:60]}) — "
                         "재시도 안 함(계정잠금 방지), 이 계정 건너뜀")
                     raise LoginCredentialError(a.account_id)
+                if code == "otp":       # 2차 인증(인증번호) 화면 → 대기 없이 건너뜀(다음 계정 진행, 다음 실행에서 재시도)
+                    log(f"  [{a.label}] ⚠ 2차 인증(인증번호) 필요 — 대기하지 않고 이 계정 건너뜀"
+                        " (다음 계정 진행 · 미완료로 남겨 다음 실행에서 재시도)")
+                    return None, {}, {}, {}
                 log(f"  [{a.label}] 로그인 미완료 — 이 계정 건너뜀")
                 return None, {}, {}, {}
             session_state.observe_auth_success(a.account_id, final_url=b.page.url)

@@ -429,7 +429,7 @@ class WingBrowser:
 
     def wait_for_login(self, timeout: float = 300.0, poll: float = 2.0, on_log=None,
                        tag: str = "login", form_warn_after: float = 25.0, on_need_user=None,
-                       blocked_grace: float = 60.0) -> bool:
+                       blocked_grace: float = 60.0, skip_on_otp: bool = False) -> bool:
         """사람이 로그인할 때까지 대기. 완료 시 True.
 
         원인을 즉시 확정하도록 화면을 분류(classify_login)해서:
@@ -493,6 +493,13 @@ class WingBrowser:
                             log("  [로그인감지] Akamai 접근 차단 지속 — 이 계정 건너뜀"
                                 " (무한대기·창 수동종료 방지, 잠시 후/내일 재시도)")
                             return False
+                    elif code == "otp" and skip_on_otp:
+                        # 2차 인증(인증번호) 화면 = 사람이 휴대폰 번호를 입력해야 함. 배치(전체실행)에서는
+                        # 대기하지 않고 **즉시 이 계정을 건너뛴다**(다음 계정 진행·이 계정은 미완료로 다음에 재시도).
+                        self.snapshot_login(tag)
+                        log("  [로그인감지] 2차 인증(인증번호) 필요 — 대기하지 않고 이 계정 건너뜀"
+                            " (다음 계정 진행, 이 계정은 나중에 재시도)")
+                        return False
                     elif code in ("akamai", "otp") and code not in guided:
                         guided.add(code)
                         self.snapshot_login(tag)
