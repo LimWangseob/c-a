@@ -17,6 +17,8 @@ echo.
 echo [3/5] 설치·무인 예약 스크립트 복사...
 copy /Y "%~dp0deploy\설치.bat" "dist\쿠팡애널리틱스\" >nul
 copy /Y "%~dp0deploy\install.ps1" "dist\쿠팡애널리틱스\" >nul
+copy /Y "%~dp0deploy\자동실행_삭제.bat" "dist\쿠팡애널리틱스\" >nul
+copy /Y "%~dp0deploy\remove_autorun.ps1" "dist\쿠팡애널리틱스\" >nul
 copy /Y "%~dp0deploy\첫실행_설정안내.txt" "dist\쿠팡애널리틱스\" >nul
 copy /Y "%~dp0deploy\라이브검증_안내.txt" "dist\쿠팡애널리틱스\" >nul
 copy /Y "%~dp0INSTALL.md" "dist\쿠팡애널리틱스\" >nul
