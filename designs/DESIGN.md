@@ -27,6 +27,7 @@
 >   폴더를 `쿠팡애널리틱스_배포.zip`으로 압축 → 새 PC=zip 풀고 `설치.bat` 하나. install.ps1 이 exe `--import-settings`로
 >   구글시트 링크·입력소스 + 네이버/OpenAI/구글SA 키를 그 PC용 DPAPI 재암호화 저장 + 평문 파일 자동 삭제(설정 탭 재입력 불필요).
 >   구현=`app_qt._export_settings`/`_import_settings`. ⚠_설정값.json·zip 은 키 평문 → 외부 공유 금지·설치 후 삭제(.gitignore 차단). 상세 [[exe-packaging-deploy]].
+> - **폴더/경로 = 개발·운용 동일·평평한 한 폴더, output·data·config=삭제 금지(2026-09-21 소유자 확정)**: 예전엔 배포 폴더 위치/이름이 노트북과 달라 재배포 시 상태를 못 찾아 ①구글시트 복원(오염·중복)·②cold 프로필(차단) 유발(2026-09-20 18:00 `C:\쿠팡애널리틱스` 실측). 해결=**노트북 repo 와 동일한 평평한 한 폴더**(코드+`output/`+`data/`+`config.json`)·**폴더명도 동일(`coupang-analytics`)**·상대경로. `apppaths.data_root()`=base_dir(앱 폴더·env `COUPANG_DATA_ROOT` override)·`output_dir/data_dir/config_path`·`set_workdir` chdir. 설정은 `appconfig`(config.json, 비밀 아님만·키는 credstore)·시작 시 `_sync_config_and_registry`(config.json↔레지스트리, 파일 권위)·`app.py._shared_setting`도 config.json 우선. **업데이트=새 zip 의 `coupang-analytics\` 를 같은 자리에 덮어쓰기**(output·data·config.json 은 zip 에 없어 보존=삭제 금지). build.bat `_씨앗\`에 노트북 통계 마스터 동봉 → install.ps1 **첫 설치 때만** output 으로 복사(업데이트는 기존 보존). spec COLLECT 폴더명=`coupang-analytics`(exe=쿠팡애널리틱스.exe). ⚠순위 프로필(data\chrome-pipeline)은 캐시 포함 수백MB·신뢰쿠키(_abck) 교차이전이 device/IP 바운드라 제한적 → zip 미동봉(운용 PC는 자기 data[휴지통 복원] 사용·야간 실행으로 자동 warm). 이로써 §0-000000 ③(마스터 없으면 구글시트 복원)은 **정상 폴더에선 안 도는 안전망**으로 격하(복원 시엔 인덱스 탭 `계정목록` 제거·잔재 정리 방어 추가). 상세 [[exe-packaging-deploy]].
 
 ## 0-000000. 최신 반영 요약 (2026-09-20 후속 — 옵션 분리 위 5건: 계정목록 상품별·검색량 채움·마스터 복원·서식 그룹화·용어)
 

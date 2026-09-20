@@ -19,8 +19,8 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from coupang_analytics import config, keyword_store  # noqa: E402
-from coupang_analytics.apppaths import base_dir as app_base_dir, set_workdir  # noqa: E402
+from coupang_analytics import appconfig, config, keyword_store  # noqa: E402
+from coupang_analytics.apppaths import output_dir as app_output_dir, set_workdir  # noqa: E402
 from coupang_analytics.browser import WingBrowser, find_chrome, reap_orphan_chrome  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics import detail_images  # noqa: E402
@@ -176,10 +176,8 @@ class App(QtWidgets.QMainWindow):
         self.product_business: dict[str, str] = {}
 
         # 실시간 모니터링용 로그 파일 미러(GUI 콘솔과 동일 내용을 파일로도 기록).
-        # 기준 폴더 기반(.exe 배포 시 _MEIPASS 임시폴더가 아닌 exe 폴더/output 에 남도록).
-        _log_dir = app_base_dir() / "output"
-        _log_dir.mkdir(parents=True, exist_ok=True)
-        self._log_path = _log_dir / f"run_log_{datetime.now():%y%m%d_%H%M%S}.log"
+        # **보존 폴더(프로젝트 루트)/output** 에 남긴다 — 실행 폴더가 바뀌어도 마스터·로그가 한 곳에 모이게.
+        self._log_path = app_output_dir() / f"run_log_{datetime.now():%y%m%d_%H%M%S}.log"
 
         self.log_signal.connect(self._append_log)
         self.finish_signal.connect(self._on_finish)
@@ -286,7 +284,7 @@ class App(QtWidgets.QMainWindow):
         self.gs_input_edit = QtWidgets.QLineEdit(st.value("gsheet/input_url", "", type=str))
         self.gs_input_edit.setPlaceholderText("「토탈셀러_셀독 관리 대장」 구글시트 링크 또는 ID — 비우면 PC 엑셀 사용")
         self.gs_input_edit.editingFinished.connect(
-            lambda: st.setValue("gsheet/input_url", self.gs_input_edit.text().strip()))
+            lambda: _cfg_save_shared("gsheet/input_url", self.gs_input_edit.text().strip()))
         in_btns = QtWidgets.QHBoxLayout()
         in_chk = QtWidgets.QPushButton("연결 확인")
         in_chk.clicked.connect(lambda: self._check_gsheet("input"))
@@ -302,7 +300,7 @@ class App(QtWidgets.QMainWindow):
         cur_src = st.value("input/source", "", type=str)
         if cur_src not in ("gsheet", "file"):
             cur_src = "gsheet"                        # 미설정 = 구글시트 기본(사용자 지정)
-            st.setValue("input/source", cur_src)
+            _cfg_save_shared("input/source", cur_src)
         self.src_gsheet_radio = QtWidgets.QRadioButton("구글시트 관리대장(기본)")
         self.src_file_radio = QtWidgets.QRadioButton("PC 엑셀(선택)")
         self.src_gsheet_radio.setChecked(cur_src == "gsheet")
@@ -319,7 +317,7 @@ class App(QtWidgets.QMainWindow):
         self.gs_output_edit = QtWidgets.QLineEdit(st.value("gsheet/output_url", "", type=str))
         self.gs_output_edit.setPlaceholderText("결과 구글시트 링크 또는 ID (계정목록·통계를 여기에 씀 — 서비스계정 '편집자' 공유)")
         self.gs_output_edit.editingFinished.connect(
-            lambda: st.setValue("gsheet/output_url", self.gs_output_edit.text().strip()))
+            lambda: _cfg_save_shared("gsheet/output_url", self.gs_output_edit.text().strip()))
         out_chk = QtWidgets.QPushButton("연결 확인")
         out_chk.clicked.connect(lambda: self._check_gsheet("output"))
         g.addWidget(QtWidgets.QLabel("결과(출력) 링크"), 3, 0)
@@ -683,7 +681,7 @@ class App(QtWidgets.QMainWindow):
             return
         self._remember_dir("input", path)
         self._apply_input(path, label=Path(path).name)
-        QtCore.QSettings("coupang-analytics", "ui").setValue("file/input", str(path))   # 무인 자동로드용
+        _cfg_save_shared("file/input", str(path))   # 무인 자동로드용(config.json + 레지스트리)
 
     def _set_input_list(self, il, label: str) -> None:
         """파싱된 InputList 를 UI 상태(상품목록·라벨·로그)에 반영. 파일/구글시트 공용."""
@@ -733,7 +731,7 @@ class App(QtWidgets.QMainWindow):
     def _on_input_source_changed(self, _checked=None) -> None:
         """기본 입력 소스 라디오 변경 → input/source 영속(다음 시작 자동로드가 이 값을 따른다)."""
         src = "gsheet" if self.src_gsheet_radio.isChecked() else "file"
-        QtCore.QSettings("coupang-analytics", "ui").setValue("input/source", src)
+        _cfg_save_shared("input/source", src)
         self.log(f"[입력] 기본 입력 소스 = {'구글시트 관리대장' if src == 'gsheet' else 'PC 엑셀'}"
                  + ("" if src == "gsheet" else " — 구글시트는 여전히 '관리대장에서 불러오기'로 수동 사용 가능"))
 
@@ -759,9 +757,8 @@ class App(QtWidgets.QMainWindow):
         il = parse_input_rows(rows, strike_grid)
         self._set_input_list(il, f"[구글시트] {title}")
         self._store_passwords_map(parse_password_rows(rows), quiet=True)
-        st = QtCore.QSettings("coupang-analytics", "ui")
-        st.setValue("gsheet/input_url", url)
-        st.setValue("input/source", "gsheet")       # 무인 자동로드가 구글시트를 우선하도록 표시
+        _cfg_save_shared("gsheet/input_url", url)
+        _cfg_save_shared("input/source", "gsheet")   # 무인 자동로드가 구글시트를 우선하도록 표시
         if getattr(self, "src_gsheet_radio", None) is not None:
             self.src_gsheet_radio.setChecked(True)   # 기본 입력 소스 라디오도 구글시트로 동기화
         return True
@@ -874,7 +871,7 @@ class App(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.information(self, "링크 필요", f"{who} 구글시트 링크를 먼저 입력하세요.")
             return
         # 편집 중 값도 즉시 저장(editingFinished 미발생 상태 대비)
-        QtCore.QSettings("coupang-analytics", "ui").setValue(f"gsheet/{kind}_url", url)
+        _cfg_save_shared(f"gsheet/{kind}_url", url)
         try:
             title, sheets = gsheet_api.check_access(url, store=self.creds_store)
         except gsheet_api.GSheetError as exc:
@@ -1363,7 +1360,7 @@ class App(QtWidgets.QMainWindow):
     def _img_out_root(self) -> str:
         """상세이미지 저장 루트(QSettings 영속). 기본 = <기준폴더>/output/상세이미지."""
         st = QtCore.QSettings("coupang-analytics", "ui")
-        default = str(app_base_dir() / "output" / "상세이미지")
+        default = str(app_output_dir() / "상세이미지")
         return st.value("dir/detail_images", default, type=str) or default
 
     def _img_change_dir(self):
@@ -1397,7 +1394,7 @@ class App(QtWidgets.QMainWindow):
             return
         from coupang_analytics.browser import _kill_profile_chrome
         import subprocess
-        profile = str((app_base_dir() / _IMG_PROFILE).resolve())
+        profile = str(Path(_IMG_PROFILE).resolve())   # 보존 폴더(프로젝트 루트)/data/chrome-images (CWD=루트)
         try:
             Path(profile).mkdir(parents=True, exist_ok=True)
             killed = _kill_profile_chrome(profile)   # 그 프로필 잔여 Chrome 정리(포트 미개방 방지)
@@ -1487,16 +1484,53 @@ def _check_icon_path() -> str:
 # 계정 비밀번호는 담지 않는다(관리대장 '비밀번호' 컬럼에서 매 실행 자동 로드).
 _EXPORT_QKEYS = ("gsheet/input_url", "gsheet/output_url", "input/source")
 _EXPORT_CREDS = ("__naver__", "__openai__", "__gsheet_sa__")
+# config.json(보존 폴더)에 두는 **공유 설정** 키 — 무인/양쪽 UI 공통(구글시트 링크·입력소스·마지막 입력파일).
+# dir/*(마지막 폴더)는 per-PC UI 편의라 레지스트리에만 둔다.
+_CONFIG_SHARED_KEYS = ("gsheet/input_url", "gsheet/output_url", "input/source", "file/input")
+
+
+def _cfg_save_shared(key: str, value: str) -> None:
+    """공유 설정을 **config.json + 레지스트리** 양쪽에 저장(파일이 권위·레지스트리는 호환 병행)."""
+    try:
+        appconfig.set(key, value)
+    except Exception:
+        pass
+    QtCore.QSettings("coupang-analytics", "ui").setValue(key, value)
+
+
+def _sync_config_and_registry() -> None:
+    """시작 시 1회: **config.json(보존 폴더)** 을 설정 권위로 삼아 레지스트리와 맞춘다.
+
+    - config.json 이 있으면 그 값을 레지스트리에 반영(파일 편집·다른 PC 이식이 그대로 먹히게).
+    - 없으면 레지스트리의 공유 키로 config.json 을 만든다(기존 사용자 자동 이관 + 루트 표식 생성).
+    UI(설정 카드)·무인 자동로드가 읽는 QSettings 를 config.json 과 일치시켜, 읽기 코드는 그대로 둔다."""
+    st = QtCore.QSettings("coupang-analytics", "ui")
+    cfg = appconfig.load()
+    if cfg:
+        for k, v in cfg.items():
+            if isinstance(v, str) and v:
+                st.setValue(k, v)
+        st.sync()
+    else:
+        seed = {}
+        for k in _CONFIG_SHARED_KEYS:
+            v = st.value(k, "", type=str)
+            if v:
+                seed[k] = v
+        appconfig.update(seed) if seed else appconfig.ensure_exists()
 
 
 def _export_settings(path: str) -> None:
-    """이 PC의 설정(구글시트 링크·입력소스 + API/SA 키)을 평문 JSON 으로 내보낸다(배포 패키지 동봉용)."""
+    """이 PC의 설정(구글시트 링크·입력소스 + API/SA 키)을 평문 JSON 으로 내보낸다(배포 패키지 동봉용).
+
+    설치 스크립트(install.ps1)가 이 파일의 qsettings 로 새 PC **프로젝트 루트에 config.json** 을 만들고
+    (비밀 아님), 키는 credstore 로 암호화 이식한다."""
     from coupang_analytics.credstore import CredStore
     st = QtCore.QSettings("coupang-analytics", "ui")
     cs = CredStore()
     data = {"qsettings": {}, "credstore": {}}
     for k in _EXPORT_QKEYS:
-        v = st.value(k, "", type=str)
+        v = appconfig.get(k, "") or st.value(k, "", type=str)   # config.json 우선(없으면 레지스트리)
         if v:
             data["qsettings"][k] = v
     for k in _EXPORT_CREDS:
@@ -1504,6 +1538,8 @@ def _export_settings(path: str) -> None:
         if v:
             data["credstore"][k] = v
     Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # config.json(비밀 아님)은 설치 스크립트(install.ps1)가 이 파일의 qsettings 로 **루트에** 만든다
+    # (onedir 안에 config.json 을 두면 가짜 루트 표식이 되므로 여기선 만들지 않는다).
     print(f"[설정 내보내기] {path} - 링크/소스 {len(data['qsettings'])}개, 키 {len(data['credstore'])}개(평문·배포 zip 전용)")
 
 
@@ -1520,9 +1556,11 @@ def _import_settings(path: str) -> None:
         print(f"[설정 가져오기] [주의] 설정 파일을 읽지 못함(건너뜀): {exc}")
         return
     st = QtCore.QSettings("coupang-analytics", "ui")
-    for k, v in (data.get("qsettings") or {}).items():
+    qs = data.get("qsettings") or {}
+    for k, v in qs.items():
         st.setValue(k, v)
     st.sync()
+    appconfig.update({k: v for k, v in qs.items() if isinstance(v, str)})   # config.json(보존 폴더)에도 이식
     cs = CredStore()
     n = 0
     for k, v in (data.get("credstore") or {}).items():
@@ -1544,7 +1582,9 @@ def main():
         _export_settings(argv[argv.index("--export-settings") + 1]); return
     if "--import-settings" in argv:      # 새 PC 설치 시: 설정 가져와 암호화 저장 + 평문 삭제
         _import_settings(argv[argv.index("--import-settings") + 1]); return
-    set_workdir()                   # .exe 더블클릭 대비 — 상대경로(output·data)가 exe 폴더에서 해석되게 CWD 고정
+    _root = set_workdir()           # 상태(output·data)를 **보존 폴더(프로젝트 루트)** 에 고정 — 실행 폴더 무관
+    _sync_config_and_registry()     # config.json(보존 폴더) ↔ 레지스트리 동기화(설정 파일을 권위로·창 생성 전)
+    print(f"[경로] 데이터 폴더(마스터·크롬 프로필·설정·로그) = {_root}")
     auto = "--auto" in sys.argv     # 무인 자동 실행(작업 스케줄러가 18:00에 이 인자로 실행)
     resume = "--resume" in sys.argv  # 재부팅 복구(작업 스케줄러 '로그온 시' 트리거) — 중단분만 이어서, 없으면 종료
     app = QtWidgets.QApplication(sys.argv)

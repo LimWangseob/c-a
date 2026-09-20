@@ -1,8 +1,15 @@
 ﻿# 다른 PC 설치 — **이 스크립트 하나로 통합**(설치.bat 이 호출). 같은 폴더에 쿠팡애널리틱스.exe 필요.
-#   1) 쓰기 가능 위치 점검  2) Google Chrome 확인  3) 바로가기(바탕화면·시작메뉴)
-#   4) 야간 무인 자동실행 등록/해제(예전 install_schedule.* · uninstall_schedule.* 를 여기에 합침)
+#   0) 보존 폴더(상태) 준비  1) 쓰기 가능 위치 점검  2) Google Chrome 확인  3) 바로가기  4) 야간 무인 등록/해제
+#
+# 폴더 구조(소유자 2026-09-21 — 개발(노트북)·운용(PC) 동일·평평한 한 폴더):
+#   coupang-analytics\        ← 이 폴더($PSScriptRoot=$root). 폴더명은 노트북 repo 와 동일.
+#     쿠팡애널리틱스.exe·_internal·스크립트   ← **업데이트로 갈아끼워도 되는** 코드
+#     output\   ← 통계 마스터·로그·진행     ┐
+#     data\     ← 크롬 프로필(warm=차단방지) ├ **삭제 금지(보존)** — 업데이트(덮어쓰기)해도 zip 에 없어 그대로 남음
+#     config.json ← 설정(비밀 아님)          ┘
+# 업데이트 = 새 zip 의 coupang-analytics\ 를 **같은 폴더에 덮어쓰기**(output·data·config.json 은 보존).
 $ErrorActionPreference = 'Stop'
-$root = $PSScriptRoot
+$root = $PSScriptRoot                       # 앱 폴더(코드+상태 한 곳)
 $exe  = Join-Path $root '쿠팡애널리틱스.exe'
 
 Write-Host '=============================================='
@@ -13,10 +20,56 @@ Write-Host ''
 # 0) exe 존재 확인 ──────────────────────────────────────────────
 if (-not (Test-Path $exe)) {
     Write-Host "[오류] 같은 폴더에 '쿠팡애널리틱스.exe' 가 없습니다."
-    Write-Host "       이 설치 파일은 '쿠팡애널리틱스' 폴더 안(exe 옆)에 두고 실행하세요."
+    Write-Host "       이 설치 파일은 'coupang-analytics' 폴더 안(exe 옆)에 두고 실행하세요."
     Write-Host "       현재 폴더: $root"
     exit 1
 }
+
+# 0.5) 보존 폴더(상태) 준비 — output/data/config 는 있으면 그대로(업데이트 보존), 없으면 만든다 ──
+Write-Host '[0/4] 보존 폴더(설정·결과·프로필) 준비...'
+foreach ($d in @((Join-Path $root 'output'), (Join-Path $root 'data'))) {
+    if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+}
+# config.json(설정): 이미 있으면 이 PC 설정 보존(업데이트), 없으면 패키지 _설정값.json 의 링크로 생성
+$cfgRoot = Join-Path $root 'config.json'
+$pkgCfg  = Join-Path $root '_설정값.json'
+if ((-not (Test-Path $cfgRoot)) -and (Test-Path $pkgCfg)) {
+    try {
+        $j = Get-Content $pkgCfg -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($j.qsettings) {
+            ($j.qsettings | ConvertTo-Json) | Set-Content -Path $cfgRoot -Encoding UTF8
+            Write-Host "  [확인] config.json 생성(설정 링크 이식) → $cfgRoot"
+        } else { '{}' | Set-Content -Path $cfgRoot -Encoding UTF8 }
+    } catch {
+        '{}' | Set-Content -Path $cfgRoot -Encoding UTF8
+        Write-Host "  [경고] config.json 기본 생성(설정은 앱에서 입력): $($_.Exception.Message)"
+    }
+} elseif (Test-Path $cfgRoot) {
+    Write-Host "  [확인] 기존 config.json 보존(이 PC 설정 유지) → $cfgRoot"
+} else {
+    '{}' | Set-Content -Path $cfgRoot -Encoding UTF8
+    Write-Host "  [확인] config.json 생성(빈 설정) → $cfgRoot"
+}
+Write-Host "  [확인] 보존(삭제 금지): $root\output · $root\data · $root\config.json  (업데이트해도 유지)"
+# 0.6) 씨앗(노트북 마스터·순위 프로필) — 대상에 **없을 때만** 복사(첫 설치). 업데이트는 기존을 덮지 않음.
+$seed = Join-Path $root '_씨앗'
+if (Test-Path $seed) {
+    $seedMaster = Join-Path $seed '쿠팡데이타분석_통계.xlsx'
+    $dstMaster  = Join-Path $root 'output\쿠팡데이타분석_통계.xlsx'
+    if ((Test-Path $seedMaster) -and (-not (Test-Path $dstMaster))) {
+        Copy-Item $seedMaster $dstMaster -Force
+        Write-Host "  [확인] 통계 마스터 씨앗 복사(첫 설치·노트북 것) → output\  (구글시트 복원 대신)"
+    } elseif (Test-Path $dstMaster) {
+        Write-Host "  [확인] 기존 마스터 보존(업데이트 — 씨앗 미복사)"
+    }
+    $seedProf = Join-Path $seed 'data\chrome-pipeline'
+    $dstProf  = Join-Path $root 'data\chrome-pipeline'
+    if ((Test-Path $seedProf) -and (-not (Test-Path $dstProf))) {
+        Copy-Item $seedProf $dstProf -Recurse -Force
+        Write-Host "  [확인] 순위 크롬 프로필(신뢰쿠키) 씨앗 복사(첫 설치) → data\  (차단 완화 머리시작)"
+    }
+}
+Write-Host ''
 
 # 1) 쓰기 가능 위치 점검 ────────────────────────────────────────
 Write-Host '[1/4] 설치 위치 점검...'
@@ -94,8 +147,8 @@ if ($made.Count -gt 0) {
 }
 Write-Host ''
 
-# 3.5) 담겨온 설정 자동 적용(무설정 설치) — 구글시트 링크·입력소스 + 네이버/OpenAI/구글SA 키 ──
-$cfg = Join-Path $root '_설정값.json'
+# 3.5) 담겨온 설정 자동 적용(무설정 설치) — 네이버/OpenAI/구글SA 키(credstore) + 링크(config.json 갱신) ──
+$cfg = Join-Path $root '_설정값.json'   # 패키지 설정은 앱 폴더에 동봉됨
 if (Test-Path $cfg) {
     Write-Host '[설정] 패키지에 담긴 설정 적용 중(구글시트 링크·API/SA 키)...'
     try {

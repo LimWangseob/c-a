@@ -80,4 +80,4 @@ exe_diag = EXE(
 )
 coll = COLLECT(exe, a.binaries, a.datas,
                exe_diag, a_diag.binaries, a_diag.datas,
-               name="쿠팡애널리틱스")
+               name="coupang-analytics")   # onedir 폴더명 = 개발(노트북 repo)과 동일(소유자 2026-09-21). exe 이름은 '쿠팡애널리틱스.exe' 유지.

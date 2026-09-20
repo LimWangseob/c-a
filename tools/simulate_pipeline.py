@@ -478,6 +478,41 @@ def scenario_vid_change_reset():
     _check(_date_headers(master) == {"09.02"}, f"이전(09.01) 데이터 삭제·새 날짜만 — {_date_headers(master)}")
 
 
+def scenario_restore_residue_cleanup():
+    print("[시나리오 13] 복원 잔재 정리 — vid 없는 옛 블록(구글시트 복원분) + 옵션분리 = 중복 잔재 제거")
+    _STATE.update(select_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    d = Path(tempfile.mkdtemp())
+    master = P._master_path(d)
+    from coupang_analytics.workbook import OutputWorkbook
+    # 구글시트 복원 흉내: 같은 등록상품명 '캠핑타프' 의 **vid 없는** 옛 블록(개인)만 있는 마스터(숨김 메타 미러 안 됨)
+    wb0 = OutputWorkbook.empty()
+    wb0.ensure_account("비즈-m1")
+    wb0.ensure_product_block("비즈-m1", "캠핑타프", config.KIND_PERSONAL, ["옛키워드"], registered="캠핑타프")
+    wb0.save(master)
+    _check(wb0.product_vids("비즈-m1", "캠핑타프") == [], "사전조건: 복원 블록은 vid 없음")
+    # 옵션분리 ①판매수집: 같은 등록명 '캠핑타프'(옵션 beige/gray, vid 있음)
+    P.run_full(_account_multi_option(), naver=None, out_dir=str(d), ai_key="sim",
+               date_from="2026-09-02", date_to="2026-09-02", carry_forward=True, on_log=lambda m: None)
+    names = _product_names(master, "비즈-m1")
+    _check("캠핑타프" not in names, f"vid 없는 옛 블록 '캠핑타프' 삭제됨(잔재 없음) — {names}")
+    _check("캠핑타프 (베이지)" in names and "캠핑타프 (그레이)" in names, f"새 옵션 블록 생성 — {names}")
+    _check(len(names) == 2, f"블록 2개(중복 잔재 없음) — {names}")
+
+
+def scenario_gsheet_index_tab_excluded():
+    print("[시나리오 14] 구글시트 인덱스 탭 '계정목록'(공백 없음)은 통계 계정으로 오인 안 함")
+    from coupang_analytics.workbook import OutputWorkbook
+    d = Path(tempfile.mkdtemp())
+    master = P._master_path(d)
+    wb = OutputWorkbook.empty()
+    wb.ensure_account("가게A")
+    wb.wb.create_sheet("계정목록")   # 결과 구글시트 미러 인덱스 탭(공백 없음) 이 복원본에 섞인 상황
+    wb.save(master)
+    wb2 = OutputWorkbook.load(master)
+    _check("계정목록" not in wb2.account_sheets(), f"'계정목록'(공백없음) 제외 — {wb2.account_sheets()}")
+    _check("가게A" in wb2.account_sheets(), f"실계정 '가게A' 는 포함 — {wb2.account_sheets()}")
+
+
 def main():
     _install_fakes()
     config.LOGIN_PACE_MIN_SEC = 0   # 시뮬은 로그인 페이싱 sleep 없이(즉시)
@@ -501,6 +536,8 @@ def main():
     scenario_full_composition()
     scenario_option_split()
     scenario_vid_change_reset()
+    scenario_restore_residue_cleanup()
+    scenario_gsheet_index_tab_excluded()
     print("=" * 60)
     print("  [완료] 모든 시나리오 통과")
     print("=" * 60)

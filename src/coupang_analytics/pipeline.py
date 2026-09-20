@@ -88,9 +88,30 @@ def restore_master_from_gsheet(out_dir: str | Path, url: str | None, on_log=None
         log("== ⚠ 마스터가 없어 결과 구글시트에서 복원을 시도했으나 실패 — 새 통계로 시작합니다 "
             f"({exc.__class__.__name__}: {str(exc)[:120]}) ==")
         return False
+    _strip_gsheet_index_tab(master, log)   # 복원본에 섞여온 인덱스 탭 '계정목록'(공백 없음) 제거(오염 방지)
     log(f"== 마스터 파일이 없어 결과 구글시트에서 복원했습니다 → {master.name} "
         "(과거 통계 이어쓰기 · 숨김 메타는 다음 판매수집이 재구성) ==")
     return True
+
+
+def _strip_gsheet_index_tab(master: Path, log) -> None:
+    """복원 마스터에서 **결과 구글시트의 인덱스 탭 '계정목록'(공백 없음)** 을 제거한다.
+
+    결과 구글시트를 통째로 내려받으면 인덱스 탭 `계정목록`(gsheet_index.INDEX_SHEET_NAME, 공백 없음)까지 딸려온다.
+    마스터 자체 인덱스는 `계정 목록`(공백 있음)이라, 이 탭을 두면 account_sheets 가 통계로 오인 → 미러링 중복 +
+    계정목록 동기화 충돌(400). 복원 직후 지운다(마스터 인덱스는 다음 저장이 다시 만든다). 방어=account_sheets 도
+    공백 무시로 제외하지만, 파일에 남겨두지 않는 게 깔끔하다."""
+    import openpyxl
+    from .gsheet_index import INDEX_SHEET_NAME   # '계정목록'(공백 없음)
+    try:
+        wb = openpyxl.load_workbook(master)
+        if INDEX_SHEET_NAME in wb.sheetnames and len(wb.sheetnames) > 1:
+            del wb[INDEX_SHEET_NAME]
+            wb.save(master)
+            log(f"  [복원] 구글시트 인덱스 탭 '{INDEX_SHEET_NAME}' 제거(마스터 자체 인덱스와 중복 방지)")
+        wb.close()
+    except Exception as exc:   # 실패해도 복원 자체는 유효(account_sheets 방어가 있음) — 조용히 넘기지 않고 로그
+        log(f"  [복원] ⚠ 인덱스 탭 정리 건너뜀 — {exc.__class__.__name__}: {str(exc)[:80]}")
 
 
 def backup_sources(out_dir: str | Path = "output", *, input_url: str | None = None,
@@ -763,12 +784,20 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
         if old and old != rep_name and not wb.has_product(biz, rep_name):
             if wb.set_display_name(biz, old, rep_name):
                 log(f"  [정체성] 기존 블록 '{old}' → '{rep_name}'(같은 vid·과거 이력 승계·이름 정규화)")
+        new_names = {_block_name(base, o.label if multi else "") for o in opts}   # 이번에 쓸(이어쓸) 블록
         for stale in wb.blocks_with_registered_name(biz, base):
             stored = set(wb.product_vids(biz, stale))
-            if vidset and stored and not (vidset & stored):   # 저장 vid 가 **있는데** 새 vid 와 완전히 다름 → 삭제
+            # ① vid 가 바뀐 옛 블록(교집합 없음) = 정체성 변경 → 삭제·새로 시작(단일옵션 동일이름도 삭제 후 재생성).
+            changed_vid = bool(vidset and stored and not (vidset & stored))
+            # ② 구글시트 복원 잔재: 옛 블록에 vid 가 **없는데**(숨김 메타 미러 안 됨) 이번에 vid 있는 옵션 블록을
+            #    새로 만든다 = 그 옛 블록은 이 상품의 pre-vid 잔재 → 삭제. 단 **이번에 이어쓸 블록(new_names)** 과
+            #    **미매칭 상품(vidset 비었음)** 은 보존(단일옵션 승계·대장명 추적 상품 안 지움).
+            legacy_novid = bool(vidset and not stored and stale not in new_names)
+            if changed_vid or legacy_novid:
                 if wb.delete_product_block(biz, stale):
-                    log(f"  [정체성] '{stale}' vid 변경(이전 {sorted(stored)} → {vids_all}) "
-                        "→ 이전 데이터 삭제·새로 시작")
+                    why = (f"vid 변경(이전 {sorted(stored)} → {vids_all})" if changed_vid
+                           else f"vid 없는 옛 블록 잔재(복원분) → 옵션 블록 {vids_all} 로 대체")
+                    log(f"  [정체성] '{stale}' {why} → 이전 데이터 삭제·새로 시작")
         # 수집 주기·마케팅은 상품(대표) 단위. 오늘 대상 아니면 이 상품의 모든 옵션 블록을 오늘치 생략.
         if product.mkt_start or product.mkt_end or product.mkt_mon:   # 대장에 마케팅 값 있을 때만 반영
             wb.set_marketing(biz, rep_name, product.mkt_start, product.mkt_end, product.mkt_mon)

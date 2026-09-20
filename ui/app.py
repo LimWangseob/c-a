@@ -43,9 +43,13 @@ _PROFILE = "data/chrome-ui"
 def _shared_setting(group: str, name: str) -> str:
     """app_qt(PySide6 QSettings · 조직 'coupang-analytics' · 앱 'ui')가 저장한 값을 **PySide6 없이** 읽는다.
 
-    Tkinter 폴백은 PySide6 부재 시 쓰이므로 그 의존을 피해야 한다 → Windows 레지스트리(winreg 표준 라이브러리)
-    에서 직접 읽는다. QSettings NativeFormat 매핑: 'group/name' → HKCU\\Software\\coupang-analytics\\ui\\group 의
+    우선 **config.json(보존 폴더)** 을 읽고(개발·운용 공통), 없으면 예전처럼 Windows 레지스트리(winreg)에서
+    읽는다. QSettings NativeFormat 매핑: 'group/name' → HKCU\\Software\\coupang-analytics\\ui\\group 의
     값 name(실측 확인). 없거나 Windows 아니면 '' 반환(→ 해당 기능 비활성, 정상 — 조용한 실패 아님)."""
+    from coupang_analytics import appconfig       # config.json 우선(레지스트리 폴백)
+    v = appconfig.get(f"{group}/{name}", "")
+    if v:
+        return v
     try:
         import winreg
     except ImportError:

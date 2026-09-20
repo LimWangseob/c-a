@@ -217,8 +217,14 @@ class OutputWorkbook:
         return max(cols, key=lambda d: cols[d]) if cols else None
 
     def account_sheets(self) -> list[str]:
-        """계정(사업자) 시트명 목록 — 특수 시트(상품ID·목차·계정정보)는 제외."""
-        return [s for s in self.wb.sheetnames if s not in _SPECIAL_SHEETS]
+        """계정(사업자) 시트명 목록 — 특수 시트(상품ID·목차·계정정보)는 제외.
+
+        ⚠ 구글시트 복원(결과시트 통째 다운로드) 시 인덱스 탭 '계정목록'(공백 없음, gsheet_index)이 섞여
+        올 수 있다. 마스터 자체 인덱스는 '계정 목록'(공백)이라, **공백 무시로 인덱스명과 같은 시트는 항상
+        제외**한다(통계로 오인해 미러링·계정목록 동기화 충돌[400] 하는 것 방지)."""
+        idx_norm = _INDEX_SHEET.replace(" ", "")   # '계정목록' — 공백 없는 형태(구글시트 미러 인덱스 포함)
+        return [s for s in self.wb.sheetnames
+                if s not in _SPECIAL_SHEETS and s.replace(" ", "") != idx_norm]
 
     def set_account_id(self, biz: str, account_id: str) -> None:
         """(사업자)→계정ID 를 숨김 시트에 저장(목차 표시용). ⚠ 비밀번호는 저장하지 않는다."""

@@ -2,6 +2,8 @@
 /data/
 /capture/
 /output/
+# 설정 파일(보존 폴더·비밀 아님이지만 PC별 링크라 커밋 안 함 — 앱이 프로젝트 루트에 자동 생성)
+/config.json
 *.har
 creds.json
 .env
