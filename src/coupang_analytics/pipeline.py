@@ -811,26 +811,37 @@ def _push_gsheet(wb, output_url: str | None, log, removed_accounts=None) -> None
     removed_accounts=[(사업자, 계정ID)…]: 관리대장에서 **줄이 사라진** 계정 → 결과 구글시트에서도 완전 삭제
     (계정목록 행 + 통계 시트). '판매중지'로 남은 건 여기 없음(유지+경고).
     """
+    # ⚠ 조용한 스킵 금지 — 반영 안 된 이유를 **항상 로그로** 남긴다(정상종료인데 반영 안 됨을 추적 가능하게).
     if not output_url:
+        log("== [구글시트] ⚠ 반영 생략 — **결과(출력) 시트 URL 미설정**. "
+            "설정 탭 '구글 시트 연동'에 결과 시트 링크를 넣어야 반영됩니다(이 PC 설정, xlsx는 저장됨) ==")
         return
+    _phase = "초기화"
     try:
         from . import gsheet_api, gsheet_index, gsheet_stats
         if not gsheet_api.load_sa_info():
-            log("== [구글시트] 서비스계정 키 미등록 — 결과 시트 반영 생략(xlsx는 저장됨) ==")
+            log("== [구글시트] ⚠ 반영 생략 — **서비스계정(SA) 키 미등록**(설정 탭에서 SA 키 입력 필요·이 PC 설정, xlsx는 저장됨) ==")
             return
+        log(f"== [구글시트] 결과 반영 시작 — 출력시트 …{str(output_url)[-24:]} ==")
+        _phase = "클라이언트 연결"
         client = gsheet_api.GSheetClient(output_url)
         if removed_accounts:   # 삭제된 계정 먼저 제거(행+시트) → 이후 미러링/동기화는 남은 것만 대상
+            _phase = "삭제계정 정리"
             d = gsheet_index.delete_accounts(client, removed_accounts, on_log=log)
             if d:
                 log(f"== [구글시트] 삭제된 계정 정리 — {len(removed_accounts)}개(계정목록 행·통계 시트 제거) ==")
+        _phase = "통계 시트 미러링"
+        log("== [구글시트] 통계 시트 미러링 중… ==")
         gids = gsheet_stats.push_statistics(client, wb, on_log=log)          # 사업자별 통계 시트 전체 미러링
+        _phase = "계정목록 동기화"
+        log(f"== [구글시트] 통계 {len(gids)}시트 미러링 완료 → 계정목록 동기화 중… ==")
         roster = gsheet_index.roster_from_workbook(wb, gids)                 # 계정목록 로스터(등록명 기반 안정키)
         plan = gsheet_index.sync_index(client, roster)                      # 계정목록 증분(마케팅 D~F 보존)
-        log(f"== [구글시트] 결과 반영 완료 — 통계 {len(gids)}시트 · 계정목록 "
+        log(f"== [구글시트] ✅ 결과 반영 완료 — 통계 {len(gids)}시트 · 계정목록 "
             f"갱신 {len(plan.updates)}·신규 {len(plan.inserts)}·판매중지 {len(plan.discontinue)} ==")
     except Exception as exc:
-        log(f"== [구글시트] 결과 반영 실패: {exc.__class__.__name__}: {exc} "
-            "(xlsx 마스터·스냅샷은 정상 저장됨) ==")
+        log(f"== [구글시트] ❌ 결과 반영 실패(단계='{_phase}'): {exc.__class__.__name__}: {str(exc)[:200]} "
+            "(xlsx 마스터·스냅샷은 정상 저장됨 — SA 편집권한·시트 공유·URL 확인) ==")
 
 
 def _count_unfilled_ranks(wb) -> int:
