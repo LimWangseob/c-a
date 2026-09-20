@@ -349,6 +349,24 @@ def t1_vid_source_option_split():
     _ok("단일 블록 삭제(delete_product_block): 대상만 제거·나머지 온전·메타 정리·재로드 보존")
 
 
+def t1_ledger_dedup():
+    print("[13] 대장 중복 상품 제거 (같은 상품명 2줄 이상 = 담당자 오입력 → 첫 줄만 추적)")
+    from coupang_analytics.input_list import parse_input_rows
+    rows = [
+        ["대표자명", "사업자명", "계정아이디", "상품명"],
+        ["홍길동", "테스트샵", "acctA", "웰빙 알부민 120정"],
+        ["", "", "", "웰빙 알부민 120정"],       # 중복(오입력) 2줄째
+        ["", "", "", "웰빙  알부민  120정"],     # 공백만 다른 중복(3줄째) — 공백정리 후 동일
+        ["", "", "", "웰빙 베타글루칸"],
+    ]
+    il = parse_input_rows(rows)
+    a = next(x for x in il.accounts if x.account_id == "acctA")
+    names = [p.name for p in a.products]
+    assert names == ["웰빙 알부민 120정", "웰빙 베타글루칸"], f"중복 제거 실패: {names}"
+    assert any("중복" in s for s in il.struck), "중복 경고 로그 없음"
+    _ok(f"같은 상품명 3줄(공백차이 포함) → 1개만 추적 {names}·중복 경고 남김")
+
+
 def t1_delete_account():
     print("[10] 삭제된 계정 완전 제거 (workbook.delete_account — 시트+메타 삭제)")
     wb = OutputWorkbook.empty()
@@ -427,6 +445,7 @@ def main():
     t1_delete_account()
     t1_product_match_precision()
     t1_vid_source_option_split()
+    t1_ledger_dedup()
     t2_keywords(store, il)
     print("=" * 60)
     print("  [완료] 로그인 불필요 부분 실증 종료")

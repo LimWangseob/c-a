@@ -309,6 +309,24 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
 
     if emit_strike_warning:   # 파일인데 취소선을 못 읽었음을 알림(수동 확인 유도). 값 파싱은 정상.
         struck.append("⚠ 취소선 자동감지 불가(엑셀 스타일 비호환) — 해지/품절은 '상태' 컬럼 또는 수동 확인 필요")
+    # 대장 중복 정책(2026-09-20 소유자): 한 계정에 **같은 상품명이 2줄 이상**이면 담당자 오입력 →
+    # **첫 줄만 추적**하고 나머지 중복 줄은 제거한다(공란 통계·중복 블록 방지). 정체성 키=공백정리 상품명
+    # (앞뒤 공백·중간 연속공백 무시, 대소문자는 유지 — 서로 다른 상품을 과합치지 않게 보수적으로).
+    for a in accounts:
+        seen: set[str] = set()
+        kept: list = []
+        removed = 0
+        for p in a.products:
+            key = " ".join(str(p.name).split())
+            if key and key in seen:
+                removed += 1
+                continue
+            seen.add(key)
+            kept.append(p)
+        if removed:
+            a.products = kept
+            struck.append(f"[대장 중복] 계정 {a.account_id or a.business_name}: 같은 상품명 중복 {removed}줄 제거"
+                          f"(첫 줄만 추적) — 담당자 오입력")
     # 리포트 기준 시드: 상품/옵션/ID는 판매분석 리포트가 제공하므로 계정만 있으면 유효.
     valid = [a for a in accounts if a.account_id]
     return InputList(accounts=valid, errors=errors, struck=struck, ledger_account_ids=ledger_ids)
