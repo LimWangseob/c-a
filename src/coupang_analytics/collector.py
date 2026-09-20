@@ -350,16 +350,6 @@ def fetch_inventory(page, log=None) -> tuple[dict[str, int], dict[str, str], dic
     total = 0
     while True:
         props, total = _fetch(_INV_PAGE_SIZE, page_num)
-        if page_num == 0 and props:
-            # vid 보강용 진단(1회): 재고 응답이 상품명/ID를 담는지 확인. 필드'명'만 로그(값 아님=민감정보 X).
-            s0 = props[0]
-            log(f"  [재고·진단] viProperty 필드: {sorted(s0.keys())}")
-            for k, v in s0.items():
-                if isinstance(v, dict):
-                    log(f"  [재고·진단]   .{k} 하위: {sorted(v.keys())}")
-            hit = [c for c in ("productName", "productId", "itemName", "itemId", "vendorItemName", "skuId")
-                   if c in s0 or any(isinstance(v, dict) and c in v for v in s0.values())]
-            log(f"  [재고·진단] 상품식별 후보 필드: {hit or '없음 — vid 보강엔 다른 소스 필요'}")
         before = len(out)
         out.update(_parse_inventory(props))
         names.update(_parse_inventory_roster(props))
@@ -719,13 +709,10 @@ def products_from_vendor_inventory(listings: list[VendorInventoryListing],
         log(f"  [상품조회] 둘다 상품 판매자배송(NORMAL) 옵션 {dropped_norm}개 제외(vid=로켓그로스만)")
     if skipped:
         log(f"  [상품조회] 옵션 없는 리스팅 {skipped}개 제외")
-    # valid=INVALID 옵션 관측 로그 — 이 필드의 **의미가 미확정**(캡처엔 값만·정의 없음)이라, 실데이터로
-    # 뜻을 파악하려고 개수+예시(상품명·옵션명·리스팅 판매상태)를 남긴다(라이브에서 INVALID 가 무엇인지 판단).
-    invalid = [(l.product_name, o.item_name, l.product_status)
-               for l in listings for o in l.options if o.valid == "INVALID"]
+    # valid=INVALID 옵션 개수만(의미 미확정 필드·필터 안 함). 예시 덤프는 제거(장황·개발 관측용이었음).
+    invalid = sum(1 for l in listings for o in l.options if o.valid == "INVALID")
     if invalid:
-        ex = [f"{nm[:14]}·{it[:10]}·상태={ps}" for nm, it, ps in invalid[:3]]
-        log(f"  [상품조회] valid=INVALID 옵션 {len(invalid)}개(의미 미확정·라이브 확인용) 예: {ex}")
+        log(f"  [상품조회] valid=INVALID 옵션 {invalid}개(의미 미확정·필터 안 함)")
     log(f"  [상품조회] 발견 상품 {len(out)}개(판매 무관 전 상품·vid 출처)")
     return out
 
