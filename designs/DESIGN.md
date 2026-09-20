@@ -12,7 +12,7 @@
 > - ✅ **4단계(옵션 분리 블록)**: `ensure_product_block(..., rank_rows=, registered=)` — 다중옵션 2차 블록은 순위행 없음(판매정보만). `has_keyword_section`(2차 판정)·`pad_keyword_rows`/②가 2차 건너뜀.
 > - ✅ **5단계(소스 조인·set_display_name 중단)**: `_fill_product_metrics`=옵션(블록) vid별 지표(노출/판매/방문=vi-detail·재고=RFM). ③ 매칭=`sibling_vids`(같은 등록상품명 옵션 vid 합집합, 아이템위너 놓침 방지). set_display_name(노출명 교체) **중단**(블록명=등록상품명+옵션라벨 고정).
 > - ✅ **6단계(pipeline 배선·옵션 루프·마이그레이션)**: `_login_and_discover`가 `fetch_vendor_inventory`를 vid 출처로(폴백=판매분석 발견). `_process_account`가 상품→옵션 블록 분해(대표=첫 옵션·키워드+순위 / 2차=지표만). **마이그레이션(소유자 2026-09-20: vid=상품당 1개)**: ①**같은 vid**=같은 상품 → 기존 블록 승계+이름을 등록상품명으로 정규화(`resolve_block_name`+`set_display_name`) ②**등록상품명은 같은데 vid가 다른**(교집합 없는) 옛 블록 = 정체성 변경 → **이전 데이터 삭제하고 새로 시작**(`blocks_with_registered_name`+`delete_product_block`, 잘못된 이력 승계 방지). 첫 적용 때 vid 출처 변경으로 값이 달라진 경우가 여기 해당.
-> - ✅ **7단계(판매상태 productStatus화)**: `collector.sale_status_of`/`sale_status_by_vid`(원문 enum→판매중/부분판매중/판매중지·방어적)·`_login_and_discover`가 productStatus 문자열맵을 판매상태 출처로(상품조회 실패 시 RFM bool 폴백)·`apply_sale_status`가 문자열·bool 둘 다 수용. **판매자배송(개인) 상품까지 판매상태 경고 커버**(§2.3 옛 한계 해소, 소유자 2026-09-20 확인: 상품조회에 전 상품 판매중/판매중지 표시됨). ⚠원문 enum 은 라이브 로그로 최종 확인.
+> - ❌ **7단계(판매상태 productStatus화) 되돌림(라이브 실측 2026-09-20 wellbing1107)**: 상품조회 `productStatus` 가 **전 옵션 SUSPENDED 상수**(재고 있는 활성 상품도 SUSPENDED)로 판매중/중지를 구분 못 함·`valid` 도 전 옵션 INVALID 상수. RFM `isSaleSuspended` 는 판매중지 42·판매중 10 정상 구분. → **판매상태 소스=RFM isSaleSuspended(로켓그로스만) 유지**, productStatus/valid 는 관측 로그로만. **판매자배송 미상 한계는 원래대로 유지**(§2.3). `sale_status_of`/`sale_status_by_vid` 는 관측용으로만 존치.
 > - ✅ **8단계(검증)**: `verify_offline[12]`(옵션 분리·vid 이름칸 왕복·숨김3열 폐지·마이그레이션)·`simulate[11]`(다중옵션 end-to-end)·`simulate[9]`(노출명 교체 중단) 통과.
 > - **블록 이름 = 쿠팡 등록상품명 + 옵션라벨**(다중옵션만·단일옵션=등록상품명). **기존 다중옵션 전환 = 대표(첫) 옵션이 과거 합산 이력 승계**(소유자 2026-09-20 확정). vid 출처=(A) 이름칸.
 >
@@ -192,10 +192,11 @@
 
 **판매상태 불일치 경고(확정 2026-09-17):** 관리대장과 쿠팡 실제 판매상태가 어긋나면 담당자가 정정하도록 결과파일에 표시한다.
 - **판정:** 그 상품이 결과파일에서 **판매중지(대장에서 빠짐 = `is_discontinued`)** 인데, 쿠팡 실제 판매상태가 **판매중/부분판매중**이면 불일치.
-- **쿠팡 상태 출처(2026-09-20 개선):** **상품조회/수정(`vendor-inventory/search`)의 `productStatus`(전 상품·판매자배송 포함)가 1순위.** collector `sale_status_of`(원문 enum→'판매중'/'부분판매중'/'판매중지'·방어적)·`sale_status_by_vid(listings)`가 `{vid: 판매상태문자열}` 맵을 만든다. 상품조회 실패 시 **폴백=로켓그로스 재고 API `isSaleSuspended`(bool·로켓그로스만)**. `_login_and_discover`가 상품조회 성공이면 문자열맵, 실패면 RFM bool맵을 4번째로 반환. ①판매수집 로그인 세션에서만 확보(②③엔 없음).
-- **상품단위 판정:** `workbook.apply_sale_status(biz, status_by_vid)`가 값이 **문자열(productStatus)·bool(isSaleSuspended) 둘 다** 받아(bool→True=판매중지·False=판매중 정규화) **마스터 전체 블록에 vid로 대조** — 블록 옵션(vid) 중 상태맵에 있는 것들: 전부 판매중지=`판매중지`·전부 판매중=`판매중`·그 외(섞임·부분)=`부분판매중`·하나도 없음=미상(생략). 숨김시트 `_상품ID` 7열 저장. ⚠ 대장에서 빠진(판매중지 표기) 상품도 쿠팡에 살아있으면 vid로 잡혀 채워진다. `_finish`가 계정마다 1회 호출.
-- **표시:** `apply_style`이 판매중지 소헤더행(G=`⛔ 판매중지`)의 **최신(맨 오른쪽) 날짜칸**에 `판매중`을 **진한 적색(C00000)·굵게** 렌더(멱등). 값+서식이 마스터에 들어가 구글시트 미러링(`gsheet_stats.worksheet_to_requests`)으로 결과시트에도 그대로 반영.
-- ✅ **판매자배송(개인) 상품 커버(2026-09-20 해소):** productStatus 가 NORMAL 포함 전상품 판매상태를 줘 **판매자배송 상품도 경고 커버**(옛 한계=RFM만이라 개인상품 미상 해소). ⚠ productStatus 원문 enum 은 라이브에서 로그(`sale_status_by_vid`가 '원문→해석' 출력)로 확인 후 `sale_status_of` 매핑 정합성 점검.
+- **쿠팡 상태 출처 = 로켓그로스 재고 API(`inventory-health-dashboard/search`)의 `isSaleSuspended`(bool).** collector `_parse_inventory_status`→`{vid: 판매중지여부}`, `fetch_inventory` 3튜플. `_login_and_discover`가 이 RFM 맵을 4번째로 반환. ①판매수집 로그인 세션에서만 확보(②③엔 없음).
+  - ⚠ **상품조회 productStatus 는 판매상태 소스로 못 씀(라이브 실측 2026-09-20 wellbing1107):** 전 옵션 SUSPENDED **상수**(재고 있는 활성 상품도 SUSPENDED)라 판매중/중지를 구분 못 함. `valid` 도 전 옵션 INVALID 상수. RFM 은 판매중지 42·판매중 10 정상 구분 → **RFM 만 신뢰.** `sale_status_of`/`sale_status_by_vid` 는 productStatus **관측 로그 전용**(판매상태 아님).
+- **상품단위 판정:** `workbook.apply_sale_status(biz, status_by_vid)` — 값 bool(isSaleSuspended; True=판매중지·False=판매중) 정규화(문자열도 수용) → **마스터 전체 블록에 vid로 대조**: 블록 옵션(vid) 중 상태맵에 있는 것들 전부 판매중지=`판매중지`·전부 판매중=`판매중`·섞임=`부분판매중`·없음=미상(생략). 숨김시트 `_상품ID` 7열 저장. `_finish`가 계정마다 1회 호출.
+- **표시:** `apply_style`이 판매중지 소헤더행(G=`⛔ 판매중지`)의 **최신(맨 오른쪽) 날짜칸**에 `판매중`을 **진한 적색(C00000)·굵게** 렌더(멱등). 구글시트 미러링으로 결과시트에도 반영.
+- ⚠ **판매자배송(개인) 상품 한계 유지:** isSaleSuspended 는 로켓그로스 재고 API에만 있어 개인상품은 미상(경고 안 뜸). productStatus 로 해소하려 했으나(옛 7단계) 위 상수 문제로 **되돌림** — 개인상품 판매상태 소스는 여전히 없음.
 
 **파일명·저장(확정):** 새로 만들 때 `쿠팡데이타분석_yymmdd_시분초.xlsx`.
 **이어쓰기/신규(확정):** 실행 시작 시 기존 출력 파일이 있으면 **"이어서 기록할지"를 사용자에게 묻는다**.
