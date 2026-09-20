@@ -30,8 +30,8 @@ from coupang_analytics.input_list import parse_input_list, parse_password_file  
 from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
 from coupang_analytics.kw_shopping import NaverShopCredentials  # noqa: E402
-from coupang_analytics.pipeline import (master_exists, restore_master_from_gsheet,  # noqa: E402
-                                        resumable_progress, run_full,
+from coupang_analytics.pipeline import (backup_sources, master_exists,  # noqa: E402
+                                        restore_master_from_gsheet, resumable_progress, run_full,
                                         select_keywords_stage, track_ranks_stage)
 from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_credentials_file  # noqa: E402
@@ -488,6 +488,7 @@ class App(tk.Tk):
             return
         input_list, naver_creds, key = self.input_list, self.naver_creds, self.ai_key
         gs_out = _shared_setting("gsheet", "output_url")   # app_qt에 등록된 결과 구글시트 링크(있으면 반영)
+        gs_in = _shared_setting("gsheet", "input_url")     # 백업용(관리대장)
         mode_txt = ("오늘다시 " if redo_today else "이어서 ") if (resume or redo_today) else \
                    ("통계이어쓰기 " if carry else "새통계 ")
         stage_txt = " · ①판매수집(키워드·순위 없음)" if keywords_off else \
@@ -504,6 +505,7 @@ class App(tk.Tk):
             stop = self._semi_stop
 
         def task():
+            backup_sources(input_url=gs_in, output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
             naver = NaverAdApi(naver_creds)
             # ① 반자동 판매수집 — 순위·키워드·노출측정 전무(offscreen 미사용)
             snap = run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import random
+import shutil
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -90,6 +91,51 @@ def restore_master_from_gsheet(out_dir: str | Path, url: str | None, on_log=None
     log(f"== 마스터 파일이 없어 결과 구글시트에서 복원했습니다 → {master.name} "
         "(과거 통계 이어쓰기 · 숨김 메타는 다음 판매수집이 재구성) ==")
     return True
+
+
+def backup_sources(out_dir: str | Path = "output", *, input_url: str | None = None,
+                   output_url: str | None = None, on_log=None) -> list[Path]:
+    """작업 시작 전 원본 백업 — **로컬 통계 마스터 + 결과 구글시트 + 관리대장 구글시트**를 타임스탬프
+    로컬 xlsx 로 `output/백업/` 에 저장한다(소유자 2026-09-20: 항상 작업 전 별도 백업 후 진행).
+
+    실패는 **로그로 명시**하되 작업을 막지 않는다(백업 실패 ≠ 작업 중단, 하지만 조용히 넘기지 않음).
+    구글시트 백업은 export(xlsx)라 SA 없이도 공개공유면 됨. 반환=저장된 백업 파일 목록.
+    """
+    log = on_log or (lambda m: None)
+    out = Path(out_dir)
+    bdir = out / "백업"
+    ts = datetime.now().strftime("%y%m%d_%H%M%S")
+    saved: list[Path] = []
+    try:
+        bdir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        log(f"== [백업] ⚠ 백업 폴더 생성 실패 — 백업 없이 진행: {exc} ==")
+        return saved
+    # 1) 로컬 통계 마스터(있으면)
+    master = _master_path(out)
+    if master.exists():
+        dest = bdir / f"통계마스터_{ts}.xlsx"
+        try:
+            shutil.copy(master, dest)
+            saved.append(dest)
+            log(f"== [백업] 통계 마스터 → 백업/{dest.name} ==")
+        except OSError as exc:
+            log(f"== [백업] ⚠ 통계 마스터 백업 실패(진행): {exc} ==")
+    # 2) 결과·관리대장 구글시트(있으면)
+    for label, url in (("결과시트", output_url), ("관리대장", input_url)):
+        if not url:
+            continue
+        dest = bdir / f"{label}_{ts}.xlsx"
+        try:
+            from . import gsheet
+            gsheet.download_xlsx(url, dest)
+            saved.append(dest)
+            log(f"== [백업] {label} 구글시트 → 백업/{dest.name} ==")
+        except Exception as exc:   # 공개공유 아님·네트워크 등 → 명시 후 진행(작업은 계속)
+            log(f"== [백업] ⚠ {label} 구글시트 백업 실패(진행): {exc.__class__.__name__}: {str(exc)[:120]} ==")
+    if saved:
+        log(f"== [백업] 작업 전 원본 {len(saved)}개 백업 완료(output/백업/) ==")
+    return saved
 
 
 def _fill_frozen_search_volumes(wb, biz: str, product: str, keywords: list[str],

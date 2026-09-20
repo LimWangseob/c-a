@@ -49,7 +49,7 @@ def _rows(wb, biz):
             out[cur] = {"metrics": {}, "kw": []}
         elif g in (config.CONTRACT_METRICS + config.PERSONAL_METRICS) and cur:
             out[cur]["metrics"][g] = ws.cell(r, 8).value
-        elif g == config.M_RANK and cur:
+        elif g == config.M_RANK and cur and name:   # 빈 순위행(4행 유지용 패딩·이름 공란)은 실제 키워드 아님 → 제외
             out[cur]["kw"].append((name, ws.cell(r, 6).value, ws.cell(r, 8).value))
     return out
 

@@ -31,10 +31,10 @@ from coupang_analytics.input_list import (parse_input_list, parse_input_rows,  #
 from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
 from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_credentials_file  # noqa: E402
-from coupang_analytics.pipeline import (_interruptible_sleep, master_exists,  # noqa: E402
-                                        push_ledger_inventory, read_run_stage, resumable_progress,
-                                        restore_master_from_gsheet, run_full, select_keywords_stage,
-                                        track_ranks_stage, write_run_stage)
+from coupang_analytics.pipeline import (_interruptible_sleep, backup_sources,  # noqa: E402
+                                        master_exists, push_ledger_inventory, read_run_stage,
+                                        resumable_progress, restore_master_from_gsheet, run_full,
+                                        select_keywords_stage, track_ranks_stage, write_run_stage)
 from coupang_analytics.rank import make_matcher, organic_rank, warmup  # noqa: E402
 
 _PROFILE = "data/chrome-ui"
@@ -1104,7 +1104,10 @@ class App(QtWidgets.QMainWindow):
             self.track_stop_btn.setEnabled(True)
             stop = self._semi_stop
 
+        gs_in = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/input_url", "", type=str).strip()
+
         def task():
+            backup_sources(input_url=gs_in, output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
             naver = NaverAdApi(naver_creds)
             # ① 반자동 판매수집 — 순위·키워드·노출측정 전무(offscreen 미사용)
             snap = run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
@@ -1129,8 +1132,7 @@ class App(QtWidgets.QMainWindow):
                                        should_stop=(stop.is_set if stop is not None else (lambda: False)),
                                        on_log=self.log, gsheet_output_url=gs_out)
             # 입력 관리대장의 '그로스 재고'(AD) 컬럼을 수집 재고로 역기록(SA 편집권한 필요·없으면 로그 후 비치명)
-            gs_in = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/input_url", "", type=str).strip()
-            push_ledger_inventory(gs_in, self.log)
+            push_ledger_inventory(gs_in, self.log)   # gs_in = 위에서 정의(백업·역기록 공용)
             if not (stop is not None and stop.is_set()):
                 write_run_stage("done")             # 전부 완료 표시(재부팅 복구 안 함)
             return result
@@ -1171,9 +1173,11 @@ class App(QtWidgets.QMainWindow):
         self.log(f"[무인] ①반자동 판매수집 → ②키워드선정 → ③반자동 순위 · 상품 {n}개 · 기간 {df}~{dt} · "
                  f"{'이어서' if resume else ('이어쓰기' if carry else '새 통계')}")
         il, naver_creds, key, stop = self.input_list, self.naver_creds, self.ai_key, self._semi_stop
+        gs_in = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/input_url", "", type=str).strip()
 
         def task():
             try:
+                backup_sources(input_url=gs_in, output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
                 naver = NaverAdApi(naver_creds)
                 # ① 반자동 판매수집(무인이어도 **처리 방식은 반자동** — 보이는 신뢰 창·실제 타이핑으로 Akamai 통과율↑).
                 #    2차인증은 사무실(신뢰 IP)이면 없이 통과; 낯선 환경서 뜨면 사람이 없어 그 계정만 건너뜀(멈춤 없음).
@@ -1206,9 +1210,8 @@ class App(QtWidgets.QMainWindow):
                     track_ranks_stage(semi=True, should_stop=stop.is_set, on_log=self.log,
                                       gsheet_output_url=gs_out)
                 # 입력 관리대장의 '그로스 재고'(AD) 컬럼을 수집 재고로 역기록(SA 편집권한 필요·없으면 비치명)
-                gs_in = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/input_url", "", type=str).strip()
                 if not stop.is_set():
-                    push_ledger_inventory(gs_in, self.log)
+                    push_ledger_inventory(gs_in, self.log)   # gs_in = 위에서 정의(백업·역기록 공용)
                     write_run_stage("done")        # 전부 완료 표시
                 # (결과는 구글 시트 통합으로 결과시트에 직접 반영 — rclone 업로드 제거)
             except Exception as exc:                # 무인: 어떤 오류도 앱을 매달아두지 않게 로그 후 종료로
@@ -1283,6 +1286,7 @@ class App(QtWidgets.QMainWindow):
 
         def task():
             try:
+                backup_sources(input_url=gs_in, output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
                 naver = NaverAdApi(naver_creds)
                 if do_sales:                       # ① 판매수집 이어서(반자동·완료계정 건너뜀)
                     run_full(il, naver, ai_key=key, date_from=df, date_to=dt,
@@ -1322,6 +1326,7 @@ class App(QtWidgets.QMainWindow):
         self.log("[키워드 선정] 시작 — 순위 조회 없이 키워드만 선정(로그인 불필요)")
 
         def task():
+            backup_sources(output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
             return select_keywords_stage(NaverAdApi(naver_creds), key, grow=grow, on_log=self.log,
                                          gsheet_output_url=gs_out)
         self.run_bg(task, on_done=self._pipeline_done, btn=self.kw_btn)
@@ -1341,6 +1346,7 @@ class App(QtWidgets.QMainWindow):
         gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
 
         def task_semi():
+            backup_sources(output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
             return track_ranks_stage(semi=True, should_stop=should_stop, on_log=self.log,
                                      gsheet_output_url=gs_out)
         self.run_bg(task_semi, on_done=self._pipeline_done, btn=self.track_semi_btn)
