@@ -119,11 +119,11 @@ def main():
     novid = [p for p in report_acc.products if not any(o.vendor_item_ids for o in p.options)]
     _log(f"[실증] 추적 상품 {len(report_acc.products)}개(대장 매칭) · "
          f"다중옵션 {len(multi)}개 · vid 미확보 {len(novid)}개 · 판매지표 옵션 {len(metrics)}개")
-    # 판매상태 = RFM isSaleSuspended(True=판매중지·False=판매중·없음=미상[개인상품 등]). productStatus 는 안 씀(상수).
+    # 판매상태 = 상품조회 productStatus 해석(판매중/부분판매중/판매중지·전 상품·화면과 일치). 없으면 미상.
     def _sale(vid):
         v = sale_status.get(vid) if vid else None
-        return "판매중지" if v is True else ("판매중" if v is False else "미상")
-    _log("[vid 출처=상품조회/수정] 각 상품 옵션별 vid·판매상태(RFM)·지표 (grep 키=vid=…):")
+        return ("판매중지" if v is True else "판매중") if isinstance(v, bool) else (v or "미상")
+    _log("[vid 출처=상품조회/수정] 각 상품 옵션별 vid·판매상태·지표 (grep 키=vid=…):")
     for p in report_acc.products:
         for o in p.options:
             vid = o.vendor_item_ids[0] if o.vendor_item_ids else ""
@@ -133,14 +133,14 @@ def main():
             lbl = f"({o.label})" if o.label else ""
             _log(f"  vid={vid or '없음'} [{p.kind}] {p.name[:30]}{lbl} "
                  f"판매상태={_sale(vid)} {metric_txt}{inv_txt}")
-    # 판매상태(§2.3) = RFM isSaleSuspended(로켓그로스만). productStatus 는 판매상태 소스 아님(라이브서 전부 SUSPENDED 상수).
+    # 판매상태(§2.3) = 상품조회 productStatus(전 상품·판매자배송 포함·화면 판매/승인상태와 일치).
     print("-" * 60)
     if sale_status:
-        n_stop = sum(1 for v in sale_status.values() if v is True)
-        n_on = sum(1 for v in sale_status.values() if v is False)
-        _log(f"[판매상태] RFM 기준 vid {len(sale_status)}개 — 판매중지 {n_stop} · 판매중 {n_on}")
+        from collections import Counter
+        c = Counter(str(v) for v in sale_status.values())
+        _log(f"[판매상태] vid {len(sale_status)}개 — 분포: {dict(c)} (원문→해석은 위 '[상품조회] 판매상태' 로그)")
     else:
-        _log("[판매상태] 없음 (로켓그로스 재고 없음 등). 판매자배송(개인)은 RFM에 없어 미상.")
+        _log("[판매상태] 없음 (상품조회 실패 등)")
     # 재고현황(RFM) — 계약(로켓그로스) 상품만. 옵션(vid)별 재고를 상품단위로 합산해 확인.
     inv_by_product: dict[str, int] = {}
     for p in report_acc.products:

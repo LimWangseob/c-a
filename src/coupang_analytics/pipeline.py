@@ -410,10 +410,11 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
         # ── vid·옵션·상품 = 상품조회/수정(전 상품·전 옵션 나열, 당일 판매 0 상품도 포함). 폴백=판매분석 발견 ──
         # (vi-detail-search 는 당일 판매활동 상품만 잡혀 판매 0 상품 vid 누락 → 상품조회/수정으로 vid 출처 교체)
         vendor_products = None
+        vendor_status: dict[str, str] = {}   # {vid: 판매상태} — 상품조회 productStatus(전 상품·판매자배송 포함)
         try:
             listings = fetch_vendor_inventory(b.page, log)
             vendor_products = products_from_vendor_inventory(listings, log)
-            sale_status_by_vid(listings, log)   # productStatus 관측 로그만(판매상태 소스는 RFM — 아래 주석 참고)
+            vendor_status = sale_status_by_vid(listings, log)   # 판매상태 출처(화면과 일치·판매자배송까지 커버)
         except VendorInventoryFetchError as exc:
             log(f"  [{a.label}] ⚠ 상품조회/수정(vid 출처) 실패 → 판매분석 발견으로 폴백 — {str(exc)[:120]}")
         # ── 지표(노출/판매/방문자) = 판매분석(vi-detail-search). 상품은 위 vendor_products 로 대체 ──
@@ -454,11 +455,11 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
                 log(f"  [{a.label}] 재고현황 {len(inventory)}개 옵션 조회")
             except InventoryFetchError as exc:   # 부가지표 — 실패해도 수집 전체는 진행(사유 명시)
                 log(f"  [{a.label}] ⚠ 재고현황 조회 실패(계속) — {str(exc)[:120]}")
-        # 판매상태 출처(§2.3 대장↔쿠팡 불일치 경고) = **RFM isSaleSuspended(로켓그로스만)** — 검증된 신뢰 소스.
-        # ⚠ 상품조회 productStatus 는 라이브 실측(2026-09-20 wellbing1107)에서 **전 옵션 SUSPENDED 상수**로 나와
-        #   판매중/중지를 구분 못 함(활성 상품도 SUSPENDED). valid 도 전 옵션 INVALID 상수. → 판매상태 소스로 안 씀.
-        #   vendor_status 는 진단 로그(관측)용으로만 두고, 실제 판정은 RFM 로 한다. 판매자배송 미상 한계는 유지.
-        sale_status = rfm_status
+        # 판매상태 출처(§2.3 대장↔쿠팡 불일치 경고) = **상품조회 productStatus(전 상품·판매자배송 포함)** 우선,
+        # 없으면(상품조회 실패) RFM isSaleSuspended(로켓그로스만) 폴백. 라이브 실측(2026-09-20 nicoable/sg0141n)에서
+        # productStatus 가 ON_SALE/PARTIAL_ON_SALE/SUSPENDED 로 정상 변동·**화면 판매/승인상태와 일치** 확인.
+        # (wellbing1107 은 '신규 등록 불가' 제한 계정이라 전부 SUSPENDED 였을 뿐 — 필드 자체는 정상.)
+        sale_status = vendor_status if vendor_status else rfm_status
         # 추적 범위 = 입력 대장 상품(위탁 관리분)만. 당일 발견을 매칭해 노출제목·vid·구분 부여(지표는 당일 것).
         tracked, n_match = scope_to_ledger(a.products, products)
         # 대장에 있는데 당일 판매·방문 0이라 미매칭(vid 없음)인 상품 → 그로스 재고 vid + 최근 N일 판매분석 vid 로

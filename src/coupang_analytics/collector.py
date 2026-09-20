@@ -148,12 +148,13 @@ def kind_of(registration_types) -> str:
 
 
 def sale_status_of(product_status: str) -> str:
-    """상품조회/수정 `productStatus` 원문 → 문자열 해석(관측·진단용). ⚠**판매상태 소스로 쓰지 말 것.**
+    """상품조회/수정 `productStatus` 원문 → 판매상태 문자열('판매중'/'부분판매중'/'판매중지'). 빈값이면 '' (미상).
 
-    라이브 실측(2026-09-20 wellbing1107): productStatus 가 **전 옵션 SUSPENDED 상수**로 나와 판매중/중지를
-    구분 못 함(재고 있는 활성 상품도 SUSPENDED). 즉 이 필드는 화면의 '판매상태'와 다르다(승인/수명주기 계열
-    추정). **실제 판매상태 = RFM 재고 API `isSaleSuspended`**(collector.fetch_inventory·검증됨)만 사용한다.
-    이 함수는 productStatus 원문을 로그로 관측하는 용도로만 남긴다(SUSPENDED/DRAFT/REJECTED 등 확인)."""
+    **화면(상품조회/수정)의 판매/승인 상태와 일치하는 신뢰 소스**(라이브 실측 2026-09-20 nicoable/sg0141n).
+    실제 원문 enum: **ON_SALE=판매중 · PARTIAL_ON_SALE=부분판매중 · SUSPENDED=판매중지**. 그 외(DRAFT=임시저장·
+    REJECTED=승인반려 등 미판매 상태)는 '판매중'이 아니므로 apply_sale_status 판정상 **판매중지로 묶는다**
+    (경고는 대장=판매중지·쿠팡=판매중일 때만 뜨므로 안전). NORMAL(판매자배송) 상품도 이 필드로 커버된다.
+    ⚠ 계정 전체가 SUSPENDED 로 나올 수 있음(wellbing1107 처럼 '신규 등록 불가' 제한 계정) — 필드 정상."""
     s = (product_status or "").strip()
     if not s:
         return ""
@@ -166,10 +167,11 @@ def sale_status_of(product_status: str) -> str:
 
 
 def sale_status_by_vid(listings: list["VendorInventoryListing"], log=None) -> dict[str, str]:
-    """{옵션ID(vid): productStatus 해석} — **관측·진단 로그 전용**(판매상태 소스 아님·[[sale_status_of]] 참고).
+    """{옵션ID(vid): 판매상태문자열} — 상품조회 productStatus(**전 상품·판매자배송 포함**)를 옵션 vid 로 편다.
 
-    productStatus 는 라이브에서 판매중/중지를 구분 못 함(전 옵션 SUSPENDED 상수)으로 확인됨 → 실제 판매상태는
-    RFM isSaleSuspended 만 쓴다. 이 함수는 원문 productStatus 분포를 로그로 남겨(라이브 관측) 필드 성격 파악에만 쓴다."""
+    한 리스팅의 모든 옵션 vid 는 그 리스팅 productStatus 를 공유(리스팅 단위 상태). 값이 빈 리스팅은 제외.
+    관측한 **원문 productStatus → 해석** 대응표를 로그로 남긴다(계정별 실제 enum 확인용). 화면과 일치하는
+    판매상태 소스([[sale_status_of]])."""
     out: dict[str, str] = {}
     seen: dict[str, str] = {}
     for listing in listings:
@@ -181,7 +183,7 @@ def sale_status_by_vid(listings: list["VendorInventoryListing"], log=None) -> di
             if o.vendor_item_id:
                 out[o.vendor_item_id] = st
     if log and seen:
-        log("  [상품조회] productStatus 관측(판매상태 아님·참고): "
+        log("  [상품조회] 판매상태(productStatus→해석): "
             + ", ".join(f"{k}={v}" for k, v in seen.items()))
     return out
 
