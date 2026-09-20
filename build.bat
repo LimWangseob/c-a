@@ -27,7 +27,8 @@ echo   * 새 PC에서 추가 입력 없이 쓰도록 담습니다. _설정값.js
 if errorlevel 1 echo   [경고] 설정 내보내기 실패 - 새 PC에서 설정 탭에 직접 입력해야 합니다(빌드는 계속).
 echo.
 echo [5/5] 배포용 zip 압축...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path 'dist\쿠팡애널리틱스\*' -DestinationPath 'dist\쿠팡애널리틱스_배포.zip' -Force"
+del /Q "dist\쿠팡애널리틱스_배포.zip" 2>nul
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path 'dist\쿠팡애널리틱스' -DestinationPath 'dist\쿠팡애널리틱스_배포.zip' -Force"
 if errorlevel 1 goto :err
 echo.
 echo 완료!
