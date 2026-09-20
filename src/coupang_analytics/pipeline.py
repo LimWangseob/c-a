@@ -760,8 +760,9 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
                 if existing:                                   # 기존 상품 → 키워드 동결
                     keywords = list(existing)
                     wb.ensure_product_block(biz, pname, kind, keywords, registered=base)   # no-op
-                    if grow and len(existing) < config.KW_MAX_TRACK and browser is not None:
-                        want = min(config.KW_ADD_PER_DAY, config.KW_MAX_TRACK - len(existing))
+                    active = wb.active_keywords(biz, pname)     # 담당자 중단 키워드 제외 = 실제 추적 대상
+                    if grow and len(active) < config.KW_MAX_TRACK and browser is not None:
+                        want = min(config.KW_ADD_PER_DAY, config.KW_MAX_TRACK - len(active))
                         found = select_keywords_light(title, naver, ai_key, browser=browser, log=log,
                                                       n=want, measure_ranks=measure, exclude=set(existing))
                         add = [t for t in found if t.keyword not in existing][:want]
@@ -770,13 +771,14 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
                             for t in add:
                                 wb.set_keyword_search(biz, pname, t.keyword, t.volume)
                             keywords += [t.keyword for t in add]
-                            log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → 동결 {existing} + 발굴 {[t.keyword for t in add]}")
+                            log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → 동결 {active} + 발굴 {[t.keyword for t in add]}")
                         else:
-                            log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → (동결) {keywords}")
+                            log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → (동결) {active}")
                     else:
-                        log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → (동결) {keywords}")
-                    _fill_frozen_search_volumes(wb, biz, pname, keywords, naver, log)  # 검색량 공란만 네이버로 채움(fix ②)
-                    todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date_iso)]
+                        log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → (동결) {active}")
+                    active = wb.active_keywords(biz, pname)     # 발굴 추가분 반영
+                    _fill_frozen_search_volumes(wb, biz, pname, active, naver, log)  # 검색량 공란만 네이버로(활성만·fix ②)
+                    todo = [kw for kw in active if not wb.is_rank_filled(biz, pname, kw, date_iso)]
                     measured = measure(todo, _cap=cap) if (browser is not None and todo) else {}
                     ranks = {kw: _best(measured.get(kw)) for kw in todo if kw in measured}  # 측정 실패는 공란
                     track_info = [(kw, 0, "", ranks.get(kw)) for kw in keywords]   # 동결분은 검색량/경쟁 미측정
@@ -918,7 +920,7 @@ def _count_unfilled_ranks(wb) -> int:
         if not date:
             continue
         for pname in wb.products_of(biz):
-            for kw in wb.product_keywords(biz, pname):
+            for kw in wb.active_keywords(biz, pname):   # 중단 키워드는 검색 대상 아님(공란 카운트 제외)
                 if not wb.is_rank_filled(biz, pname, kw, date):
                     n += 1
     return n
@@ -941,7 +943,7 @@ def _measure_unfilled_once(wb, path, log) -> int:
                 continue
             for pname in wb.products_of(biz):
                 vids = wb.sibling_vids(biz, pname)   # 리스팅 전 옵션 vid 합집합(아이템위너 놓침 방지)
-                keywords = wb.product_keywords(biz, pname)
+                keywords = wb.active_keywords(biz, pname)   # 중단 키워드 제외(이력만 보존)
                 if not keywords:                        # 2차 옵션 블록(키워드 없음)·vid 없는 상품 건너뜀
                     continue
                 todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
@@ -1334,9 +1336,9 @@ def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = 
             for pname in wb.products_of(biz):
                 if not wb.has_keyword_section(biz, pname):   # 다중옵션 2차 블록(판매정보만) → 키워드 선정 대상 아님
                     continue
-                existing = wb.product_keywords(biz, pname)
-                if existing:   # 동결 키워드 중 검색량 공란만 네이버로 채움(직원 직접입력 키워드 등, fix ②)
-                    _fill_frozen_search_volumes(wb, biz, pname, existing, naver, log)
+                existing = wb.product_keywords(biz, pname)   # 활성+중단 전체(프리즈 카운트 = 삭제 슬롯 AI 재충전 방지)
+                if existing:   # 동결 키워드 중 검색량 공란만 네이버로 채움(활성만·중단 제외·fix ②)
+                    _fill_frozen_search_volumes(wb, biz, pname, wb.active_keywords(biz, pname), naver, log)
                 # 채울 목표 = grow면 KW_MAX_TRACK(발굴 추가), 아니면 KW_TRACK_N(=4, 빈행 대신 실제 키워드로 채움).
                 # 부족분만 보충하고 목표치 이상이면 동결(스킵). '빈행도 키워드로 채우기' 요구(2026-09-15).
                 target = config.KW_MAX_TRACK if grow else config.KW_TRACK_N
@@ -1415,8 +1417,8 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
                 continue
             for pname in wb.products_of(biz):
                 vids = wb.sibling_vids(biz, pname)   # 리스팅 전 옵션 vid 합집합(아이템위너 놓침 방지)
-                keywords = wb.product_keywords(biz, pname)
-                if not keywords:                     # 2차 옵션 블록(키워드 없음)은 순위 대상 아님
+                keywords = wb.active_keywords(biz, pname)   # 담당자 중단 키워드는 순위 검색 제외(이력만 보존)
+                if not keywords:                     # 2차 옵션 블록·전부 중단 = 순위 대상 아님
                     continue
                 if not vids and not (pname or "").strip():   # 매칭 근거(vid·상품명) 전무 → 측정 불가(이례)
                     noname_products += 1
@@ -1755,8 +1757,8 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                 if wb.has_marketing() and not wb.product_due(biz, pname, date)[0]:
                     continue                       # 상품 수집 주기(마케팅 상품만 매일) — 오늘 대상 아니면 순위도 생략
                 vids = wb.sibling_vids(biz, pname)   # 리스팅 전 옵션 vid 합집합(아이템위너 놓침 방지)
-                keywords = wb.product_keywords(biz, pname)
-                if not keywords:                     # 2차 옵션 블록(키워드 없음)은 순위 대상 아님
+                keywords = wb.active_keywords(biz, pname)   # 담당자 중단 키워드는 순위 검색 제외(이력만 보존)
+                if not keywords:                     # 2차 옵션 블록·전부 중단 = 순위 대상 아님
                     continue
                 if not vids and not (pname or "").strip():   # 매칭 근거(vid·상품명) 전무 → 측정 불가(이례)
                     noname_products += 1

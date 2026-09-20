@@ -113,6 +113,7 @@ class OutputWorkbook:
         self._date_rows: dict[str, list[int]] = {}              # {사업자: [날짜 헤더행...]}
         self._metric_row: dict[tuple[str, str, str], int] = {}  # {(사업자,상품,지표): 행}
         self._kw_row: dict[tuple[str, str, str], int] = {}      # {(사업자,상품,키워드): 행}
+        self._kw_off: set[tuple[str, str, str]] = set()         # 추적 중단(담당자 삭제) 키워드 — 행·이력은 보존, 검색만 제외
         self._vid_row: dict[tuple[str, str], int] = {}          # {(사업자,상품): _상품ID 시트 행(등록명·판매상태·제목캐시)}
         self._block_vids: dict[tuple[str, str], list[str]] = {}  # {(사업자,상품): vid 목록} — 헤더 이름칸 'VID :' 꼬리에서 복원(출처=(A))
         self._reindex()
@@ -137,7 +138,7 @@ class OutputWorkbook:
     def _reindex(self) -> None:
         self._date_col.clear(); self._date_rows.clear()
         self._metric_row.clear(); self._kw_row.clear(); self._vid_row.clear()
-        self._block_vids.clear()
+        self._block_vids.clear(); self._kw_off.clear()
         for ws in self.wb.worksheets:
             if ws.title in (_INDEX_SHEET, _ACCT_SHEET, _MKT_SHEET, _DISC_SHEET):  # 특수시트 = 데이터 아님
                 continue
@@ -170,21 +171,53 @@ class OutputWorkbook:
                 elif metric in _ALL_METRICS:                    # 상품 지표행
                     if cur_prod:
                         self._metric_row[(biz, cur_prod, metric)] = r
-                elif metric == config.M_RANK and name:          # 키워드 순위행
+                elif metric in (config.M_RANK, config.M_RANK_OFF) and name:   # 키워드 순위행(활성/중단)
                     if cur_prod:
                         self._kw_row[(biz, cur_prod, name)] = r
+                        if metric == config.M_RANK_OFF:          # 추적 중단 키워드(담당자 삭제·이력 보존)
+                            self._kw_off.add((biz, cur_prod, name))
 
     # ── 재개(이어서)용 조회 ──────────────────────────────────
     def has_product(self, biz: str, product: str) -> bool:
         return any(k[0] == biz and k[1] == product for k in self._metric_row)
 
     def product_keywords(self, biz: str, product: str) -> list[str]:
-        """이 상품에 이미 기록된 키워드 목록(있으면 AI 선정 건너뛰고 순위만 — 키워드 동결)."""
+        """이 상품에 기록된 **모든** 키워드(활성+중단). 있으면 AI 선정 생략(동결) 판정·프리즈 카운트용.
+        중단(담당자 삭제) 키워드도 포함해 카운트해야 AI가 삭제된 슬롯을 다시 채우지 않는다."""
         out: list[str] = []
         for (b, p, kw) in self._kw_row:
             if b == biz and p == product and kw not in out:
                 out.append(kw)
         return out
+
+    def is_keyword_inactive(self, biz: str, product: str, keyword: str) -> bool:
+        """추적 중단(담당자가 구글시트에서 지운) 키워드인가 — 순위 검색·검색량 채움에서 제외 대상."""
+        return (_norm(biz), _key(product), str(keyword)) in self._kw_off
+
+    def active_keywords(self, biz: str, product: str) -> list[str]:
+        """**활성** 키워드만(중단 제외) — 순위 검색·검색량 채움·상한 카운트 대상."""
+        return [kw for kw in self.product_keywords(biz, product)
+                if not self.is_keyword_inactive(biz, product, keyword=kw)]
+
+    def set_keyword_active(self, biz: str, product: str, keyword: str, active: bool) -> bool:
+        """키워드 추적 활성/중단 토글 — 순위행 G열 라벨을 M_RANK↔M_RANK_OFF 로 바꾼다(행·과거값 보존).
+
+        active=False: 담당자 삭제 반영 = 추적 중단(이력은 그대로, 순위 검색만 제외·구글시트엔 '노출 순위(중단)'로 표시).
+        active=True: 재활성(담당자가 다시 넣음). 대상 행이 없으면 no-op(False)."""
+        biz, product = _norm(biz), _key(product)
+        row = self._kw_row.get((biz, product, str(keyword)))
+        if row is None:
+            return False
+        cur_off = (biz, product, str(keyword)) in self._kw_off
+        if cur_off == (not active):            # 이미 원하는 상태
+            return False
+        self.wb[biz].cell(row=row, column=_COL_METRIC,
+                          value=(config.M_RANK if active else config.M_RANK_OFF))
+        if active:
+            self._kw_off.discard((biz, product, str(keyword)))
+        else:
+            self._kw_off.add((biz, product, str(keyword)))
+        return True
 
     def products_of(self, biz: str) -> list[str]:
         """그 사업자 시트의 상품명 목록(블록 등장 순서). ②③ 단계가 상품을 순회하는 데 쓴다."""
@@ -973,6 +1006,7 @@ class OutputWorkbook:
         self.normalize_date_columns()
         font = Font(name=self._FN, size=11)
         bold = Font(name=self._FN, size=11, bold=True)
+        gray_bold = Font(name=self._FN, size=11, bold=True, color="9AA7B6")   # 중단(담당자 삭제) 키워드
         title_font = Font(name=self._FN, size=14, bold=True)
         f_prod = PatternFill("solid", fgColor=self._FILL_PROD)
         f_label = PatternFill("solid", fgColor=self._FILL_LABEL)
@@ -1094,10 +1128,14 @@ class OutputWorkbook:
                 if kh:
                     for r in range(kh, end + 1):
                         head = (r == kh)
+                        # 중단(담당자 삭제) 키워드 행 = 회색 글씨로 구분(과거값·행은 보존, 검색 제외)
+                        kw_nm = _key(ws.cell(r, _COL_NAME).value)
+                        inactive = (not head) and kw_nm and self.is_keyword_inactive(ws.title, nm, kw_nm)
+                        kw_font = gray_bold if inactive else bold
                         cell(ws, r, 1, fill=f_kind)
                         cell(ws, r, 2, fill=f_kind)
-                        for c in range(_COL_NAME, _COL_SEARCH):     # C~E 키워드명(항상 bold)
-                            cell(ws, r, c, fill=(f_kwhead if head else None), fnt=bold, align=wrap)
+                        for c in range(_COL_NAME, _COL_SEARCH):     # C~E 키워드명(활성=bold·중단=회색)
+                            cell(ws, r, c, fill=(f_kwhead if head else None), fnt=(bold if head else kw_font), align=wrap)
                         cell(ws, r, _COL_SEARCH, fill=(f_kwhead if head else None), num=not head)
                         cell(ws, r, _COL_METRIC, fill=(f_kwhead if head else f_label))
                         if head:   # 비고 자리(소헤더 G): 판매중지 > 체험단중 > 비고 (멱등 재계산)
