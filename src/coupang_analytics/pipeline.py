@@ -1179,6 +1179,12 @@ class _RunCtx:
     log: object
 
 
+def _save_ctx_progress(ctx: _RunCtx) -> None:
+    """실행 컨텍스트로 진행 상태 저장(_실행단계 진행파일). 9인자 호출 반복을 한 곳으로."""
+    _save_progress(ctx.out, ctx.date_from, ctx.date_to, ctx.started_at, ctx.done,
+                   ctx.carry, ctx.grow, ctx.skip_ranks, ctx.date_label)
+
+
 def _finish(ctx: _RunCtx, a: Account, report_acc, metrics, inv_by_vid, inv_status=None) -> None:
     """발견 결과를 워크북에 기록 + 진행 저장(1·2차 패스 공통). report_acc=None이면 무동작."""
     wb, log = ctx.wb, ctx.log
@@ -1211,10 +1217,89 @@ def _finish(ctx: _RunCtx, a: Account, report_acc, metrics, inv_by_vid, inv_statu
         log(f"  [{a.label}] 대장 상품 0개 — 시트·키워드·순위 생략")
     wb.mark_sales_collected(a.label, ctx.col_label)   # 오늘 판매수집 완료 스탬프(같은 날 재실행 시 생략 근거)
     ctx.done.add(a.account_id)                    # 이 계정 완료 확정
-    _save_progress(ctx.out, ctx.date_from, ctx.date_to, ctx.started_at, ctx.done,
-                   ctx.carry, ctx.grow, ctx.skip_ranks, ctx.date_label)
+    _save_ctx_progress(ctx)
     wb.save(ctx.partial)
     log(f"  [{a.label}] 완료 — 진행 {len(ctx.done)}/{ctx.total} (진행 저장: {ctx.partial.name})")
+
+
+def _collect_session_first(ctx: _RunCtx, accounts, get_password
+                           ) -> tuple[list[tuple[int, Account]], list[Account]]:
+    """1차 패스 — 세션 살아있는 계정 먼저 수집(로그인 없음 → 차단 위험 0). 세션 만료는 로그인 대기열로.
+
+    반복 자동로그인이 Akamai IP 차단을 유발하므로, 로그인 없는 계정을 먼저 다 확보한다.
+    반환: (로그인 필요 [(순번, Account)], 오늘 판매수집 이미 완료라 생략한 계정[키워드 보완 대상]).
+    """
+    wb, log, done, total, col_label = ctx.wb, ctx.log, ctx.done, ctx.total, ctx.col_label
+    login_needed: list[tuple[int, Account]] = []
+    sales_skipped: list[Account] = []
+    for i, a in enumerate(accounts, 1):
+        if a.account_id in done:                  # 완료 계정 → 건너뜀
+            log(f"== [{i}/{total}] {a.label} — 이미 완료, 건너뜀 ==")
+            continue
+        if wb.has_sales(a.label, col_label):      # 오늘 판매수집 이미 완료(스탬프) → 로그인·수집 생략(재실행)
+            log(f"== [{i}/{total}] {a.label} — 오늘({col_label}) 판매수집 완료됨 → 로그인·수집 생략(재실행). "
+                "키워드는 미보유분만 보완·순위는 미기입분만 조회 ==")
+            done.add(a.account_id)
+            _save_ctx_progress(ctx)
+            sales_skipped.append(a)
+            continue
+        if ctx.carry and wb.has_marketing():      # 마케팅 설정됐을 때만 주기 게이팅(미설정=현행 매일 유지)
+            due, why = wb.account_due(a.label, ctx.date_to)
+            if not due:
+                log(f"== [{i}/{total}] {a.label} — {why} → 오늘 수집 안 함(로그인 생략) ==")
+                done.add(a.account_id)            # 오늘은 의도적 스킵으로 '처리됨'(완주 판정·재개 일관)
+                _save_ctx_progress(ctx)
+                continue
+        log(f"== [{i}/{total}] {a.label} (계정ID: {a.account_id}) ==")
+        try:   # 한 계정의 어떤 오류(수집·워크북쓰기)도 전체를 막지 않게 계정 전체를 격리
+            report_acc, metrics, inv_by_vid, inv_status = _login_and_discover(
+                a, ctx.date_from, ctx.date_to, get_password, log, login=False)
+            _finish(ctx, a, report_acc, metrics, inv_by_vid, inv_status)
+        except NeedLogin:                         # 세션 없음 → 뒤로 미룸(자동제출 안 함)
+            login_needed.append((i, a))
+            log(f"  [{a.label}] 세션 만료 → 로그인 대기열(세션 있는 계정 먼저 수집 후 처리)")
+        except Exception as exc:
+            first = (str(exc).splitlines() or [""])[0][:250]
+            log(f"  [{a.label}] 처리 오류: {exc.__class__.__name__}: {first} — 건너뜀")
+    return login_needed, sales_skipped
+
+
+def _collect_with_login(ctx: _RunCtx, login_needed, get_password, sales_semi: bool) -> None:
+    """2차 패스 — 로그인 필요 계정 처리. 서킷브레이커(연속 Akamai 차단 K회면 이후 로그인 생략)·
+    로그인 사이 사람 간격(몰아치기=IP 플래그 방지)·비번오류는 재시도 금지(계정잠금 방지)."""
+    log, done, total = ctx.log, ctx.done, ctx.total
+    if login_needed:
+        log(f"== 로그인 필요 계정 {len(login_needed)}개 처리(세션우선 수집 완료) ==")
+    blocks = 0
+    attempted = 0
+    for i, a in login_needed:
+        if blocks >= config.LOGIN_BLOCK_CIRCUIT:  # IP가 이미 플래그됨 → 더 두드리지 않음(더 태우기 방지)
+            log(f"== [{i}/{total}] {a.label} — Akamai 차단 지속(연속 {blocks}회)으로 로그인 생략 "
+                "→ 잠시 후/내일(쉰 IP) 이어서 수집 ==")
+            continue
+        if attempted > 0:   # 로그인 사이에 사람 간격(몰아치기=IP 플래그 방지). 첫 로그인엔 대기 없음
+            pace = random.uniform(config.LOGIN_PACE_MIN_SEC, config.LOGIN_PACE_MAX_SEC)
+            if pace > 0:
+                log(f"  [페이싱] 다음 로그인까지 {pace:.0f}s 대기(로그인 몰아치기=차단 회피)")
+                time.sleep(pace)
+        attempted += 1
+        log(f"== [{i}/{total}] {a.label} (계정ID: {a.account_id}) — 로그인 시도 ==")
+        try:
+            report_acc, metrics, inv_by_vid, inv_status = _login_and_discover(
+                a, ctx.date_from, ctx.date_to, get_password, log, login=True, semi=sales_semi)
+            blocks = 0                            # 로그인 성공 → 연속 차단 카운터 리셋
+            _finish(ctx, a, report_acc, metrics, inv_by_vid, inv_status)
+        except LoginBlocked:                      # Akamai 차단 → 서킷브레이커 카운트
+            blocks += 1
+            log(f"  [{a.label}] 로그인 차단 누적 {blocks}/{config.LOGIN_BLOCK_CIRCUIT}")
+        except LoginCredentialError:              # 비번오류/계정잠금 → 재시도 금지: '처리됨'으로 표시해
+            done.add(a.account_id)                # 야간 재개·같은 날 재실행이 비번을 다시 제출하지 않게(계정잠금 방지).
+            _save_ctx_progress(ctx)
+            log(f"  [{a.label}] 비밀번호 오류/계정 상태로 건너뜀 — 자동 재시도 안 함(계정잠금 방지). "
+                "관리대장에서 비번 수정 후 새 실행(다음 날/진행분 초기화)에서 재시도됨")
+        except Exception as exc:
+            first = (str(exc).splitlines() or [""])[0][:250]
+            log(f"  [{a.label}] 처리 오류: {exc.__class__.__name__}: {first} — 건너뜀")
 
 
 def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
@@ -1328,73 +1413,9 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
                   skip_ranks=skip_ranks, keywords_off=keywords_off, col_label=col_label, total=total,
                   naver=naver, ai_key=ai_key, log=log)
 
-    # ── 1차 패스: 세션 살아있는 계정 먼저 수집(로그인 없음 → 차단 위험 0). 세션 만료는 로그인 대기열로. ──
-    #   반복 자동로그인이 Akamai IP 차단을 유발하므로, 로그인 없는 계정을 먼저 다 확보한다.
-    login_needed: list[tuple[int, Account]] = []
-    sales_skipped: list[Account] = []             # 오늘 판매수집 이미 완료 → 로그인·수집 생략한 계정(키워드 보완 대상)
-    for i, a in enumerate(accounts, 1):
-        if a.account_id in done:                  # 완료 계정 → 건너뜀
-            log(f"== [{i}/{total}] {a.label} — 이미 완료, 건너뜀 ==")
-            continue
-        if wb.has_sales(a.label, col_label):      # 오늘 판매수집 이미 완료(스탬프) → 로그인·수집 생략(재실행)
-            log(f"== [{i}/{total}] {a.label} — 오늘({col_label}) 판매수집 완료됨 → 로그인·수집 생략(재실행). "
-                "키워드는 미보유분만 보완·순위는 미기입분만 조회 ==")
-            done.add(a.account_id)
-            _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks, date_label)
-            sales_skipped.append(a)
-            continue
-        if carry and wb.has_marketing():          # 마케팅 설정됐을 때만 주기 게이팅(미설정=현행 매일 유지)
-            due, why = wb.account_due(a.label, date_to)
-            if not due:
-                log(f"== [{i}/{total}] {a.label} — {why} → 오늘 수집 안 함(로그인 생략) ==")
-                done.add(a.account_id)            # 오늘은 의도적 스킵으로 '처리됨'(완주 판정·재개 일관)
-                _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks, date_label)
-                continue
-        log(f"== [{i}/{total}] {a.label} (계정ID: {a.account_id}) ==")
-        try:   # 한 계정의 어떤 오류(수집·워크북쓰기)도 전체를 막지 않게 계정 전체를 격리
-            report_acc, metrics, inv_by_vid, inv_status = _login_and_discover(
-                a, date_from, date_to, get_password, log, login=False)
-            _finish(ctx, a, report_acc, metrics, inv_by_vid, inv_status)
-        except NeedLogin:                         # 세션 없음 → 뒤로 미룸(자동제출 안 함)
-            login_needed.append((i, a))
-            log(f"  [{a.label}] 세션 만료 → 로그인 대기열(세션 있는 계정 먼저 수집 후 처리)")
-        except Exception as exc:
-            first = (str(exc).splitlines() or [""])[0][:250]
-            log(f"  [{a.label}] 처리 오류: {exc.__class__.__name__}: {first} — 건너뜀")
-
-    # ── 2차 패스: 로그인 필요 계정 — 서킷브레이커(연속 Akamai 차단 K회면 이후 로그인 생략). ──
-    if login_needed:
-        log(f"== 로그인 필요 계정 {len(login_needed)}개 처리(세션우선 수집 완료) ==")
-    blocks = 0
-    attempted = 0
-    for i, a in login_needed:
-        if blocks >= config.LOGIN_BLOCK_CIRCUIT:  # IP가 이미 플래그됨 → 더 두드리지 않음(더 태우기 방지)
-            log(f"== [{i}/{total}] {a.label} — Akamai 차단 지속(연속 {blocks}회)으로 로그인 생략 "
-                "→ 잠시 후/내일(쉰 IP) 이어서 수집 ==")
-            continue
-        if attempted > 0:   # 로그인 사이에 사람 간격(몰아치기=IP 플래그 방지). 첫 로그인엔 대기 없음
-            pace = random.uniform(config.LOGIN_PACE_MIN_SEC, config.LOGIN_PACE_MAX_SEC)
-            if pace > 0:
-                log(f"  [페이싱] 다음 로그인까지 {pace:.0f}s 대기(로그인 몰아치기=차단 회피)")
-                time.sleep(pace)
-        attempted += 1
-        log(f"== [{i}/{total}] {a.label} (계정ID: {a.account_id}) — 로그인 시도 ==")
-        try:
-            report_acc, metrics, inv_by_vid, inv_status = _login_and_discover(
-                a, date_from, date_to, get_password, log, login=True, semi=sales_semi)
-            blocks = 0                            # 로그인 성공 → 연속 차단 카운터 리셋
-            _finish(ctx, a, report_acc, metrics, inv_by_vid, inv_status)
-        except LoginBlocked:                      # Akamai 차단 → 서킷브레이커 카운트
-            blocks += 1
-            log(f"  [{a.label}] 로그인 차단 누적 {blocks}/{config.LOGIN_BLOCK_CIRCUIT}")
-        except LoginCredentialError:              # 비번오류/계정잠금 → 재시도 금지: '처리됨'으로 표시해
-            done.add(a.account_id)                # 야간 재개·같은 날 재실행이 비번을 다시 제출하지 않게(계정잠금 방지).
-            _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks, date_label)
-            log(f"  [{a.label}] 비밀번호 오류/계정 상태로 건너뜀 — 자동 재시도 안 함(계정잠금 방지). "
-                "관리대장에서 비번 수정 후 새 실행(다음 날/진행분 초기화)에서 재시도됨")
-        except Exception as exc:
-            first = (str(exc).splitlines() or [""])[0][:250]
-            log(f"  [{a.label}] 처리 오류: {exc.__class__.__name__}: {first} — 건너뜀")
+    # 계정 수집 = 2패스(세션우선 → 로그인). Akamai IP 차단을 줄이려 로그인 없는 계정을 먼저 다 확보한다.
+    login_needed, sales_skipped = _collect_session_first(ctx, accounts, get_password)
+    _collect_with_login(ctx, login_needed, get_password, sales_semi)
 
     uncollected = [a for _, a in login_needed if a.account_id not in done]
     if uncollected:
