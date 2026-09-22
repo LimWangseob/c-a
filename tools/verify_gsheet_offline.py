@@ -349,6 +349,11 @@ def t6_roster_from_workbook() -> None:
     assert r0.product == "스텐 텀블러 500ml"                              # C=노출명(표시)
     assert r0.key == gi.marketing_key("idA", "텀블러")                    # 안정키=계정ID+등록명(노출명 아님)
     assert r0.link_gid == 42 and r0.link_row is not None
+    # 상품 링크 수식 = 사업자 통계시트(#gid)+블록 헤더행. ⚠ '계정목록!A1' 자가참조 아님(어제 gsheet 버그).
+    _cell = gi._product_cell(r0)
+    _fml = _cell["userEnteredValue"]["formulaValue"]
+    assert _fml == f'=HYPERLINK("#gid=42&range=A{r0.link_row}","{r0.product}")', _fml
+    assert "!A1" not in _fml and "계정목록" not in _fml, _fml   # 자기 탭 A1 자가참조(버그) 아님
     # 사업자별 바탕색 밴딩: 인접 사업자는 다른 색 + 팔레트 길이마다 순환(행 전체 A~G 동일색)
     assert gi._band_fill(0) != gi._band_fill(1) != gi._band_fill(2)          # 인접 밴드는 서로 다름
     assert gi._band_fill(0) == gi._band_fill(len(gi._BAND_FILLS))            # 팔레트 길이마다 순환
