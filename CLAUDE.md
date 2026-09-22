@@ -45,6 +45,23 @@ python ui/app_qt.py     # 기본 UI = PySide6(Qt) + Windows 11 Fluent 스타일
 - 쿠키 주입한 새 브라우저는 판매분석 데이터API가 Akamai에 막힘 → **수집은 사람이 로그인한 그 세션/프로필 재사용에서만**.
 - fallback 금지(try/except pass, silent None). 응답 한국어.
 
+## 코드 건강 규칙 (회귀 방지 — 2026-09-22, SSOT=`designs/CODE_HEALTH_PLAN.md`)
+> 배경: 잦은 수정으로 4파일(`pipeline.py`·`workbook.py`·`app_qt.py`·`app.py`)이 비대·괴물함수화되고
+> "과거 정상→오류" 회귀가 반복됨. 이를 막는 게이트를 뒀다. **아래는 매 작업에서 지킨다.**
+- **커밋/푸시 전 게이트 통과 필수**: `python tools/run_checks.py`(전체 3종·오프라인·결정적)가 초록이어야 함.
+  git 훅이 자동 검사(pre-commit=`--quick`[시뮬+구글시트], pre-push=전체+`check_complexity.py`).
+  **새 PC/클론 후 `python tools/install_hooks.py` 1회**. 응급 우회(`--no-verify`)는 **상시 금지**(회귀 유입).
+- **테스트에서 실 API 금지**: 검증 3종은 로그인·OpenAI·네이버 **호출 없이** 돈다. `verify_offline`의 [6]
+  키워드 선정도 **기본은 결정적 모킹**(경계만 페이크). 실 API 실증이 필요하면 `VERIFY_REAL_API=1`로 옵트인.
+- **새 함수 CC ≤ 15 지향 · 파일 ≤ ~600줄 지향**: `check_complexity.py`가 4파일 밖에서 새 D+(CC≥21)
+  괴물함수를 경고하고, 건강하던 파일이 MI **C로 떨어지면 차단**(exit 1). 건강(A/B) 파일은 그대로 유지.
+- **A등급(건강) 파일은 건드리지 말 것**: 불필요 변경=새 회귀. 4개 썩은 파일 수정 시 **핀 테스트 먼저**
+  (그 행동을 `simulate_pipeline`/`verify_offline`이 덮는지 확인, 얇으면 시나리오 추가 후 분해).
+- **되돌림/정책 변경은 실측 근거 메모 필수**(플립플롭 방지, [[fix-from-real-evidence]]). 판매상태 소스·키워드
+  로직처럼 왕복(A→B→A)한 이력이 있음 — 근거 없는 되돌림 금지.
+- **분해는 행동 불변**(로직 바꾸지 말고 위치만): 정책·엣지케이스(로그인 판정·Akamai·날짜라벨·옵션분리·매칭
+  게이트) 보존. 매 추출 후 게이트 초록 유지, 커밋은 작게·자주.
+
 ## 현재 상태
 - v1 완성·운용 중. 3단계(①판매수집(로그인) ②키워드선정 ③순위조회) 분리, 계정단위 end-to-end, 재개(`진행중.xlsx`+`.json`)·통계 마스터 이어쓰기·서킷브레이커 구현.
 - **✅VID 출처 변경 1~7단계 구현 완료(2026-09-20·오프라인 검증 통과·⚠라이브 확인 남음, DESIGN §0-00000)**: 최초 vid를 판매분석(`vi-detail-search`, 당일 판매활동 상품만)이 아니라 **상품조회/수정(`POST /tenants/seller-web/v2/vendor-inventory/search`, 전 상품·전 옵션)** 에서 등록상품명 매칭으로 확보. `collector.fetch_vendor_inventory`/`products_from_vendor_inventory` → `_login_and_discover`가 vid 출처로(폴백=판매분석 발견). **vid 출처=(A) 헤더 이름칸 'VID :' 꼬리**(인메모리 `_block_vids`·숨김 `_상품ID` vid 3열 폐지·무손실 이관). **옵션 분리(다중옵션만)**: 옵션(vid)별 블록, **대표=첫 옵션(키워드+순위·과거 합산이력 승계)·2차=판매정보만**(`ensure_product_block(rank_rows=,registered=)`·`has_keyword_section`). **블록 이름=등록상품명+옵션라벨**(단일=등록상품명). ③ 순위 매칭=`sibling_vids`(같은 등록상품명 옵션 vid 합집합, 아이템위너 놓침 방지). **set_display_name(노출명 교체) 중단**(블록명 고정). 지표=옵션(vid)별(노출/판매/방문=vi-detail·재고=RFM). 둘다=RFM만. 대장 vid 역기록 금지(재고역기록 유지). **마이그레이션(vid=상품당 1개)**: 같은 vid=기존 블록 승계(이름 정규화)·**등록상품명 같은데 vid 다르면 이전 데이터 삭제하고 새로 시작**(`blocks_with_registered_name`+`delete_product_block`). **계정 삭제 시 관련 시트 제거=기존 구현**(delete_account+gsheet delete_accounts). **7단계(판매상태 productStatus화) 라이브 검증 완료**(2026-09-20 다계정): productStatus=화면 판매/승인상태와 일치하는 신뢰 소스(전 상품·판매자배송 포함). enum=ON_SALE→판매중·PARTIAL_ON_SALE→부분판매중·SUSPENDED→판매중지·DRAFT→임시저장·REJECTED→승인반려(nicoable·sg0141n로 정상 변동 확인). 상품조회 실패 시 RFM isSaleSuspended 폴백. ⚠계정 전체 SUSPENDED 가능(wellbing1107='신규 등록 불가' 제한계정 — 처음 이 계정만 보고 되돌렸다가 다계정 검증으로 재적용). **⭐라이브 검증: 로그인·상품조회(51→47상품)·대장매칭(17→14·vid80)·옵션분리·판매분석지표·재고 전부 정상.** 검증=verify_offline[8·12]·simulate[11][9]·verify_gsheet. SSOT=DESIGN §0-00000·§2.3·§8-G, 메모 feature-vid-source-from-product-list.

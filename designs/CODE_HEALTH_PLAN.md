@@ -62,20 +62,18 @@
 
 ## 3. 4단계 실행 계획
 
-### 단계 1 — 테스트 게이트 + 3계층 훅  (먼저·안전·즉효)
-- [ ] `tools/run_checks.py`(또는 `make check`) 신설 = 3 스크립트 순차 실행·하나라도 실패 시 exit 1·요약 출력.
-- [ ] **verify_offline 실 API 제거**: [6] Phase B가 실제 OpenAI/네이버를 부르면 **모킹**으로 교체(결정적·<2s). (실 API 호출부 확인 후 stub.) — 테스트 신뢰성의 핵심.
-- [ ] **3계층 훅**:
-  1. **pre-commit**(<10s): 문법/임포트 체크 + `simulate_pipeline` + `verify_gsheet_offline`(빠른 오프라인).
-  2. **pre-push**(<30s): `run_checks.py` 전체.
-  3. **품질 게이트**: `radon cc --min D`가 **새로** D+ 함수를 만들거나 `radon mi`가 4파일 외 파일을 C로 떨어뜨리면 경고/차단. (스크립트로 임계치 비교.)
-- [ ] 훅은 `.git/hooks/`에 두되, 재설치용 `tools/install_hooks.py`(또는 `deploy/`)로 버전관리(팀/새 PC 복원).
-- 수용기준: `run_checks.py` 초록 + 훅이 일부러 깬 커밋을 실제로 막음(1회 실증).
+### 단계 1 — 테스트 게이트 + 3계층 훅  ✅ 완료 (2026-09-22)
+- [x] `tools/run_checks.py` 신설 = 3 스크립트 **서브프로세스** 순차 실행(하나 죽어도 나머지 계속)·하나라도 실패 시 exit 1·요약. `--quick`=빠른 2종(시뮬+구글시트, pre-commit용). 전체 **16.9s**(<30s).
+- [x] **verify_offline 실 API 제거**: [6]을 **결정적 모킹**으로 교체 — `kw_ai._ask`/`_client`(OpenAI)와 `_FakeNaver`(네이버) **경계만** 페이크, 실제 `select_keywords_light` 로직(후보조립→판정→압축→AI선정) 그대로 실행. 판정/선정 페이크는 프롬프트 안 후보를 되받아(echo) 일관 유지. **16.4→3.3s·결정적.** 실 API 실증은 `VERIFY_REAL_API=1` 옵트인(기존 경로 보존).
+- [x] **3계층 훅**(`tools/install_hooks.py`가 SSOT·`.git/hooks/`에 기록·`--status`/`--uninstall`):
+  1. **pre-commit**: 스테이징 .py `py_compile` + `run_checks.py --quick`(시뮬+구글시트, ~12s).
+  2. **pre-push**: `run_checks.py`(전체) + `check_complexity.py`(품질).
+  3. **품질 게이트** `tools/check_complexity.py`: 4파일(KNOWN_BAD) **밖** 파일이 MI **C로 추락 시 차단**(exit 1) + 4파일 밖 새 **D+(CC≥21) 괴물함수 경고**(현재 7개=기존 단발성). radon 미설치면 조언만(통과).
+- 수용기준 ✅: `run_checks.py` 초록 + 훅이 문법오류 스테이징 커밋을 실제 차단(실증 완료·로그 head 불변).
 
-### 단계 2 — CLAUDE.md 규칙 + 메모리  (매 세션 자동 적용)
-- [ ] CLAUDE.md에 "코드 건강 규칙" 섹션: **커밋 전 `run_checks.py` 통과 필수** · 새 함수 **CC ≤ 15** · 파일 **≤ ~600줄** 지향 · **테스트서 실 API 금지** · **되돌림/정책변경은 근거 메모 필수**(플립플롭 방지) · 4개 건강 안 된 파일 수정 시 **핀 테스트 먼저**.
-- [ ] 메모리(feedback): 위 규칙을 [[fix-from-real-evidence]]·[[commit-with-design-and-memory]]와 연결해 1개 저장.
-- 수용기준: 규칙이 CLAUDE.md·메모리에 있고, 이후 세션이 자동 인용.
+### 단계 2 — CLAUDE.md 규칙 + 메모리  ✅ 완료 (2026-09-22)
+- [x] CLAUDE.md에 "코드 건강 규칙 (회귀 방지)" 섹션 추가(커밋 전 게이트·실 API 금지·CC≤15·파일≤600·되돌림 근거 메모·건강 파일 미접촉·행동 불변 분해).
+- [x] 메모리(feedback) [[code-health-regression-gate]] 저장([[fix-from-real-evidence]]·[[commit-with-design-and-memory]] 연결) + [[handoff-code-health]]·MEMORY.md 갱신.
 
 ### 단계 3 — 썩음 측정  ✅ 완료 (이 문서 §1). 판정 = **정리(분해)**.
 

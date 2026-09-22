@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -420,8 +421,83 @@ def t1_delete_account():
     _ok("가게A 시트·이력·메타(계정정보/상품ID/마케팅) 완전 삭제·가게B 온전·계정목록에서도 사라짐")
 
 
-# ── Tier2 (외부 네트워크·AI, 로그인 아님) ─────────────────────
+# ── [6] 키워드 Phase B 선정 로직 ───────────────────────────────
+# 기본 = **결정적 모킹**(네이버·OpenAI 경계만 페이크, 실제 select_keywords_light 로직 그대로 실행).
+#        회귀 게이트가 빠르고(<2s) 결정적이려면 실 API 호출 금지(비용·네트워크·비결정성 제거).
+# 실 API 실증이 필요하면 VERIFY_REAL_API=1 로 실행하면 저장된 키로 진짜 호출(옵트인).
+class _FakeNaver:
+    """NaverAdApi 대역 — related_keywords_multi 만 쓰인다. 모든 힌트를 고검색량으로 되돌려
+    후보 하한(≥500/≥30)을 전부 통과시켜 선정 파이프라인 전 구간이 도는지 검증한다."""
+
+    def related_keywords_multi(self, hints):
+        from coupang_analytics.kw_volume import KeywordVolume
+        out = []
+        for h in hints:
+            h = str(h).strip()
+            if h:
+                out.append(KeywordVolume(keyword=h, pc=900, mobile=900, comp_idx="중간",
+                                         pc_clicks=10.0, mobile_clicks=20.0, pl_avg_depth=3))
+        return out
+
+    def related_keywords(self, hint):
+        return self.related_keywords_multi([hint])
+
+
+def _fake_ask(_client, _model, system, user, *_a, **_kw):
+    """kw_ai._ask 대역 — system 프롬프트로 호출 지점을 식별해 유효 JSON을 되돌린다.
+    판정/선정은 프롬프트 안의 후보를 되받아(echo) 후보 집합과 항상 일관되게 만든다."""
+    import re as _re
+
+    from coupang_analytics import kw_ai
+    if system == kw_ai._ANALYZE_SYSTEM:
+        return json.dumps({"core": "테스트상품", "use": "테스트 용도",
+                           "identities": ["테스트상품", "테스트제품"],
+                           "attributes": ["소형"],
+                           "anchors": ["테스트상품", "테스트키워드"]}, ensure_ascii=False)
+    if system == kw_ai._GEN_SYSTEM:
+        return json.dumps({"candidates": ["테스트상품", "테스트키워드", "테스트상품추천"]},
+                          ensure_ascii=False)
+    if system == kw_ai._JUDGE_SYSTEM:      # user 안 '후보 키워드: [...]' 를 되받아 CORE/RELATED 판정
+        m = _re.search(r"후보 키워드:\s*(\[[^\]]*\])", user)
+        cands = json.loads(m.group(1)) if m else []
+        judged = [{"k": k, "label": ("CORE" if i == 0 else "RELATED"), "match": max(50, 90 - i)}
+                  for i, k in enumerate(cands)]
+        return json.dumps({"judged": judged}, ensure_ascii=False)
+    if system == kw_ai._SELECT_SYSTEM:     # items 의 "keyword" 값을 되받아 우선순위대로 선정
+        kws = _re.findall(r'"keyword":\s*"([^"]+)"', user)
+        selected = [{"k": k, "role": ("REP" if i == 0 else "SALES"), "priority": i + 1}
+                    for i, k in enumerate(kws)]
+        return json.dumps({"selected": selected}, ensure_ascii=False)
+    return "{}"
+
+
+def _t2_keywords_mocked():
+    print("[6] 키워드 Phase B 선정 로직 (결정적 모킹 — 네이버·OpenAI 경계만 페이크, 실 API 호출 없음)")
+    from coupang_analytics import kw_ai
+    orig_ask, orig_client = kw_ai._ask, kw_ai._client
+    kw_ai._ask = _fake_ask
+    kw_ai._client = lambda _key=None: object()   # OpenAI 인스턴스 생성 회피(오프라인)
+    try:
+        lines: list[str] = []
+        picked = select_keywords_light("테스트상품 프리미엄 소형 30개입", _FakeNaver(),
+                                       ai_key="__mock__", n=config.KW_MAX_TRACK,
+                                       browser=None, measure_ranks=None,
+                                       log=lambda m: lines.append(m))
+    finally:
+        kw_ai._ask, kw_ai._client = orig_ask, orig_client
+    assert picked, "선정 결과가 비었음(파이프라인 어딘가에서 후보가 전멸)"
+    assert len(picked) <= config.KW_MAX_TRACK, f"선정 개수 초과: {len(picked)} > {config.KW_MAX_TRACK}"
+    assert picked[0].role == "REP", f"첫 키워드 역할이 REP가 아님: {picked[0].role}"
+    assert all(k.keyword.strip() for k in picked), "빈 키워드 포함"
+    _ok(f"선정 로직 완주(후보조립→판정→점수압축→AI종합선정) → {len(picked)}개")
+    _ok("최종: " + ", ".join(f"[{k.relevance or '?'}]{k.keyword}({k.role})" for k in picked))
+
+
+# ── Tier2 (외부 네트워크·AI, 로그인 아님) — VERIFY_REAL_API=1 옵트인 ─────────────
 def t2_keywords(store, il):
+    if os.environ.get("VERIFY_REAL_API") != "1":
+        _t2_keywords_mocked()
+        return
     print("[6] 키워드 Phase B 실제 실행 (AI 앵커→네이버확장→AI판정→점수압축→AI종합선정, 브라우저 없이)")
     nj = store.get_password("__naver__")
     if not nj:
