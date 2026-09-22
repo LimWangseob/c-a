@@ -140,7 +140,11 @@
 - workbook: apply_style F52·_build_index D29·normalize_date_columns D26·set_display_name D21 → 전부 제거.
 - app_qt/app: do_run_full E33/E34 → C(실행모드 로직 백엔드 공통화).
 - **`python -m radon cc <4파일> -n D` = 빈 결과**(D+ 0개). 검증: 게이트 6종 + 품질 게이트 초록.
-- **남은 것 = (1) 4파일 MI C→B 는 모듈 분리 필요**(대형파일 radon MI 포화·별도 단계·테스트 가로채기 재배선 위험) **(2) 라이브 검증**(로그인·순위 사무실).
+- **✅라이브 ①(로그인·발견) 통과(2026-09-22 사무실 nicoable)**: 분해 `_ensure_login`/`_fresh_login`/`_discover_products`/
+  `_run_discover`/`_augment_vids` 프로덕션 정상(행동 불변 실증) — 로그인·상품조회 7상품·판매분석 23옵션·재고 21vid·
+  판매상태 15vid(판매중9/중지4/부분2)·미매칭 3vid 보강·대장 3전건. 도구=`verify_login_discover_live.py <계정ID> --semi`(읽기전용).
+- ⚠ **별도 발견**: 구글시트 **입력 관리대장 403**(SA `coupang-sheet-bot@…` 미공유) → 무인 gsheet 입력·재고 역기록 막힐 수 있음. SA에 대장 시트 **'편집자' 공유** 확인(코드 아님).
+- **남은 것 = (1) 4파일 MI C→B 는 모듈 분리 필요**(대형파일 radon MI 포화·별도 단계·테스트 가로채기 재배선 위험) **(2) ③순위 라이브 검증**(핫스팟 권장·사무실 IP는 차단 이력).
 - 회귀 게이트 = `run_checks.py` **6종**(시뮬·핀3[login_ranks 16시나리오·apply_style·run_plan]·구글시트·오프라인), quick=5종.
 - **모듈 분리**(pipeline_sales/ranks/gsheet)는 함수 CC 정리 후 별도 단계로(지금은 제자리 분해로 충분).
 
