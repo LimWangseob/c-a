@@ -128,6 +128,19 @@ def main():
     def _sale(vid):
         v = sale_status.get(vid) if vid else None
         return ("판매중지" if v is True else "판매중") if isinstance(v, bool) else (v or "미상")
+    # ── ⭐재고 vid 대조(옵션 재고 공란 원인 진단) ──────────────────────────
+    # 상품조회(블록) 옵션 vid 중 **RFM 재고맵(inv_by_vid)에 없는** vid = 재고 공란의 직접 원인.
+    # 판매상태별로 나눠, 재고가 안 잡히는 게 판매중지 때문인지·특정 vid 번호대 때문인지 드러난다.
+    tracked_vids = [(o.vendor_item_ids[0], p, o) for p in report_acc.products
+                    for o in p.options if o.vendor_item_ids]
+    have = [(v, p, o) for v, p, o in tracked_vids if v in inv_by_vid]
+    miss = [(v, p, o) for v, p, o in tracked_vids
+            if v not in inv_by_vid and p.kind in ("로켓그로스", "로켓그로스+판매자배송")]
+    _log(f"[재고대조] RFM 재고맵 {len(inv_by_vid)}vid · 추적 옵션 {len(tracked_vids)}vid "
+         f"· 재고매칭 {len(have)} · **재고 없는 로켓그로스 옵션 {len(miss)}** (판매자배송 제외)")
+    for v, p, o in miss[:20]:
+        _log(f"  [재고없음] vid={v} 판매상태={_sale(v)} [{p.kind}] {p.name[:26]}"
+             f"{'('+o.label+')' if o.label else ''} — RFM 목록에 이 vid 없음")
     _log("[vid 출처=상품조회/수정] 각 상품 옵션별 vid·판매상태·지표 (grep 키=vid=…):")
     for p in report_acc.products:
         for o in p.options:

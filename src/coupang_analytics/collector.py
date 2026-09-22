@@ -324,29 +324,12 @@ def fetch_inventory(page, log=None) -> tuple[dict[str, int], dict[str, str], dic
     — 개인(NORMAL) 계정은 로켓그로스 재고가 없어 빈 dict(정상). 비200/파싱실패는 InventoryFetchError.
     페이지네이션: pageNumber 로 넘기다가 **안 넘어가면(재고 API가 pageNumber 무시)** 큰 pageSize 로 전량 1회 재요청.
     ⚠ 상품별 재고를 빠짐없이 잡기 위함 — 재고 적은 옵션이 정렬 하위로 밀려 상위 100 밖에 있으면 그 상품 재고현황이 공란이 되던 문제 해결.
-    **hiddenStatus 확장(소유자 2026-09-22)**: 로켓그로스는 판매중지·숨김 옵션도 상태 무관 전부 재고를 준다.
-    VISIBLE 만 조회하면 **숨김/판매중지 옵션 vid 가 빠져 그 옵션 재고가 공란**이 되던 문제 → VISIBLE 조회 후
-    **HIDDEN 을 1회 더 조회해 합친다**(없던 vid 만 추가·VISIBLE 우선). HIDDEN 조회 실패는 비치명(VISIBLE 유지).
+    ⚠ hiddenStatus 는 VISIBLE 만 조회한다 — **HIDDEN 은 라이브(2026-09-22 nicoable)서 0개 반환**이라 무의미
+    (재고 공란의 원인은 숨김/판매중지가 아니라 **상품조회 중복 옵션**[같은 라벨의 여러 vid 중 일부만 RFM
+    재고에 존재]임이 확인됨 → 원인은 products_from_vendor_inventory 쪽에서 처리).
     """
     log = log or (lambda m: None)
-    inv, names, status = _fetch_inventory_status(page, "VISIBLE", log)
-    try:
-        inv2, names2, status2 = _fetch_inventory_status(page, "HIDDEN", log)
-    except InventoryFetchError as exc:   # 숨김 조회 실패(값 미지원 등) → VISIBLE 만으로 진행(회귀 없음)
-        log(f"  [재고] ⚠ 숨김 옵션 조회 실패(계속·VISIBLE만) — {str(exc)[:100]}")
-        return inv, names, status
-    added = 0
-    for k, v in inv2.items():
-        if k not in inv:
-            inv[k] = v
-            added += 1
-    for k, v in names2.items():
-        names.setdefault(k, v)
-    for k, v in status2.items():
-        status.setdefault(k, v)
-    if added:
-        log(f"  [재고] 숨김/비활성 옵션 {added}개 추가(누적 {len(inv)})")
-    return inv, names, status
+    return _fetch_inventory_status(page, "VISIBLE", log)
 
 
 def _fetch_inventory_status(page, hidden_status: str, log) -> tuple[dict, dict, dict]:
