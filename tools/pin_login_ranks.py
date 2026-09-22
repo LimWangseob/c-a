@@ -398,6 +398,33 @@ def pin_rank_skip_optionless():
     _check(not wb.has_keyword_section("비즈R", "상품R (그레이)"), "2차 블록=키워드 구역 없음(건너뜀)")
 
 
+def pin_rank_manual_mode():
+    print("[핀 N] 반자동(비자동제출) — 사람이 Enter, 감지된 페이지만 기록·미감지는 공란(중단 없음)")
+    _SPEC.clear(); _COUNT.clear()
+    config.RANK_SEMI_AUTOSUBMIT = False
+    config.RANK_SEMI_AUTO_MAX_MISS = 3
+    config.RANK_SEMI_COOLDOWN_MAX = 4
+    d = Path(tempfile.mkdtemp()); path = d / "m.xlsx"
+    wb = _rank_wb(path)
+    pg = object()
+    _install_rank_fakes([(pg, False)])   # 자동제출 경로 아님 → _wait_user_search 로 감지
+    detected = {"i": 0, "seq": [pg, None]}   # kw1 감지, kw2 미감지(사람이 검색 안 함)
+
+    def fake_user_search(browser, kw, log, should_stop):
+        i = detected["i"]; detected["i"] += 1
+        return detected["seq"][min(i, len(detected["seq"]) - 1)]
+
+    P._wait_user_search = fake_user_search
+    logs: list[str] = []
+    P._track_ranks_semi(wb, path, logs.append, lambda: False)
+    joined = "\n".join(logs)
+    dt = wb.latest_date("비즈R")
+    _check(wb.is_rank_filled("비즈R", "상품R", "kw1", dt), "kw1 감지 → 순위 기록")
+    _check(not wb.is_rank_filled("비즈R", "상품R", "kw2", dt), "kw2 미감지 → 공란(다음에 이어서)")
+    _check("미감지/시간초과" in joined and "IP 회복 불가" not in joined,
+           "반자동은 미감지 공란(서킷브레이커·중단 없음)")
+
+
 def main() -> int:
     config.SESSION_STATE_DB = os.path.join(tempfile.gettempdir(), "pin_session_state.db")
     config.LOGIN_PACE_MIN_SEC = 0
@@ -427,6 +454,7 @@ def main() -> int:
         pin_rank_block_then_recover()
         pin_rank_halt()
         pin_rank_skip_optionless()
+        pin_rank_manual_mode()
     finally:
         for k, v in saved.items():   # 순위 config 원복(다른 검증 오염 방지 — 별 프로세스지만 방어적)
             setattr(config, k, v)

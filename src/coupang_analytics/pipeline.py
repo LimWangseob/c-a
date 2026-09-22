@@ -2031,150 +2031,187 @@ _SEMI_BANNER_JS = r"""(() => {
 })();"""
 
 
+@dataclass
+class _SemiState:
+    """반자동 순위 상태기계의 가변 카운터(헬퍼가 공유·변경). 제어흐름은 분해 전과 동일."""
+    autosubmit: bool
+    halted: bool = False        # 자동제출 서킷브레이커(연속 차단/미감지) → 당일 전면 중단
+    miss_streak: int = 0        # 자동제출 연속 실패 수(성공 시 0으로 리셋)
+    cooldowns: int = 0          # 차단 감지 쿨다운 진입 횟수(진전 있으면 0으로 리셋) — 무한 재시도 방지
+    noname_products: int = 0    # vid·상품명 모두 없어(이례) 측정 못 한 상품 수(집계 → 종료 시 안내)
+    measured_any: bool = False  # 첫 검색 전엔 대기 없음·마지막 검색 뒤에도 대기 없음(간격은 '검색 사이'에만)
+
+
 def _track_ranks_semi(wb, path, log, should_stop) -> Path:
     """반자동 순위조회 — 앱이 창을 띄우고 키워드를 안내, 사람이 직접 검색한 화면만 읽어 순위 산출·기록.
 
     우리가 검색(네비게이션)을 하지 않으므로 Akamai 봇차단이 안 생긴다. 상품마다 저장 → 중단해도 이어서.
     """
-    from .rank import parse_serp_rank
-    autosubmit = config.RANK_SEMI_AUTOSUBMIT
-    halted = False        # 자동제출 서킷브레이커(연속 차단/미감지) → 당일 전면 중단
-    miss_streak = 0       # 자동제출 연속 실패 수(성공 시 0으로 리셋)
-    cooldowns = 0         # 차단 감지 쿨다운 진입 횟수(진전 있으면 0으로 리셋) — 무한 재시도 방지
-    noname_products = 0   # vid·상품명 모두 없어(이례) 측정 못 한 상품 수(집계 → 종료 시 안내)
-    measured_any = False  # 첫 검색 전엔 대기 없음·마지막 검색 뒤에도 대기 없음(간격은 '검색 사이'에만)
+    st = _SemiState(autosubmit=config.RANK_SEMI_AUTOSUBMIT)
+    _semi_start_log(st.autosubmit, log)
+    with WingBrowser(profile_dir=_PROFILE, offscreen=False) as browser:
+        _semi_browser_prep(browser, st.autosubmit, log)
+        for biz in wb.account_sheets():
+            if should_stop() or st.halted:
+                break
+            date = wb.latest_date(biz)
+            if not date:
+                continue
+            for pname in wb.products_of(biz):
+                if should_stop() or st.halted:
+                    break
+                _semi_track_product(st, browser, wb, biz, pname, date, path, should_stop, log)
+    wb.apply_style()
+    wb.save(path)
+    if st.noname_products:
+        log(f"  [안내] vid·상품명이 모두 없는 상품 {st.noname_products}개는 매칭 근거가 없어 순위 공란입니다(이례).")
+    if st.halted:
+        log("== ⛔ 반자동(자동검색) 중단(차단 추정) — 진행분 저장됨. 쉰 시간/IP에 다시 실행하면 이어서 조회 ==")
+    else:
+        log("== 반자동 노출순위 종료 — 진행분 저장됨(중단 시 다음 실행이 남은 것부터 이어서) ==")
+    return path
+
+
+def _semi_start_log(autosubmit: bool, log) -> None:
     if autosubmit:
         log("== 반자동(자동검색) 노출순위 시작 — 앱이 키워드 자동입력+Enter까지 수행(손 안 대도 됨). "
             f"키워드 간 {config.RANK_NAV_DELAY_MIN_SEC}~{config.RANK_NAV_DELAY_MAX_SEC}s 간격, "
             f"연속 {config.RANK_SEMI_AUTO_MAX_MISS}회 차단 시 계정 보호로 당일 중단 ==")
     else:
         log("== 반자동 노출순위 시작 — 뜬 Chrome 창의 쿠팡 검색창에 '안내되는 키워드'를 직접 입력·검색하세요 ==")
-    with WingBrowser(profile_dir=_PROFILE, offscreen=False) as browser:
-        try:
-            browser.page.add_init_script(_SEMI_BANNER_JS)   # 이후 모든 네비/검색결과에 빨간 띠(창 식별)
-        except Exception:
-            pass
-        browser.show()
-        try:
-            browser.goto("https://www.coupang.com/")   # 검색창 제공
-        except Exception:
-            pass
-        try:
-            browser.page.evaluate(_SEMI_BANNER_JS)          # 현재(홈) 페이지에도 즉시 표시
-        except Exception:
-            pass
-        browser.show()   # goto 후 다시 중앙·맨앞으로
-        if not autosubmit:
-            log("  [반자동] ⬆ 창 여러 개 중 **하단에 빨간 띠('반자동 순위조회 창')**가 있는 창에서 검색하세요")
-        for biz in wb.account_sheets():
-            if should_stop() or halted:
+
+
+def _semi_browser_prep(browser, autosubmit: bool, log) -> None:
+    """반자동 창 준비 — 빨간 띠(창 식별) 주입 + 쿠팡 홈(검색창) 이동 + 창 표시."""
+    try:
+        browser.page.add_init_script(_SEMI_BANNER_JS)   # 이후 모든 네비/검색결과에 빨간 띠(창 식별)
+    except Exception:
+        pass
+    browser.show()
+    try:
+        browser.goto("https://www.coupang.com/")   # 검색창 제공
+    except Exception:
+        pass
+    try:
+        browser.page.evaluate(_SEMI_BANNER_JS)          # 현재(홈) 페이지에도 즉시 표시
+    except Exception:
+        pass
+    browser.show()   # goto 후 다시 중앙·맨앞으로
+    if not autosubmit:
+        log("  [반자동] ⬆ 창 여러 개 중 **하단에 빨간 띠('반자동 순위조회 창')**가 있는 창에서 검색하세요")
+
+
+def _semi_track_product(st: _SemiState, browser, wb, biz, pname, date, path, should_stop, log) -> None:
+    """한 상품의 미기입 키워드를 순회하며 반자동 검색·순위 기록(상태기계는 st 로 공유)."""
+    if wb.has_marketing() and not wb.product_due(biz, pname, date)[0]:
+        return                             # 상품 수집 주기(마케팅 상품만 매일) — 오늘 대상 아니면 순위도 생략
+    vids = wb.sibling_vids(biz, pname)     # 리스팅 전 옵션 vid 합집합(아이템위너 놓침 방지)
+    keywords = wb.product_keywords(biz, pname)
+    if not keywords:                       # 2차 옵션 블록(키워드 없음)은 순위 대상 아님
+        return
+    if not vids and not (pname or "").strip():   # 매칭 근거(vid·상품명) 전무 → 측정 불가(이례)
+        st.noname_products += 1
+        return
+    todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
+    if not todo:
+        return
+    if not vids:   # 판매 0 등으로 vid 없음 → 상품명(부분일치)으로 매칭(건너뛰지 않음)
+        log(f"  [순위] {biz} · {pname} — vid 없음(판매 0 등) → 상품명으로 매칭")
+    matcher = _rank_matcher(vids, pname)
+    for idx, kw in enumerate(todo, 1):
+        if should_stop() or st.halted:
+            break
+        if st.measured_any and st.autosubmit:
+            # 검색 **사이** 사람속도 간격(버스트 없이 차단 회피). 검색 앞에 두어 마지막 검색 뒤엔
+            # 대기 안 함(자투리 제거). 중단형이라 대기 중 '반자동 중지'도 즉시 반응.
+            d = random.uniform(config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC)
+            _interruptible_sleep(d, should_stop)
+            if should_stop() or st.halted:
                 break
-            date = wb.latest_date(biz)
-            if not date:
-                continue
-            for pname in wb.products_of(biz):
-                if should_stop() or halted:
-                    break
-                if wb.has_marketing() and not wb.product_due(biz, pname, date)[0]:
-                    continue                       # 상품 수집 주기(마케팅 상품만 매일) — 오늘 대상 아니면 순위도 생략
-                vids = wb.sibling_vids(biz, pname)   # 리스팅 전 옵션 vid 합집합(아이템위너 놓침 방지)
-                keywords = wb.product_keywords(biz, pname)
-                if not keywords:                     # 2차 옵션 블록(키워드 없음)은 순위 대상 아님
-                    continue
-                if not vids and not (pname or "").strip():   # 매칭 근거(vid·상품명) 전무 → 측정 불가(이례)
-                    noname_products += 1
-                    continue
-                todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
-                if not todo:
-                    continue
-                if not vids:   # 판매 0 등으로 vid 없음 → 상품명(부분일치)으로 매칭(건너뛰지 않음)
-                    log(f"  [순위] {biz} · {pname} — vid 없음(판매 0 등) → 상품명으로 매칭")
-                matcher = _rank_matcher(vids, pname)
-                for idx, kw in enumerate(todo, 1):
-                    if should_stop() or halted:
-                        break
-                    if measured_any and autosubmit:
-                        # 검색 **사이** 사람속도 간격(버스트 없이 차단 회피). 검색 앞에 두어 마지막 검색 뒤엔
-                        # 대기 안 함(자투리 제거). 중단형이라 대기 중 '반자동 중지'도 즉시 반응.
-                        d = random.uniform(config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC)
-                        _interruptible_sleep(d, should_stop)
-                        if should_stop() or halted:
-                            break
-                    browser.to_front()   # 키워드마다 창을 앞으로(다른 창에 가려 못 찾는 것 방지)
-                    log(f"  🔎 [{biz}] {pname}  ({idx}/{len(todo)})")
-                    filled = _prefill_search(browser, kw)   # 사람처럼 한 글자씩 타이핑(붙여넣기 아님)
-                    if autosubmit:
-                        # 타이핑이 이미 사람 리듬(글자별 미세 랜덤)을 재현 → 다 치고 **짧게 멈춘 뒤** 검색(사람 패턴).
-                        pause = random.uniform(0.5, 1.4)
-                        log(f"     ⌨ 「{kw}」 한 글자씩 자동 타이핑{'' if filled else '(검색창 못찾음→URL 폴백)'}"
-                            f" → {pause:.1f}s 뒤 자동검색(Enter)")
-                        _interruptible_sleep(pause, should_stop)   # 다 치고 잠깐 멈춤(중지 반응 유지)
-                        if should_stop() or halted:
-                            break
-                        _submit_search(browser)              # 사람 대신 앱이 Enter(제출)
-                        measured_any = True                  # 실제 검색 발생 → 다음 키워드는 '검색 사이' 간격 적용
-                        pg, blocked = _wait_results_loaded(
-                            browser, kw, should_stop, config.RANK_SEMI_AUTO_WAIT_SEC)
-                    else:
-                        if filled:
-                            log(f"     ✅ 검색창에 「{kw}」 자동입력됨 → **빨간 띠 창에서 Enter만** 누르세요"
-                                f" (안 채워졌으면 직접 입력: {kw})")
-                        else:
-                            log(f"     그 창 검색창을 비우고, 아래 '검색어'만 더블클릭해 복사→붙여넣고 Enter:")
-                            log(f"     검색어 ▶  {kw}")
-                        pg, blocked = _wait_user_search(browser, kw, log, should_stop), False
-                    if pg is None:
-                        if autosubmit:
-                            miss_streak += 1
-                            if blocked:   # 확정 차단 페이지(사용권한 없음)=IP 막힘 → 3회 안 기다리고 즉시 판정
-                                miss_streak = config.RANK_SEMI_AUTO_MAX_MISS
-                                log(f"  [반자동] 「{kw}」 쿠팡 접근차단(사용권한 없음) 감지 — **이 IP가 막혔습니다**. "
-                                    "휴대폰 핫스팟 등 **새 IP**에서 재실행하면 남은 것부터 이어서 조회됩니다")
-                            else:
-                                log(f"  [반자동] 「{kw}」 결과 미로딩(차단 추정) — 공란. "
-                                    f"연속 {miss_streak}/{config.RANK_SEMI_AUTO_MAX_MISS}")
-                            if miss_streak >= config.RANK_SEMI_AUTO_MAX_MISS:
-                                # 하드 스톱 대신 **긴 쿨다운 후 자동 재개**(무인 장시간). 쿨다운 후에도 진전 0이
-                                # 반복되면(cooldowns 초과) 그때 당일 중단(IP 회복 불가 판단 — 무한 재시도 금지).
-                                cooldowns += 1
-                                if cooldowns > config.RANK_SEMI_COOLDOWN_MAX:
-                                    halted = True
-                                    log(f"  ⛔ 쿨다운 {config.RANK_SEMI_COOLDOWN_MAX}회 후에도 계속 차단 = IP 회복 불가"
-                                        " → 당일 중단. 쉰 시간/다른 IP에서 다시 실행하면 남은 것부터 이어서")
-                                    break
-                                mins = config.RANK_SEMI_COOLDOWN_SEC // 60
-                                resume_at = (datetime.now() + timedelta(
-                                    seconds=config.RANK_SEMI_COOLDOWN_SEC)).strftime("%H:%M")
-                                log(f"  ⏸ 차단 감지 — 하드중단 대신 {mins}분 쿨다운 후 자동 재개(약 {resume_at}). "
-                                    f"쿨다운 {cooldowns}/{config.RANK_SEMI_COOLDOWN_MAX} (재개 후 1개라도 측정되면 리셋)")
-                                _interruptible_sleep(config.RANK_SEMI_COOLDOWN_SEC, should_stop, log,
-                                                     f"(약 {resume_at})")
-                                miss_streak = 0    # 쿨다운 끝 → 다음 키워드부터 재개
-                        else:
-                            log(f"  [반자동] 「{kw}」 미감지/시간초과 — 공란으로 두고 다음에 이어서 조회합니다")
-                        continue
-                    miss_streak = 0    # 성공 → 연속 실패 리셋
-                    cooldowns = 0      # 진전 발생 → 쿨다운 카운터도 리셋(IP 살아있음)
-                    human_mouse.browse_serp(pg)   # 결과를 사람처럼 훑어봄(호버·스크롤, 클릭 없음)
-                    try:
-                        # 반자동은 로드된 페이지 1장만 읽는다 → 50위 상한 없이 오가닉 전부를 세어 **50위 초과도 실제 등수 기록**.
-                        res = parse_serp_rank(pg, matcher, max_rank=config.RANK_SCAN_MAX_SEMI)
-                    except Exception as exc:
-                        log(f"  [반자동] 「{kw}」 파싱 실패(공란) — {exc.__class__.__name__}: {str(exc)[:80]}")
-                        continue
-                    rank, mi = res.get("제품", (None, None))
-                    wb.set_keyword_rank(biz, pname, kw, date, rank)
-                    log(f"  ✅ 「{kw}」 순위 = {rank_label(rank)}  — 기록 완료({idx}/{len(todo)})")
-                    if mi is not None and getattr(mi, "name", ""):   # 노출명은 로그로만(블록명=등록상품명 고정)
-                        log(f"  [노출명] 검색결과 노출명 = {mi.name} (블록명은 등록상품명 고정)")
-                    wb.save(path)
-                    # (키워드 사이 간격은 루프 상단에서 '검색 앞'에 적용 — 마지막 검색 뒤 자투리 대기 제거)
-    wb.apply_style()
-    wb.save(path)
-    if noname_products:
-        log(f"  [안내] vid·상품명이 모두 없는 상품 {noname_products}개는 매칭 근거가 없어 순위 공란입니다(이례).")
-    if halted:
-        log("== ⛔ 반자동(자동검색) 중단(차단 추정) — 진행분 저장됨. 쉰 시간/IP에 다시 실행하면 이어서 조회 ==")
+        browser.to_front()   # 키워드마다 창을 앞으로(다른 창에 가려 못 찾는 것 방지)
+        log(f"  🔎 [{biz}] {pname}  ({idx}/{len(todo)})")
+        pg, blocked, aborted = _semi_search_one(st, browser, kw, should_stop, log)
+        if aborted:          # 검색 직전 pause 중 중지/halt → 키워드 루프 종료
+            break
+        if pg is None:
+            _semi_on_miss(st, kw, blocked, should_stop, log)
+            continue
+        st.miss_streak = 0   # 성공 → 연속 실패 리셋
+        st.cooldowns = 0     # 진전 발생 → 쿨다운 카운터도 리셋(IP 살아있음)
+        _semi_record(wb, pg, matcher, biz, pname, kw, date, path, idx, len(todo), log)
+
+
+def _semi_search_one(st: _SemiState, browser, kw, should_stop, log):
+    """키워드 1건 검색 — 자동제출(타이핑+Enter+결과대기) 또는 반자동(자동입력+사람 Enter 대기).
+
+    반환: (pg, blocked, aborted). aborted=True 면 pause 중 중지/halt(호출부가 키워드 루프 종료)."""
+    filled = _prefill_search(browser, kw)   # 사람처럼 한 글자씩 타이핑(붙여넣기 아님)
+    if st.autosubmit:
+        # 타이핑이 이미 사람 리듬(글자별 미세 랜덤)을 재현 → 다 치고 **짧게 멈춘 뒤** 검색(사람 패턴).
+        pause = random.uniform(0.5, 1.4)
+        log(f"     ⌨ 「{kw}」 한 글자씩 자동 타이핑{'' if filled else '(검색창 못찾음→URL 폴백)'}"
+            f" → {pause:.1f}s 뒤 자동검색(Enter)")
+        _interruptible_sleep(pause, should_stop)   # 다 치고 잠깐 멈춤(중지 반응 유지)
+        if should_stop() or st.halted:
+            return None, False, True
+        _submit_search(browser)              # 사람 대신 앱이 Enter(제출)
+        st.measured_any = True               # 실제 검색 발생 → 다음 키워드는 '검색 사이' 간격 적용
+        pg, blocked = _wait_results_loaded(browser, kw, should_stop, config.RANK_SEMI_AUTO_WAIT_SEC)
+        return pg, blocked, False
+    if filled:
+        log(f"     ✅ 검색창에 「{kw}」 자동입력됨 → **빨간 띠 창에서 Enter만** 누르세요"
+            f" (안 채워졌으면 직접 입력: {kw})")
     else:
-        log("== 반자동 노출순위 종료 — 진행분 저장됨(중단 시 다음 실행이 남은 것부터 이어서) ==")
-    return path
+        log(f"     그 창 검색창을 비우고, 아래 '검색어'만 더블클릭해 복사→붙여넣고 Enter:")
+        log(f"     검색어 ▶  {kw}")
+    return _wait_user_search(browser, kw, log, should_stop), False, False
+
+
+def _semi_on_miss(st: _SemiState, kw, blocked: bool, should_stop, log) -> None:
+    """검색 결과 미감지(pg=None) 처리 — 자동제출은 서킷브레이커(쿨다운 재개/당일 중단), 반자동은 공란."""
+    if not st.autosubmit:
+        log(f"  [반자동] 「{kw}」 미감지/시간초과 — 공란으로 두고 다음에 이어서 조회합니다")
+        return
+    st.miss_streak += 1
+    if blocked:   # 확정 차단 페이지(사용권한 없음)=IP 막힘 → 3회 안 기다리고 즉시 판정
+        st.miss_streak = config.RANK_SEMI_AUTO_MAX_MISS
+        log(f"  [반자동] 「{kw}」 쿠팡 접근차단(사용권한 없음) 감지 — **이 IP가 막혔습니다**. "
+            "휴대폰 핫스팟 등 **새 IP**에서 재실행하면 남은 것부터 이어서 조회됩니다")
+    else:
+        log(f"  [반자동] 「{kw}」 결과 미로딩(차단 추정) — 공란. "
+            f"연속 {st.miss_streak}/{config.RANK_SEMI_AUTO_MAX_MISS}")
+    if st.miss_streak < config.RANK_SEMI_AUTO_MAX_MISS:
+        return
+    # 하드 스톱 대신 **긴 쿨다운 후 자동 재개**(무인 장시간). 쿨다운 후에도 진전 0이
+    # 반복되면(cooldowns 초과) 그때 당일 중단(IP 회복 불가 판단 — 무한 재시도 금지).
+    st.cooldowns += 1
+    if st.cooldowns > config.RANK_SEMI_COOLDOWN_MAX:
+        st.halted = True
+        log(f"  ⛔ 쿨다운 {config.RANK_SEMI_COOLDOWN_MAX}회 후에도 계속 차단 = IP 회복 불가"
+            " → 당일 중단. 쉰 시간/다른 IP에서 다시 실행하면 남은 것부터 이어서")
+        return
+    mins = config.RANK_SEMI_COOLDOWN_SEC // 60
+    resume_at = (datetime.now() + timedelta(seconds=config.RANK_SEMI_COOLDOWN_SEC)).strftime("%H:%M")
+    log(f"  ⏸ 차단 감지 — 하드중단 대신 {mins}분 쿨다운 후 자동 재개(약 {resume_at}). "
+        f"쿨다운 {st.cooldowns}/{config.RANK_SEMI_COOLDOWN_MAX} (재개 후 1개라도 측정되면 리셋)")
+    _interruptible_sleep(config.RANK_SEMI_COOLDOWN_SEC, should_stop, log, f"(약 {resume_at})")
+    st.miss_streak = 0    # 쿨다운 끝 → 다음 키워드부터 재개
+
+
+def _semi_record(wb, pg, matcher, biz, pname, kw, date, path, idx, total, log) -> None:
+    """검색결과 페이지에서 순위를 파싱해 워크북에 기록·저장(상품마다 저장 → 중단해도 이어서)."""
+    from .rank import parse_serp_rank
+    human_mouse.browse_serp(pg)   # 결과를 사람처럼 훑어봄(호버·스크롤, 클릭 없음)
+    try:
+        # 반자동은 로드된 페이지 1장만 읽는다 → 50위 상한 없이 오가닉 전부를 세어 **50위 초과도 실제 등수 기록**.
+        res = parse_serp_rank(pg, matcher, max_rank=config.RANK_SCAN_MAX_SEMI)
+    except Exception as exc:
+        log(f"  [반자동] 「{kw}」 파싱 실패(공란) — {exc.__class__.__name__}: {str(exc)[:80]}")
+        return
+    rank, mi = res.get("제품", (None, None))
+    wb.set_keyword_rank(biz, pname, kw, date, rank)
+    log(f"  ✅ 「{kw}」 순위 = {rank_label(rank)}  — 기록 완료({idx}/{total})")
+    if mi is not None and getattr(mi, "name", ""):   # 노출명은 로그로만(블록명=등록상품명 고정)
+        log(f"  [노출명] 검색결과 노출명 = {mi.name} (블록명은 등록상품명 고정)")
+    wb.save(path)
+    # (키워드 사이 간격은 _semi_track_product 상단에서 '검색 앞'에 적용 — 마지막 검색 뒤 자투리 대기 제거)
