@@ -111,6 +111,7 @@ _COL_SEARCH = 6    # F: 검색량
 _COL_METRIC = 7    # G: 지표 라벨
 _FIRST_DATE = 8    # H~: 일자
 _LABEL_DATE = "날짜"
+_NOT_SELLING_STATUSES = ("판매중지", "임시저장", "승인반려")   # ③ 순위 조회 제외 대상(판매중/부분판매중만 검색)
 _LABEL_KEYWORD = "키워드"
 _LABEL_SEARCH = "검색량"
 _LABEL_NOTE = "비고"
@@ -883,6 +884,15 @@ class OutputWorkbook:
     def sale_active(self, biz: str, product: str) -> bool:
         """쿠팡에서 **판매 가능 상태**(판매중 또는 부분판매중)면 True. 판매중지·미상은 False."""
         return self.sale_status(biz, product) in ("판매중", "부분판매중")
+
+    def rank_suppressed(self, biz: str, product: str) -> bool:
+        """③ 노출순위 조회 대상이 **아닌** 상품 — 대장 취소선(판매중지)이거나 쿠팡 상태가 판매중이 아님.
+
+        소유자 요구(2026-09-22): 쿠팡에서 **판매중/부분판매중** 인 상품만 순위검색(판매중지·임시저장·승인반려는
+        검색 안 함 → 차단 예산 절약·정확). **미상('')은 억제하지 않는다**(판매자배송·미로그인 등 legit 상품
+        누락 방지 — 확정 미판매만 제외). 대장에서 빠진 상품(is_discontinued)도 순위 제외."""
+        return (self.is_discontinued(biz, product)
+                or self.sale_status(biz, product) in _NOT_SELLING_STATUSES)
 
     def apply_sale_status(self, biz: str, status_by_vid: dict) -> int:
         """쿠팡 판매상태맵을 그 사업자 **마스터 전체 상품(블록)** 에 vid로 대조해 저장.

@@ -1829,6 +1829,8 @@ def _measure_product_auto(browser, wb, path, biz: str, pname: str, date, log) ->
     keywords/vid 없거나 todo 비면 (False, ·)로 건너뜀. RankHalt=차단 감지(부분결과 기록·halted=True),
     그 외 예외=공란(다음 재시도). 상품마다 저장 → 중단돼도 진행분 보존. (⚠ 현 정책은 반자동만 사용 —
     이 자동 경로는 사문화에 가깝지만 track_ranks_stage(semi=False) 로 여전히 호출 가능·핀 O/O2 로 커버.)"""
+    if wb.rank_suppressed(biz, pname):   # 판매중지·임시저장·승인반려·대장취소선 → 순위 제외(소유자 2026-09-22)
+        return False, False
     vids = wb.sibling_vids(biz, pname)   # 리스팅 전 옵션 vid 합집합(아이템위너 놓침 방지)
     keywords = wb.product_keywords(biz, pname)
     if not keywords:                     # 2차 옵션 블록(키워드 없음)은 순위 대상 아님
@@ -2185,6 +2187,8 @@ def _semi_track_product(st: _SemiState, browser, wb, biz, pname, date, path, sho
     """한 상품의 미기입 키워드를 순회하며 반자동 검색·순위 기록(상태기계는 st 로 공유)."""
     if wb.has_marketing() and not wb.product_due(biz, pname, date)[0]:
         return                             # 상품 수집 주기(마케팅 상품만 매일) — 오늘 대상 아니면 순위도 생략
+    if wb.rank_suppressed(biz, pname):     # 판매중지·임시저장·승인반려·대장취소선 → 순위 제외(소유자 2026-09-22)
+        return
     vids = wb.sibling_vids(biz, pname)     # 리스팅 전 옵션 vid 합집합(아이템위너 놓침 방지)
     keywords = wb.product_keywords(biz, pname)
     if not keywords:                       # 2차 옵션 블록(키워드 없음)은 순위 대상 아님

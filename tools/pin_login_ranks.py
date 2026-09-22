@@ -443,6 +443,25 @@ def pin_rank_auto_halt():
     _check(not wb.is_rank_filled("비즈R", "상품R", "kw2", dt), "차단 후 kw2 공란(다음에 이어서)")
 
 
+def pin_rank_skip_suspended():
+    print("[핀 P2] 판매중지 상품은 순위 검색 제외(rank_suppressed)")
+    _SPEC.clear(); _COUNT.clear()
+    config.RANK_SEMI_AUTOSUBMIT = True
+    config.RANK_SEMI_AUTO_MAX_MISS = 3
+    config.RANK_SEMI_COOLDOWN_MAX = 4
+    d = Path(tempfile.mkdtemp()); path = d / "m.xlsx"
+    wb = _rank_wb(path)                                  # 상품R · kw1/kw2 · vid vidR
+    wb.apply_sale_status("비즈R", {"vidR": True})        # True → 판매중지
+    wb.save(path)
+    _check(wb.rank_suppressed("비즈R", "상품R"), "판매중지 → rank_suppressed True")
+    pg = object()
+    _install_rank_fakes([(pg, False), (pg, False)])
+    P._track_ranks_semi(wb, path, lambda m: None, lambda: False)
+    dt = wb.latest_date("비즈R")
+    _check(not wb.is_rank_filled("비즈R", "상품R", "kw1", dt), "판매중지 상품 kw1 순위 미기록(건너뜀)")
+    _check(not wb.is_rank_filled("비즈R", "상품R", "kw2", dt), "판매중지 상품 kw2 순위 미기록(건너뜀)")
+
+
 def pin_rank_manual_mode():
     print("[핀 N] 반자동(비자동제출) — 사람이 Enter, 감지된 페이지만 기록·미감지는 공란(중단 없음)")
     _SPEC.clear(); _COUNT.clear()
@@ -502,6 +521,7 @@ def main() -> int:
         pin_rank_manual_mode()
         pin_rank_auto_success()
         pin_rank_auto_halt()
+        pin_rank_skip_suspended()
     finally:
         for k, v in saved.items():   # 순위 config 원복(다른 검증 오염 방지 — 별 프로세스지만 방어적)
             setattr(config, k, v)
