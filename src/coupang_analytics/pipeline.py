@@ -1108,6 +1108,54 @@ def _select_keywords_for_skipped(wb, save_path, accounts, naver, ai_key, log) ->
         wb.save(save_path)
 
 
+def _column_label(date_from: str, date_to: str, date_label: str | None, log) -> str:
+    """일자 컬럼 제목 = 작업 실행날짜(date_label)의 년도 없는 '월.일'. SSOT=designs/DESIGN.md §일자 컬럼.
+
+    판매데이터는 전일(D-1=date_from~date_to)에서 오지만 컬럼 제목은 실제 작업한 날로 적는다(새벽 넘겨도
+    시작일 기준). date_label 없으면 date_to 폴백, 기간지정이면 'from~to'. 라벨≠판매조회일이면 둘 다 안내.
+    """
+    label_src = date_label or date_to
+    if date_from == date_to or date_label:
+        try:
+            col_label = datetime.strptime(label_src, "%Y-%m-%d").strftime("%m.%d")   # 년도 없는 '월.일'
+        except ValueError:
+            col_label = label_src
+    else:
+        col_label = f"{date_from}~{date_to}"
+    if date_label and date_label != date_to:   # 라벨(실행일)과 판매조회일(전일)이 다르면 둘 다 안내
+        log(f"== 컬럼(작업 실행날짜): {col_label} · 판매조회 {date_from}~{date_to}(전일) ==")
+    else:
+        log(f"== 수집 대상 구간(컬럼): {col_label} ==")
+    return col_label
+
+
+def _reconcile_ledger_accounts(wb, input_list: InputList, uncollected, log) -> list[tuple[str, str]]:
+    """계정 단위 대조(2026-09-17 정책) — 관리대장 기준으로 결과 워크북의 계정을 정리한다.
+
+    - 대장에서 **줄이 완전히 사라진 계정 = 완전 삭제**(시트·이력·메타).
+    - 대장에 **줄은 남았으나 비활성**(전 상품 판매중지 등) = 판매중지 표기(유지·경고 기능).
+    - 로그인 실패(uncollected)는 '사라짐' 아님 → 제외(다음에 수집).
+    삭제 판정 = 계정ID가 대장에 아예 없음. 반환 = 완전 삭제한 (사업자, 계정ID) 목록.
+    """
+    active_biz = {a.label for a in input_list.accounts}
+    active_ids = input_list.ledger_account_ids            # 대장에 줄이 존재하는 계정ID(판매중지 포함)
+    uncollected_biz = {a.label for a in uncollected}
+    removed_accounts: list[tuple[str, str]] = []          # (사업자, 계정ID) — 결과에서 완전 삭제한 계정
+    for biz in list(wb.account_sheets()):
+        if biz in active_biz or biz in uncollected_biz:
+            continue                                       # 활성(수집대상)·로그인 실패는 삭제/중지 대상 아님
+        aid = wb.account_id_of(biz)
+        if active_ids and aid and aid not in active_ids:   # 대장에 줄이 아예 없음 → 완전 삭제
+            if wb.delete_account(biz):
+                removed_accounts.append((biz, aid))
+                log(f"== [{biz}] 관리대장에서 삭제됨(줄 사라짐) → 결과 완전 삭제(시트·이력·메타) ==")
+        else:                                              # 대장에 남아있으나 비활성 → 판매중지(유지·경고)
+            gone = wb.reconcile_account(biz, [])
+            if gone:
+                log(f"== [{biz}] 대장에 남았으나 비활성 → 상품 {len(gone)}개 판매중지 표기 ==")
+    return removed_accounts
+
+
 def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
              ai_key: str | None = None, date_from: str | None = None, date_to: str | None = None,
              get_password=None, resume: bool = False, carry_forward: bool = False,
@@ -1202,21 +1250,9 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     if not keywords_off:                       # ①판매수집 전용은 키워드 단계가 없어 역머지 불필요
         _pull_gsheet_keywords(wb, gsheet_output_url, log)
 
-    # 일자 컬럼 라벨 = **작업 실행날짜**(date_label). 판매데이터는 전일(D-1=date_from~date_to)에서 가져오지만
-    # 컬럼 제목은 실제 작업한 날로 적는다(새벽 넘겨도 시작일 기준). date_label 없으면(직접 날짜지정 등) date_to 로 폴백.
-    # 순위(③)는 같은 실행날짜 컬럼(latest_date)에 기록돼 '오늘 순위 + 전일 판매'가 한 컬럼에 나란히 쌓인다.
-    label_src = date_label or date_to
-    if date_from == date_to or date_label:
-        try:
-            col_label = datetime.strptime(label_src, "%Y-%m-%d").strftime("%m.%d")   # 년도 없는 '월.일'
-        except ValueError:
-            col_label = label_src
-    else:
-        col_label = f"{date_from}~{date_to}"
-    if date_label and date_label != date_to:   # 라벨(실행일)과 판매조회일(전일)이 다르면 둘 다 안내
-        log(f"== 컬럼(작업 실행날짜): {col_label} · 판매조회 {date_from}~{date_to}(전일) ==")
-    else:
-        log(f"== 수집 대상 구간(컬럼): {col_label} ==")
+    # 일자 컬럼 라벨 = **작업 실행날짜**(date_label). 순위(③)는 같은 실행날짜 컬럼(latest_date)에 기록돼
+    # '오늘 순위 + 전일 판매'가 한 컬럼에 나란히 쌓인다.
+    col_label = _column_label(date_from, date_to, date_label, log)
     if redo_today and carry:      # ② 오늘 처음(다시): 오늘 컬럼·완료스탬프 초기화 → 전 계정 오늘분 재수집
         c1 = wb.reset_date_column(col_label)
         c2 = wb.clear_sales_stamps()
@@ -1334,25 +1370,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         log(f"== ⚠ 로그인 못한 계정 {len(uncollected)}개(세션만료+Akamai차단): "
             f"{', '.join(a.label for a in uncollected)} — 쉰 IP(내일 등)에 재실행 시 수집됨 ==")
 
-    # 계정 단위 대조(2026-09-17 정책): 관리대장에서 **줄이 완전히 사라진 계정 = 완전 삭제**(시트·이력·메타),
-    # 대장에 **줄은 남아있으나 비활성**(전 상품 판매중지 등)= 판매중지 표기(유지·경고 기능). 로그인 실패
-    # (uncollected)는 '사라짐' 아님 → 제외(다음에 수집). 삭제 판정 = **계정ID가 대장에 아예 없음**.
-    active_biz = {a.label for a in input_list.accounts}
-    active_ids = input_list.ledger_account_ids            # 대장에 줄이 존재하는 계정ID(판매중지 포함)
-    uncollected_biz = {a.label for a in uncollected}
-    removed_accounts: list[tuple[str, str]] = []          # (사업자, 계정ID) — 결과에서 완전 삭제한 계정
-    for biz in list(wb.account_sheets()):
-        if biz in active_biz or biz in uncollected_biz:
-            continue                                       # 활성(수집대상)·로그인 실패는 삭제/중지 대상 아님
-        aid = wb.account_id_of(biz)
-        if active_ids and aid and aid not in active_ids:   # 대장에 줄이 아예 없음 → 완전 삭제
-            if wb.delete_account(biz):
-                removed_accounts.append((biz, aid))
-                log(f"== [{biz}] 관리대장에서 삭제됨(줄 사라짐) → 결과 완전 삭제(시트·이력·메타) ==")
-        else:                                              # 대장에 남아있으나 비활성 → 판매중지(유지·경고)
-            gone = wb.reconcile_account(biz, [])
-            if gone:
-                log(f"== [{biz}] 대장에 남았으나 비활성 → 상품 {len(gone)}개 판매중지 표기 ==")
+    removed_accounts = _reconcile_ledger_accounts(wb, input_list, uncollected, log)
 
     # 판매수집을 건너뛴(이미 오늘 수집됨) 계정도 키워드가 비어 있으면 선정(로그인 없이·워크북 기반).
     # 전체실행(①②③) 재실행에서 판매는 스킵하되 ②키워드가 빠지지 않게 한다(①판매수집 전용은 키워드 단계 없음).
