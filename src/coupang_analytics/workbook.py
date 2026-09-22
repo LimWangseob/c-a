@@ -73,6 +73,29 @@ def _sty_merge(ws, r1, c1, r2, c2) -> None:
         ws.merge_cells(start_row=r1, start_column=c1, end_row=r2, end_column=c2)
 
 
+@dataclass
+class _IdxStyle:
+    """계정 목록(목차) 행 렌더 팔레트 — _build_index / _index_row 공유."""
+    font: Font
+    gray_font: Font
+    link_font: Font
+    red_bold: Font
+    box: Border
+    center: Alignment
+    left: Alignment
+    mkt_fill: PatternFill
+
+
+def _rekey_block(mapping: dict, biz: str, old: str, new: str) -> dict:
+    """블록 인덱스의 (biz, old[, …]) 키를 (biz, new[, …]) 로 이동한 새 dict — 상품명 리네임용.
+
+    3튜플(_metric_row/_kw_row: (biz, product, metric/kw))·2튜플(_block_vids: (biz, product)) 모두 처리."""
+    out = {}
+    for k, v in mapping.items():
+        out[(biz, new, *k[2:]) if (k[0] == biz and k[1] == old) else k] = v
+    return out
+
+
 def _sty_edge(ws, maxc, row, side, style) -> None:
     """상품 블록 경계(첫 행 상단/마지막 행 하단) 테두리 — 그룹 바깥=굵은선(thick)·변형 사이=얇은선(thin)."""
     for c in range(1, maxc + 1):
@@ -688,59 +711,70 @@ class OutputWorkbook:
         for biz, cols in list(self._date_col.items()):
             if biz not in self.wb.sheetnames or not cols:
                 continue
-            parsed = {lbl: _parse_date(lbl) for lbl in cols}
-            if any(d is None for d in parsed.values()):
-                _log(f"  [날짜정렬] {biz}: 파싱 불가 라벨 있음 → 건너뜀 {sorted(cols)}")
-                continue
-            # 날짜→기존 열(첫 등장). 라벨을 '월.일'로 재포맷하므로 값은 **날짜**로 스냅샷해 매칭한다.
-            date2col: dict = {}
-            for lbl, dd in sorted(parsed.items(), key=lambda kv: kv[1]):
-                date2col.setdefault(dd, cols[lbl])
-            days = sorted(date2col)
-            first, last = days[0], days[-1]
-            target_days: list = []
-            d = first
-            while d <= last:
-                target_days.append(d)
-                d += _td(days=1)
-            target = [dd.strftime("%m.%d") for dd in target_days]   # 년도 없는 '월.일'로 통일
-            old_labels_sorted = [lbl for lbl, _dd in sorted(parsed.items(), key=lambda kv: kv[1])]
-            old_cols_sorted = [cols[lbl] for lbl in old_labels_sorted]
-            # 이미 '월.일' 연속·정렬이고 물리 순서도 H부터 오름차순이면 변경 없음(멱등)
-            if target == old_labels_sorted \
-               and old_cols_sorted == list(range(_FIRST_DATE, _FIRST_DATE + len(old_cols_sorted))):
-                added[biz] = []
-                continue
-            ws = self.wb[biz]
-            max_row = ws.max_row
-            # 스냅샷: 기존 일자 컬럼의 모든 셀 값을 (행, 날짜)로 보존
-            snap: dict[tuple[int, object], object] = {}
-            used_cols = set(cols.values())
-            for r in range(1, max_row + 1):
-                for dd, c in date2col.items():
-                    v = ws.cell(r, c).value
-                    if v not in (None, ""):
-                        snap[(r, dd)] = v
-            header_rows = set(self._date_rows.get(biz, []))
-            # 기존 일자 영역 전부 비움(A~G= _FIRST_DATE 미만은 불변)
-            for r in range(1, max_row + 1):
-                for c in used_cols:
-                    ws.cell(r, c).value = None
-            # 정렬·연속 순서로 재기록(라벨=월.일)
-            new_map: dict[str, int] = {}
-            for i, dd in enumerate(target_days):
-                col = _FIRST_DATE + i
-                lbl = dd.strftime("%m.%d")
-                new_map[lbl] = col
-                for r in range(1, max_row + 1):
-                    if r in header_rows:
-                        ws.cell(r, col).value = lbl          # 헤더행 = 날짜 라벨(빠진 날도 표기)
-                    elif (r, dd) in snap:
-                        ws.cell(r, col).value = snap[(r, dd)]  # 기존 값 이식(없으면 공란)
-            self._date_col[biz] = new_map
-            old_days = set(days)
-            added[biz] = [dd.strftime("%m.%d") for dd in target_days if dd not in old_days]
+            res = self._normalize_sheet_dates(biz, cols, _log)
+            if res is not None:   # None=파싱불가로 건너뜀(added 미기록) · []=멱등 · [라벨]=재구성
+                added[biz] = res
         return added
+
+    def _normalize_sheet_dates(self, biz: str, cols: dict, log) -> list[str] | None:
+        """한 시트의 일자 컬럼을 첫날~마지막날 연속·'월.일' 정렬로 재구성(값은 날짜로 매칭 이식).
+
+        반환: None=파싱 불가 라벨 있어 건너뜀 · []=이미 정렬·연속(멱등, 변경 없음) · [라벨…]=새로 채운 날짜."""
+        parsed = {lbl: _parse_date(lbl) for lbl in cols}
+        if any(d is None for d in parsed.values()):
+            log(f"  [날짜정렬] {biz}: 파싱 불가 라벨 있음 → 건너뜀 {sorted(cols)}")
+            return None
+        # 날짜→기존 열(첫 등장). 라벨을 '월.일'로 재포맷하므로 값은 **날짜**로 스냅샷해 매칭한다.
+        date2col: dict = {}
+        for lbl, dd in sorted(parsed.items(), key=lambda kv: kv[1]):
+            date2col.setdefault(dd, cols[lbl])
+        days = sorted(date2col)
+        first, last = days[0], days[-1]
+        target_days: list = []
+        d = first
+        while d <= last:
+            target_days.append(d)
+            d += _td(days=1)
+        target = [dd.strftime("%m.%d") for dd in target_days]   # 년도 없는 '월.일'로 통일
+        old_labels_sorted = [lbl for lbl, _dd in sorted(parsed.items(), key=lambda kv: kv[1])]
+        old_cols_sorted = [cols[lbl] for lbl in old_labels_sorted]
+        # 이미 '월.일' 연속·정렬이고 물리 순서도 H부터 오름차순이면 변경 없음(멱등)
+        if target == old_labels_sorted \
+           and old_cols_sorted == list(range(_FIRST_DATE, _FIRST_DATE + len(old_cols_sorted))):
+            return []
+        self._rebuild_date_grid(biz, date2col, target_days, set(cols.values()))
+        old_days = set(days)
+        return [dd.strftime("%m.%d") for dd in target_days if dd not in old_days]
+
+    def _rebuild_date_grid(self, biz: str, date2col: dict, target_days: list, used_cols: set) -> None:
+        """일자 컬럼 물리 재기록 — 기존 값을 (행,날짜)로 스냅샷 → 일자 영역 비움 → 첫날~마지막날 연속·
+        정렬 순서로 H열부터 재기록(헤더=라벨, 값=날짜 매칭 이식·없으면 공란). _date_col[biz] 갱신."""
+        ws = self.wb[biz]
+        max_row = ws.max_row
+        # 스냅샷: 기존 일자 컬럼의 모든 셀 값을 (행, 날짜)로 보존
+        snap: dict[tuple[int, object], object] = {}
+        for r in range(1, max_row + 1):
+            for dd, c in date2col.items():
+                v = ws.cell(r, c).value
+                if v not in (None, ""):
+                    snap[(r, dd)] = v
+        header_rows = set(self._date_rows.get(biz, []))
+        # 기존 일자 영역 전부 비움(A~G= _FIRST_DATE 미만은 불변)
+        for r in range(1, max_row + 1):
+            for c in used_cols:
+                ws.cell(r, c).value = None
+        # 정렬·연속 순서로 재기록(라벨=월.일)
+        new_map: dict[str, int] = {}
+        for i, dd in enumerate(target_days):
+            col = _FIRST_DATE + i
+            lbl = dd.strftime("%m.%d")
+            new_map[lbl] = col
+            for r in range(1, max_row + 1):
+                if r in header_rows:
+                    ws.cell(r, col).value = lbl          # 헤더행 = 날짜 라벨(빠진 날도 표기)
+                elif (r, dd) in snap:
+                    ws.cell(r, col).value = snap[(r, dd)]  # 기존 값 이식(없으면 공란)
+        self._date_col[biz] = new_map
 
     # ── 값 기록 ──────────────────────────────────────────────
     def set_product_metric(self, biz: str, product: str, metric: str, date_iso: str, value) -> bool:
@@ -968,13 +1002,10 @@ class OutputWorkbook:
             return False
         if any(k[0] == biz and k[1] == new_name for k in self._metric_row):
             return False   # 새 이름이 이미 다른 상품 블록 → 병합 방지, 갱신 생략
-        self._metric_row = {((b, new_name, m) if (b == biz and p == product) else (b, p, m)): v
-                            for (b, p, m), v in self._metric_row.items()}
-        self._kw_row = {((b, new_name, kw) if (b == biz and p == product) else (b, p, kw)): v
-                        for (b, p, kw), v in self._kw_row.items()}
+        self._metric_row = _rekey_block(self._metric_row, biz, product, new_name)
+        self._kw_row = _rekey_block(self._kw_row, biz, product, new_name)
         # vid 인덱스도 키 이동(출처=헤더 C셀이므로, 이동 후 표시값에 'VID :' 꼬리를 다시 붙여 렌더)
-        self._block_vids = {((b, new_name) if (b == biz and p == product) else (b, p)): v
-                            for (b, p), v in self._block_vids.items()}
+        self._block_vids = _rekey_block(self._block_vids, biz, product, new_name)
         ws.cell(header, _COL_NAME, self._display_name(biz, new_name))
         row = self._vid_row.pop((biz, product), None)
         if row is not None:
@@ -1567,18 +1598,21 @@ class OutputWorkbook:
                 del self.wb[legacy]
         rows = self._product_rows()   # (사업자, 상품, 헤더행|None, 시트有無) — 상품 단위
         ws = self.wb.create_sheet(_INDEX_SHEET, 0)       # 맨 앞
-        font = Font(name=self._FN, size=11)
         bold = Font(name=self._FN, size=11, bold=True)
-        link_font = Font(name=self._FN, size=11, color="0563C1", underline="single")
-        gray_font = Font(name=self._FN, size=11, color="9AA7B6")   # 미수집(옅게)
-        red_bold = Font(name=self._FN, size=11, bold=True, color="C00000")   # 체험단중 상태
         title_font = Font(name=self._FN, size=14, bold=True)
         thin = Side(style="thin", color="BFBFBF")
         box = Border(left=thin, right=thin, top=thin, bottom=thin)
         center = Alignment(horizontal="center", vertical="center")
-        left = Alignment(horizontal="left", vertical="center")
         head_fill = PatternFill("solid", fgColor=self._FILL_LABEL)
         mkt_fill = PatternFill("solid", fgColor="FFF2CC")   # 마케팅 입력열 강조(입력 자리 안내)
+        sty = _IdxStyle(
+            font=Font(name=self._FN, size=11),
+            gray_font=Font(name=self._FN, size=11, color="9AA7B6"),   # 미수집(옅게)
+            link_font=Font(name=self._FN, size=11, color="0563C1", underline="single"),
+            red_bold=Font(name=self._FN, size=11, bold=True, color="C00000"),   # 체험단중 상태
+            box=box, center=center,
+            left=Alignment(horizontal="left", vertical="center"),
+            mkt_fill=mkt_fill)
         n_prod = sum(1 for _b, p, _h, hs in rows if hs and p)
 
         ws.cell(1, 1, f"{_INDEX_SHEET} · 상품 {n_prod}개").font = title_font
@@ -1592,29 +1626,7 @@ class OutputWorkbook:
             x.font = bold; x.alignment = center; x.border = box
             x.fill = mkt_fill if 5 <= c <= 7 else head_fill   # 5~7열=마케팅(관리대장 값 표시)
         for r, (biz, prod, hdr, has_sheet) in enumerate(rows, start=3):
-            ws.cell(r, 1, self.representative_of(biz)).font = font if has_sheet else gray_font
-            ws.cell(r, 2, biz).font = font if has_sheet else gray_font
-            pcell = ws.cell(r, 3, prod if prod else ("(미수집)" if not has_sheet else "(상품없음)"))
-            if has_sheet and prod and hdr:      # 상품 블록으로 점프(헤더행)
-                pcell.hyperlink = Hyperlink(ref=pcell.coordinate,
-                                            location=f"'{biz.replace(chr(39), chr(39) * 2)}'!A{hdr}")
-                pcell.font = link_font
-            else:
-                pcell.font = gray_font
-            ws.cell(r, 4, self.account_id_of(biz)).font = font if has_sheet else gray_font
-            start, end, mon = self.marketing_of(biz, prod)
-            if has_sheet and prod and self.is_discontinued(biz, prod):
-                status = "⛔ 판매중지"
-            else:
-                status = self._mkt_status(start, end, mon) if has_sheet else "미수집"
-            for c, v in ((5, start), (6, end), (7, mon)):   # 마케팅(관리대장 값 표시)
-                x = ws.cell(r, c, v); x.font = font; x.alignment = center; x.border = box; x.fill = mkt_fill
-            st = ws.cell(r, 8, status); st.alignment = center; st.border = box
-            st.font = (red_bold if status == "체험단중"
-                       else (gray_font if status in ("미수집", "종료", "⛔ 판매중지") else font))
-            for c in (1, 2, 3, 4):
-                ws.cell(r, c).alignment = left if c == 3 else center
-                ws.cell(r, c).border = box
+            self._index_row(ws, r, biz, prod, hdr, has_sheet, sty)
         for c, w in {1: 16, 2: 22, 3: 40, 4: 15, 5: 13, 6: 13, 7: 14, 8: 10}.items():
             ws.column_dimensions[get_column_letter(c)].width = w
         ws.row_dimensions[1].height = 21
@@ -1626,3 +1638,30 @@ class OutputWorkbook:
                 other.sheet_view.tabSelected = (other is ws)
         except Exception:
             pass
+
+    def _index_row(self, ws, r: int, biz: str, prod: str, hdr, has_sheet: bool, sty: _IdxStyle) -> None:
+        """목차 한 행 렌더 — 대표자·사업자·상품(점프 링크)·계정ID·마케팅 입력열·상태(판매중지/체험단중/미수집)."""
+        ws.cell(r, 1, self.representative_of(biz)).font = sty.font if has_sheet else sty.gray_font
+        ws.cell(r, 2, biz).font = sty.font if has_sheet else sty.gray_font
+        pcell = ws.cell(r, 3, prod if prod else ("(미수집)" if not has_sheet else "(상품없음)"))
+        if has_sheet and prod and hdr:      # 상품 블록으로 점프(헤더행)
+            pcell.hyperlink = Hyperlink(ref=pcell.coordinate,
+                                        location=f"'{biz.replace(chr(39), chr(39) * 2)}'!A{hdr}")
+            pcell.font = sty.link_font
+        else:
+            pcell.font = sty.gray_font
+        ws.cell(r, 4, self.account_id_of(biz)).font = sty.font if has_sheet else sty.gray_font
+        start, end, mon = self.marketing_of(biz, prod)
+        if has_sheet and prod and self.is_discontinued(biz, prod):
+            status = "⛔ 판매중지"
+        else:
+            status = self._mkt_status(start, end, mon) if has_sheet else "미수집"
+        for c, v in ((5, start), (6, end), (7, mon)):   # 마케팅(관리대장 값 표시)
+            x = ws.cell(r, c, v)
+            x.font = sty.font; x.alignment = sty.center; x.border = sty.box; x.fill = sty.mkt_fill
+        st = ws.cell(r, 8, status); st.alignment = sty.center; st.border = sty.box
+        st.font = (sty.red_bold if status == "체험단중"
+                   else (sty.gray_font if status in ("미수집", "종료", "⛔ 판매중지") else sty.font))
+        for c in (1, 2, 3, 4):
+            ws.cell(r, c).alignment = sty.left if c == 3 else sty.center
+            ws.cell(r, c).border = sty.box
