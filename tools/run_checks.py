@@ -26,6 +26,7 @@ except AttributeError:
 # (표시명, 스크립트, quick 포함 여부) — quick=커밋 전 빠른 것만
 CHECKS = [
     ("시뮬레이션(파이프라인 14시나리오)", "tools/simulate_pipeline.py", True),
+    ("핀(로그인·발견·반자동순위 실제코드)", "tools/pin_login_ranks.py", True),
     ("구글시트 오프라인 검증", "tools/verify_gsheet_offline.py", True),
     ("오프라인 실증(워크북·매칭·키워드선정)", "tools/verify_offline.py", False),
 ]

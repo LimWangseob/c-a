@@ -94,10 +94,16 @@
   `_finalize_run` 추출. run_full=오케스트레이터(검증→초기화→컬럼→2패스 수집→대조→마무리).
 - ✅ **`_process_account` F(72)→C(18)**: `_ProcCtx`+`_process_option`(C14)·`_resolve_keywords`(C11)·
   `_frozen_keywords`(C18)·`_migrate_product_blocks`(C16) 추출.
-- ⬜ **남은 괴물(다음 세션)**: `_login_and_discover` F(54)·`_track_ranks_semi` F(45)·`track_ranks_stage` D(27)·
-  `select_keywords_stage` D(25). **⚠주의**: 앞 둘은 **라이브 로그인·Akamai·2차인증·순위 상태기계**라 이른 return·
-  예외가 많고 **simulate 가 브라우저를 페이크**해 오프라인 핀 커버가 얇다 → §4.1대로 **핀 테스트 보강(먼저)**
-  또는 라이브 검증을 붙인 뒤 분해할 것(무리한 추출 금지). 파일 MI 는 이 둘이 F 라 아직 C(0.00).
+- ✅ **핀 테스트 보강 완료(2026-09-22)**: `tools/pin_login_ranks.py` 신설 — `_login_and_discover`·
+  `_track_ranks_semi` 를 **실제 코드로** 오프라인 구동(경계만 페이크: `WingBrowser`=`_FakeWing`,
+  collector 함수, rank 헬퍼). 13시나리오로 제어흐름 고정: **A**세션재사용·**B**NeedLogin(1차 미제출)·
+  **C**LoginBlocked·**D**LoginCredentialError(재시도 없음)·**E**otp 건너뜀·**F**반자동 1회 재시도 회복·
+  **G**discover PWTimeout→상품조회 vid 계속·**H**Failed to fetch 1회 재시도·**I**상품조회 실패→판매분석 폴백·
+  **J**반자동 순위 정상·**K**차단→쿨다운 재개·**L**쿨다운 초과→당일 중단(halt)·**M**키워드 없는 2차 블록 건너뜀.
+  `run_checks.py`(quick 포함)에 4번째로 배선, 전체 게이트 27.9s(<30s)·결정적. **이제 두 함수 분해 시 회귀 감지됨.**
+- ⬜ **남은 괴물(분해 대상)**: `_login_and_discover` F(54)·`_track_ranks_semi` F(45)·`track_ranks_stage` D(27)·
+  `select_keywords_stage` D(25). 핀 커버 확보 → §START HERE 2번대로 제자리 분해(이른 return·예외 제어흐름 보존).
+  파일 MI 는 이 둘이 F 라 아직 C(0.00).
 - **모듈 분리**(pipeline_sales/ranks/gsheet)는 함수 CC 정리 후 별도 단계로(지금은 제자리 분해로 충분).
 
 #### ⭐다음 세션 착수 레시피 (START HERE — pipeline.py 마저)
