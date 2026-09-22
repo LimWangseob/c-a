@@ -88,6 +88,18 @@
 3. **매 추출 후 `run_checks.py` 통과**(초록 유지가 절대 규칙). 커밋은 작게·자주.
 - 수용기준: 파일 MI가 C→B이상, 괴물 함수 CC가 F→C이하, 검증 3종 계속 초록.
 
+#### pipeline.py 진행 (2026-09-22, 커밋 05ac18b~66bb61f)
+- ✅ **`run_full` F(75)→C(15)**: `_column_label`·`_reconcile_ledger_accounts`·`_finish`(+`_RunCtx`)·
+  `_collect_session_first`/`_collect_with_login`·`_init_run_state`(+`_RunInit`)·`_validate_or_raise`·
+  `_finalize_run` 추출. run_full=오케스트레이터(검증→초기화→컬럼→2패스 수집→대조→마무리).
+- ✅ **`_process_account` F(72)→C(18)**: `_ProcCtx`+`_process_option`(C14)·`_resolve_keywords`(C11)·
+  `_frozen_keywords`(C18)·`_migrate_product_blocks`(C16) 추출.
+- ⬜ **남은 괴물(다음 세션)**: `_login_and_discover` F(54)·`_track_ranks_semi` F(45)·`track_ranks_stage` D(27)·
+  `select_keywords_stage` D(25). **⚠주의**: 앞 둘은 **라이브 로그인·Akamai·2차인증·순위 상태기계**라 이른 return·
+  예외가 많고 **simulate 가 브라우저를 페이크**해 오프라인 핀 커버가 얇다 → §4.1대로 **핀 테스트 보강(먼저)**
+  또는 라이브 검증을 붙인 뒤 분해할 것(무리한 추출 금지). 파일 MI 는 이 둘이 F 라 아직 C(0.00).
+- **모듈 분리**(pipeline_sales/ranks/gsheet)는 함수 CC 정리 후 별도 단계로(지금은 제자리 분해로 충분).
+
 ## 4. 실행 순서 (권장)
 1. **단계 1·2 먼저**(게이트·훅·규칙) — 이후 모든 수정에 회귀 자동 차단. (반나절)
 2. 그다음 **단계 4를 파일 하나씩**, 새 세션마다 한 파일(또는 한 함수군)씩·게이트 초록 유지. pipeline.py부터.
