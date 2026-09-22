@@ -55,8 +55,11 @@ def _load_input():
         src, url, file_path = "", "", ""
     if src == "gsheet" and url:                       # 앱과 동일: 구글시트 관리대장 우선
         from coupang_analytics.input_list import read_ledger_rows, parse_input_rows
-        title, rows, strike = read_ledger_rows(url, store=CredStore())
-        return parse_input_rows(rows, strike), f"구글시트 관리대장({title})"
+        try:
+            title, rows, strike = read_ledger_rows(url, store=CredStore())
+            return parse_input_rows(rows, strike), f"구글시트 관리대장({title})"
+        except Exception as exc:   # 403(SA 미공유) 등 → PC 엑셀로 폴백(로그인 테스트는 gsheet 불필요)
+            print(f"[경고] 구글시트 입력 로드 실패({exc.__class__.__name__}) → PC 엑셀로 폴백")
     path = file_path or (str(_REAL_INPUT) if _REAL_INPUT.exists() else "")
     if path and Path(path).exists():
         return parse_input_list(path), path
@@ -66,7 +69,8 @@ def _load_input():
 def main():
     args = sys.argv[1:]
     manual = "--manual" in args
-    args = [x for x in args if x != "--manual"]
+    semi = "--semi" in args   # 앱의 ①판매수집과 동일: 보이는 반자동 창(2차인증은 사람이 처리·offscreen 아님)
+    args = [x for x in args if x not in ("--manual", "--semi")]
     try:
         il, src_desc = _load_input()
     except Exception as exc:
@@ -101,7 +105,7 @@ def main():
     print("=" * 60)
     print(f"  대상 계정 : {a.account_id}  ({a.business_name})")
     print(f"  로그인 방식: {'자동입력' if has_pw else '수동(창에서 직접 입력)'}"
-          f"{' [--manual]' if manual else ''}")
+          f"{' [--manual]' if manual else ''}{' [--semi=보이는 반자동창]' if semi else ' [offscreen]'}")
     print(f"  수집 기간 : {date_from} ~ {date_to} (최근 {_DAYS}일 합계)")
     print("  → 잠시 후 로그인 창이 화면 중앙에 뜹니다. 2차 인증이 뜨면 그 창에서 처리하세요.")
     print("=" * 60)
@@ -109,7 +113,8 @@ def main():
     # ⚠ 읽기 전용: 마스터/구글시트를 건드리지 않는다(정체·지표만 조회·출력). vid 출처 변경(상품조회/수정)
     # 실동작·판매상태(productStatus) 확인용. 4튜플 = (계정, {vid:지표}, {vid:재고}, {vid:판매상태}).
     # 표준 로그 포맷(_log)으로 파이프라인 로그를 받는다 → 모든 줄에 [YYYY-MM-DD HH:MM:SS.mmm] 시각.
-    report_acc, metrics, inv_by_vid, sale_status = _login_and_discover(a, date_from, date_to, get_pw, _log)
+    report_acc, metrics, inv_by_vid, sale_status = _login_and_discover(
+        a, date_from, date_to, get_pw, _log, semi=semi)
 
     print("-" * 60)
     if report_acc is None:
