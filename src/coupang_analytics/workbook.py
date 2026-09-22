@@ -901,8 +901,9 @@ class OutputWorkbook:
         '부분판매중'/'판매중지'·상품조회/수정 `productStatus`, 판매자배송 포함 전 상품). bool 은 문자열로
         정규화한다(True→판매중지·False→판매중). 상품 정체성은 vendorItemId 앵커라, 대장에서 빠져 '판매중지'
         표기된 상품도 쿠팡에 살아있으면 그 vid 로 잡혀 실제 판매상태가 채워진다(대장↔쿠팡 불일치 경고 근거).
-        블록의 옵션(vid) 중 상태맵에 있는 것들만 보고: 전부 판매중지=판매중지·전부 판매중=판매중·그 외(섞임·
-        부분 포함)=부분판매중·하나도 없음=미상(생략). 반환=상태를 채운 상품 수."""
+        블록의 옵션(vid) 중 상태맵에 있는 것들만 보고: **모두 같은 상태면 그대로**(판매중/부분판매중/판매중지/
+        임시저장/승인반려 — 소유자 요구 2026-09-22: 임시저장·승인반려도 정확히 표기)·**섞이면 부분판매중**·
+        하나도 없음=미상(생략). 옵션 분리 후엔 블록당 vid 1개라 보통 단일 상태다. 반환=상태를 채운 상품 수."""
         if not status_by_vid:
             return 0
 
@@ -918,12 +919,8 @@ class OutputWorkbook:
             known = [s for s in known if s]   # 빈값(미상) 제외
             if not known:                     # 이 상품 옵션이 상태맵에 없음 → 미상(기존 값 보존)
                 continue
-            if all(s == "판매중지" for s in known):
-                st = "판매중지"
-            elif all(s == "판매중" for s in known):
-                st = "판매중"
-            else:
-                st = "부분판매중"
+            uniq = set(known)
+            st = next(iter(uniq)) if len(uniq) == 1 else "부분판매중"   # 단일=그대로·섞임=부분판매중
             self.set_sale_status(biz, p, st)
             n += 1
         return n
@@ -1520,12 +1517,16 @@ class OutputWorkbook:
         return self._product_rows()
 
     def status_of(self, biz: str, product: str, has_sheet: bool = True) -> str:
-        """계정목록 상태 열(G) 값 — openpyxl `_build_index` 규칙과 동일:
-        판매중지 > (미수집) > 체험단 상태(예정/체험단중/모니터링/종료/'')."""
+        """계정목록 상태 열 값 — 우선순위: 대장 판매중지 > (미수집) > **쿠팡 실제 판매상태(판매중지/임시저장/
+        승인반려)** > 체험단 상태. 소유자 요구(2026-09-22): 쿠팡 상품조회 판매상태(임시저장·승인반려 포함)를
+        **정확히 표기**한다(판매중/부분판매중은 정상이라 체험단/공란으로 둠)."""
         if has_sheet and product and self.is_discontinued(biz, product):
             return "⛔ 판매중지"
         if not has_sheet:
             return "미수집"
+        ss = self.sale_status(biz, product)   # 쿠팡 실제 판매상태(상품조회 productStatus)
+        if ss in _NOT_SELLING_STATUSES:       # 판매중지/임시저장/승인반려 → 그대로 표기
+            return ss
         s, e, m = self.marketing_of(biz, product)
         return self._mkt_status(s, e, m)
 
@@ -1670,8 +1671,8 @@ class OutputWorkbook:
             x = ws.cell(r, c, v)
             x.font = sty.font; x.alignment = sty.center; x.border = sty.box; x.fill = sty.mkt_fill
         st = ws.cell(r, 8, status); st.alignment = sty.center; st.border = sty.box
-        st.font = (sty.red_bold if status == "체험단중"
-                   else (sty.gray_font if status in ("미수집", "종료", "⛔ 판매중지") else sty.font))
+        _gray = ("미수집", "종료", "⛔ 판매중지", "판매중지", "임시저장", "승인반려")   # 미판매/비활성 = 옅게
+        st.font = sty.red_bold if status == "체험단중" else (sty.gray_font if status in _gray else sty.font)
         for c in (1, 2, 3, 4):
             ws.cell(r, c).alignment = sty.left if c == 3 else sty.center
             ws.cell(r, c).border = sty.box

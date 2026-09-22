@@ -169,10 +169,32 @@ def pin_trailing_trim():
     _check(ws.max_row == last_data, f"꼬리 공백행 없음(max_row={ws.max_row}=데이터끝)")
 
 
+def pin_sale_status_accurate():
+    print("[핀 S7] 판매상태 정확 표기 — 임시저장·승인반려를 판매중지로 안 뭉갬")
+    from coupang_analytics.collector import sale_status_of
+    # collector 원문 enum → 해석
+    _check(sale_status_of("ON_SALE") == "판매중", "ON_SALE→판매중")
+    _check(sale_status_of("PARTIAL_ON_SALE") == "부분판매중", "PARTIAL_ON_SALE→부분판매중")
+    _check(sale_status_of("SUSPENDED") == "판매중지", "SUSPENDED→판매중지")
+    _check(sale_status_of("DRAFT") == "임시저장", "DRAFT→임시저장")
+    _check(sale_status_of("REJECTED") == "승인반려", "REJECTED→승인반려")
+    _check(sale_status_of("") == "", "빈값→미상('')")
+    # apply_sale_status 는 단일 상태를 그대로 보존(임시저장이 부분판매중으로 안 바뀜)
+    wb = OutputWorkbook.empty()
+    wb.ensure_account(BIZ)
+    wb.ensure_product_block(BIZ, "임시상품", config.KIND_PERSONAL, ["kw"], registered="임시상품")
+    wb.set_product_vids(BIZ, "임시상품", ["vidT"])
+    wb.apply_sale_status(BIZ, {"vidT": "임시저장"})
+    _check(wb.sale_status(BIZ, "임시상품") == "임시저장", "apply_sale_status: 임시저장 보존(부분판매중 아님)")
+    _check(wb.status_of(BIZ, "임시상품") == "임시저장", "status_of(계정목록 상태)=임시저장 표기")
+    _check(wb.rank_suppressed(BIZ, "임시상품"), "임시저장 → 순위 제외(rank_suppressed)")
+
+
 def main() -> int:
     print("=" * 60)
     print("  핀 테스트 — OutputWorkbook.apply_style 서식 출력")
     print("=" * 60)
+    pin_sale_status_accurate()
     pin_title_and_frame()
     pin_block_fills()
     pin_sale_status_mismatch()
