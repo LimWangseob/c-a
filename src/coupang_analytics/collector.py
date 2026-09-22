@@ -324,24 +324,51 @@ def fetch_inventory(page, log=None) -> tuple[dict[str, int], dict[str, str], dic
     — 개인(NORMAL) 계정은 로켓그로스 재고가 없어 빈 dict(정상). 비200/파싱실패는 InventoryFetchError.
     페이지네이션: pageNumber 로 넘기다가 **안 넘어가면(재고 API가 pageNumber 무시)** 큰 pageSize 로 전량 1회 재요청.
     ⚠ 상품별 재고를 빠짐없이 잡기 위함 — 재고 적은 옵션이 정렬 하위로 밀려 상위 100 밖에 있으면 그 상품 재고현황이 공란이 되던 문제 해결.
+    **hiddenStatus 확장(소유자 2026-09-22)**: 로켓그로스는 판매중지·숨김 옵션도 상태 무관 전부 재고를 준다.
+    VISIBLE 만 조회하면 **숨김/판매중지 옵션 vid 가 빠져 그 옵션 재고가 공란**이 되던 문제 → VISIBLE 조회 후
+    **HIDDEN 을 1회 더 조회해 합친다**(없던 vid 만 추가·VISIBLE 우선). HIDDEN 조회 실패는 비치명(VISIBLE 유지).
     """
     log = log or (lambda m: None)
+    inv, names, status = _fetch_inventory_status(page, "VISIBLE", log)
+    try:
+        inv2, names2, status2 = _fetch_inventory_status(page, "HIDDEN", log)
+    except InventoryFetchError as exc:   # 숨김 조회 실패(값 미지원 등) → VISIBLE 만으로 진행(회귀 없음)
+        log(f"  [재고] ⚠ 숨김 옵션 조회 실패(계속·VISIBLE만) — {str(exc)[:100]}")
+        return inv, names, status
+    added = 0
+    for k, v in inv2.items():
+        if k not in inv:
+            inv[k] = v
+            added += 1
+    for k, v in names2.items():
+        names.setdefault(k, v)
+    for k, v in status2.items():
+        status.setdefault(k, v)
+    if added:
+        log(f"  [재고] 숨김/비활성 옵션 {added}개 추가(누적 {len(inv)})")
+    return inv, names, status
+
+
+def _fetch_inventory_status(page, hidden_status: str, log) -> tuple[dict, dict, dict]:
+    """한 hiddenStatus(VISIBLE|HIDDEN) 로 로켓그로스 재고 전량 조회 → (재고맵, 이름맵, 판매중지여부맵).
+
+    fetch_inventory 의 실조회 본체(페이지네이션 + pageNumber 미진행 시 큰 pageSize 전량 재요청). 상태별로 호출."""
     names: dict[str, str] = {}   # {vid: 등록상품명} — 판매 무관 그로스 상품 roster(vid 보강용)
     status: dict[str, bool] = {}  # {vid: isSaleSuspended} — 대장↔쿠팡 판매상태 불일치 경고용
 
     def _fetch(page_size: int, page_num: int) -> tuple[list, int]:
         payload = {"paginationRequest": {"pageSize": page_size, "pageNumber": page_num,
                                          "searchAfterSortValues": None},
-                   "hiddenStatus": "VISIBLE",
+                   "hiddenStatus": hidden_status,
                    "sort": [{"sortParameter": "ORDERABLE_QUANTITY", "sortDirection": "DESCENDING"}],
                    "rrqContext": {"source": "IHD", "eventType": "RRQ_SEEN", "metadata": "{}"}}
         res = page.evaluate(_INV_FETCH_JS, payload)
-        status, body = res.get("status"), res.get("body", "")
-        if status != 200:
+        st, body = res.get("status"), res.get("body", "")
+        if st != 200:
             raise InventoryFetchError(
-                f"inventory search 응답 status={status}"
+                f"inventory search 응답 status={st}"
                 f"{' (XSRF 토큰 없음)' if not res.get('hasToken') else ''} — page {page_num}"
-                f" · 응답본문: {str(body)[:300]}")
+                f" · hiddenStatus={hidden_status} · 응답본문: {str(body)[:300]}")
         try:
             data = json.loads(body)
         except json.JSONDecodeError as exc:
@@ -359,7 +386,7 @@ def fetch_inventory(page, log=None) -> tuple[dict[str, int], dict[str, str], dic
         names.update(_parse_inventory_roster(props))
         status.update(_parse_inventory_status(props))
         total = total or len(out)
-        log(f"  [재고] search p{page_num + 1} — {len(props)}개 (누적 {len(out)}/{total})")
+        log(f"  [재고:{hidden_status}] search p{page_num + 1} — {len(props)}개 (누적 {len(out)}/{total})")
         if not props or len(out) >= total or len(out) == before:
             break            # 빈 페이지 / 목표 도달 / 페이지 미진행(새 항목 0개)
         page_num += 1
