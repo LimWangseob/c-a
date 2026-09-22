@@ -888,6 +888,35 @@ def _process_option(pctx: _ProcCtx, biz: str, product, base: str, kind: str, tit
     wb.save(pctx.save_path)
 
 
+def _migrate_product_blocks(wb, biz: str, base: str, rep_name: str, vids_all, opts, multi: bool,
+                            log) -> None:
+    """정체성/마이그레이션(소유자 2026-09-20: vid=상품당 1개).
+
+    ① **같은 vid** = 같은 상품 → 기존 블록 승계 + 이름을 등록상품명으로 정규화(set_display_name 은
+       중단됐으니 이 한 번만). ② **등록상품명은 같은데 vid 가 다른**(교집합 없는) 옛 블록 = 정체성 바뀜
+       → **이전 데이터 삭제하고 새로 시작**(잘못된 이력 승계 방지). vid 없는 복원 잔재 블록도 대체 삭제한다
+       (단 이번에 이어쓸 블록·미매칭 상품은 보존).
+    """
+    vidset = set(vids_all)
+    old = wb.resolve_block_name(biz, vids_all)   # 새 vid 와 교집합 있는 기존 블록(같은 vid)
+    if old and old != rep_name and not wb.has_product(biz, rep_name):
+        if wb.set_display_name(biz, old, rep_name):
+            log(f"  [정체성] 기존 블록 '{old}' → '{rep_name}'(같은 vid·과거 이력 승계·이름 정규화)")
+    new_names = {_block_name(base, o.label if multi else "") for o in opts}   # 이번에 쓸(이어쓸) 블록
+    for stale in wb.blocks_with_registered_name(biz, base):
+        stored = set(wb.product_vids(biz, stale))
+        # ① vid 가 바뀐 옛 블록(교집합 없음) = 정체성 변경 → 삭제·새로 시작(단일옵션 동일이름도 삭제 후 재생성).
+        changed_vid = bool(vidset and stored and not (vidset & stored))
+        # ② 구글시트 복원 잔재: 옛 블록에 vid 가 **없는데** 이번에 vid 있는 옵션 블록을 새로 만든다 = pre-vid 잔재
+        #    → 삭제. 단 **이번에 이어쓸 블록(new_names)** 과 **미매칭 상품(vidset 비었음)** 은 보존.
+        legacy_novid = bool(vidset and not stored and stale not in new_names)
+        if changed_vid or legacy_novid:
+            if wb.delete_product_block(biz, stale):
+                why = (f"vid 변경(이전 {sorted(stored)} → {vids_all})" if changed_vid
+                       else f"vid 없는 옛 블록 잔재(복원분) → 옵션 블록 {vids_all} 로 대체")
+                log(f"  [정체성] '{stale}' {why} → 이전 데이터 삭제·새로 시작")
+
+
 def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid,
                      date_iso, grow, log, save_path, skip_ranks: bool = False,
                      keywords_off: bool = False) -> None:
@@ -913,29 +942,7 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
         base = product.name                            # 등록상품명(vendor-inventory) = 블록 기준명
         vids_all = [oid for o in opts for oid in o.vendor_item_ids]
         rep_name = _block_name(base, opts[0].label if multi else "")
-        # ── 정체성/마이그레이션(소유자 2026-09-20: vid=상품당 1개) ──
-        # ① **같은 vid** = 같은 상품 → 기존 블록 승계 + 이름을 등록상품명으로 정규화(set_display_name 은 중단됐으니
-        #    이 한 번만). ② **등록상품명은 같은데 vid 가 다른**(교집합 없는) 옛 블록 = 정체성 바뀜 → **이전 데이터
-        #    삭제하고 새로 시작**(잘못된 이력 승계 방지). 첫 적용 때 vid 출처가 바뀌어 값이 달라진 경우가 여기 해당.
-        vidset = set(vids_all)
-        old = wb.resolve_block_name(biz, vids_all)   # 새 vid 와 교집합 있는 기존 블록(같은 vid)
-        if old and old != rep_name and not wb.has_product(biz, rep_name):
-            if wb.set_display_name(biz, old, rep_name):
-                log(f"  [정체성] 기존 블록 '{old}' → '{rep_name}'(같은 vid·과거 이력 승계·이름 정규화)")
-        new_names = {_block_name(base, o.label if multi else "") for o in opts}   # 이번에 쓸(이어쓸) 블록
-        for stale in wb.blocks_with_registered_name(biz, base):
-            stored = set(wb.product_vids(biz, stale))
-            # ① vid 가 바뀐 옛 블록(교집합 없음) = 정체성 변경 → 삭제·새로 시작(단일옵션 동일이름도 삭제 후 재생성).
-            changed_vid = bool(vidset and stored and not (vidset & stored))
-            # ② 구글시트 복원 잔재: 옛 블록에 vid 가 **없는데**(숨김 메타 미러 안 됨) 이번에 vid 있는 옵션 블록을
-            #    새로 만든다 = 그 옛 블록은 이 상품의 pre-vid 잔재 → 삭제. 단 **이번에 이어쓸 블록(new_names)** 과
-            #    **미매칭 상품(vidset 비었음)** 은 보존(단일옵션 승계·대장명 추적 상품 안 지움).
-            legacy_novid = bool(vidset and not stored and stale not in new_names)
-            if changed_vid or legacy_novid:
-                if wb.delete_product_block(biz, stale):
-                    why = (f"vid 변경(이전 {sorted(stored)} → {vids_all})" if changed_vid
-                           else f"vid 없는 옛 블록 잔재(복원분) → 옵션 블록 {vids_all} 로 대체")
-                    log(f"  [정체성] '{stale}' {why} → 이전 데이터 삭제·새로 시작")
+        _migrate_product_blocks(wb, biz, base, rep_name, vids_all, opts, multi, log)
         # 수집 주기·마케팅은 상품(대표) 단위. 오늘 대상 아니면 이 상품의 모든 옵션 블록을 오늘치 생략.
         if product.mkt_start or product.mkt_end or product.mkt_mon:   # 대장에 마케팅 값 있을 때만 반영
             wb.set_marketing(biz, rep_name, product.mkt_start, product.mkt_end, product.mkt_mon)
