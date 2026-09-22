@@ -169,7 +169,7 @@ class App(QtWidgets.QMainWindow):
 
     def __init__(self, auto: bool = False):
         super().__init__()
-        self.auto = auto            # 무인 자동 실행(--auto) 모드 — 팝업 없이 로그로, 06:00 자동 종료
+        self.auto = auto            # 무인 자동 실행(--auto) 모드 — 팝업 없이 로그로, **완주 후에만 종료**(강제종료 없음)
         self.setWindowTitle("쿠팡 애널리틱스")
         self.input_list = None
         self.naver_creds = None
@@ -1131,9 +1131,9 @@ class App(QtWidgets.QMainWindow):
             write_run_stage("done")             # 전부 완료 표시(재부팅 복구 안 함)
         return result
 
-    # ── 무인 자동 실행(--auto, 18:00 시작 → 06:00 자동 종료) ───────
+    # ── 무인 자동 실행(--auto, 18:00 시작 → **모든 처리 완주 후 종료**·강제종료 없음) ───────
     def start_auto(self):
-        """무인 자동 실행 — 팝업 없이 **①반자동 판매수집 → ②키워드선정 → ③반자동 순위**, 06:00 자동 종료.
+        """무인 자동 실행 — 팝업 없이 **①반자동 판매수집 → ②키워드선정 → ③반자동 순위**, **모든 처리 완주 후에만 종료**(강제종료 없음).
 
         무인이어도 **처리 방식은 전부 반자동**(전체실행과 동일 조합·offscreen 전무): ①은 보이는 신뢰 창에서
         자동입력 로그인(Akamai 통과율↑), ②는 로그인 없이 쿠팡 자동완성+네이버+AI 선정, ③은 autosubmit 순위.
@@ -1148,7 +1148,10 @@ class App(QtWidgets.QMainWindow):
         if self.naver_creds is None or not self.ai_key:
             self.log("[무인] 네이버/OpenAI 키 미설정 — 설정 후 재시도. 종료")
             return self._auto_quit()
-        self._schedule_auto_stop()                 # 06:00 자동 종료 예약
+        # ⚠ 06:00 강제 종료 폐지(소유자 2026-09-23): **어떤 경우에도 강제 종료 금지 — 모든 처리(①②③+재고
+        # 역기록)가 끝난 뒤에만 _auto_done 으로 종료**한다. 순위·로그인 단계는 자체 서킷브레이커(쿨다운 MAX·
+        # 연속차단)로 스스로 끝나므로 무한 대기하지 않는다. (예전 _schedule_auto_stop 은 06:00에 순위를 중간에
+        # 끊고 60초 뒤 강제 종료했다 — 미처리분 발생·소유자 불가 판정.) 절전만 실행 동안 방지.
         df, dt, dlabel = self._run_dates()         # 판매조회=어제(D-1) · 컬럼라벨=실행날짜(오늘)
         meta = resumable_progress()
         resume = bool(meta)
@@ -1212,21 +1215,6 @@ class App(QtWidgets.QMainWindow):
             return None
         self.run_bg(task, on_done=self._auto_done, btn=None)
 
-    def _schedule_auto_stop(self):
-        now = datetime.now()
-        stop = now.replace(hour=6, minute=0, second=0, microsecond=0)
-        if stop <= now:
-            stop += timedelta(days=1)
-        QtCore.QTimer.singleShot(int((stop - now).total_seconds() * 1000), self._auto_stop)
-        self.log(f"[무인] {stop:%m-%d %H:%M} 자동 종료 예약")
-
-    def _auto_stop(self):
-        self.log("[무인] 06:00 도달 — 순위 조회 중지 요청 후 종료")
-        ev = getattr(self, "_semi_stop", None)
-        if ev is not None:
-            ev.set()
-        QtCore.QTimer.singleShot(60000, self._auto_quit)   # 정리 시간 준 뒤 강제 종료(백스톱)
-
     def _auto_done(self, _result=None):
         self.log("== [무인 자동 실행] 완료 — 종료 ==")
         self._auto_quit()
@@ -1260,8 +1248,7 @@ class App(QtWidgets.QMainWindow):
             self.log("[재부팅 복구] 네이버/OpenAI 키 미설정 — 종료")
             return self._auto_quit()
 
-        _prevent_sleep(True)
-        self._schedule_auto_stop()                 # 안전 백스톱(06:00 자동 종료)
+        _prevent_sleep(True)   # 06:00 강제 종료 폐지(소유자 2026-09-23) — 이어서 하는 작업도 완주 후에만 종료
         self._semi_stop = threading.Event()
         stop = self._semi_stop
         df, dt, dlabel = self._run_dates()
