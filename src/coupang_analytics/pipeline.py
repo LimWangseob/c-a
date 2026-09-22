@@ -751,6 +751,143 @@ def _block_name(base: str, label: str) -> str:
     return f"{base} ({label})" if label else base
 
 
+@dataclass
+class _ProcCtx:
+    """_process_account 한 계정 처리의 공유 인자(상품·옵션 루프가 이 컨텍스트로 동작)."""
+    wb: OutputWorkbook
+    naver: NaverAdApi
+    ai_key: str | None
+    browser: object
+    metrics: object
+    inv_by_vid: object
+    date_iso: str
+    grow: bool
+    skip_ranks: bool
+    keywords_off: bool
+    log: object
+    save_path: object
+
+
+def _frozen_keywords(pctx: _ProcCtx, biz: str, pname: str, base: str, kind: str, title: str,
+                     opt_vids, existing, measure, cap: dict):
+    """기존 상품의 키워드 동결 경로 — 시트 키워드 그대로(grow=True면 상한 내 발굴 추가), 미기입 순위만 측정.
+
+    반환: (keywords, ranks{키워드:순위}, track_info). 동결분은 검색량/경쟁 미측정(track_info 값 0/'').
+    """
+    wb, log = pctx.wb, pctx.log
+    naver, ai_key, browser, grow, date_iso = pctx.naver, pctx.ai_key, pctx.browser, pctx.grow, pctx.date_iso
+    keywords = list(existing)
+    wb.ensure_product_block(biz, pname, kind, keywords, registered=base)   # no-op
+    if grow and len(existing) < config.KW_MAX_TRACK and browser is not None:
+        want = min(config.KW_ADD_PER_DAY, config.KW_MAX_TRACK - len(existing))
+        found = select_keywords_light(title, naver, ai_key, browser=browser, log=log,
+                                      n=want, measure_ranks=measure, exclude=set(existing))
+        add = [t for t in found if t.keyword not in existing][:want]
+        if add:
+            wb.add_product_keywords(biz, pname, [t.keyword for t in add])
+            for t in add:
+                wb.set_keyword_search(biz, pname, t.keyword, t.volume)
+            keywords += [t.keyword for t in add]
+            log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → 동결 {existing} + 발굴 {[t.keyword for t in add]}")
+        else:
+            log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → (동결) {keywords}")
+    else:
+        log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → (동결) {keywords}")
+    _fill_frozen_search_volumes(wb, biz, pname, keywords, naver, log)  # 검색량 공란만 네이버로(fix ②)
+    todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date_iso)]
+    measured = measure(todo, _cap=cap) if (browser is not None and todo) else {}
+    ranks = {kw: _best(measured.get(kw)) for kw in todo if kw in measured}  # 측정 실패는 공란
+    track_info = [(kw, 0, "", ranks.get(kw)) for kw in keywords]   # 동결분은 검색량/경쟁 미측정
+    return keywords, ranks, track_info
+
+
+def _resolve_keywords(pctx: _ProcCtx, biz: str, pname: str, base: str, kind: str, title: str,
+                      opt_vids, measure, measure_cb, cap: dict):
+    """대표 옵션의 키워드 확정 — 기존=동결(grow면 상한 내 발굴 추가), 새 상품=AI 선정.
+
+    반환: (keywords, ranks{키워드:순위}, track_info[(kw,vol,comp,rank)], roles{키워드:역할}).
+    선정 실패(AI 깨진 JSON·네이버 400 등)는 이 상품만 건너뛰고 빈 결과 반환(판매지표는 호출부가 계속 기록).
+    """
+    wb, log = pctx.wb, pctx.log
+    naver, ai_key, browser, grow, date_iso = pctx.naver, pctx.ai_key, pctx.browser, pctx.grow, pctx.date_iso
+    try:   # 한 상품의 키워드 선정 실패가 계정 전체를 막지 않게 격리
+        existing = wb.product_keywords(biz, pname)
+        if existing:                                   # 기존 상품 → 동결(역할 재판정 안 함)
+            kws, ranks, track_info = _frozen_keywords(pctx, biz, pname, base, kind, title,
+                                                      opt_vids, existing, measure, cap)
+            return kws, ranks, track_info, {}
+        # 새 상품 → AI 선정(skip_ranks면 순위 없이 부분점수)
+        tracks = select_keywords_light(title, naver, ai_key, browser=browser, log=log,
+                                       measure_ranks=measure_cb)
+        keywords = [t.keyword for t in tracks]
+        wb.ensure_product_block(biz, pname, kind, keywords, registered=base)
+        for t in tracks:
+            wb.set_keyword_search(biz, pname, t.keyword, t.volume)
+        ranks = {t.keyword: t.exposure_best for t in tracks}          # 선정단계 순위 재사용
+        track_info = [(t.keyword, t.volume, t.comp_idx, t.exposure_best) for t in tracks]
+        roles = {t.keyword: t.role for t in tracks if t.role}         # ④ 역할(REP/SALES/GROWTH/DEFENSE)
+        log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → {[f'{t.keyword}({t.role})' if t.role else t.keyword for t in tracks]}")
+        return keywords, ranks, track_info, roles
+    except Exception as exc:   # 이 상품만 건너뜀(판매지표·재고는 호출부가 계속 기록). 계정은 완주.
+        log(f"  [오류] {_vtag(opt_vids)} {_short(title)} 키워드 처리 실패(건너뜀, 판매지표는 기록) — "
+            f"{exc.__class__.__name__}: {str(exc)[:80]}")
+        wb.ensure_product_block(biz, pname, kind, wb.product_keywords(biz, pname), registered=base)
+        return [], {}, [], {}
+
+
+def _process_option(pctx: _ProcCtx, biz: str, product, base: str, kind: str, title: str,
+                    i: int, opt, multi: bool) -> None:
+    """상품의 옵션(vid) 한 개를 기록. 대표(i==0)=키워드/순위/지표, 2차 옵션=판매정보(지표·재고)만.
+
+    keywords_off(①판매수집)면 대표도 지표·재고·vid만(키워드는 ②, 순위는 ③). 상품마다 저장(중단 복구).
+    """
+    wb, log = pctx.wb, pctx.log
+    is_rep = (i == 0)
+    pname = _block_name(base, opt.label if multi else "")
+    opt_vids = list(opt.vendor_item_ids)
+    if pctx.keywords_off or not is_rep:
+        # ① 판매수집 단계, 또는 다중옵션 2차 블록 → 지표·재고·vid만(키워드/순위 없음, rank_rows=is_rep)
+        wb.ensure_product_block(biz, pname, kind, wb.product_keywords(biz, pname),
+                                rank_rows=is_rep, registered=base)
+        wb.set_product_vids(biz, pname, opt_vids)
+        _fill_product_metrics(wb, biz, pname, opt_vids, kind, pctx.metrics, pctx.inv_by_vid,
+                              pctx.date_iso, log=log)
+        wb.save(pctx.save_path)
+        return
+    # ── 대표 옵션(단일옵션 포함): 키워드 동결/선정 → 순위 → 지표 → 진단 ──
+    naver, ai_key, browser, grow = pctx.naver, pctx.ai_key, pctx.browser, pctx.grow
+    skip_ranks, date_iso = pctx.skip_ranks, pctx.date_iso
+    pmatcher = {"제품": _product_matcher(product)}   # 순위 매칭 = 리스팅 전 옵션 vid(아이템위너 놓침 방지)
+
+    def measure(kws, _m=pmatcher, _cap=None):
+        return _measure_safe(browser, kws, _m, log, matched_out=_cap)   # 순위 실패해도 판매데이터 완주
+
+    measure_cb = measure if (browser is not None and not skip_ranks) else None
+    cap: dict = {}   # 매칭된 검색결과 항목(노출명) 회수용
+    keywords, ranks, track_info, roles = _resolve_keywords(
+        pctx, biz, pname, base, kind, title, opt_vids, measure, measure_cb, cap)
+
+    if not skip_ranks:                             # 순위 기록(PC). 날짜지정 수집(skip_ranks)은 순위 제외
+        # 차단된 실행이면 미측정(None)을 '50위'로 위장 기록하지 않고 **공란**으로 남긴다 →
+        # is_rank_filled=False 유지 → 다음(쉰 IP) 실행이 그 순위만 재측정.
+        blocked = _RANK_HALT["stop"]
+        for kw in keywords:                        # 이미 채워진 건 건너뜀
+            if kw not in ranks or wb.is_rank_filled(biz, pname, kw, date_iso):
+                continue
+            if ranks.get(kw) is None and blocked:  # 차단으로 못 잰 값 → 공란(재측정 대상)
+                continue
+            wb.set_keyword_rank(biz, pname, kw, date_iso, ranks.get(kw))
+            log(f"  [순위] {_vtag(opt_vids)} '{kw}': {rank_label(ranks.get(kw))}")
+        # ⚠ set_display_name(노출명 교체) 중단 — 블록 이름을 등록상품명+옵션라벨로 고정(옵션 정체성 안정).
+        mi = cap.get("제품")                        # 노출명은 로그로만(블록명은 등록상품명 유지)
+        if mi is not None and getattr(mi, "name", ""):
+            log(f"  [노출명] {_vtag(opt_vids)} 검색결과 노출명 = {_short(mi.name, 40)} (블록명은 등록상품명 고정)")
+    wb.set_product_vids(biz, pname, opt_vids)          # 대표 옵션 vid 저장(③은 sibling_vids 합집합으로 매칭)
+    _fill_product_metrics(wb, biz, pname, opt_vids, kind, pctx.metrics, pctx.inv_by_vid, date_iso, log=log)
+    _log_diagnose(product, track_info, ai_key, log, wb=wb, biz=biz, roles=roles, pname=pname)
+    wb.save(pctx.save_path)
+
+
 def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid,
                      date_iso, grow, log, save_path, skip_ranks: bool = False,
                      keywords_off: bool = False) -> None:
@@ -810,89 +947,12 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
                     seen_products.append(_block_name(base, o.label if multi else ""))   # 있음(오늘 스킵돼도 '있음')
                 continue
         # ── 옵션 블록 루프: 대표(i==0)만 키워드/순위, 나머지는 판매정보만 ──
+        pctx = _ProcCtx(wb=wb, naver=naver, ai_key=ai_key, browser=browser, metrics=metrics,
+                        inv_by_vid=inv_by_vid, date_iso=date_iso, grow=grow, skip_ranks=skip_ranks,
+                        keywords_off=keywords_off, log=log, save_path=save_path)
         for i, opt in enumerate(opts):
-            is_rep = (i == 0)
-            pname = _block_name(base, opt.label if multi else "")
-            opt_vids = list(opt.vendor_item_ids)
-            seen_products.append(pname)
-            if keywords_off or not is_rep:
-                # ① 판매수집 단계, 또는 다중옵션 2차 블록 → 지표·재고·vid만(키워드/순위 없음, rank_rows=is_rep)
-                wb.ensure_product_block(biz, pname, kind, wb.product_keywords(biz, pname),
-                                        rank_rows=is_rep, registered=base)
-                wb.set_product_vids(biz, pname, opt_vids)
-                _fill_product_metrics(wb, biz, pname, opt_vids, kind, metrics, inv_by_vid, date_iso, log=log)
-                wb.save(save_path)
-                continue
-            # ── 대표 옵션(단일옵션 포함): 키워드 동결/선정 → 순위 → 지표 → 진단 ──
-            pmatcher = {"제품": _product_matcher(product)}   # 순위 매칭 = 리스팅 전 옵션 vid(아이템위너 놓침 방지)
-
-            def measure(kws, _m=pmatcher, _cap=None):
-                return _measure_safe(browser, kws, _m, log, matched_out=_cap)   # 순위 실패해도 판매데이터 완주
-
-            measure_cb = measure if (browser is not None and not skip_ranks) else None
-            cap: dict = {}   # 매칭된 검색결과 항목(노출명) 회수용
-            try:   # 한 상품의 키워드 선정 실패(AI 깨진 JSON·네이버 400 등)가 계정 전체를 막지 않게 격리
-                existing = wb.product_keywords(biz, pname)
-                if existing:                                   # 기존 상품 → 시트 키워드 그대로(동결, AI 톱업 없음)
-                    keywords = list(existing)
-                    wb.ensure_product_block(biz, pname, kind, keywords, registered=base)   # no-op
-                    if grow and len(existing) < config.KW_MAX_TRACK and browser is not None:
-                        want = min(config.KW_ADD_PER_DAY, config.KW_MAX_TRACK - len(existing))
-                        found = select_keywords_light(title, naver, ai_key, browser=browser, log=log,
-                                                      n=want, measure_ranks=measure, exclude=set(existing))
-                        add = [t for t in found if t.keyword not in existing][:want]
-                        if add:
-                            wb.add_product_keywords(biz, pname, [t.keyword for t in add])
-                            for t in add:
-                                wb.set_keyword_search(biz, pname, t.keyword, t.volume)
-                            keywords += [t.keyword for t in add]
-                            log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → 동결 {existing} + 발굴 {[t.keyword for t in add]}")
-                        else:
-                            log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → (동결) {keywords}")
-                    else:
-                        log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → (동결) {keywords}")
-                    _fill_frozen_search_volumes(wb, biz, pname, keywords, naver, log)  # 검색량 공란만 네이버로(fix ②)
-                    todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date_iso)]
-                    measured = measure(todo, _cap=cap) if (browser is not None and todo) else {}
-                    ranks = {kw: _best(measured.get(kw)) for kw in todo if kw in measured}  # 측정 실패는 공란
-                    track_info = [(kw, 0, "", ranks.get(kw)) for kw in keywords]   # 동결분은 검색량/경쟁 미측정
-                    roles = {}                                     # 동결 상품은 역할 재판정 안 함
-                else:                                          # 새 상품 → AI 선정(skip_ranks면 순위 없이 부분점수)
-                    tracks = select_keywords_light(title, naver, ai_key, browser=browser, log=log,
-                                                   measure_ranks=measure_cb)
-                    keywords = [t.keyword for t in tracks]
-                    wb.ensure_product_block(biz, pname, kind, keywords, registered=base)
-                    for t in tracks:
-                        wb.set_keyword_search(biz, pname, t.keyword, t.volume)
-                    ranks = {t.keyword: t.exposure_best for t in tracks}          # 선정단계 순위 재사용
-                    track_info = [(t.keyword, t.volume, t.comp_idx, t.exposure_best) for t in tracks]
-                    roles = {t.keyword: t.role for t in tracks if t.role}         # ④ 역할(REP/SALES/GROWTH/DEFENSE)
-                    log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → {[f'{t.keyword}({t.role})' if t.role else t.keyword for t in tracks]}")
-            except Exception as exc:   # 이 상품만 건너뜀(판매지표·재고는 아래에서 계속 기록). 계정은 완주.
-                log(f"  [오류] {_vtag(opt_vids)} {_short(title)} 키워드 처리 실패(건너뜀, 판매지표는 기록) — "
-                    f"{exc.__class__.__name__}: {str(exc)[:80]}")
-                wb.ensure_product_block(biz, pname, kind, wb.product_keywords(biz, pname), registered=base)
-                keywords, ranks, track_info, roles = [], {}, [], {}
-
-            if not skip_ranks:                             # 순위 기록(PC). 날짜지정 수집(skip_ranks)은 순위 제외
-                # 차단된 실행이면 미측정(None)을 '50위'로 위장 기록하지 않고 **공란**으로 남긴다 →
-                # is_rank_filled=False 유지 → 다음(쉰 IP) 실행이 그 순위만 재측정.
-                blocked = _RANK_HALT["stop"]
-                for kw in keywords:                        # 이미 채워진 건 건너뜀
-                    if kw not in ranks or wb.is_rank_filled(biz, pname, kw, date_iso):
-                        continue
-                    if ranks.get(kw) is None and blocked:  # 차단으로 못 잰 값 → 공란(재측정 대상)
-                        continue
-                    wb.set_keyword_rank(biz, pname, kw, date_iso, ranks.get(kw))
-                    log(f"  [순위] {_vtag(opt_vids)} '{kw}': {rank_label(ranks.get(kw))}")
-                # ⚠ set_display_name(노출명 교체) 중단 — 블록 이름을 등록상품명+옵션라벨로 고정(옵션 정체성 안정).
-                mi = cap.get("제품")                        # 노출명은 로그로만(블록명은 등록상품명 유지)
-                if mi is not None and getattr(mi, "name", ""):
-                    log(f"  [노출명] {_vtag(opt_vids)} 검색결과 노출명 = {_short(mi.name, 40)} (블록명은 등록상품명 고정)")
-            wb.set_product_vids(biz, pname, opt_vids)          # 대표 옵션 vid 저장(③은 sibling_vids 합집합으로 매칭)
-            _fill_product_metrics(wb, biz, pname, opt_vids, kind, metrics, inv_by_vid, date_iso, log=log)
-            _log_diagnose(product, track_info, ai_key, log, wb=wb, biz=biz, roles=roles, pname=pname)
-            wb.save(save_path)
+            seen_products.append(_block_name(base, opt.label if multi else ""))
+            _process_option(pctx, biz, product, base, kind, title, i, opt, multi)
     # 대장 대조: 이번 대장에 없던 마스터 블록 = 판매중지/삭제 표기(데이터 보존, 다시 나타나면 자동 해제)
     newly = wb.reconcile_account(biz, seen_products)
     if newly:
