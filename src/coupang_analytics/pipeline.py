@@ -1367,6 +1367,45 @@ def _init_run_state(input_list: InputList, out: Path, partial: Path, prog: Path,
     return _RunInit(wb, date_from, date_to, started_at, done, carry, grow, skip_ranks, date_label)
 
 
+def _validate_or_raise(input_list: InputList, log) -> None:
+    """시작 전 입력 검증 — 경고는 알리고 진행, 치명적 이상은 시작 차단(작업 도중 크래시·데이터 손실 예방)."""
+    fatals, warns = validate_input_list(input_list)
+    for w in warns:
+        log(f"  [입력검증] ⚠ {w}")
+    if fatals:
+        for f in fatals:
+            log(f"  [입력검증] ✖ {f}")
+        raise InputValidationError("입력 파일 검증 실패 — 위 항목을 고친 뒤 다시 시작하세요.")
+    log(f"[입력검증] 통과 — 계정 {len(input_list.accounts)}개 · "
+        f"상품 {sum(len(a.products) for a in input_list.accounts)}개"
+        + (f" · 경고 {len(warns)}건(진행)" if warns else ""))
+
+
+def _finalize_run(ctx: _RunCtx, master: Path, prog: Path, now: datetime, gsheet_output_url,
+                  removed_accounts, uncollected) -> Path:
+    """통계 마스터/스냅샷 저장 + 결과 구글시트 반영 + 진행파일 정리. 반환=스냅샷 경로.
+
+    로그인 못한 계정이 남았으면 진행분을 유지(같은 날 재실행이 미완료분만 이어서 처리), 없으면 진행파일을
+    지운다(날짜가 바뀌면 resumable_progress 가 '오늘 아님'으로 무시 → 자동으로 처음부터).
+    """
+    wb, log = ctx.wb, ctx.log
+    snapshot = _snapshot_path(ctx.out, now)
+    wb.apply_style()         # 가독성 서식(헤더 고정·상품 구분·정렬) — 최종본에만
+    wb.save(master)          # 다음 날 이어쓸 마스터
+    wb.save(snapshot)        # 그날 백업본(감사용)
+    _push_gsheet(wb, gsheet_output_url, log, removed_accounts=removed_accounts)   # 결과 반영 + 삭제 계정 정리
+    if uncollected:
+        _save_ctx_progress(ctx)
+        wb.save(ctx.partial)     # 재개 기준선(완료분 반영)
+        log(f"== 미완료 {len(uncollected)}개 남음 — 진행분 유지(같은 날 재실행 시 그 계정만 이어서) ==")
+    else:
+        for p in (ctx.partial, prog):
+            if p.exists():
+                p.unlink()
+    log(f"== 완료: 마스터 {master.name} · 스냅샷 {snapshot.name} (성공 {len(ctx.done)}/{ctx.total} 계정) ==")
+    return snapshot
+
+
 def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
              ai_key: str | None = None, date_from: str | None = None, date_to: str | None = None,
              get_password=None, resume: bool = False, carry_forward: bool = False,
@@ -1395,17 +1434,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     if not ai_key:
         raise KeywordAIError("OpenAI(ChatGPT) API 키가 없어 키워드 추출을 할 수 없습니다. "
                              "설정 탭에서 OpenAI API 키를 입력한 뒤 다시 실행하세요.")
-    # 시작 전 입력 검증 — 경고는 알리고 진행, 치명적 이상은 시작 차단(작업 도중 크래시·데이터 손실 예방)
-    fatals, warns = validate_input_list(input_list)
-    for w in warns:
-        log(f"  [입력검증] ⚠ {w}")
-    if fatals:
-        for f in fatals:
-            log(f"  [입력검증] ✖ {f}")
-        raise InputValidationError("입력 파일 검증 실패 — 위 항목을 고친 뒤 다시 시작하세요.")
-    log(f"[입력검증] 통과 — 계정 {len(input_list.accounts)}개 · "
-        f"상품 {sum(len(a.products) for a in input_list.accounts)}개"
-        + (f" · 경고 {len(warns)}건(진행)" if warns else ""))
+    _validate_or_raise(input_list, log)
     now = datetime.now()
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -1466,25 +1495,8 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         #    skip_ranks=False를 물려받으면 ①이 헛도는 offscreen 백필을 시도하던 잠재버그 방지).
         _backfill_ranks(wb, partial, log, was_blocked=_RANK_HALT["stop"])
 
-    # 통계 마스터 갱신 + 그날 스냅샷 저장
-    snapshot = _snapshot_path(out, now)
-    wb.apply_style()         # 가독성 서식(헤더 고정·상품 구분·정렬) — 최종본에만
-    wb.save(master)          # 다음 날 이어쓸 마스터
-    wb.save(snapshot)        # 그날 백업본(감사용)
-    _push_gsheet(wb, gsheet_output_url, log, removed_accounts=removed_accounts)   # 결과 반영 + 삭제된 계정 정리
-    # 진행 상태 정리 — 단, 이 실행에서 로그인 못한 계정이 **남았으면 진행분을 유지**해서
-    # 같은 날 재실행이 '미완료분만' 이어서 처리하게 한다(완료 계정은 done 으로 자동 건너뜀).
-    # 날짜가 바뀌면 resumable_progress 가 '오늘 아님'으로 무시 → 자동으로 처음부터.
-    if uncollected:
-        _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks, date_label)
-        wb.save(partial)     # 재개 기준선(완료분 반영)
-        log(f"== 미완료 {len(uncollected)}개 남음 — 진행분 유지(같은 날 재실행 시 그 계정만 이어서) ==")
-    else:
-        for p in (partial, prog):
-            if p.exists():
-                p.unlink()
-    log(f"== 완료: 마스터 {master.name} · 스냅샷 {snapshot.name} (성공 {len(done)}/{total} 계정) ==")
-    return snapshot
+    # 통계 마스터/스냅샷 저장 + 결과 구글시트 반영 + 진행파일 정리
+    return _finalize_run(ctx, master, prog, now, gsheet_output_url, removed_accounts, uncollected)
 
 
 def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = "output",
