@@ -152,8 +152,9 @@ def sale_status_of(product_status: str) -> str:
 
     **화면(상품조회/수정)의 판매/승인 상태와 일치하는 신뢰 소스**(라이브 실측 2026-09-20 nicoable/sg0141n).
     실제 원문 enum → 해석: **ON_SALE=판매중 · PARTIAL_ON_SALE=부분판매중 · SUSPENDED=판매중지 ·
-    DRAFT=임시저장 · REJECTED=승인반려** (소유자 요구 2026-09-22: 임시저장·승인반려를 판매중지로 묶지 말고
-    **정확히 표기**). 그 외 미인식 원문은 안전하게 판매중지로 본다. NORMAL(판매자배송) 상품도 이 필드로 커버.
+    DRAFT=임시저장 · REJECTED=승인반려 · UNDER_REVIEW=검토중** (소유자 요구 2026-09-22: 임시저장·승인반려·
+    검토중을 판매중지로 묶지 말고 **정확히 표기**·라이브 nicoable 에서 UNDER_REVIEW 확인). 그 외 미인식 원문은
+    안전하게 판매중지로 본다. NORMAL(판매자배송) 상품도 이 필드로 커버.
     ⚠ 계정 전체가 SUSPENDED 로 나올 수 있음(wellbing1107 처럼 '신규 등록 불가' 제한 계정) — 필드 정상."""
     s = (product_status or "").strip()
     if not s:
@@ -167,6 +168,8 @@ def sale_status_of(product_status: str) -> str:
         return "임시저장"
     if "REJECT" in u or s.startswith("승인"):
         return "승인반려"
+    if "REVIEW" in u or s.startswith("검토"):
+        return "검토중"
     return "판매중지"   # SUSPENDED 등 그 외 미판매 상태
 
 

@@ -185,8 +185,23 @@ def t1_sale_status_flag():
     assert sale_status_of("ON_SALE") == "판매중"
     assert sale_status_of("PARTIAL_ON_SALE") == "부분판매중"
     assert sale_status_of("판매중") == "판매중"
+    assert sale_status_of("DRAFT") == "임시저장"            # 소유자 2026-09-22: 판매중지로 안 뭉갬
+    assert sale_status_of("REJECTED") == "승인반려"
+    assert sale_status_of("UNDER_REVIEW") == "검토중"       # 라이브 nicoable 확인
     assert sale_status_of("SALE_STOP") == "판매중지"        # 미지 enum → 판매중지(안전한 실패=경보 누락)
     assert sale_status_of("") == ""                          # 빈값=미상
+    # ── '둘다' 상품의 판매자배송(NORMAL) 중복 옵션 제외 = RFM(로켓그로스) vid 만 채택(재고 공란 방지) ──
+    from coupang_analytics.collector import products_from_vendor_inventory
+
+    def _opt(vid, rt, valid="VALID"):
+        return VendorInventoryOption(vendor_item_id=vid, item_name="베이지", registration_type=rt, valid=valid)
+    both = VendorInventoryListing(product_name="기저귀가방", vendor_inventory_id="g1",
+                                  registration_type="", product_status="ON_SALE",
+                                  options=[_opt("N_dup", "NORMAL"), _opt("R_real", "RFM")])
+    prods = products_from_vendor_inventory([both])
+    vids = [v for p in prods for o in p.options for v in o.vendor_item_ids]
+    assert vids == ["R_real"], f"둘다 상품 NORMAL 중복 미제외(재고 공란 원인): {vids}"
+    assert prods[0].kind == config.KIND_BOTH, "구분은 둘다 보존"
     # vid별 전개 + apply_sale_status 문자열 경로(판매자배송 NORMAL 상품도 상태 커버)
     def _li(name, vid, status, rt="NORMAL"):
         return VendorInventoryListing(product_name=name, vendor_inventory_id="g_" + vid,

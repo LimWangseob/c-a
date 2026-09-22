@@ -53,39 +53,29 @@ def main():
             print("  [중단] 로그인 안 됨"); return
         b.goto(WING_URL)
         b.page.wait_for_timeout(1200)
-        # ── 상품조회(블록 vid 출처) 옵션 전부 ──
         from coupang_analytics.collector import fetch_vendor_inventory
         listings = fetch_vendor_inventory(b.page, lambda m: None)
-        vi_opts = []   # (vendorItemId, vendorInventoryItemId, itemName, salePrice, regType, valid, status, 상품명)
-        for L in listings:
-            for o in L.options:
-                vi_opts.append((o.vendor_item_id, o.vendor_inventory_item_id, o.item_name,
-                                o.sale_price, o.registration_type, o.valid, o.status, L.product_name))
-        vi_vids = {o[0] for o in vi_opts}
-        # ── RFM 재고 전부 + 첫 항목 구조 ──
         res = b.page.evaluate(_INV_FETCH_JS, _payload("VISIBLE"))
         data = json.loads(res.get("body", "{}"))
         props = data.get("viProperties") or []
-        rfm_vids = {str(p.get("vendorItemId") or "") for p in props}
-        print(f"\n[상품조회] 옵션 {len(vi_opts)}개 · [RFM재고] 항목 {len(props)}개")
-        print("[RFM 첫 항목 필드]:", list(props[0].keys()) if props else "없음")
-        # RFM 항목의 id 후보들(vendorItemId 외에 매칭키 있나) + 이름/가격
-        print("[RFM 항목 5개 — id 후보]:")
-        for p in props[:5]:
-            ids = {k: p.get(k) for k in p if "id" in k.lower() or "Id" in k}
-            print(f"   {ids} · name={str(p.get('vendorItemName') or p.get('itemName') or p.get('productName'))[:20]!r}")
-        # 상품조회에만 있고 RFM엔 없는 옵션(=재고 공란 원인) — 이름·가격으로 RFM에 짝이 있나
-        print(f"\n[상품조회에만·RFM 없음] {len(vi_vids - rfm_vids)}개 vid:")
-        rfm_by_name = {}
-        for p in props:
-            nm = str(p.get("vendorItemName") or p.get("itemName") or "")
-            rfm_by_name.setdefault(nm, []).append((str(p.get('vendorItemId')), _parse_inventory([p]).get(str(p.get('vendorItemId')))))
-        for o in vi_opts:
-            if o[0] in rfm_vids:
-                continue
-            twin = rfm_by_name.get(o[2] or "", [])
-            print(f"   상품조회 vid={o[0]} vInvItemId={o[1]} 이름={o[2]!r} 가격={o[3]} 구분={o[4]} valid={o[5]} status={o[6]}"
-                  f"  → RFM 동명 항목: {twin}")
+        rfm = {str(p.get("vendorItemId") or ""): _parse_inventory([p]).get(str(p.get("vendorItemId")))
+               for p in props}
+        # productStatus 원문 분포(검토중 등 미확인 enum 확인)
+        from collections import Counter
+        pst = Counter(L.product_status or "(빈)" for L in listings)
+        print(f"\n[상품조회] 리스팅 {len(listings)}개 · productStatus 분포: {dict(pst)}")
+        print(f"[RFM재고] {len(rfm)}vid")
+        # ── 리스팅별 전체 구조: 같은 옵션의 RFM/NORMAL/무효/검토중 묶임 확인 ──
+        print("\n[리스팅별 옵션 구조] (재고=RFM 매칭 / -=RFM없음):")
+        for L in listings:
+            regs = Counter(o.registration_type for o in L.options)
+            print(f"  ▶ 리스팅 invId={L.vendor_inventory_id} · productStatus={L.product_status!r}"
+                  f" · 옵션{len(L.options)}({dict(regs)}) · {L.product_name[:22]!r}")
+            for o in L.options:
+                inv = rfm.get(o.vendor_item_id)
+                mark = f"재고 {inv}" if o.vendor_item_id in rfm else "-(RFM없음)"
+                print(f"      vid={o.vendor_item_id} [{o.registration_type}/{o.valid}/{o.status}]"
+                      f" {o.item_name!r} {o.sale_price}원 → {mark}")
     print("\n== 끝 ==")
 
 
