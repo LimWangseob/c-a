@@ -25,6 +25,16 @@ if (-not (Test-Path $exe)) {
     exit 1
 }
 
+# 0.4) Windows Defender 검사 제외(이 폴더) — 미서명 PyInstaller exe 오탐(!ml) 재격리 방지 ──
+#   ⚠ 최초 압축 풀 때의 삭제는 이걸로 못 막는다(그건 '0_먼저실행_보안제외.bat' 을 압축 전에 실행).
+#   여기선 설치 후 업데이트·재검사 때 exe 가 다시 격리되는 것을 막는다(관리자 권한 필요).
+try {
+    Add-MpPreference -ExclusionPath $root -ErrorAction Stop
+    Write-Host "  [확인] Windows Defender 검사 제외에 추가: $root (오탐 재격리 방지)"
+} catch {
+    Write-Host "  [건너뜀] Defender 제외 추가 실패(관리자 아님/정책) — 필요 시 수동 제외: $root"
+}
+
 # 0.5) 보존 폴더(상태) 준비 — output/data/config 는 있으면 그대로(업데이트 보존), 없으면 만든다 ──
 Write-Host '[0/4] 보존 폴더(설정·결과·프로필) 준비...'
 foreach ($d in @((Join-Path $root 'output'), (Join-Path $root 'data'))) {

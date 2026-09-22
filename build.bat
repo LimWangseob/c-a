@@ -17,6 +17,9 @@ echo.
 echo [3/5] 설치·무인 예약 스크립트 복사(코드 폴더 안)...
 copy /Y "%~dp0deploy\설치.bat" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0deploy\install.ps1" "dist\coupang-analytics\" >nul
+copy /Y "%~dp0deploy\0_먼저실행_보안제외.bat" "dist\coupang-analytics\" >nul
+copy /Y "%~dp0deploy\0_먼저실행_보안제외.bat" "dist\" >nul
+rem ⚠ Defender 오탐(미서명 PyInstaller exe) 대비 — 압축 전에 실행할 '보안 제외' 스크립트를 zip 루트에도 둔다.
 copy /Y "%~dp0deploy\자동실행_삭제.bat" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0deploy\remove_autorun.ps1" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0deploy\첫실행_설정안내.txt" "dist\coupang-analytics\" >nul
@@ -41,7 +44,8 @@ rem    운용 PC는 자기 data 폴더(휴지통 복원 등)를 쓰거나, 야�
 echo.
 echo [5/5] 배포용 zip 압축(폴더째 — 개발·운용 폴더명 동일: coupang-analytics)...
 del /Q "dist\쿠팡애널리틱스_배포.zip" 2>nul
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path 'dist\coupang-analytics' -DestinationPath 'dist\쿠팡애널리틱스_배포.zip' -Force"
+rem zip 루트에 '0_먼저실행_보안제외.bat' 을 함께 넣는다(압축 풀기 전 관리자로 실행 → Defender 오탐 삭제 방지).
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path 'dist\coupang-analytics','dist\0_먼저실행_보안제외.bat' -DestinationPath 'dist\쿠팡애널리틱스_배포.zip' -Force"
 if errorlevel 1 goto :err
 echo.
 echo 완료!
