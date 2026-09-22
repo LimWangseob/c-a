@@ -115,6 +115,16 @@
   (pipeline_sales/ranks/gsheet, §단계4)가 필요 → 다음 별도 단계. 이번 세션 목표(두 F 괴물함수 제거)는 달성.
 - ⬜ **라이브 검증 남김(사무실)**: 로그인/순위는 오프라인 핀으로 100% 못 잡으니, 분해 후 사무실에서 ①판매수집·
   ③순위 1회 라이브 확인 권장(정책 엣지케이스 실측). 근거 없는 되돌림 금지([[fix-from-real-evidence]]).
+
+#### workbook.py 진행 (2026-09-22, 커밋 22b41d3·3388f35)
+- ✅ **서식 핀 먼저(커밋 22b41d3)**: verify_offline/simulate 는 `apply_style` 호출은 하나 **값만 assert**하고 서식은
+  미검증 → `tools/pin_apply_style.py` 신설(제목/틀고정/열너비·상품/키워드/지표 색·판매중지↔판매중 불일치 적색
+  C00000·마케팅 배경·그룹 굵은선/얇은선·꼬리행 정리). run_checks 5번째로 배선.
+- ✅ **`apply_style` F(52)→A(3) 분해(커밋 3388f35)**: 팔레트=`_StyleCtx` dataclass, `cell/merge/edge` 클로저→모듈
+  헬퍼(`_sty_cell/_sty_merge/_sty_edge`). `_style_sheet`(B10)→`_style_block`(A5)→`_mkt_cols`·`_find_kw_head`·
+  `_style_metric_rows`·`_style_keyword_rows`(C11)·`_flag_sale_mismatch`·`_style_block_edges`(C11). **workbook 에 F/E 괴물 0.**
+- ⬜ **남은 D(다음)**: `_build_index` D·`normalize_date_columns` D·`set_display_name` D. **파일 MI 는 여전히 C(0.00)**
+  (1576줄 포화) — pipeline 과 동일하게 B 이상은 모듈 분리가 필요(별도 단계). 이후 app_qt/app(`do_run_full` E33).
 - **모듈 분리**(pipeline_sales/ranks/gsheet)는 함수 CC 정리 후 별도 단계로(지금은 제자리 분해로 충분).
 
 #### ⭐다음 세션 착수 레시피 (START HERE — pipeline.py 마저)
