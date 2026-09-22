@@ -84,8 +84,8 @@ RANK_NAV_SERIAL = True        # True=직렬 네비게이션(기본, 안전). Fal
 # 2026-09-14: 밤샘 반자동(271키워드/10.5h·차단 0건) 실측상 대기가 총시간의 ~86% → 90~150(평균120)을
 # 45~75(평균60)로 하향(총시간 ~10.5h→~6h). 무차단 유지되면 다음 단계 30~50 검토(단계적 하향 원칙, §위 폐기된
 # 초단축과 달리 실측 근거). 설정탭에서 실행 중에도 조정 가능(A/B).
-RANK_NAV_DELAY_MIN_SEC = 45   # 최소 대기(초) — 평균 ~60s(밤샘 무차단 근거로 하향, 필요시 설정탭 조정)
-RANK_NAV_DELAY_MAX_SEC = 75   # 최대 대기(초). 무작위
+RANK_NAV_DELAY_MIN_SEC = 35   # 최소 대기(초) — 평균 ~45s(45~75서 단계 하향, 소유자 2026-09-23·차단 0 유지 확인 후 유지/추가하향)
+RANK_NAV_DELAY_MAX_SEC = 55   # 최대 대기(초). 무작위. ⚠차단 뜨면 45~75로 되돌릴 것
 RANK_FETCH_CONCURRENCY = 2   # 병렬(직렬모드 off) 시 동시 fetch 개수. RANK_HUMAN_SERIAL=True면 1로 강제(직렬)
 RANK_FETCH_JITTER_MIN_MS = 700  # 각 fetch 전 최소 지연(ms) — 직렬모드 사람 간격 하한(0이면 하한 없음)
 RANK_FETCH_JITTER_MS = 1800   # 각 fetch 전 최대 지연(ms) — 실제 지연은 MIN~MAX 무작위(사람처럼). 직렬이라 여전히 빠름(요청당 fetch ~0.3s)
