@@ -143,7 +143,7 @@
 - **✅라이브 ①(로그인·발견) 통과(2026-09-22 사무실 nicoable)**: 분해 `_ensure_login`/`_fresh_login`/`_discover_products`/
   `_run_discover`/`_augment_vids` 프로덕션 정상(행동 불변 실증) — 로그인·상품조회 7상품·판매분석 23옵션·재고 21vid·
   판매상태 15vid(판매중9/중지4/부분2)·미매칭 3vid 보강·대장 3전건. 도구=`verify_login_discover_live.py <계정ID> --semi`(읽기전용).
-- ⚠ **별도 발견**: 구글시트 **입력 관리대장 403**(SA `coupang-sheet-bot@…` 미공유) → 무인 gsheet 입력·재고 역기록 막힐 수 있음. SA에 대장 시트 **'편집자' 공유** 확인(코드 아님).
+- ✅ **별도 발견 해결(2026-09-22)**: 구글시트 **입력 관리대장 403**(SA `coupang-sheet-bot@…` 미공유)이었으나 소유자가 SA를 **편집자로 공유** → 정상 로드 확인("셀독리스트" 27계정, gsheet 직접·폴백 없음). 무인 gsheet 입력·재고 역기록 복구. (결과 통계 시트엔 원래 SA 편집자 있었음 — 둘은 별개 스프레드시트.)
 - **남은 것 = (1) 4파일 MI C→B 는 모듈 분리 필요**(대형파일 radon MI 포화·별도 단계·테스트 가로채기 재배선 위험) **(2) ③순위 라이브 검증**(핫스팟 권장·사무실 IP는 차단 이력).
 - 회귀 게이트 = `run_checks.py` **6종**(시뮬·핀3[login_ranks 16시나리오·apply_style·run_plan]·구글시트·오프라인), quick=5종.
 - **모듈 분리**(pipeline_sales/ranks/gsheet)는 함수 CC 정리 후 별도 단계로(지금은 제자리 분해로 충분).
