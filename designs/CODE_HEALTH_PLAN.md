@@ -100,6 +100,29 @@
   또는 라이브 검증을 붙인 뒤 분해할 것(무리한 추출 금지). 파일 MI 는 이 둘이 F 라 아직 C(0.00).
 - **모듈 분리**(pipeline_sales/ranks/gsheet)는 함수 CC 정리 후 별도 단계로(지금은 제자리 분해로 충분).
 
+#### ⭐다음 세션 착수 레시피 (START HERE — pipeline.py 마저)
+0. **환경 확인**: `python tools/install_hooks.py --status`(둘 다 '설치됨'), `python tools/run_checks.py`(초록) 먼저.
+   커밋 기준선 = `66bb61f`(분해7/N) 또는 `e19e551`(문서). 미푸시 커밋 9개 있음.
+1. **⚠핀 테스트 먼저(필수)**: `_login_and_discover`·`_track_ranks_semi`는 **simulate 가 통째로 페이크**
+   (`tools/simulate_pipeline.py`의 `_fake_login_and_discover`·`_fake_track_ranks_semi`로 `_install_fakes`가
+   교체) → **실제 코드가 오프라인에서 0% 실행됨.** 지금 추출하면 회귀를 못 잡는다. 먼저 커버를 붙일 것:
+   - **방법**: 실제 함수를 돌리되 **경계만** 페이크. `_login_and_discover`는 `WingBrowser`(현재 `_FakeBrowser`는
+     빈 스텁 → `goto`/`page.wait_for_timeout`/`authenticated`/`autofill_login`/`wait_for_login`/`classify_login`/
+     `show`/`hide`/`page.url` 를 갖도록 확장)와 collector 함수(`fetch_vendor_inventory`/`discover`/`fetch_inventory`/
+     `sale_status_by_vid`/`fetch_sales_roster`) 를 페이크로. 검증할 분기: **세션재사용**(authenticated=True)·
+     **NeedLogin**(login=False+미인증)·**LoginBlocked**(classify 'blocked')·**LoginCredentialError**(classify
+     'error', 재시도 안 함)·**otp 건너뜀**(classify 'otp'→None 반환)·**반자동 1회 재시도**(semi)·**discover 없음**
+     (PWTimeout→vendor_products로 계속)·**Failed to fetch 1회 재시도**. `_track_ranks_semi`는
+     `_prefill_search`/`_submit_search`/`_wait_results_loaded`/`_all_pages`/`organic_ranks`를 페이크로 실제 함수 구동.
+   - 이 핀 테스트를 `verify_offline` 또는 `simulate`에 **추가하고 게이트 초록** 확인 후에만 분해.
+2. **분해(핀 초록 유지)**: `_login_and_discover` F54 = 로그인 국면(세션판정·자동입력·wait·분류·반자동재시도)을
+   `_ensure_login(...)`로, 발견 국면(vendor/discover/inventory/scope/augment)을 `_discover_products(...)`로 분리.
+   이른 return(4-튜플)·예외(NeedLogin/LoginBlocked/LoginCredentialError) **제어흐름 절대 보존**. `_track_ranks_semi`
+   F45 = 키워드 루프·쿨다운재개·차단중단을 헬퍼로. 목표 CC≤C, 게이트 매 추출마다 초록.
+3. 파일 MI 가 B 이상 되면 (이 두 F 제거 시) **수용기준 달성** → workbook.py(`apply_style` F52)로 이동.
+4. **라이브 검증 남김**: 로그인/순위는 오프라인 핀으로도 100% 못 잡으니, 분해 후 사무실에서 ①판매수집·③순위
+   1회 라이브 확인 권장(정책 엣지케이스 실측). 근거 없는 되돌림 금지([[fix-from-real-evidence]]).
+
 ## 4. 실행 순서 (권장)
 1. **단계 1·2 먼저**(게이트·훅·규칙) — 이후 모든 수정에 회귀 자동 차단. (반나절)
 2. 그다음 **단계 4를 파일 하나씩**, 새 세션마다 한 파일(또는 한 함수군)씩·게이트 초록 유지. pipeline.py부터.
