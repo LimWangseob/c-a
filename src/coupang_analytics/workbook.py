@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date as _date, datetime as _dt, timedelta as _td
 from pathlib import Path
 
@@ -35,6 +36,51 @@ def _unmerge_all(ws) -> None:
                 if (rr, cc) not in ws._cells:
                     ws._cells[(rr, cc)] = Cell(ws, row=rr, column=cc)
         ws.unmerge_cells(str(mr))
+
+
+@dataclass
+class _StyleCtx:
+    """apply_style 팔레트(폰트·채움·테두리·정렬) 묶음 — 시트/블록 서식 헬퍼가 공유."""
+    font: Font
+    bold: Font
+    title_font: Font
+    f_prod: PatternFill
+    f_label: PatternFill
+    f_kwhead: PatternFill
+    f_kind: PatternFill
+    mkt_fill: PatternFill
+    box: Border
+    center: Alignment
+    wrap: Alignment
+    thick: Side
+    thin: Side
+
+
+def _sty_cell(ws, r, c, sty: _StyleCtx, *, fill=None, fnt=None, align=None, num=False) -> None:
+    """셀 서식 적용(폰트·정렬·테두리·선택 채움/숫자서식). 분해 전 apply_style 내부 `cell` 클로저와 동일."""
+    x = ws.cell(r, c)
+    x.font = fnt or sty.font
+    x.alignment = align or sty.center
+    x.border = sty.box
+    if fill:
+        x.fill = fill
+    if num and isinstance(x.value, (int, float)):
+        x.number_format = "#,##0"
+
+
+def _sty_merge(ws, r1, c1, r2, c2) -> None:
+    if r2 > r1 or c2 > c1:
+        ws.merge_cells(start_row=r1, start_column=c1, end_row=r2, end_column=c2)
+
+
+def _sty_edge(ws, maxc, row, side, style) -> None:
+    """상품 블록 경계(첫 행 상단/마지막 행 하단) 테두리 — 그룹 바깥=굵은선(thick)·변형 사이=얇은선(thin)."""
+    for c in range(1, maxc + 1):
+        b = ws.cell(row, c).border
+        ws.cell(row, c).border = Border(
+            left=b.left, right=b.right,
+            top=style if side == "top" else b.top,
+            bottom=style if side == "bottom" else b.bottom)
 
 _COL_KIND = 1      # A: 상품구분 / 사업자명
 _COL_NAME = 3      # C: 상품명 / 키워드
@@ -994,191 +1040,197 @@ class OutputWorkbook:
         # 서식 재적용 전에 일자 컬럼을 **시트별 첫날~마지막날 연속·날짜순**으로 정규화(빠진 날=날짜만 표기·값 공란).
         # 멱등·값 보존이라 결과파일 저장 때마다 시계열이 일자별로 끊기지 않게 유지된다(§'미실행 날짜=공란').
         self.normalize_date_columns()
-        font = Font(name=self._FN, size=11)
-        bold = Font(name=self._FN, size=11, bold=True)
-        title_font = Font(name=self._FN, size=14, bold=True)
-        f_prod = PatternFill("solid", fgColor=self._FILL_PROD)
-        f_label = PatternFill("solid", fgColor=self._FILL_LABEL)
-        f_kwhead = PatternFill("solid", fgColor=self._FILL_KWHEAD)
-        f_kind = PatternFill("solid", fgColor=self._FILL_KIND)
-        mkt_fill = PatternFill("solid", fgColor=self._FILL_MKT)   # 마케팅 기간(시작~종료) 일자 컬럼 배경
         thin = Side(style="thin", color="BFBFBF")
-        box = Border(left=thin, right=thin, top=thin, bottom=thin)
-        center = Alignment(horizontal="center", vertical="center")
-        wrap = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-        def cell(ws, r, c, *, fill=None, fnt=font, align=center, num=False):
-            x = ws.cell(r, c)
-            x.font = fnt
-            x.alignment = align
-            x.border = box
-            if fill:
-                x.fill = fill
-            if num and isinstance(x.value, (int, float)):
-                x.number_format = "#,##0"
-
-        def merge(ws, r1, c1, r2, c2):
-            if r2 > r1 or c2 > c1:
-                ws.merge_cells(start_row=r1, start_column=c1, end_row=r2, end_column=c2)
-
-        thick = Side(style="thick")
-
-        def edge(ws, maxc, row, side, style=thick):
-            """상품 블록 경계(첫 행 상단/마지막 행 하단)에 선 — **그룹 바깥=굵은 선(thick), 같은
-            등록상품명 변형(옵션) 사이=얇은 선(thin)**. 변형 상품이 한 덩어리로 보이게 한다(fix ④)."""
-            for c in range(1, maxc + 1):
-                b = ws.cell(row, c).border
-                ws.cell(row, c).border = Border(
-                    left=b.left, right=b.right,
-                    top=style if side == "top" else b.top,
-                    bottom=style if side == "bottom" else b.bottom)
-
+        sty = _StyleCtx(
+            font=Font(name=self._FN, size=11),
+            bold=Font(name=self._FN, size=11, bold=True),
+            title_font=Font(name=self._FN, size=14, bold=True),
+            f_prod=PatternFill("solid", fgColor=self._FILL_PROD),
+            f_label=PatternFill("solid", fgColor=self._FILL_LABEL),
+            f_kwhead=PatternFill("solid", fgColor=self._FILL_KWHEAD),
+            f_kind=PatternFill("solid", fgColor=self._FILL_KIND),
+            mkt_fill=PatternFill("solid", fgColor=self._FILL_MKT),   # 마케팅 기간 일자 컬럼 배경
+            box=Border(left=thin, right=thin, top=thin, bottom=thin),
+            center=Alignment(horizontal="center", vertical="center"),
+            wrap=Alignment(horizontal="center", vertical="center", wrap_text=True),
+            thick=Side(style="thick"),
+            thin=thin,
+        )
         for ws in self.wb.worksheets:
             if ws.title in _SPECIAL_SHEETS:              # 숨김 매핑·목차·계정정보 시트는 블록 서식 대상 아님
                 continue
-            # 멱등화: 기존 병합을 모두 해제한 뒤 아래에서 표준대로 다시 병합한다.
-            # (②/③/반영 등이 서식 없이 셀을 추가해 병합·테두리가 시트마다 섞이는 것을 원천 제거 →
-            #  apply_style 을 몇 번 돌려도 항상 '첫 시트 표준' 하나로 고정됨.)
-            _unmerge_all(ws)
-            # 꼬리 공백행 제거(멱등): 값이 있는 마지막 행 아래를 모두 삭제해 max_row 를 실제 데이터에 맞춘다.
-            # 구 버그(마지막 블록 하단선을 end+1 빈 행에 그리던 시절)가 남긴 '스타일만 있는 빈 행'이 통계
-            # 이어쓰기로 시트마다 누적돼(상품 1·2·5개 무관 5행씩) 마지막 상품 아래 공백으로 보였다. →
-            # 아래에서 마지막 블록 하단선을 end(=이제 실제 마지막 데이터행)에 그리면 공백 없이 딱 닫힌다.
-            mc0 = ws.max_column
-            last_data = max((r for r in range(1, ws.max_row + 1)
-                             if any(ws.cell(r, c).value not in (None, "") for c in range(1, mc0 + 1))),
-                            default=1)
-            if ws.max_row > last_data:
-                ws.delete_rows(last_data + 1, ws.max_row - last_data)
-            maxc = ws.max_column
-            t = ws.cell(1, 1)
-            t.font = title_font
-            t.alignment = center
-            t.border = Border(bottom=Side(style="medium"))
-            merge(ws, 1, 1, 1, _COL_SEARCH - 1)       # 제목 A~E (F·G 는 목차 복귀 링크 자리)
-            # ◀ 목차 복귀 링크(F1:G1) — 1행+A~G열은 틀고정이라 **어느 시트·어디로 스크롤해도 항상 보임**.
-            # 탭이 많아 목차 탭이 탭바에서 밀려 안 보일 때, 여기 클릭 한 번으로 목차로 돌아간다(사용자 요청).
-            back = ws.cell(1, _COL_SEARCH, f"👈 {_INDEX_SHEET}")   # 손가락(뒤로) + 명확한 문구
-            back.hyperlink = Hyperlink(ref=back.coordinate, location=f"'{_INDEX_SHEET}'!A1")
-            back.font = Font(name=self._FN, size=12, bold=True, color="FF0000")  # 빨간색 진하게(눈에 띄게)
-            back.alignment = Alignment(horizontal="center", vertical="center")
-            back.fill = PatternFill("solid", fgColor="FFF2CC")   # 옅은 노랑 강조 배경
-            back.border = Border(bottom=Side(style="medium"))
-            merge(ws, 1, _COL_SEARCH, 1, _COL_METRIC)  # F1:G1
-            ws.row_dimensions[1].height = 21          # 제목행 높이(샘플 서식 고정값)
-            ws.freeze_panes = "H2"                     # A~G열·1행 고정, H~ 일자만 스크롤
-            # 표준 열너비: A11 B6 D9 E9 F13.75 G14. **C(상품명/키워드)만 full 제목이 보이도록 넓힘**
-            # (사용자 요청: 이름칸 1줄=제목·2줄=vid, 제목 폭을 제목에 맞추기 — 기존 C10은 너무 좁았음).
-            for c, w in {1: 11, 2: 6, 3: 36, 4: 9, 5: 9, 6: 13.75, 7: 14}.items():
-                ws.column_dimensions[get_column_letter(c)].width = w
-            for c in range(_FIRST_DATE, maxc + 1):
-                ws.column_dimensions[get_column_letter(c)].width = 11
-            headers = sorted(self._date_rows.get(ws.title, []))
-            # fix ④: 같은 등록상품명(변형/옵션) 블록을 한 그룹으로 묶어 그룹 바깥만 굵은 선. 옵션 블록은
-            # 생성 순서상 시트에서 인접하므로 **연속된 같은 등록명 = 한 그룹**으로 본다.
-            regs = []
-            for hr in headers:
-                _rnm = _key(ws.cell(hr, _COL_NAME).value)
-                regs.append(self.registered_name(ws.title, _rnm) or _rnm)
-            for i, hr in enumerate(headers):
-                end = (headers[i + 1] - 2) if i + 1 < len(headers) else ws.max_row
-                # 이름칸 렌더링(멱등): 헤더 C = 1줄 상품제목 + (보이지 않는 구분자) + 2줄 vendorItemId.
-                # 키는 항상 구분자 앞부분이므로 _key 로 순수명 복원 후 vid 를 다시 붙여 표준화한다.
-                nm = _key(ws.cell(hr, _COL_NAME).value)
-                if nm:
-                    ws.cell(hr, _COL_NAME).value = self._display_name(ws.title, nm)
-                # 마케팅: 이 상품의 기간·상태 + 마케팅기간(시작~종료)에 해당하는 일자 컬럼 집합(배경색용)
-                mstart, mend, _mmon = self.marketing_of(ws.title, nm)
-                is_mkt = self._mkt_status(mstart, mend, _mmon) == "체험단중"
-                is_disc = self.is_discontinued(ws.title, nm)   # 대장에서 사라짐 = 판매중지 표기
-                mcols: set[int] = set()
-                _s, _e = _parse_date(mstart), _parse_date(mend)
-                if _s:
-                    for _lbl, _cc in self._date_col.get(ws.title, {}).items():
-                        _d = _parse_date(_lbl)
-                        if _d and _d >= _s and (not _e or _d <= _e):
-                            mcols.add(_cc)
-                kh = None                                   # 키워드 소헤더행(C='키워드'로 식별 — G는 비고/마케팅 표기에 씀)
-                for r in range(hr, end + 1):
-                    if _norm(ws.cell(r, _COL_NAME).value) == _LABEL_KEYWORD:
-                        kh = r
-                        break
-                m_end = (kh - 1) if kh else end
-                # 상품 지표블록: A:B 구분(살구=상품명색) · C:F 상품명(세로) · G 라벨 · H~ 값
-                for r in range(hr, m_end + 1):
-                    cell(ws, r, 1, fill=f_prod)
-                    cell(ws, r, 2, fill=f_prod)
-                    for c in range(_COL_NAME, _COL_SEARCH + 1):
-                        cell(ws, r, c, fill=f_prod, fnt=bold, align=wrap)
-                    cell(ws, r, _COL_METRIC, fill=f_label)
-                    for c in range(_FIRST_DATE, maxc + 1):
-                        cell(ws, r, c, num=True, fill=(mkt_fill if c in mcols else None))
-                # 키워드블록: A:B 사업자(세로) · C:E 키워드명(가로) · F 검색량 · G(소헤더 비고=회색/순위라벨=연파랑) · H~ 순위
-                if kh:
-                    for r in range(kh, end + 1):
-                        head = (r == kh)
-                        cell(ws, r, 1, fill=f_kind)
-                        cell(ws, r, 2, fill=f_kind)
-                        for c in range(_COL_NAME, _COL_SEARCH):     # C~E 키워드명(항상 bold)
-                            cell(ws, r, c, fill=(f_kwhead if head else None), fnt=bold, align=wrap)
-                        cell(ws, r, _COL_SEARCH, fill=(f_kwhead if head else None), num=not head)
-                        cell(ws, r, _COL_METRIC, fill=(f_kwhead if head else f_label))
-                        if head:   # 비고 자리(소헤더 G): 판매중지 > 체험단중 > 비고 (멱등 재계산)
-                            gm = ws.cell(r, _COL_METRIC)
-                            if is_disc:
-                                gm.value = "⛔ 판매중지"
-                                gm.font = Font(name=self._FN, size=11, bold=True, color="808080")
-                            elif is_mkt:
-                                gm.value = "🔴 체험단중"
-                                gm.font = Font(name=self._FN, size=11, bold=True, color="C00000")
-                            else:
-                                gm.value = _LABEL_NOTE
-                        for c in range(_FIRST_DATE, maxc + 1):
-                            cell(ws, r, c, fill=(mkt_fill if c in mcols else None))
-                    # 판매상태 불일치 경고: 대장=판매중지(is_disc)인데 쿠팡 실제=판매중/부분판매중이면
-                    # 판매중지 소헤더행(kh)의 **최신(맨 오른쪽) 날짜칸**에 "판매중"을 진한 적색·굵게(담당자 확인용).
-                    # 값+서식이 마스터에 들어가면 구글시트 미러링(worksheet_to_requests)으로 결과시트에도 그대로 반영.
-                    if is_disc and self.sale_active(ws.title, nm):
-                        _ld = self.latest_date(ws.title)
-                        _lc = self._date_col.get(ws.title, {}).get(_ld) if _ld else None
-                        if _lc:
-                            wc = ws.cell(kh, _lc)
-                            wc.value = "판매중"
-                            wc.font = Font(name=self._FN, size=11, bold=True, color="C00000")
-                            wc.alignment = center
-                # 상품 1개 구분 — 굵은 선. 상단=블록 첫 행 top(병합 top-left라 정상).
-                # 하단=다음(빈) 구분행의 top(시각적으로 마지막 행 하단선). ⚠ 마지막 블록은 end+1 행이
-                # 없어서 거기 테두리를 그리면 **빈 행이 새로 생긴다**(2상품 시트의 2번째 블록 하단 공백줄 버그).
-                # → 마지막 블록은 end 행 자체의 bottom 에 그려 새 행을 만들지 않는다.
-                # fix ④: 같은 등록상품명(변형) 그룹 안 경계는 얇은 선, 그룹 바깥만 굵은 선.
-                group_start = (i == 0) or (regs[i] != regs[i - 1])
-                group_end = (i + 1 >= len(headers)) or (regs[i + 1] != regs[i])
-                edge(ws, maxc, hr, "top", thick if group_start else thin)
-                if i + 1 < len(headers):
-                    # 사이 블록 하단선(=구분 빈 행 상단선): 그룹 끝이면 굵게, 같은 그룹 변형 사이면 얇게
-                    edge(ws, maxc, end + 1, "top", thick if group_end else thin)
-                # 병합(마지막) — 세로/가로 병합은 서식·경계선 적용 뒤에
-                merge(ws, hr, 1, m_end, 2)
-                merge(ws, hr, _COL_NAME, m_end, _COL_SEARCH)
-                if kh:
-                    merge(ws, kh, 1, end, 2)
-                    for r in range(kh, end + 1):
-                        merge(ws, r, _COL_NAME, r, _COL_SEARCH - 1)
-                # 마지막 블록 하단 굵은선(새 행 안 만듦). ⚠ openpyxl 은 **세로 병합의 하단 테두리를
-                # '앵커(top-left) 셀'의 border 로 렌더**한다 → 마지막행 셀에 그려도 A:B 세로병합(col1·2)은
-                # 얇게 남던 버그(사용자 관찰). 그래서 단일셀·가로병합은 마지막행에, A:B 세로병합은 그 앵커
-                # (kh 또는 hr, col1)에 굵은 하단선을 지정한다.
-                if i + 1 >= len(headers):
-                    edge(ws, maxc, end, "bottom")       # 단일셀 + 가로병합(C:E, 앵커=마지막행) 하단
-                    ab_row = kh if kh else hr           # A:B 세로병합 앵커 행
-                    ab = ws.cell(ab_row, 1).border
-                    ws.cell(ab_row, 1).border = Border(left=ab.left, right=ab.right,
-                                                       top=ab.top, bottom=thick)
-                    if not kh:                          # 키워드 없는 블록: C:F 세로병합 앵커도
-                        cf = ws.cell(hr, _COL_NAME).border
-                        ws.cell(hr, _COL_NAME).border = Border(left=cf.left, right=cf.right,
-                                                               top=cf.top, bottom=thick)
+            self._style_sheet(ws, sty)
         self._build_index()   # 전 계정 요약·점프 링크의 '목차' 시트를 맨 앞에 재생성(멱등)
+
+    def _style_sheet(self, ws, sty: _StyleCtx) -> None:
+        """한 계정(사업자) 시트 서식 — 병합 초기화·꼬리행 정리·제목/틀고정/열너비 + 블록별 서식."""
+        # 멱등화: 기존 병합을 모두 해제한 뒤 아래에서 표준대로 다시 병합한다.
+        # (②/③/반영 등이 서식 없이 셀을 추가해 병합·테두리가 시트마다 섞이는 것을 원천 제거 →
+        #  apply_style 을 몇 번 돌려도 항상 '첫 시트 표준' 하나로 고정됨.)
+        _unmerge_all(ws)
+        # 꼬리 공백행 제거(멱등): 값이 있는 마지막 행 아래를 모두 삭제해 max_row 를 실제 데이터에 맞춘다.
+        # 구 버그(마지막 블록 하단선을 end+1 빈 행에 그리던 시절)가 남긴 '스타일만 있는 빈 행'이 통계
+        # 이어쓰기로 시트마다 누적돼(상품 1·2·5개 무관 5행씩) 마지막 상품 아래 공백으로 보였다. →
+        # 아래에서 마지막 블록 하단선을 end(=이제 실제 마지막 데이터행)에 그리면 공백 없이 딱 닫힌다.
+        mc0 = ws.max_column
+        last_data = max((r for r in range(1, ws.max_row + 1)
+                         if any(ws.cell(r, c).value not in (None, "") for c in range(1, mc0 + 1))),
+                        default=1)
+        if ws.max_row > last_data:
+            ws.delete_rows(last_data + 1, ws.max_row - last_data)
+        maxc = ws.max_column
+        t = ws.cell(1, 1)
+        t.font = sty.title_font
+        t.alignment = sty.center
+        t.border = Border(bottom=Side(style="medium"))
+        _sty_merge(ws, 1, 1, 1, _COL_SEARCH - 1)       # 제목 A~E (F·G 는 목차 복귀 링크 자리)
+        # ◀ 목차 복귀 링크(F1:G1) — 1행+A~G열은 틀고정이라 **어느 시트·어디로 스크롤해도 항상 보임**.
+        # 탭이 많아 목차 탭이 탭바에서 밀려 안 보일 때, 여기 클릭 한 번으로 목차로 돌아간다(사용자 요청).
+        back = ws.cell(1, _COL_SEARCH, f"👈 {_INDEX_SHEET}")   # 손가락(뒤로) + 명확한 문구
+        back.hyperlink = Hyperlink(ref=back.coordinate, location=f"'{_INDEX_SHEET}'!A1")
+        back.font = Font(name=self._FN, size=12, bold=True, color="FF0000")  # 빨간색 진하게(눈에 띄게)
+        back.alignment = Alignment(horizontal="center", vertical="center")
+        back.fill = PatternFill("solid", fgColor="FFF2CC")   # 옅은 노랑 강조 배경
+        back.border = Border(bottom=Side(style="medium"))
+        _sty_merge(ws, 1, _COL_SEARCH, 1, _COL_METRIC)  # F1:G1
+        ws.row_dimensions[1].height = 21          # 제목행 높이(샘플 서식 고정값)
+        ws.freeze_panes = "H2"                     # A~G열·1행 고정, H~ 일자만 스크롤
+        # 표준 열너비: A11 B6 D9 E9 F13.75 G14. **C(상품명/키워드)만 full 제목이 보이도록 넓힘**
+        # (사용자 요청: 이름칸 1줄=제목·2줄=vid, 제목 폭을 제목에 맞추기 — 기존 C10은 너무 좁았음).
+        for c, w in {1: 11, 2: 6, 3: 36, 4: 9, 5: 9, 6: 13.75, 7: 14}.items():
+            ws.column_dimensions[get_column_letter(c)].width = w
+        for c in range(_FIRST_DATE, maxc + 1):
+            ws.column_dimensions[get_column_letter(c)].width = 11
+        headers = sorted(self._date_rows.get(ws.title, []))
+        # fix ④: 같은 등록상품명(변형/옵션) 블록을 한 그룹으로 묶어 그룹 바깥만 굵은 선. 옵션 블록은
+        # 생성 순서상 시트에서 인접하므로 **연속된 같은 등록명 = 한 그룹**으로 본다.
+        regs = []
+        for hr in headers:
+            _rnm = _key(ws.cell(hr, _COL_NAME).value)
+            regs.append(self.registered_name(ws.title, _rnm) or _rnm)
+        for i, hr in enumerate(headers):
+            self._style_block(ws, sty, i, hr, headers, regs, maxc)
+
+    def _style_block(self, ws, sty: _StyleCtx, i: int, hr: int, headers, regs, maxc: int) -> None:
+        """상품 블록 1개 서식 — 이름 렌더·마케팅 배경·지표/키워드 색·판매중지 불일치 경고·그룹 경계·병합."""
+        end = (headers[i + 1] - 2) if i + 1 < len(headers) else ws.max_row
+        # 이름칸 렌더링(멱등): 헤더 C = 1줄 상품제목 + (보이지 않는 구분자) + 2줄 vendorItemId.
+        # 키는 항상 구분자 앞부분이므로 _key 로 순수명 복원 후 vid 를 다시 붙여 표준화한다.
+        nm = _key(ws.cell(hr, _COL_NAME).value)
+        if nm:
+            ws.cell(hr, _COL_NAME).value = self._display_name(ws.title, nm)
+        # 마케팅: 이 상품의 기간·상태 + 마케팅기간(시작~종료)에 해당하는 일자 컬럼 집합(배경색용)
+        mstart, mend, _mmon = self.marketing_of(ws.title, nm)
+        is_mkt = self._mkt_status(mstart, mend, _mmon) == "체험단중"
+        is_disc = self.is_discontinued(ws.title, nm)   # 대장에서 사라짐 = 판매중지 표기
+        mcols = self._mkt_cols(ws, mstart, mend)
+        kh = self._find_kw_head(ws, hr, end)   # 키워드 소헤더행(C='키워드')·없으면 None(2차 옵션 블록)
+        m_end = (kh - 1) if kh else end
+        self._style_metric_rows(ws, sty, hr, m_end, mcols, maxc)
+        if kh:
+            self._style_keyword_rows(ws, sty, kh, end, mcols, maxc, is_disc, is_mkt)
+            self._flag_sale_mismatch(ws, sty, kh, nm, is_disc)
+        self._style_block_edges(ws, sty, i, hr, end, m_end, kh, headers, regs, maxc)
+
+    def _mkt_cols(self, ws, mstart, mend) -> set[int]:
+        """마케팅 기간(시작~종료)에 해당하는 일자 컬럼번호 집합(배경색용). 시작 없으면 빈 집합."""
+        mcols: set[int] = set()
+        _s, _e = _parse_date(mstart), _parse_date(mend)
+        if _s:
+            for _lbl, _cc in self._date_col.get(ws.title, {}).items():
+                _d = _parse_date(_lbl)
+                if _d and _d >= _s and (not _e or _d <= _e):
+                    mcols.add(_cc)
+        return mcols
+
+    def _find_kw_head(self, ws, hr: int, end: int):
+        """블록(hr~end) 안 키워드 소헤더행(C='키워드'). 없으면 None(2차 옵션 블록=판매정보만)."""
+        for r in range(hr, end + 1):
+            if _norm(ws.cell(r, _COL_NAME).value) == _LABEL_KEYWORD:
+                return r
+        return None
+
+    def _style_metric_rows(self, ws, sty: _StyleCtx, hr: int, m_end: int, mcols: set, maxc: int) -> None:
+        """상품 지표블록: A:B 구분(살구=상품명색) · C:F 상품명(세로) · G 라벨 · H~ 값(마케팅기간 배경)."""
+        for r in range(hr, m_end + 1):
+            _sty_cell(ws, r, 1, sty, fill=sty.f_prod)
+            _sty_cell(ws, r, 2, sty, fill=sty.f_prod)
+            for c in range(_COL_NAME, _COL_SEARCH + 1):
+                _sty_cell(ws, r, c, sty, fill=sty.f_prod, fnt=sty.bold, align=sty.wrap)
+            _sty_cell(ws, r, _COL_METRIC, sty, fill=sty.f_label)
+            for c in range(_FIRST_DATE, maxc + 1):
+                _sty_cell(ws, r, c, sty, num=True, fill=(sty.mkt_fill if c in mcols else None))
+
+    def _style_keyword_rows(self, ws, sty: _StyleCtx, kh: int, end: int, mcols: set, maxc: int,
+                            is_disc: bool, is_mkt: bool) -> None:
+        """키워드블록: A:B 사업자(세로) · C:E 키워드명(가로) · F 검색량 · G(소헤더 비고/순위라벨) · H~ 순위."""
+        for r in range(kh, end + 1):
+            head = (r == kh)
+            _sty_cell(ws, r, 1, sty, fill=sty.f_kind)
+            _sty_cell(ws, r, 2, sty, fill=sty.f_kind)
+            for c in range(_COL_NAME, _COL_SEARCH):     # C~E 키워드명(항상 bold)
+                _sty_cell(ws, r, c, sty, fill=(sty.f_kwhead if head else None), fnt=sty.bold, align=sty.wrap)
+            _sty_cell(ws, r, _COL_SEARCH, sty, fill=(sty.f_kwhead if head else None), num=not head)
+            _sty_cell(ws, r, _COL_METRIC, sty, fill=(sty.f_kwhead if head else sty.f_label))
+            if head:   # 비고 자리(소헤더 G): 판매중지 > 체험단중 > 비고 (멱등 재계산)
+                gm = ws.cell(r, _COL_METRIC)
+                if is_disc:
+                    gm.value = "⛔ 판매중지"
+                    gm.font = Font(name=self._FN, size=11, bold=True, color="808080")
+                elif is_mkt:
+                    gm.value = "🔴 체험단중"
+                    gm.font = Font(name=self._FN, size=11, bold=True, color="C00000")
+                else:
+                    gm.value = _LABEL_NOTE
+            for c in range(_FIRST_DATE, maxc + 1):
+                _sty_cell(ws, r, c, sty, fill=(sty.mkt_fill if c in mcols else None))
+
+    def _flag_sale_mismatch(self, ws, sty: _StyleCtx, kh: int, nm: str, is_disc: bool) -> None:
+        """판매상태 불일치 경고: 대장=판매중지인데 쿠팡 실제=판매중/부분판매중이면 판매중지 소헤더행(kh)의
+        **최신(맨 오른쪽) 날짜칸**에 "판매중"을 진한 적색·굵게(담당자 확인용). 값+서식이 마스터에 들어가면
+        구글시트 미러링(worksheet_to_requests)으로 결과시트에도 그대로 반영."""
+        if not (is_disc and self.sale_active(ws.title, nm)):
+            return
+        _ld = self.latest_date(ws.title)
+        _lc = self._date_col.get(ws.title, {}).get(_ld) if _ld else None
+        if _lc:
+            wc = ws.cell(kh, _lc)
+            wc.value = "판매중"
+            wc.font = Font(name=self._FN, size=11, bold=True, color="C00000")
+            wc.alignment = sty.center
+
+    def _style_block_edges(self, ws, sty: _StyleCtx, i: int, hr: int, end: int, m_end: int,
+                           kh, headers, regs, maxc: int) -> None:
+        """블록 경계선(그룹 바깥=굵은선·변형 사이=얇은선, fix ④) + 세로/가로 병합 + 마지막 블록 하단선."""
+        # 상단=블록 첫 행 top(병합 top-left라 정상). 하단=다음(빈) 구분행의 top(시각적으로 마지막 행 하단선).
+        # ⚠ 마지막 블록은 end+1 행이 없어서 거기 테두리를 그리면 **빈 행이 새로 생긴다** → end 행 자체 bottom.
+        group_start = (i == 0) or (regs[i] != regs[i - 1])
+        group_end = (i + 1 >= len(headers)) or (regs[i + 1] != regs[i])
+        _sty_edge(ws, maxc, hr, "top", sty.thick if group_start else sty.thin)
+        if i + 1 < len(headers):
+            # 사이 블록 하단선(=구분 빈 행 상단선): 그룹 끝이면 굵게, 같은 그룹 변형 사이면 얇게
+            _sty_edge(ws, maxc, end + 1, "top", sty.thick if group_end else sty.thin)
+        # 병합(마지막) — 세로/가로 병합은 서식·경계선 적용 뒤에
+        _sty_merge(ws, hr, 1, m_end, 2)
+        _sty_merge(ws, hr, _COL_NAME, m_end, _COL_SEARCH)
+        if kh:
+            _sty_merge(ws, kh, 1, end, 2)
+            for r in range(kh, end + 1):
+                _sty_merge(ws, r, _COL_NAME, r, _COL_SEARCH - 1)
+        # 마지막 블록 하단 굵은선(새 행 안 만듦). ⚠ openpyxl 은 **세로 병합의 하단 테두리를
+        # '앵커(top-left) 셀'의 border 로 렌더**한다 → 마지막행 셀에 그려도 A:B 세로병합(col1·2)은
+        # 얇게 남던 버그(사용자 관찰). 그래서 단일셀·가로병합은 마지막행에, A:B 세로병합은 그 앵커
+        # (kh 또는 hr, col1)에 굵은 하단선을 지정한다.
+        if i + 1 >= len(headers):
+            _sty_edge(ws, maxc, end, "bottom", sty.thick)   # 단일셀 + 가로병합(C:E, 앵커=마지막행) 하단
+            ab_row = kh if kh else hr           # A:B 세로병합 앵커 행
+            ab = ws.cell(ab_row, 1).border
+            ws.cell(ab_row, 1).border = Border(left=ab.left, right=ab.right,
+                                               top=ab.top, bottom=sty.thick)
+            if not kh:                          # 키워드 없는 블록: C:F 세로병합 앵커도
+                cf = ws.cell(hr, _COL_NAME).border
+                ws.cell(hr, _COL_NAME).border = Border(left=cf.left, right=cf.right,
+                                                       top=cf.top, bottom=sty.thick)
 
     def _roster(self) -> list[tuple[str, bool]]:
         """목차에 실을 계정 로스터 — (사업자, 데이터시트有無). 수집된 계정(시트 있음) 먼저, 그 뒤에
