@@ -48,8 +48,10 @@ python ui/app_qt.py     # 기본 UI = PySide6(Qt) + Windows 11 Fluent 스타일
 ## 코드 건강 규칙 (회귀 방지 — 2026-09-22, SSOT=`designs/CODE_HEALTH_PLAN.md`)
 > 배경: 잦은 수정으로 4파일(`pipeline.py`·`workbook.py`·`app_qt.py`·`app.py`)이 비대·괴물함수화되고
 > "과거 정상→오류" 회귀가 반복됨. 이를 막는 게이트를 뒀다. **아래는 매 작업에서 지킨다.**
-- **커밋/푸시 전 게이트 통과 필수**: `python tools/run_checks.py`(전체 3종·오프라인·결정적)가 초록이어야 함.
-  git 훅이 자동 검사(pre-commit=`--quick`[시뮬+구글시트], pre-push=전체+`check_complexity.py`).
+> ✅ **정비 완료(2026-09-22)**: 4파일의 **D/E/F 괴물함수 전멸(전부 C 이하·헬퍼 분해·행동 불변)**, 핀 3종
+> 신설(pin_login_ranks·pin_apply_style·pin_run_plan). 남은=**모듈 분리로 MI C→B**(대형파일 포화·별도 단계)·**라이브 검증**. 상세=`designs/CODE_HEALTH_PLAN.md`.
+- **커밋/푸시 전 게이트 통과 필수**: `python tools/run_checks.py`(전체 6종·오프라인·결정적)가 초록이어야 함.
+  git 훅이 자동 검사(pre-commit=`--quick`[시뮬+핀3+구글시트], pre-push=전체+`check_complexity.py`).
   **새 PC/클론 후 `python tools/install_hooks.py` 1회**. 응급 우회(`--no-verify`)는 **상시 금지**(회귀 유입).
 - **테스트에서 실 API 금지**: 검증 3종은 로그인·OpenAI·네이버 **호출 없이** 돈다. `verify_offline`의 [6]
   키워드 선정도 **기본은 결정적 모킹**(경계만 페이크). 실 API 실증이 필요하면 `VERIFY_REAL_API=1`로 옵트인.

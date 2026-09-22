@@ -1,10 +1,10 @@
-"""회귀 게이트 — 오프라인 검증 3종을 순차 실행하고 하나라도 실패하면 exit 1.
+"""회귀 게이트 — 오프라인 검증 6종을 순차 실행하고 하나라도 실패하면 exit 1.
 
 용도: 커밋/푸시 전(git 훅) 또는 수동으로 회귀를 잡는다. 모두 **로그인·실 API 없이** 결정적으로 돈다
 (verify_offline [6]도 기본은 결정적 모킹 — 실 API는 VERIFY_REAL_API=1 옵트인).
 
-    python tools/run_checks.py           # 전체 3종 (pre-push, <30s)
-    python tools/run_checks.py --quick   # 빠른 2종만 (pre-commit, <10s)
+    python tools/run_checks.py           # 전체 6종 (pre-push, <30s)
+    python tools/run_checks.py --quick   # 빠른 5종 (pre-commit, verify_offline 제외)
 
 각 스크립트는 실패 시 non-zero로 끝난다(assert/SystemExit). 여기선 하나가 죽어도 나머지를 계속
 돌려 **전체 결과를 한 번에** 보여주고, 실패가 하나라도 있으면 최종 exit 1.
