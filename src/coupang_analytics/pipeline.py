@@ -12,6 +12,7 @@ import json
 import random
 import shutil
 import time
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -1156,6 +1157,66 @@ def _reconcile_ledger_accounts(wb, input_list: InputList, uncollected, log) -> l
     return removed_accounts
 
 
+@dataclass
+class _RunCtx:
+    """run_full 한 번의 공유 실행 상태(계정별 기록·진행 저장에 필요한 것). 설정 후 불변으로 다룬다."""
+    wb: OutputWorkbook
+    out: Path
+    partial: Path
+    date_from: str
+    date_to: str
+    date_label: str | None
+    started_at: str
+    done: set                 # 완료 계정ID(가변 — 계정마다 add)
+    carry: bool
+    grow: bool
+    skip_ranks: bool
+    keywords_off: bool
+    col_label: str
+    total: int
+    naver: NaverAdApi
+    ai_key: str | None
+    log: object
+
+
+def _finish(ctx: _RunCtx, a: Account, report_acc, metrics, inv_by_vid, inv_status=None) -> None:
+    """발견 결과를 워크북에 기록 + 진행 저장(1·2차 패스 공통). report_acc=None이면 무동작."""
+    wb, log = ctx.wb, ctx.log
+    if report_acc is None:      # 로그인 미완료/데이터 없음 → 다음 계정(전체 안 막힘)
+        return
+    wb.set_account_id(a.label, a.account_id)   # 목차 계정ID 표시용(비번은 저장 안 함)
+    wb.set_representative(a.label, a.representative)   # 계정목록 대표자 컬럼(관리대장 대표자명)
+    # 자동완성(키워드 후보)·순위 모두 비로그인 쿠팡 세션이 필요하다. 로그인 브라우저가 닫힌 뒤 별도로
+    # 연다(중첩 금지 — sync playwright 충돌 방지). 활동 상품이 있을 때만 열고, 그 한 세션에서
+    # 키워드 선정(자동완성)→순위까지 재사용한다(warmup 먼저 = 쿠팡 오리진 로드, same-origin fetch).
+    if report_acc.products:
+        if ctx.skip_ranks or ctx.keywords_off:
+            # 순위 제외(날짜지정) 또는 판매수집 전용(①): 쿠팡 순위 브라우저 안 열고(차단 접촉 0)
+            _process_account(report_acc, wb, ctx.naver, ctx.ai_key, None, metrics, inv_by_vid,
+                             ctx.col_label, ctx.grow, log, ctx.partial, skip_ranks=ctx.skip_ranks,
+                             keywords_off=ctx.keywords_off)
+        else:
+            with WingBrowser(profile_dir=_PROFILE, offscreen=True) as rank_browser:
+                warmup(rank_browser)
+                _process_account(report_acc, wb, ctx.naver, ctx.ai_key, rank_browser, metrics,
+                                 inv_by_vid, ctx.col_label, ctx.grow, log, ctx.partial)
+        # 판매상태 불일치 경고: 쿠팡 재고 판매상태맵을 마스터 전체 상품에 vid로 대조해 저장(멱등).
+        # 대장에서 빠진(판매중지 표기) 상품도 쿠팡 재고에 살아있으면 vid로 잡혀 "판매중"으로 채워진다.
+        # 상태맵은 ①판매수집 로그인 세션에서만 확보되므로(②③엔 없음) 여기서 1회 반영, 렌더는 apply_style이 담당.
+        if inv_status:
+            n_flag = wb.apply_sale_status(a.label, inv_status)
+            if n_flag:
+                log(f"  [{a.label}] 쿠팡 판매상태 {n_flag}개 상품 반영(대장=판매중지·쿠팡=판매중이면 경고 표시)")
+    else:                                        # 대장 상품 0개 → Chrome 개방 생략, 시트도 생략
+        log(f"  [{a.label}] 대장 상품 0개 — 시트·키워드·순위 생략")
+    wb.mark_sales_collected(a.label, ctx.col_label)   # 오늘 판매수집 완료 스탬프(같은 날 재실행 시 생략 근거)
+    ctx.done.add(a.account_id)                    # 이 계정 완료 확정
+    _save_progress(ctx.out, ctx.date_from, ctx.date_to, ctx.started_at, ctx.done,
+                   ctx.carry, ctx.grow, ctx.skip_ranks, ctx.date_label)
+    wb.save(ctx.partial)
+    log(f"  [{a.label}] 완료 — 진행 {len(ctx.done)}/{ctx.total} (진행 저장: {ctx.partial.name})")
+
+
 def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
              ai_key: str | None = None, date_from: str | None = None, date_to: str | None = None,
              get_password=None, resume: bool = False, carry_forward: bool = False,
@@ -1261,41 +1322,11 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
 
     accounts = input_list.accounts
     total = len(accounts)
-
-    def _finish(a: Account, report_acc, metrics, inv_by_vid, inv_status=None) -> None:
-        """발견 결과를 워크북에 기록 + 진행 저장(1·2차 패스 공통). report_acc=None이면 무동작."""
-        if report_acc is None:      # 로그인 미완료/데이터 없음 → 다음 계정(전체 안 막힘)
-            return
-        wb.set_account_id(a.label, a.account_id)   # 목차 계정ID 표시용(비번은 저장 안 함)
-        wb.set_representative(a.label, a.representative)   # 계정목록 대표자 컬럼(관리대장 대표자명)
-        # 자동완성(키워드 후보)·순위 모두 비로그인 쿠팡 세션이 필요하다. 로그인 브라우저가 닫힌 뒤 별도로
-        # 연다(중첩 금지 — sync playwright 충돌 방지). 활동 상품이 있을 때만 열고, 그 한 세션에서
-        # 키워드 선정(자동완성)→순위까지 재사용한다(warmup 먼저 = 쿠팡 오리진 로드, same-origin fetch).
-        if report_acc.products:
-            if skip_ranks or keywords_off:
-                # 순위 제외(날짜지정) 또는 판매수집 전용(①): 쿠팡 순위 브라우저 안 열고(차단 접촉 0)
-                _process_account(report_acc, wb, naver, ai_key, None, metrics, inv_by_vid,
-                                 col_label, grow, log, partial, skip_ranks=skip_ranks,
-                                 keywords_off=keywords_off)
-            else:
-                with WingBrowser(profile_dir=_PROFILE, offscreen=True) as rank_browser:
-                    warmup(rank_browser)
-                    _process_account(report_acc, wb, naver, ai_key, rank_browser, metrics, inv_by_vid,
-                                     col_label, grow, log, partial)
-            # 판매상태 불일치 경고: 쿠팡 재고 판매상태맵을 마스터 전체 상품에 vid로 대조해 저장(멱등).
-            # 대장에서 빠진(판매중지 표기) 상품도 쿠팡 재고에 살아있으면 vid로 잡혀 "판매중"으로 채워진다.
-            # 상태맵은 ①판매수집 로그인 세션에서만 확보되므로(②③엔 없음) 여기서 1회 반영, 렌더는 apply_style이 담당.
-            if inv_status:
-                n_flag = wb.apply_sale_status(a.label, inv_status)
-                if n_flag:
-                    log(f"  [{a.label}] 쿠팡 판매상태 {n_flag}개 상품 반영(대장=판매중지·쿠팡=판매중이면 경고 표시)")
-        else:                                        # 대장 상품 0개 → Chrome 개방 생략, 시트도 생략
-            log(f"  [{a.label}] 대장 상품 0개 — 시트·키워드·순위 생략")
-        wb.mark_sales_collected(a.label, col_label)   # 오늘 판매수집 완료 스탬프(같은 날 재실행 시 로그인·수집 생략 근거)
-        done.add(a.account_id)                    # 이 계정 완료 확정
-        _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks, date_label)
-        wb.save(partial)
-        log(f"  [{a.label}] 완료 — 진행 {len(done)}/{total} (진행 저장: {partial.name})")
+    # 계정별 기록·진행 저장에 쓰는 공유 상태를 한 곳에 모은다(_finish 가 이 컨텍스트로 동작).
+    ctx = _RunCtx(wb=wb, out=out, partial=partial, date_from=date_from, date_to=date_to,
+                  date_label=date_label, started_at=started_at, done=done, carry=carry, grow=grow,
+                  skip_ranks=skip_ranks, keywords_off=keywords_off, col_label=col_label, total=total,
+                  naver=naver, ai_key=ai_key, log=log)
 
     # ── 1차 패스: 세션 살아있는 계정 먼저 수집(로그인 없음 → 차단 위험 0). 세션 만료는 로그인 대기열로. ──
     #   반복 자동로그인이 Akamai IP 차단을 유발하므로, 로그인 없는 계정을 먼저 다 확보한다.
@@ -1323,7 +1354,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         try:   # 한 계정의 어떤 오류(수집·워크북쓰기)도 전체를 막지 않게 계정 전체를 격리
             report_acc, metrics, inv_by_vid, inv_status = _login_and_discover(
                 a, date_from, date_to, get_password, log, login=False)
-            _finish(a, report_acc, metrics, inv_by_vid, inv_status)
+            _finish(ctx, a, report_acc, metrics, inv_by_vid, inv_status)
         except NeedLogin:                         # 세션 없음 → 뒤로 미룸(자동제출 안 함)
             login_needed.append((i, a))
             log(f"  [{a.label}] 세션 만료 → 로그인 대기열(세션 있는 계정 먼저 수집 후 처리)")
@@ -1352,7 +1383,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
             report_acc, metrics, inv_by_vid, inv_status = _login_and_discover(
                 a, date_from, date_to, get_password, log, login=True, semi=sales_semi)
             blocks = 0                            # 로그인 성공 → 연속 차단 카운터 리셋
-            _finish(a, report_acc, metrics, inv_by_vid, inv_status)
+            _finish(ctx, a, report_acc, metrics, inv_by_vid, inv_status)
         except LoginBlocked:                      # Akamai 차단 → 서킷브레이커 카운트
             blocks += 1
             log(f"  [{a.label}] 로그인 차단 누적 {blocks}/{config.LOGIN_BLOCK_CIRCUIT}")
