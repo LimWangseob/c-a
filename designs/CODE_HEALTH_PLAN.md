@@ -124,7 +124,22 @@
   헬퍼(`_sty_cell/_sty_merge/_sty_edge`). `_style_sheet`(B10)→`_style_block`(A5)→`_mkt_cols`·`_find_kw_head`·
   `_style_metric_rows`·`_style_keyword_rows`(C11)·`_flag_sale_mismatch`·`_style_block_edges`(C11). **workbook 에 F/E 괴물 0.**
 - ⬜ **남은 D(다음)**: `_build_index` D·`normalize_date_columns` D·`set_display_name` D. **파일 MI 는 여전히 C(0.00)**
-  (1576줄 포화) — pipeline 과 동일하게 B 이상은 모듈 분리가 필요(별도 단계). 이후 app_qt/app(`do_run_full` E33).
+  (1576줄 포화) — pipeline 과 동일하게 B 이상은 모듈 분리가 필요(별도 단계).
+
+#### app_qt.py·app.py 진행 (2026-09-22, 커밋 5f38502)
+- ✅ **`do_run_full` E(33/34)→C(16/18) 분해 + 실행모드 로직 백엔드 공통화**: 두 UI 에 중복돼 회귀가 잦던
+  실행모드 결정을 **순수 백엔드**로 추출 — `plan_run_mode`(RunPlan: newall/redo/resume/carry + meta 기간 덮기)·
+  `run_title`·`run_log_labels`(확인/로그 문구). 각 UI 는 `_require_run_inputs`(검증)·`_full_pipeline_task`
+  (①②③ 백그라운드, do_run_full 시점 스냅샷 인자로 실행시점 값 고정) 추출. **app_qt=단계마커+재고역기록 포함·
+  app.py=미포함**(폴백 기존 동작 그대로)·app.py 만의 date_label 복원도 보존. 신규 핀 `tools/pin_run_plan.py`
+  (P1~P7)로 실행모드·라벨 골든값 고정(예전 회귀 핫스팟). 두 UI 정상 import 확인.
+
+### ⭐마일스톤(2026-09-22): 4개 나쁜 파일의 **E/F 괴물함수 전멸**
+- pipeline: run_full F75·_process_account F72·_login_and_discover F54·_track_ranks_semi F45 → 전부 제거.
+- workbook: apply_style F52 → 제거. · app_qt/app: do_run_full E33/E34 → C.
+- **남은 것 = D 몇 개**(pipeline: track_ranks_stage D27·select_keywords_stage D25 / workbook: _build_index D29·
+  normalize_date_columns D26·set_display_name D21) + **4파일 MI C→B 는 모듈 분리 필요**(대형파일 포화·별도 단계) + **라이브 검증**.
+- 회귀 게이트 = `run_checks.py` **6종**(시뮬·핀3[login_ranks·apply_style·run_plan]·구글시트·오프라인), quick=5종.
 - **모듈 분리**(pipeline_sales/ranks/gsheet)는 함수 CC 정리 후 별도 단계로(지금은 제자리 분해로 충분).
 
 #### ⭐다음 세션 착수 레시피 (START HERE — pipeline.py 마저)
