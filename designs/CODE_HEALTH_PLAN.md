@@ -141,7 +141,7 @@
 - app_qt/app: do_run_full E33/E34 → C(실행모드 로직 백엔드 공통화).
 - **`python -m radon cc <4파일> -n D` = 빈 결과**(D+ 0개). 검증: 게이트 6종 + 품질 게이트 초록.
 - **남은 것 = (1) 4파일 MI C→B 는 모듈 분리 필요**(대형파일 radon MI 포화·별도 단계·테스트 가로채기 재배선 위험) **(2) 라이브 검증**(로그인·순위 사무실).
-- 회귀 게이트 = `run_checks.py` **6종**(시뮬·핀3[login_ranks 18시나리오·apply_style·run_plan]·구글시트·오프라인), quick=5종.
+- 회귀 게이트 = `run_checks.py` **6종**(시뮬·핀3[login_ranks 16시나리오·apply_style·run_plan]·구글시트·오프라인), quick=5종.
 - **모듈 분리**(pipeline_sales/ranks/gsheet)는 함수 CC 정리 후 별도 단계로(지금은 제자리 분해로 충분).
 
 #### ⭐다음 세션 착수 레시피 (START HERE — pipeline.py 마저)
