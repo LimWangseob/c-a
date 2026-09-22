@@ -217,6 +217,67 @@ def resumable_progress(out_dir: str | Path = "output") -> dict | None:
     return meta
 
 
+@dataclass
+class RunPlan:
+    """전체실행/판매수집 실행모드 결정 결과 — 플래그 + (재개면 덮은) 기간 + 사용자 확인용 문구."""
+    resume: bool
+    carry: bool
+    redo_today: bool
+    date_from: str
+    date_to: str
+    mode_desc: str
+
+
+def plan_run_mode(newall: bool, redo: bool, meta: dict | None, master: bool,
+                  date_from: str, date_to: str) -> RunPlan:
+    """실행모드 결정(순수·오프라인 검증 가능) — app_qt/app.do_run_full 의 if/elif 사슬을 백엔드로 공통화.
+
+    입력: newall(통계 전체 새로)·redo(오늘 것만 다시)·meta(resumable_progress 결과|None)·
+    master(master_exists())·date_from/to(기본 기간). 반환 RunPlan: resume/carry/redo_today 플래그 +
+    (meta 있으면 그 기간으로 덮은) date_from/to + 확인 팝업용 mode_desc.
+    ⚠ **grow·date_label 은 UI마다 처리가 달라(app.py 만 date_label 복원) 여기서 다루지 않는다** — 호출부가
+    plan.resume/carry/redo_today 를 보고 각자 처리한다(행동 불변). 제어흐름은 분해 전 사슬과 완전히 동일."""
+    resume = carry = redo_today = False
+    if newall:
+        mode_desc = "통계 전체 초기화(백업 후) — ⚠ 기존 통계 마스터는 백업 후 빈 통계로 새로(누적 시계열 끊김)"
+    elif redo:
+        if master:
+            carry = redo_today = True
+            mode_desc = f"오늘 것만 다시 수집 — 오늘({date_to}) 초기화 후 전 계정 재수집(어제까지 유지·키워드 동결)"
+        else:
+            mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음·구글시트 복원 불가), 기간 {date_from}~{date_to}"
+    elif meta:
+        resume = True
+        carry = bool(meta.get("carry", False))
+        date_from, date_to = meta["date_from"], meta["date_to"]
+        mode_desc = f"이어서 하기 — 오늘 미완료분 이어서(완료 {len(meta['done'])}개 건너뜀), 기간 {date_from}~{date_to}"
+    elif master:
+        carry = True
+        mode_desc = f"이어서 하기 — 오늘({date_to}) 컬럼 추가(키워드 동결)"
+    else:
+        mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음·구글시트 복원 불가), 기간 {date_from}~{date_to}"
+    return RunPlan(resume, carry, redo_today, date_from, date_to, mode_desc)
+
+
+def run_title(keywords_off: bool, sales_semi: bool) -> str:
+    """확인 팝업/로그 제목(순수) — app_qt/app.do_run_full 공통. ①판매수집 vs 전체실행 × 반자동 여부."""
+    return (("① 판매수집(반자동)" if sales_semi else "① 판매수집") if keywords_off
+            else ("전체 실행(① 반자동 로그인)" if sales_semi else "전체 실행"))
+
+
+def run_log_labels(keywords_off: bool, resume: bool, redo_today: bool, carry: bool,
+                   skip_ranks: bool) -> tuple[str, str]:
+    """실행 로그용 (모드표기, 단계표기) 문자열(순수) — app_qt/app.do_run_full 공통(중복 제거).
+
+    mode_txt=이어서/오늘다시/이어쓰기/새통계, stage_txt=①판매수집 단독 or 순위 제외 표기. 제어흐름은
+    분해 전 두 UI 의 ternary 와 완전히 동일(행동 불변)."""
+    mode_txt = ("오늘다시 " if redo_today else "이어서 ") if (resume or redo_today) else \
+               ("통계이어쓰기 " if carry else "새통계 ")
+    stage_txt = " · ①판매수집(키워드·순위 없음)" if keywords_off else \
+        (" · 순위 제외(판매데이터만)" if skip_ranks and not resume else "")
+    return mode_txt, stage_txt
+
+
 def _run_stage_path(out_dir: str | Path) -> Path:
     return Path(out_dir) / _RUN_STAGE_JSON
 

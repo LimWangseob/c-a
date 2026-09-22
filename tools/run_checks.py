@@ -28,6 +28,7 @@ CHECKS = [
     ("시뮬레이션(파이프라인 14시나리오)", "tools/simulate_pipeline.py", True),
     ("핀(로그인·발견·반자동순위 실제코드)", "tools/pin_login_ranks.py", True),
     ("핀(apply_style 서식 출력)", "tools/pin_apply_style.py", True),
+    ("핀(실행모드 결정 plan_run_mode)", "tools/pin_run_plan.py", True),
     ("구글시트 오프라인 검증", "tools/verify_gsheet_offline.py", True),
     ("오프라인 실증(워크북·매칭·키워드선정)", "tools/verify_offline.py", False),
 ]

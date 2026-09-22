@@ -30,9 +30,10 @@ from coupang_analytics.input_list import parse_input_list, parse_password_file  
 from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
 from coupang_analytics.kw_shopping import NaverShopCredentials  # noqa: E402
-from coupang_analytics.pipeline import (backup_sources, master_exists,  # noqa: E402
+from coupang_analytics.pipeline import (backup_sources, master_exists, plan_run_mode,  # noqa: E402
                                         restore_master_from_gsheet, resumable_progress, run_full,
-                                        select_keywords_stage, track_ranks_stage)
+                                        run_log_labels, run_title, select_keywords_stage,
+                                        track_ranks_stage)
 from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_credentials_file  # noqa: E402
 from coupang_analytics.rank import make_matcher, organic_rank, warmup  # noqa: E402
@@ -435,55 +436,45 @@ class App(tk.Tk):
         dt = self.to_var.get().strip()
         return self.from_var.get().strip(), dt, dt
 
-    def do_run_full(self, keywords_off: bool = False, sales_semi: bool = False):
+    def _require_run_inputs(self) -> bool:
+        """전체실행/판매수집 전 필수 입력·키 확인 — 없으면 경고 후 False."""
         if self.input_list is None:
             messagebox.showwarning("입력 필요", "설정 탭에서 입력 엑셀을 먼저 여세요.")
-            return
+            return False
         if self.naver_creds is None:
             messagebox.showwarning("키 필요", "설정 탭에서 네이버 API 키를 먼저 여세요.")
-            return
+            return False
         if not self.ai_key:   # 키워드 추출은 AI 필수(토큰 폴백 폐지)
             messagebox.showwarning("키 필요", "키워드 추출에 OpenAI(ChatGPT) API 키가 필요합니다. "
                                    "설정 탭에서 OpenAI API 키를 입력한 뒤 다시 실행하세요.")
+            return False
+        return True
+
+    def do_run_full(self, keywords_off: bool = False, sales_semi: bool = False):
+        if not self._require_run_inputs():
             return
         df, dt, dlabel = self._run_dates()
         # 날짜를 직접 지정(당일 자동이 아님)하면 순위 조회 제외 = 그 날짜 판매데이터만 채움(차단 회피)
         skip_ranks = self.collect_mode.get() != "today"
         n = sum(len(a.products) for a in self.input_list.accounts)
-        title = (("① 판매수집(반자동)" if sales_semi else "① 판매수집") if keywords_off
-                 else ("전체 실행(① 반자동 로그인)" if sales_semi else "전체 실행"))
+        title = run_title(keywords_off, sales_semi)
         # 실행 모드 3택 → 여기선 예/아니오만 확인.
         #  · resume(이어서): 오늘 진행분 있으면 이어서(완료 계정 건너뜀), 아니면 마스터에 오늘 컬럼 추가.
         #  · redo(오늘 처음/다시): carry + redo_today → 오늘 컬럼·완료스탬프 초기화 후 전 계정 재수집(어제까지 유지).
         #  · newall(전체 새로): carry_forward=False → 기존 마스터 백업 후 빈 통계로 새로.
         mode = self.run_mode.get()
         newall, redo = mode == "newall", mode == "redo"
-        resume = carry = redo_today = False
         # fix ③: 마스터가 없지만 결과 구글시트가 있으면 복원(첫 실행 오판·과거 통계 유실 방지). 초기화(newall)는 제외.
         gs_out_early = _shared_setting("gsheet", "output_url")
         if not newall and not master_exists() and gs_out_early:
             self.log("[통계] 마스터가 없어 결과 구글시트에서 복원을 시도합니다…")
             restore_master_from_gsheet("output", gs_out_early, self.log)
         meta = resumable_progress() if not (newall or redo) else None
-        if newall:
-            mode_desc = "통계 전체 초기화(백업 후) — ⚠ 기존 통계 마스터는 백업 후 빈 통계로 새로(누적 시계열 끊김)"
-        elif redo:
-            if master_exists():
-                carry = redo_today = True
-                mode_desc = f"오늘 것만 다시 수집 — 오늘({dt}) 초기화 후 전 계정 재수집(어제까지 유지·키워드 동결)"
-            else:
-                mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음·구글시트 복원 불가), 기간 {df}~{dt}"
-        elif meta:
-            resume = True
-            carry = bool(meta.get("carry", False))
-            df, dt = meta["date_from"], meta["date_to"]
+        plan = plan_run_mode(newall, redo, meta, master_exists(), df, dt)   # 실행모드 결정(백엔드 공통)
+        resume, carry, redo_today = plan.resume, plan.carry, plan.redo_today
+        df, dt, mode_desc = plan.date_from, plan.date_to, plan.mode_desc
+        if resume:   # app.py 만의 date_label 복원(재개 시 시작일 기준 라벨 고정) — 행동 불변 유지
             dlabel = meta.get("date_label") or dlabel
-            mode_desc = f"이어서 하기 — 오늘 미완료분 이어서(완료 {len(meta['done'])}개 건너뜀), 기간 {df}~{dt}"
-        elif master_exists():
-            carry = True
-            mode_desc = f"이어서 하기 — 오늘({dt}) 컬럼 추가(키워드 동결)"
-        else:
-            mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음·구글시트 복원 불가), 기간 {df}~{dt}"
         grow = carry and not redo_today and self.grow_var.get()   # 발굴 추가는 이어쓰기 때만
         if not messagebox.askyesno(f"{title} 확인",
                                    f"{mode_desc}\n대상: 상품 {n}개"
@@ -493,10 +484,7 @@ class App(tk.Tk):
         input_list, naver_creds, key = self.input_list, self.naver_creds, self.ai_key
         gs_out = _shared_setting("gsheet", "output_url")   # app_qt에 등록된 결과 구글시트 링크(있으면 반영)
         gs_in = _shared_setting("gsheet", "input_url")     # 백업용(관리대장)
-        mode_txt = ("오늘다시 " if redo_today else "이어서 ") if (resume or redo_today) else \
-                   ("통계이어쓰기 " if carry else "새통계 ")
-        stage_txt = " · ①판매수집(키워드·순위 없음)" if keywords_off else \
-            (" · 순위 제외(판매데이터만)" if skip_ranks and not resume else "")
+        mode_txt, stage_txt = run_log_labels(keywords_off, resume, redo_today, carry, skip_ranks)
         self.log(f"[{'판매수집' if keywords_off else '전체실행'}] {mode_txt}시작 — 상품 {n}개, 기간 {df}~{dt}"
                  f"{' · 새 키워드 발굴 추가' if grow else ''}{stage_txt}")
         btn = self.sales_semi_btn if keywords_off else self.pipeline_btn
@@ -508,35 +496,43 @@ class App(tk.Tk):
             self.track_stop_btn.config(state="normal")
             stop = self._semi_stop
 
-        def task():
-            backup_sources(input_url=gs_in, output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
-            naver = NaverAdApi(naver_creds)
-            # ① 반자동 판매수집 — 순위·키워드·노출측정 전무(offscreen 미사용)
-            snap = run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
-                            get_password=self._account_pw, resume=resume, carry_forward=carry,
-                            grow_keywords=False, skip_ranks=True, redo_today=redo_today,
-                            sales_semi=True, date_label=dlabel, keywords_off=True, on_log=self.log,
-                            gsheet_output_url=gs_out)
-            if keywords_off:                        # ① 단독 실행 → 판매데이터만 채우고 종료
-                return snap
-            if stop is not None and stop.is_set():
-                return snap
-            # ② 키워드 선정 — 공개검색(노출측정) 없이 AI 선정만(로그인 불필요·동결분 유지)
-            self.log("[전체실행] ② 키워드 선정 — 노출측정 없이 AI 선정(동결분 유지)")
-            select_keywords_stage(naver, key, grow=grow, on_log=self.log, gsheet_output_url=gs_out)
-            if stop is not None and stop.is_set():
-                return snap
-            # ③ 반자동 순위 — 보이는 창에서 자동 타이핑·검색(차단 회피)
-            self.log("[전체실행] ③ 반자동 순위 — 보이는 창 자동 타이핑(중지: '반자동 중지')")
-            return track_ranks_stage(semi=True,
-                                     should_stop=(stop.is_set if stop is not None else (lambda: False)),
-                                     on_log=self.log, gsheet_output_url=gs_out)
-
         def done(p):
             if not keywords_off:
                 self.track_stop_btn.config(state="disabled")
             self._pipeline_done(p)
-        self.run_bg(task, on_done=done, btn=btn)
+        self.run_bg(lambda: self._full_pipeline_task(
+            input_list, naver_creds, key, df, dt, dlabel, resume, carry, redo_today,
+            grow, keywords_off, gs_in, gs_out, stop),
+            on_done=done, btn=btn)
+
+    def _full_pipeline_task(self, input_list, naver_creds, key, df, dt, dlabel, resume, carry,
+                            redo_today, grow, keywords_off, gs_in, gs_out, stop):
+        """전체실행/판매수집 백그라운드 작업(Tkinter 폴백) — ①반자동 판매수집 → ②키워드선정 → ③반자동 순위.
+
+        인자는 do_run_full 시점의 스냅샷(실행 중 self.* 변경에 영향받지 않음 — 행동 불변).
+        (app_qt 와 달리 재부팅 단계마커·그로스 재고 역기록은 없음 — 폴백 UI 기존 동작 그대로.)"""
+        backup_sources(input_url=gs_in, output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
+        naver = NaverAdApi(naver_creds)
+        # ① 반자동 판매수집 — 순위·키워드·노출측정 전무(offscreen 미사용)
+        snap = run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
+                        get_password=self._account_pw, resume=resume, carry_forward=carry,
+                        grow_keywords=False, skip_ranks=True, redo_today=redo_today,
+                        sales_semi=True, date_label=dlabel, keywords_off=True, on_log=self.log,
+                        gsheet_output_url=gs_out)
+        if keywords_off:                        # ① 단독 실행 → 판매데이터만 채우고 종료
+            return snap
+        if stop is not None and stop.is_set():
+            return snap
+        # ② 키워드 선정 — 공개검색(노출측정) 없이 AI 선정만(로그인 불필요·동결분 유지)
+        self.log("[전체실행] ② 키워드 선정 — 노출측정 없이 AI 선정(동결분 유지)")
+        select_keywords_stage(naver, key, grow=grow, on_log=self.log, gsheet_output_url=gs_out)
+        if stop is not None and stop.is_set():
+            return snap
+        # ③ 반자동 순위 — 보이는 창에서 자동 타이핑·검색(차단 회피)
+        self.log("[전체실행] ③ 반자동 순위 — 보이는 창 자동 타이핑(중지: '반자동 중지')")
+        return track_ranks_stage(semi=True,
+                                 should_stop=(stop.is_set if stop is not None else (lambda: False)),
+                                 on_log=self.log, gsheet_output_url=gs_out)
 
     def do_select_keywords(self):
         """② 키워드 선정 — 로그인 불필요. 최신 결과 워크북 상품에 키워드만 채운다(순위 없음)."""
