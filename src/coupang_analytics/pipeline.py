@@ -1302,6 +1302,71 @@ def _collect_with_login(ctx: _RunCtx, login_needed, get_password, sales_semi: bo
             log(f"  [{a.label}] 처리 오류: {exc.__class__.__name__}: {first} — 건너뜀")
 
 
+@dataclass
+class _RunInit:
+    """run_full 시작 시 결정되는 실행 상태(재개 복구 또는 새 실행)."""
+    wb: OutputWorkbook
+    date_from: str
+    date_to: str
+    started_at: str
+    done: set
+    carry: bool
+    grow: bool
+    skip_ranks: bool
+    date_label: str | None
+
+
+def _init_run_state(input_list: InputList, out: Path, partial: Path, prog: Path, master: Path,
+                    now: datetime, resume: bool, carry_forward: bool, grow_keywords: bool,
+                    skip_ranks: bool, redo_today: bool, date_from, date_to, date_label, log) -> _RunInit:
+    """실행 시작 상태 결정 — 같은 날 크래시 복구(resume) 또는 새 실행(통계 이어쓰기/새 통계).
+
+    resume=True고 오늘 진행분이 있으면 기간·완료계정·진행엑셀·모드(carry/grow/skip)를 복원한다.
+    새 실행이면 날짜·done을 세우고, carry_forward+마스터 존재면 마스터를 이어쓰기(키워드 동결),
+    아니면 빈 워크북(명시적 '새 통계'는 기존 마스터를 보관 후). 진행 기준선(partial)·진행파일을 저장한다.
+    """
+    meta = resumable_progress(out) if resume else None
+    if meta:                                   # 같은 날 크래시 복구 — 기간·완료계정·진행엑셀·모드 복원
+        date_from, date_to = meta["date_from"], meta["date_to"]
+        started_at = meta["started_at"]
+        done = set(meta["done"])
+        carry = bool(meta.get("carry", False))
+        grow = bool(meta.get("grow", False))
+        skip_ranks = bool(meta.get("skip", False))   # 재개 시 순위제외 모드도 그대로 유지
+        date_label = meta.get("date_label") or date_label   # 재개=원래 작업 실행날짜 라벨 유지(새벽 넘겨도 시작일 기준)
+        wb = OutputWorkbook.load(partial)
+        log(f"== 이어서 실행({'통계이어쓰기' if carry else '새통계'}) — 완료 {len(done)}개 건너뜀, "
+            f"기간 {date_from}~{date_to} ==")
+        return _RunInit(wb, date_from, date_to, started_at, done, carry, grow, skip_ranks, date_label)
+    # 새 실행(오늘)
+    date_to = date_to or now.strftime("%Y-%m-%d")
+    date_from = date_from or date_to
+    started_at = now.strftime("%Y-%m-%d %H:%M:%S")
+    done: set = set()
+    carry = carry_forward and master.exists()
+    grow = grow_keywords and carry
+    if carry_forward and not master.exists():
+        log("== ⚠ 통계 마스터가 없어 '새 통계'로 시작합니다 — 결과 구글시트가 있으면 UI가 먼저 복원합니다 ==")
+    if carry:
+        wb = OutputWorkbook.load(master)   # 기존 통계 이어쓰기(키워드 동결 + 오늘 컬럼)
+        log(f"== {'오늘 처음(다시) 하기' if redo_today else '통계 이어쓰기'} — 마스터 로드, "
+            f"오늘 컬럼{' 초기화 후 재수집' if redo_today else ' 추가'}"
+            f"{' · 새 키워드 발굴 추가' if grow else ' · 키워드 동결'} ==")
+    else:
+        if not carry_forward and master.exists():   # 명시적 '새 통계' → 기존 마스터 보관(백업)
+            bak = out / f"{config.OUTPUT_FILE_PREFIX}_통계_보관_{now.strftime('%y%m%d_%H%M%S')}.xlsx"
+            master.rename(bak)
+            log(f"== 기존 통계 마스터를 보관함: {bak.name} ==")
+        wb = OutputWorkbook.empty()
+        log(f"== 새 통계 시작 — {len(input_list.accounts)}개 계정, 기간 {date_from}~{date_to} ==")
+    for p in (partial, prog):
+        if p.exists():
+            p.unlink()
+    wb.save(partial)                       # 크래시 복구 기준선(carry면 마스터 내용 포함)
+    _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks, date_label)
+    return _RunInit(wb, date_from, date_to, started_at, done, carry, grow, skip_ranks, date_label)
+
+
 def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
              ai_key: str | None = None, date_from: str | None = None, date_to: str | None = None,
              get_password=None, resume: bool = False, carry_forward: bool = False,
@@ -1347,44 +1412,11 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     partial, prog = _partial_path(out), _progress_path(out)
 
     master = _master_path(out)
-    meta = resumable_progress(out) if resume else None
-    if meta:                                   # 같은 날 크래시 복구 — 기간·완료계정·진행엑셀·모드 복원
-        date_from, date_to = meta["date_from"], meta["date_to"]
-        started_at = meta["started_at"]
-        done = set(meta["done"])
-        carry = bool(meta.get("carry", False))
-        grow = bool(meta.get("grow", False))
-        skip_ranks = bool(meta.get("skip", False))   # 재개 시 순위제외 모드도 그대로 유지
-        date_label = meta.get("date_label") or date_label   # 재개=원래 작업 실행날짜 라벨 유지(새벽 넘겨도 시작일 기준)
-        wb = OutputWorkbook.load(partial)
-        log(f"== 이어서 실행({'통계이어쓰기' if carry else '새통계'}) — 완료 {len(done)}개 건너뜀, "
-            f"기간 {date_from}~{date_to} ==")
-    else:                                      # 새 실행(오늘)
-        date_to = date_to or now.strftime("%Y-%m-%d")
-        date_from = date_from or date_to
-        started_at = now.strftime("%Y-%m-%d %H:%M:%S")
-        done = set()
-        carry = carry_forward and master.exists()
-        grow = grow_keywords and carry
-        if carry_forward and not master.exists():
-            log("== ⚠ 통계 마스터가 없어 '새 통계'로 시작합니다 — 결과 구글시트가 있으면 UI가 먼저 복원합니다 ==")
-        if carry:
-            wb = OutputWorkbook.load(master)   # 기존 통계 이어쓰기(키워드 동결 + 오늘 컬럼)
-            log(f"== {'오늘 처음(다시) 하기' if redo_today else '통계 이어쓰기'} — 마스터 로드, "
-                f"오늘 컬럼{' 초기화 후 재수집' if redo_today else ' 추가'}"
-                f"{' · 새 키워드 발굴 추가' if grow else ' · 키워드 동결'} ==")
-        else:
-            if not carry_forward and master.exists():   # 명시적 '새 통계' → 기존 마스터 보관(백업)
-                bak = out / f"{config.OUTPUT_FILE_PREFIX}_통계_보관_{now.strftime('%y%m%d_%H%M%S')}.xlsx"
-                master.rename(bak)
-                log(f"== 기존 통계 마스터를 보관함: {bak.name} ==")
-            wb = OutputWorkbook.empty()
-            log(f"== 새 통계 시작 — {len(input_list.accounts)}개 계정, 기간 {date_from}~{date_to} ==")
-        for p in (partial, prog):
-            if p.exists():
-                p.unlink()
-        wb.save(partial)                       # 크래시 복구 기준선(carry면 마스터 내용 포함)
-        _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks, date_label)
+    st = _init_run_state(input_list, out, partial, prog, master, now, resume, carry_forward,
+                         grow_keywords, skip_ranks, redo_today, date_from, date_to, date_label, log)
+    wb, date_from, date_to = st.wb, st.date_from, st.date_to
+    started_at, done, date_label = st.started_at, st.done, st.date_label
+    carry, grow, skip_ranks = st.carry, st.grow, st.skip_ranks
 
     # 목차 로스터 — 입력 전체 계정(계정ID·대표자명)을 등록해 **미수집 계정도 목차에 표시**(수집 현황 파악)
     for _a in input_list.accounts:
