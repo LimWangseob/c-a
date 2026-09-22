@@ -101,9 +101,20 @@
   **G**discover PWTimeout→상품조회 vid 계속·**H**Failed to fetch 1회 재시도·**I**상품조회 실패→판매분석 폴백·
   **J**반자동 순위 정상·**K**차단→쿨다운 재개·**L**쿨다운 초과→당일 중단(halt)·**M**키워드 없는 2차 블록 건너뜀.
   `run_checks.py`(quick 포함)에 4번째로 배선, 전체 게이트 27.9s(<30s)·결정적. **이제 두 함수 분해 시 회귀 감지됨.**
-- ⬜ **남은 괴물(분해 대상)**: `_login_and_discover` F(54)·`_track_ranks_semi` F(45)·`track_ranks_stage` D(27)·
-  `select_keywords_stage` D(25). 핀 커버 확보 → §START HERE 2번대로 제자리 분해(이른 return·예외 제어흐름 보존).
-  파일 MI 는 이 둘이 F 라 아직 C(0.00).
+- ✅ **`_login_and_discover` F(54) 분해 완료(2026-09-22, 커밋 96d7205)**: 오케스트레이터로 축소(with 안에서
+  `_ensure_login`→`_discover_products` 만 호출). 로그인 국면=`_ensure_login`(세션판정·NeedLogin)→`_fresh_login`
+  (C16)→`_semi_retry_login`(반자동 1회 재시도)·`_resolve_login_failure`(blocked/cred/otp 분기). 발견 국면=
+  `_discover_products`(C16)→`_run_discover`(PWTimeout·Failed-to-fetch 재시도)·`_augment_vids`(미매칭 vid 보강).
+  4-튜플 이른 return·예외(NeedLogin/LoginBlocked/LoginCredentialError) 제어흐름 보존. 핀 A~I 가 고정.
+- ✅ **`_track_ranks_semi` F(45) 분해 완료(2026-09-22, 커밋 5e6185e)**: 가변 카운터를 `_SemiState` dataclass 로
+  묶고 오케스트레이터는 2중 루프만. `_semi_start_log`·`_semi_browser_prep`·`_semi_track_product`(C20)→
+  `_semi_search_one`(자동제출/사람Enter)·`_semi_on_miss`(서킷브레이커=쿨다운 재개/당일 중단)·`_semi_record`
+  (파싱·기록·저장). 핀 J~N 이 정상/차단→쿨다운/중단/2차블록/사람Enter 를 고정.
+- ⬜ **남은 D(다음 세션)**: `track_ranks_stage` D(27)·`select_keywords_stage` D(25). **파일 MI 는 여전히 C(0.00)** —
+  radon MI 는 ~2100줄 대형 파일에서 포화(0.00)라 함수 CC 를 낮춰도 B 로 안 오른다. **B 이상은 모듈 분리**
+  (pipeline_sales/ranks/gsheet, §단계4)가 필요 → 다음 별도 단계. 이번 세션 목표(두 F 괴물함수 제거)는 달성.
+- ⬜ **라이브 검증 남김(사무실)**: 로그인/순위는 오프라인 핀으로 100% 못 잡으니, 분해 후 사무실에서 ①판매수집·
+  ③순위 1회 라이브 확인 권장(정책 엣지케이스 실측). 근거 없는 되돌림 금지([[fix-from-real-evidence]]).
 - **모듈 분리**(pipeline_sales/ranks/gsheet)는 함수 CC 정리 후 별도 단계로(지금은 제자리 분해로 충분).
 
 #### ⭐다음 세션 착수 레시피 (START HERE — pipeline.py 마저)
