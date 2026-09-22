@@ -398,6 +398,51 @@ def pin_rank_skip_optionless():
     _check(not wb.has_keyword_section("비즈R", "상품R (그레이)"), "2차 블록=키워드 구역 없음(건너뜀)")
 
 
+def _rank_master(d: Path):
+    """track_ranks_stage(out_dir) 가 로드하도록 마스터에 저장한 워크북(계정1·상품1·키워드2·vid·최신일자)."""
+    path = P._master_path(d)
+    _rank_wb(path)   # 같은 픽스처를 마스터 경로에 저장
+    return path
+
+
+def pin_rank_auto_success():
+    print("[핀 O] 자동 순위(track_ranks_stage semi=False) — _measure 측정→기록")
+    _SPEC.clear(); _COUNT.clear()
+    d = Path(tempfile.mkdtemp())
+    _rank_master(d)
+    P.WingBrowser = _FakeWing
+    P.warmup = lambda browser: None
+    P._best = lambda v: v
+    P._measure = lambda browser, todo, matcher, log, matched_out=None: {kw: 3 for kw in todo}
+    P.track_ranks_stage(out_dir=str(d), semi=False, on_log=lambda m: None)
+    from coupang_analytics.workbook import OutputWorkbook
+    wb = OutputWorkbook.load(P._master_path(d))
+    dt = wb.latest_date("비즈R")
+    _check(wb.is_rank_filled("비즈R", "상품R", "kw1", dt), "kw1 자동 순위 기록")
+    _check(wb.is_rank_filled("비즈R", "상품R", "kw2", dt), "kw2 자동 순위 기록")
+
+
+def pin_rank_auto_halt():
+    print("[핀 O2] 자동 순위 차단(RankHalt) — 부분결과만 기록·나머지 공란·중단")
+    _SPEC.clear(); _COUNT.clear()
+    d = Path(tempfile.mkdtemp())
+    _rank_master(d)
+    P.WingBrowser = _FakeWing
+    P.warmup = lambda browser: None
+    P._best = lambda v: v
+
+    def fake_measure(browser, todo, matcher, log, matched_out=None):
+        raise P.RankHalt(partial={todo[0]: 7})   # 첫 키워드만 측정하고 차단 감지
+
+    P._measure = fake_measure
+    P.track_ranks_stage(out_dir=str(d), semi=False, on_log=lambda m: None)
+    from coupang_analytics.workbook import OutputWorkbook
+    wb = OutputWorkbook.load(P._master_path(d))
+    dt = wb.latest_date("비즈R")
+    _check(wb.is_rank_filled("비즈R", "상품R", "kw1", dt), "차단 전 부분결과(kw1) 기록")
+    _check(not wb.is_rank_filled("비즈R", "상품R", "kw2", dt), "차단 후 kw2 공란(다음에 이어서)")
+
+
 def pin_rank_manual_mode():
     print("[핀 N] 반자동(비자동제출) — 사람이 Enter, 감지된 페이지만 기록·미감지는 공란(중단 없음)")
     _SPEC.clear(); _COUNT.clear()
@@ -455,6 +500,8 @@ def main() -> int:
         pin_rank_halt()
         pin_rank_skip_optionless()
         pin_rank_manual_mode()
+        pin_rank_auto_success()
+        pin_rank_auto_halt()
     finally:
         for k, v in saved.items():   # 순위 config 원복(다른 검증 오염 방지 — 별 프로세스지만 방어적)
             setattr(config, k, v)

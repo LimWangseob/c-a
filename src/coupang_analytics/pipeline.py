@@ -1715,41 +1715,7 @@ def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = 
         warmup(browser)
         for biz in wb.account_sheets():
             for pname in wb.products_of(biz):
-                if not wb.has_keyword_section(biz, pname):   # 다중옵션 2차 블록(판매정보만) → 키워드 선정 대상 아님
-                    continue
-                existing = wb.product_keywords(biz, pname)
-                if existing:   # 시트에 채워진 키워드 = 그대로 사용. 검색량 공란만 네이버로(fix ②)
-                    _fill_frozen_search_volumes(wb, biz, pname, existing, naver, log)
-                # **키워드가 있으면 시트 값 그대로 동결** — 일부(2개)만 있으면 일부만, AI 톱업 없음(소유자 2026-09-20).
-                # 새 키워드는 grow(발굴 추가) 옵션일 때만 상한 내에서 추가. 키워드가 아예 없으면(새 상품) AI 첫 선정.
-                if existing and not grow:
-                    log(f"  [{biz}] {pname} → 키워드 있음, 그대로 사용(동결) {existing}")
-                    continue
-                try:
-                    if existing:                           # grow: 기존 유지 + 상한 내 발굴 추가
-                        want = min(config.KW_ADD_PER_DAY, config.KW_MAX_TRACK - len(existing))
-                        if want <= 0:
-                            log(f"  [{biz}] {pname} → (동결·상한 {config.KW_MAX_TRACK}) {existing}")
-                            continue
-                        tracks = select_keywords_light(pname, naver, ai_key, browser=browser, log=log,
-                                                       n=want, measure_ranks=None, exclude=set(existing))
-                        new = [t for t in tracks if t.keyword not in existing][:want]
-                        if new:
-                            wb.add_product_keywords(biz, pname, [t.keyword for t in new])
-                            for t in new:
-                                wb.set_keyword_search(biz, pname, t.keyword, t.volume)
-                            log(f"  [{biz}] {pname} → 동결 {existing} + 발굴 {[t.keyword for t in new]}")
-                        else:
-                            log(f"  [{biz}] {pname} → (동결·추가 후보 없음) {existing}")
-                    else:                                  # 새 상품(키워드 0개) → AI 첫 선정(최대 KW_TRACK_N)
-                        tracks = select_keywords_light(pname, naver, ai_key, browser=browser,
-                                                       log=log, measure_ranks=None)
-                        wb.add_product_keywords(biz, pname, [t.keyword for t in tracks])
-                        for t in tracks:
-                            wb.set_keyword_search(biz, pname, t.keyword, t.volume)
-                        log(f"  [{biz}] {pname} → 키워드 {[t.keyword for t in tracks]}")
-                except Exception as exc:   # 한 상품 실패(AI·네이버 400 등)가 나머지 상품·계정 선정을 안 막게 격리
-                    log(f"  [{biz}] {pname} 키워드 선정 실패(건너뜀) — {exc.__class__.__name__}: {str(exc)[:80]}")
+                _select_product_keywords(wb, biz, pname, naver, ai_key, browser, grow, log)
             wb.save(path)
     # 키워드가 KW_TRACK_N(=4) 미만인 상품(선정 실패·옛 0행 블록 등)은 빈 순위행으로 4행 유지(사용자 요구 2026-09-15).
     padded = sum(wb.pad_keyword_rows(biz, p) for biz in wb.account_sheets() for p in wb.products_of(biz))
@@ -1760,6 +1726,47 @@ def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = 
     _push_gsheet(wb, gsheet_output_url, log)   # ② 개별 실행도 결과 구글시트에 반영(키워드 갱신)
     log("== 키워드 선정 완료 ==")
     return path
+
+
+def _select_product_keywords(wb, biz: str, pname: str, naver, ai_key, browser, grow: bool, log) -> None:
+    """② 한 상품 키워드 선정 — 동결(있으면 유지·검색량만 채움)/발굴(grow)/새 상품 AI 첫 선정.
+
+    다중옵션 2차 블록(키워드 구역 없음)은 대상 아님. 한 상품 실패(AI·네이버 400 등)는 격리(로그만)."""
+    if not wb.has_keyword_section(biz, pname):   # 다중옵션 2차 블록(판매정보만) → 키워드 선정 대상 아님
+        return
+    existing = wb.product_keywords(biz, pname)
+    if existing:   # 시트에 채워진 키워드 = 그대로 사용. 검색량 공란만 네이버로(fix ②)
+        _fill_frozen_search_volumes(wb, biz, pname, existing, naver, log)
+    # **키워드가 있으면 시트 값 그대로 동결** — 일부(2개)만 있으면 일부만, AI 톱업 없음(소유자 2026-09-20).
+    # 새 키워드는 grow(발굴 추가) 옵션일 때만 상한 내에서 추가. 키워드가 아예 없으면(새 상품) AI 첫 선정.
+    if existing and not grow:
+        log(f"  [{biz}] {pname} → 키워드 있음, 그대로 사용(동결) {existing}")
+        return
+    try:
+        if existing:                           # grow: 기존 유지 + 상한 내 발굴 추가
+            want = min(config.KW_ADD_PER_DAY, config.KW_MAX_TRACK - len(existing))
+            if want <= 0:
+                log(f"  [{biz}] {pname} → (동결·상한 {config.KW_MAX_TRACK}) {existing}")
+                return
+            tracks = select_keywords_light(pname, naver, ai_key, browser=browser, log=log,
+                                           n=want, measure_ranks=None, exclude=set(existing))
+            new = [t for t in tracks if t.keyword not in existing][:want]
+            if new:
+                wb.add_product_keywords(biz, pname, [t.keyword for t in new])
+                for t in new:
+                    wb.set_keyword_search(biz, pname, t.keyword, t.volume)
+                log(f"  [{biz}] {pname} → 동결 {existing} + 발굴 {[t.keyword for t in new]}")
+            else:
+                log(f"  [{biz}] {pname} → (동결·추가 후보 없음) {existing}")
+        else:                                  # 새 상품(키워드 0개) → AI 첫 선정(최대 KW_TRACK_N)
+            tracks = select_keywords_light(pname, naver, ai_key, browser=browser,
+                                           log=log, measure_ranks=None)
+            wb.add_product_keywords(biz, pname, [t.keyword for t in tracks])
+            for t in tracks:
+                wb.set_keyword_search(biz, pname, t.keyword, t.volume)
+            log(f"  [{biz}] {pname} → 키워드 {[t.keyword for t in tracks]}")
+    except Exception as exc:   # 한 상품 실패(AI·네이버 400 등)가 나머지 상품·계정 선정을 안 막게 격리
+        log(f"  [{biz}] {pname} 키워드 선정 실패(건너뜀) — {exc.__class__.__name__}: {str(exc)[:80]}")
 
 
 def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
@@ -1798,38 +1805,9 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
             if not date:
                 continue
             for pname in wb.products_of(biz):
-                vids = wb.sibling_vids(biz, pname)   # 리스팅 전 옵션 vid 합집합(아이템위너 놓침 방지)
-                keywords = wb.product_keywords(biz, pname)
-                if not keywords:                     # 2차 옵션 블록(키워드 없음)은 순위 대상 아님
-                    continue
-                if not vids and not (pname or "").strip():   # 매칭 근거(vid·상품명) 전무 → 측정 불가(이례)
+                halted, noname = _measure_product_auto(browser, wb, path, biz, pname, date, log)
+                if noname:
                     noname_products += 1
-                    continue
-                # 이미 채워진 키워드는 건너뜀 = **중단 지점부터 이어서**(당일 재작업 시 남은 것만)
-                todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
-                if not todo:
-                    continue
-                if not vids:   # 판매 0 등으로 vid 없음 → 상품명(부분일치)으로 매칭(건너뛰지 않음)
-                    log(f"  [순위] {biz} · {pname} — vid 없음(판매 0 등) → 상품명으로 매칭")
-                cap: dict = {}
-                try:
-                    measured = _measure(browser, todo, _rank_matcher(vids, pname), log, matched_out=cap)
-                except RankHalt as h:              # 차단 감지 → 부분결과만 기록하고 전면 중단
-                    measured = h.partial
-                    halted = True
-                except Exception as exc:           # 그 외 예외 → 공란(다음에 재시도)
-                    log(f"  [순위] 측정 실패(공란) — {exc.__class__.__name__}: {str(exc)[:80]}")
-                    measured = {}
-                for kw in todo:
-                    if kw not in measured:            # 측정 안 됨(중단·실패) → 공란 유지(다음에 이어서)
-                        continue
-                    r = _best(measured.get(kw))       # 정상 측정: 미노출이면 '-', 노출이면 'N위'
-                    wb.set_keyword_rank(biz, pname, kw, date, r)
-                    log(f"  [{biz}] {pname} '{kw}': {rank_label(r)}")
-                mi = cap.get("제품")                   # 노출명은 로그로만(블록명=등록상품명 고정, set_display_name 중단)
-                if mi is not None and getattr(mi, "name", ""):
-                    log(f"  [노출명] 검색결과 노출명 = {mi.name} (블록명은 등록상품명 고정)")
-                wb.save(path)   # **상품마다 저장** → 중단돼도 여기까지 보존(재실행 시 이어서)
                 if halted:
                     break
     wb.apply_style()   # 저장본 서식 항상 표준으로 고정
@@ -1843,6 +1821,47 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
         log("== 노출순위 조회 완료 ==")
     _push_gsheet(wb, gsheet_output_url, log)   # ③ 자동 순위 채운 뒤 결과 구글시트에도 반영(차단 중단이어도 진행분 반영)
     return path
+
+
+def _measure_product_auto(browser, wb, path, biz: str, pname: str, date, log) -> tuple[bool, bool]:
+    """③ 자동(offscreen) 순위 — 한 상품 측정·기록·저장. 반환 (halted, noname).
+
+    keywords/vid 없거나 todo 비면 (False, ·)로 건너뜀. RankHalt=차단 감지(부분결과 기록·halted=True),
+    그 외 예외=공란(다음 재시도). 상품마다 저장 → 중단돼도 진행분 보존. (⚠ 현 정책은 반자동만 사용 —
+    이 자동 경로는 사문화에 가깝지만 track_ranks_stage(semi=False) 로 여전히 호출 가능·핀 O/O2 로 커버.)"""
+    vids = wb.sibling_vids(biz, pname)   # 리스팅 전 옵션 vid 합집합(아이템위너 놓침 방지)
+    keywords = wb.product_keywords(biz, pname)
+    if not keywords:                     # 2차 옵션 블록(키워드 없음)은 순위 대상 아님
+        return False, False
+    if not vids and not (pname or "").strip():   # 매칭 근거(vid·상품명) 전무 → 측정 불가(이례)
+        return False, True
+    # 이미 채워진 키워드는 건너뜀 = **중단 지점부터 이어서**(당일 재작업 시 남은 것만)
+    todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
+    if not todo:
+        return False, False
+    if not vids:   # 판매 0 등으로 vid 없음 → 상품명(부분일치)으로 매칭(건너뛰지 않음)
+        log(f"  [순위] {biz} · {pname} — vid 없음(판매 0 등) → 상품명으로 매칭")
+    cap: dict = {}
+    halted = False
+    try:
+        measured = _measure(browser, todo, _rank_matcher(vids, pname), log, matched_out=cap)
+    except RankHalt as h:              # 차단 감지 → 부분결과만 기록하고 전면 중단
+        measured = h.partial
+        halted = True
+    except Exception as exc:           # 그 외 예외 → 공란(다음에 재시도)
+        log(f"  [순위] 측정 실패(공란) — {exc.__class__.__name__}: {str(exc)[:80]}")
+        measured = {}
+    for kw in todo:
+        if kw not in measured:            # 측정 안 됨(중단·실패) → 공란 유지(다음에 이어서)
+            continue
+        r = _best(measured.get(kw))       # 정상 측정: 미노출이면 '-', 노출이면 'N위'
+        wb.set_keyword_rank(biz, pname, kw, date, r)
+        log(f"  [{biz}] {pname} '{kw}': {rank_label(r)}")
+    mi = cap.get("제품")                   # 노출명은 로그로만(블록명=등록상품명 고정, set_display_name 중단)
+    if mi is not None and getattr(mi, "name", ""):
+        log(f"  [노출명] 검색결과 노출명 = {mi.name} (블록명은 등록상품명 고정)")
+    wb.save(path)   # **상품마다 저장** → 중단돼도 여기까지 보존(재실행 시 이어서)
+    return halted, False
 
 
 def _search_q(url: str) -> str | None:
