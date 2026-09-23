@@ -644,7 +644,21 @@ class App(QtWidgets.QMainWindow):
         self.log(f"[로그] 전체 복사됨 — {len(text.splitlines())}줄 (클립보드)")
 
     # ── 백그라운드 실행(스레드 → 시그널로 완료 전달) ───────────
-    def run_bg(self, task, on_done=None, btn=None):
+    def _guard_busy(self) -> bool:
+        """브라우저를 여는 실행이 이미 도는 중이면 True(호출부가 즉시 return) — 동시 실행 방지.
+
+        같은 프로필로 WingBrowser 두 개가 열리면 프로필 잠금 충돌(ECONNRESET/포트 미개방)·중지 버튼
+        오작동이 난다(CLAUDE.md: rank_browser와 로그인 브라우저 동시 개방 금지). Qt 클릭은 GUI 스레드
+        단일 처리라 이 검사↔run_bg(_run_active 설정) 사이에 다른 클릭이 끼어들지 않는다(경쟁 없음)."""
+        if getattr(self, "_run_active", False):
+            self.log("[안내] 이미 실행 중입니다 — 지금 작업이 끝난 뒤 다시 눌러 주세요.")
+            return True
+        return False
+
+    def run_bg(self, task, on_done=None, btn=None, exclusive=False):
+        if exclusive:   # 브라우저/파이프라인 실행 = 한 번에 하나(배타). btn 은 그 실행의 소유 표식.
+            self._run_active = True
+            self._active_btn = btn
         if btn:
             btn.setEnabled(False)
 
@@ -660,8 +674,13 @@ class App(QtWidgets.QMainWindow):
     def _on_finish(self, btn, on_done, result, err):
         if btn:
             btn.setEnabled(True)
-        if getattr(self, "track_stop_btn", None) is not None:   # 반자동 종료(성공/실패 공통) → 중지 버튼 끔
-            self.track_stop_btn.setEnabled(False)
+        # 배타 실행(그 btn 이 소유)만 종료 처리 — 다른 빠른 작업이 파이프라인 도중 끝나도 중지 버튼을
+        # 끄지 않는다(예전엔 무조건 껐음 → 파이프라인을 멈출 수 없던 버그).
+        if btn is not None and btn is getattr(self, "_active_btn", None):
+            self._run_active = False
+            self._active_btn = None
+            if getattr(self, "track_stop_btn", None) is not None:   # 이 배타 실행이 소유한 중지 버튼만 끔
+                self.track_stop_btn.setEnabled(False)
         if err is not None:
             self.log(f"[오류] {err.__class__.__name__}: {err}")
         elif on_done is not None:
@@ -914,6 +933,8 @@ class App(QtWidgets.QMainWindow):
 
     # ── 키워드 추천 ───────────────────────────────────────────
     def do_recommend(self):
+        if self._guard_busy():
+            return
         if self.naver_creds is None:
             QtWidgets.QMessageBox.warning(self, "키 필요", "네이버 API 키를 먼저 불러오세요.")
             return
@@ -936,7 +957,7 @@ class App(QtWidgets.QMainWindow):
                 if seed:
                     return recommend(seed, api, wb)
                 return recommend_from_title(product, api, wb, ai_key=key)
-        self.run_bg(task, on_done=self._fill_kw, btn=self.kw_run_btn)
+        self.run_bg(task, on_done=self._fill_kw, btn=self.kw_run_btn, exclusive=True)
 
     def _fill_kw(self, recs):
         self.kw_table.setRowCount(len(recs))
@@ -996,6 +1017,8 @@ class App(QtWidgets.QMainWindow):
 
     # ── 순위 조회 ─────────────────────────────────────────────
     def do_rank(self):
+        if self._guard_busy():
+            return
         kw = self.rank_kw.text().strip()
         name = self.rank_name.text().strip()
         if not kw or not name:
@@ -1009,7 +1032,7 @@ class App(QtWidgets.QMainWindow):
                 return organic_rank(wb, kw, make_matcher(name_substr=name))
         self.run_bg(task, on_done=lambda r: self.log(
             f"[순위] 결과: {('오가닉 ' + str(r) + '위') if r else (str(config.RANK_SCAN_MAX) + '위 밖 → ' + str(config.RANK_SCAN_MAX) + '위')}"),
-            btn=self.rank_btn)
+            btn=self.rank_btn, exclusive=True)
 
     # ── 전체 실행 ─────────────────────────────────────────────
     def _toggle_range(self):
@@ -1045,6 +1068,8 @@ class App(QtWidgets.QMainWindow):
         return True
 
     def do_run_full(self, keywords_off: bool = False, sales_semi: bool = False):
+        if self._guard_busy():
+            return
         if not self._require_run_inputs():
             return
         df, dt, dlabel = self._run_dates()
@@ -1094,7 +1119,7 @@ class App(QtWidgets.QMainWindow):
         self.run_bg(lambda: self._full_pipeline_task(
             input_list, naver_creds, key, df, dt, dlabel, resume, carry, redo_today,
             grow, keywords_off, gs_in, gs_out, stop),
-            on_done=self._pipeline_done, btn=btn)
+            on_done=self._pipeline_done, btn=btn, exclusive=True)
 
     def _full_pipeline_task(self, input_list, naver_creds, key, df, dt, dlabel, resume, carry,
                             redo_today, grow, keywords_off, gs_in, gs_out, stop):
@@ -1293,6 +1318,8 @@ class App(QtWidgets.QMainWindow):
 
     def do_select_keywords(self):
         """② 키워드 선정 — 로그인 불필요. 최신 결과 워크북 상품에 키워드만 채운다(순위 없음)."""
+        if self._guard_busy():
+            return
         if self.input_list is None or self.naver_creds is None or not self.ai_key:
             QtWidgets.QMessageBox.warning(self, "키/입력 필요",
                                           "설정 탭에서 입력 엑셀·네이버 API·OpenAI 키를 먼저 준비하세요.")
@@ -1310,12 +1337,14 @@ class App(QtWidgets.QMainWindow):
             backup_sources(output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
             return select_keywords_stage(NaverAdApi(naver_creds), key, grow=grow, on_log=self.log,
                                          gsheet_output_url=gs_out)
-        self.run_bg(task, on_done=self._pipeline_done, btn=self.kw_btn)
+        self.run_bg(task, on_done=self._pipeline_done, btn=self.kw_btn, exclusive=True)
 
     def do_track_ranks(self, semi: bool = True):
         """③ 노출순위 조회(반자동) — 로그인 불필요. 앱이 창을 띄우고 키워드를 안내, 사용자가 직접
         검색하면 그 화면을 읽어 기록한다(자동 검색을 안 해 차단이 안 생김). 자동 방식은 차단 위험으로 폐지.
         """
+        if self._guard_busy():
+            return
         if not (master_exists() or resumable_progress()):
             QtWidgets.QMessageBox.warning(self, "먼저 ①②",
                                           "결과 파일이 없습니다. ① 판매수집·② 키워드 선정을 먼저 실행하세요.")
@@ -1330,7 +1359,7 @@ class App(QtWidgets.QMainWindow):
             backup_sources(output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
             return track_ranks_stage(semi=True, should_stop=should_stop, on_log=self.log,
                                      gsheet_output_url=gs_out)
-        self.run_bg(task_semi, on_done=self._pipeline_done, btn=self.track_semi_btn)
+        self.run_bg(task_semi, on_done=self._pipeline_done, btn=self.track_semi_btn, exclusive=True)
 
     def _stop_semi(self):
         """반자동 순위 중지 요청 — 현재 키워드까지만 처리하고 멈춤(진행분은 저장됨)."""
