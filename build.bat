@@ -35,9 +35,9 @@ echo [4.5/5] 노트북 통계 마스터를 씨앗으로 동봉(새 PC **첫 설�
 if exist "%~dp0output\쿠팡데이타분석_통계.xlsx" (
   if not exist "dist\coupang-analytics\_씨앗" mkdir "dist\coupang-analytics\_씨앗"
   copy /Y "%~dp0output\쿠팡데이타분석_통계.xlsx" "dist\coupang-analytics\_씨앗\" >nul
-  echo   [확인] 통계 마스터 씨앗 동봉(노트북 것) — 새 PC가 구글시트 복원 없이 이 마스터로 시작
+  echo   [확인] 통계 마스터 씨앗 동봉^(노트북 것^) — 새 PC가 구글시트 복원 없이 이 마스터로 시작
 ) else (
-  echo   [건너뜀] 노트북에 마스터 없음 — 씨앗 없이 배포(새 PC는 구글시트 복원 또는 수동 복사)
+  echo   [건너뜀] 노트북에 마스터 없음 — 씨앗 없이 배포^(새 PC는 구글시트 복원 또는 수동 복사^)
 )
 rem ⚠ 순위 크롬 프로필(data\chrome-pipeline)은 캐시 포함 수백MB라 zip 동봉 안 함(신뢰쿠키 교차이전도 제한적).
 rem    운용 PC는 자기 data 폴더(휴지통 복원 등)를 쓰거나, 야간 실행으로 프로필이 스스로 warm 된다.
