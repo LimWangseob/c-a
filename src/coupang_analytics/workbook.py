@@ -153,23 +153,43 @@ def _vids_from_cell(v) -> list[str]:
     return [x.strip() for x in tail.split("/") if x.strip()]
 
 
+def _nearest_year(month: int, day: int):
+    """년도 없는 '월.일' → **오늘과 가장 가까운 연도**의 date(연말/연초 경계 보정).
+
+    1월에 만난 '12.30'을 올해 12월로 오인하면 정규화가 first~last(1월~12월) 사이 ~363칸을 만들어
+    폭발한다. 오늘 기준 작년/올해/내년 중 |날짜-오늘|이 최소인 해를 고른다(2/29 등 그 해에 없는 날은 건너뜀)."""
+    today = _date.today()
+    best = None
+    for y in (today.year - 1, today.year, today.year + 1):
+        try:
+            cand = _date(y, month, day)
+        except ValueError:   # 그 해에 없는 날(예: 평년 2/29)
+            continue
+        if best is None or abs((cand - today).days) < abs((best - today).days):
+            best = cand
+    return best
+
+
 def _parse_date(s):
-    """날짜 문자열 → date(못 읽으면 None). YYYY-MM-DD·YY.MM.DD·**MM.DD(년도 없음·올해)**·YYYY/MM/DD·MM/DD 등 허용.
+    """날짜 문자열 → date(못 읽으면 None). YYYY-MM-DD·YY.MM.DD·**MM.DD(년도 없음)**·YYYY/MM/DD·MM/DD 등 허용.
 
     ⚠ 일자 컬럼 라벨은 2026-09-16부터 **년도 없는 '월.일'(예 09.16)** 로 적는다(사용자 요청·당분간).
-    '월.일'은 올해로 해석(연말/연초 경계는 당분간 미고려 — 필요 시 년도 복원)."""
+    '월.일'은 **오늘과 가장 가까운 연도**로 해석한다(`_nearest_year` — 연말/연초 경계 보정)."""
     s = _norm(s)
     if not s:
         return None
     if isinstance(s, (_dt, _date)):
         return s.date() if isinstance(s, _dt) else s
-    no_year = ("%m/%d", "%m-%d", "%m.%d")   # 년도 없는 표기 → 올해로 보정
+    no_year = ("%m/%d", "%m-%d", "%m.%d")   # 년도 없는 표기 → 오늘과 가장 가까운 해로 보정
     for fmt in ("%Y-%m-%d", "%Y.%m.%d", "%y.%m.%d", "%Y/%m/%d", "%y/%m/%d", "%m.%d", "%m/%d", "%m-%d"):
         try:
             d = _dt.strptime(s, fmt).date()
-            return d.replace(year=_date.today().year) if fmt in no_year else d
         except ValueError:
             continue
+        if fmt in no_year:
+            ny = _nearest_year(d.month, d.day)
+            return ny if ny is not None else d
+        return d
     return None
 
 

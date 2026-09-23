@@ -405,6 +405,32 @@ def t1_ledger_dedup():
     _ok(f"같은 상품명 3줄(공백차이 포함) → 1개만 추적 {names}·중복 경고 남김")
 
 
+def t1_date_columns():
+    print("[14] 일자 컬럼 — 연말/연초 경계 보정 (workbook _parse_date nearest-year·정규화 폭발 방지)")
+    import coupang_analytics.workbook as wbmod
+    from datetime import date as _rdate
+
+    class _FakeJan(_rdate):
+        @classmethod
+        def today(cls):
+            return cls(2027, 1, 5)   # '오늘'을 1월로 고정(연초)
+
+    orig = wbmod._date
+    wbmod._date = _FakeJan
+    try:
+        wb = OutputWorkbook.empty()
+        wb.ensure_product_block("경계", "상품", config.KIND_CONTRACT, ["kw"])
+        wb.set_keyword_rank("경계", "상품", "kw", "12.30", 3)   # 작년 12/30 → 오늘(1/5)과 가까운 연도=2026
+        wb.set_keyword_rank("경계", "상품", "kw", "01.02", 4)   # 올해 1/2 → 2027
+        wb.normalize_date_columns()
+        cols = wb._date_col.get("경계", {})
+    finally:
+        wbmod._date = orig
+    # 12/30~1/2 = 연속 4일. 버그(월.일=무조건 올해)면 1/2~12/30 = 363칸 폭발.
+    assert len(cols) <= 8, f"연말/연초 경계에서 일자 컬럼 폭발: {len(cols)}개(기대 ≤8)"
+    _ok(f"연말/연초 경계: 12월+1월 라벨 → 일자 컬럼 {len(cols)}개(폭발 없음)")
+
+
 def t1_delete_account():
     print("[10] 삭제된 계정 완전 제거 (workbook.delete_account — 시트+메타 삭제)")
     wb = OutputWorkbook.empty()
@@ -559,6 +585,7 @@ def main():
     t1_product_match_precision()
     t1_vid_source_option_split()
     t1_ledger_dedup()
+    t1_date_columns()
     t2_keywords(store, il)
     print("=" * 60)
     print("  [완료] 로그인 불필요 부분 실증 종료")
