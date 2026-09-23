@@ -745,11 +745,12 @@ class OutputWorkbook:
         if any(d is None for d in parsed.values()):
             log(f"  [날짜정렬] {biz}: 파싱 불가 라벨 있음 → 건너뜀 {sorted(cols)}")
             return None
-        # 날짜→기존 열(첫 등장). 라벨을 '월.일'로 재포맷하므로 값은 **날짜**로 스냅샷해 매칭한다.
-        date2col: dict = {}
+        # 날짜→기존 열 **전부**(같은 날이 옛/신 라벨 2컬럼으로 공존 가능). 라벨을 '월.일'로 재포맷하므로
+        # 값은 **날짜**로 스냅샷해 매칭한다. 컬럼은 오름차순(기록 순 — 뒤가 최신)으로 모은다.
+        date2cols: dict = {}
         for lbl, dd in sorted(parsed.items(), key=lambda kv: kv[1]):
-            date2col.setdefault(dd, cols[lbl])
-        days = sorted(date2col)
+            date2cols.setdefault(dd, []).append(cols[lbl])
+        days = sorted(date2cols)
         first, last = days[0], days[-1]
         target_days: list = []
         d = first
@@ -763,22 +764,26 @@ class OutputWorkbook:
         if target == old_labels_sorted \
            and old_cols_sorted == list(range(_FIRST_DATE, _FIRST_DATE + len(old_cols_sorted))):
             return []
-        self._rebuild_date_grid(biz, date2col, target_days, set(cols.values()))
+        self._rebuild_date_grid(biz, date2cols, target_days, set(cols.values()))
         old_days = set(days)
         return [dd.strftime("%m.%d") for dd in target_days if dd not in old_days]
 
-    def _rebuild_date_grid(self, biz: str, date2col: dict, target_days: list, used_cols: set) -> None:
+    def _rebuild_date_grid(self, biz: str, date2cols: dict, target_days: list, used_cols: set) -> None:
         """일자 컬럼 물리 재기록 — 기존 값을 (행,날짜)로 스냅샷 → 일자 영역 비움 → 첫날~마지막날 연속·
-        정렬 순서로 H열부터 재기록(헤더=라벨, 값=날짜 매칭 이식·없으면 공란). _date_col[biz] 갱신."""
+        정렬 순서로 H열부터 재기록(헤더=라벨, 값=날짜 매칭 이식·없으면 공란). _date_col[biz] 갱신.
+
+        같은 날짜가 두 컬럼(옛/신 라벨)으로 있으면 **가장 최근(높은 컬럼) 비어있지 않은 값**을 보존한다
+        (첫 컬럼만 보던 옛 로직은 오늘 새로 쓴 둘째 컬럼 값을 유실했음)."""
         ws = self.wb[biz]
         max_row = ws.max_row
-        # 스냅샷: 기존 일자 컬럼의 모든 셀 값을 (행, 날짜)로 보존
+        # 스냅샷: 같은 날짜의 여러 컬럼 중 오름차순으로 훑어 마지막(최신) 비어있지 않은 값을 (행,날짜)로 보존
         snap: dict[tuple[int, object], object] = {}
         for r in range(1, max_row + 1):
-            for dd, c in date2col.items():
-                v = ws.cell(r, c).value
-                if v not in (None, ""):
-                    snap[(r, dd)] = v
+            for dd, cs in date2cols.items():
+                for c in sorted(cs):
+                    v = ws.cell(r, c).value
+                    if v not in (None, ""):
+                        snap[(r, dd)] = v
         header_rows = set(self._date_rows.get(biz, []))
         # 기존 일자 영역 전부 비움(A~G= _FIRST_DATE 미만은 불변)
         for r in range(1, max_row + 1):

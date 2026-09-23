@@ -430,6 +430,21 @@ def t1_date_columns():
     assert len(cols) <= 8, f"연말/연초 경계에서 일자 컬럼 폭발: {len(cols)}개(기대 ≤8)"
     _ok(f"연말/연초 경계: 12월+1월 라벨 → 일자 컬럼 {len(cols)}개(폭발 없음)")
 
+    # (B) 같은 날짜가 옛 라벨('26.09.14')+신 라벨('09.14') 두 컬럼으로 공존 → 정규화가 하나로
+    #     합칠 때 나중(오늘 새로 쓴) 값이 유실되면 안 됨(버그: 첫 컬럼만 스냅샷).
+    wb2 = OutputWorkbook.empty()
+    wb2.ensure_product_block("중복", "상품", config.KIND_CONTRACT, ["kw"])
+    wb2.set_keyword_rank("중복", "상품", "kw", "26.09.14", 3)   # 옛 라벨 컬럼(과거값 3위)
+    wb2.set_keyword_rank("중복", "상품", "kw", "09.14", 5)      # 신 라벨 컬럼(오늘 새로 쓴 5위)
+    assert len(wb2._date_col.get("중복", {})) == 2, "같은 날 두 라벨이 두 컬럼으로 안 만들어짐(전제 실패)"
+    wb2.normalize_date_columns()
+    cols2 = wb2._date_col.get("중복", {})
+    assert list(cols2) == ["09.14"], f"같은 날 두 컬럼이 하나로 안 합쳐짐: {list(cols2)}"
+    row = wb2._kw_row[("중복", "상품", "kw")]
+    val = wb2.wb["중복"].cell(row, cols2["09.14"]).value
+    assert val == "5위", f"합칠 때 오늘 값(5위) 유실 — 남은 값: {val!r}"
+    _ok("같은 날 옛/신 라벨 2컬럼 → 하나로 합치되 최신(오늘) 값 보존")
+
 
 def t1_delete_account():
     print("[10] 삭제된 계정 완전 제거 (workbook.delete_account — 시트+메타 삭제)")
