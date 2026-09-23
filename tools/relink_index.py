@@ -30,9 +30,26 @@ from coupang_analytics import appconfig, config, gsheet_api, gsheet_index  # noq
 from coupang_analytics.workbook import OutputWorkbook  # noqa: E402
 
 
+def _shared_setting(group: str, name: str) -> str:
+    """app_qt(QSettings)가 저장한 값을 config.json 우선·레지스트리 폴백으로 읽는다(ui/app.py 와 동일 방식).
+
+    개발/운용 PC 모두 config.json 이 없어도 레지스트리(HKCU\\Software\\coupang-analytics\\ui\\group)에서 읽힌다."""
+    v = appconfig.get(f"{group}/{name}", "")
+    if v:
+        return v
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            rf"Software\coupang-analytics\ui\{group}") as k:
+            val, _ = winreg.QueryValueEx(k, name)
+        return str(val).strip() if val else ""
+    except (ImportError, OSError):
+        return ""
+
+
 def main() -> int:
     args = sys.argv[1:]
-    output_url = args[0] if len(args) >= 1 else appconfig.get("gsheet/output_url", "")
+    output_url = args[0] if len(args) >= 1 else _shared_setting("gsheet", "output_url")
     master = Path(args[1]) if len(args) >= 2 else Path("output") / f"{config.OUTPUT_FILE_PREFIX}_통계.xlsx"
 
     if not output_url:
