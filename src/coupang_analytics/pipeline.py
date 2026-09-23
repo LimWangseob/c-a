@@ -802,6 +802,24 @@ def _short(name: str, n: int = 30) -> str:
     return s if len(s) <= n else s[:n] + "…"
 
 
+def _ilog(log, tag: str, vids, name: str = "", msg: str = "", *, kind: str = "") -> None:
+    """상품/옵션 단위 로그 **공통 포맷**(진행상황·디버깅용) — vid 를 **항상** 포함한다.
+
+    형식: `  [{tag}] vid=.. [{상품명}][ [{kind}]][ {msg}]`. `grep "vid=<값>"` 한 번으로 그 상품의
+    전 과정(발견→지표→재고→키워드→순위→오류)을 이어서 볼 수 있게 태그·vid 를 앞에 고정한다.
+    name/kind/msg 는 있을 때만 붙는다. log 가 None 이면 무시(호출부 가드 불필요)."""
+    if log is None:
+        return
+    parts = [f"[{tag}]", _vtag(vids)]
+    if name:
+        parts.append(_short(name))
+    if kind:
+        parts.append(f"[{kind}]")
+    if msg:
+        parts.append(msg)
+    log("  " + " ".join(parts))
+
+
 def _fill_product_metrics(wb, biz, pname, vids, kind, metrics, inv_by_vid, date_iso, log=None) -> None:
     """**옵션(블록) 단위** 판매지표 기록 + **vid 기준 데이터 로그**(오류·진행 추적).
 
@@ -820,18 +838,25 @@ def _fill_product_metrics(wb, biz, pname, vids, kind, metrics, inv_by_vid, date_
     wb.set_product_metric(biz, pname, config.M_VISITORS, date_iso, visitors)
     wb.set_product_metric(biz, pname, config.M_VIEWS, date_iso, views)
     inv_txt = ""
+    inv_missing = False
     if kind in config.KINDS_WITH_INVENTORY:   # 재고현황 = 로켓그로스 + 둘다(로켓그로스 파트 있음)
-        vals = [inv_by_vid[oid] for oid in vids if inv_by_vid and oid in inv_by_vid]
-        if vals:
-            wb.set_product_metric(biz, pname, config.M_INVENTORY, date_iso, sum(vals))
-            inv_txt = f"·재고 {sum(vals)}"
+        matched = [oid for oid in vids if inv_by_vid and oid in inv_by_vid]
+        if matched:
+            qty = sum(inv_by_vid[oid] for oid in matched)
+            wb.set_product_metric(biz, pname, config.M_INVENTORY, date_iso, qty)   # 0 도 기록(재고 0)
+            inv_txt = f"·재고 {qty}"
         else:
-            inv_txt = "·재고 없음(vid 재고맵에 없음)"   # 로켓그로스인데 재고 조회 안 됨 → 진단 단서
-    if log:
-        no_metric = [v for v in vids if v not in metrics]   # 당일 지표가 없는 vid(판매 0·미노출 등)
-        warn = f" ⚠지표없는vid {no_metric}" if no_metric else ""
-        log(f"    [지표] {_vtag(vids)} {_short(pname)} [{kind}] "
-            f"노출 {views}·판매 {sales}·방문 {visitors}{inv_txt}{warn}")
+            inv_missing = True   # 로켓그로스인데 재고 API 응답에 이 블록 vid 가 하나도 없음 = vid 잘못 매칭
+    no_metric = [v for v in vids if v not in metrics]   # 당일 지표가 없는 vid(판매 0·미노출 등)
+    _ilog(log, "지표", vids, pname,
+          f"노출 {views}·판매 {sales}·방문 {visitors}{inv_txt}"
+          + (f" ⚠지표없는vid {no_metric}" if no_metric else ""), kind=kind)
+    if inv_missing:
+        # ⛔ 로켓그로스/둘다는 재고가 **반드시 존재**(재고 없는 로켓그로스는 불가) → 공란은 '모름'이 아니라
+        # **vid 를 잘못 잡은 오류**(재고칸에 조용히 공란으로 묻힘). 로그로만 명시(결과파일은 안 건드림).
+        _ilog(log, "재고오류", vids, pname,
+              f"로켓그로스인데 재고맵({len(inv_by_vid or {})}vid)에 이 블록 vid 없음 → 재고 공란"
+              f"(vid 매칭 오류 의심·상품조회 옵션 vid ≠ 재고 API vid)", kind=kind)
 
 
 def _log_diagnose(product, track_info, ai_key, log, wb=None, biz=None, roles=None, pname=None) -> None:
@@ -917,11 +942,11 @@ def _frozen_keywords(pctx: _ProcCtx, biz: str, pname: str, base: str, kind: str,
             for t in add:
                 wb.set_keyword_search(biz, pname, t.keyword, t.volume)
             keywords += [t.keyword for t in add]
-            log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → 동결 {existing} + 발굴 {[t.keyword for t in add]}")
+            _ilog(log, "키워드", opt_vids, title, f"→ 동결 {existing} + 발굴 {[t.keyword for t in add]}")
         else:
-            log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → (동결) {keywords}")
+            _ilog(log, "키워드", opt_vids, title, f"→ (동결) {keywords}")
     else:
-        log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → (동결) {keywords}")
+        _ilog(log, "키워드", opt_vids, title, f"→ (동결) {keywords}")
     _fill_frozen_search_volumes(wb, biz, pname, keywords, naver, log)  # 검색량 공란만 네이버로(fix ②)
     todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date_iso)]
     measured = measure(todo, _cap=cap) if (browser is not None and todo) else {}
@@ -955,11 +980,12 @@ def _resolve_keywords(pctx: _ProcCtx, biz: str, pname: str, base: str, kind: str
         ranks = {t.keyword: t.exposure_best for t in tracks}          # 선정단계 순위 재사용
         track_info = [(t.keyword, t.volume, t.comp_idx, t.exposure_best) for t in tracks]
         roles = {t.keyword: t.role for t in tracks if t.role}         # ④ 역할(REP/SALES/GROWTH/DEFENSE)
-        log(f"  [키워드] {_vtag(opt_vids)} {_short(title)} → {[f'{t.keyword}({t.role})' if t.role else t.keyword for t in tracks]}")
+        _ilog(log, "키워드", opt_vids, title,
+              f"→ {[f'{t.keyword}({t.role})' if t.role else t.keyword for t in tracks]}")
         return keywords, ranks, track_info, roles
     except Exception as exc:   # 이 상품만 건너뜀(판매지표·재고는 호출부가 계속 기록). 계정은 완주.
-        log(f"  [오류] {_vtag(opt_vids)} {_short(title)} 키워드 처리 실패(건너뜀, 판매지표는 기록) — "
-            f"{exc.__class__.__name__}: {str(exc)[:80]}")
+        _ilog(log, "오류", opt_vids, title,
+              f"키워드 처리 실패(건너뜀, 판매지표는 기록) — {exc.__class__.__name__}: {str(exc)[:80]}")
         wb.ensure_product_block(biz, pname, kind, wb.product_keywords(biz, pname), registered=base)
         return [], {}, [], {}
 
@@ -1006,11 +1032,11 @@ def _process_option(pctx: _ProcCtx, biz: str, product, base: str, kind: str, tit
             if ranks.get(kw) is None and blocked:  # 차단으로 못 잰 값 → 공란(재측정 대상)
                 continue
             wb.set_keyword_rank(biz, pname, kw, date_iso, ranks.get(kw))
-            log(f"  [순위] {_vtag(opt_vids)} '{kw}': {rank_label(ranks.get(kw))}")
+            _ilog(log, "순위", opt_vids, "", f"'{kw}': {rank_label(ranks.get(kw))}")
         # ⚠ set_display_name(노출명 교체) 중단 — 블록 이름을 등록상품명+옵션라벨로 고정(옵션 정체성 안정).
         mi = cap.get("제품")                        # 노출명은 로그로만(블록명은 등록상품명 유지)
         if mi is not None and getattr(mi, "name", ""):
-            log(f"  [노출명] {_vtag(opt_vids)} 검색결과 노출명 = {_short(mi.name, 40)} (블록명은 등록상품명 고정)")
+            _ilog(log, "노출명", opt_vids, "", f"검색결과 노출명 = {_short(mi.name, 40)} (블록명은 등록상품명 고정)")
     wb.set_product_vids(biz, pname, opt_vids)          # 대표 옵션 vid 저장(③은 sibling_vids 합집합으로 매칭)
     _fill_product_metrics(wb, biz, pname, opt_vids, kind, pctx.metrics, pctx.inv_by_vid, date_iso, log=log)
     _log_diagnose(product, track_info, ai_key, log, wb=wb, biz=biz, roles=roles, pname=pname)

@@ -464,6 +464,29 @@ def t1_date_columns():
     _ok("최신 날짜=맨 왼쪽(H열)·오래된=오른쪽(내림차순)·latest_date/product_latest_date 날짜기준")
 
 
+def t1_inventory_missing_error():
+    print("[15] 재고 공란=오류 로그 (로켓그로스인데 재고맵에 vid 없음 → [재고오류]·vid 필수·로그전용)")
+    from coupang_analytics.pipeline import _fill_product_metrics
+    wb = OutputWorkbook.empty()
+    wb.ensure_product_block("재고샵", "로켓상품", config.KIND_CONTRACT, ["kw"])
+    logs: list[str] = []
+    # (A) 로켓그로스인데 재고맵 비어 있음(vid 잘못 매칭) → [재고오류](vid 포함) 로그
+    _fill_product_metrics(wb, "재고샵", "로켓상품", ["v1"], config.KIND_CONTRACT, {}, {}, "09.20", log=logs.append)
+    assert any("[재고오류]" in m and "vid=v1" in m for m in logs), f"재고오류 로그(vid 포함) 없음: {logs}"
+    # (B) 재고맵에 vid 있음 → 재고 기록·[재고오류] 안 뜸
+    logs.clear()
+    _fill_product_metrics(wb, "재고샵", "로켓상품", ["v1"], config.KIND_CONTRACT, {}, {"v1": 5}, "09.21", log=logs.append)
+    assert not any("[재고오류]" in m for m in logs), f"정상 재고인데 재고오류 뜸: {logs}"
+    assert any("재고 5" in m for m in logs), f"재고 기록 로그 없음: {logs}"
+    # (C) 판매자배송(개인)=재고 개념 없음 → [재고오류] 안 뜸(오탐 방지)
+    wb.ensure_product_block("재고샵", "개인상품", config.KIND_PERSONAL, ["kw"])
+    logs.clear()
+    _fill_product_metrics(wb, "재고샵", "개인상품", ["v2"], config.KIND_PERSONAL, {}, {}, "09.20", log=logs.append)
+    assert not any("[재고오류]" in m for m in logs), f"개인상품에 재고오류 오탐: {logs}"
+    assert all("vid=" in m for m in logs), f"항목 로그에 vid 누락(공통함수 _ilog): {logs}"
+    _ok("로켓그로스 재고 공란→[재고오류](vid 포함)·정상재고/개인상품엔 안 뜸·항목로그 vid 필수")
+
+
 def t1_delete_account():
     print("[10] 삭제된 계정 완전 제거 (workbook.delete_account — 시트+메타 삭제)")
     wb = OutputWorkbook.empty()
@@ -619,6 +642,7 @@ def main():
     t1_vid_source_option_split()
     t1_ledger_dedup()
     t1_date_columns()
+    t1_inventory_missing_error()
     t2_keywords(store, il)
     print("=" * 60)
     print("  [완료] 로그인 불필요 부분 실증 종료")
