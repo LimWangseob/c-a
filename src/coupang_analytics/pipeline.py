@@ -709,12 +709,53 @@ def _discover_products(b, a: Account, date_from, date_to, log):
     return products, tracked, metrics, inventory, sale_status
 
 
-def _log_vid_compare(a: Account, listings, inventory, log) -> None:
-    """진단(config.DIAG_VID_LOG) — **상품조회 옵션 vid ↔ 재고 API vid 집합 대조**를 실행 로그에 남긴다.
+def _diag_listing_lines(tag, listings, inventory, log) -> None:
+    """[A] 상품조회 옵션별 상세 — vid·**vInvId(등록상품ID·리스팅)**·종류·valid·상태·재고·이름.
 
-    재고 공란 원인(묶음/수량 변형 vid가 재고 API에 없는지) 확정용. [A]옵션별 상세(vid·로켓그로스/판매자·
-    상태·재고유무) [B]재고 API 전체 vid [C]집합대조(둘다·RFM인데재고없음=공란원인·재고인데상품조회없음).
+    vInvId 를 넣어 어느 옵션이 어느 리스팅(등록상품) 소속인지 상품 단위로 묶을 수 있게 한다(추정 제거)."""
+    log(f"{tag}[A] 상품조회 옵션 (vid|vInvId|종류|valid|상태|재고|이름):")
+    for lst in listings:
+        for o in lst.options:
+            vid = str(o.vendor_item_id or "")
+            kind = "로켓그로스" if o.registration_type == "RFM" else f"판매자({o.registration_type})"
+            mark = f"재고{inventory.get(vid)}" if vid in inventory else "재고없음"
+            log(f"{tag}[A] {vid}|{lst.vendor_inventory_id}|{kind}|{o.valid}|{lst.product_status}|{mark}|"
+                f"{(o.item_name or lst.product_name)[:28]}")
+
+
+def _diag_inventory_lines(tag, inv_diag, log) -> None:
+    """[B] 재고 API 리치덤프 — vid마다 productId·vendorInventoryId·virtualBundleType·hasVirtualBundles·재고·중지·이름."""
+    log(f"{tag}[B] 재고 API 리치({len(inv_diag)}) (vid|pid|vInvId|번들|hasVB|재고|중지|이름):")
+    for vid, d in sorted(inv_diag.items()):
+        log(f"{tag}[B] {vid}|pid={d['productId']}|vInv={d['vendorInventoryId']}|{d['virtualBundleType']}"
+            f"|hasVB={d['hasVirtualBundles']}|재고{d['qty']}|susp={d['isSaleSuspended']}|{d['name'][:22]}")
+
+
+def _diag_pid_groups(tag, inv_diag, log) -> None:
+    """[D] 재고 API 를 **productId(노출상품ID)** 로 묶어 같은 상품의 vid·재고 분포를 본다.
+
+    "같은 실제 상품이 여러 vid"(중복 리스팅·가상번들)를 상품 단위로 확정 — 다중 vid 상품만 나열."""
+    groups: dict[str, list] = {}
+    for vid, d in inv_diag.items():
+        groups.setdefault(d["productId"] or "(pid없음)", []).append((vid, d))
+    multi = {pid: vs for pid, vs in groups.items() if len(vs) > 1}
+    log(f"{tag}[D] 재고 productId 그룹: 총 {len(groups)}상품 · 다중vid {len(multi)}상품")
+    for pid, vs in sorted(multi.items(), key=lambda kv: -len(kv[1])):
+        parts = []
+        for vid, d in vs:
+            bundle = "" if d["virtualBundleType"] in ("", "NOT_A_VIRTUAL_BUNDLE") else "·번들"
+            parts.append(f"{vid}(재고{d['qty']}·vInv{d['vendorInventoryId']}{bundle})")
+        log(f"{tag}[D] pid={pid} vid{len(vs)}개 [{vs[0][1]['name'][:22]}]: {', '.join(parts)}")
+
+
+def _log_vid_compare(a: Account, listings, inventory, log) -> None:
+    """진단(config.DIAG_VID_LOG) — **상품조회 옵션 vid ↔ 재고 API 식별자 대조**를 실행 로그에 남긴다.
+
+    재고 공란 원인(같은 실제 상품이 여러 vid=중복 리스팅·가상번들) 확정용. [A]상품조회 옵션별(+vInvId)
+    [B]재고 API 리치덤프(pid·vInvId·번들여부·재고) [C]집합대조 [D]productId 그룹핑(중복/번들 구조).
     분석 끝나면 config.DIAG_VID_LOG=False 로 되돌린다(로그 비대 방지)."""
+    from .collector import last_inventory_diag
+    inv_diag = {k: v for k, v in last_inventory_diag().items() if k in inventory}  # 이 계정 재고분만(스테일 방지)
     rfm_vids = {str(o.vendor_item_id) for lst in listings for o in lst.options
                 if o.registration_type == "RFM"}
     normal_vids = {str(o.vendor_item_id) for lst in listings for o in lst.options
@@ -724,19 +765,13 @@ def _log_vid_compare(a: Account, listings, inventory, log) -> None:
     tag = f"[vid대조 {a.account_id}/{a.label}]"
     log(f"{tag} 상품조회 RFM {len(rfm_vids)}·NORMAL {len(normal_vids)} · 재고 {len(inv_vids)}"
         f" → 둘다 {len(both)}·RFM인데재고없음 {len(rfm_only)}·재고인데RFM없음 {len(inv_only)}")
-    log(f"{tag}[A] 옵션별 (vid|종류|valid|상품상태|재고|이름):")
-    for lst in listings:
-        for o in lst.options:
-            vid = str(o.vendor_item_id or "")
-            kind = "로켓그로스" if o.registration_type == "RFM" else f"판매자({o.registration_type})"
-            mark = f"재고{inventory.get(vid)}" if vid in inv_vids else "재고없음"
-            log(f"{tag}[A] vid={vid}|{kind}|{o.valid}|{lst.product_status}|{mark}|"
-                f"{(o.item_name or lst.product_name)[:30]}")
-    log(f"{tag}[B] 재고 API 전체 vid({len(inv_vids)}): {sorted(inv_vids)}")
+    _diag_listing_lines(tag, listings, inventory, log)
+    _diag_inventory_lines(tag, inv_diag, log)
     if rfm_only:
         log(f"{tag}[C] RFM인데 재고없음(공란원인 {len(rfm_only)}): {sorted(rfm_only)}")
     if inv_only:
         log(f"{tag}[C] 재고엔 있는데 상품조회 RFM에 없음({len(inv_only)}): {sorted(inv_only)}")
+    _diag_pid_groups(tag, inv_diag, log)
 
 
 def _run_discover(b, a: Account, date_from, date_to, has_vendor: bool, log):
