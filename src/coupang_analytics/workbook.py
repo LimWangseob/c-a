@@ -45,6 +45,7 @@ class _StyleCtx:
     bold: Font
     title_font: Font
     f_prod: PatternFill
+    f_prod2: PatternFill          # 상품군 교대 배경(같은 등록상품명=한 군, 인접 군을 두 색으로 구분)
     f_label: PatternFill
     f_kwhead: PatternFill
     f_kind: PatternFill
@@ -1099,7 +1100,8 @@ class OutputWorkbook:
     # 사용자 `셀독 판매 데이터_서식.xlsx`(한컴 셀) 시각 서식을 재현한다. 행 스캔 방식이라
     # 계정(시트)·상품(블록)이 늘어도 자동 적용된다.
     _FN = "맑은 고딕"
-    _FILL_PROD = "FBE2D5"     # 상품명(살구)
+    _FILL_PROD = "FBE2D5"     # 상품명(살구) — 상품군 교대색 A
+    _FILL_PROD2 = "E2EFDA"    # 상품명(민트) — 상품군 교대색 B(같은 등록상품명=한 군, 인접 군을 시각 구분)
     _FILL_LABEL = "D9E9FA"    # G열 지표 라벨/순위(연파랑)
     _FILL_KWHEAD = "E8E8E8"   # 키워드 소헤더행(회색)
     _FILL_KIND = "FFFFFF"     # 구분(계약/개인)·사업자명(흰)
@@ -1115,6 +1117,7 @@ class OutputWorkbook:
             bold=Font(name=self._FN, size=11, bold=True),
             title_font=Font(name=self._FN, size=14, bold=True),
             f_prod=PatternFill("solid", fgColor=self._FILL_PROD),
+            f_prod2=PatternFill("solid", fgColor=self._FILL_PROD2),
             f_label=PatternFill("solid", fgColor=self._FILL_LABEL),
             f_kwhead=PatternFill("solid", fgColor=self._FILL_KWHEAD),
             f_kind=PatternFill("solid", fgColor=self._FILL_KIND),
@@ -1177,11 +1180,19 @@ class OutputWorkbook:
         for hr in headers:
             _rnm = _key(ws.cell(hr, _COL_NAME).value)
             regs.append(self.registered_name(ws.title, _rnm) or _rnm)
+        # 상품군(등록상품명) 교대 배경색: 같은 등록명 변형/옵션 = 한 군(연속) → 인접 상품군을 두 색으로
+        # 교대해 시각적으로 구분(소유자 2026-09-23). 그룹 경계 판정은 _style_block_edges 와 동일(regs 연속).
+        g = 0
         for i, hr in enumerate(headers):
-            self._style_block(ws, sty, i, hr, headers, regs, maxc)
+            if i > 0 and regs[i] != regs[i - 1]:
+                g += 1
+            prod_fill = sty.f_prod if g % 2 == 0 else sty.f_prod2
+            self._style_block(ws, sty, i, hr, headers, regs, maxc, prod_fill)
 
-    def _style_block(self, ws, sty: _StyleCtx, i: int, hr: int, headers, regs, maxc: int) -> None:
-        """상품 블록 1개 서식 — 이름 렌더·마케팅 배경·지표/키워드 색·판매중지 불일치 경고·그룹 경계·병합."""
+    def _style_block(self, ws, sty: _StyleCtx, i: int, hr: int, headers, regs, maxc: int,
+                     prod_fill: PatternFill) -> None:
+        """상품 블록 1개 서식 — 이름 렌더·마케팅 배경·지표/키워드 색·판매중지 불일치 경고·그룹 경계·병합.
+        prod_fill = 이 블록의 상품군 배경색(같은 등록상품명끼리 같은 색, 인접 군은 교대)."""
         end = (headers[i + 1] - 2) if i + 1 < len(headers) else ws.max_row
         # 이름칸 렌더링(멱등): 헤더 C = 1줄 상품제목 + (보이지 않는 구분자) + 2줄 vendorItemId.
         # 키는 항상 구분자 앞부분이므로 _key 로 순수명 복원 후 vid 를 다시 붙여 표준화한다.
@@ -1195,7 +1206,7 @@ class OutputWorkbook:
         mcols = self._mkt_cols(ws, mstart, mend)
         kh = self._find_kw_head(ws, hr, end)   # 키워드 소헤더행(C='키워드')·없으면 None(2차 옵션 블록)
         m_end = (kh - 1) if kh else end
-        self._style_metric_rows(ws, sty, hr, m_end, mcols, maxc)
+        self._style_metric_rows(ws, sty, hr, m_end, mcols, maxc, prod_fill)
         if kh:
             self._style_keyword_rows(ws, sty, kh, end, mcols, maxc, is_disc, is_mkt)
             self._flag_sale_mismatch(ws, sty, kh, nm, is_disc)
@@ -1219,13 +1230,15 @@ class OutputWorkbook:
                 return r
         return None
 
-    def _style_metric_rows(self, ws, sty: _StyleCtx, hr: int, m_end: int, mcols: set, maxc: int) -> None:
-        """상품 지표블록: A:B 구분(살구=상품명색) · C:F 상품명(세로) · G 라벨 · H~ 값(마케팅기간 배경)."""
+    def _style_metric_rows(self, ws, sty: _StyleCtx, hr: int, m_end: int, mcols: set, maxc: int,
+                           prod_fill: PatternFill) -> None:
+        """상품 지표블록: A:B 구분(상품군색) · C:F 상품명(세로) · G 라벨 · H~ 값(마케팅기간 배경).
+        prod_fill = 이 상품군의 배경색(같은 등록상품명끼리 같은 색, 인접 군은 교대 — 시각적 구분)."""
         for r in range(hr, m_end + 1):
-            _sty_cell(ws, r, 1, sty, fill=sty.f_prod)
-            _sty_cell(ws, r, 2, sty, fill=sty.f_prod)
+            _sty_cell(ws, r, 1, sty, fill=prod_fill)
+            _sty_cell(ws, r, 2, sty, fill=prod_fill)
             for c in range(_COL_NAME, _COL_SEARCH + 1):
-                _sty_cell(ws, r, c, sty, fill=sty.f_prod, fnt=sty.bold, align=sty.wrap)
+                _sty_cell(ws, r, c, sty, fill=prod_fill, fnt=sty.bold, align=sty.wrap)
             _sty_cell(ws, r, _COL_METRIC, sty, fill=sty.f_label)
             for c in range(_FIRST_DATE, maxc + 1):
                 _sty_cell(ws, r, c, sty, num=True, fill=(sty.mkt_fill if c in mcols else None))

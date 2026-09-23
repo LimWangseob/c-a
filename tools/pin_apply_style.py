@@ -190,6 +190,22 @@ def pin_sale_status_accurate():
     _check(wb.rank_suppressed(BIZ, "임시상품"), "임시저장 → 순위 제외(rank_suppressed)")
 
 
+def pin_group_fill_alternation():
+    print("[핀 S8] 상품군 배경색 교대 — 같은 등록명(옵션)=같은 색·인접 상품군=다른 색")
+    wb = _build()
+    wb.apply_style()
+    ws = wb.wb[BIZ]
+    c_s = _fill(ws, _hdr_row(ws, "상품S"), 1)          # 군0
+    c_beige = _fill(ws, _hdr_row(ws, "타프 (베이지)"), 1)   # 군1
+    c_gray = _fill(ws, _hdr_row(ws, "타프 (그레이)"), 1)    # 군1(같은 등록명)
+    c_disc = _fill(ws, _hdr_row(ws, "중지상품"), 1)      # 군2
+    _check(c_s.endswith(OutputWorkbook._FILL_PROD), "상품S(군0) 살구 FBE2D5")
+    _check(c_beige.endswith(OutputWorkbook._FILL_PROD2), "타프(군1) 민트 E2EFDA — 인접 군과 다른 색")
+    _check(c_beige == c_gray, "같은 등록명 옵션(베이지·그레이) = 같은 배경색(한 상품군)")
+    _check(c_disc.endswith(OutputWorkbook._FILL_PROD), "중지상품(군2) 다시 살구 — 직전(타프)과 다른 색")
+    _check(c_s != c_beige, "인접 상품군은 배경색이 다름(시각적 구분)")
+
+
 def main() -> int:
     print("=" * 60)
     print("  핀 테스트 — OutputWorkbook.apply_style 서식 출력")
@@ -200,6 +216,7 @@ def main() -> int:
     pin_sale_status_mismatch()
     pin_marketing_fill()
     pin_group_edges()
+    pin_group_fill_alternation()
     pin_trailing_trim()
     print("=" * 60)
     print("  [완료] 서식 핀 모두 통과")
