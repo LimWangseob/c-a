@@ -84,7 +84,68 @@ def main():
                 print(f"      vid={o.vendor_item_id} [{o.registration_type}/{o.valid}/{o.status}]"
                       f" {o.item_name!r} {o.sale_price}원 → {mark}")
         _diag_both_normal(listings)
+        _diag_vid_compare(acct, listings, props)
     print("\n== 끝 ==")
+
+
+def _diag_vid_compare(acct, listings, props) -> None:
+    """사용자 지정 대조 — 상품조회 전 옵션(vid·RFM/판매자·상태) vs 재고 API 전체 vid 집합 비교.
+
+    재고 공란 원인(묶음변형 vid가 재고 API에 없는지)을 **집합 대조**로 확정한다. 콘솔+파일 저장."""
+    lines: list[str] = []
+
+    def w(s=""):
+        lines.append(s)
+        print(s)
+
+    # A) 상품조회 전 옵션 flat 목록: vid | 종류 | valid | 상태 | 이름
+    w("\n" + "=" * 60)
+    w(f"[대조] 계정 {acct} — 상품조회 옵션 vs 재고 API vid")
+    w("=" * 60)
+    w("\n[A] 상품조회 전 옵션 (vid | 종류 | valid | 상품상태 | 이름):")
+    prod_rfm_vids: set[str] = set()
+    prod_normal_vids: set[str] = set()
+    for L in listings:
+        for o in L.options:
+            vid = str(o.vendor_item_id or "")
+            kind = "로켓그로스(RFM)" if o.registration_type == "RFM" else f"판매자배송({o.registration_type})"
+            if o.registration_type == "RFM":
+                prod_rfm_vids.add(vid)
+            else:
+                prod_normal_vids.add(vid)
+            w(f"  vid={vid} | {kind} | {o.valid} | {L.product_status} | {(o.item_name or L.product_name)[:30]}")
+
+    # B) 재고 API 전체 vid
+    inv_vids = {str(p.get("vendorItemId") or "") for p in props if p.get("vendorItemId")}
+    w(f"\n[B] 재고 API(VISIBLE) 전체 vid {len(inv_vids)}개:")
+    for v in sorted(inv_vids):
+        w(f"  {v}")
+
+    # C) 집합 대조
+    both = prod_rfm_vids & inv_vids
+    rfm_only = prod_rfm_vids - inv_vids       # 로켓그로스인데 재고 API에 없음 → 재고 공란 원인
+    inv_only = inv_vids - prod_rfm_vids       # 재고엔 있는데 상품조회 RFM에 없음
+    normal_in_inv = prod_normal_vids & inv_vids
+    w("\n[C] 집합 대조:")
+    w(f"  상품조회 RFM vid   = {len(prod_rfm_vids)}")
+    w(f"  상품조회 NORMAL vid= {len(prod_normal_vids)}")
+    w(f"  재고 API vid       = {len(inv_vids)}")
+    w(f"  ● 둘 다 있음(정상 매칭) = {len(both)}")
+    w(f"  ● RFM인데 재고 없음(=공란 원인) = {len(rfm_only)}")
+    for v in sorted(rfm_only)[:20]:
+        w(f"      {v}")
+    w(f"  ● 재고엔 있는데 상품조회 RFM에 없음 = {len(inv_only)}")
+    for v in sorted(inv_only)[:20]:
+        w(f"      {v}")
+    w(f"  ● (참고) NORMAL vid가 재고 API에 있음 = {len(normal_in_inv)}")
+
+    out = ROOT / "output" / f"diag_vid_compare_{acct}.txt"
+    try:
+        out.parent.mkdir(exist_ok=True)
+        out.write_text("\n".join(lines), encoding="utf-8")
+        print(f"\n[저장] {out}")
+    except OSError as e:
+        print(f"[저장 실패] {e}")
 
 
 def _norm_name(s):
