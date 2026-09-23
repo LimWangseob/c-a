@@ -109,6 +109,29 @@ def last_inventory_diag() -> dict[str, dict]:
     return _LAST_INVENTORY_DIAG
 
 
+# 데이터 분석용 **원본(raw) 응답 보관**(config.DIAG_VID_LOG) — 3개 API 응답 body 를 가공 없이 전 페이지
+# 그대로 담는다. pipeline 이 계정마다 reset_raw_dumps() 로 초기화 → 각 fetch 가 _raw_add 로 append →
+# _dump_raw 가 output/_raw/{계정}_{api}.json.gz 로 저장. 분석 끝나면 DIAG_VID_LOG=False 로 함께 끔.
+_LAST_RAW: dict[str, list[str]] = {"vendor_inventory": [], "inventory": [], "sales": []}
+
+
+def reset_raw_dumps() -> None:
+    """계정 시작 시 호출 — 원본 보관 버퍼를 비운다(계정 간 섞임·스테일 방지)."""
+    for k in _LAST_RAW:
+        _LAST_RAW[k] = []
+
+
+def last_raw_dumps() -> dict[str, list[str]]:
+    """진단용 — 직전 계정의 {api: [응답 body 원문(페이지별)]}. api=vendor_inventory|inventory|sales."""
+    return _LAST_RAW
+
+
+def _raw_add(key: str, body: str) -> None:
+    """DIAG_VID_LOG 일 때만 해당 API 응답 body 원문을 버퍼에 추가(가공 없음)."""
+    if config.DIAG_VID_LOG and body:
+        _LAST_RAW[key].append(body)
+
+
 class VendorInventoryFetchError(Exception):
     """상품조회/수정(vendor-inventory/search) 직접조회 실패(비200·success=false·파싱실패 등). vid 출처."""
 
@@ -256,6 +279,7 @@ def fetch_sales_details(page, date_from: str, date_to: str, log=None) -> dict[st
                    "sortBy": "GMV", "sortOrder": "DESC", "includeSoldVICount": True}
         res = page.evaluate(_FETCH_JS, payload)
         status, body = res.get("status"), res.get("body", "")
+        _raw_add("sales", body)   # 데이터 분석용 원본 보관(가공 없음, DIAG 일 때만)
         if status != 200:
             raise SalesFetchError(
                 f"vi-detail-search 응답 status={status}"
@@ -389,6 +413,7 @@ def _fetch_inventory_status(page, hidden_status: str, log) -> tuple[dict, dict, 
                    "rrqContext": {"source": "IHD", "eventType": "RRQ_SEEN", "metadata": "{}"}}
         res = page.evaluate(_INV_FETCH_JS, payload)
         st, body = res.get("status"), res.get("body", "")
+        _raw_add("inventory", body)   # 데이터 분석용 원본 보관(가공 없음, DIAG 일 때만)
         if st != 200:
             raise InventoryFetchError(
                 f"inventory search 응답 status={st}"
@@ -487,6 +512,7 @@ def fetch_vendor_inventory(page, log=None) -> list[VendorInventoryListing]:
         payload = dict(_VI_SEARCH_BASE, page=page_num)
         res = page.evaluate(_VI_FETCH_JS, payload)
         status, body = res.get("status"), res.get("body", "")
+        _raw_add("vendor_inventory", body)   # 데이터 분석용 원본 보관(가공 없음, DIAG 일 때만)
         if status != 200:
             raise VendorInventoryFetchError(
                 f"vendor-inventory/search 응답 status={status}"

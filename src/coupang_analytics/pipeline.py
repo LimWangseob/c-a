@@ -654,8 +654,10 @@ def _discover_products(b, a: Account, date_from, date_to, log):
     None(호출부가 (None,{},{},{}) 로 이 계정 건너뜀). 제어흐름·엣지케이스는 분해 전과 동일하다."""
     from .collector import (fetch_inventory, InventoryFetchError,
                             fetch_vendor_inventory, products_from_vendor_inventory,
-                            VendorInventoryFetchError, sale_status_by_vid)
+                            VendorInventoryFetchError, sale_status_by_vid, reset_raw_dumps)
     from .product_match import scope_to_ledger
+    if config.DIAG_VID_LOG:
+        reset_raw_dumps()   # 데이터 분석용 원본(raw) 버퍼를 이 계정용으로 초기화(계정 간 섞임 방지)
     # ── vid·옵션·상품 = 상품조회/수정(전 상품·전 옵션 나열, 당일 판매 0 상품도 포함). 폴백=판매분석 발견 ──
     # (vi-detail-search 는 당일 판매활동 상품만 잡혀 판매 0 상품 vid 누락 → 상품조회/수정으로 vid 출처 교체)
     vendor_products = None
@@ -685,11 +687,13 @@ def _discover_products(b, a: Account, date_from, date_to, log):
             log(f"  [{a.label}] 재고현황 {len(inventory)}개 옵션 조회")
         except InventoryFetchError as exc:   # 부가지표 — 실패해도 수집 전체는 진행(사유 명시)
             log(f"  [{a.label}] ⚠ 재고현황 조회 실패(계속) — {str(exc)[:120]}")
-    if config.DIAG_VID_LOG and listings:   # 진단: 상품조회 옵션 vid ↔ 재고 vid 집합 대조(재고 공란 원인 확정)
-        try:                                # 진단 로깅은 수집을 절대 깨지 않는다(실패 시 건너뜀을 명시)
-            _log_vid_compare(a, listings, inventory, log)
+    if config.DIAG_VID_LOG:                 # 진단: 원본 3API 저장 + vid↔재고 요약대조(재고 공란 원인 확정)
+        try:                                # 진단은 수집을 절대 깨지 않는다(실패 시 건너뜀을 명시)
+            _dump_raw(a, log)               # 데이터 분석용 원본(가공없음) — output/_raw/
+            if listings:
+                _log_vid_compare(a, listings, inventory, log)
         except Exception as exc:
-            log(f"  [vid대조] 진단 로깅 건너뜀(비치명): {exc.__class__.__name__}: {str(exc)[:80]}")
+            log(f"  [vid대조] 진단 건너뜀(비치명): {exc.__class__.__name__}: {str(exc)[:80]}")
     # 판매상태 출처(§2.3 대장↔쿠팡 불일치 경고) = **상품조회 productStatus(전 상품·판매자배송 포함)** 우선,
     # 없으면(상품조회 실패) RFM isSaleSuspended(로켓그로스만) 폴백. 라이브 실측(2026-09-20 nicoable/sg0141n)에서
     # productStatus 가 ON_SALE/PARTIAL_ON_SALE/SUSPENDED 로 정상 변동·**화면 판매/승인상태와 일치** 확인.
@@ -709,26 +713,25 @@ def _discover_products(b, a: Account, date_from, date_to, log):
     return products, tracked, metrics, inventory, sale_status
 
 
-def _diag_listing_lines(tag, listings, inventory, log) -> None:
-    """[A] 상품조회 옵션별 상세 — vid·**vInvId(등록상품ID·리스팅)**·종류·valid·상태·재고·이름.
+def _dump_raw(a: Account, log) -> None:
+    """데이터 분석용 — 3개 API(상품조회·재고·판매분석) **원본 응답을 가공 없이** 저장한다.
 
-    vInvId 를 넣어 어느 옵션이 어느 리스팅(등록상품) 소속인지 상품 단위로 묶을 수 있게 한다(추정 제거)."""
-    log(f"{tag}[A] 상품조회 옵션 (vid|vInvId|종류|valid|상태|재고|이름):")
-    for lst in listings:
-        for o in lst.options:
-            vid = str(o.vendor_item_id or "")
-            kind = "로켓그로스" if o.registration_type == "RFM" else f"판매자({o.registration_type})"
-            mark = f"재고{inventory.get(vid)}" if vid in inventory else "재고없음"
-            log(f"{tag}[A] {vid}|{lst.vendor_inventory_id}|{kind}|{o.valid}|{lst.product_status}|{mark}|"
-                f"{(o.item_name or lst.product_name)[:28]}")
-
-
-def _diag_inventory_lines(tag, inv_diag, log) -> None:
-    """[B] 재고 API 리치덤프 — vid마다 productId·vendorInventoryId·virtualBundleType·hasVirtualBundles·재고·중지·이름."""
-    log(f"{tag}[B] 재고 API 리치({len(inv_diag)}) (vid|pid|vInvId|번들|hasVB|재고|중지|이름):")
-    for vid, d in sorted(inv_diag.items()):
-        log(f"{tag}[B] {vid}|pid={d['productId']}|vInv={d['vendorInventoryId']}|{d['virtualBundleType']}"
-            f"|hasVB={d['hasVirtualBundles']}|재고{d['qty']}|susp={d['isSaleSuspended']}|{d['name'][:22]}")
+    output/_raw/{계정ID}_{api}_p{페이지}.json.gz 로 페이지별 응답 body 원문 그대로(gzip). 로그에 필드를
+    골라 찍는 대신 원본을 남겨, 이후 vid·pid·번들·SKU·판매통계 등 무엇이든 재빌드 없이 오프라인 분석."""
+    import gzip
+    import os
+    from .collector import last_raw_dumps
+    out_dir = os.path.join("output", "_raw")
+    os.makedirs(out_dir, exist_ok=True)
+    n = 0
+    for api, bodies in last_raw_dumps().items():
+        for i, body in enumerate(bodies, 1):
+            path = os.path.join(out_dir, f"{a.account_id}_{api}_p{i}.json.gz")
+            with gzip.open(path, "wt", encoding="utf-8") as f:
+                f.write(body)   # 응답 body 원문 그대로(파싱·가공 없음)
+            n += 1
+    if n:
+        log(f"  [원본] {a.account_id} — 3API 응답 {n}개 저장(output/_raw/, gzip·가공없음)")
 
 
 def _diag_pid_groups(tag, inv_diag, log) -> None:
@@ -751,9 +754,9 @@ def _diag_pid_groups(tag, inv_diag, log) -> None:
 def _log_vid_compare(a: Account, listings, inventory, log) -> None:
     """진단(config.DIAG_VID_LOG) — **상품조회 옵션 vid ↔ 재고 API 식별자 대조**를 실행 로그에 남긴다.
 
-    재고 공란 원인(같은 실제 상품이 여러 vid=중복 리스팅·가상번들) 확정용. [A]상품조회 옵션별(+vInvId)
-    [B]재고 API 리치덤프(pid·vInvId·번들여부·재고) [C]집합대조 [D]productId 그룹핑(중복/번들 구조).
-    분석 끝나면 config.DIAG_VID_LOG=False 로 되돌린다(로그 비대 방지)."""
+    재고 공란 원인(같은 실제 상품이 여러 vid=중복 리스팅·가상번들) 확정용. **요약만** — 원본 상세는
+    output/_raw/ 원본 파일(_dump_raw)로 대체. [C]집합대조 [D]productId 그룹핑(중복/번들 구조).
+    분석 끝나면 config.DIAG_VID_LOG=False 로 되돌린다."""
     from .collector import last_inventory_diag
     inv_diag = {k: v for k, v in last_inventory_diag().items() if k in inventory}  # 이 계정 재고분만(스테일 방지)
     rfm_vids = {str(o.vendor_item_id) for lst in listings for o in lst.options
@@ -765,8 +768,6 @@ def _log_vid_compare(a: Account, listings, inventory, log) -> None:
     tag = f"[vid대조 {a.account_id}/{a.label}]"
     log(f"{tag} 상품조회 RFM {len(rfm_vids)}·NORMAL {len(normal_vids)} · 재고 {len(inv_vids)}"
         f" → 둘다 {len(both)}·RFM인데재고없음 {len(rfm_only)}·재고인데RFM없음 {len(inv_only)}")
-    _diag_listing_lines(tag, listings, inventory, log)
-    _diag_inventory_lines(tag, inv_diag, log)
     if rfm_only:
         log(f"{tag}[C] RFM인데 재고없음(공란원인 {len(rfm_only)}): {sorted(rfm_only)}")
     if inv_only:
