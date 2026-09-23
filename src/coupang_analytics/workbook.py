@@ -302,9 +302,10 @@ class OutputWorkbook:
         return out
 
     def latest_date(self, biz: str) -> str | None:
-        """그 사업자의 가장 최근(맨 오른쪽) 일자 컬럼 라벨(③ 순위 기록 날짜)."""
+        """그 사업자의 가장 최근 **날짜** 일자 컬럼 라벨(③ 순위 기록 날짜). 내림차순 정렬이라 물리적으론
+        맨 왼쪽(H) 칸이지만, 물리 위치가 아니라 **날짜값 기준**으로 최신을 고른다(정렬 방향 무관)."""
         cols = self._date_col.get(biz, {})
-        return max(cols, key=lambda d: cols[d]) if cols else None
+        return max(cols, key=lambda d: (_parse_date(d) or _date.min)) if cols else None
 
     def account_sheets(self) -> list[str]:
         """계정(사업자) 시트명 목록 — 특수 시트(상품ID·목차·계정정보)는 제외.
@@ -686,7 +687,9 @@ class OutputWorkbook:
 
     # ── 일자 컬럼 ────────────────────────────────────────────
     def _append_date_col(self, biz: str, date_iso: str) -> int:
-        """일자 라벨 하나를 그 사업자 시트의 **맨 오른쪽**에 새 컬럼으로 추가(헤더행 전부에 라벨 기록)."""
+        """일자 라벨 하나를 그 사업자 시트의 맨 오른쪽에 새 컬럼으로 추가(헤더행 전부에 라벨 기록).
+        ⚠물리적으론 오른쪽 끝에 붙지만, 저장 시 normalize_date_columns 가 **최신=맨 왼쪽(H)** 내림차순으로
+        재정렬한다(값은 날짜로 매칭 이식). 즉 최종 파일은 항상 최신 날짜가 H열."""
         cols = self._date_col.setdefault(biz, {})
         col = max(cols.values(), default=_FIRST_DATE - 1) + 1
         cols[date_iso] = col
@@ -752,17 +755,18 @@ class OutputWorkbook:
             date2cols.setdefault(dd, []).append(cols[lbl])
         days = sorted(date2cols)
         first, last = days[0], days[-1]
-        target_days: list = []
+        target_days: list = []          # 첫날~마지막날 연속(먼저 오름차순으로 빠짐없이 모음)
         d = first
         while d <= last:
             target_days.append(d)
             d += _td(days=1)
-        target = [dd.strftime("%m.%d") for dd in target_days]   # 년도 없는 '월.일'로 통일
-        old_labels_sorted = [lbl for lbl, _dd in sorted(parsed.items(), key=lambda kv: kv[1])]
-        old_cols_sorted = [cols[lbl] for lbl in old_labels_sorted]
-        # 이미 '월.일' 연속·정렬이고 물리 순서도 H부터 오름차순이면 변경 없음(멱등)
-        if target == old_labels_sorted \
-           and old_cols_sorted == list(range(_FIRST_DATE, _FIRST_DATE + len(old_cols_sorted))):
+        target_days.reverse()           # **내림차순**: 최신(last)이 맨 앞 → H열(맨 왼쪽)에 기록(소유자 2026-09-23)
+        target = [dd.strftime("%m.%d") for dd in target_days]   # 년도 없는 '월.일'·내림차순 라벨
+        old_labels_desc = [lbl for lbl, _dd in sorted(parsed.items(), key=lambda kv: kv[1], reverse=True)]
+        old_cols_desc = [cols[lbl] for lbl in old_labels_desc]
+        # 이미 '월.일' 연속·**내림차순**이고 물리 순서도 H부터(최신) 오름차순이면 변경 없음(멱등)
+        if target == old_labels_desc \
+           and old_cols_desc == list(range(_FIRST_DATE, _FIRST_DATE + len(old_cols_desc))):
             return []
         self._rebuild_date_grid(biz, date2cols, target_days, set(cols.values()))
         old_days = set(days)
@@ -1252,7 +1256,7 @@ class OutputWorkbook:
 
     def _flag_sale_mismatch(self, ws, sty: _StyleCtx, kh: int, nm: str, is_disc: bool) -> None:
         """판매상태 불일치 경고: 대장=판매중지인데 쿠팡 실제=판매중/부분판매중이면 판매중지 소헤더행(kh)의
-        **최신(맨 오른쪽) 날짜칸**에 "판매중"을 진한 적색·굵게(담당자 확인용). 값+서식이 마스터에 들어가면
+        **최신(맨 왼쪽 H) 날짜칸**에 "판매중"을 진한 적색·굵게(담당자 확인용·latest_date=날짜기준). 값+서식이 마스터에 들어가면
         구글시트 미러링(worksheet_to_requests)으로 결과시트에도 그대로 반영."""
         if not (is_disc and self.sale_active(ws.title, nm)):
             return
@@ -1489,19 +1493,23 @@ class OutputWorkbook:
         return False
 
     def product_latest_date(self, biz: str, product: str) -> str:
-        """그 상품이 값을 가진 가장 최근(오른쪽) 일자 라벨(없으면 ''). 상품별 3일주기 판정용."""
+        """그 상품이 값을 가진 가장 최근 **날짜** 일자 라벨(없으면 ''). 상품별 3일주기 판정용.
+        물리 컬럼 위치가 아니라 **날짜값 기준**(내림차순 정렬이라 최신=맨 왼쪽 칸)."""
         cols = self._date_col.get(biz, {})
         if not cols or biz not in self.wb.sheetnames:
             return ""
         ws = self.wb[biz]
-        best, best_c = "", -1
+        best, best_d = "", None
         for m in _ALL_METRICS:
             row = self._metric_row.get((biz, product, m))
             if row is None:
                 continue
             for lbl, c in cols.items():
-                if c > best_c and ws.cell(row, c).value not in (None, ""):
-                    best, best_c = lbl, c
+                if ws.cell(row, c).value in (None, ""):
+                    continue
+                dd = _parse_date(lbl)
+                if dd is not None and (best_d is None or dd > best_d):
+                    best, best_d = lbl, dd
         return best
 
     def product_cadence(self, biz: str, product: str, target_iso: str) -> str:

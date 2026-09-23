@@ -447,6 +447,22 @@ def t1_date_columns():
     assert val == "5위", f"합칠 때 오늘 값(5위) 유실 — 남은 값: {val!r}"
     _ok("같은 날 옛/신 라벨 2컬럼 → 하나로 합치되 최신(오늘) 값 보존")
 
+    # (C) 최신 날짜가 항상 맨 왼쪽 날짜칸(H열)·오래된 날짜는 오른쪽 = 내림차순(소유자 2026-09-23)
+    wb3 = OutputWorkbook.empty()
+    wb3.ensure_product_block("정렬", "상품", config.KIND_CONTRACT, ["kw"])
+    wb3.set_keyword_rank("정렬", "상품", "kw", "09.01", 1)
+    wb3.set_keyword_rank("정렬", "상품", "kw", "09.02", 2)
+    wb3.set_keyword_rank("정렬", "상품", "kw", "09.03", 3)   # 최신
+    wb3.set_product_metric("정렬", "상품", config.M_VIEWS, "09.01", 50)
+    wb3.set_product_metric("정렬", "상품", config.M_VIEWS, "09.03", 100)   # 지표 최신
+    wb3.normalize_date_columns()
+    cols3 = wb3._date_col["정렬"]
+    assert cols3["09.03"] == min(cols3.values()), f"최신(09.03)이 맨 왼쪽 칸 아님: {cols3}"
+    assert cols3["09.03"] < cols3["09.02"] < cols3["09.01"], f"내림차순(최신←오래된→오른쪽) 아님: {cols3}"
+    assert wb3.latest_date("정렬") == "09.03", f"latest_date 날짜기준 아님: {wb3.latest_date('정렬')}"
+    assert wb3.product_latest_date("정렬", "상품") == "09.03", "product_latest_date 날짜기준 아님"
+    _ok("최신 날짜=맨 왼쪽(H열)·오래된=오른쪽(내림차순)·latest_date/product_latest_date 날짜기준")
+
 
 def t1_delete_account():
     print("[10] 삭제된 계정 완전 제거 (workbook.delete_account — 시트+메타 삭제)")
