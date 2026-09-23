@@ -660,6 +660,7 @@ def _discover_products(b, a: Account, date_from, date_to, log):
     # (vi-detail-search 는 당일 판매활동 상품만 잡혀 판매 0 상품 vid 누락 → 상품조회/수정으로 vid 출처 교체)
     vendor_products = None
     vendor_status: dict[str, str] = {}   # {vid: 판매상태} — 상품조회 productStatus(전 상품·판매자배송 포함)
+    listings: list = []                  # 진단(vid 대조)용 — 실패 시 빈 목록
     try:
         listings = fetch_vendor_inventory(b.page, log)
         vendor_products = products_from_vendor_inventory(listings, log)
@@ -684,6 +685,11 @@ def _discover_products(b, a: Account, date_from, date_to, log):
             log(f"  [{a.label}] 재고현황 {len(inventory)}개 옵션 조회")
         except InventoryFetchError as exc:   # 부가지표 — 실패해도 수집 전체는 진행(사유 명시)
             log(f"  [{a.label}] ⚠ 재고현황 조회 실패(계속) — {str(exc)[:120]}")
+    if config.DIAG_VID_LOG and listings:   # 진단: 상품조회 옵션 vid ↔ 재고 vid 집합 대조(재고 공란 원인 확정)
+        try:                                # 진단 로깅은 수집을 절대 깨지 않는다(실패 시 건너뜀을 명시)
+            _log_vid_compare(a, listings, inventory, log)
+        except Exception as exc:
+            log(f"  [vid대조] 진단 로깅 건너뜀(비치명): {exc.__class__.__name__}: {str(exc)[:80]}")
     # 판매상태 출처(§2.3 대장↔쿠팡 불일치 경고) = **상품조회 productStatus(전 상품·판매자배송 포함)** 우선,
     # 없으면(상품조회 실패) RFM isSaleSuspended(로켓그로스만) 폴백. 라이브 실측(2026-09-20 nicoable/sg0141n)에서
     # productStatus 가 ON_SALE/PARTIAL_ON_SALE/SUSPENDED 로 정상 변동·**화면 판매/승인상태와 일치** 확인.
@@ -701,6 +707,36 @@ def _discover_products(b, a: Account, date_from, date_to, log):
         f"(매칭 {n_match}·vid {vid_count}) · 미매칭(vid없음) {len(unmatched)}"
         + (f": {[_short(n, 22) for n in unmatched[:10]]}{'…' if len(unmatched) > 10 else ''}" if unmatched else ""))
     return products, tracked, metrics, inventory, sale_status
+
+
+def _log_vid_compare(a: Account, listings, inventory, log) -> None:
+    """진단(config.DIAG_VID_LOG) — **상품조회 옵션 vid ↔ 재고 API vid 집합 대조**를 실행 로그에 남긴다.
+
+    재고 공란 원인(묶음/수량 변형 vid가 재고 API에 없는지) 확정용. [A]옵션별 상세(vid·로켓그로스/판매자·
+    상태·재고유무) [B]재고 API 전체 vid [C]집합대조(둘다·RFM인데재고없음=공란원인·재고인데상품조회없음).
+    분석 끝나면 config.DIAG_VID_LOG=False 로 되돌린다(로그 비대 방지)."""
+    rfm_vids = {str(o.vendor_item_id) for lst in listings for o in lst.options
+                if o.registration_type == "RFM"}
+    normal_vids = {str(o.vendor_item_id) for lst in listings for o in lst.options
+                   if o.registration_type != "RFM"}
+    inv_vids = {str(v) for v in inventory}
+    both, rfm_only, inv_only = rfm_vids & inv_vids, rfm_vids - inv_vids, inv_vids - rfm_vids
+    tag = f"[vid대조 {a.account_id}/{a.label}]"
+    log(f"{tag} 상품조회 RFM {len(rfm_vids)}·NORMAL {len(normal_vids)} · 재고 {len(inv_vids)}"
+        f" → 둘다 {len(both)}·RFM인데재고없음 {len(rfm_only)}·재고인데RFM없음 {len(inv_only)}")
+    log(f"{tag}[A] 옵션별 (vid|종류|valid|상품상태|재고|이름):")
+    for lst in listings:
+        for o in lst.options:
+            vid = str(o.vendor_item_id or "")
+            kind = "로켓그로스" if o.registration_type == "RFM" else f"판매자({o.registration_type})"
+            mark = f"재고{inventory.get(vid)}" if vid in inv_vids else "재고없음"
+            log(f"{tag}[A] vid={vid}|{kind}|{o.valid}|{lst.product_status}|{mark}|"
+                f"{(o.item_name or lst.product_name)[:30]}")
+    log(f"{tag}[B] 재고 API 전체 vid({len(inv_vids)}): {sorted(inv_vids)}")
+    if rfm_only:
+        log(f"{tag}[C] RFM인데 재고없음(공란원인 {len(rfm_only)}): {sorted(rfm_only)}")
+    if inv_only:
+        log(f"{tag}[C] 재고엔 있는데 상품조회 RFM에 없음({len(inv_only)}): {sorted(inv_only)}")
 
 
 def _run_discover(b, a: Account, date_from, date_to, has_vendor: bool, log):

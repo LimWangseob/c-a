@@ -8,6 +8,9 @@ M_VISITORS = "방문자"     # 계약 방문자수
 M_VIEWS = "노출량"        # 계약 노출량(조회수)
 M_INVENTORY = "재고현황"   # 판매가능 재고수량 — **로켓그로스(계약)만** 해당(rfm-inventory)
 M_RANK = "노출 순위"      # 키워드별 오가닉 순위(PC)
+# 진단(임시) — ①상품수집에서 **상품조회 옵션 vid ↔ 재고 API vid 집합 대조**를 실행 로그에 남긴다.
+# 재고 공란 원인(묶음/수량 변형 vid가 재고 API에 없는지) 확정용. 분석 끝나면 False 로 되돌릴 것(로그 비대).
+DIAG_VID_LOG = True
 # 기본 지표 = 판매량·방문자·노출량(계약/개인 공통). 재고현황은 로켓그로스(계약)에만 추가.
 CONTRACT_METRICS = (M_SALES, M_VISITORS, M_VIEWS, M_INVENTORY)  # 로켓그로스(재고 포함)
 PERSONAL_METRICS = (M_SALES, M_VISITORS, M_VIEWS)              # 판매자배송(재고 없음)
