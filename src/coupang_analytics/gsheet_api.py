@@ -158,7 +158,8 @@ class GSheetClient:
             try:
                 self._meta = self._sheets().get(
                     spreadsheetId=self.spreadsheet_id,
-                    fields="properties.title,sheets.properties(sheetId,title,index)").execute()
+                    fields=("properties.title,"
+                            "sheets.properties(sheetId,title,index,gridProperties.rowCount)")).execute()
             except Exception as exc:
                 raise self._wrap(exc)
         return self._meta
@@ -174,6 +175,16 @@ class GSheetClient:
         for s in self.meta().get("sheets", []):
             if s["properties"]["title"] == title:
                 return s["properties"]["sheetId"]
+        return None
+
+    def grid_row_count(self, title: str) -> int | None:
+        """시트의 현재 그리드 행 수(rowCount). 없으면 None. 캐시(meta) 기반 — 확장 판단용.
+
+        insertDimension 은 startIndex < rowCount 라야 하므로(그리드 끝 넘으면 400), 삽입 전 이 값으로
+        그리드 확장 필요 여부를 판단한다."""
+        for s in self.meta().get("sheets", []):
+            if s["properties"]["title"] == title:
+                return s["properties"].get("gridProperties", {}).get("rowCount")
         return None
 
     def ensure_sheet(self, title: str) -> int:

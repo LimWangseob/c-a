@@ -471,21 +471,40 @@ def delete_accounts(client, removed, *, sheet: str = INDEX_SHEET_NAME, on_log=No
     return n
 
 
+_GRID_ROW_BUFFER = 50   # 삽입 여유행(매 실행 재확장 방지 — 신규 상품/계정 몇 개는 그리드 확장 없이 소화)
+
+
+def _grid_grow_requests(client, sheet: str, sheet_id: int, n_data_rows: int) -> list[dict]:
+    """삽입/기록이 그리드 끝을 넘어 400 나지 않게, 부족하면 **미리 행을 늘린다**(appendDimension).
+
+    insertDimension(inheritFromBefore=False)은 startIndex < 현재 rowCount 라야 한다 — 데이터가 그리드를
+    꽉 채우면 신규 삽입이 그리드 끝(==rowCount)을 넘어 400(라이브 2026-09-23 실측). 삽입 전 rowCount 를
+    `헤더2 + 데이터행수 + 여유(_GRID_ROW_BUFFER)` 이상으로 맞춘다. rowCount 를 못 읽으면(폴백) 확장 생략."""
+    need = DATA_START0 + n_data_rows + _GRID_ROW_BUFFER
+    cur = client.grid_row_count(sheet)
+    if cur is not None and cur < need:
+        return [{"appendDimension": {"sheetId": sheet_id, "dimension": "ROWS", "length": need - cur}}]
+    return []
+
+
 def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME) -> SyncPlan:
     """결과 구글시트의 `계정목록`을 원하는 로스터에 맞춰 생성/동기화하고 계획을 반환.
 
     비어 있으면 전체 생성, 아니면 증분(자동열만 갱신·신규 삽입·판매중지 표기). 마케팅 D~F는 안 건드린다.
+    삽입이 그리드 끝을 넘지 않게 **미리 그리드를 확장**한다(부족할 때만 — insertDimension 400 방지).
     """
     sheet_id = client.ensure_sheet(sheet)
     _ensure_rep_column(client, sheet, sheet_id)   # 옛 7열 시트면 A에 대표자 빈 열 삽입(멱등) → 아래 읽기는 새 레이아웃
     existing = _read_existing(client, sheet)
     if not existing:
-        client.batch_update(_full_build_requests(sheet_id, desired))
+        grow = _grid_grow_requests(client, sheet, sheet_id, len(desired))
+        client.batch_update(grow + _full_build_requests(sheet_id, desired))
         # 최초 생성도 계획 형태로 반환(삽입=전체)
         return SyncPlan(updates=[], inserts=[(DATA_START0 + i, d) for i, d in enumerate(desired)],
                         discontinue=[], total_rows=len(desired))
     plan = plan_sync(existing, desired)
     band_by_acct = {r.account_id: r.band for r in desired}   # 판매중지 행도 계정 밴드색으로 칠하기 위함
     rep_by_acct = {r.account_id: r.representative for r in desired if r.representative}  # 판매중지 행 대표자 채움
-    client.batch_update(_build_requests_for_plan(sheet_id, plan, band_by_acct, rep_by_acct))
+    grow = _grid_grow_requests(client, sheet, sheet_id, plan.total_rows)
+    client.batch_update(grow + _build_requests_for_plan(sheet_id, plan, band_by_acct, rep_by_acct))
     return plan

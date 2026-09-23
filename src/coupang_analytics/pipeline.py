@@ -1204,8 +1204,11 @@ def _push_gsheet(wb, output_url: str | None, log, removed_accounts=None) -> None
         log(f"== [구글시트] ✅ 결과 반영 완료 — 통계 {len(gids)}시트 · 계정목록 "
             f"갱신 {len(plan.updates)}·신규 {len(plan.inserts)}·판매중지 {len(plan.discontinue)} ==")
     except Exception as exc:
-        log(f"== [구글시트] ❌ 결과 반영 실패(단계='{_phase}'): {exc.__class__.__name__}: {str(exc)[:200]} "
-            "(xlsx 마스터·스냅샷은 정상 저장됨 — SA 편집권한·시트 공유·URL 확인) ==")
+        # ⚠ 조용한 실패 금지 — 계정목록/통계가 최신이 아닐 수 있음을 **눈에 띄게** 경고(과거 이 실패를
+        # 한 줄로 삼켜 계정목록이 옛 상태로 방치됨, 라이브 2026-09-23). 실행은 계속(xlsx 는 보존).
+        log("== [구글시트] ❌❌ 결과 반영 실패 — **계정목록/통계가 최신이 아닐 수 있습니다(확인 필요)** ==")
+        log(f"==   단계='{_phase}' · {exc.__class__.__name__}: {str(exc)[:200]} ==")
+        log("==   xlsx 마스터·스냅샷은 정상 저장됨. SA 편집권한·시트 공유·URL 확인 후 재실행하면 반영됩니다 ==")
 
 
 def _count_unfilled_ranks(wb) -> int:

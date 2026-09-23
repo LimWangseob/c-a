@@ -193,12 +193,14 @@ def t3_index_sync() -> None:
 
 
 class _FakeClient:
-    def __init__(self, values, titles=None):
+    def __init__(self, values, titles=None, row_count=1000):
         self._v = values; self.batches = []
+        self._row_count = row_count   # 그리드 행수(확장 판단용) — 기본 넉넉히
         self._titles = titles if titles is not None else (["계정목록"] if values else [])
         self._ids = {t: 100 + i for i, t in enumerate(self._titles)}
     def sheet_titles(self): return list(self._titles)
     def sheet_id(self, title): return self._ids.get(title)
+    def grid_row_count(self, title): return self._row_count
     def ensure_sheet(self, name): return self._ids.get(name, 7)
     def read_grid(self, sheet, notes=False): return self._v, [[None] * len(r) for r in self._v]
     def batch_update(self, reqs):
@@ -256,6 +258,31 @@ def t3b_full_and_incremental() -> None:
     assert len(p3.inserts) == 1 and p3.inserts[0][1].product == "상품4"   # 삽입 후 위치 매칭 정상
     assert len(p3.discontinue) == 1
     _ok("옛 7열 시트 → 대표자 열 자동 삽입(마이그레이션) 후 증분 정상")
+
+
+def t3d_grid_autogrow() -> None:
+    print("[3d] 그리드 자동 확장 — 여유 없으면 삽입 전 appendDimension(라이브 400 방지), 있으면 안 함")
+    desired = [_R("A", "상품1", gi.marketing_key("A", "상품1")),
+               _R("A", "상품9", gi.marketing_key("A", "상품9")),        # 신규 → 삽입
+               _R("B", "상품3", gi.marketing_key("B", "상품3"))]
+    existing_vals = [
+        ["계정목록 · 상품 2개"], list(_HEAD),
+        ["대표A", "biz_A", "상품1", "A", "", "", "", "예정"],
+        ["대표B", "biz_B", "상품3", "B", "", "", "", "예정"],
+    ]
+    # 그리드가 데이터로 꽉 참(rowCount=4=헤더2+데이터2) → 신규 삽입이 그리드 끝을 넘어 400 위험 → 확장 필요
+    fc = _FakeClient(existing_vals, row_count=4)
+    gi.sync_index(fc, desired)
+    grow = [r for b in fc.batches for r in b if "appendDimension" in r]
+    assert grow, "여유 없는 그리드인데 appendDimension(행 확장) 누락 — insertDimension 400 재발 위험"
+    assert grow[0]["appendDimension"]["dimension"] == "ROWS" and grow[0]["appendDimension"]["length"] > 0
+    _ok("여유 없는 그리드 → 삽입 전 행 자동 확장(appendDimension)")
+
+    fc2 = _FakeClient(existing_vals, row_count=1000)          # 여유 충분 → 확장 불필요
+    gi.sync_index(fc2, desired)
+    grow2 = [r for b in fc2.batches for r in b if "appendDimension" in r]
+    assert not grow2, "여유 충분한데 불필요한 그리드 확장(멱등성 위반)"
+    _ok("여유 충분한 그리드 → 확장 안 함")
 
 
 def t3c_delete_accounts() -> None:
@@ -413,7 +440,7 @@ def t7_staff_keywords_merge() -> None:
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
     for fn in (t1_ledger_rows, t1b_ledger_strike, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
-               t3c_delete_accounts, t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook, t7_staff_keywords_merge):
+               t3d_grid_autogrow, t3c_delete_accounts, t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook, t7_staff_keywords_merge):
         fn()
     print("=== 전부 통과 ===")
     return 0
