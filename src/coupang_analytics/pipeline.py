@@ -219,24 +219,25 @@ def resumable_progress(out_dir: str | Path = "output") -> dict | None:
 
 @dataclass
 class RunPlan:
-    """전체실행/판매수집 실행모드 결정 결과 — 플래그 + (재개면 덮은) 기간 + 사용자 확인용 문구."""
+    """전체실행/판매수집 실행모드 결정 결과 — 플래그 + (재개면 덮은) 기간·날짜라벨 + 사용자 확인용 문구."""
     resume: bool
     carry: bool
     redo_today: bool
     date_from: str
     date_to: str
     mode_desc: str
+    date_label: str
 
 
 def plan_run_mode(newall: bool, redo: bool, meta: dict | None, master: bool,
-                  date_from: str, date_to: str) -> RunPlan:
+                  date_from: str, date_to: str, date_label: str = "") -> RunPlan:
     """실행모드 결정(순수·오프라인 검증 가능) — app_qt/app.do_run_full 의 if/elif 사슬을 백엔드로 공통화.
 
     입력: newall(통계 전체 새로)·redo(오늘 것만 다시)·meta(resumable_progress 결과|None)·
-    master(master_exists())·date_from/to(기본 기간). 반환 RunPlan: resume/carry/redo_today 플래그 +
-    (meta 있으면 그 기간으로 덮은) date_from/to + 확인 팝업용 mode_desc.
-    ⚠ **grow·date_label 은 UI마다 처리가 달라(app.py 만 date_label 복원) 여기서 다루지 않는다** — 호출부가
-    plan.resume/carry/redo_today 를 보고 각자 처리한다(행동 불변). 제어흐름은 분해 전 사슬과 완전히 동일."""
+    master(master_exists())·date_from/to(기본 기간)·date_label(기본 날짜라벨). 반환 RunPlan:
+    resume/carry/redo_today 플래그 + (meta 있으면 그 기간으로 덮은) date_from/to + 확인 팝업용 mode_desc +
+    (재개면 meta 의 date_label 로 복원한) date_label. ⚠ grow 는 UI마다 달라 여기서 안 다룬다.
+    **date_label 복원은 양쪽 UI 공통**(예전엔 app.py 만 처리해 app_qt 재개 시 오늘 컬럼으로 어긋나는 버그)."""
     resume = carry = redo_today = False
     if newall:
         mode_desc = "통계 전체 초기화(백업 후) — ⚠ 기존 통계 마스터는 백업 후 빈 통계로 새로(누적 시계열 끊김)"
@@ -250,13 +251,14 @@ def plan_run_mode(newall: bool, redo: bool, meta: dict | None, master: bool,
         resume = True
         carry = bool(meta.get("carry", False))
         date_from, date_to = meta["date_from"], meta["date_to"]
+        date_label = meta.get("date_label") or date_label   # 재개 시 시작일 기준 라벨 고정(양쪽 UI 공통)
         mode_desc = f"이어서 하기 — 오늘 미완료분 이어서(완료 {len(meta['done'])}개 건너뜀), 기간 {date_from}~{date_to}"
     elif master:
         carry = True
         mode_desc = f"이어서 하기 — 오늘({date_to}) 컬럼 추가(키워드 동결)"
     else:
         mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음·구글시트 복원 불가), 기간 {date_from}~{date_to}"
-    return RunPlan(resume, carry, redo_today, date_from, date_to, mode_desc)
+    return RunPlan(resume, carry, redo_today, date_from, date_to, mode_desc, date_label)
 
 
 def run_title(keywords_off: bool, sales_semi: bool) -> str:

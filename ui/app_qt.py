@@ -1065,9 +1065,10 @@ class App(QtWidgets.QMainWindow):
             self.log("[통계] 마스터가 없어 결과 구글시트에서 복원을 시도합니다…")
             restore_master_from_gsheet("output", gs_out, self.log)
         meta = resumable_progress() if not (newall or redo) else None   # 이어서만 오늘 진행분 재개
-        plan = plan_run_mode(newall, redo, meta, master_exists(), df, dt)   # 실행모드 결정(백엔드 공통)
+        plan = plan_run_mode(newall, redo, meta, master_exists(), df, dt, dlabel)   # 실행모드 결정(백엔드 공통)
         resume, carry, redo_today = plan.resume, plan.carry, plan.redo_today
         df, dt, mode_desc = plan.date_from, plan.date_to, plan.mode_desc
+        dlabel = plan.date_label   # 재개 시 시작일 기준 날짜라벨 복원(백엔드 공통·app.py와 동일 동작)
         grow = carry and not redo_today and self.cb_grow.isChecked()   # 발굴 추가는 이어쓰기 때만
         # 단일 확인 팝업 — 실행 여부(예/아니오)만.
         confirm = (f"{mode_desc}\n대상: 상품 {n}개"

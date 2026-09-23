@@ -20,6 +20,7 @@ except AttributeError:
 from coupang_analytics.pipeline import plan_run_mode, run_log_labels, run_title  # noqa: E402
 
 DF, DT = "2026-09-21", "2026-09-22"
+DL = "09.22"   # 기본 날짜라벨(오늘)
 
 
 def _check(cond: bool, msg: str) -> None:
@@ -31,10 +32,11 @@ def _check(cond: bool, msg: str) -> None:
 def pin_newall():
     print("[핀 P1] 통계 전체 초기화(newall) — 이어쓰기/재개 아님")
     p = plan_run_mode(newall=True, redo=False, meta={"date_from": "x", "date_to": "y", "done": [1]},
-                      master=True, date_from=DF, date_to=DT)
+                      master=True, date_from=DF, date_to=DT, date_label=DL)
     _check(not p.resume and not p.carry and not p.redo_today, "resume/carry/redo 모두 False")
     _check("전체 초기화" in p.mode_desc, "초기화 안내 문구")
     _check(p.date_from == DF and p.date_to == DT, "기간=기본(meta 무시)")
+    _check(p.date_label == DL, "날짜라벨=기본(재개 아님 → 복원 안 함)")
 
 
 def pin_redo_with_master():
@@ -53,11 +55,17 @@ def pin_redo_no_master():
 
 def pin_resume():
     print("[핀 P4] 진행분(meta) 있음 — 이어서(완료 건너뜀), 기간=meta로 덮음")
-    meta = {"date_from": "2026-09-19", "date_to": "2026-09-20", "done": ["a", "b"], "carry": True}
-    p = plan_run_mode(newall=False, redo=False, meta=meta, master=True, date_from=DF, date_to=DT)
+    meta = {"date_from": "2026-09-19", "date_to": "2026-09-20", "done": ["a", "b"],
+            "carry": True, "date_label": "09.19"}
+    p = plan_run_mode(newall=False, redo=False, meta=meta, master=True, date_from=DF, date_to=DT, date_label=DL)
     _check(p.resume and p.carry, "resume·carry True")
     _check(p.date_from == "2026-09-19" and p.date_to == "2026-09-20", "기간=meta로 덮음")
     _check("이어서 하기" in p.mode_desc and "2개" in p.mode_desc, "완료 2개 건너뜀 안내")
+    _check(p.date_label == "09.19", "날짜라벨=meta로 복원(재개 시 시작일 기준·app_qt/app 공통)")
+    # 재개인데 meta 에 date_label 없으면 기본 라벨로 폴백(옛 진행중 파일 호환)
+    p2 = plan_run_mode(newall=False, redo=False, meta={k: v for k, v in meta.items() if k != "date_label"},
+                       master=True, date_from=DF, date_to=DT, date_label=DL)
+    _check(p2.date_label == DL, "meta 에 date_label 없으면 기본 라벨 폴백")
 
 
 def pin_carry_master_only():

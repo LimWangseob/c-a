@@ -470,11 +470,10 @@ class App(tk.Tk):
             self.log("[통계] 마스터가 없어 결과 구글시트에서 복원을 시도합니다…")
             restore_master_from_gsheet("output", gs_out_early, self.log)
         meta = resumable_progress() if not (newall or redo) else None
-        plan = plan_run_mode(newall, redo, meta, master_exists(), df, dt)   # 실행모드 결정(백엔드 공통)
+        plan = plan_run_mode(newall, redo, meta, master_exists(), df, dt, dlabel)   # 실행모드 결정(백엔드 공통)
         resume, carry, redo_today = plan.resume, plan.carry, plan.redo_today
         df, dt, mode_desc = plan.date_from, plan.date_to, plan.mode_desc
-        if resume:   # app.py 만의 date_label 복원(재개 시 시작일 기준 라벨 고정) — 행동 불변 유지
-            dlabel = meta.get("date_label") or dlabel
+        dlabel = plan.date_label   # 재개 시 시작일 기준 날짜라벨 복원(백엔드 공통·app_qt와 동일 동작)
         grow = carry and not redo_today and self.grow_var.get()   # 발굴 추가는 이어쓰기 때만
         if not messagebox.askyesno(f"{title} 확인",
                                    f"{mode_desc}\n대상: 상품 {n}개"
