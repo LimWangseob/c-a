@@ -2150,6 +2150,10 @@ class _SemiState:
     cooldowns: int = 0          # 차단 감지 쿨다운 진입 횟수(진전 있으면 0으로 리셋) — 무한 재시도 방지
     noname_products: int = 0    # vid·상품명 모두 없어(이례) 측정 못 한 상품 수(집계 → 종료 시 안내)
     measured_any: bool = False  # 첫 검색 전엔 대기 없음·마지막 검색 뒤에도 대기 없음(간격은 '검색 사이'에만)
+    # ── 종료 요약용 **누적** 카운터(진전 리셋 대상 아님 — 실행 전체 합계, B-1 간격 되돌림 판단) ──
+    searched: int = 0           # 실제 측정(순위 기록)된 검색 건수
+    cooldown_total: int = 0     # 차단 감지로 쿨다운에 진입한 총 횟수(간격이 짧아 IP를 태우는지 신호)
+    blocked_total: int = 0      # 확정 차단 페이지(사용권한 없음) 감지 총 횟수
 
 
 def _track_ranks_semi(wb, path, log, should_stop) -> Path:
@@ -2179,7 +2183,23 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
         log("== ⛔ 반자동(자동검색) 중단(차단 추정) — 진행분 저장됨. 쉰 시간/IP에 다시 실행하면 이어서 조회 ==")
     else:
         log("== 반자동 노출순위 종료 — 진행분 저장됨(중단 시 다음 실행이 남은 것부터 이어서) ==")
+    _semi_summary_log(st, log)
     return path
+
+
+def _semi_summary_log(st: _SemiState, log) -> None:
+    """순위 단계 종료 요약 — 측정·쿨다운·차단 누적 + 검색간격. 차단/쿨다운이 있으면 간격 되돌림을 권고(B-1).
+
+    소유자가 검색간격을 45~75 → 35~55 로 낮춘 뒤 **차단이 늘면 되돌려야** 하는데, 그 판단을 로그 grep 없이
+    바로 할 수 있게 한다. 차단/쿨다운이 0이면 현재 간격 유지 판단."""
+    if st.autosubmit:   # 자동제출(현재 기본)에서만 차단/쿨다운 카운터가 의미 있음
+        log(f"== [순위요약] 측정 {st.searched}건 · 쿨다운 {st.cooldown_total}회 · 차단감지 {st.blocked_total}회 "
+            f"· 검색간격 {config.RANK_NAV_DELAY_MIN_SEC}~{config.RANK_NAV_DELAY_MAX_SEC}s ==")
+        if st.cooldown_total or st.blocked_total:
+            log("== [순위요약] ⚠ 차단/쿨다운 발생 — config.py 의 RANK_NAV_DELAY 를 45~75 로 되돌리는 것을 권고합니다"
+                "(간격이 짧아 IP를 태우는 신호). 다음 실행에서도 계속 뜨면 상향 필요 ==")
+        else:
+            log("== [순위요약] 차단/쿨다운 0 — 현재 검색간격 유지 판단(무차단) ==")
 
 
 def _semi_start_log(autosubmit: bool, log) -> None:
@@ -2250,6 +2270,7 @@ def _semi_track_product(st: _SemiState, browser, wb, biz, pname, date, path, sho
             continue
         st.miss_streak = 0   # 성공 → 연속 실패 리셋
         st.cooldowns = 0     # 진전 발생 → 쿨다운 카운터도 리셋(IP 살아있음)
+        st.searched += 1     # 종료 요약용 누적(리셋 안 함)
         _semi_record(wb, pg, matcher, biz, pname, kw, date, path, idx, len(todo), log)
 
 
@@ -2286,6 +2307,7 @@ def _semi_on_miss(st: _SemiState, kw, blocked: bool, should_stop, log) -> None:
         return
     st.miss_streak += 1
     if blocked:   # 확정 차단 페이지(사용권한 없음)=IP 막힘 → 3회 안 기다리고 즉시 판정
+        st.blocked_total += 1     # 종료 요약용 누적
         st.miss_streak = config.RANK_SEMI_AUTO_MAX_MISS
         log(f"  [반자동] 「{kw}」 쿠팡 접근차단(사용권한 없음) 감지 — **이 IP가 막혔습니다**. "
             "휴대폰 핫스팟 등 **새 IP**에서 재실행하면 남은 것부터 이어서 조회됩니다")
@@ -2297,6 +2319,7 @@ def _semi_on_miss(st: _SemiState, kw, blocked: bool, should_stop, log) -> None:
     # 하드 스톱 대신 **긴 쿨다운 후 자동 재개**(무인 장시간). 쿨다운 후에도 진전 0이
     # 반복되면(cooldowns 초과) 그때 당일 중단(IP 회복 불가 판단 — 무한 재시도 금지).
     st.cooldowns += 1
+    st.cooldown_total += 1        # 종료 요약용 누적(진전 시 cooldowns 만 리셋·이건 유지)
     if st.cooldowns > config.RANK_SEMI_COOLDOWN_MAX:
         st.halted = True
         log(f"  ⛔ 쿨다운 {config.RANK_SEMI_COOLDOWN_MAX}회 후에도 계속 차단 = IP 회복 불가"

@@ -339,10 +339,15 @@ def pin_rank_success():
     wb = _rank_wb(path)
     pg = object()
     _install_rank_fakes([(pg, False), (pg, False)])
-    P._track_ranks_semi(wb, path, lambda m: None, lambda: False)
+    logs: list[str] = []
+    P._track_ranks_semi(wb, path, logs.append, lambda: False)
+    joined = "\n".join(logs)
     dt = wb.latest_date("비즈R")   # apply_style 이 ISO→'월.일'로 재라벨 → 실행 후 라벨로 검증
     _check(wb.is_rank_filled("비즈R", "상품R", "kw1", dt), "kw1 순위 기록됨")
     _check(wb.is_rank_filled("비즈R", "상품R", "kw2", dt), "kw2 순위 기록됨")
+    # B-1 종료 요약: 무차단이면 유지 판단·되돌림 권고 없음
+    _check("[순위요약]" in joined and "차단/쿨다운 0" in joined, "무차단 종료 요약(측정·쿨다운·차단 집계)")
+    _check("되돌리는 것을 권고" not in joined, "무차단 시 간격 되돌림 권고 없음")
 
 
 def pin_rank_not_found():
@@ -383,6 +388,9 @@ def pin_rank_block_then_recover():
     _check(not wb.is_rank_filled("비즈R", "상품R", "kw1", dt), "kw1 차단 → 공란(재측정 대상)")
     _check(wb.is_rank_filled("비즈R", "상품R", "kw2", dt), "kw2 재개 후 측정됨")
     _check("쿨다운 후 자동 재개" in joined and "IP 회복 불가" not in joined, "쿨다운 재개(하드중단 아님)")
+    # B-1 종료 요약: 차단/쿨다운 발생 → 간격 되돌림 권고
+    _check("[순위요약]" in joined and "쿨다운 1회" in joined and "차단감지 1회" in joined, "요약에 쿨다운·차단 누적 집계")
+    _check("RANK_NAV_DELAY 를 45~75" in joined, "차단/쿨다운 발생 시 간격 되돌림 권고 출력")
 
 
 def pin_rank_halt():

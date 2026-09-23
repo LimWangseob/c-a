@@ -1,9 +1,16 @@
-"""재고 조회 hiddenStatus 값 실험 — 어떤 값이 전 옵션 재고를 주는지 라이브로 확인.
+"""재고 조회 hiddenStatus 값 실험 + **'둘다' 리스팅 NORMAL 고유옵션 진단(D/A-2)**.
 
-배경: fetch_inventory 는 hiddenStatus:"VISIBLE" 만 조회 → ⚠️등록가능·❗중지 옵션이 빠져 그 옵션 재고 공란
+배경1: fetch_inventory 는 hiddenStatus:"VISIBLE" 만 조회 → ⚠️등록가능·❗중지 옵션이 빠져 그 옵션 재고 공란
 (2026-09-22 실측). "HIDDEN"=0개라 값이 틀림. 이 스크립트가 여러 hiddenStatus 값으로 같은 계정 재고를
-조회해 **vid 개수**를 비교 → 전량을 주는 값을 찾는다. **로그인 세션 재사용**(profile) — 최근 로그인했으면
-재로그인 없이 붙는다. 사무실에서 실행.
+조회해 **vid 개수**를 비교 → 전량을 주는 값을 찾는다.
+
+배경2(D/A-2 진단): products_from_vendor_inventory 는 '둘다'(RFM+NORMAL 혼재) 리스팅에서 **NORMAL 옵션을
+전부 제외**(collector.py). RFM 에 **같은 item_name 짝이 없는 NORMAL 고유옵션**이 있으면 그 옵션 지표가
+누락된다. 이 도구가 계정의 '둘다' 리스팅을 훑어 **(1) 혼합 리스팅(RFM전용+NORMAL전용 공존)이 실재하는지,
+(2) 같은 물리 옵션의 NORMAL/RFM item_name 이 정확히 일치하는지**를 자동 판정해 안전판 수정 여부를 결정한다.
+결론: 혼합 리스팅 0 = 수정 불필요(헛수정). 이름 미세 불일치 = item_name 매칭 대신 다른 키 필요(회귀 위험).
+
+**로그인 세션 재사용**(profile) — 최근 로그인했으면 재로그인 없이 붙는다. 사무실에서 실행.
 
     python tools/diag_inv_hidden.py [계정ID]   # 기본 nicoable
 """
@@ -21,7 +28,7 @@ except AttributeError:
 
 from coupang_analytics import config  # noqa: E402
 from coupang_analytics.browser import WingBrowser, WING_URL  # noqa: E402
-from coupang_analytics.collector import _INV_FETCH_JS, _parse_inventory, _parse_inventory_roster  # noqa: E402
+from coupang_analytics.collector import _INV_FETCH_JS, _parse_inventory, kind_of  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics.pipeline import account_profile  # noqa: E402
 import json  # noqa: E402
@@ -76,7 +83,45 @@ def main():
                 mark = f"재고 {inv}" if o.vendor_item_id in rfm else "-(RFM없음)"
                 print(f"      vid={o.vendor_item_id} [{o.registration_type}/{o.valid}/{o.status}]"
                       f" {o.item_name!r} {o.sale_price}원 → {mark}")
+        _diag_both_normal(listings)
     print("\n== 끝 ==")
+
+
+def _norm_name(s):
+    return (s or "").strip()
+
+
+def _diag_both_normal(listings) -> None:
+    """D/A-2 자동 판정 — '둘다' 리스팅에서 (1) NORMAL 고유옵션 실재 여부 (2) NORMAL↔RFM 이름 일치 여부.
+
+    현재 코드는 '둘다' 리스팅의 NORMAL 을 전부 버린다. 아래 두 신호로 안전판 수정 필요성을 판정:
+      - 고유 NORMAL(같은 item_name 의 RFM 짝 없음) > 0  → 지표 누락 실재 → 안전판 수정 필요
+      - 겹치는 NORMAL/RFM 의 item_name 이 **정확히** 같은가 → 다르면 item_name 매칭은 회귀 위험(다른 키 필요)
+    """
+    both = [L for L in listings if kind_of(o.registration_type for o in L.options) == config.KIND_BOTH]
+    print(f"\n[D/A-2 진단] '둘다'(RFM+NORMAL 혼재) 리스팅 {len(both)}개")
+    if not both:
+        print("  → 이 계정엔 '둘다' 리스팅 없음(NORMAL 고유옵션 손실 위험 없음). 수정 불필요(이 계정 기준).")
+        return
+    unique_normal_total = 0     # RFM 짝 없는 NORMAL 고유옵션(=현재 코드가 잃는 지표)
+    overlap_total = 0           # RFM 와 같은 이름 짝이 있는 NORMAL(정상 제외 대상)
+    for L in both:
+        rfm_names = {_norm_name(o.item_name) for o in L.options if o.registration_type == "RFM"}
+        normals = [o for o in L.options if o.registration_type != "RFM"]
+        uniq = [o for o in normals if _norm_name(o.item_name) not in rfm_names]
+        over = [o for o in normals if _norm_name(o.item_name) in rfm_names]
+        unique_normal_total += len(uniq)
+        overlap_total += len(over)
+        if uniq:
+            print(f"  ⚠ invId={L.vendor_inventory_id} {L.product_name[:22]!r} — 고유 NORMAL {len(uniq)}개(현 코드가 지표 손실):")
+            for o in uniq:
+                print(f"        vid={o.vendor_item_id} {o.item_name!r} {o.sale_price}원 (RFM 이름목록={sorted(rfm_names)})")
+    print(f"\n  [판정] 고유 NORMAL(손실) 총 {unique_normal_total}개 · 정상 제외(RFM 이름 짝 있음) {overlap_total}개")
+    if unique_normal_total == 0:
+        print("  → 고유 NORMAL 0 = 현재 코드로 지표 손실 없음(이 계정 기준). 안전판 수정 불필요(헛수정 회귀 방지).")
+    else:
+        print("  → 고유 NORMAL 존재 = 지표 손실 실재. 안전판(이름 겹치는 NORMAL 만 제외) 수정 근거. "
+              "단 위 '겹치는' 케이스의 NORMAL/RFM 이름이 정확히 같은지 육안 확인(미세 불일치면 이중집계 회귀).")
 
 
 if __name__ == "__main__":
