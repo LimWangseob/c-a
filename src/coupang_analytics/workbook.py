@@ -1080,12 +1080,14 @@ class OutputWorkbook:
         return self.wb[biz].cell(row=row, column=_COL_SEARCH).value
 
     def set_keyword_rank(self, biz: str, product: str, keyword: str, date_iso: str,
-                         rank: int | None) -> bool:
+                         rank: int | None, scanned: int | None = None) -> bool:
         row = self._kw_row.get((biz, product, keyword))
         if row is None:
             return False
-        # 스캔 상한(RANK_SCAN_MAX) 안이면 그 순위, 밖(None)이면 상한값으로 고정(요청: 50위밖→50).
-        val = f"{rank}위" if rank else f"{config.RANK_SCAN_MAX}위"
+        # 찾았으면 그 순위, 못 찾았으면 **그 페이지에서 실제로 센 개수 '위밖'**(예 '44위밖'·'59위밖' —
+        # 소유자 2026-09-23). scanned 미지정이면 스캔 상한으로 폴백('50위밖'). ⚠차단/미측정은 여기 안 옴
+        # (그건 공란=재측정, _semi_on_miss 가 처리). 미발견=측정 완료라 재검색 안 하게 '위밖'으로 채운다.
+        val = f"{rank}위" if rank else f"{scanned if scanned is not None else config.RANK_SCAN_MAX}위밖"
         self.wb[biz].cell(row=row, column=self.ensure_date(biz, date_iso), value=val)
         return True
 

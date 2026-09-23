@@ -2289,14 +2289,15 @@ def _semi_record(wb, pg, matcher, biz, pname, kw, date, path, idx, total, log) -
     from .rank import parse_serp_rank
     human_mouse.browse_serp(pg)   # 결과를 사람처럼 훑어봄(호버·스크롤, 클릭 없음)
     try:
-        # 반자동은 로드된 페이지 1장만 읽는다 → 50위 상한 없이 오가닉 전부를 세어 **50위 초과도 실제 등수 기록**.
-        res = parse_serp_rank(pg, matcher, max_rank=config.RANK_SCAN_MAX_SEMI)
+        # 반자동은 로드된 페이지 1장만 읽는다 → 상한 없이 오가닉 전부를 센다(실제 등수 기록). 못 찾으면
+        # scanned=이 페이지에서 센 개수 → '{scanned}위밖'(예 44개까지 있으면 '44위밖', 다음 페이지 넘겨야 함).
+        res, scanned = parse_serp_rank(pg, matcher, max_rank=config.RANK_SCAN_MAX_SEMI)
     except Exception as exc:
         log(f"  [반자동] 「{kw}」 파싱 실패(공란) — {exc.__class__.__name__}: {str(exc)[:80]}")
         return
     rank, mi = res.get("제품", (None, None))
-    wb.set_keyword_rank(biz, pname, kw, date, rank)
-    log(f"  ✅ 「{kw}」 순위 = {rank_label(rank)}  — 기록 완료({idx}/{total})")
+    wb.set_keyword_rank(biz, pname, kw, date, rank, scanned=scanned)
+    log(f"  ✅ 「{kw}」 순위 = {rank_label(rank) if rank else f'{scanned}위밖'}  — 기록 완료({idx}/{total})")
     if mi is not None and getattr(mi, "name", ""):   # 노출명은 로그로만(블록명=등록상품명 고정)
         log(f"  [노출명] 검색결과 노출명 = {mi.name} (블록명은 등록상품명 고정)")
     wb.save(path)

@@ -311,8 +311,9 @@ def _rank_wb(path: Path, *, keywords=("kw1", "kw2"), second_optionless=False) ->
     return wb
 
 
-def _install_rank_fakes(wait_results):
-    """반자동 순위 헬퍼 경계 페이크. wait_results=키워드마다 (page, blocked) 반환할 리스트(순서 소비)."""
+def _install_rank_fakes(wait_results, serp=None):
+    """반자동 순위 헬퍼 경계 페이크. wait_results=키워드마다 (page, blocked) 반환할 리스트(순서 소비).
+    serp=(parse_serp_rank 반환 result, scanned) — 기본은 3위 발견. 미발견은 ({'제품':(None,None)}, 개수)."""
     state = {"i": 0}
 
     def fake_wait(browser, kw, should_stop, timeout):
@@ -320,12 +321,13 @@ def _install_rank_fakes(wait_results):
         state["i"] += 1
         return wait_results[min(i, len(wait_results) - 1)]
 
+    serp = serp if serp is not None else ({"제품": (3, None)}, 3)
     P._prefill_search = lambda browser, kw: True
     P._submit_search = lambda browser: None
     P._wait_results_loaded = fake_wait
     P.human_mouse = SimpleNamespace(browse_serp=lambda pg: None)
     P.random = SimpleNamespace(uniform=lambda a, b: 0.0)   # 타이핑 후 '짧게 멈춤' pause 를 0으로(시험 단축)
-    R.parse_serp_rank = lambda pg, matcher, max_rank=None: {"제품": (3, None)}
+    R.parse_serp_rank = lambda pg, matcher, max_rank=None: serp   # (result, scanned) 튜플
     return state
 
 
@@ -341,6 +343,26 @@ def pin_rank_success():
     dt = wb.latest_date("비즈R")   # apply_style 이 ISO→'월.일'로 재라벨 → 실행 후 라벨로 검증
     _check(wb.is_rank_filled("비즈R", "상품R", "kw1", dt), "kw1 순위 기록됨")
     _check(wb.is_rank_filled("비즈R", "상품R", "kw2", dt), "kw2 순위 기록됨")
+
+
+def pin_rank_not_found():
+    print("[핀 J2] 반자동 순위 미발견 → '센 개수 위밖' 기록(예 '44위밖', 공란 아님=재측정 안 함)")
+    _SPEC.clear(); _COUNT.clear()
+    config.RANK_SEMI_AUTOSUBMIT = True
+    config.RANK_SEMI_AUTO_MAX_MISS = 3
+    config.RANK_SEMI_COOLDOWN_MAX = 4
+    d = Path(tempfile.mkdtemp()); path = d / "m.xlsx"
+    wb = _rank_wb(path)
+    pg = object()
+    # 페이지는 정상 로드(차단 아님)인데 상품이 그 페이지에 없음 → scanned=44 개까지 셈
+    _install_rank_fakes([(pg, False), (pg, False)], serp=({"제품": (None, None)}, 44))
+    P._track_ranks_semi(wb, path, lambda m: None, lambda: False)
+    dt = wb.latest_date("비즈R")
+    _check(wb.is_rank_filled("비즈R", "상품R", "kw1", dt), "미발견도 '기록됨'(공란 아님=같은 날 재측정 안 함)")
+    row = wb._kw_row[("비즈R", "상품R", "kw1")]
+    col = wb._date_col["비즈R"][dt]
+    val = wb.wb["비즈R"].cell(row, col).value
+    _check(val == "44위밖", f"미발견 = 센 개수 위밖('44위밖') — 실제 {val!r}")
 
 
 def pin_rank_block_then_recover():
@@ -515,6 +537,7 @@ def main() -> int:
         pin_discover_failed_then_ok()
         pin_vendor_fallback_to_discover()
         pin_rank_success()
+        pin_rank_not_found()
         pin_rank_block_then_recover()
         pin_rank_halt()
         pin_rank_skip_optionless()

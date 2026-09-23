@@ -71,6 +71,7 @@ def t1_workbook():
     wb = OutputWorkbook.empty()
     wb.ensure_product_block("비즈A", "상품A", config.KIND_CONTRACT, ["kw1", "kw2"])
     wb.set_keyword_rank("비즈A", "상품A", "kw1", "2026-09-02", 3)
+    wb.set_keyword_rank("비즈A", "상품A", "kw2", "2026-09-02", None, scanned=44)   # 못찾음=센 개수 위밖
     wb.set_keyword_search("비즈A", "상품A", "kw1", 1200)
     wb.set_product_metric("비즈A", "상품A", config.M_VIEWS, "2026-09-02", 123)
     path = d / "실증_워크북.xlsx"
@@ -80,6 +81,7 @@ def t1_workbook():
     ws = openpyxl.load_workbook(path)["비즈A"]   # 시트명 = 사업자명
     flat = [c.value for row in ws.iter_rows() for c in row]
     assert "3위" in flat and 123 in flat and 1200 in flat, "값 재로드 실패"
+    assert "44위밖" in flat, "미발견 순위 '44위밖'(센 개수) 미기록/유실"
     # 재로드 후 재개 조회(_reindex)도 실제로 동작하는지
     wb2 = OutputWorkbook.load(path)
     # 저장 시 apply_style→normalize_date_columns 가 라벨을 년도 없는 '월.일'(09.02)로 통일 → 그 라벨로 조회.

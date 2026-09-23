@@ -312,11 +312,14 @@ def organic_ranks(browser: WingBrowser, keyword: str, matchers: dict[str, Callab
 
 
 def parse_serp_rank(page, matchers: dict[str, Callable[[SearchItem], bool]],
-                    max_rank: int | None = None) -> dict[str, tuple[int | None, SearchItem | None]]:
+                    max_rank: int | None = None
+                    ) -> tuple[dict[str, tuple[int | None, SearchItem | None]], int]:
     """**네비게이션 없이** 현재 열린 검색결과 페이지에서 광고 제외 오가닉 순위를 산출(반자동 전용).
 
     사람이 직접 검색해 이미 떠 있는 SERP 의 DOM(extract_items)만 읽는다 — goto/warmup 안 함(봇 신호 0).
-    반환 {라벨: (순위 or None, 매칭 SearchItem or None)}. 매칭 항목의 name = 정확 노출명.
+    반환 ({라벨: (순위 or None, 매칭 SearchItem or None)}, scanned). 매칭 항목의 name = 정확 노출명.
+    **scanned = 이 페이지에서 실제로 센 오가닉 개수**(못 찾은 상품을 '{scanned}위밖'으로 표기하는 데 씀 —
+    1페이지에 44개까지 있으면 '44위밖'). 미발견 시 루프가 페이지 끝까지 세므로 scanned=페이지 전체 상품 수.
     """
     max_rank = config.RANK_SCAN_MAX if max_rank is None else max_rank
     result: dict[str, tuple[int | None, SearchItem | None]] = {label: (None, None) for label in matchers}
@@ -331,7 +334,7 @@ def parse_serp_rank(page, matchers: dict[str, Callable[[SearchItem], bool]],
             del remaining[label]
         if rank >= max_rank or not remaining:
             break
-    return result
+    return result, rank
 
 
 # ── 병렬 fetch 순위조회 (기본, 대폭 가속) ──────────────────────────
