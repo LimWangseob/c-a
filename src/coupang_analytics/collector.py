@@ -97,41 +97,6 @@ class InventoryFetchError(Exception):
     """로켓그로스 재고현황 API 직접조회 실패(비200·파싱실패 등). 계약 계정에만 존재."""
 
 
-# ── 진단(config.DIAG_VID_LOG) 전용 사이드채널 ────────────────────────────────
-# 직전 fetch_inventory 가 남긴 재고 API 리치 식별자 맵. production 반환값은 안 바꾸고(핀/호출부 무손상)
-# 진단 로깅(pipeline._log_vid_compare)만 이걸 읽는다. 분석 끝나면 DIAG_VID_LOG=False 와 함께 제거 대상.
-_LAST_INVENTORY_DIAG: dict[str, dict] = {}
-
-
-def last_inventory_diag() -> dict[str, dict]:
-    """진단용 — 직전 fetch_inventory 의 {vid: {productId, vendorInventoryId, virtualBundleType,
-    hasVirtualBundles, qty, isSaleSuspended, name}}. DIAG_VID_LOG 아닐 땐 빈 dict(누적 안 함)."""
-    return _LAST_INVENTORY_DIAG
-
-
-# 데이터 분석용 **원본(raw) 응답 보관**(config.DIAG_VID_LOG) — 3개 API 응답 body 를 가공 없이 전 페이지
-# 그대로 담는다. pipeline 이 계정마다 reset_raw_dumps() 로 초기화 → 각 fetch 가 _raw_add 로 append →
-# _dump_raw 가 output/_raw/{계정}_{api}.json.gz 로 저장. 분석 끝나면 DIAG_VID_LOG=False 로 함께 끔.
-_LAST_RAW: dict[str, list[str]] = {"vendor_inventory": [], "inventory": [], "sales": []}
-
-
-def reset_raw_dumps() -> None:
-    """계정 시작 시 호출 — 원본 보관 버퍼를 비운다(계정 간 섞임·스테일 방지)."""
-    for k in _LAST_RAW:
-        _LAST_RAW[k] = []
-
-
-def last_raw_dumps() -> dict[str, list[str]]:
-    """진단용 — 직전 계정의 {api: [응답 body 원문(페이지별)]}. api=vendor_inventory|inventory|sales."""
-    return _LAST_RAW
-
-
-def _raw_add(key: str, body: str) -> None:
-    """DIAG_VID_LOG 일 때만 해당 API 응답 body 원문을 버퍼에 추가(가공 없음)."""
-    if config.DIAG_VID_LOG and body:
-        _LAST_RAW[key].append(body)
-
-
 class VendorInventoryFetchError(Exception):
     """상품조회/수정(vendor-inventory/search) 직접조회 실패(비200·success=false·파싱실패 등). vid 출처."""
 
@@ -280,7 +245,6 @@ def fetch_sales_details(page, date_from: str, date_to: str, log=None) -> dict[st
                    "sortBy": "GMV", "sortOrder": "DESC", "includeSoldVICount": True}
         res = page.evaluate(_FETCH_JS, payload)
         status, body = res.get("status"), res.get("body", "")
-        _raw_add("sales", body)   # 데이터 분석용 원본 보관(가공 없음, DIAG 일 때만)
         if status != 200:
             raise SalesFetchError(
                 f"vi-detail-search 응답 status={status}"
@@ -354,31 +318,6 @@ def _parse_inventory_status(vi_props: list[dict]) -> dict[str, bool]:
     return out
 
 
-def _parse_inventory_diag(vi_props: list[dict]) -> dict[str, dict]:
-    """진단(DIAG_VID_LOG) — 재고 search viProperties → {vid: 리치 식별자}.
-
-    재고 API 가 주는 상위 식별자(productId=노출상품ID·vendorInventoryId=등록상품ID·virtualBundleType=묶음여부)를
-    vid 별로 뽑는다. "같은 실제 상품이 여러 vid" 원인(중복 리스팅·가상번들)을 상품 단위로 확정하기 위함."""
-    out: dict[str, dict] = {}
-    for vp in vi_props:
-        oid = str(vp.get("vendorItemId") or "").strip()
-        if not oid:
-            continue
-        ld = vp.get("listingDetails") or {}
-        inv = vp.get("inventoryDetails") or {}
-        out[oid] = {
-            "productId": str(ld.get("productId") or "").strip(),
-            "vendorInventoryId": str(ld.get("vendorInventoryId") or "").strip(),
-            "virtualBundleType": str(ld.get("virtualBundleType") or "").strip(),
-            "hasVirtualBundles": bool(ld.get("hasVirtualBundles")),
-            "qty": _num(inv.get("orderableQuantity")),
-            "isSaleSuspended": ld.get("isSaleSuspended"),
-            "name": str(ld.get("vendorInventoryItemName")
-                        or ld.get("vendorInventoryName") or "").strip(),
-        }
-    return out
-
-
 def fetch_inventory(page, log=None) -> tuple[dict[str, int], dict[str, str], dict[str, bool]]:
     """로켓그로스 재고현황 API(inventory-health-dashboard/search)를 **직접 fetch**.
 
@@ -394,8 +333,6 @@ def fetch_inventory(page, log=None) -> tuple[dict[str, int], dict[str, str], dic
     재고에 존재]임이 확인됨 → 원인은 products_from_vendor_inventory 쪽에서 처리).
     """
     log = log or (lambda m: None)
-    if config.DIAG_VID_LOG:
-        _LAST_INVENTORY_DIAG.clear()   # 진단: 이 계정 재고 조회분만 담는다(_fetch_inventory_status 가 누적)
     return _fetch_inventory_status(page, "VISIBLE", log)
 
 
@@ -414,7 +351,6 @@ def _fetch_inventory_status(page, hidden_status: str, log) -> tuple[dict, dict, 
                    "rrqContext": {"source": "IHD", "eventType": "RRQ_SEEN", "metadata": "{}"}}
         res = page.evaluate(_INV_FETCH_JS, payload)
         st, body = res.get("status"), res.get("body", "")
-        _raw_add("inventory", body)   # 데이터 분석용 원본 보관(가공 없음, DIAG 일 때만)
         if st != 200:
             raise InventoryFetchError(
                 f"inventory search 응답 status={st}"
@@ -436,8 +372,6 @@ def _fetch_inventory_status(page, hidden_status: str, log) -> tuple[dict, dict, 
         out.update(_parse_inventory(props))
         names.update(_parse_inventory_roster(props))
         status.update(_parse_inventory_status(props))
-        if config.DIAG_VID_LOG:
-            _LAST_INVENTORY_DIAG.update(_parse_inventory_diag(props))
         total = total or len(out)
         log(f"  [재고:{hidden_status}] search p{page_num + 1} — {len(props)}개 (누적 {len(out)}/{total})")
         if not props or len(out) >= total or len(out) == before:
@@ -455,9 +389,6 @@ def _fetch_inventory_status(page, hidden_status: str, log) -> tuple[dict, dict, 
         full = _parse_inventory(props)
         if len(full) > len(out):
             log(f"  [재고] 전량 재요청(pageSize {big}) → {len(full)}개 확보(이전 상위 {len(out)}개)")
-            if config.DIAG_VID_LOG:   # 진단맵도 전량분으로 교체(out↔full 동일 규칙)
-                _LAST_INVENTORY_DIAG.clear()
-                _LAST_INVENTORY_DIAG.update(_parse_inventory_diag(props))
             return full, _parse_inventory_roster(props), _parse_inventory_status(props)
         log(f"  [재고] ⚠ 전량 재요청도 {len(full)}개 — 상위 {len(out)}/{total}개만 유지(무한루프 방지)")
     return out, names, status
@@ -514,7 +445,6 @@ def fetch_vendor_inventory(page, log=None) -> list[VendorInventoryListing]:
         payload = dict(_VI_SEARCH_BASE, page=page_num)
         res = page.evaluate(_VI_FETCH_JS, payload)
         status, body = res.get("status"), res.get("body", "")
-        _raw_add("vendor_inventory", body)   # 데이터 분석용 원본 보관(가공 없음, DIAG 일 때만)
         if status != 200:
             raise VendorInventoryFetchError(
                 f"vendor-inventory/search 응답 status={status}"

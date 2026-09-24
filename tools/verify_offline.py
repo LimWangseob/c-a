@@ -249,7 +249,15 @@ def t1_sale_status_flag():
     # 역기록 가드: product_inventory 는 숫자만 반환('미입고' 문자열은 None → 대장 미접촉)
     assert wbI.product_inventory(bzI, "미입고품") is None, "'미입고' 문자열은 역기록 대상 아님"
     assert wbI.product_inventory(bzI, "품절품") == 0 and wbI.product_inventory(bzI, "입고품") == 7
-    _ok("재고 표기(입고 값/품절 0/미입고 문자열/판매중지 공란)·역기록 숫자 가드 정상")
+    # 결과파일 표기 보장: apply_style + 저장 + 재로드 후에도 '미입고' 문자열이 재고칸에 유지
+    _dtmp = Path(tempfile.mkdtemp())
+    wbI.apply_style()
+    wbI.save(_dtmp / "재고표기.xlsx")
+    wbR = OutputWorkbook.load(_dtmp / "재고표기.xlsx")
+    _rowI = wbR._metric_row.get((_norm(bzI), _key("미입고품"), config.M_INVENTORY))
+    _colI = wbR._date_col.get(bzI, {}).get(wbR.latest_date(bzI))
+    assert wbR.wb[bzI].cell(_rowI, _colI).value == config.INV_NOT_INBOUND, "결과파일 저장 후 '미입고' 유실"
+    _ok("재고 표기(입고 값/품절 0/미입고 문자열/판매중지 공란)·역기록 숫자가드·결과파일 저장 후 미입고 유지")
     # vid별 전개 + apply_sale_status 문자열 경로(판매자배송 NORMAL 상품도 상태 커버)
     def _li(name, vid, status, rt="NORMAL"):
         return VendorInventoryListing(product_name=name, vendor_inventory_id="g_" + vid,
