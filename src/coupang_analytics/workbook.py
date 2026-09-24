@@ -1046,6 +1046,10 @@ class OutputWorkbook:
     def _display_name(self, biz: str, name: str) -> str:
         """이름칸 표시값 = **1줄 상품제목 + (보이지 않는 구분자) + 2줄 상품 인식코드(vendorItemId)**.
 
+        ⏳ TODO(레이아웃 v4·소유자 확정 2026-09-24·미구현, 메모 handoff-block-layout-redesign): 이 함수는
+        상품명만 반환하도록 축소 예정 — VID/판매일/최근입고는 좌측 라벨 칸(A:B)+값(C:F) 별도 줄로 이동.
+        VID 저장은 헤더 이름칸 'VID :' 꼬리 → 숨김 메타시트(_상품ID col3)로 이전(A안). 아직 미적용(현행 유지).
+
         키(순수 상품명 `name`)는 건드리지 않고 표시용 꼬리만 만든다. vid 없으면 이름만(1줄). 여러 옵션이면
         vid 를 '/' 로 이어 붙인다. `apply_style` 이 저장 직전 이 값으로 헤더 C셀을 렌더링(멱등)."""
         vids = self.product_vids(biz, name)
@@ -1307,7 +1311,12 @@ class OutputWorkbook:
     def _style_metric_rows(self, ws, sty: _StyleCtx, hr: int, m_end: int, mcols: set, maxc: int,
                            prod_fill: PatternFill) -> None:
         """상품 지표블록: A:B 구분(상품군색) · C:F 상품명(세로) · G 라벨 · H~ 값(마케팅기간 배경).
-        prod_fill = 이 상품군의 배경색(같은 등록상품명끼리 같은 색, 인접 군은 교대 — 시각적 구분)."""
+        prod_fill = 이 상품군의 배경색(같은 등록상품명끼리 같은 색, 인접 군은 교대 — 시각적 구분).
+
+        ⏳ TODO(레이아웃 v4·소유자 확정 2026-09-24·미구현, 메모 handoff-block-layout-redesign):
+        A:B 를 **줄별 라벨 칸**(상품명 2줄 세로병합·VID·판매방식·로켓그로스 3줄 세로병합)으로, C:F 를
+        줄별 값으로 재구성(우측 지표 7줄과 정렬). 상품군 색은 A:B 라벨 칸에, 값 C:F=흰색. 세로병합/테두리는
+        _style_block_edges 도 함께 수정. 아직 미적용(현행=A:B 구분·C:F 상품명 전체 세로병합 유지)."""
         for r in range(hr, m_end + 1):
             _sty_cell(ws, r, 1, sty, fill=prod_fill)
             _sty_cell(ws, r, 2, sty, fill=prod_fill)
