@@ -1183,7 +1183,11 @@ def _sweep_dead_duplicates(wb, biz: str, live_vids, log) -> None:
             continue   # 그룹 전체가 코팡서 소멸 → 판매중지 단독군 → 통째 보존
         for b in blocks:
             vids = wb.product_vids(biz, b)
-            if vids and all(v not in live_vids for v in vids):   # 코팡서 완전 소멸한 vid만
+            # 🔒 정책(소유자 2026-09-24): **판매자배송(NORMAL) twin 은 삭제하지 않고 보존**한다.
+            # 같은 상품을 로켓그로스+판매자배송 둘 다 등록하면 vid 가 2개(RFM/NORMAL) 생기고, 추적은 RFM 만
+            # 하지만 NORMAL twin 도 **코팡 상품조회에 살아있는 vid** 라 아래 'vid 전부 소멸' 조건에 안 걸린다
+            # → 판매중지 표기로 남겨 보존(데이터 유실 방지). 완전 제거는 registrationType 배선이 필요한 별도 후속.
+            if vids and all(v not in live_vids for v in vids):   # 코팡서 완전 소멸한 vid만(=죽은 재등록)
                 if wb.delete_product_block(biz, b):
                     log(f"  [정체성] '{b}' 죽은 중복 블록 삭제(vid {vids} 상품조회에 없음·live 형제 존재)")
 
