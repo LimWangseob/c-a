@@ -183,7 +183,7 @@ def pin_session_reuse():
     _SPEC.clear(); _COUNT.clear()
     _SPEC["authenticated"] = [True]
     _install_collector_fakes()
-    acct, metrics, inventory, sale_status, _ub, _lv = _run_login()
+    acct, metrics, inventory, sale_status, _ub, _lv, _vm = _run_login()
     _check(acct is not None and len(acct.products) == 1, "발견·매칭된 계정 반환(상품 1)")
     _check(metrics.get(_VID) is not None, "판매분석 지표(vi-detail) 전달됨")
     _check(inventory.get(_VID) == 42, "로켓그로스 재고 조회됨")
@@ -243,8 +243,8 @@ def pin_otp_skip():
     _SPEC["wait_for_login"] = [False]
     _SPEC["classify"] = ("otp", "인증번호를 입력하세요")
     _install_collector_fakes()
-    acct, metrics, inv, status, _ub, _lv = _run_login()
-    _check(acct is None and metrics == {} and inv == {} and status == {} and _ub == set() and _lv == set(),
+    acct, metrics, inv, status, _ub, _lv, _vm = _run_login()
+    _check(acct is None and metrics == {} and inv == {} and status == {} and _ub == set() and _lv == set() and _vm == {},
            "(None,{},{},{},set(),set()) 반환 — 다음 계정 진행(다음 실행에서 재시도)")
     _check(_COUNT.get("wait_for_login", 0) == 1, "otp는 재시도 없이 1회 후 건너뜀")
 
@@ -257,7 +257,7 @@ def pin_semi_retry_recover():
     _SPEC["wait_for_login"] = [False]
     _SPEC["classify"] = ("timeout", "")
     _install_collector_fakes()
-    acct, metrics, inventory, sale_status, _ub, _lv = _run_login()
+    acct, metrics, inventory, sale_status, _ub, _lv, _vm = _run_login()
     _check(acct is not None and len(acct.products) == 1, "반자동 재시도 후 수집 성공(상품 1)")
     _check(_COUNT.get("autofill", 0) == 1, "자동입력 1회(재시도는 authenticated로 회복 — 재제출 없음)")
 
@@ -267,7 +267,7 @@ def pin_discover_empty_uses_vendor():
     _SPEC.clear(); _COUNT.clear()
     _SPEC["authenticated"] = [True]
     _install_collector_fakes(discover_behavior="pwtimeout")
-    acct, metrics, inventory, sale_status, _ub, _lv = _run_login()
+    acct, metrics, inventory, sale_status, _ub, _lv, _vm = _run_login()
     _check(acct is not None and len(acct.products) == 1, "상품조회 vid로 상품 추적(건너뛰지 않음)")
     _check(metrics == {}, "판매분석 지표는 비어 있음(당일 판매 0)")
     _check(sale_status.get(_VID) == "판매중", "판매상태는 상품조회에서 확보")
@@ -278,7 +278,7 @@ def pin_discover_failed_then_ok():
     _SPEC.clear(); _COUNT.clear()
     _SPEC["authenticated"] = [True]
     dstate = _install_collector_fakes(discover_behavior="failed_then_ok")
-    acct, metrics, inventory, sale_status, _ub, _lv = _run_login()
+    acct, metrics, inventory, sale_status, _ub, _lv, _vm = _run_login()
     _check(acct is not None and metrics.get(_VID) is not None, "재시도로 지표 수집 성공")
     _check(dstate["n"] == 2, "discover 정확히 2회 호출(첫 실패→재시도)")
 
@@ -288,7 +288,7 @@ def pin_vendor_fallback_to_discover():
     _SPEC.clear(); _COUNT.clear()
     _SPEC["authenticated"] = [True]
     _install_collector_fakes(vendor_ok=False, discover_behavior="ok")
-    acct, metrics, inventory, sale_status, _ub, _lv = _run_login()
+    acct, metrics, inventory, sale_status, _ub, _lv, _vm = _run_login()
     _check(acct is not None and len(acct.products) == 1, "폴백(판매분석 발견)으로 상품 확보")
     _check(metrics.get(_VID) is not None, "판매분석 지표 전달됨")
     _check(sale_status.get(_VID) is False, "상품조회 실패 → 판매상태 RFM(isSaleSuspended=False) 폴백")

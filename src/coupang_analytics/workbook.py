@@ -149,9 +149,16 @@ def _vids_from_cell(v) -> list[str]:
     if config.NAME_ID_SEP not in s:
         return []
     tail = s.split(config.NAME_ID_SEP, 1)[1]
-    if ":" in tail:                       # "\nVID : a / b" → 콜론 뒤가 vid 목록
-        tail = tail.split(":", 1)[1]
-    return [x.strip() for x in tail.split("/") if x.strip()]
+    # 꼬리는 여러 줄일 수 있다(VID / 상품판매가 / 로켓그로스 입고일). **'VID :' 줄만** 파싱해야 vid 오염 방지
+    # (헤더에 다른 줄을 추가해도 vid 출처가 안 깨짐 — 소유자 2026-09-24 헤더 확장 대비 안전화).
+    vid_line = ""
+    for line in tail.splitlines():
+        if "VID" in line.upper() and ":" in line:
+            vid_line = line.split(":", 1)[1]
+            break
+    if not vid_line:                      # 옛 형식(줄 구분 없이 콜론 하나) 호환
+        vid_line = tail.split(":", 1)[1] if ":" in tail else tail
+    return [x.strip() for x in vid_line.split("/") if x.strip()]
 
 
 def _nearest_year(month: int, day: int):
@@ -829,7 +836,37 @@ class OutputWorkbook:
         ws.cell(1, 4, "키워드서명"); ws.cell(1, 5, "권고제목")   # ⑤ 제목 캐시(동결 상품 AI 재호출 생략)
         ws.cell(1, 6, "등록상품명")   # 대장 원본명(노출명으로 바뀌어도 불변) — 계정목록 안정키·3c 마케팅 매칭 기준
         ws.cell(1, 7, "판매상태(쿠팡)")   # 쿠팡 재고 판매상태(판매중/부분판매중/판매중지) — 대장 판매중지와 대조해 경고 표시
+        ws.cell(1, 8, "상품판매가")   # 옵션 salePrice — 헤더 표시용(소유자 2026-09-24)
+        ws.cell(1, 9, "로켓그로스입고일")   # saleStartedAt(입고일 근사) — 헤더 표시용, 판매자배송은 공란
         return ws
+
+    def set_product_extra(self, biz: str, product: str, sale_price=None, inbound_date=None) -> None:
+        """헤더 표시용 부가정보(상품판매가·로켓그로스 입고일 근사=판매시작일)를 숨김시트 8·9열에 저장.
+
+        소유자 2026-09-24: 상품 제목·VID 아래에 '상품판매가 :'·'로켓그로스 입고일 :' 로 표시. inbound_date 는
+        **로켓그로스/둘다만** 넘어옴(판매자배송은 None→공란). 값 없으면(None) 그 칸은 안 건드림(기존 보존).
+        _display_name 이 이 값을 읽어 헤더 C셀을 렌더한다(apply_style 멱등)."""
+        biz, product = _norm(biz), _key(product)
+        if not (biz and product):
+            return
+        ws = self._meta_ws()
+        row = self._vid_row.get((biz, product))
+        if row is None:
+            row = ws.max_row + 1
+            ws.cell(row, 1, biz); ws.cell(row, 2, product)
+            self._vid_row[(biz, product)] = row
+        if sale_price is not None:
+            ws.cell(row, 8, int(sale_price) if isinstance(sale_price, (int, float)) else sale_price)
+        if inbound_date:
+            ws.cell(row, 9, str(inbound_date))
+
+    def _product_extra(self, biz: str, product: str) -> tuple:
+        """(상품판매가, 로켓그로스입고일) — 헤더 렌더용. 없으면 (None, '')."""
+        row = self._vid_row.get((_norm(biz), _key(product)))
+        if row is None or _META_SHEET not in self.wb.sheetnames:
+            return None, ""
+        ws = self.wb[_META_SHEET]
+        return ws.cell(row, 8).value, _norm(ws.cell(row, 9).value)
 
     def set_product_vids(self, biz: str, product: str, vids) -> None:
         """상품의 고유ID(vendorItemId) 목록을 저장(③ 순위조회의 상품 매칭용).
@@ -1010,7 +1047,15 @@ class OutputWorkbook:
         vids = self.product_vids(biz, name)
         if not vids:
             return name
-        return f"{name}{config.NAME_ID_SEP}\nVID : {' / '.join(vids)}"
+        tail = f"{name}{config.NAME_ID_SEP}\nVID : {' / '.join(vids)}"
+        # 상품 제목·VID 아래에 상품판매가·로켓그로스 입고일(근사=판매시작일) 표기(소유자 2026-09-24).
+        # ⚠ 반드시 'VID :' 줄 **뒤**에 붙인다 — _vids_from_cell 은 'VID :' 줄만 파싱하므로 vid 오염 없음.
+        price, inbound = self._product_extra(biz, name)
+        if inbound:                       # 로켓그로스/둘다만(판매자배송은 공란 → 줄 생략)
+            tail += f"\n로켓그로스 입고일 : {inbound}"
+        if isinstance(price, (int, float)) and price > 0:
+            tail += f"\n상품판매가 : {int(price):,}원"
+        return tail
 
     def resolve_block_name(self, biz: str, vids) -> str | None:
         """이 사업자에서 주어진 vid(옵션ID)와 교집합이 있는 **기존 상품 블록의 이름**을 반환(없으면 None).

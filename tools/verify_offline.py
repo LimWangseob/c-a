@@ -333,6 +333,32 @@ def t1_sale_status_flag():
     _col._raw_add("sales", "x"); assert _col.raw_dumps() == {}, "설정 끄면 원문 수집 안 함"
     config.SAVE_RAW_RESPONSES = _sv
     _ok("응답 원문 보관: 3 API 원문 그대로 버퍼→gzip 사이드카 저장·재로드 일치·reset·설정 off no-op")
+    # ── 헤더 표시: 상품판매가·로켓그로스 입고일(근사) + vid 파싱 안전(줄 추가해도 vid 안 깨짐) ──
+    from coupang_analytics.workbook import _vids_from_cell
+    wbH = OutputWorkbook.empty(); bzH = "헤더비즈"
+    wbH.ensure_product_block(bzH, "운동기구", config.KIND_CONTRACT, ["kw"])
+    wbH.set_product_vids(bzH, "운동기구", ["V1", "V2"])
+    wbH.set_product_extra(bzH, "운동기구", sale_price=35700, inbound_date="2026-06-25")
+    _disp = wbH._display_name(bzH, "운동기구")
+    assert "VID : V1 / V2" in _disp, f"VID 줄 없음: {_disp!r}"
+    assert "상품판매가 : 35,700원" in _disp, f"판매가 줄 없음: {_disp!r}"
+    assert "로켓그로스 입고일 : 2026-06-25" in _disp, f"입고일 줄 없음: {_disp!r}"
+    # 🔒 vid 파싱 안전: 줄이 추가돼도 vid 는 'VID :' 줄만 정확히 파싱(오염 없음)
+    assert _vids_from_cell(_disp) == ["V1", "V2"], f"vid 파싱 오염(치명): {_vids_from_cell(_disp)}"
+    assert wbH.product_vids(bzH, "운동기구") == ["V1", "V2"], "product_vids 오염"
+    # 저장→재로드 후에도 vid·판매가·입고일 유지(라운드트립)
+    _dh = Path(tempfile.mkdtemp()); wbH.apply_style(); wbH.save(_dh / "헤더.xlsx")
+    wbH2 = OutputWorkbook.load(_dh / "헤더.xlsx")
+    assert wbH2.product_vids(bzH, "운동기구") == ["V1", "V2"], "재로드 후 vid 유실"
+    assert "상품판매가 : 35,700원" in wbH2._display_name(bzH, "운동기구"), "재로드 후 판매가 유실"
+    # 판매자배송(개인) → 로켓그로스 입고일 줄 생략(inbound_date=None)
+    wbP = OutputWorkbook.empty()
+    wbP.ensure_product_block("개인비즈", "개인상품", config.KIND_PERSONAL, ["kw"])
+    wbP.set_product_vids("개인비즈", "개인상품", ["P1"])
+    wbP.set_product_extra("개인비즈", "개인상품", sale_price=9900, inbound_date=None)
+    _dp = wbP._display_name("개인비즈", "개인상품")
+    assert "상품판매가 : 9,900원" in _dp and "로켓그로스 입고일" not in _dp, f"판매자배송 입고일 줄 오출력: {_dp!r}"
+    _ok("헤더 표시(상품판매가·로켓그로스 입고일 근사)·vid 파싱 안전(줄추가 오염 없음)·재로드 유지·판매자배송 입고일 생략")
     # vid별 전개 + apply_sale_status 문자열 경로(판매자배송 NORMAL 상품도 상태 커버)
     def _li(name, vid, status, rt="NORMAL"):
         return VendorInventoryListing(product_name=name, vendor_inventory_id="g_" + vid,

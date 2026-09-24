@@ -131,6 +131,7 @@ class VendorInventoryListing:
     registration_type: str       # 리스팅 레벨 등록타입
     product_status: str          # ON_SALE / PARTIAL_ON_SALE(부분판매중) / 판매중지
     status: str = ""            # APPROVED 등
+    sale_started_at: str = ""    # 판매시작일(saleStartedAt) — 로켓그로스 입고일 근사 표기용(진짜 입고일 필드는 없음)
     options: list[VendorInventoryOption] = field(default_factory=list)
 
 
@@ -446,8 +447,22 @@ def _parse_vendor_inventory(product_list: list[dict]) -> list[VendorInventoryLis
             registration_type=str(p.get("registrationType") or "").strip(),
             product_status=str(p.get("productStatus") or "").strip(),
             status=str(p.get("status") or "").strip(),
+            sale_started_at=str(p.get("saleStartedAt") or "").strip(),   # 판매시작일(입고일 근사)
             options=options,
         ))
+    return out
+
+
+def vid_meta_of(listings: list["VendorInventoryListing"]) -> dict[str, tuple[int, str]]:
+    """{옵션ID(vid): (판매가 salePrice, 판매시작일 saleStartedAt)} — 헤더 표시용(상품판매가·로켓그로스 입고일 근사).
+
+    판매가는 옵션(vid) 단위, 판매시작일은 리스팅 단위(같은 리스팅 옵션 공통). 진짜 로켓그로스 입고일 필드는
+    응답에 없어 판매시작일로 근사 표기(소유자 2026-09-24). vid 없는 옵션은 제외."""
+    out: dict[str, tuple[int, str]] = {}
+    for lst in listings:
+        for o in lst.options:
+            if o.vendor_item_id:
+                out[o.vendor_item_id] = (o.sale_price, lst.sale_started_at)
     return out
 
 
