@@ -284,7 +284,9 @@ class OutputWorkbook:
                     if cur_prod:
                         self._metric_row[(biz, cur_prod, metric)] = r
                 elif metric == config.M_RANK:                    # 키워드 순위행 — 키워드명=A열(v4 좌측확장 앵커)
-                    kwn = _key(ws.cell(r, _COL_KW).value)
+                    # 옛 마스터(v3)는 키워드가 C열에 있으므로 A 없으면 **C 폴백**으로 읽어 동결 유지
+                    # (물리 이전은 apply_style 의 _migrate_keyword_col 이 수행 — 여기선 인덱스만 올바르게).
+                    kwn = _key(ws.cell(r, _COL_KW).value) or _key(ws.cell(r, _COL_NAME).value)
                     if cur_prod and kwn:
                         self._kw_row[(biz, cur_prod, kwn)] = r
 
@@ -1209,6 +1211,36 @@ class OutputWorkbook:
             if not _norm(ws.cell(row, 3).value):
                 ws.cell(row, 3, " / ".join(vids))
 
+    def _migrate_keyword_col(self) -> None:
+        """옛 마스터(v3)의 키워드명·소헤더를 **C열 → A열**로 물리 이전(레이아웃 v4 좌측확장·유실 방지).
+
+        v3는 키워드명과 소헤더 '키워드'를 C열(_COL_NAME)에, 사업자명을 A열에 뒀다. v4는 키워드명을 A열
+        (병합 앵커)에서 읽으므로(A:E 병합 시 비앵커 C값은 저장에서 버려짐), 옛 마스터를 그대로 저장하면
+        키워드·순위가 유실된다. 저장(apply_style) 직전 한 번 옮긴다(멱등 — 이미 A열이면 no-op). 이전 후 재인덱스."""
+        moved = False
+        for ws in self.wb.worksheets:
+            if ws.title in _SPECIAL_SHEETS:
+                continue
+            # 먼저 (읽기 전용) 옛 포맷 키워드행/소헤더가 있는지 탐지(병합 셀도 앵커값은 읽힘)
+            targets = []
+            for r in range(1, ws.max_row + 1):
+                g = _norm(ws.cell(r, _COL_METRIC).value)
+                c = _norm(ws.cell(r, _COL_NAME).value)
+                a = _norm(ws.cell(r, _COL_KW).value)
+                if _norm(ws.cell(r, _COL_NAME).value) == _LABEL_KEYWORD and a != _LABEL_KEYWORD:
+                    targets.append((r, _LABEL_KEYWORD))           # 옛 소헤더: C='키워드'·A=사업자
+                elif g == config.M_RANK and c and not a:
+                    targets.append((r, c))                        # 옛 키워드행: C=키워드명·A 공란
+            if not targets:
+                continue
+            _unmerge_all(ws)                                       # 옛 병합(사업자 A:B 세로·키워드 C:E) 해제 후 쓰기
+            for r, val in targets:
+                ws.cell(r, _COL_KW, val)                          # A ← 키워드명/'키워드'
+                ws.cell(r, _COL_NAME).value = None                # C 비움(v4는 A가 앵커)
+            moved = True
+        if moved:
+            self._reindex()
+
     def _group_sibling_blocks(self) -> None:
         """같은 등록상품명(기본+옵션) 블록을 **인접**하게 정렬(분산 치유·소유자 2026-09-25).
 
@@ -1319,6 +1351,7 @@ class OutputWorkbook:
         # 멱등·값 보존이라 결과파일 저장 때마다 시계열이 일자별로 끊기지 않게 유지된다(§'미실행 날짜=공란').
         self.normalize_date_columns()
         self._migrate_vids_to_meta()   # 옛 마스터 vid(이름칸 꼬리) → 메타 col3(v4 name-only 렌더 전 유실 방지)
+        self._migrate_keyword_col()    # 옛 마스터 키워드·소헤더 C열 → A열(v4 좌측확장·유실 방지)
         self._group_sibling_blocks()   # 같은 등록상품명(기본+옵션) 블록 인접 정렬(분산 치유)
         thin = Side(style="thin", color="BFBFBF")
         sty = _StyleCtx(

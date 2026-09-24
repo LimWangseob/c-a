@@ -583,6 +583,39 @@ def t1_vid_source_option_split():
     _mr = wbR2._metric_row[(bz3, "비누", config.M_SALES)]
     assert wsR.cell(_mr, _cc).value == 222, "재배치 후 지표값 유실"
     _ok("형제(같은 등록상품명) 블록 인접 정렬: 분산→인접 재배치·키워드/vid/순위/지표 값 무손실·재로드 보존")
+    # ── 옛 마스터(v3) → v4 마이그레이션 무손실(치명적 회귀 방지·소유자 정밀분석 2026-09-25) ──
+    # v3 포맷(vid=헤더 C셀 'VID :' 꼬리·판매방식=A열·키워드/소헤더=C열)을 openpyxl 로 직접 합성 → v4 로드+저장 후
+    # 키워드·순위·vid·판매방식이 전부 보존돼야(실측: 수정 전엔 키워드·순위 전멸). 값 이동만·손실 0.
+    import openpyxl as _op
+    SEP = config.NAME_ID_SEP
+    bz4 = "옛포맷가게"
+    wbO = _op.Workbook(); wsO = wbO.active; wsO.title = bz4
+    wsO.cell(1, 1, config.SELDOC_SHEET_TITLE)
+    wsO.cell(3, 1, config.KIND_CONTRACT); wsO.cell(3, 3, f"상품X{SEP}\nVID : vidX"); wsO.cell(3, 7, "날짜"); wsO.cell(3, 8, "09.24")
+    for j, m in enumerate(config.CONTRACT_METRICS):   # 지표행(값은 H열)
+        wsO.cell(4 + j, 7, m)
+    wsO.cell(4, 8, 100)                               # 판매량=100
+    kh = 4 + len(config.CONTRACT_METRICS)
+    wsO.cell(kh, 1, bz4); wsO.cell(kh, 3, "키워드"); wsO.cell(kh, 6, "검색량"); wsO.cell(kh, 7, "비고")   # 옛 소헤더(A=사업자·C='키워드')
+    wsO.cell(kh + 1, 3, "베개커버"); wsO.cell(kh + 1, 7, config.M_RANK); wsO.cell(kh + 1, 8, "7위")       # 옛 키워드행(C=키워드명)
+    wsO.cell(kh + 2, 3, "무형광 베개"); wsO.cell(kh + 2, 7, config.M_RANK); wsO.cell(kh + 2, 8, "12위")
+    mO = wbO.create_sheet("_상품ID"); mO.cell(1, 1, "사업자"); mO.cell(1, 2, "상품명"); mO.cell(1, 6, "등록상품명")
+    mO.cell(2, 1, bz4); mO.cell(2, 2, "상품X"); mO.cell(2, 6, "상품X")   # col3(vid)·col11(판매방식)=공란(옛)
+    _pv3 = d / "옛포맷.xlsx"; wbO.save(_pv3)
+    wv4 = OutputWorkbook.load(_pv3)                   # v4 코드로 로드
+    assert wv4.product_keywords(bz4, "상품X") == ["베개커버", "무형광 베개"], f"로드 시 키워드 유실(동결 깨짐): {wv4.product_keywords(bz4, '상품X')}"
+    wv4.apply_style(); _pv4 = d / "옛→v4.xlsx"; wv4.save(_pv4)
+    wv5 = OutputWorkbook.load(_pv4)                   # 저장·재로드 후에도 무손실
+    assert wv5.product_keywords(bz4, "상품X") == ["베개커버", "무형광 베개"], "v4 저장 후 키워드 유실"
+    assert wv5.product_vids(bz4, "상품X") == ["vidX"], "옛 헤더꼬리 vid → 메타 col3 이관 실패"
+    assert wv5.product_kind(bz4, "상품X") == config.KIND_CONTRACT, "옛 A열 판매방식 → 메타 col11 이관 실패"
+    _wr = wv5._kw_row[(bz4, "상품X", "베개커버")]; _wc = wv5._date_col[bz4]["09.24"]
+    assert wv5.wb[bz4].cell(_wr, _wc).value == "7위", "옛 순위값 유실"
+    _mr2 = wv5._metric_row[(bz4, "상품X", config.M_SALES)]
+    assert wv5.wb[bz4].cell(_mr2, _wc).value == 100, "옛 판매량 유실"
+    # 키워드명이 실제로 A열(v4)로 이동했는지
+    assert _norm(wv5.wb[bz4].cell(_wr, 1).value) == "베개커버" and not _norm(wv5.wb[bz4].cell(_wr, 3).value), "키워드 C→A 물리이전 실패"
+    _ok("옛 마스터(v3)→v4 마이그레이션: 키워드·순위·vid·판매방식·판매량 전부 무손실(C→A 이전·헤더꼬리→메타)·재로드 보존")
 
 
 def t1_ledger_dedup():
