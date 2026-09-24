@@ -153,6 +153,17 @@ def pin_sale_status_mismatch():
     wc = ws.cell(kh, last_col)
     _check(_n(wc.value) == "판매중", "불일치 경고 '판매중' 기록")
     _check(_n(getattr(wc.font.color, "rgb", "")).endswith("C00000"), "'판매중' 진한 적색(C00000)")
+    # 누적 방지(2026-09-25): 과거 실행이 남긴 '판매중'은 최신 칸만 남기고 청소돼야(여러 칸 번짐 방지)
+    wb.ensure_date(BIZ, "2026-09-19")            # 더 과거 날짜 추가(최신=09-20 유지)
+    cols2 = wb._date_col.get(BIZ, {})
+    old_col = cols2["2026-09-19"]
+    ws.cell(kh, old_col, "판매중")                # 과거 칸에 옛 '판매중' 심기(누적 재현)
+    wb.apply_style()
+    cols3 = wb._date_col.get(BIZ, {})
+    latest = cols3[max(cols3, key=lambda d: d)]   # 문자열 최대(2026-09-20 > 09-19)
+    n_pandae = sum(1 for c in cols3.values() if _n(ws.cell(kh, c).value) == "판매중")
+    _check(n_pandae == 1, f"'판매중'은 최신 칸 1개만(누적 청소) — 실제 {n_pandae}칸")
+    _check(_n(ws.cell(kh, latest).value) == "판매중", "'판매중'이 최신 칸에 남음")
 
 
 def pin_marketing_fill():

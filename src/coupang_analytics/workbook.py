@@ -1569,12 +1569,19 @@ class OutputWorkbook:
 
     def _flag_sale_mismatch(self, ws, sty: _StyleCtx, kh: int, nm: str, is_disc: bool) -> None:
         """판매상태 불일치 경고: 대장=판매중지인데 쿠팡 실제=판매중/부분판매중이면 판매중지 소헤더행(kh)의
-        **최신(맨 왼쪽 H) 날짜칸**에 "판매중"을 진한 적색·굵게(담당자 확인용·latest_date=날짜기준). 값+서식이 마스터에 들어가면
-        구글시트 미러링(worksheet_to_requests)으로 결과시트에도 그대로 반영."""
+        **최신(맨 왼쪽 H) 날짜칸**에만 "판매중"을 진한 적색·굵게(담당자 확인용·latest_date=날짜기준). 값+서식이 마스터에
+        들어가면 구글시트 미러링(worksheet_to_requests)으로 결과시트에도 그대로 반영.
+
+        ⚠ 매 실행 최신 칸에만 표기(원칙) — 과거 실행이 남긴 '판매중'을 먼저 **모두 지워** 여러 날짜 칸에
+        누적되던 문제 방지(2026-09-25 실측: 여러 칸 번짐). 불일치가 해소돼도 과거 '판매중'이 남지 않게 항상 청소."""
+        cols = self._date_col.get(ws.title, {})
+        for c in cols.values():                        # 과거 '판매중' 경고 전부 제거(최신 칸에만 원칙·누적 방지)
+            if _norm(ws.cell(kh, c).value) == "판매중":
+                ws.cell(kh, c).value = None
         if not (is_disc and self.sale_active(ws.title, nm)):
             return
         _ld = self.latest_date(ws.title)
-        _lc = self._date_col.get(ws.title, {}).get(_ld) if _ld else None
+        _lc = cols.get(_ld) if _ld else None
         if _lc:
             wc = ws.cell(kh, _lc)
             wc.value = "판매중"
