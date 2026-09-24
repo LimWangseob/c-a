@@ -1412,11 +1412,17 @@ class OutputWorkbook:
         values = self._v4_values(biz, nm, ws, hr)
         label_at = {a: lab for (a, _s, lab) in layout["ab"]}
         value_at = {a: key for (a, _s, key) in layout["cf"]}
+        # 상품명 값 칸(pos0 C:F)은 **상품군 색**으로 칠해 상품명을 강조하고 동일 상품군을 시각적으로 묶는다
+        # (소유자 2026-09-25). 나머지 값 칸(VID/판매방식/로켓그로스)은 흰색 유지(가독성). name_rows=상품명 세로칸.
+        name_rows = {a + j for (a, span, key) in layout["cf"] if key == "name" for j in range(span)}
         for r in range(hr, m_end + 1):
             _sty_cell(ws, r, 1, sty, fill=prod_fill, fnt=sty.bold, align=sty.wrap)   # A:B 라벨 칸(상품군색)
             _sty_cell(ws, r, 2, sty, fill=prod_fill, fnt=sty.bold, align=sty.wrap)
-            for c in range(_COL_NAME, _COL_SEARCH + 1):                              # C:F 값 칸(흰)
-                _sty_cell(ws, r, c, sty, fill=sty.f_kind, align=sty.wrap)
+            in_name = r in name_rows
+            cf_fill = prod_fill if in_name else sty.f_kind                           # 상품명 칸=상품군색·나머지=흰
+            cf_fnt = sty.bold if in_name else sty.font                               # 상품명=굵게(강조)
+            for c in range(_COL_NAME, _COL_SEARCH + 1):
+                _sty_cell(ws, r, c, sty, fill=cf_fill, fnt=cf_fnt, align=sty.wrap)
             _sty_cell(ws, r, _COL_METRIC, sty, fill=sty.f_label)                     # G 지표 라벨(연파랑)
             for c in range(_FIRST_DATE, maxc + 1):                                   # H~ 값(마케팅기간 배경)
                 _sty_cell(ws, r, c, sty, num=True, fill=(sty.mkt_fill if c in mcols else None))

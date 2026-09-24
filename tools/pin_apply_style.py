@@ -112,9 +112,10 @@ def pin_block_fills():
     ws = wb.wb[BIZ]
     hr = _hdr_row(ws, "상품S")   # KIND_CONTRACT → 7줄(상품명2·VID·판매방식·로켓그로스3)
     kh = _kw_head_row(ws, hr)
-    # 좌측 A:B = 라벨 칸(상품군색), C:F = 값 칸(흰)
+    # 좌측 A:B = 라벨 칸(상품군색), C:F = 값 칸. **상품명 칸(pos0 C:F)=상품군색**(강조), 나머지 값 칸=흰
     _check(_fill(ws, hr, 1).endswith(OutputWorkbook._FILL_PROD), "좌측 라벨 칸 A열 살구색(FBE2D5)")
-    _check(_fill(ws, hr, 3).endswith(OutputWorkbook._FILL_KIND), "값 칸 C열 흰색(FFFFFF)")
+    _check(_fill(ws, hr, 3).endswith(OutputWorkbook._FILL_PROD), "상품명 값 칸 C열 상품군색(FBE2D5)")
+    _check(_fill(ws, hr + 2, 3).endswith(OutputWorkbook._FILL_KIND), "VID 값 칸 C열 흰색(FFFFFF)")
     _check(_fill(ws, hr + 1, 7).endswith(OutputWorkbook._FILL_LABEL), "지표 라벨 G열 연파랑(D9E9FA)")
     # 라벨/값 텍스트(pos0 상품명·pos2 VID·pos3 판매방식·pos4 로켓그로스)
     _check(_n(ws.cell(hr, 1).value) == "상품명", "pos0 라벨 A='상품명'")
