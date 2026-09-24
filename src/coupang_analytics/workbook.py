@@ -1208,6 +1208,62 @@ class OutputWorkbook:
             if not _norm(ws.cell(row, 3).value):
                 ws.cell(row, 3, " / ".join(vids))
 
+    def _group_sibling_blocks(self) -> None:
+        """같은 등록상품명(기본+옵션) 블록을 **인접**하게 정렬(분산 치유·소유자 2026-09-25).
+
+        옵션이 나중 실행에서 뒤늦게 발견되면 블록이 시트 끝에 붙어 형제(같은 등록상품명)와 떨어져 분산된다
+        (그룹 배경색·경계선이 한 블록으로 안 묶임). 저장(apply_style)마다 형제끼리 붙여 정렬해 치유한다.
+        이미 인접이면 no-op(흔한 경우). 재정렬한 시트가 있으면 1회 재인덱스."""
+        changed = False
+        for ws in self.wb.worksheets:
+            if ws.title in _SPECIAL_SHEETS:
+                continue
+            if self._regroup_sheet_blocks(ws):
+                changed = True
+        if changed:
+            self._reindex()
+
+    def _regroup_sheet_blocks(self, ws) -> bool:
+        """한 시트의 상품 블록을 등록상품명 **첫 등장 순서로 그룹핑**해 형제끼리 인접하게 재배치(값만 이동).
+
+        행 insert 없이 블록 값을 스냅샷 → 비우기 → 새 순서로 재기록한다(병합은 apply_style 이 뒤에서 재생성,
+        서식도 재계산되므로 값만 옮기면 안전). 이미 형제끼리 인접(desired==현재)이면 no-op. 재배치했으면 True."""
+        headers = sorted(self._date_rows.get(ws.title, []))
+        if len(headers) < 2:
+            return False
+        regs = [self.registered_name(ws.title, _key(ws.cell(h, _COL_NAME).value))
+                or _key(ws.cell(h, _COL_NAME).value) for h in headers]
+        first_idx: dict[str, int] = {}
+        for i, rg in enumerate(regs):
+            first_idx.setdefault(rg, i)
+        desired = sorted(range(len(headers)), key=lambda i: (first_idx[regs[i]], i))
+        if desired == list(range(len(headers))):
+            return False   # 이미 형제끼리 인접(흔한 경우)
+        maxc = ws.max_column
+        last_data = max((r for r in range(1, ws.max_row + 1)
+                         if any(ws.cell(r, c).value not in (None, "") for c in range(1, maxc + 1))),
+                        default=headers[0])
+        snaps = []                                   # 블록별 값 스냅샷(꼬리 빈 행 제거)
+        for i, h in enumerate(headers):
+            stop = headers[i + 1] if i + 1 < len(headers) else last_data + 1
+            rows = list(range(h, stop))
+            while len(rows) > 1 and all(_norm(ws.cell(rows[-1], c).value) == "" for c in range(1, maxc + 1)):
+                rows.pop()
+            snaps.append([[ws.cell(r, c).value for c in range(1, maxc + 1)] for r in rows])
+        _unmerge_all(ws)                             # 값 이동 전 병합 해제(쓰기 안전, apply_style 재병합)
+        for r in range(headers[0], last_data + 1):   # 블록 영역 비우기
+            for c in range(1, maxc + 1):
+                ws.cell(r, c).value = None
+        w = headers[0]                               # 새 순서로 재기록(블록 사이 빈 줄 1)
+        for oi in desired:
+            for rowvals in snaps[oi]:
+                for c, v in enumerate(rowvals, 1):
+                    if v is not None:
+                        ws.cell(w, c, v)
+                w += 1
+            w += 1
+        return True
+
     def _v4_layout(self, hr: int, m_end: int) -> dict:
         """레이아웃 v4 헤더 라벨/값 칸 배치(소유자 확정 2026-09-24). 우측 지표 N줄과 정렬되도록 좌측
         A:B(라벨)·C:F(값)를 pos별로 매핑한다. 로켓그로스(재고 포함, 7줄)만 판매일/입고 3줄, 판매자배송(6줄)은 생략.
@@ -1262,6 +1318,7 @@ class OutputWorkbook:
         # 멱등·값 보존이라 결과파일 저장 때마다 시계열이 일자별로 끊기지 않게 유지된다(§'미실행 날짜=공란').
         self.normalize_date_columns()
         self._migrate_vids_to_meta()   # 옛 마스터 vid(이름칸 꼬리) → 메타 col3(v4 name-only 렌더 전 유실 방지)
+        self._group_sibling_blocks()   # 같은 등록상품명(기본+옵션) 블록 인접 정렬(분산 치유)
         thin = Side(style="thin", color="BFBFBF")
         sty = _StyleCtx(
             font=Font(name=self._FN, size=11),

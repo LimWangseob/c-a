@@ -560,6 +560,29 @@ def t1_vid_source_option_split():
     wb6 = OutputWorkbook.load(p3)
     assert wb6.products_of(bz2) == ["유지품"] and wb6.product_vids(bz2, "유지품") == ["K1"], "재로드 후 삭제/유지 불일치"
     _ok("단일 블록 삭제(delete_product_block): 대상만 제거·나머지 온전·메타 정리·재로드 보존")
+    # ── 같은 등록상품명(기본+옵션) 블록 인접 정렬(분산 치유·소유자 2026-09-25) ──
+    # 옵션이 나중에 발견돼 시트 끝에 붙어 형제와 분산된 마스터를 apply_style 이 형제끼리 인접하게 재배치(값 무손실).
+    from coupang_analytics.workbook import _norm, _key
+    bz3 = "정렬가게"
+    wbR = OutputWorkbook.empty()
+    wbR.ensure_product_block(bz3, "도마 (대)", config.KIND_CONTRACT, ["도마kw"], registered="도마"); wbR.set_product_vids(bz3, "도마 (대)", ["D1"])
+    wbR.ensure_product_block(bz3, "비누", config.KIND_PERSONAL, ["비누kw"], registered="비누"); wbR.set_product_vids(bz3, "비누", ["S1"])
+    wbR.ensure_product_block(bz3, "도마 (소)", config.KIND_CONTRACT, ["소kw"], registered="도마"); wbR.set_product_vids(bz3, "도마 (소)", ["D2"])   # 뒤늦게 발견=끝에 붙음(분산)
+    wbR.set_keyword_rank(bz3, "도마 (대)", "도마kw", "09.25", 7)
+    wbR.set_keyword_rank(bz3, "도마 (소)", "소kw", "09.25", 9)
+    wbR.set_product_metric(bz3, "비누", config.M_SALES, "09.25", 222)
+    pR = d / "정렬.xlsx"; wbR.apply_style(); wbR.save(pR)
+    wbR2 = OutputWorkbook.load(pR)
+    wsR = wbR2.wb[bz3]
+    order = [_key(wsR.cell(r, 3).value) for r in range(1, wsR.max_row + 1) if _norm(wsR.cell(r, 7).value) == "날짜"]
+    assert order == ["도마 (대)", "도마 (소)", "비누"], f"형제 블록 인접 정렬 실패(분산): {order}"
+    assert wbR2.product_keywords(bz3, "도마 (소)") == ["소kw"], "재배치 후 키워드 유실"
+    assert sorted(wbR2.sibling_vids(bz3, "도마 (대)")) == ["D1", "D2"], "재배치 후 sibling_vids 오류"
+    _rr = wbR2._kw_row[(bz3, "도마 (소)", "소kw")]; _cc = wbR2._date_col[bz3]["09.25"]
+    assert wsR.cell(_rr, _cc).value == "9위", "재배치 후 순위값 유실"
+    _mr = wbR2._metric_row[(bz3, "비누", config.M_SALES)]
+    assert wsR.cell(_mr, _cc).value == 222, "재배치 후 지표값 유실"
+    _ok("형제(같은 등록상품명) 블록 인접 정렬: 분산→인접 재배치·키워드/vid/순위/지표 값 무손실·재로드 보존")
 
 
 def t1_ledger_dedup():
