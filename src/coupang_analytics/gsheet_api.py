@@ -102,6 +102,11 @@ def _cell_strikethrough(cell: dict) -> bool:
     return False
 
 
+# 구글 Sheets API 공통 재시도(일시적 오류만) — read timeout·429·5xx 지수백오프.
+_GSHEET_MAX_RETRIES = 4
+_RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
+
+
 class GSheetClient:
     """서비스계정으로 인증된 Sheets API v4 클라이언트(스프레드시트 1개 대상).
 
@@ -110,7 +115,8 @@ class GSheetClient:
     """
 
     def __init__(self, url_or_id: str, *, sa_info: dict | None = None,
-                 store: CredStore | None = None, sa_path: str | Path | None = None):
+                 store: CredStore | None = None, sa_path: str | Path | None = None,
+                 on_log=None):
         self.spreadsheet_id = sheet_id_from_url(url_or_id)
         self._sa_info = sa_info if sa_info is not None else load_sa_info(store, sa_path)
         if not self._sa_info:
@@ -118,6 +124,7 @@ class GSheetClient:
         self._svc = None                 # googleapiclient sheets service (지연 생성)
         self._HttpError = None
         self._meta: dict | None = None   # 스프레드시트 메타(시트 목록) 캐시
+        self._log = on_log or (lambda m: None)   # 재시도 로그(구글시트 반영 단계에서 전달)
 
     # ── 내부 ────────────────────────────────────────────────────
     def _sheets(self):
@@ -151,17 +158,47 @@ class GSheetClient:
             return GSheetError(f"구글 시트 API 오류(status={status}): {exc}")
         return GSheetError(f"구글 시트 처리 중 오류: {exc}")
 
+    def _is_transient(self, exc: Exception) -> bool:
+        """일시적(재시도 가치) 오류인가 — read timeout·연결끊김·429·5xx. 영구오류(403/404/400)는 즉시 실패."""
+        import socket
+        if isinstance(exc, (socket.timeout, TimeoutError, ConnectionError)):
+            return True
+        HttpError = self._HttpError
+        if HttpError is not None and isinstance(exc, HttpError):
+            return getattr(getattr(exc, "resp", None), "status", None) in _RETRY_STATUS
+        # ssl/http 계층의 read timeout 은 일반 OSError 로 올라오기도 함(메시지로 판별)
+        return "timed out" in str(exc).lower() or "timeout" in str(exc).lower()
+
+    def _exec(self, request, what: str = "구글 API 호출"):
+        """**모든 Sheets API 호출의 공통 진입점** — 일시적 오류(read timeout·429·5xx)를 지수백오프로
+        재시도한다. 판매수집(①)·키워드(②)·순위(③) 어느 단계의 구글시트 반영이든 이 경로를 거치므로
+        여기 한 곳의 복원이 전 단계에 적용된다(소유자 2026-09-24: 공통 모듈화). 영구오류는 즉시 _wrap."""
+        import time
+        import random
+        last: Exception | None = None
+        for attempt in range(_GSHEET_MAX_RETRIES + 1):
+            try:
+                return request.execute()
+            except Exception as exc:
+                last = exc
+                if attempt < _GSHEET_MAX_RETRIES and self._is_transient(exc):
+                    wait = min(2 ** attempt, 8) + random.uniform(0, 0.4)
+                    self._log(f"  [구글시트] {what} 일시 오류({str(exc)[:60]}) — "
+                              f"{wait:.1f}s 후 재시도 {attempt + 1}/{_GSHEET_MAX_RETRIES}")
+                    time.sleep(wait)
+                    continue
+                raise self._wrap(exc)
+        raise self._wrap(last if last is not None else RuntimeError(what))   # 도달 불가(방어)
+
     # ── 메타/시트 ────────────────────────────────────────────────
     def meta(self, refresh: bool = False) -> dict:
         """스프레드시트 메타(제목·시트목록). 시트 gid/이름 조회용. 캐시."""
         if self._meta is None or refresh:
-            try:
-                self._meta = self._sheets().get(
-                    spreadsheetId=self.spreadsheet_id,
-                    fields=("properties.title,"
-                            "sheets.properties(sheetId,title,index,gridProperties.rowCount)")).execute()
-            except Exception as exc:
-                raise self._wrap(exc)
+            self._meta = self._exec(self._sheets().get(
+                spreadsheetId=self.spreadsheet_id,
+                fields=("properties.title,"
+                        "sheets.properties(sheetId,title,index,gridProperties.rowCount)")),
+                "메타 조회")
         return self._meta
 
     def title(self) -> str:
@@ -192,12 +229,9 @@ class GSheetClient:
         gid = self.sheet_id(title)
         if gid is not None:
             return gid
-        try:
-            resp = self._sheets().batchUpdate(
-                spreadsheetId=self.spreadsheet_id,
-                body={"requests": [{"addSheet": {"properties": {"title": title}}}]}).execute()
-        except Exception as exc:
-            raise self._wrap(exc)
+        resp = self._exec(self._sheets().batchUpdate(
+            spreadsheetId=self.spreadsheet_id,
+            body={"requests": [{"addSheet": {"properties": {"title": title}}}]}), "시트 생성")
         self._meta = None   # 캐시 무효화(새 시트 반영)
         return resp["replies"][0]["addSheet"]["properties"]["sheetId"]
 
@@ -210,13 +244,10 @@ class GSheetClient:
         existing = {t: self.sheet_id(t) for t in titles}   # 첫 조회에서 meta() 캐시
         missing = [t for t in titles if existing[t] is None]
         if missing:
-            try:
-                self._sheets().batchUpdate(
-                    spreadsheetId=self.spreadsheet_id,
-                    body={"requests": [{"addSheet": {"properties": {"title": t}}} for t in missing]}
-                ).execute()
-            except Exception as exc:
-                raise self._wrap(exc)
+            self._exec(self._sheets().batchUpdate(
+                spreadsheetId=self.spreadsheet_id,
+                body={"requests": [{"addSheet": {"properties": {"title": t}}} for t in missing]}),
+                "시트 일괄 생성")
             self._meta = None
             for t in missing:
                 existing[t] = self.sheet_id(t)             # 새 메타 1회 재조회 후 gid 채움
@@ -231,33 +262,25 @@ class GSheetClient:
         """
         rng = f"'{sheet}'" if cell_range is None else (
             cell_range if "!" in cell_range else f"'{sheet}'!{cell_range}")
-        try:
-            resp = self._sheets().values().get(
-                spreadsheetId=self.spreadsheet_id, range=rng,
-                valueRenderOption="FORMATTED_VALUE",
-                dateTimeRenderOption="FORMATTED_STRING").execute()
-        except Exception as exc:
-            raise self._wrap(exc)
+        resp = self._exec(self._sheets().values().get(
+            spreadsheetId=self.spreadsheet_id, range=rng,
+            valueRenderOption="FORMATTED_VALUE",
+            dateTimeRenderOption="FORMATTED_STRING"), f"값 읽기({sheet})")
         return resp.get("values", [])
 
     def write_values(self, sheet: str, rows: list[list[Any]], start: str = "A1") -> None:
         """rows 를 start(예 'A1')부터 덮어쓴다(USER_ENTERED — 수식/하이퍼링크 반영)."""
         rng = f"'{sheet}'!{start}"
-        try:
-            self._sheets().values().update(
-                spreadsheetId=self.spreadsheet_id, range=rng,
-                valueInputOption="USER_ENTERED", body={"values": rows}).execute()
-        except Exception as exc:
-            raise self._wrap(exc)
+        self._exec(self._sheets().values().update(
+            spreadsheetId=self.spreadsheet_id, range=rng,
+            valueInputOption="USER_ENTERED", body={"values": rows}), f"값 쓰기({sheet})")
 
     def clear_values(self, sheet: str, cell_range: str | None = None) -> None:
         """시트(또는 범위)의 값 지우기(서식은 유지)."""
         rng = f"'{sheet}'" if cell_range is None else (
             cell_range if "!" in cell_range else f"'{sheet}'!{cell_range}")
-        try:
-            self._sheets().values().clear(spreadsheetId=self.spreadsheet_id, range=rng).execute()
-        except Exception as exc:
-            raise self._wrap(exc)
+        self._exec(self._sheets().values().clear(
+            spreadsheetId=self.spreadsheet_id, range=rng), f"값 지우기({sheet})")
 
     def read_grid(self, sheet: str, *, notes: bool = False) -> tuple[list[list[str]], list[list[str | None]]]:
         """시트의 (표시값 격자, 메모 격자)를 한 번에 읽는다.
@@ -266,12 +289,9 @@ class GSheetClient:
         notes=False면 메모 격자는 빈 리스트들. 시트가 비어 있으면 ([], []).
         """
         fields = "sheets.data.rowData.values(formattedValue" + (",note" if notes else "") + ")"
-        try:
-            resp = self._sheets().get(
-                spreadsheetId=self.spreadsheet_id, ranges=[f"'{sheet}'"],
-                includeGridData=True, fields=fields).execute()
-        except Exception as exc:
-            raise self._wrap(exc)
+        resp = self._exec(self._sheets().get(
+            spreadsheetId=self.spreadsheet_id, ranges=[f"'{sheet}'"],
+            includeGridData=True, fields=fields), f"격자 읽기({sheet})")
         data = resp.get("sheets", [{}])[0].get("data", [{}])
         row_data = (data[0] if data else {}).get("rowData", [])
         values: list[list[str]] = []
@@ -294,12 +314,9 @@ class GSheetClient:
         rng = f"'{sheet}'" if not max_rows else f"'{sheet}'!1:{max_rows}"
         fields = ("sheets.data.rowData.values("
                   "effectiveFormat.textFormat.strikethrough,textFormatRuns.format.strikethrough)")
-        try:
-            resp = self._sheets().get(
-                spreadsheetId=self.spreadsheet_id, ranges=[rng],
-                includeGridData=True, fields=fields).execute()
-        except Exception as exc:
-            raise self._wrap(exc)
+        resp = self._exec(self._sheets().get(
+            spreadsheetId=self.spreadsheet_id, ranges=[rng],
+            includeGridData=True, fields=fields), f"취소선 읽기({sheet})")
         data = resp.get("sheets", [{}])[0].get("data", [{}])
         row_data = (data[0] if data else {}).get("rowData", [])
         return [[_cell_strikethrough(c) for c in row.get("values", [])] for row in row_data]
@@ -311,11 +328,8 @@ class GSheetClient:
         """
         if not requests:
             return {}
-        try:
-            return self._sheets().batchUpdate(
-                spreadsheetId=self.spreadsheet_id, body={"requests": requests}).execute()
-        except Exception as exc:
-            raise self._wrap(exc)
+        return self._exec(self._sheets().batchUpdate(
+            spreadsheetId=self.spreadsheet_id, body={"requests": requests}), "서식/구조 반영")
 
 
 def check_access(url_or_id: str, *, store: CredStore | None = None,

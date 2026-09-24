@@ -437,10 +437,59 @@ def t7_staff_keywords_merge() -> None:
     _ok("직원 키워드 위치기반 파싱·1개 추가·기존 보존·재실행 idempotent(→그 상품 AI 선정 생략)")
 
 
+def t8_exec_retry() -> None:
+    """공통 재시도(_exec) — 일시적 오류(read timeout·429·5xx)는 지수백오프 재시도로 흡수,
+    영구오류는 즉시 실패. 판매수집·키워드·순위 등 모든 구글시트 반영이 이 경로를 거친다."""
+    import socket
+    import time as _t
+    from coupang_analytics.gsheet_api import GSheetClient, GSheetError
+
+    class _Req:
+        def __init__(self, fail_n, exc):
+            self.n = 0
+            self.fail_n = fail_n
+            self.exc = exc
+
+        def execute(self):
+            self.n += 1
+            if self.n <= self.fail_n:
+                raise self.exc
+            return {"ok": True, "tries": self.n}
+
+    logs: list[str] = []
+    c = GSheetClient("https://docs.google.com/spreadsheets/d/ABC123def456/edit",
+                     sa_info={"client_email": "x@y.z"}, on_log=logs.append)
+    orig_sleep = _t.sleep
+    _t.sleep = lambda s: None                      # 테스트 즉시 실행(백오프 대기 제거)
+    try:
+        # (A) read timeout 2회 후 성공 → 재시도로 흡수
+        r = c._exec(_Req(2, socket.timeout("The read operation timed out")), "통계 미러링")
+        assert r["ok"] and r["tries"] == 3, f"재시도 후 성공 실패: {r}"
+        assert sum("재시도" in m for m in logs) >= 2, f"재시도 로그 부족: {logs}"
+        # (B) 계속 timeout → 재시도 소진 후 GSheetError
+        try:
+            c._exec(_Req(99, socket.timeout("timed out")), "영구타임아웃")
+            raise AssertionError("영구 timeout인데 예외 안 남")
+        except GSheetError:
+            pass
+        # (C) 비일시적 오류(400류)는 재시도 없이 즉시 실패
+        logs.clear()
+        try:
+            c._exec(_Req(99, ValueError("invalid range 400")), "영구오류")
+            raise AssertionError("비일시적인데 예외 안 남")
+        except GSheetError:
+            pass
+        assert not any("재시도" in m for m in logs), f"비일시적인데 재시도함: {logs}"
+    finally:
+        _t.sleep = orig_sleep
+    _ok("공통 재시도(_exec): 일시적 timeout 흡수·영구 timeout 소진 실패·비일시적 즉시 실패")
+
+
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
     for fn in (t1_ledger_rows, t1b_ledger_strike, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
-               t3d_grid_autogrow, t3c_delete_accounts, t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook, t7_staff_keywords_merge):
+               t3d_grid_autogrow, t3c_delete_accounts, t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook, t7_staff_keywords_merge,
+               t8_exec_retry):
         fn()
     print("=== 전부 통과 ===")
     return 0

@@ -66,6 +66,7 @@ python ui/app_qt.py     # 기본 UI = PySide6(Qt) + Windows 11 Fluent 스타일
   게이트) 보존. 매 추출 후 게이트 초록 유지, 커밋은 작게·자주.
 
 ## 현재 상태
+- **✅구글시트 반영 공통 재시도(2026-09-24, 소유자 요청)**: 구글시트 반영이 일시적 `read timeout`으로 중단돼 키워드가 일부만 반영된 사건(9/24 11:10 실행, 통계 6/27시트 후 timeout) 재발 방지. **`GSheetClient._exec`가 모든 Sheets API 호출의 공통 진입점** — 일시적 오류(read timeout·429·5xx)를 지수백오프로 재시도(_GSHEET_MAX_RETRIES=4), 영구오류(403/404/400)는 즉시 실패. ①판매수집·②키워드·③순위 **어느 단계의 구글시트 반영이든 이 한 곳을 거치므로 전 단계에 적용**(공통 모듈화). on_log 로 재시도 로그를 run_log 에 남김. 로컬 xlsx 마스터는 항상 먼저 저장돼 데이터 유실 없음. 검증=verify_gsheet_offline[t8]. SSOT=gsheet_api.py.
 - **🔒재고 규칙 확정·구현(2026-09-24, 소유자 결정·원본(_raw) 6계정 분석+웹근거, 메모 handoff-inventory-blank-260924·inventory-api-rfm-search)**:
   - **업번들(자동번들) 옵션 = 결과파일 완전 제외**(상품/옵션/순위/재고). 판정=상품조회 `upbundlingInfo.upBundling`. 업번들=2025-05 로켓그로스 자동생성 묶음(원상품 N개)·별도 입고 없이 원상품 재고 공유하는 가상옵션이라 '실입고' 아님. `collector.products_from_vendor_inventory`(옵션선별 `_tracked_listing_options`).
   - **재고값 = 재고현황 API(`inventory-health-dashboard`) `orderableQuantity`에서만.** ⛔상품조회 `stockQuantity`=등록시 임의입력값→**신뢰불가·쓰지말 것**(상품조회는 vid·옵션·판매방식·상태·업번들여부·매칭 전용).

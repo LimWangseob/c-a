@@ -1158,7 +1158,7 @@ def _pull_gsheet_keywords(wb, output_url: str | None, log) -> None:
         from . import gsheet_api, gsheet_stats
         if not gsheet_api.load_sa_info():
             return
-        client = gsheet_api.GSheetClient(output_url)
+        client = gsheet_api.GSheetClient(output_url, on_log=log)
         n = gsheet_stats.merge_staff_keywords(client, wb, on_log=log)
         if n:
             log(f"== [구글시트] 직원 입력 키워드 반영 {n}개 상품 → 해당 상품 AI 선정 생략(동결) ==")
@@ -1182,7 +1182,7 @@ def push_ledger_inventory(input_url: str | None, log, out_dir: str = "output") -
             return
         if not gsheet_api.load_sa_info():
             return
-        client = gsheet_api.GSheetClient(input_url)
+        client = gsheet_api.GSheetClient(input_url, on_log=log)
         n = input_list.write_ledger_inventory(client, wb, on_log=log)
         if n:
             log(f"== [관리대장] 그로스 재고 역기록 완료 — {n}개 상품(입력 대장 AD컬럼) ==")
@@ -1212,7 +1212,7 @@ def _push_gsheet(wb, output_url: str | None, log, removed_accounts=None) -> None
             return
         log(f"== [구글시트] 결과 반영 시작 — 출력시트 …{str(output_url)[-24:]} ==")
         _phase = "클라이언트 연결"
-        client = gsheet_api.GSheetClient(output_url)
+        client = gsheet_api.GSheetClient(output_url, on_log=log)
         if removed_accounts:   # 삭제된 계정 먼저 제거(행+시트) → 이후 미러링/동기화는 남은 것만 대상
             _phase = "삭제계정 정리"
             d = gsheet_index.delete_accounts(client, removed_accounts, on_log=log)
