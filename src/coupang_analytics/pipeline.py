@@ -1061,25 +1061,27 @@ def _resolve_keywords(pctx: _ProcCtx, biz: str, pname: str, base: str, kind: str
         return [], {}, [], {}
 
 
-def _apply_vid_meta(wb, biz: str, pname: str, kind: str, opt_vids, vid_meta, date_iso) -> None:
-    """이 옵션(블록)의 판매가·로켓그로스 판매일을 기록(소유자 2026-09-24).
+def _apply_vid_meta(wb, biz: str, pname: str, kind: str, opt_vids, vid_meta, date_iso,
+                    inbound_summary: str = "") -> None:
+    """이 옵션(블록)의 판매가·로켓그로스 판매일·최근입고를 기록(소유자 2026-09-24).
 
     **판매가**=이 블록 옵션(첫 vid) salePrice → **'판매가' 지표행(재고현황 아래)에 일자별** 기록(마케팅 일환
-    변동 추적). **로켓그로스 판매일**(판매시작일 근사)=로켓그로스/둘다만 → 헤더에 표시(판매자배송은 None→생략).
-    vid_meta 없거나 매칭 vid 없으면 no-op."""
-    if not vid_meta:
-        return
+    변동 추적). **로켓그로스 판매일**(판매시작일 근사)+**최근입고 요약**(관리대장)=로켓그로스/둘다만 → 헤더에
+    묶어 표시(판매자배송은 로켓그로스 개념 없어 생략). vid_meta 비어도 최근입고(대장)는 반영."""
     price = None
     started = ""
-    for v in opt_vids:
-        if v in vid_meta:
-            price, started = vid_meta[v]
-            break
+    if vid_meta:
+        for v in opt_vids:
+            if v in vid_meta:
+                price, started = vid_meta[v]
+                break
     if isinstance(price, (int, float)) and price > 0:
         wb.set_product_metric(biz, pname, config.M_SALE_PRICE, date_iso, price)   # 판매가 지표행(일자별)
-    inbound = started if kind in config.KINDS_WITH_INVENTORY else None
-    if inbound:
-        wb.set_product_extra(biz, pname, inbound_date=inbound)   # 로켓그로스 판매일(헤더)
+    is_rg = kind in config.KINDS_WITH_INVENTORY
+    inbound = started if is_rg else None
+    summ = inbound_summary if (is_rg and inbound_summary) else None
+    if inbound or summ:
+        wb.set_product_extra(biz, pname, inbound_date=inbound, inbound_summary=summ)   # 헤더 로켓그로스 묶음
 
 
 def _process_option(pctx: _ProcCtx, biz: str, product, base: str, kind: str, title: str,
@@ -1097,7 +1099,7 @@ def _process_option(pctx: _ProcCtx, biz: str, product, base: str, kind: str, tit
         wb.ensure_product_block(biz, pname, kind, wb.product_keywords(biz, pname),
                                 rank_rows=is_rep, registered=base)
         wb.set_product_vids(biz, pname, opt_vids)
-        _apply_vid_meta(wb, biz, pname, kind, opt_vids, pctx.vid_meta, pctx.date_iso)   # 판매가 지표행·판매일 헤더
+        _apply_vid_meta(wb, biz, pname, kind, opt_vids, pctx.vid_meta, pctx.date_iso, product.inbound_summary)   # 판매가 지표행·판매일/최근입고 헤더
         _fill_product_metrics(wb, biz, pname, opt_vids, kind, pctx.metrics, pctx.inv_by_vid,
                               pctx.date_iso, log=log, sale_status=pctx.sale_status)
         wb.save(pctx.save_path)
@@ -1131,7 +1133,7 @@ def _process_option(pctx: _ProcCtx, biz: str, product, base: str, kind: str, tit
         if mi is not None and getattr(mi, "name", ""):
             _ilog(log, "노출명", opt_vids, "", f"검색결과 노출명 = {_short(mi.name, 40)} (블록명은 등록상품명 고정)")
     wb.set_product_vids(biz, pname, opt_vids)          # 대표 옵션 vid 저장(③은 sibling_vids 합집합으로 매칭)
-    _apply_vid_meta(wb, biz, pname, kind, opt_vids, pctx.vid_meta, pctx.date_iso)   # 판매가 지표행·판매일 헤더
+    _apply_vid_meta(wb, biz, pname, kind, opt_vids, pctx.vid_meta, pctx.date_iso, product.inbound_summary)   # 판매가 지표행·판매일/최근입고 헤더
     _fill_product_metrics(wb, biz, pname, opt_vids, kind, pctx.metrics, pctx.inv_by_vid, date_iso,
                           log=log, sale_status=pctx.sale_status)
     _log_diagnose(product, track_info, ai_key, log, wb=wb, biz=biz, roles=roles, pname=pname)

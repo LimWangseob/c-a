@@ -1639,18 +1639,17 @@ class OutputWorkbook:
         return self._product_rows()
 
     def status_of(self, biz: str, product: str, has_sheet: bool = True) -> str:
-        """계정목록 상태 열 값 — 우선순위: 대장 판매중지 > (미수집) > **쿠팡 실제 판매상태(판매중지/임시저장/
-        승인반려)** > 체험단 상태. 소유자 요구(2026-09-22): 쿠팡 상품조회 판매상태(임시저장·승인반려 포함)를
-        **정확히 표기**한다(판매중/부분판매중은 정상이라 체험단/공란으로 둠)."""
+        """계정목록 상태 열 값 — **관리대장 상태만**(소유자 2026-09-24 확정): 대장 판매중지 > (미수집) > 체험단 상태.
+
+        ⚠소유자 결정(2026-09-24): 계정목록엔 **관리대장 상태**만 표기한다. 쿠팡 상품조회 판매상태(임시저장·
+        승인반려 등)는 **날짜별 '판매상태' 지표행**에서 이미 보여주므로 계정목록에선 뺀다(2026-09-22의
+        productStatus 폴백 되돌림 — 실측 근거=소유자 지시, 상태는 소스별로 위치 분리해 표기)."""
         if has_sheet and product and self.is_discontinued(biz, product):
-            return "⛔ 판매중지"
+            return "⛔ 판매중지"          # 관리대장 상태(대장에서 빠짐)
         if not has_sheet:
             return "미수집"
-        ss = self.sale_status(biz, product)   # 쿠팡 실제 판매상태(상품조회 productStatus)
-        if ss in _NOT_SELLING_STATUSES:       # 판매중지/임시저장/승인반려 → 그대로 표기
-            return ss
         s, e, m = self.marketing_of(biz, product)
-        return self._mkt_status(s, e, m)
+        return self._mkt_status(s, e, m)   # 체험단중 / 공란
 
     def _is_secondary_option(self, biz: str, product: str) -> bool:
         """다중옵션 상품의 **2차(비대표) 옵션 블록**인가 — 계정목록(상품별 로스터)에서 제외 대상.

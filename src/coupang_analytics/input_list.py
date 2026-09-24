@@ -33,6 +33,7 @@ class Product:
     mkt_start: str = ""             # 마케팅 시작일(관리대장 입력) — 그 상품만 매일 수집·비고·배경색
     mkt_end: str = ""               # 마케팅 종료일
     mkt_mon: str = ""               # 모니터링 종료일(이후 수집 중단)
+    inbound_summary: str = ""       # 로켓그로스 최근입고 요약(관리대장) — 헤더 '최근입고 : …'(소유자 2026-09-24)
 
     @property
     def display_title(self) -> str:
@@ -105,11 +106,38 @@ def _column_index(header: list[str]) -> dict[str, int]:
     for key, aliases in (("mkt_start", config.IN_ALIASES_MKT_START),
                          ("mkt_end", config.IN_ALIASES_MKT_END),
                          ("mkt_mon", config.IN_ALIASES_MKT_MON),
-                         ("status", config.IN_ALIASES_STATUS)):
+                         ("status", config.IN_ALIASES_STATUS),
+                         ("inb_reqdate", config.IN_ALIASES_INB_REQDATE),
+                         ("inb_reqqty", config.IN_ALIASES_INB_REQQTY),
+                         ("inb_workqty", config.IN_ALIASES_INB_WORKQTY),
+                         ("inb_box", config.IN_ALIASES_INB_BOX),
+                         ("inb_pallet", config.IN_ALIASES_INB_PALLET),
+                         ("inb_donedate", config.IN_ALIASES_INB_DONEDATE),
+                         ("inb_shipdate", config.IN_ALIASES_INB_SHIPDATE)):
         i = _alias_index(norm, aliases)
         if i is not None:
             idx[key] = i
     return idx
+
+
+def _inbound_summary(row, idx: dict) -> str:
+    """관리대장 입고 컬럼(요청일자·요청/작업수량·박스·파레트·완료/출고일자)을 한 줄 요약으로.
+
+    '최근입고 : {요청일자} 요청N·작업N·박스N·파레트N·완료MM.DD·출고MM.DD' — 값 있는 항목만. 전부 비면 ''."""
+    def _v(key):
+        return _norm(_cell(row, idx.get(key)))
+    reqdate = _v("inb_reqdate")
+    parts = []
+    for key, label in (("inb_reqqty", "요청"), ("inb_workqty", "작업"),
+                       ("inb_box", "박스"), ("inb_pallet", "파레트"),
+                       ("inb_donedate", "완료"), ("inb_shipdate", "출고")):
+        v = _v(key)
+        if v:
+            parts.append(f"{label}{v}")
+    if not reqdate and not parts:
+        return ""
+    head = reqdate + " " if reqdate else ""
+    return f"최근입고 : {head}{'·'.join(parts)}".rstrip()
 
 
 def _cell(row, i):
@@ -292,7 +320,8 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
                 prod_cancelled = False
                 current_prod = Product(prod, mkt_start=_norm_date(_cell(row, i_ms)),
                                        mkt_end=_norm_date(_cell(row, i_me)),
-                                       mkt_mon=_norm_date(_cell(row, i_mm)))
+                                       mkt_mon=_norm_date(_cell(row, i_mm)),
+                                       inbound_summary=_inbound_summary(row, idx))
                 if current_acct is None:
                     errors.append(f"{row_no}행: 소속 계정 없이 상품 '{prod}'")
                 else:

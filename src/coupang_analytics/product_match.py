@@ -159,10 +159,12 @@ def scope_to_ledger(ledger: list[Product], discovered: list[Product]) -> tuple[l
             out.append(Product(
                 name=_title(d), title=_title(d), kind=d.kind,
                 options=[Option(o.label, list(o.vendor_item_ids), list(o.product_ids)) for o in d.options],
-                mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon))   # 대장 마케팅 이월
+                mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon,
+                inbound_summary=lp.inbound_summary))   # 대장 마케팅·입고요약 이월
         else:
             out.append(Product(name=lp.name, title=lp.name, kind=config.KIND_PERSONAL, options=[Option("")],
-                               mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon))
+                               mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon,
+                               inbound_summary=lp.inbound_summary))
     return out, len(res)
 
 
@@ -194,6 +196,7 @@ def augment_unmatched(ledger: list[Product], tracked: list[Product],
         out[i] = Product(
             name=_title(d), title=_title(d), kind=d.kind,
             options=[Option(o.label, list(o.vendor_item_ids), list(o.product_ids)) for o in d.options],
-            mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon)   # 대장 마케팅 이월
+            mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon,
+                               inbound_summary=lp.inbound_summary)   # 대장 마케팅·입고요약 이월
         added += 1
     return out, added

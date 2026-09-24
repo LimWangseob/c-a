@@ -186,7 +186,9 @@ def pin_sale_status_accurate():
     wb.set_product_vids(BIZ, "임시상품", ["vidT"])
     wb.apply_sale_status(BIZ, {"vidT": "임시저장"})
     _check(wb.sale_status(BIZ, "임시상품") == "임시저장", "apply_sale_status: 임시저장 보존(부분판매중 아님)")
-    _check(wb.status_of(BIZ, "임시상품") == "임시저장", "status_of(계정목록 상태)=임시저장 표기")
+    # 계정목록 status_of = 대장 상태만(소유자 2026-09-24 결정). productStatus(임시저장 등)는
+    # 계정목록이 아니라 상품블록 '판매상태' 지표행(sale_status)에만 표기 → status_of 는 productStatus 미반영.
+    _check(wb.status_of(BIZ, "임시상품") != "임시저장", "status_of(계정목록)=대장상태만(productStatus 미표기)")
     _check(wb.rank_suppressed(BIZ, "임시상품"), "임시저장 → 순위 제외(rank_suppressed)")
 
 
