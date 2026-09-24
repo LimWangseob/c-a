@@ -1077,6 +1077,7 @@ def _apply_vid_meta(wb, biz: str, pname: str, kind: str, opt_vids, vid_meta, dat
                 break
     if isinstance(price, (int, float)) and price > 0:
         wb.set_product_metric(biz, pname, config.M_SALE_PRICE, date_iso, price)   # 판매가 지표행(일자별)
+    wb.set_product_kind(biz, pname, kind)   # 판매방식(메타 col11) — 레이아웃 v4 헤더 '판매방식' 줄 표시용
     is_rg = kind in config.KINDS_WITH_INVENTORY
     inbound = started if is_rg else None
     summ = inbound_summary if (is_rg and inbound_summary) else None

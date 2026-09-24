@@ -510,17 +510,17 @@ def t1_vid_source_option_split():
     # ③ 리스팅 순위 매칭 = 같은 등록상품명 두 블록의 vid 합집합
     assert sorted(wb.sibling_vids(biz, rep)) == ["v_beige", "v_gray"], f"sibling_vids 합집합 오류: {wb.sibling_vids(biz, rep)}"
     assert sorted(wb.sibling_vids(biz, sec)) == ["v_beige", "v_gray"], "2차 블록 sibling_vids 오류"
-    # vid 출처=이름칸 → 숨김시트 3열 미사용 + 재로드 왕복 복원
+    # vid 출처(A안·레이아웃 v4)=숨김 메타시트 3열 → 저장·재로드 왕복 복원
     path = d / "옵션.xlsx"
     wb.apply_style(); wb.save(path)
     meta = openpyxl.load_workbook(path)["_상품ID"]
-    col3 = [meta.cell(r, 3).value for r in range(2, meta.max_row + 1)]
-    assert all(not v for v in col3), f"숨김시트 3열에 vid 잔존(폐지 대상): {col3}"
+    col3 = {meta.cell(r, 3).value for r in range(2, meta.max_row + 1) if meta.cell(r, 3).value}
+    assert col3 == {"v_beige", "v_gray"}, f"숨김시트 3열 vid 저장 실패(vid 출처): {col3}"
     wb2 = OutputWorkbook.load(path)
-    assert wb2.product_vids(biz, rep) == ["v_beige"], f"대표 vid 이름칸 복원 실패: {wb2.product_vids(biz, rep)}"
-    assert wb2.product_vids(biz, sec) == ["v_gray"], "2차 vid 이름칸 복원 실패"
+    assert wb2.product_vids(biz, rep) == ["v_beige"], f"대표 vid 메타 복원 실패: {wb2.product_vids(biz, rep)}"
+    assert wb2.product_vids(biz, sec) == ["v_gray"], "2차 vid 메타 복원 실패"
     assert sorted(wb2.sibling_vids(biz, rep)) == ["v_beige", "v_gray"], "재로드 후 sibling_vids 오류"
-    _ok("옵션 분리(대표=키워드+순위·2차=판매정보만)·sibling_vids 합집합·vid 출처=이름칸(숨김3열 폐지) 재로드 왕복")
+    _ok("옵션 분리(대표=키워드+순위·2차=판매정보만)·sibling_vids 합집합·vid 출처=메타 col3 저장·재로드 왕복")
     # 마이그레이션: 옛 블록(옛 이름·전 옵션 vid·키워드·과거 순위) → 대표 등록상품명으로 정규화(이력 승계)
     wb3 = OutputWorkbook.empty()
     old = "옛노출명 캠핑타프"

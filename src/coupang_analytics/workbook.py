@@ -236,6 +236,18 @@ class OutputWorkbook:
         self._date_col.clear(); self._date_rows.clear()
         self._metric_row.clear(); self._kw_row.clear(); self._vid_row.clear()
         self._block_vids.clear()
+        # vid 출처(A안, 레이아웃 v4)=숨김 메타시트 `_상품ID` col3. 헤더 이름칸 꼬리는 옛 마스터 폴백용.
+        # 메타시트가 계정시트 뒤에 올 수 있어 **먼저 한 번** 스캔해 {(사업자,상품): [vid…]} 를 만든다.
+        meta_vids: dict[tuple[str, str], list[str]] = {}
+        if _META_SHEET in self.wb.sheetnames:
+            mws = self.wb[_META_SHEET]
+            for r in range(2, mws.max_row + 1):
+                b = _norm(mws.cell(r, 1).value); p = _norm(mws.cell(r, 2).value)
+                raw = _norm(mws.cell(r, 3).value)
+                if b and p and raw:
+                    vs = [x.strip() for x in raw.split("/") if x.strip()]
+                    if vs:
+                        meta_vids[(b, p)] = vs
         for ws in self.wb.worksheets:
             if ws.title in (_INDEX_SHEET, _ACCT_SHEET, _MKT_SHEET, _DISC_SHEET):  # 특수시트 = 데이터 아님
                 continue
@@ -258,7 +270,8 @@ class OutputWorkbook:
                 if metric == _LABEL_DATE:                       # 상품 헤더행 → 새 상품
                     cur_prod = name
                     self._date_rows[biz].append(r)
-                    vids = _vids_from_cell(raw_name)            # 이름칸 'VID :' 꼬리 → vid 출처(A)
+                    # vid 출처=메타 col3(우선). 없으면 옛 마스터 이름칸 'VID :' 꼬리서 폴백 복원(무손실 마이그레이션).
+                    vids = meta_vids.get((biz, cur_prod)) or _vids_from_cell(raw_name)
                     if vids:
                         self._block_vids[(biz, cur_prod)] = vids
                     for c in range(_FIRST_DATE, ws.max_column + 1):
@@ -834,13 +847,14 @@ class OutputWorkbook:
             return self.wb[_META_SHEET]
         ws = self.wb.create_sheet(title=_META_SHEET)
         ws.sheet_state = "hidden"
-        ws.cell(1, 1, "사업자"); ws.cell(1, 2, "상품명"); ws.cell(1, 3, "(미사용)")   # 옛 vid열 — 폐지(vid=헤더 이름칸)
+        ws.cell(1, 1, "사업자"); ws.cell(1, 2, "상품명"); ws.cell(1, 3, "상품ID(vid)")   # vid 목록('/' 조인) — 레이아웃 v4서 vid 출처(A안, 헤더 이름칸 꼬리→여기로 이전)
         ws.cell(1, 4, "키워드서명"); ws.cell(1, 5, "권고제목")   # ⑤ 제목 캐시(동결 상품 AI 재호출 생략)
         ws.cell(1, 6, "등록상품명")   # 대장 원본명(노출명으로 바뀌어도 불변) — 계정목록 안정키·3c 마케팅 매칭 기준
         ws.cell(1, 7, "판매상태(쿠팡)")   # 쿠팡 재고 판매상태(판매중/부분판매중/판매중지) — 대장 판매중지와 대조해 경고 표시
         ws.cell(1, 8, "상품판매가(미사용)")   # 판매가는 '판매가' 지표행으로 이관(2026-09-24)
         ws.cell(1, 9, "로켓그로스판매일")   # saleStartedAt(판매일 근사) — 헤더 표시용, 판매자배송은 공란
         ws.cell(1, 10, "최근입고요약")   # 관리대장 입고 요약(요청/작업/박스/파레트/완료/출고) — 헤더 로켓그로스 묶음
+        ws.cell(1, 11, "판매방식")   # 구분(로켓그로스/판매자배송/둘다) — 레이아웃 v4 헤더 '판매방식' 줄 표시용(표시 전용·인덱스 아님)
         return ws
 
     def set_product_extra(self, biz: str, product: str, sale_price=None, inbound_date=None,
@@ -872,17 +886,48 @@ class OutputWorkbook:
         ws = self.wb[_META_SHEET]
         return ws.cell(row, 8).value, _norm(ws.cell(row, 9).value), _norm(ws.cell(row, 10).value)
 
+    def set_product_kind(self, biz: str, product: str, kind: str) -> None:
+        """상품 **판매방식(구분)**을 숨김 메타시트 11열에 저장(레이아웃 v4 헤더 '판매방식' 줄 표시용).
+
+        런타임에 파이프라인이 매번 넘기는 표시 전용 값 — 인덱스가 아니라 헤더 렌더에만 쓴다(kind A열 쓰기 대체).
+        빈값이면 no-op(기존 보존 — 로그인 못한 실행이 지우지 않게)."""
+        biz, product, kind = _norm(biz), _key(product), _norm(kind)
+        if not (biz and product and kind):
+            return
+        ws = self._meta_ws()
+        row = self._vid_row.get((biz, product))
+        if row is None:
+            row = ws.max_row + 1
+            ws.cell(row, 1, biz); ws.cell(row, 2, product)
+            self._vid_row[(biz, product)] = row
+        ws.cell(row, 11, kind)
+
+    def product_kind(self, biz: str, product: str) -> str:
+        """저장된 판매방식(없으면 '' — 옛 마스터·미로그인). 레이아웃 v4 헤더 '판매방식' 줄 값."""
+        row = self._vid_row.get((_norm(biz), _key(product)))
+        if row is None or _META_SHEET not in self.wb.sheetnames:
+            return ""
+        return _norm(self.wb[_META_SHEET].cell(row, 11).value)
+
     def set_product_vids(self, biz: str, product: str, vids) -> None:
         """상품의 고유ID(vendorItemId) 목록을 저장(③ 순위조회의 상품 매칭용).
 
-        vid 출처(A)=헤더 C셀. 인메모리 인덱스(_block_vids)를 갱신하고 헤더 이름칸을 즉시 렌더해
-        영속한다(숨김 `_상품ID` 3열 저장 폐지). 빈 목록이면 no-op(기존 값 보존)."""
+        vid 출처(A안, 레이아웃 v4)=숨김 메타시트 `_상품ID` col3. 인메모리 인덱스(_block_vids)를 갱신하고
+        메타 col3에 '/' 조인 저장해 영속한다(옛 마스터 폴백=헤더 이름칸 꼬리는 _reindex 가 처리). 헤더 C셀도
+        즉시 렌더(현행 _display_name 의 'VID :' 꼬리 — 레이아웃 v4 렌더 전까지 표시 병행). 빈 목록이면 no-op."""
         vids = [str(v) for v in dict.fromkeys(vids) if v]
         if not vids:
             return
         biz, product = _norm(biz), _key(product)
         self._block_vids[(biz, product)] = vids
-        self._render_block_name(biz, product)   # 헤더 C셀 'VID :' 꼬리 즉시 렌더(중간저장/재개/②③ 유실 방지)
+        ws = self._meta_ws()                    # 메타 col3 영속(vid 출처 = 여기)
+        row = self._vid_row.get((biz, product))
+        if row is None:
+            row = ws.max_row + 1
+            ws.cell(row, 1, biz); ws.cell(row, 2, product)
+            self._vid_row[(biz, product)] = row
+        ws.cell(row, 3, " / ".join(vids))
+        self._render_block_name(biz, product)   # 헤더 C셀 렌더(중간저장/재개/②③ 유실 방지)
 
     def product_vids(self, biz: str, product: str) -> list[str]:
         """저장된 상품 고유ID 목록(없으면 빈 리스트). 출처=헤더 이름칸(_reindex 가 복원한 _block_vids)."""
