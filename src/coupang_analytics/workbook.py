@@ -537,8 +537,10 @@ class OutputWorkbook:
             if (kind in config.KINDS_WITH_INVENTORY
                     and (biz, product, config.M_INVENTORY) not in self._metric_row):
                 self._add_metric_row(biz, product, config.M_INVENTORY)
-            # 판매상태 지표행(실행일마다 쿠팡 판매상태 기록, 소유자 2026-09-24) — 옛 마스터 블록엔 없어
-            # 자동 추가한다(모든 구분 공통·개인상품 포함). 멱등(이미 있으면 미진입).
+            # 판매가·판매상태 지표행(실행일마다 기록, 소유자 2026-09-24) — 옛 마스터 블록엔 없어 자동 추가
+            # (모든 구분 공통·개인상품 포함). 멱등(이미 있으면 미진입). 판매가=재고현황 아래, 판매상태=그 아래.
+            if (biz, product, config.M_SALE_PRICE) not in self._metric_row:
+                self._add_metric_row(biz, product, config.M_SALE_PRICE)
             if (biz, product, config.M_SALE_STATUS) not in self._metric_row:
                 self._add_metric_row(biz, product, config.M_SALE_STATUS)
             return
@@ -836,16 +838,18 @@ class OutputWorkbook:
         ws.cell(1, 4, "키워드서명"); ws.cell(1, 5, "권고제목")   # ⑤ 제목 캐시(동결 상품 AI 재호출 생략)
         ws.cell(1, 6, "등록상품명")   # 대장 원본명(노출명으로 바뀌어도 불변) — 계정목록 안정키·3c 마케팅 매칭 기준
         ws.cell(1, 7, "판매상태(쿠팡)")   # 쿠팡 재고 판매상태(판매중/부분판매중/판매중지) — 대장 판매중지와 대조해 경고 표시
-        ws.cell(1, 8, "상품판매가")   # 옵션 salePrice — 헤더 표시용(소유자 2026-09-24)
-        ws.cell(1, 9, "로켓그로스입고일")   # saleStartedAt(입고일 근사) — 헤더 표시용, 판매자배송은 공란
+        ws.cell(1, 8, "상품판매가(미사용)")   # 판매가는 '판매가' 지표행으로 이관(2026-09-24)
+        ws.cell(1, 9, "로켓그로스판매일")   # saleStartedAt(판매일 근사) — 헤더 표시용, 판매자배송은 공란
+        ws.cell(1, 10, "최근입고요약")   # 관리대장 입고 요약(요청/작업/박스/파레트/완료/출고) — 헤더 로켓그로스 묶음
         return ws
 
-    def set_product_extra(self, biz: str, product: str, sale_price=None, inbound_date=None) -> None:
-        """헤더 표시용 부가정보(상품판매가·로켓그로스 입고일 근사=판매시작일)를 숨김시트 8·9열에 저장.
+    def set_product_extra(self, biz: str, product: str, sale_price=None, inbound_date=None,
+                          inbound_summary=None) -> None:
+        """헤더 표시용 로켓그로스 부가정보를 숨김시트에 저장(소유자 2026-09-24).
 
-        소유자 2026-09-24: 상품 제목·VID 아래에 '상품판매가 :'·'로켓그로스 입고일 :' 로 표시. inbound_date 는
-        **로켓그로스/둘다만** 넘어옴(판매자배송은 None→공란). 값 없으면(None) 그 칸은 안 건드림(기존 보존).
-        _display_name 이 이 값을 읽어 헤더 C셀을 렌더한다(apply_style 멱등)."""
+        inbound_date=로켓그로스 판매일(판매시작일 근사, 9열)·inbound_summary=관리대장 최근입고 요약(10열).
+        **로켓그로스/둘다만** 넘어옴(판매자배송 None→공란). 값 None이면 그 칸 미접촉(기존 보존). 판매가(sale_price)는
+        '판매가' 지표행으로 이관해 8열은 미사용(호환 위해 인자만 유지). _display_name 이 9·10열을 읽어 헤더 렌더."""
         biz, product = _norm(biz), _key(product)
         if not (biz and product):
             return
@@ -855,18 +859,18 @@ class OutputWorkbook:
             row = ws.max_row + 1
             ws.cell(row, 1, biz); ws.cell(row, 2, product)
             self._vid_row[(biz, product)] = row
-        if sale_price is not None:
-            ws.cell(row, 8, int(sale_price) if isinstance(sale_price, (int, float)) else sale_price)
         if inbound_date:
             ws.cell(row, 9, str(inbound_date))
+        if inbound_summary:
+            ws.cell(row, 10, str(inbound_summary))
 
     def _product_extra(self, biz: str, product: str) -> tuple:
-        """(상품판매가, 로켓그로스입고일) — 헤더 렌더용. 없으면 (None, '')."""
+        """(상품판매가[미사용], 로켓그로스판매일, 최근입고요약) — 헤더 렌더용. 없으면 (None, '', '')."""
         row = self._vid_row.get((_norm(biz), _key(product)))
         if row is None or _META_SHEET not in self.wb.sheetnames:
-            return None, ""
+            return None, "", ""
         ws = self.wb[_META_SHEET]
-        return ws.cell(row, 8).value, _norm(ws.cell(row, 9).value)
+        return ws.cell(row, 8).value, _norm(ws.cell(row, 9).value), _norm(ws.cell(row, 10).value)
 
     def set_product_vids(self, biz: str, product: str, vids) -> None:
         """상품의 고유ID(vendorItemId) 목록을 저장(③ 순위조회의 상품 매칭용).
@@ -1048,13 +1052,15 @@ class OutputWorkbook:
         if not vids:
             return name
         tail = f"{name}{config.NAME_ID_SEP}\nVID : {' / '.join(vids)}"
-        # 상품 제목·VID 아래에 상품판매가·로켓그로스 입고일(근사=판매시작일) 표기(소유자 2026-09-24).
+        # 상품 제목·VID 아래에 **로켓그로스 관련 정보**를 묶어 표기(소유자 2026-09-24, 유형A). 판매일(판매시작일
+        # 근사)·최근입고(요청/작업/박스/파레트/완료/출고). 판매자배송(개인)은 로켓그로스 개념 없어 줄 생략.
         # ⚠ 반드시 'VID :' 줄 **뒤**에 붙인다 — _vids_from_cell 은 'VID :' 줄만 파싱하므로 vid 오염 없음.
-        price, inbound = self._product_extra(biz, name)
+        # 판매가는 헤더가 아니라 '판매가' 지표행(재고현황 아래)에 일자별 기록(마케팅 일환 변동 추적).
+        _price, inbound, inbound_line = self._product_extra(biz, name)
         if inbound:                       # 로켓그로스/둘다만(판매자배송은 공란 → 줄 생략)
-            tail += f"\n로켓그로스 입고일 : {inbound}"
-        if isinstance(price, (int, float)) and price > 0:
-            tail += f"\n상품판매가 : {int(price):,}원"
+            tail += f"\n로켓그로스 판매일 : {inbound}"
+        if inbound_line:                  # 최근입고 요약(관리대장) — 로켓그로스 정보로 묶어 판매일 아래
+            tail += f"\n{inbound_line}"
         return tail
 
     def resolve_block_name(self, biz: str, vids) -> str | None:
@@ -1254,11 +1260,12 @@ class OutputWorkbook:
         is_mkt = self._mkt_status(mstart, mend, _mmon) == "체험단중"
         is_disc = self.is_discontinued(ws.title, nm)   # 대장에서 사라짐 = 판매중지 표기
         mcols = self._mkt_cols(ws, mstart, mend)
+        promo_cols = self._promo_cols(ws, mstart)   # 체험단 시작일~+1개월 → 노출순위 배경색(소유자 2026-09-24)
         kh = self._find_kw_head(ws, hr, end)   # 키워드 소헤더행(C='키워드')·없으면 None(2차 옵션 블록)
         m_end = (kh - 1) if kh else end
         self._style_metric_rows(ws, sty, hr, m_end, mcols, maxc, prod_fill)
         if kh:
-            self._style_keyword_rows(ws, sty, kh, end, mcols, maxc, is_disc, is_mkt)
+            self._style_keyword_rows(ws, sty, kh, end, promo_cols, maxc, is_disc, is_mkt)
             self._flag_sale_mismatch(ws, sty, kh, nm, is_disc)
         self._style_block_edges(ws, sty, i, hr, end, m_end, kh, headers, regs, maxc)
 
@@ -1272,6 +1279,23 @@ class OutputWorkbook:
                 if _d and _d >= _s and (not _e or _d <= _e):
                     mcols.add(_cc)
         return mcols
+
+    def _promo_cols(self, ws, mstart) -> set[int]:
+        """체험단 **시작일부터 1개월** 에 해당하는 일자 컬럼번호 집합 — 노출순위 행 배경색용(소유자 2026-09-24).
+
+        마케팅 종료일(mend)과 무관하게 '시작일 + 1개월'(같은 날, 월말 보정) 창으로 계산한다. 시작 없으면 빈 집합."""
+        s = _parse_date(mstart)
+        if not s:
+            return set()
+        y, mo = (s.year + 1, 1) if s.month == 12 else (s.year, s.month + 1)
+        import calendar
+        e = _date(y, mo, min(s.day, calendar.monthrange(y, mo)[1]))   # 시작일 +1개월(월말 보정)
+        out: set[int] = set()
+        for _lbl, _cc in self._date_col.get(ws.title, {}).items():
+            _d = _parse_date(_lbl)
+            if _d and s <= _d <= e:
+                out.add(_cc)
+        return out
 
     def _find_kw_head(self, ws, hr: int, end: int):
         """블록(hr~end) 안 키워드 소헤더행(C='키워드'). 없으면 None(2차 옵션 블록=판매정보만)."""

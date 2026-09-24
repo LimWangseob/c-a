@@ -8,11 +8,12 @@ M_VISITORS = "방문자"     # 계약 방문자수
 M_VIEWS = "노출량"        # 계약 노출량(조회수)
 M_INVENTORY = "재고현황"   # 판매가능 재고수량 — **로켓그로스(계약)만** 해당(rfm-inventory)
 INV_NOT_INBOUND = "미입고"  # 재고현황 API에 없는 로켓그로스 원상품 = 물류센터 실입고 안 됨(재고 0=품절과 구분)
+M_SALE_PRICE = "판매가"    # 판매가(salePrice) — 마케팅 일환으로 자주 변동 → **실행일마다** 지표행에 기록(소유자 2026-09-24). 재고현황 아래
 M_SALE_STATUS = "판매상태"  # 쿠팡 실제 판매상태(판매중/판매중지/부분판매중/임시저장/승인반려/검토중)를 **실행일마다** 기록(소유자 2026-09-24)
 M_RANK = "노출 순위"      # 키워드별 오가닉 순위(PC)
-# 기본 지표 = 판매량·방문자·노출량·판매상태(계약/개인 공통). 재고현황은 로켓그로스(계약)에만 추가.
-CONTRACT_METRICS = (M_SALES, M_VISITORS, M_VIEWS, M_INVENTORY, M_SALE_STATUS)  # 로켓그로스(재고 포함)
-PERSONAL_METRICS = (M_SALES, M_VISITORS, M_VIEWS, M_SALE_STATUS)              # 판매자배송(재고 없음)
+# 기본 지표 = 판매량·방문자·노출량·판매가·판매상태(계약/개인 공통). 재고현황은 로켓그로스(계약)에만 추가(판매가 위).
+CONTRACT_METRICS = (M_SALES, M_VISITORS, M_VIEWS, M_INVENTORY, M_SALE_PRICE, M_SALE_STATUS)  # 로켓그로스(재고 포함)
+PERSONAL_METRICS = (M_SALES, M_VISITORS, M_VIEWS, M_SALE_PRICE, M_SALE_STATUS)              # 판매자배송(재고 없음)
 # 상품 구분(배송/판매 방식) — API registration_type 로 자동 판별(RFM=로켓그로스, NORMAL=판매자배송).
 KIND_CONTRACT = "로켓그로스"          # 옵션이 전부 RFM(로켓그로스)
 KIND_PERSONAL = "판매자배송"          # 옵션에 RFM 없음(판매자배송)
