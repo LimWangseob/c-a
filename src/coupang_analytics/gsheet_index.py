@@ -22,7 +22,8 @@ COL_REP = 0                                    # 대표자(2026-09-17 추가)
 COL_BUSINESS, COL_PRODUCT, COL_ACCOUNT = 1, 2, 3
 COL_MKT_START, COL_MKT_END, COL_MKT_MON = 4, 5, 6
 COL_STATUS = 7
-N_COLS = 8
+COL_PROMO = 8          # 체험단효과(자동열, 2026-09-24) — E~G 직원 마케팅 뒤(끝)에 추가해 미접촉
+N_COLS = 9
 HEADER_ROW0 = 1        # 헤더가 있는 0-based 행(=시트 2행). 0행=제목.
 DATA_START0 = 2        # 데이터 시작 0-based 행(=시트 3행)
 DISCONTINUED = "⛔ 판매중지"
@@ -60,6 +61,8 @@ class IndexRow:
     link_row: int | None = None   # C 하이퍼링크 대상 행(상품 블록 헤더)
     band: int = 0            # 사업자 등장 순서 인덱스 → 바탕색 밴딩(사업자별 시각 구분)
     representative: str = ""  # A 대표자(관리대장 대표자명)
+    promo_effect: str = ""   # I 체험단효과 표시문자열(예 "판매 +38% · 순위 32→18 ↑"). 없으면 공란
+    promo_verdict: str = ""  # 판정: 'up'(개선=초록)·'down'(악화=적색)·''(혼조/무변화=밴드색)
 
 
 @dataclass
@@ -171,7 +174,18 @@ def _auto_cells_request(sheet_id: int, grid_row: int, row: IndexRow) -> list[dic
             "fields": "userEnteredValue,userEnteredFormat.backgroundColor",
         }
     }
-    return [abcd, h]
+    promo_bg = (_PROMO_UP_FILL if row.promo_verdict == "up"
+                else _PROMO_DOWN_FILL if row.promo_verdict == "down" else _band_fill(row.band))
+    promo = {                                    # I 체험단효과(자동열) — 개선=연초록·악화=연적색·그외=밴드색
+        "updateCells": {
+            "start": {"sheetId": sheet_id, "rowIndex": grid_row, "columnIndex": COL_PROMO},
+            "rows": [{"values": [{**_s(row.promo_effect),
+                                  "userEnteredFormat": {"backgroundColor": promo_bg,
+                                                        "horizontalAlignment": "CENTER"}}]}],
+            "fields": "userEnteredValue,userEnteredFormat.backgroundColor,userEnteredFormat.horizontalAlignment",
+        }
+    }
+    return [abcd, h, promo]
 
 
 def _status_only_request(sheet_id: int, grid_row: int, status: str) -> dict:
@@ -270,10 +284,15 @@ def _build_requests_for_plan(sheet_id: int, plan: SyncPlan,
     return reqs
 
 
-_HEADS = ["대표자", "사업자", "상품명(클릭 이동)", "계정ID", "체험단 시작일", "체험단 종료일", "모니터링 종료일", "상태"]
+_HEADS = ["대표자", "사업자", "상품명(클릭 이동)", "계정ID", "체험단 시작일", "체험단 종료일",
+          "모니터링 종료일", "상태", "체험단효과"]
 _MKT_LABELS = (_HEADS[COL_MKT_START], _HEADS[COL_MKT_END], _HEADS[COL_MKT_MON])   # 체험단 3열 헤더 라벨
 _COL_WIDTHS = {COL_REP: 110, COL_BUSINESS: 150, COL_PRODUCT: 300, COL_ACCOUNT: 110,
-               COL_MKT_START: 95, COL_MKT_END: 95, COL_MKT_MON: 100, COL_STATUS: 90}
+               COL_MKT_START: 95, COL_MKT_END: 95, COL_MKT_MON: 100, COL_STATUS: 90,
+               COL_PROMO: 190}
+# 체험단효과 셀 배경 — 개선(연초록)·악화(연적색). 무판정/공란은 사업자 밴드색.
+_PROMO_UP_FILL = {"red": 0.788, "green": 0.902, "blue": 0.788}     # C9E6C9 연초록
+_PROMO_DOWN_FILL = {"red": 0.957, "green": 0.800, "blue": 0.800}   # F4CCCC 연적색
 
 
 def _full_build_requests(sheet_id: int, desired: list[IndexRow]) -> list[dict]:
@@ -405,10 +424,12 @@ def roster_from_workbook(wb, stats_gids: dict[str, int]) -> list[IndexRow]:
         linkable = bool(has_sheet and prod and hdr)
         gid = stats_gids.get(biz) if linkable else None
         band = band_by_acct.setdefault(acct or biz, len(band_by_acct))   # 계정ID 기준(없으면 사업자 폴백)
+        effect, verdict = wb.promo_effect(biz, prod) if has_sheet else ("", "")   # 체험단효과(시작일 직전→최신)
         rows.append(IndexRow(business=biz, product=prod, account_id=acct,
                              status=wb.status_of(biz, prod, has_sheet), key=key,
                              link_gid=gid, link_row=(hdr if (linkable and gid is not None) else None),
-                             band=band, representative=wb.representative_of(biz)))
+                             band=band, representative=wb.representative_of(biz),
+                             promo_effect=effect, promo_verdict=verdict))
     return rows
 
 

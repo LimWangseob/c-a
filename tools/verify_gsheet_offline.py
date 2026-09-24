@@ -391,7 +391,19 @@ def t6_roster_from_workbook() -> None:
         for j, cell in enumerate(uc["rows"][0]["values"]):
             if cell.get("userEnteredFormat", {}).get("backgroundColor"):
                 bg_cols.add(start + j)
-    assert bg_cols == {0, 1, 2, 3, 7}, bg_cols       # _auto_cells_request는 A·B·C·D·H 담당(대표자 추가)
+    assert bg_cols == {0, 1, 2, 3, 7, 8}, bg_cols    # A·B·C·D·H + I(체험단효과) 담당(E~G 미접촉)
+    # I열 체험단효과 색: 개선=연초록·악화=연적색·그외=밴드색(값도 기록)
+    def _promo_cell(verdict):
+        rq = gi._auto_cells_request(1, DATA_START0,
+                                    IndexRow("s", "p", "id", "예정", "k", band=2,
+                                             promo_effect="판매 +38% · 순위 32→18 ↑", promo_verdict=verdict))
+        pc = next(r for r in rq if r["updateCells"]["start"]["columnIndex"] == gi.COL_PROMO)
+        v = pc["updateCells"]["rows"][0]["values"][0]
+        return v["userEnteredValue"]["stringValue"], v["userEnteredFormat"]["backgroundColor"]
+    txt, up_bg = _promo_cell("up")
+    assert txt == "판매 +38% · 순위 32→18 ↑" and up_bg == gi._PROMO_UP_FILL
+    assert _promo_cell("down")[1] == gi._PROMO_DOWN_FILL
+    assert _promo_cell("")[1] == gi._band_fill(2)    # 무판정 → 사업자 밴드색
     # E~G는 _mkt_fill_request가 같은 밴드색으로(행 전체 동일 바탕색) + 값은 안 건드림(repeatCell)
     mreq = gi._mkt_fill_request(1, DATA_START0, 1)
     rc = mreq["repeatCell"]

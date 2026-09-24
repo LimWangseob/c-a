@@ -1443,6 +1443,93 @@ class OutputWorkbook:
                     return (_norm(ws.cell(r, 3).value), _norm(ws.cell(r, 4).value), _norm(ws.cell(r, 5).value))
         return ("", "", "")
 
+    # ── 체험단 효과(계정목록 자동열) — 시작일 직전값 → 최신값 점 비교 ──────────
+    @staticmethod
+    def _cell_num(ws, row: int | None, col: int):
+        """(행,열) 셀을 숫자로(int/float/숫자문자열) — 아니면 None."""
+        if not row:
+            return None
+        v = ws.cell(row=row, column=col).value
+        if isinstance(v, (int, float)):
+            return v
+        s = _norm(v)
+        try:
+            return int(s) if s and s.lstrip("-").isdigit() else (float(s) if s else None)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _rank_num(v):
+        """순위 셀 → 정수 순위. '32위'=32, 정수=그대로. **'44위밖'(미발견)·공란·차단은 None**(정확 순위만)."""
+        if isinstance(v, (int, float)):
+            return int(v) if v > 0 else None
+        s = _norm(v)
+        if not s or "위밖" in s:      # 미발견(센 개수 위밖)은 정확 순위 아님 → 제외
+            return None
+        s = s.replace("위", "").strip()
+        return int(s) if s.isdigit() and int(s) > 0 else None
+
+    def _best_rank_at(self, biz: str, product: str, col: int):
+        """그 일자 컬럼에서 이 상품 **모든 키워드 중 최고 순위(숫자 최소)** — 정확 순위만, 없으면 None."""
+        ws = self.wb[biz]
+        best = None
+        for kw in self.product_keywords(biz, product):
+            r = self._kw_row.get((biz, product, kw))
+            if not r:
+                continue
+            n = self._rank_num(ws.cell(row=r, column=col).value)
+            if n is not None and (best is None or n < best):
+                best = n
+        return best
+
+    def promo_effect(self, biz: str, product: str) -> tuple[str, str]:
+        """계정목록 '체험단효과' 열 값 — (표시문자열, 판정) 반환. 판정 ∈ {'up','down',''}.
+
+        소유자 2026-09-24: **체험단 시작일 직전 마지막 측정치 → 가장 최신 측정치**(점 비교).
+        판매=판매량 지표행 % 변화, 순위=모든 키워드 **최고 순위(숫자 최소)** before→after(예 32→18 ↑).
+        개선(판매↑·순위↑=숫자↓)=up(초록)·악화=down(적색)·데이터 부족(시작 전/후 값 없음)=('', '')=공란."""
+        biz, product = _norm(biz), _key(product)
+        start_d = _parse_date(self.marketing_of(biz, product)[0])
+        if start_d is None or biz not in self.wb.sheetnames:
+            return "", ""                                   # 체험단 시작일 없음 → 공란
+        cols = self._date_col.get(biz) or {}
+        dated = sorted(((d, c) for k, c in cols.items()
+                        if (d := _parse_date(k)) is not None), key=lambda t: t[0])
+        if not dated:
+            return "", ""
+        ws = self.wb[biz]
+
+        def _series_ba(getter):
+            """계열의 (직전값, 최신값) — 값이 있는 컬럼만: before=시작 직전 마지막 측정치, after=시작 후 최신치.
+            gap-fill 빈 컬럼(값 None)은 건너뛰어 실제 측정된 값끼리 비교한다."""
+            before = after = None
+            for d, c in dated:
+                v = getter(c)
+                if v is None:
+                    continue
+                if d < start_d:
+                    before = v
+                else:
+                    after = v
+            return before, after
+
+        parts: list[str] = []
+        score = 0
+        srow = self._metric_row.get((biz, product, config.M_SALES))
+        sb, sa = _series_ba(lambda c: self._cell_num(ws, srow, c)) if srow else (None, None)
+        if sb is not None and sa is not None and sb > 0:
+            pct = round((sa - sb) / sb * 100)
+            parts.append(f"판매 {pct:+d}%")
+            score += (1 if pct > 0 else -1 if pct < 0 else 0)
+        rb, ra = _series_ba(lambda c: self._best_rank_at(biz, product, c))
+        if rb is not None and ra is not None:
+            arrow = "↑" if ra < rb else ("↓" if ra > rb else "→")   # 순위 숫자↓ = 상위 노출 = 개선
+            parts.append(f"순위 {rb}→{ra} {arrow}")
+            score += (1 if ra < rb else -1 if ra > rb else 0)
+        if not parts:
+            return "", ""                                   # 판매·순위 둘 다 데이터 부족 → 공란
+        return " · ".join(parts), ("up" if score > 0 else "down" if score < 0 else "")
+
     # ── 판매중지/삭제(대장에서 사라짐) 표기 — 데이터는 보존, 표시만 구분 ──────
     def set_discontinued(self, biz: str, product: str, flag: bool) -> None:
         """(사업자,상품) 판매중지 여부 기록. flag=False면 해제(대장에 다시 나타나면 복귀)."""
@@ -1748,18 +1835,18 @@ class OutputWorkbook:
         n_prod = sum(1 for _b, p, _h, hs in rows if hs and p)
 
         ws.cell(1, 1, f"{_INDEX_SHEET} · 상품 {n_prod}개").font = title_font
-        ws.merge_cells("A1:H1")                            # 대표자 컬럼 추가로 8열(A~H)
+        ws.merge_cells("A1:I1")                            # 대표자+체험단효과로 9열(A~I)
         ws.cell(1, 1).alignment = center
-        # 열: 1 대표자 · 2 사업자 · 3 상품명 · 4 계정ID · 5~7 체험단(관리대장 입력·표시) · 8 상태.
+        # 열: 1 대표자 · 2 사업자 · 3 상품명 · 4 계정ID · 5~7 체험단(관리대장 입력·표시) · 8 상태 · 9 체험단효과.
         heads = ["대표자", "사업자", "상품명(클릭 이동)", "계정ID",
-                 _MKT_COLS[0], _MKT_COLS[1], _MKT_COLS[2], "상태"]
+                 _MKT_COLS[0], _MKT_COLS[1], _MKT_COLS[2], "상태", "체험단효과"]
         for c, h in enumerate(heads, 1):
             x = ws.cell(2, c, h)
             x.font = bold; x.alignment = center; x.border = box
             x.fill = mkt_fill if 5 <= c <= 7 else head_fill   # 5~7열=마케팅(관리대장 값 표시)
         for r, (biz, prod, hdr, has_sheet) in enumerate(rows, start=3):
             self._index_row(ws, r, biz, prod, hdr, has_sheet, sty)
-        for c, w in {1: 16, 2: 22, 3: 40, 4: 15, 5: 13, 6: 13, 7: 14, 8: 10}.items():
+        for c, w in {1: 16, 2: 22, 3: 40, 4: 15, 5: 13, 6: 13, 7: 14, 8: 10, 9: 26}.items():
             ws.column_dimensions[get_column_letter(c)].width = w
         ws.row_dimensions[1].height = 21
         ws.freeze_panes = "E3"                            # 제목·헤더 + 대표자/사업자/상품/계정ID 고정(가로 스크롤 시)
@@ -1794,6 +1881,12 @@ class OutputWorkbook:
         st = ws.cell(r, 8, status); st.alignment = sty.center; st.border = sty.box
         _gray = ("미수집", "종료", "⛔ 판매중지", "판매중지", "임시저장", "승인반려")   # 미판매/비활성 = 옅게
         st.font = sty.red_bold if status == "체험단중" else (sty.gray_font if status in _gray else sty.font)
+        eff, verdict = self.promo_effect(biz, prod) if has_sheet else ("", "")   # 9열 체험단효과(시작일 직전→최신)
+        pe = ws.cell(r, 9, eff); pe.alignment = sty.center; pe.border = sty.box; pe.font = sty.font
+        if verdict == "up":
+            pe.fill = PatternFill("solid", fgColor="C9E6C9")   # 개선=연초록
+        elif verdict == "down":
+            pe.fill = PatternFill("solid", fgColor="F4CCCC")   # 악화=연적색
         for c in (1, 2, 3, 4):
             ws.cell(r, c).alignment = sty.left if c == 3 else sty.center
             ws.cell(r, c).border = sty.box

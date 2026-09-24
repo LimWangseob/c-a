@@ -699,6 +699,52 @@ def t1_delete_account():
     _ok("가게A 시트·이력·메타(계정정보/상품ID/마케팅) 완전 삭제·가게B 온전·계정목록에서도 사라짐")
 
 
+def t1_promo_effect():
+    print("[13] 체험단효과(promo_effect) — 시작일 직전값→최신값 점 비교·최고순위·판정색")
+    wb = OutputWorkbook.empty()
+    wb.ensure_product_block("가게P", "상품P", config.KIND_CONTRACT, ["kw1", "kw2"])
+    wb.set_marketing("가게P", "상품P", "2026-09-10", "", "")          # 체험단 시작일
+    # 판매량: 시작 직전(09.05)=100 → 최신(09.20)=138  → +38%
+    wb.set_product_metric("가게P", "상품P", config.M_SALES, "2026-09-05", 100)
+    wb.set_product_metric("가게P", "상품P", config.M_SALES, "2026-09-20", 138)
+    # 순위(최고=숫자 최소): 09.05 kw1=32·kw2=40 → 32, 09.20 kw1=18·kw2=25 → 18  → 32→18 ↑(개선)
+    wb.set_keyword_rank("가게P", "상품P", "kw1", "2026-09-05", 32)
+    wb.set_keyword_rank("가게P", "상품P", "kw2", "2026-09-05", 40)
+    wb.set_keyword_rank("가게P", "상품P", "kw1", "2026-09-20", 18)
+    wb.set_keyword_rank("가게P", "상품P", "kw2", "2026-09-20", 25)
+    eff, verdict = wb.promo_effect("가게P", "상품P")
+    assert eff == "판매 +38% · 순위 32→18 ↑", eff
+    assert verdict == "up", verdict
+    # 체험단 시작일 없음 → 공란(해당없음)
+    wb.ensure_product_block("가게P", "상품Q", config.KIND_CONTRACT, ["kw"])
+    wb.set_product_metric("가게P", "상품Q", config.M_SALES, "2026-09-05", 10)
+    assert wb.promo_effect("가게P", "상품Q") == ("", ""), "체험단 없으면 공란"
+    # 시작 전 데이터 없음 → 공란(after만 있음)
+    wb.ensure_product_block("가게P", "상품R", config.KIND_CONTRACT, ["kw"])
+    wb.set_marketing("가게P", "상품R", "2026-09-01", "", "")
+    wb.set_product_metric("가게P", "상품R", config.M_SALES, "2026-09-20", 50)
+    assert wb.promo_effect("가게P", "상품R") == ("", ""), "시작 전 데이터 없으면 공란"
+    # 악화(판매↓·순위↓=숫자↑) → verdict down
+    wb.ensure_product_block("가게P", "상품S", config.KIND_CONTRACT, ["kw"])
+    wb.set_marketing("가게P", "상품S", "2026-09-10", "", "")
+    wb.set_product_metric("가게P", "상품S", config.M_SALES, "2026-09-05", 100)
+    wb.set_product_metric("가게P", "상품S", config.M_SALES, "2026-09-20", 60)
+    wb.set_keyword_rank("가게P", "상품S", "kw", "2026-09-05", 10)
+    wb.set_keyword_rank("가게P", "상품S", "kw", "2026-09-20", 40)
+    eff_s, verdict_s = wb.promo_effect("가게P", "상품S")
+    assert eff_s == "판매 -40% · 순위 10→40 ↓" and verdict_s == "down", (eff_s, verdict_s)
+    # '위밖'(미발견)은 정확 순위 아님 → 순위부분 제외(판매만 표기)
+    wb.ensure_product_block("가게P", "상품T", config.KIND_CONTRACT, ["kw"])
+    wb.set_marketing("가게P", "상품T", "2026-09-10", "", "")
+    wb.set_product_metric("가게P", "상품T", config.M_SALES, "2026-09-05", 100)
+    wb.set_product_metric("가게P", "상품T", config.M_SALES, "2026-09-20", 110)
+    wb.set_keyword_rank("가게P", "상품T", "kw", "2026-09-05", None, scanned=50)   # 50위밖
+    wb.set_keyword_rank("가게P", "상품T", "kw", "2026-09-20", None, scanned=50)
+    eff_t, _ = wb.promo_effect("가게P", "상품T")
+    assert eff_t == "판매 +10%", eff_t
+    _ok("체험단효과: +38%·32→18↑=개선 / 데이터부족=공란 / 악화=down / 위밖=순위 제외")
+
+
 # ── [6] 키워드 Phase B 선정 로직 ───────────────────────────────
 # 기본 = **결정적 모킹**(네이버·OpenAI 경계만 페이크, 실제 select_keywords_light 로직 그대로 실행).
 #        회귀 게이트가 빠르고(<2s) 결정적이려면 실 API 호출 금지(비용·네트워크·비결정성 제거).
@@ -824,6 +870,7 @@ def main():
     t1_ledger_dedup()
     t1_date_columns()
     t1_inventory_missing_error()
+    t1_promo_effect()
     t2_keywords(store, il)
     print("=" * 60)
     print("  [완료] 로그인 불필요 부분 실증 종료")
