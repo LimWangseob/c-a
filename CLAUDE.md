@@ -66,6 +66,11 @@ python ui/app_qt.py     # 기본 UI = PySide6(Qt) + Windows 11 Fluent 스타일
   게이트) 보존. 매 추출 후 게이트 초록 유지, 커밋은 작게·자주.
 
 ## 현재 상태
+- **✅3대 최종결정 구현·커밋(2026-09-24, 소유자 확정, 메모 handoff-3decisions-260924)**:
+  - **① 계정목록 상태 = 관리대장 상태만**(`workbook.status_of` productStatus 폴백 제거·**2026-09-22 되돌림**): 대장 판매중지(⛔) > 미수집 > 체험단 상태. 쿠팡 판매상태(임시저장·승인반려 등)는 **날짜별 '판매상태' 지표행**에 이미 있어 계정목록에선 뺌(소스별 위치 분리). 핀 pin_apply_style S7.
+  - **② 계정목록 자동열 '체험단효과'(I열) 신설**: `wb.promo_effect` = 체험단 시작일(`marketing_of[0]`) **직전 마지막 측정치→가장 최신 측정치** 점 비교(gap-fill 빈 컬럼 건너뜀). 판매=`M_SALES` %변화·순위=**모든 키워드 최고순위(숫자 최소)** before→after(예 "판매 +38% · 순위 32→18 ↑"). 판정 up(개선=판매↑·순위 숫자↓)=연초록·down(악화)=연적색·데이터부족=공란. 순위 `'N위밖'`(미발견)=제외(`_rank_num`). 배선 gsheet `COL_PROMO=8`·`N_COLS 8→9`(**직원 마케팅 E~G 뒤 끝**에 추가·미접촉·기존 8열 시트 자동 확장)·엑셀 `계정 목록` A~I 패리티. 소유자 확정=직전값→최신값 점비교·최고순위(평균/전체구간 아님). 핀 verify_offline[13]·verify_gsheet t6.
+  - **③ 관리대장 로켓그로스 입고 7컬럼 → 헤더 '최근입고' 요약**: 요청일자·요청수량·작업수량·박스·파레트·완료일자·출고일자 → `input_list._inbound_summary` 한 줄 요약(config `IN_ALIASES_INB_*`)·`Product.inbound_summary`(product_match 3곳 전파)→`pipeline._apply_vid_meta(inbound_summary)`→`wb.set_product_extra(inbound_summary=)` 헤더 로켓그로스 묶음(판매일+최근입고). 판매가는 별도 '판매가' 지표행(재고현황 아래) 유지. 담당자 참고용·역기록 미접촉.
+  - **[검증]** 게이트 6종+`check_complexity.py`(exit 0)+시뮬 14시나리오 초록. ⚠**라이브 확인·운용 PC 재배포 남음**. SSOT=DESIGN §계정목록·§일자컬럼.
 - **✅구글시트 반영 공통 재시도(2026-09-24, 소유자 요청)**: 구글시트 반영이 일시적 `read timeout`으로 중단돼 키워드가 일부만 반영된 사건(9/24 11:10 실행, 통계 6/27시트 후 timeout) 재발 방지. **`GSheetClient._exec`가 모든 Sheets API 호출의 공통 진입점** — 일시적 오류(read timeout·429·5xx)를 지수백오프로 재시도(_GSHEET_MAX_RETRIES=4), 영구오류(403/404/400)는 즉시 실패. ①판매수집·②키워드·③순위 **어느 단계의 구글시트 반영이든 이 한 곳을 거치므로 전 단계에 적용**(공통 모듈화). on_log 로 재시도 로그를 run_log 에 남김. 로컬 xlsx 마스터는 항상 먼저 저장돼 데이터 유실 없음. 검증=verify_gsheet_offline[t8]. SSOT=gsheet_api.py.
 - **🔒재고 규칙 확정·구현(2026-09-24, 소유자 결정·원본(_raw) 6계정 분석+웹근거, 메모 handoff-inventory-blank-260924·inventory-api-rfm-search)**:
   - **업번들(자동번들) 옵션 = 결과파일 완전 제외**(상품/옵션/순위/재고). 판정=상품조회 `upbundlingInfo.upBundling`. 업번들=2025-05 로켓그로스 자동생성 묶음(원상품 N개)·별도 입고 없이 원상품 재고 공유하는 가상옵션이라 '실입고' 아님. `collector.products_from_vendor_inventory`(옵션선별 `_tracked_listing_options`).
