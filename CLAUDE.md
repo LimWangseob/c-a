@@ -70,9 +70,10 @@ python ui/app_qt.py     # 기본 UI = PySide6(Qt) + Windows 11 Fluent 스타일
 - **🔒재고 규칙 확정·구현(2026-09-24, 소유자 결정·원본(_raw) 6계정 분석+웹근거, 메모 handoff-inventory-blank-260924·inventory-api-rfm-search)**:
   - **업번들(자동번들) 옵션 = 결과파일 완전 제외**(상품/옵션/순위/재고). 판정=상품조회 `upbundlingInfo.upBundling`. 업번들=2025-05 로켓그로스 자동생성 묶음(원상품 N개)·별도 입고 없이 원상품 재고 공유하는 가상옵션이라 '실입고' 아님. `collector.products_from_vendor_inventory`(옵션선별 `_tracked_listing_options`).
   - **재고값 = 재고현황 API(`inventory-health-dashboard`) `orderableQuantity`에서만.** ⛔상품조회 `stockQuantity`=등록시 임의입력값→**신뢰불가·쓰지말 것**(상품조회는 vid·옵션·판매방식·상태·업번들여부·매칭 전용).
-  - **재고칸 표기(`_fill_product_metrics`+`_block_sellable`)**: 재고현황에 vid 있으면 값(**0=입고됐지만 품절**)·없고 **판매중**이면 **"미입고"**(`config.INV_NOT_INBOUND`, 등록됐으나 물류센터 실입고 안 됨)·없고 **판매중지**면 공란(판매중지 경고 별도). 미입고vs품절 신호=**재고현황 API 존재 여부**(품절도 0으로 남고 미입고는 빠짐, 6계정 실측). 판매자배송(NORMAL)=재고 개념 없음(공란).
-  - **미입고는 결과파일엔 표기·관리대장 그로스재고 역기록엔 미접촉**(`workbook.product_inventory` 숫자 가드=대장값 보존). 판매상태맵은 `_finish`→`_process_account`→`_ProcCtx`→`_fill` 로 배선(apply_sale_status 이후 실행이라 직접 전달).
-  - 진단(임시 DIAG_VID_LOG·vid대조·raw덤프)은 조사 완료로 **전부 제거**(코드 물리삭제). SSOT=DESIGN §0-00000.
+  - **⚠️재고칸 표기 규칙 개정(소유자 2026-09-24 오후·구현은 새 세션 handoff-gsheet-inventory-followup)**: **판매중지 여부와 무관하게** 재고현황에 vid 있으면 값(**0=품절**)·**없으면 항상 "미입고"**(`config.INV_NOT_INBOUND`). 즉 옛 "없고 판매중지→공란" 분기 **폐기**(`_block_sellable` 제거 대상). 웰빙곳간처럼 계정 전체 SUSPENDED여도 재고가 텅 비지 않음.
+  - **판매상태(productStatus)는 쿠팡 그대로 존중(우선 적용)** — 재고칸이 아니라 **실행일 "비고" 항목에 항상 표시**(판매중/판매중지/부분판매중/임시저장/승인반려/검토중). all-SUSPENDED 계정도 "안 믿기" 보정 안 함(쿠팡 존중). ⛔상품조회 `stockQuantity`(재고 숫자)만 여전히 신뢰불가·안 씀.
+  - **업번들 잔재 블록 = 매 수집 시 자동 삭제**(별도 정리 도구 ❌ — 담당자 상품 변동과 충돌). reconcile/`_migrate_product_blocks`에서 이번 상품조회의 업번들 vid 집합으로 마스터 블록 삭제(vid 기반·이름패턴 아님, 색상/사이즈 변형은 유지).
+  - **[현재 구현 상태(구버전)]**: 코드는 아직 "없고 판매중→미입고·없고 판매중지→공란"(7e6e0d0)·업번들 잔재 미삭제. **위 개정은 새 세션에서 구현 예정.** 미입고는 결과파일 표기·역기록 미접촉(`workbook.product_inventory` 숫자 가드)은 유지. 재고값=재고현황 `orderableQuantity`만. SSOT=DESIGN §0-00000.
 - **✅보완 4건 반영(2026-09-22, 어제 9/21 실행 분석 근거·라이브 nicoable 검증, 메모 followups-260921-run)**:
   - **순위 = 판매중 상품만**(`workbook.rank_suppressed`): 판매중지·임시저장·승인반려·검토중·대장취소선(is_discontinued)은 ③순위 검색 **제외**(미상''은 유지). 자동/반자동 순위 헬퍼가 스킵 → 차단 예산 절약(어제 실측: 판매중지에 순위 69개 낭비·판매중 176 공란). 핀 pin_login_ranks P2.
   - **판매상태 정확 표기**(`collector.sale_status_of`): productStatus enum = ON_SALE→판매중·PARTIAL_ON_SALE→부분판매중·SUSPENDED→판매중지·**DRAFT→임시저장·REJECTED→승인반려·UNDER_REVIEW→검토중**(기존엔 판매중지로 뭉갬). `apply_sale_status`는 단일상태 보존·`status_of`(계정목록 상태)에 미판매 상태 표기. 핀 verify_offline[8]·pin_apply_style S7.
