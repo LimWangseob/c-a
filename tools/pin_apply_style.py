@@ -177,7 +177,7 @@ def pin_group_edges():
     beige = _hdr_row(ws, "타프 (베이지)")   # 그룹 시작(직전=상품S, 다른 등록명) → 상단 굵은선
     gray = _hdr_row(ws, "타프 (그레이)")    # 같은 그룹(직전=베이지) → 상단 얇은선
     _check(ws.cell(beige, 1).border.top.style == "thick", "그룹 시작 블록 상단=굵은선")
-    _check(ws.cell(gray, 1).border.top.style == "thin", "그룹 내부 변형 사이=얇은선")
+    _check(ws.cell(gray, 1).border.top.style == "medium", "그룹 내부(기본↔옵션) 구분선=medium(진하게)")
 
 
 def pin_trailing_trim():

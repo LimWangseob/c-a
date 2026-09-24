@@ -55,6 +55,7 @@ class _StyleCtx:
     wrap: Alignment
     thick: Side
     thin: Side
+    mid: Side          # 기본↔옵션(같은 상품군 내부) 구분선 — 격자(thin)보다 진하고 그룹 바깥(thick)보다 얇게
 
 
 def _sty_cell(ws, r, c, sty: _StyleCtx, *, fill=None, fnt=None, align=None, num=False) -> None:
@@ -1335,6 +1336,7 @@ class OutputWorkbook:
             wrap=Alignment(horizontal="center", vertical="center", wrap_text=True),
             thick=Side(style="thick"),
             thin=thin,
+            mid=Side(style="medium", color="808080"),   # 기본↔옵션 구분선(진한 회색·medium)
         )
         for ws in self.wb.worksheets:
             if ws.title in _SPECIAL_SHEETS:              # 숨김 매핑·목차·계정정보 시트는 블록 서식 대상 아님
@@ -1532,10 +1534,11 @@ class OutputWorkbook:
         # ⚠ 마지막 블록은 end+1 행이 없어서 거기 테두리를 그리면 **빈 행이 새로 생긴다** → end 행 자체 bottom.
         group_start = (i == 0) or (regs[i] != regs[i - 1])
         group_end = (i + 1 >= len(headers)) or (regs[i + 1] != regs[i])
-        _sty_edge(ws, maxc, hr, "top", sty.thick if group_start else sty.thin)
+        # 그룹 바깥=굵은선(thick)·같은 상품군 내부(기본↔옵션)=진한 회색 medium(격자 thin 과 확실히 구분·소유자 2026-09-25)
+        _sty_edge(ws, maxc, hr, "top", sty.thick if group_start else sty.mid)
         if i + 1 < len(headers):
-            # 사이 블록 하단선(=구분 빈 행 상단선): 그룹 끝이면 굵게, 같은 그룹 변형 사이면 얇게
-            _sty_edge(ws, maxc, end + 1, "top", sty.thick if group_end else sty.thin)
+            # 사이 블록 하단선(=구분 빈 행 상단선): 그룹 끝이면 굵게, 같은 상품군 기본↔옵션 사이면 medium
+            _sty_edge(ws, maxc, end + 1, "top", sty.thick if group_end else sty.mid)
         # 병합(마지막) — 세로/가로 병합은 서식·경계선 적용 뒤에.
         # 레이아웃 v4 헤더: A:B 라벨 칸(상품명2·VID1·판매방식1·로켓그로스3)·C:F 값 칸(상품명2 + pos2~ 단일)을
         # pos별로 병합(전체 세로병합 폐지 — 우측 지표 7줄과 정렬). _v4_layout 이 앵커·칸수를 준다.
