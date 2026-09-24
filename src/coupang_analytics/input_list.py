@@ -121,23 +121,27 @@ def _column_index(header: list[str]) -> dict[str, int]:
 
 
 def _inbound_summary(row, idx: dict) -> str:
-    """관리대장 입고 컬럼(요청일자·요청/작업수량·박스·파레트·완료/출고일자)을 한 줄 요약으로.
+    """관리대장 입고 컬럼을 **2줄** 요약으로(레이아웃 v4 헤더 로켓그로스 pos5·pos6, 소유자 2026-09-24).
 
-    '최근입고 : {요청일자} 요청N·작업N·박스N·파레트N·완료MM.DD·출고MM.DD' — 값 있는 항목만. 전부 비면 ''."""
+    L1 `그로스요청일자 : {요청일자} · 출고일 : {출고일자}` / L2 `요청수량 : {요청수량} · 작업수량 : {작업수량}
+    · 박스 : {박스} · 파레트 : {파레트}` — 값 있는 항목만. '\n' 조인. 완료일자는 미표기. 전부 비면 ''."""
     def _v(key):
         return _norm(_cell(row, idx.get(key)))
-    reqdate = _v("inb_reqdate")
-    parts = []
-    for key, label in (("inb_reqqty", "요청"), ("inb_workqty", "작업"),
-                       ("inb_box", "박스"), ("inb_pallet", "파레트"),
-                       ("inb_donedate", "완료"), ("inb_shipdate", "출고")):
+    l1 = []
+    for key, label in (("inb_reqdate", "그로스요청일자"), ("inb_shipdate", "출고일")):
         v = _v(key)
         if v:
-            parts.append(f"{label}{v}")
-    if not reqdate and not parts:
+            l1.append(f"{label} : {v}")
+    l2 = []
+    for key, label in (("inb_reqqty", "요청수량"), ("inb_workqty", "작업수량"),
+                       ("inb_box", "박스"), ("inb_pallet", "파레트")):
+        v = _v(key)
+        if v:
+            l2.append(f"{label} : {v}")
+    line1, line2 = " · ".join(l1), " · ".join(l2)
+    if not line1 and not line2:
         return ""
-    head = reqdate + " " if reqdate else ""
-    return f"최근입고 : {head}{'·'.join(parts)}".rstrip()
+    return f"{line1}\n{line2}"
 
 
 def _cell(row, i):

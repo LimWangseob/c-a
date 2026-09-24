@@ -98,19 +98,37 @@ def pin_title_and_frame():
     merged = {str(m) for m in ws.merged_cells.ranges}
     _check("A1:E1" in merged, "제목 A1:E1 병합")
     _check("F1:G1" in merged, "목차 복귀 링크 F1:G1 병합")
-    _check(ws.column_dimensions["C"].width == 36, "C열(상품명) 너비 36")
+    # 레이아웃 v4: 좌측 라벨 칸 A:B 합(7+7=14) = 우측 지표 라벨 칸 G(14)·값 칸 C:F 재배분
+    _check(ws.column_dimensions["A"].width == 7 and ws.column_dimensions["B"].width == 7,
+           "좌측 라벨 칸 A7·B7(합 14)")
+    _check(ws.column_dimensions["G"].width == 14, "지표 라벨 칸 G14 = 좌측 라벨 칸 합")
+    _check(ws.column_dimensions["C"].width == 18, "C열(값 칸) 너비 18")
 
 
 def pin_block_fills():
-    print("[핀 S2] 상품/키워드/지표 블록 배경색")
+    print("[핀 S2] 레이아웃 v4 헤더 — A:B 라벨 칸(상품군색)·C:F 값 칸(흰)·G 지표 라벨(연파랑)")
     wb = _build()
     wb.apply_style()
     ws = wb.wb[BIZ]
-    hr = _hdr_row(ws, "상품S")
+    hr = _hdr_row(ws, "상품S")   # KIND_CONTRACT → 7줄(상품명2·VID·판매방식·로켓그로스3)
     kh = _kw_head_row(ws, hr)
-    _check(_fill(ws, hr, 1).endswith(OutputWorkbook._FILL_PROD), "상품 헤더 A열 살구색(FBE2D5)")
-    _check(_fill(ws, hr, 3).endswith(OutputWorkbook._FILL_PROD), "상품 헤더 C열 살구색")
+    # 좌측 A:B = 라벨 칸(상품군색), C:F = 값 칸(흰)
+    _check(_fill(ws, hr, 1).endswith(OutputWorkbook._FILL_PROD), "좌측 라벨 칸 A열 살구색(FBE2D5)")
+    _check(_fill(ws, hr, 3).endswith(OutputWorkbook._FILL_KIND), "값 칸 C열 흰색(FFFFFF)")
     _check(_fill(ws, hr + 1, 7).endswith(OutputWorkbook._FILL_LABEL), "지표 라벨 G열 연파랑(D9E9FA)")
+    # 라벨/값 텍스트(pos0 상품명·pos2 VID·pos3 판매방식·pos4 로켓그로스)
+    _check(_n(ws.cell(hr, 1).value) == "상품명", "pos0 라벨 A='상품명'")
+    _check(_base(ws.cell(hr, 3).value) == "상품S", "pos0 값 C=상품명(블록 KEY)")
+    _check(_n(ws.cell(hr + 2, 1).value) == "VID", "pos2 라벨 A='VID'")
+    _check(_n(ws.cell(hr + 2, 3).value) == "vidS", "pos2 값 C=vid 목록")
+    _check(_n(ws.cell(hr + 3, 1).value) == "판매방식", "pos3 라벨 A='판매방식'")
+    _check(_n(ws.cell(hr + 3, 3).value) == config.KIND_CONTRACT, "pos3 값 C=판매방식(로켓그로스)")
+    _check(_n(ws.cell(hr + 4, 1).value) == "로켓그로스", "pos4 라벨 A='로켓그로스'(3줄 세로병합 앵커)")
+    # A:B 라벨 세로병합(상품명 2줄·로켓그로스 3줄)
+    merged = {str(m) for m in ws.merged_cells.ranges}
+    _check(f"A{hr}:B{hr + 1}" in merged, "상품명 라벨 A:B 2줄 세로병합")
+    _check(f"A{hr + 4}:B{hr + 6}" in merged, "로켓그로스 라벨 A:B 3줄 세로병합")
+    _check(f"C{hr}:F{hr + 1}" in merged, "상품명 값 C:F 2줄 세로병합")
     _check(kh is not None and _fill(ws, kh, 3).endswith(OutputWorkbook._FILL_KWHEAD),
            "키워드 소헤더 회색(E8E8E8)")
     _check(_n(ws.cell(kh, 7).value) == "비고", "정상 상품 소헤더 G='비고'")

@@ -139,13 +139,11 @@ def t1_kind():
     wb.ensure_product_block("가게A", "상품B", config.KIND_BOTH, ["키워드1"])
     assert wb.has_product("가게A", "상품B")
     assert (wb._metric_row.get(("가게A", "상품B", config.M_INVENTORY)) is not None), "둘 다=재고행 있어야"
-    # 라벨 마이그레이션: 기존 블록에 구분이 바뀌면 A열 라벨만 최신화(구조 불변)
-    ws = wb.wb["가게A"]
-    hdr = next(r for r in wb._date_rows["가게A"])
-    assert ws.cell(hdr, 1).value == config.KIND_BOTH
-    wb.ensure_product_block("가게A", "상품B", config.KIND_CONTRACT, ["키워드1"])   # 재호출=라벨만 갱신
-    assert ws.cell(hdr, 1).value == config.KIND_CONTRACT, "구분 라벨 최신화 실패"
-    _ok("둘 다 블록=재고행 포함 · 재호출 시 구분 라벨 최신화(마이그레이션)")
+    # 판매방식 마이그레이션(레이아웃 v4): 구분은 A열이 아니라 **메타 col11**(product_kind)에 저장·갱신
+    assert wb.product_kind("가게A", "상품B") == config.KIND_BOTH, "판매방식 메타 저장 실패"
+    wb.ensure_product_block("가게A", "상품B", config.KIND_CONTRACT, ["키워드1"])   # 재호출=판매방식 갱신
+    assert wb.product_kind("가게A", "상품B") == config.KIND_CONTRACT, "판매방식 최신화 실패"
+    _ok("둘 다 블록=재고행 포함 · 재호출 시 판매방식(메타 col11) 최신화(마이그레이션)")
     # 개인→로켓그로스 마이그레이션 = **재고행 자동 추가**(역기록 공란 근본원인 수정, 2026-09-17)
     wb.ensure_product_block("가게A", "상품P", config.KIND_PERSONAL, ["kwP"])
     assert ("가게A", "상품P", config.M_INVENTORY) not in wb._metric_row, "개인은 재고행 없어야"
@@ -333,41 +331,52 @@ def t1_sale_status_flag():
     _col._raw_add("sales", "x"); assert _col.raw_dumps() == {}, "설정 끄면 원문 수집 안 함"
     config.SAVE_RAW_RESPONSES = _sv
     _ok("응답 원문 보관: 3 API 원문 그대로 버퍼→gzip 사이드카 저장·재로드 일치·reset·설정 off no-op")
-    # ── 헤더 표시: 상품판매가·로켓그로스 입고일(근사) + vid 파싱 안전(줄 추가해도 vid 안 깨짐) ──
-    from coupang_analytics.workbook import _vids_from_cell
+    # ── 레이아웃 v4 헤더 렌더: 좌측 A:B 라벨 / C:F 값(상품명·VID·판매방식·로켓그로스 판매일·요청·출고·수량) ──
+    def _hdr_row(ws, base):
+        for r in range(1, ws.max_row + 1):
+            if _norm(ws.cell(r, 7).value) == "날짜" and _key(ws.cell(r, 3).value) == base:
+                return r
+        raise AssertionError(f"헤더행 못 찾음: {base}")
     wbH = OutputWorkbook.empty(); bzH = "헤더비즈"
+    _inb2 = "그로스요청일자 : 09.11 · 출고일 : 09.07\n요청수량 : 200 · 작업수량 : 128 · 박스 : 32 · 파레트 : 2"
     wbH.ensure_product_block(bzH, "운동기구", config.KIND_CONTRACT, ["kw"])
     wbH.set_product_vids(bzH, "운동기구", ["V1", "V2"])
-    wbH.set_product_extra(bzH, "운동기구", inbound_date="2026-06-25", inbound_summary="최근입고 : 09.11 요청200·출고08.07")
+    wbH.set_product_extra(bzH, "운동기구", inbound_date="2026-06-25", inbound_summary=_inb2)
     from coupang_analytics.pipeline import _apply_vid_meta
     _apply_vid_meta(wbH, bzH, "운동기구", config.KIND_CONTRACT, ["V1"], {"V1": (35700, "2026-06-25")}, "2026-09-24")
     wbH.set_keyword_rank(bzH, "운동기구", "kw", "2026-09-24", 1)   # 날짜칸 확보
-    _disp = wbH._display_name(bzH, "운동기구")
-    assert "VID : V1 / V2" in _disp, f"VID 줄 없음: {_disp!r}"
-    assert "로켓그로스 판매일 : 2026-06-25" in _disp, f"판매일 줄 없음(입고일→판매일): {_disp!r}"
-    assert "최근입고 : 09.11 요청200·출고08.07" in _disp, f"최근입고 묶음 줄 없음: {_disp!r}"
-    assert "상품판매가" not in _disp, f"판매가는 헤더 아니라 지표행이어야: {_disp!r}"
-    # 판매가는 '판매가' 지표행(재고현황 아래)에 일자별
+    # _display_name = 상품명만(v4)
+    assert wbH._display_name(bzH, "운동기구") == "운동기구", f"_display_name 은 상품명만이어야: {wbH._display_name(bzH, '운동기구')!r}"
+    wbH.apply_style()
+    wsH = wbH.wb[bzH]; hrH = _hdr_row(wsH, "운동기구")   # KIND_CONTRACT → 7줄
+    assert _norm(wsH.cell(hrH + 2, 1).value) == "VID" and _norm(wsH.cell(hrH + 2, 3).value) == "V1 / V2", "pos2 VID 렌더 실패"
+    assert _norm(wsH.cell(hrH + 3, 1).value) == "판매방식" and _norm(wsH.cell(hrH + 3, 3).value) == config.KIND_CONTRACT, "pos3 판매방식 렌더 실패"
+    assert _norm(wsH.cell(hrH + 4, 3).value) == "쿠팡 등록 로켓그로스 판매일 : 2026-06-25", f"pos4 판매일 렌더 실패: {wsH.cell(hrH + 4, 3).value!r}"
+    assert _norm(wsH.cell(hrH + 5, 3).value) == "그로스요청일자 : 09.11 · 출고일 : 09.07", f"pos5 요청·출고 렌더 실패: {wsH.cell(hrH + 5, 3).value!r}"
+    assert _norm(wsH.cell(hrH + 6, 3).value) == "요청수량 : 200 · 작업수량 : 128 · 박스 : 32 · 파레트 : 2", f"pos6 수량 렌더 실패: {wsH.cell(hrH + 6, 3).value!r}"
+    # 판매가는 헤더 아니라 '판매가' 지표행(재고현황 아래)에 일자별
     _pr = wbH._metric_row.get((_norm(bzH), _key("운동기구"), config.M_SALE_PRICE))
     _pc = wbH._date_col.get(bzH, {}).get(wbH.latest_date(bzH))
     assert _pr and wbH.wb[bzH].cell(_pr, _pc).value == 35700, "판매가 지표행 일자별 기록 실패"
-    # 🔒 vid 파싱 안전: 줄이 추가돼도 vid 는 'VID :' 줄만 정확히 파싱(오염 없음)
-    assert _vids_from_cell(_disp) == ["V1", "V2"], f"vid 파싱 오염(치명): {_vids_from_cell(_disp)}"
     assert wbH.product_vids(bzH, "운동기구") == ["V1", "V2"], "product_vids 오염"
-    # 저장→재로드 후에도 vid·판매일·최근입고 유지(라운드트립)
+    # 저장→재로드 후에도 vid(메타 col3)·판매방식·판매일·최근입고 유지(라운드트립)
     _dh = Path(tempfile.mkdtemp()); wbH.apply_style(); wbH.save(_dh / "헤더.xlsx")
     wbH2 = OutputWorkbook.load(_dh / "헤더.xlsx")
-    assert wbH2.product_vids(bzH, "운동기구") == ["V1", "V2"], "재로드 후 vid 유실"
-    assert "로켓그로스 판매일 : 2026-06-25" in wbH2._display_name(bzH, "운동기구"), "재로드 후 판매일 유실"
-    # 판매자배송(개인) → 로켓그로스 판매일 줄 생략(inbound_date=None)
+    assert wbH2.product_vids(bzH, "운동기구") == ["V1", "V2"], "재로드 후 vid 유실(메타 col3)"
+    assert wbH2.product_kind(bzH, "운동기구") == config.KIND_CONTRACT, "재로드 후 판매방식 유실"
+    ws2 = wbH2.wb[bzH]; hr2 = _hdr_row(ws2, "운동기구")
+    assert _norm(ws2.cell(hr2 + 4, 3).value) == "쿠팡 등록 로켓그로스 판매일 : 2026-06-25", "재로드 후 판매일 유실"
+    # 판매자배송(개인·6줄) → 로켓그로스 3줄 생략(pos4~ 공란)
     wbP = OutputWorkbook.empty()
     wbP.ensure_product_block("개인비즈", "개인상품", config.KIND_PERSONAL, ["kw"])
     wbP.set_product_vids("개인비즈", "개인상품", ["P1"])
     _apply_vid_meta(wbP, "개인비즈", "개인상품", config.KIND_PERSONAL, ["P1"], {"P1": (9900, "2026-06-25")}, "2026-09-24")
-    _dp = wbP._display_name("개인비즈", "개인상품")
-    assert "로켓그로스 판매일" not in _dp, f"판매자배송 판매일 줄 오출력: {_dp!r}"
+    wbP.apply_style()
+    wsP = wbP.wb["개인비즈"]; hrP = _hdr_row(wsP, "개인상품")
+    assert _norm(wsP.cell(hrP + 3, 1).value) == "판매방식" and _norm(wsP.cell(hrP + 3, 3).value) == config.KIND_PERSONAL, "개인 pos3 판매방식 렌더 실패"
+    assert not any("로켓그로스" == _norm(wsP.cell(r, 1).value) for r in range(hrP, hrP + 6)), "판매자배송에 로켓그로스 라벨 오출력"
     assert wbP._metric_row.get((_norm("개인비즈"), _key("개인상품"), config.M_SALE_PRICE)), "개인상품도 판매가 지표행 있어야"
-    _ok("헤더 로켓그로스 묶음(판매일·최근입고)·판매가 지표행(일자별)·vid 파싱 안전·재로드 유지·판매자배송 판매일 생략")
+    _ok("v4 헤더 렌더(A:B 라벨/C:F 값·VID·판매방식·로켓그로스 판매일/요청·출고/수량)·재로드 유지·판매자배송 로켓그로스 생략")
     # vid별 전개 + apply_sale_status 문자열 경로(판매자배송 NORMAL 상품도 상태 커버)
     def _li(name, vid, status, rt="NORMAL"):
         return VendorInventoryListing(product_name=name, vendor_inventory_id="g_" + vid,

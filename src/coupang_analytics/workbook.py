@@ -488,18 +488,10 @@ class OutputWorkbook:
         return ws
 
     def _update_kind_label(self, biz: str, product: str, kind: str) -> None:
-        """기존 블록의 **구분 라벨(A열)만** 최신화(구조 변경 없음). 라벨 문구 변경(마이그레이션: '계약 상품'→
-        '로켓그로스' 등)·구분 변경(로켓그로스→둘 다) 반영. 재고행 유무 등 구조는 그대로(기존 로켓그로스/둘 다는
-        이미 재고행 보유). 헤더행을 찾아 A셀 값만 바꾼다(A:B 세로병합 앵커=헤더행 A셀이라 표시 갱신됨)."""
-        kind = _norm(kind)
-        if not kind or biz not in self.wb.sheetnames:
-            return
-        ws = self.wb[biz]
-        for r in self._date_rows.get(biz, []):
-            if _key(ws.cell(r, _COL_NAME).value) == product:
-                if _norm(ws.cell(r, _COL_KIND).value) != kind:
-                    ws.cell(r, _COL_KIND, kind)
-                return
+        """기존 블록의 **판매방식(구분)** 최신화 — 레이아웃 v4에서 구분은 A열이 아니라 **메타 col11**에 저장하고
+        `_style_metric_rows`가 헤더 '판매방식' 줄(pos3 C:F)에 렌더한다. 구분 변경(로켓그로스→둘 다)·문구
+        마이그레이션 반영. 재고행 유무 등 구조는 그대로(기존 로켓그로스/둘 다는 이미 재고행 보유)."""
+        self.set_product_kind(biz, product, kind)
 
     def _render_block_name(self, biz: str, product: str) -> None:
         """블록 헤더 C셀을 표시값(순수명 + 'VID :' 꼬리)으로 **즉시 렌더**(멱등).
@@ -561,8 +553,9 @@ class OutputWorkbook:
         metrics = (config.CONTRACT_METRICS if kind in config.KINDS_WITH_INVENTORY
                    else config.PERSONAL_METRICS)
         r = (ws.max_row + 2) if ws.max_row > 1 else 3      # 블록 사이 빈 줄
-        # 상품 헤더행: A=구분, C=상품명, G=날짜, H~=기존 일자 라벨
-        ws.cell(r, _COL_KIND, kind)
+        # 상품 헤더행(pos0): C=상품명(블록 KEY), G=날짜, H~=기존 일자 라벨.
+        # 판매방식(구분)은 레이아웃 v4에서 A열이 아니라 **메타 col11**에 저장(헤더 pos3 렌더). A열 kind 쓰기 폐지.
+        self.set_product_kind(biz, product, kind)
         ws.cell(r, _COL_NAME, product)
         ws.cell(r, _COL_METRIC, _LABEL_DATE)
         for d, c in self._date_col.get(biz, {}).items():
@@ -1089,28 +1082,12 @@ class OutputWorkbook:
         return out
 
     def _display_name(self, biz: str, name: str) -> str:
-        """이름칸 표시값 = **1줄 상품제목 + (보이지 않는 구분자) + 2줄 상품 인식코드(vendorItemId)**.
+        """헤더 C셀(pos0) 표시값 = **순수 상품명만**(레이아웃 v4·소유자 확정 2026-09-24).
 
-        ⏳ TODO(레이아웃 v4·소유자 확정 2026-09-24·미구현, 메모 handoff-block-layout-redesign): 이 함수는
-        상품명만 반환하도록 축소 예정 — VID/판매일/최근입고는 좌측 라벨 칸(A:B)+값(C:F) 별도 줄로 이동.
-        VID 저장은 헤더 이름칸 'VID :' 꼬리 → 숨김 메타시트(_상품ID col3)로 이전(A안). 아직 미적용(현행 유지).
-
-        키(순수 상품명 `name`)는 건드리지 않고 표시용 꼬리만 만든다. vid 없으면 이름만(1줄). 여러 옵션이면
-        vid 를 '/' 로 이어 붙인다. `apply_style` 이 저장 직전 이 값으로 헤더 C셀을 렌더링(멱등)."""
-        vids = self.product_vids(biz, name)
-        if not vids:
-            return name
-        tail = f"{name}{config.NAME_ID_SEP}\nVID : {' / '.join(vids)}"
-        # 상품 제목·VID 아래에 **로켓그로스 관련 정보**를 묶어 표기(소유자 2026-09-24, 유형A). 판매일(판매시작일
-        # 근사)·최근입고(요청/작업/박스/파레트/완료/출고). 판매자배송(개인)은 로켓그로스 개념 없어 줄 생략.
-        # ⚠ 반드시 'VID :' 줄 **뒤**에 붙인다 — _vids_from_cell 은 'VID :' 줄만 파싱하므로 vid 오염 없음.
-        # 판매가는 헤더가 아니라 '판매가' 지표행(재고현황 아래)에 일자별 기록(마케팅 일환 변동 추적).
-        _price, inbound, inbound_line = self._product_extra(biz, name)
-        if inbound:                       # 로켓그로스/둘다만(판매자배송은 공란 → 줄 생략)
-            tail += f"\n로켓그로스 판매일 : {inbound}"
-        if inbound_line:                  # 최근입고 요약(관리대장) — 로켓그로스 정보로 묶어 판매일 아래
-            tail += f"\n{inbound_line}"
-        return tail
+        v4에서 VID/판매방식/로켓그로스 판매일·최근입고는 좌측 라벨 칸(A:B)+값(C:F)의 **별도 줄**로 이동했다
+        (`_style_metric_rows`가 pos2~6에 렌더). vid 저장은 숨김 메타시트 `_상품ID` col3(A안). 따라서 이 함수는
+        상품명(블록 KEY)만 반환한다 — C(hr)=상품명이라 `_key`/reindex 매칭 불변. (biz 인자는 시그니처 호환 유지.)"""
+        return name
 
     def resolve_block_name(self, biz: str, vids) -> str | None:
         """이 사업자에서 주어진 vid(옵션ID)와 교집합이 있는 **기존 상품 블록의 이름**을 반환(없으면 None).
@@ -1212,10 +1189,78 @@ class OutputWorkbook:
     _FILL_KIND = "FFFFFF"     # 구분(계약/개인)·사업자명(흰)
     _FILL_MKT = "FCE4D6"      # 마케팅 기간 일자 컬럼 배경(연주황 — 캠페인 구간 구분)
 
+    def _migrate_vids_to_meta(self) -> None:
+        """옛 마스터(vid=헤더 이름칸 꼬리)의 vid 를 숨김 메타 col3 에 영속(레이아웃 v4 렌더 전 유실 방지).
+
+        v4에서 `_display_name`이 상품명만 반환하므로, 아직 메타 col3 에 없는 인메모리 vid(이름칸 꼬리에서
+        복원된 것)를 렌더 전에 col3 로 옮긴다. 이미 col3 값이 있으면 미접촉(멱등). set_product_vids/pipeline
+        경로는 이미 col3 를 쓰므로 이 마이그레이션은 load+style+save(무 파이프라인, 예: normalize_dates)만 커버."""
+        if not self._block_vids:
+            return
+        ws = self._meta_ws()
+        for (biz, prod), vids in self._block_vids.items():
+            row = self._vid_row.get((biz, prod))
+            if row is None:
+                row = ws.max_row + 1
+                ws.cell(row, 1, biz); ws.cell(row, 2, prod)
+                self._vid_row[(biz, prod)] = row
+            if not _norm(ws.cell(row, 3).value):
+                ws.cell(row, 3, " / ".join(vids))
+
+    def _v4_layout(self, hr: int, m_end: int) -> dict:
+        """레이아웃 v4 헤더 라벨/값 칸 배치(소유자 확정 2026-09-24). 우측 지표 N줄과 정렬되도록 좌측
+        A:B(라벨)·C:F(값)를 pos별로 매핑한다. 로켓그로스(재고 포함, 7줄)만 판매일/입고 3줄, 판매자배송(6줄)은 생략.
+
+        반환: {rows, ab:[(앵커행, 세로칸수, 라벨)], cf:[(앵커행, 세로칸수, 값키)]}.
+        A:B 라벨=상품명2·VID1·판매방식1·로켓그로스3, C:F 값=상품명2 + pos2~6 단일(판매일/요청·출고/수량)."""
+        rows = list(range(hr, m_end + 1))
+        n = len(rows)
+        ab: list[tuple[int, int, str]] = []
+        cf: list[tuple[int, int, str]] = []
+        name_span = 2 if n >= 2 else 1
+        ab.append((rows[0], name_span, "상품명")); cf.append((rows[0], name_span, "name"))
+        covered = name_span
+        if n >= 3:
+            ab.append((rows[2], 1, "VID")); cf.append((rows[2], 1, "vid")); covered = 3
+        if n >= 4:
+            ab.append((rows[3], 1, "판매방식")); cf.append((rows[3], 1, "kind")); covered = 4
+        if n >= 7:   # 로켓그로스(재고 포함) — A:B 3행 세로병합·C:F 3 단일값
+            ab.append((rows[4], 3, "로켓그로스"))
+            cf.append((rows[4], 1, "sale_date"))
+            cf.append((rows[5], 1, "req_ship"))
+            cf.append((rows[6], 1, "qty"))
+            covered = 7
+        for r in rows[covered:]:   # 남은 행(판매자배송 pos4~ 공란, 잉여) = 빈 라벨/값 단일행
+            ab.append((r, 1, "")); cf.append((r, 1, ""))
+        return {"rows": rows, "ab": ab, "cf": cf}
+
+    def _v4_values(self, biz: str, nm: str, ws, hr: int) -> dict:
+        """레이아웃 v4 헤더 값(C:F) — 상품명·VID·판매방식·로켓그로스 판매일/요청·출고/수량. 데이터는 메타시트에서.
+
+        판매방식(kind)이 메타 col11 에 없으면(옛 마스터) 헤더 A열의 옛 구분 라벨을 회수해 메타에 1회 영속(마이그레이션)."""
+        vids = self.product_vids(biz, nm)
+        kind = self.product_kind(biz, nm)
+        if not kind:   # 옛 마스터: A열의 옛 구분 라벨(알려진 kind만) 회수 → 메타 영속(A열 덮어쓰기 전에)
+            old = _norm(ws.cell(hr, _COL_KIND).value)
+            if old in (config.KIND_CONTRACT, config.KIND_PERSONAL, config.KIND_BOTH):
+                kind = old
+                self.set_product_kind(biz, nm, kind)
+        _price, inbound, summary = self._product_extra(biz, nm)
+        lines = summary.split("\n") if summary else []
+        return {
+            "name": nm,
+            "vid": " / ".join(vids),
+            "kind": kind,
+            "sale_date": (f"쿠팡 등록 로켓그로스 판매일 : {inbound}" if inbound else ""),
+            "req_ship": (lines[0] if len(lines) >= 1 else ""),
+            "qty": (lines[1] if len(lines) >= 2 else ""),
+        }
+
     def apply_style(self) -> None:
         # 서식 재적용 전에 일자 컬럼을 **시트별 첫날~마지막날 연속·날짜순**으로 정규화(빠진 날=날짜만 표기·값 공란).
         # 멱등·값 보존이라 결과파일 저장 때마다 시계열이 일자별로 끊기지 않게 유지된다(§'미실행 날짜=공란').
         self.normalize_date_columns()
+        self._migrate_vids_to_meta()   # 옛 마스터 vid(이름칸 꼬리) → 메타 col3(v4 name-only 렌더 전 유실 방지)
         thin = Side(style="thin", color="BFBFBF")
         sty = _StyleCtx(
             font=Font(name=self._FN, size=11),
@@ -1272,9 +1317,9 @@ class OutputWorkbook:
         _sty_merge(ws, 1, _COL_SEARCH, 1, _COL_METRIC)  # F1:G1
         ws.row_dimensions[1].height = 21          # 제목행 높이(샘플 서식 고정값)
         ws.freeze_panes = "H2"                     # A~G열·1행 고정, H~ 일자만 스크롤
-        # 표준 열너비: A11 B6 D9 E9 F13.75 G14. **C(상품명/키워드)만 full 제목이 보이도록 넓힘**
-        # (사용자 요청: 이름칸 1줄=제목·2줄=vid, 제목 폭을 제목에 맞추기 — 기존 C10은 너무 좁았음).
-        for c, w in {1: 11, 2: 6, 3: 36, 4: 9, 5: 9, 6: 13.75, 7: 14}.items():
+        # 표준 열너비(레이아웃 v4): 좌측 라벨 칸 A:B 합(7+7=14) = 우측 지표 라벨 칸 G(14) 동일(소유자 #3).
+        # C:F(값 칸)는 상품명·VID·로켓그로스 요약이 들어가 넓게 재배분(C18 D16 E16 F13.75).
+        for c, w in {1: 7, 2: 7, 3: 18, 4: 16, 5: 16, 6: 13.75, 7: 14}.items():
             ws.column_dimensions[get_column_letter(c)].width = w
         for c in range(_FIRST_DATE, maxc + 1):
             ws.column_dimensions[get_column_letter(c)].width = 11
@@ -1355,21 +1400,29 @@ class OutputWorkbook:
 
     def _style_metric_rows(self, ws, sty: _StyleCtx, hr: int, m_end: int, mcols: set, maxc: int,
                            prod_fill: PatternFill) -> None:
-        """상품 지표블록: A:B 구분(상품군색) · C:F 상품명(세로) · G 라벨 · H~ 값(마케팅기간 배경).
-        prod_fill = 이 상품군의 배경색(같은 등록상품명끼리 같은 색, 인접 군은 교대 — 시각적 구분).
+        """상품 헤더블록(레이아웃 v4·소유자 확정 2026-09-24): 좌측 A:B=라벨 칸(상품군색·굵게)·C:F=값 칸(흰) /
+        우측 G=지표 라벨(연파랑)·H~=값(마케팅기간 배경). 좌측 라벨 7줄(상품명2·VID·판매방식·로켓그로스3)이
+        우측 지표 7줄과 정렬(판매자배송 6줄은 로켓그로스 생략). prod_fill = 이 상품군의 교대 배경색.
 
-        ⏳ TODO(레이아웃 v4·소유자 확정 2026-09-24·미구현, 메모 handoff-block-layout-redesign):
-        A:B 를 **줄별 라벨 칸**(상품명 2줄 세로병합·VID·판매방식·로켓그로스 3줄 세로병합)으로, C:F 를
-        줄별 값으로 재구성(우측 지표 7줄과 정렬). 상품군 색은 A:B 라벨 칸에, 값 C:F=흰색. 세로병합/테두리는
-        _style_block_edges 도 함께 수정. 아직 미적용(현행=A:B 구분·C:F 상품명 전체 세로병합 유지)."""
+        라벨/값 텍스트는 `_v4_layout`의 pos 앵커행에만 쓰고, 세로병합은 `_style_block_edges`가 처리한다."""
+        biz = ws.title
+        nm = _key(ws.cell(hr, _COL_NAME).value)
+        layout = self._v4_layout(hr, m_end)
+        values = self._v4_values(biz, nm, ws, hr)
+        label_at = {a: lab for (a, _s, lab) in layout["ab"]}
+        value_at = {a: key for (a, _s, key) in layout["cf"]}
         for r in range(hr, m_end + 1):
-            _sty_cell(ws, r, 1, sty, fill=prod_fill)
-            _sty_cell(ws, r, 2, sty, fill=prod_fill)
-            for c in range(_COL_NAME, _COL_SEARCH + 1):
-                _sty_cell(ws, r, c, sty, fill=prod_fill, fnt=sty.bold, align=sty.wrap)
-            _sty_cell(ws, r, _COL_METRIC, sty, fill=sty.f_label)
-            for c in range(_FIRST_DATE, maxc + 1):
+            _sty_cell(ws, r, 1, sty, fill=prod_fill, fnt=sty.bold, align=sty.wrap)   # A:B 라벨 칸(상품군색)
+            _sty_cell(ws, r, 2, sty, fill=prod_fill, fnt=sty.bold, align=sty.wrap)
+            for c in range(_COL_NAME, _COL_SEARCH + 1):                              # C:F 값 칸(흰)
+                _sty_cell(ws, r, c, sty, fill=sty.f_kind, align=sty.wrap)
+            _sty_cell(ws, r, _COL_METRIC, sty, fill=sty.f_label)                     # G 지표 라벨(연파랑)
+            for c in range(_FIRST_DATE, maxc + 1):                                   # H~ 값(마케팅기간 배경)
                 _sty_cell(ws, r, c, sty, num=True, fill=(sty.mkt_fill if c in mcols else None))
+            if r in label_at:                        # 좌측 라벨(A) — 앵커행에만(세로병합 top-left)
+                ws.cell(r, 1, label_at[r])
+            if r in value_at:                        # 좌측 값(C) — 앵커행에만
+                ws.cell(r, _COL_NAME, values.get(value_at[r], ""))
 
     def _style_keyword_rows(self, ws, sty: _StyleCtx, kh: int, end: int, mcols: set, maxc: int,
                             is_disc: bool, is_mkt: bool) -> None:
@@ -1420,27 +1473,32 @@ class OutputWorkbook:
         if i + 1 < len(headers):
             # 사이 블록 하단선(=구분 빈 행 상단선): 그룹 끝이면 굵게, 같은 그룹 변형 사이면 얇게
             _sty_edge(ws, maxc, end + 1, "top", sty.thick if group_end else sty.thin)
-        # 병합(마지막) — 세로/가로 병합은 서식·경계선 적용 뒤에
-        _sty_merge(ws, hr, 1, m_end, 2)
-        _sty_merge(ws, hr, _COL_NAME, m_end, _COL_SEARCH)
+        # 병합(마지막) — 세로/가로 병합은 서식·경계선 적용 뒤에.
+        # 레이아웃 v4 헤더: A:B 라벨 칸(상품명2·VID1·판매방식1·로켓그로스3)·C:F 값 칸(상품명2 + pos2~ 단일)을
+        # pos별로 병합(전체 세로병합 폐지 — 우측 지표 7줄과 정렬). _v4_layout 이 앵커·칸수를 준다.
+        layout = self._v4_layout(hr, m_end)
+        for a, span, _lab in layout["ab"]:
+            _sty_merge(ws, a, 1, a + span - 1, 2)                          # A:B 라벨 칸
+        for a, span, _key in layout["cf"]:
+            _sty_merge(ws, a, _COL_NAME, a + span - 1, _COL_SEARCH)        # C:F 값 칸
         if kh:
             _sty_merge(ws, kh, 1, end, 2)
             for r in range(kh, end + 1):
                 _sty_merge(ws, r, _COL_NAME, r, _COL_SEARCH - 1)
         # 마지막 블록 하단 굵은선(새 행 안 만듦). ⚠ openpyxl 은 **세로 병합의 하단 테두리를
-        # '앵커(top-left) 셀'의 border 로 렌더**한다 → 마지막행 셀에 그려도 A:B 세로병합(col1·2)은
-        # 얇게 남던 버그(사용자 관찰). 그래서 단일셀·가로병합은 마지막행에, A:B 세로병합은 그 앵커
-        # (kh 또는 hr, col1)에 굵은 하단선을 지정한다.
+        # '앵커(top-left) 셀'의 border 로 렌더**한다 → 마지막행 셀에 그려도 세로병합 col1·2 는 얇게 남는다.
+        # 그래서 단일셀·가로병합(C:F 값 칸은 헤더 하단행에서 단일행 병합)은 마지막행에, A:B 세로병합은 그
+        # **하단행을 포함하는 병합의 앵커**에 굵은 하단선을 지정한다.
         if i + 1 >= len(headers):
-            _sty_edge(ws, maxc, end, "bottom", sty.thick)   # 단일셀 + 가로병합(C:E, 앵커=마지막행) 하단
-            ab_row = kh if kh else hr           # A:B 세로병합 앵커 행
-            ab = ws.cell(ab_row, 1).border
-            ws.cell(ab_row, 1).border = Border(left=ab.left, right=ab.right,
-                                               top=ab.top, bottom=sty.thick)
-            if not kh:                          # 키워드 없는 블록: C:F 세로병합 앵커도
-                cf = ws.cell(hr, _COL_NAME).border
-                ws.cell(hr, _COL_NAME).border = Border(left=cf.left, right=cf.right,
-                                                       top=cf.top, bottom=sty.thick)
+            _sty_edge(ws, maxc, end, "bottom", sty.thick)   # 단일셀 + 가로병합(앵커=마지막행) 하단
+            if kh:                              # 키워드 있는 블록: 블록 하단=키워드 구역(A:B 병합 앵커=kh)
+                ab_anchor = kh
+            else:                               # 키워드 없는 블록: 블록 하단=헤더 지표구역(m_end 포함 A:B 병합의 앵커)
+                ab_anchor = next((a for a, span, _l in layout["ab"]
+                                  if a <= m_end <= a + span - 1), hr)
+            ab = ws.cell(ab_anchor, 1).border
+            ws.cell(ab_anchor, 1).border = Border(left=ab.left, right=ab.right,
+                                                  top=ab.top, bottom=sty.thick)
 
     def _roster(self) -> list[tuple[str, bool]]:
         """목차에 실을 계정 로스터 — (사업자, 데이터시트有無). 수집된 계정(시트 있음) 먼저, 그 뒤에
