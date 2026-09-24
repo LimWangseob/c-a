@@ -177,8 +177,9 @@ def _keywords_in(path: Path) -> set[str]:
     out = set()
     for ws in wb.worksheets:
         for r in range(1, ws.max_row + 1):
-            if _n(ws.cell(r, 7).value) == config.M_RANK and ws.cell(r, 3).value:
-                out.add(ws.cell(r, 3).value)
+            # 키워드명 = A열(레이아웃 v4 좌측확장·G=노출순위 행)
+            if _n(ws.cell(r, 7).value) == config.M_RANK and ws.cell(r, 1).value:
+                out.add(ws.cell(r, 1).value)
     return out
 
 

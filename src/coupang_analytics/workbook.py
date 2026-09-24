@@ -106,8 +106,9 @@ def _sty_edge(ws, maxc, row, side, style) -> None:
             top=style if side == "top" else b.top,
             bottom=style if side == "bottom" else b.bottom)
 
-_COL_KIND = 1      # A: 상품구분 / 사업자명
-_COL_NAME = 3      # C: 상품명 / 키워드
+_COL_KIND = 1      # A: (레이아웃 v4) 헤더 라벨 칸 / 옛 구분 라벨(마이그레이션 회수용)
+_COL_KW = 1        # A: 키워드명(레이아웃 v4 좌측확장 A~E, 병합 앵커=A). 상품 헤더 라벨과 행 종류로 구분(G값)
+_COL_NAME = 3      # C: 상품명(헤더행 KEY) / 헤더 값 칸(pos0 C:F)
 _COL_SEARCH = 6    # F: 검색량
 _COL_METRIC = 7    # G: 지표 라벨
 _FIRST_DATE = 8    # H~: 일자
@@ -281,9 +282,10 @@ class OutputWorkbook:
                 elif metric in _ALL_METRICS:                    # 상품 지표행
                     if cur_prod:
                         self._metric_row[(biz, cur_prod, metric)] = r
-                elif metric == config.M_RANK and name:          # 키워드 순위행
-                    if cur_prod:
-                        self._kw_row[(biz, cur_prod, name)] = r
+                elif metric == config.M_RANK:                    # 키워드 순위행 — 키워드명=A열(v4 좌측확장 앵커)
+                    kwn = _key(ws.cell(r, _COL_KW).value)
+                    if cur_prod and kwn:
+                        self._kw_row[(biz, cur_prod, kwn)] = r
 
     # ── 재개(이어서)용 조회 ──────────────────────────────────
     def has_product(self, biz: str, product: str) -> bool:
@@ -300,14 +302,14 @@ class OutputWorkbook:
     def clear_keyword_row(self, biz: str, product: str, keyword: str) -> bool:
         """키워드 행을 **빈 순위행으로 비운다**(담당자가 구글시트에서 지운 키워드 반영).
 
-        이름칸(C)과 그 행의 모든 일자값(H~)을 지워 빈 순위행(구조는 유지·검색 대상 아님)으로 만든다.
+        키워드명 칸(A·v4 좌측확장 앵커)과 그 행의 모든 일자값(H~)을 지워 빈 순위행(구조는 유지·검색 대상 아님)으로.
         소유자 확정(2026-09-20): **이력 보존 안 함** — 지운 키워드의 과거 순위값도 함께 삭제. 대상 행 없으면 no-op."""
         biz, product = _norm(biz), _key(product)
         row = self._kw_row.get((biz, product, str(keyword)))
         if row is None:
             return False
         ws = self.wb[biz]
-        ws.cell(row=row, column=_COL_NAME).value = None      # 키워드명 삭제 → 빈 순위행
+        ws.cell(row=row, column=_COL_KW).value = None        # 키워드명(A) 삭제 → 빈 순위행
         ws.cell(row=row, column=_COL_SEARCH).value = None    # 검색량 삭제
         for c in range(_FIRST_DATE, ws.max_column + 1):      # 과거 일자별 순위값 삭제(이력 보존 안 함)
             ws.cell(row=row, column=c).value = None
@@ -567,17 +569,16 @@ class OutputWorkbook:
             ws.cell(r, _COL_METRIC, m)
             self._metric_row[(biz, product, m)] = r
         if rank_rows:            # 다중옵션 2차 블록(rank_rows=False)은 키워드·순위행 없음(판매지표만)
-            # 키워드 소헤더
+            # 키워드 소헤더 — 키워드명은 A열(v4 좌측확장 A~E 앵커). 사업자명(A) 표기 폐지.
             r += 1
-            ws.cell(r, _COL_KIND, biz)
-            ws.cell(r, _COL_NAME, _LABEL_KEYWORD)
+            ws.cell(r, _COL_KW, _LABEL_KEYWORD)
             ws.cell(r, _COL_SEARCH, _LABEL_SEARCH)
             ws.cell(r, _COL_METRIC, _LABEL_NOTE)
             # 키워드 순위행
             kws = list(dict.fromkeys(keywords))
             for kw in kws:
                 r += 1
-                ws.cell(r, _COL_NAME, kw)
+                ws.cell(r, _COL_KW, kw)
                 ws.cell(r, _COL_METRIC, config.M_RANK)
                 self._kw_row[(biz, product, kw)] = r
             # 키워드가 KW_TRACK_N(=4) 미만이면 **빈 순위행**으로 채워 블록의 키워드행 구조를 항상 유지한다
@@ -607,7 +608,7 @@ class OutputWorkbook:
         rows: list[tuple[int, str]] = []
         for r in range(start, end + 1):
             if _norm(ws.cell(r, _COL_METRIC).value) == config.M_RANK:
-                rows.append((r, _key(ws.cell(r, _COL_NAME).value)))
+                rows.append((r, _key(ws.cell(r, _COL_KW).value)))   # 키워드명=A열(v4)
         return rows
 
     def has_keyword_section(self, biz: str, product: str) -> bool:
@@ -627,7 +628,7 @@ class OutputWorkbook:
         headers = sorted(r for r in self._date_rows.get(biz, []) if r > start)
         end = (headers[0] - 1) if headers else ws.max_row
         for r in range(start, end + 1):
-            if (_key(ws.cell(r, _COL_NAME).value) == _LABEL_KEYWORD
+            if (_key(ws.cell(r, _COL_KW).value) == _LABEL_KEYWORD   # 소헤더 '키워드'=A열(v4)
                     and _norm(ws.cell(r, _COL_METRIC).value) == _LABEL_NOTE):
                 return True
         return False
@@ -663,7 +664,7 @@ class OutputWorkbook:
         for row in blanks:                                 # ① 빈 순위행부터 채움(행 삽입 없음)
             if i >= len(add):
                 break
-            ws.cell(row, _COL_NAME, add[i])
+            ws.cell(row, _COL_KW, add[i])                  # 키워드명=A열(v4)
             ws.cell(row, _COL_METRIC, config.M_RANK)
             i += 1
         remaining = add[i:]
@@ -674,7 +675,7 @@ class OutputWorkbook:
                                   if (biz, product, m) in self._metric_row) + 1
             ws.insert_rows(last_kw_row + 1, amount=len(remaining))
             for j, kw in enumerate(remaining, 1):
-                ws.cell(last_kw_row + j, _COL_NAME, kw)
+                ws.cell(last_kw_row + j, _COL_KW, kw)      # 키워드명=A열(v4)
                 ws.cell(last_kw_row + j, _COL_METRIC, config.M_RANK)
         self._reindex()   # 행 채움·이동 반영 전체 재인덱스(정확성 우선)
         return add
@@ -1392,9 +1393,9 @@ class OutputWorkbook:
         return out
 
     def _find_kw_head(self, ws, hr: int, end: int):
-        """블록(hr~end) 안 키워드 소헤더행(C='키워드'). 없으면 None(2차 옵션 블록=판매정보만)."""
+        """블록(hr~end) 안 키워드 소헤더행(A='키워드'·v4 좌측확장). 없으면 None(2차 옵션 블록=판매정보만)."""
         for r in range(hr, end + 1):
-            if _norm(ws.cell(r, _COL_NAME).value) == _LABEL_KEYWORD:
+            if _norm(ws.cell(r, _COL_KW).value) == _LABEL_KEYWORD:
                 return r
         return None
 
@@ -1426,12 +1427,11 @@ class OutputWorkbook:
 
     def _style_keyword_rows(self, ws, sty: _StyleCtx, kh: int, end: int, mcols: set, maxc: int,
                             is_disc: bool, is_mkt: bool) -> None:
-        """키워드블록: A:B 사업자(세로) · C:E 키워드명(가로) · F 검색량 · G(소헤더 비고/순위라벨) · H~ 순위."""
+        """키워드블록(레이아웃 v4): A~E 키워드명(가로 병합·좌측확장) · F 검색량 · G(소헤더 비고/순위라벨) · H~ 순위.
+        사업자명(A:B) 표기 폐지 — 키워드가 A~E 로 좌측 확장(소유자 확정 2026-09-24). 키워드명 앵커=A."""
         for r in range(kh, end + 1):
             head = (r == kh)
-            _sty_cell(ws, r, 1, sty, fill=sty.f_kind)
-            _sty_cell(ws, r, 2, sty, fill=sty.f_kind)
-            for c in range(_COL_NAME, _COL_SEARCH):     # C~E 키워드명(항상 bold)
+            for c in range(_COL_KW, _COL_SEARCH):       # A~E 키워드명(항상 bold, 앵커=A)
                 _sty_cell(ws, r, c, sty, fill=(sty.f_kwhead if head else None), fnt=sty.bold, align=sty.wrap)
             _sty_cell(ws, r, _COL_SEARCH, sty, fill=(sty.f_kwhead if head else None), num=not head)
             _sty_cell(ws, r, _COL_METRIC, sty, fill=(sty.f_kwhead if head else sty.f_label))
@@ -1481,24 +1481,21 @@ class OutputWorkbook:
             _sty_merge(ws, a, 1, a + span - 1, 2)                          # A:B 라벨 칸
         for a, span, _key in layout["cf"]:
             _sty_merge(ws, a, _COL_NAME, a + span - 1, _COL_SEARCH)        # C:F 값 칸
-        if kh:
-            _sty_merge(ws, kh, 1, end, 2)
+        if kh:   # 키워드 구역: 사업자(A:B) 세로병합 폐지 → 키워드명 A~E 가로병합(좌측확장, 앵커=A·행별)
             for r in range(kh, end + 1):
-                _sty_merge(ws, r, _COL_NAME, r, _COL_SEARCH - 1)
+                _sty_merge(ws, r, _COL_KW, r, _COL_SEARCH - 1)
         # 마지막 블록 하단 굵은선(새 행 안 만듦). ⚠ openpyxl 은 **세로 병합의 하단 테두리를
         # '앵커(top-left) 셀'의 border 로 렌더**한다 → 마지막행 셀에 그려도 세로병합 col1·2 는 얇게 남는다.
-        # 그래서 단일셀·가로병합(C:F 값 칸은 헤더 하단행에서 단일행 병합)은 마지막행에, A:B 세로병합은 그
-        # **하단행을 포함하는 병합의 앵커**에 굵은 하단선을 지정한다.
+        # 그래서 단일셀·가로병합은 마지막행 _sty_edge 로 닫히지만, **헤더 지표구역이 블록 하단(키워드 없는
+        # 2차 블록)** 이면 m_end 를 포함하는 A:B 세로병합의 앵커에 굵은 하단선을 별도 지정한다.
         if i + 1 >= len(headers):
             _sty_edge(ws, maxc, end, "bottom", sty.thick)   # 단일셀 + 가로병합(앵커=마지막행) 하단
-            if kh:                              # 키워드 있는 블록: 블록 하단=키워드 구역(A:B 병합 앵커=kh)
-                ab_anchor = kh
-            else:                               # 키워드 없는 블록: 블록 하단=헤더 지표구역(m_end 포함 A:B 병합의 앵커)
+            if not kh:                          # 키워드 없는 블록: 하단=헤더 지표구역(m_end 포함 A:B 병합의 앵커)
                 ab_anchor = next((a for a, span, _l in layout["ab"]
                                   if a <= m_end <= a + span - 1), hr)
-            ab = ws.cell(ab_anchor, 1).border
-            ws.cell(ab_anchor, 1).border = Border(left=ab.left, right=ab.right,
-                                                  top=ab.top, bottom=sty.thick)
+                ab = ws.cell(ab_anchor, 1).border
+                ws.cell(ab_anchor, 1).border = Border(left=ab.left, right=ab.right,
+                                                      top=ab.top, bottom=sty.thick)
 
     def _roster(self) -> list[tuple[str, bool]]:
         """목차에 실을 계정 로스터 — (사업자, 데이터시트有無). 수집된 계정(시트 있음) 먼저, 그 뒤에

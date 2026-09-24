@@ -50,9 +50,9 @@ def _hdr_row(ws, base: str) -> int:
 
 
 def _kw_head_row(ws, hr: int) -> int | None:
-    """hr 아래 첫 키워드 소헤더행(C='키워드'). 없으면 None(2차 옵션 블록)."""
+    """hr 아래 첫 키워드 소헤더행(A='키워드'·v4 좌측확장). 없으면 None(2차 옵션 블록)."""
     for r in range(hr, ws.max_row + 1):
-        if _n(ws.cell(r, 3).value) == "키워드":
+        if _n(ws.cell(r, 1).value) == "키워드":
             return r
     return None
 
@@ -129,8 +129,12 @@ def pin_block_fills():
     _check(f"A{hr}:B{hr + 1}" in merged, "상품명 라벨 A:B 2줄 세로병합")
     _check(f"A{hr + 4}:B{hr + 6}" in merged, "로켓그로스 라벨 A:B 3줄 세로병합")
     _check(f"C{hr}:F{hr + 1}" in merged, "상품명 값 C:F 2줄 세로병합")
-    _check(kh is not None and _fill(ws, kh, 3).endswith(OutputWorkbook._FILL_KWHEAD),
-           "키워드 소헤더 회색(E8E8E8)")
+    # 키워드 구역(v4 좌측확장): 소헤더 A='키워드'·A~E 가로병합·회색(사업자명 A:B 폐지)
+    _check(kh is not None and _n(ws.cell(kh, 1).value) == "키워드", "키워드 소헤더 A='키워드'(좌측확장)")
+    _check(_fill(ws, kh, 1).endswith(OutputWorkbook._FILL_KWHEAD), "키워드 소헤더 회색(E8E8E8·앵커=A)")
+    _check(f"A{kh}:E{kh}" in merged, "키워드 소헤더 A~E 가로병합(좌측확장)")
+    _check(_n(ws.cell(kh + 1, 1).value) == "kw1", "키워드명=A열(v4)")
+    _check(f"A{kh + 1}:E{kh + 1}" in merged, "키워드 순위행 A~E 가로병합")
     _check(_n(ws.cell(kh, 7).value) == "비고", "정상 상품 소헤더 G='비고'")
 
 
