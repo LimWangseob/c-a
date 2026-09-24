@@ -542,9 +542,9 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
     """계정 하나: (필요시) 로그인 → **같은 신선한 세션**에서 즉시 판매분석 발견 + 지표.
 
     반환: (report_account[활동 상품만] | None, {옵션ID: OptionMetric}, {옵션ID: 재고수량},
-    {옵션ID: 판매상태}, {업번들 옵션ID 집합}). 4번째 판매상태맵 = 상품조회 productStatus 문자열(판매자배송 포함
-    전 상품) 또는 폴백 RFM isSaleSuspended(bool). 5번째 = 이번 상품조회의 업번들 vid 집합(마스터 잔재 자동삭제용).
-    로그인 미완료면 (None, {}, {}, {}, set()) → 호출부가 건너뛰고 다음 계정으로.
+    {옵션ID: 판매상태}, {업번들 vid 집합}, {상품조회 전체 vid 집합}). 4번째 판매상태맵 = 상품조회 productStatus
+    문자열(판매자배송 포함 전 상품) 또는 폴백 RFM isSaleSuspended(bool). 5번째 = 업번들 vid(잔재 자동삭제용). 6번째 =
+    이번 상품조회에 존재하는 전체 vid(죽은 중복 블록 정리 기준). 로그인 미완료면 (None,{},{},{},set(),set()) → 다음 계정으로.
     login=False(세션우선 1차): 세션 없으면 자동제출하지 않고 **NeedLogin** 을 던져 뒤로 미룬다
     (반복 자동로그인 = IP 차단 유발이라, 세션 살아있는 계정을 먼저 다 수집). Akamai 차단 시 LoginBlocked.
     semi=True(**반자동 판매수집**): 창을 **처음부터 보이게**(offscreen=False) 띄우고 **무인 아님**(사람이
@@ -556,18 +556,18 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
     # 기본은 **창 숨김**(offscreen). 반자동(semi)이면 처음부터 보이게 띄운다(사람이 2차인증 처리).
     with WingBrowser(profile_dir=account_profile(a.account_id), offscreen=not semi) as b:
         if not _ensure_login(b, a, pw, log, login=login, semi=semi):
-            return None, {}, {}, {}, set()   # 이 계정 건너뜀(무인 비번없음·otp·로그인 미완료)
+            return None, {}, {}, {}, set(), set()   # 이 계정 건너뜀(무인 비번없음·otp·로그인 미완료)
         collector.reset_raw()                # 계정별 응답 원문 버퍼 초기화(파일 분리)
         found = _discover_products(b, a, date_from, date_to, log)
         _dump_raw(a.account_id, log)         # 3 API 응답 원문 저장(가공 없음·분석용). found None(데이터없음)이어도 남김
         if found is None:                    # 판매분석·상품조회 모두 데이터 없음 → 건너뜀
-            return None, {}, {}, {}, set()
-        products, tracked, metrics, inventory, sale_status, upbundle_vids = found
+            return None, {}, {}, {}, set(), set()
+        products, tracked, metrics, inventory, sale_status, upbundle_vids, live_all_vids = found
         _persist_session(a, b, log)                                 # 세션 3요소+쿠키 영속(부가)
         session_state.observe_collection_done(a.account_id)         # 관측: 이 계정 수집 완료 시각
     save_discovered(a.account_id, products)   # (요약 로그는 위 with 블록에서 계정 단위로 남김)
     return (Account(a.account_id, a.representative, a.business_name, tracked),
-            metrics, inventory, sale_status, upbundle_vids)
+            metrics, inventory, sale_status, upbundle_vids, live_all_vids)
 
 
 def _ensure_login(b, a: Account, pw, log, *, login: bool = True, semi: bool = False) -> bool:
@@ -729,6 +729,9 @@ def _discover_products(b, a: Account, date_from, date_to, log):
     # 자동삭제하는 데 쓴다(소유자 2026-09-24, _purge_upbundle_blocks). 상품조회 실패(listings=[])면 빈 집합.
     upbundle_vids = {o.vendor_item_id for lst in listings for o in lst.options
                      if getattr(o, "is_upbundle", False) and o.vendor_item_id}
+    # 이번 상품조회에 **실제로 존재하는 전체 vid**(NORMAL·RFM·업번들 모두 = 코팡 현재 보유분). 죽은 중복 블록
+    # 정리(_sweep_dead_duplicates)의 기준 — 이 집합에 없는 vid = 코팡서 사라짐. 상품조회 실패면 빈 집합(정리 skip).
+    live_all_vids = {o.vendor_item_id for lst in listings for o in lst.options if o.vendor_item_id}
     # 추적 범위 = 입력 대장 상품(위탁 관리분)만. 당일 발견을 매칭해 노출제목·vid·구분 부여(지표는 당일 것).
     tracked, n_match = scope_to_ledger(a.products, products)
     tracked, n_match = _augment_vids(b, a, tracked, n_match, inv_names, date_to, log)
@@ -740,7 +743,7 @@ def _discover_products(b, a: Account, date_from, date_to, log):
     log(f"  [계정 {a.account_id}/{a.label}] 대장 {len(a.products)} → 추적 {len(tracked)}"
         f"(매칭 {n_match}·vid {vid_count}) · 미매칭(vid없음) {len(unmatched)}"
         + (f": {[_short(n, 22) for n in unmatched[:10]]}{'…' if len(unmatched) > 10 else ''}" if unmatched else ""))
-    return products, tracked, metrics, inventory, sale_status, upbundle_vids
+    return products, tracked, metrics, inventory, sale_status, upbundle_vids, live_all_vids
 
 
 def _run_discover(b, a: Account, date_from, date_to, has_vendor: bool, log):
@@ -1156,9 +1159,39 @@ def _purge_upbundle_blocks(wb, biz: str, upbundle_vids, log) -> None:
                 log(f"  [정체성] '{p}' 업번들(자동번들) 잔재 블록 삭제(vid {vids} 전부 업번들·원상품 재고공유)")
 
 
+def _sweep_dead_duplicates(wb, biz: str, live_vids, log) -> None:
+    """**죽은 중복 블록**만 정리 — 안전 규칙(소유자 2026-09-24). 두 조건을 **모두** 만족할 때만 삭제:
+
+    (a) **같은 상품군(블록명 접두=옵션라벨 앞부분)에 live 형제 존재**(vid 가 이번 상품조회에 있는 블록) AND
+    (b) 그 블록 vid 가 **전부 이번 상품조회(live_vids)에 없음**(코팡서 사라진 죽은 등록).
+
+    → 재등록으로 죽은 옛 vid 유령(R601_/__/…)만 제거하고, **판매중지 단독 상품·색상/사이즈 변형·코팡에
+    남아있는 vid(판매자배송 twin 포함)·신규는 전부 보존**(reconcile 이 판매중지 표기). 상품조회 실패로 live_vids
+    비면 no-op(오삭제 방지). **그룹 키=마스터 블록명 접두**(등록상품명/발견명 드리프트에 무관 — vid 앵커로 live 판정).
+    같은 상품군에 live 형제가 없으면(그룹 전체가 코팡서 소멸=판매중지 단독) 통째 보존."""
+    if not live_vids:
+        return
+    groups: dict = {}   # 블록명 접두 → [블록명…] (색상/사이즈/재등록 형제가 한 군)
+    for p in wb.products_of(biz):
+        prefix = p.rsplit(" (", 1)[0] if " (" in p else p
+        groups.setdefault(prefix, []).append(p)
+    for prefix, blocks in groups.items():
+        if len(blocks) < 2:
+            continue   # 형제 없는 단독 블록(판매중지 단독 포함) → 보존
+        has_live = any(any(v in live_vids for v in wb.product_vids(biz, b)) for b in blocks)
+        if not has_live:
+            continue   # 그룹 전체가 코팡서 소멸 → 판매중지 단독군 → 통째 보존
+        for b in blocks:
+            vids = wb.product_vids(biz, b)
+            if vids and all(v not in live_vids for v in vids):   # 코팡서 완전 소멸한 vid만
+                if wb.delete_product_block(biz, b):
+                    log(f"  [정체성] '{b}' 죽은 중복 블록 삭제(vid {vids} 상품조회에 없음·live 형제 존재)")
+
+
 def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid,
                      date_iso, grow, log, save_path, skip_ranks: bool = False,
-                     keywords_off: bool = False, sale_status=None, upbundle_vids=None) -> None:
+                     keywords_off: bool = False, sale_status=None, upbundle_vids=None,
+                     live_vids=None) -> None:
     """계정(시트) 하나: 상품마다 **옵션 블록**을 만들고 [대표=키워드/순위/지표, 2차=지표만] 기록·저장.
 
     다중옵션 상품은 옵션(vid)별 블록으로 분리한다 — **대표(첫 옵션)** 만 키워드 동결/선정·순위(리스팅 단위)를
@@ -1168,6 +1201,8 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
     - skip_ranks=True(날짜 지정 수집): 쿠팡 순위 조회를 제외(browser=None). 판매지표·재고만.
     - keywords_off=True(① 판매수집 단계): 모든 옵션 블록에 지표·재고·vid만(키워드는 ②, 순위는 ③).
     - upbundle_vids: 이번 상품조회의 업번들 vid 집합 → 마스터 잔재 업번들 블록 자동삭제(reconcile 전).
+    - live_vids: 이번 상품조회 전체 vid 집합 → **죽은 중복 블록** 정리(같은 등록상품명 live 형제 있고 vid 소멸한
+      것만·판매중지 단독/변형/신규 보존, reconcile 전). 상품조회 실패면 빈 집합(정리 skip).
     상품마다 save_path 저장 → 도중 끊겨도 이어감.
     """
     from .input_list import Option
@@ -1201,6 +1236,8 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
         for i, opt in enumerate(opts):
             seen_products.append(_block_name(base, opt.label if multi else ""))
             _process_option(pctx, biz, product, base, kind, title, i, opt, multi)
+    # 죽은 중복 블록 정리(안전 규칙): live 형제 있고 vid 가 상품조회서 소멸한 잔재만 삭제(reconcile 판매중지 표기 전)
+    _sweep_dead_duplicates(wb, biz, live_vids, log)
     # 대장 대조: 이번 대장에 없던 마스터 블록 = 판매중지/삭제 표기(데이터 보존, 다시 나타나면 자동 해제)
     newly = wb.reconcile_account(biz, seen_products)
     if newly:
@@ -1497,10 +1534,11 @@ def _save_ctx_progress(ctx: _RunCtx) -> None:
 
 
 def _finish(ctx: _RunCtx, a: Account, report_acc, metrics, inv_by_vid, inv_status=None,
-            upbundle_vids=None) -> None:
+            upbundle_vids=None, live_vids=None) -> None:
     """발견 결과를 워크북에 기록 + 진행 저장(1·2차 패스 공통). report_acc=None이면 무동작.
 
-    upbundle_vids = 이번 상품조회의 업번들 vid 집합 → _process_account 가 마스터 잔재 업번들 블록 자동삭제."""
+    upbundle_vids = 이번 상품조회의 업번들 vid 집합 → 마스터 잔재 업번들 블록 자동삭제.
+    live_vids = 이번 상품조회 전체 vid 집합 → 죽은 중복 블록 정리 기준(_process_account)."""
     wb, log = ctx.wb, ctx.log
     if report_acc is None:      # 로그인 미완료/데이터 없음 → 다음 계정(전체 안 막힘)
         return
@@ -1515,13 +1553,13 @@ def _finish(ctx: _RunCtx, a: Account, report_acc, metrics, inv_by_vid, inv_statu
             _process_account(report_acc, wb, ctx.naver, ctx.ai_key, None, metrics, inv_by_vid,
                              ctx.col_label, ctx.grow, log, ctx.partial, skip_ranks=ctx.skip_ranks,
                              keywords_off=ctx.keywords_off, sale_status=inv_status,
-                             upbundle_vids=upbundle_vids)
+                             upbundle_vids=upbundle_vids, live_vids=live_vids)
         else:
             with WingBrowser(profile_dir=_PROFILE, offscreen=True) as rank_browser:
                 warmup(rank_browser)
                 _process_account(report_acc, wb, ctx.naver, ctx.ai_key, rank_browser, metrics,
                                  inv_by_vid, ctx.col_label, ctx.grow, log, ctx.partial,
-                                 sale_status=inv_status, upbundle_vids=upbundle_vids)
+                                 sale_status=inv_status, upbundle_vids=upbundle_vids, live_vids=live_vids)
         # 판매상태 불일치 경고: 쿠팡 재고 판매상태맵을 마스터 전체 상품에 vid로 대조해 저장(멱등).
         # 대장에서 빠진(판매중지 표기) 상품도 쿠팡 재고에 살아있으면 vid로 잡혀 "판매중"으로 채워진다.
         # 상태맵은 ①판매수집 로그인 세션에서만 확보되므로(②③엔 없음) 여기서 1회 반영, 렌더는 apply_style이 담당.
@@ -1568,9 +1606,9 @@ def _collect_session_first(ctx: _RunCtx, accounts, get_password
                 continue
         log(f"== [{i}/{total}] {a.label} (계정ID: {a.account_id}) ==")
         try:   # 한 계정의 어떤 오류(수집·워크북쓰기)도 전체를 막지 않게 계정 전체를 격리
-            report_acc, metrics, inv_by_vid, inv_status, upbundle_vids = _login_and_discover(
+            report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids = _login_and_discover(
                 a, ctx.date_from, ctx.date_to, get_password, log, login=False)
-            _finish(ctx, a, report_acc, metrics, inv_by_vid, inv_status, upbundle_vids)
+            _finish(ctx, a, report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids)
         except NeedLogin:                         # 세션 없음 → 뒤로 미룸(자동제출 안 함)
             login_needed.append((i, a))
             log(f"  [{a.label}] 세션 만료 → 로그인 대기열(세션 있는 계정 먼저 수집 후 처리)")
@@ -1601,10 +1639,10 @@ def _collect_with_login(ctx: _RunCtx, login_needed, get_password, sales_semi: bo
         attempted += 1
         log(f"== [{i}/{total}] {a.label} (계정ID: {a.account_id}) — 로그인 시도 ==")
         try:
-            report_acc, metrics, inv_by_vid, inv_status, upbundle_vids = _login_and_discover(
+            report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids = _login_and_discover(
                 a, ctx.date_from, ctx.date_to, get_password, log, login=True, semi=sales_semi)
             blocks = 0                            # 로그인 성공 → 연속 차단 카운터 리셋
-            _finish(ctx, a, report_acc, metrics, inv_by_vid, inv_status, upbundle_vids)
+            _finish(ctx, a, report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids)
         except LoginBlocked:                      # Akamai 차단 → 서킷브레이커 카운트
             blocks += 1
             log(f"  [{a.label}] 로그인 차단 누적 {blocks}/{config.LOGIN_BLOCK_CIRCUIT}")

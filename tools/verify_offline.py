@@ -286,6 +286,29 @@ def t1_sale_status_flag():
     _purge_upbundle_blocks(wbU, bzU, set(), lambda m: None)         # 빈 집합(상품조회 실패) → no-op
     assert set(wbU.products_of(bzU)) == _left, "업번들 집합 비면 삭제 안 함(잘못된 삭제 방지)"
     _ok("업번들 잔재 블록 vid 기준 자동삭제(변형·실vid 보존)·빈 집합=no-op")
+    # ── 죽은 중복 블록 sweep(안전 규칙·소유자 2026-09-24): live 형제 + vid 소멸 둘 다일 때만 삭제 ──
+    from coupang_analytics.pipeline import _sweep_dead_duplicates
+    wbS = OutputWorkbook.empty(); bzS = "죽은중복비즈"
+
+    def _mk(nm, vid, reg):
+        wbS.ensure_product_block(bzS, nm, config.KIND_CONTRACT, [], rank_rows=False, registered=reg)
+        wbS.set_product_vids(bzS, nm, [vid])
+    _mk("운동기구 (R601)", "V_live", "운동기구")       # 이번 추적된 대표(live)
+    _mk("운동기구 (R601_)", "V_dead", "운동기구")      # 죽은 중복(같은 등록명·vid 소멸)
+    _mk("운동기구 (블랙)", "V_variant", "운동기구")    # 변형(같은 등록명·vid 코팡에 남음)
+    _mk("단종상품", "V_gone", "단종상품")             # 판매중지 단독(live 형제 없음·vid 소멸)
+    live_vids = {"V_live", "V_variant"}   # 이번 상품조회 존재 vid(대표+변형만)
+    _sweep_dead_duplicates(wbS, bzS, live_vids, lambda m: None)
+    _rem = set(wbS.products_of(bzS))
+    assert "운동기구 (R601_)" not in _rem, "죽은 중복(live 형제+vid 소멸) 미삭제"
+    assert "운동기구 (R601)" in _rem and "운동기구 (블랙)" in _rem, "대표·변형(코팡 잔존 vid) 보존 실패"
+    assert "단종상품" in _rem, "판매중지 단독(live 형제 없음)은 보존해야(데이터 유실 방지)"
+    # 상품조회 실패(live_vids 비면) → no-op(오삭제 방지)
+    wbS.ensure_product_block(bzS, "운동기구 (R601__)", config.KIND_CONTRACT, [], rank_rows=False, registered="운동기구")
+    wbS.set_product_vids(bzS, "운동기구 (R601__)", ["V_dead2"])
+    _sweep_dead_duplicates(wbS, bzS, set(), lambda m: None)
+    assert "운동기구 (R601__)" in set(wbS.products_of(bzS)), "live_vids 비면 삭제 안 함(상품조회 실패 보호)"
+    _ok("죽은 중복 sweep: live형제+vid소멸만 삭제 · 판매중지단독·변형·신규 보존 · 상품조회실패 no-op(엣지 5종)")
     # ── 응답 원문 보관(가공 없음·분석용, 소유자 2026-09-24): collector 버퍼 + pipeline gzip 사이드카 ──
     import gzip as _gz
     from coupang_analytics import collector as _col
