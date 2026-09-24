@@ -963,7 +963,8 @@ class OutputWorkbook:
         if row is None or col is None:
             return None
         v = self.wb[biz].cell(row, col).value
-        return v if v not in (None, "") else None
+        # 관리대장 '그로스 재고' 역기록은 **숫자 재고만** — '미입고'(문자열)·공란은 대상 아님(대장값 보존).
+        return v if isinstance(v, (int, float)) else None
 
     def inventory_by_biz(self) -> dict:
         """{사업자norm: [(상품명, 재고), …]} — 재고 있는 상품만. 관리대장 역기록 **유사도 매칭**용.

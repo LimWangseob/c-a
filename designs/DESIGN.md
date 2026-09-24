@@ -64,7 +64,8 @@
   - 리스팅(`productList[]`): `productName`=등록상품명(대장 매칭키)·`vendorInventoryId`=등록상품ID(내부)=옵션 그룹핑키·`registrationType`(NORMAL=판매자배송/RFM=로켓그로스)·`productStatus`(ON_SALE/PARTIAL_ON_SALE/판매중지)=판매상태(전상품·NORMAL포함)·`status`·`representativeImage`·`itemUnitSoldAgg`.
   - 옵션(`vendorInventoryItems[]`): `vendorItemId`=vid(정체성)·`itemName`=옵션명(라벨)·`registrationType`=둘다판별(RFM만)·`valid`(VALID/INVALID)·`status`·`salePrice`·`stockQuantity`(**안 씀**).
   - ⚠ **노출상품ID(productId)는 응답에 없음** → 그룹핑은 `vendorInventoryId`로. 순위는 검색결과서 vid 매칭이라 productId 불요.
-- **재고는 이 소스에서 제외(소유자 2026-09-20):** 상품조회/수정 화면 재고는 **등록시 임의 입력값이라 부정확** → 재고=RFM 재고 API(`inventory-health-dashboard/search`)만 사용. 이 소스는 **vid·옵션·판매방식·상태·매칭 전용**.
+- **재고는 이 소스에서 제외(소유자 2026-09-20):** 상품조회/수정 화면 재고(`stockQuantity`)는 **등록시 임의 입력값이라 부정확** → 재고=RFM 재고 API(`inventory-health-dashboard/search`)만 사용. 이 소스는 **vid·옵션·판매방식·상태·업번들여부·매칭 전용**.
+- **재고 표기 규칙(소유자 2026-09-24, `_fill_product_metrics`):** 로켓그로스/둘다 블록의 재고칸 = ① 재고현황 API에 vid 있으면 `orderableQuantity`(**0=입고됐지만 품절**) · ② 없고 **판매중**이면 `config.INV_NOT_INBOUND`("미입고"=등록됐으나 물류센터 실입고 안 됨) · ③ 없고 **판매중지**면 공란(판매중지 경고가 별도 처리). 판매중/판매중지 판정=`_block_sellable(sale_status)`. 미입고 vs 품절 신호=**재고현황 API 존재 여부**(품절도 0으로 남고 미입고는 빠짐, 6계정 실측). '미입고' 문자열은 대장 그로스재고 역기록 대상 아님(`product_inventory` 숫자 가드).
 - **소스 역할 분담(확정):** vid·옵션명·판매방식·상태·등록상품명=vendor-inventory/search / 재고=RFM 재고 API(로켓그로스만) / 일자별 노출·판매·**방문자**=vi-detail-search(방문자는 이 소스에만 있음).
 - **옵션 분리(소유자 확정):** ①**다중옵션 상품에만** 적용(단일옵션은 기존 유지) ②옵션(vid)별 통계표 1 set·`vendorInventoryId`로 그룹 ③**대표 옵션=첫 옵션만 키워드+노출순위 유지**, 나머지 옵션 블록은 **판매정보만·순위 제외**(순위는 리스팅 단위라 옵션 공통) ④옵션 라벨(색상/사이즈/등급=`itemName`)을 상품명 옆 표기 ⑤행 3~4배 일부 증가 허용.
 - **둘다(로켓그로스+판매자배송) 처리:** 같은 상품에 RFM·NORMAL 옵션 공존 시 **`registrationType=="RFM"` 옵션만 채택**(vid·판매통계 모두), NORMAL 중복 옵션 제외.

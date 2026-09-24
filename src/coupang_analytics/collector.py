@@ -762,6 +762,23 @@ def _products_from_metrics(metrics: dict) -> list[Product]:
     return out
 
 
+def _tracked_listing_options(listing: VendorInventoryListing):
+    """리스팅에서 **추적 대상 옵션**을 선별 — 업번들(자동번들) 제외 후, '둘다'면 RFM(로켓그로스)만.
+
+    반환 (opts, kind, 제외한_업번들수, 제외한_NORMAL수). opts 가 비면 호출부가 그 리스팅을 건너뛴다.
+    - 업번들 제외: 별도 입고 없이 원상품 재고 공유하는 가상옵션이라 '실입고'가 아님(소유자 2026-09-24).
+    - 둘다=RFM만: 같은 옵션이 NORMAL·RFM 2 vid 로 존재 → 판매자배송분 제외(재고 공란 방지). kind 는 '둘다' 보존."""
+    real = [o for o in listing.options if not o.is_upbundle]
+    n_up = len(listing.options) - len(real)
+    if not real:
+        return [], "", n_up, 0
+    kind = kind_of(o.registration_type for o in real)   # 원상품(업번들 제외) 판별(둘다 보존)
+    if kind == config.KIND_BOTH:
+        rfm = [o for o in real if o.registration_type == "RFM"]
+        return (rfm or real), kind, n_up, len(real) - len(rfm)   # 안전판: RFM 0개면 원본 유지
+    return real, kind, n_up, 0
+
+
 def products_from_vendor_inventory(listings: list[VendorInventoryListing],
                                    log=None) -> list[Product]:
     """상품조회/수정 리스팅 → **발견 Product 목록**(대장 매칭용). vi-detail-search 대체 vid 출처.
@@ -780,19 +797,12 @@ def products_from_vendor_inventory(listings: list[VendorInventoryListing],
     dropped_upbundle = 0
     skipped = 0
     for listing in listings:
-        # 업번들(자동번들=원상품 N개 묶음) 제외 — 별도 입고 없이 원상품 재고를 공유하는 가상옵션이라
-        # '실제 로켓그로스에 입고된 것'이 아니다(소유자 2026-09-24). 원상품만 추적/표기.
-        real_opts = [o for o in listing.options if not o.is_upbundle]
-        dropped_upbundle += len(listing.options) - len(real_opts)
-        if not real_opts:
+        opts, kind, n_up, n_norm = _tracked_listing_options(listing)
+        dropped_upbundle += n_up
+        dropped_norm += n_norm
+        if not opts:
             skipped += 1
             continue
-        kind = kind_of(o.registration_type for o in real_opts)   # 원상품(업번들 제외) 판별(둘다 보존)
-        opts = real_opts
-        if kind == config.KIND_BOTH:
-            rfm = [o for o in real_opts if o.registration_type == "RFM"]
-            dropped_norm += len(real_opts) - len(rfm)
-            opts = rfm or real_opts                  # 안전판: RFM 0개면(이론상 없음) 원본 유지
         labels = [""] if len(opts) == 1 else _uniquify_labels(
             [o.item_name or o.vendor_item_id[-4:] for o in opts])
         options = [Option(label=lbl, vendor_item_ids=[o.vendor_item_id])

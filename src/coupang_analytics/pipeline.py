@@ -892,13 +892,37 @@ def _ilog(log, tag: str, vids, name: str = "", msg: str = "", *, kind: str = "")
     log("  " + " ".join(parts))
 
 
-def _fill_product_metrics(wb, biz, pname, vids, kind, metrics, inv_by_vid, date_iso, log=None) -> None:
-    """**옵션(블록) 단위** 판매지표 기록 + **vid 기준 데이터 로그**(오류·진행 추적).
+def _block_sellable(sale_status, vids) -> bool:
+    """이 블록이 **판매중**(미입고 표기 대상)인지 — sale_status 로 판정. 재고현황에 없는 로켓그로스 원상품이
+    판매중(VALID)이면 '미입고', 판매중지면 공란으로 가르는 기준(소유자 2026-09-24).
+
+    sale_status = {vid: 판매상태 문자열('판매중'/'부분판매중'/'판매중지'…)} 또는 {vid: isSaleSuspended bool}
+    둘 다 지원(_discover 가 상황에 따라 문자열/부울 맵 반환). 상태 정보가 아예 없으면 기본 판매중(미입고 노출)."""
+    if not sale_status:
+        return True
+    known = [sale_status[v] for v in vids if v in sale_status]
+    if not known:
+        return True                                   # 정보 없음 → 기본 판매중(미입고로 표기)
+
+    def _one(st) -> bool:
+        if isinstance(st, bool):
+            return not st                             # isSaleSuspended False = 판매중
+        if isinstance(st, str):
+            return st in ("판매중", "부분판매중")
+        return True
+
+    return any(_one(st) for st in known)
+
+
+def _fill_product_metrics(wb, biz, pname, vids, kind, metrics, inv_by_vid, date_iso,
+                          log=None, sale_status=None) -> None:
+    """**옵션(블록) 단위** 판매지표 기록 + **vid 기준 데이터 로그**(진행 추적).
 
     vids = 이 블록에 속한 옵션ID 목록(단일옵션·판매자배송=상품 전 옵션, 다중옵션=그 옵션 하나). 지표는
     vi-detail-search(metrics: vid→OptionMetric)에서, 재고는 RFM 재고 API(inv_by_vid: vid→수량)에서 vid 로
-    조인해 이 블록 vid 들만 합산한다. 재고행은 kind 가 로켓그로스/둘다일 때만. log 를 주면 vid·이름·구분·
-    노출/판매/방문/재고를 **한 줄**로 남기고, 지표 없는 vid(당일 판매 0 등)·재고 누락도 명시한다."""
+    조인해 이 블록 vid 들만 합산한다. 재고행은 kind 가 로켓그로스/둘다일 때만.
+    **재고 규칙(소유자 2026-09-24)**: 재고현황 API에 vid 있으면 수량(0=입고됐지만 품절) · 없고 판매중이면
+    '미입고'(실입고 안 됨) · 없고 판매중지면 공란(판매중지 경고가 별도 처리). 값 출처=재고현황 API만."""
     views = sales = visitors = 0
     for oid in vids:
         m = metrics.get(oid)
@@ -910,25 +934,22 @@ def _fill_product_metrics(wb, biz, pname, vids, kind, metrics, inv_by_vid, date_
     wb.set_product_metric(biz, pname, config.M_VISITORS, date_iso, visitors)
     wb.set_product_metric(biz, pname, config.M_VIEWS, date_iso, views)
     inv_txt = ""
-    inv_missing = False
     if kind in config.KINDS_WITH_INVENTORY:   # 재고현황 = 로켓그로스 + 둘다(로켓그로스 파트 있음)
         matched = [oid for oid in vids if inv_by_vid and oid in inv_by_vid]
         if matched:
             qty = sum(inv_by_vid[oid] for oid in matched)
-            wb.set_product_metric(biz, pname, config.M_INVENTORY, date_iso, qty)   # 0 도 기록(재고 0)
+            wb.set_product_metric(biz, pname, config.M_INVENTORY, date_iso, qty)   # 0=입고됐지만 품절
             inv_txt = f"·재고 {qty}"
+        elif _block_sellable(sale_status, vids):
+            # 재고현황에 없음 + 판매중 = 로켓그로스 등록됐으나 물류센터 **미입고**(재고 0과 구분)
+            wb.set_product_metric(biz, pname, config.M_INVENTORY, date_iso, config.INV_NOT_INBOUND)
+            inv_txt = "·재고 미입고"
         else:
-            inv_missing = True   # 로켓그로스인데 재고 API 응답에 이 블록 vid 가 하나도 없음 = vid 잘못 매칭
+            inv_txt = "·재고 공란(판매중지)"   # 판매중지 → 공란 유지(판매중지 경고가 별도 처리)
     no_metric = [v for v in vids if v not in metrics]   # 당일 지표가 없는 vid(판매 0·미노출 등)
     _ilog(log, "지표", vids, pname,
           f"노출 {views}·판매 {sales}·방문 {visitors}{inv_txt}"
           + (f" ⚠지표없는vid {no_metric}" if no_metric else ""), kind=kind)
-    if inv_missing:
-        # ⛔ 로켓그로스/둘다는 재고가 **반드시 존재**(재고 없는 로켓그로스는 불가) → 공란은 '모름'이 아니라
-        # **vid 를 잘못 잡은 오류**(재고칸에 조용히 공란으로 묻힘). 로그로만 명시(결과파일은 안 건드림).
-        _ilog(log, "재고오류", vids, pname,
-              f"로켓그로스인데 재고맵({len(inv_by_vid or {})}vid)에 이 블록 vid 없음 → 재고 공란"
-              f"(vid 매칭 오류 의심·상품조회 옵션 vid ≠ 재고 API vid)", kind=kind)
 
 
 def _log_diagnose(product, track_info, ai_key, log, wb=None, biz=None, roles=None, pname=None) -> None:
@@ -992,6 +1013,7 @@ class _ProcCtx:
     keywords_off: bool
     log: object
     save_path: object
+    sale_status: object = None   # {vid: 판매상태(문자열) 또는 isSaleSuspended(bool)} — 미입고/판매중지 구분용
 
 
 def _frozen_keywords(pctx: _ProcCtx, biz: str, pname: str, base: str, kind: str, title: str,
@@ -1078,7 +1100,7 @@ def _process_option(pctx: _ProcCtx, biz: str, product, base: str, kind: str, tit
                                 rank_rows=is_rep, registered=base)
         wb.set_product_vids(biz, pname, opt_vids)
         _fill_product_metrics(wb, biz, pname, opt_vids, kind, pctx.metrics, pctx.inv_by_vid,
-                              pctx.date_iso, log=log)
+                              pctx.date_iso, log=log, sale_status=pctx.sale_status)
         wb.save(pctx.save_path)
         return
     # ── 대표 옵션(단일옵션 포함): 키워드 동결/선정 → 순위 → 지표 → 진단 ──
@@ -1110,7 +1132,8 @@ def _process_option(pctx: _ProcCtx, biz: str, product, base: str, kind: str, tit
         if mi is not None and getattr(mi, "name", ""):
             _ilog(log, "노출명", opt_vids, "", f"검색결과 노출명 = {_short(mi.name, 40)} (블록명은 등록상품명 고정)")
     wb.set_product_vids(biz, pname, opt_vids)          # 대표 옵션 vid 저장(③은 sibling_vids 합집합으로 매칭)
-    _fill_product_metrics(wb, biz, pname, opt_vids, kind, pctx.metrics, pctx.inv_by_vid, date_iso, log=log)
+    _fill_product_metrics(wb, biz, pname, opt_vids, kind, pctx.metrics, pctx.inv_by_vid, date_iso,
+                          log=log, sale_status=pctx.sale_status)
     _log_diagnose(product, track_info, ai_key, log, wb=wb, biz=biz, roles=roles, pname=pname)
     wb.save(pctx.save_path)
 
@@ -1146,7 +1169,7 @@ def _migrate_product_blocks(wb, biz: str, base: str, rep_name: str, vids_all, op
 
 def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid,
                      date_iso, grow, log, save_path, skip_ranks: bool = False,
-                     keywords_off: bool = False) -> None:
+                     keywords_off: bool = False, sale_status=None) -> None:
     """계정(시트) 하나: 상품마다 **옵션 블록**을 만들고 [대표=키워드/순위/지표, 2차=지표만] 기록·저장.
 
     다중옵션 상품은 옵션(vid)별 블록으로 분리한다 — **대표(첫 옵션)** 만 키워드 동결/선정·순위(리스팅 단위)를
@@ -1183,7 +1206,7 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
         # ── 옵션 블록 루프: 대표(i==0)만 키워드/순위, 나머지는 판매정보만 ──
         pctx = _ProcCtx(wb=wb, naver=naver, ai_key=ai_key, browser=browser, metrics=metrics,
                         inv_by_vid=inv_by_vid, date_iso=date_iso, grow=grow, skip_ranks=skip_ranks,
-                        keywords_off=keywords_off, log=log, save_path=save_path)
+                        keywords_off=keywords_off, log=log, save_path=save_path, sale_status=sale_status)
         for i, opt in enumerate(opts):
             seen_products.append(_block_name(base, opt.label if multi else ""))
             _process_option(pctx, biz, product, base, kind, title, i, opt, multi)
@@ -1497,12 +1520,13 @@ def _finish(ctx: _RunCtx, a: Account, report_acc, metrics, inv_by_vid, inv_statu
             # 순위 제외(날짜지정) 또는 판매수집 전용(①): 쿠팡 순위 브라우저 안 열고(차단 접촉 0)
             _process_account(report_acc, wb, ctx.naver, ctx.ai_key, None, metrics, inv_by_vid,
                              ctx.col_label, ctx.grow, log, ctx.partial, skip_ranks=ctx.skip_ranks,
-                             keywords_off=ctx.keywords_off)
+                             keywords_off=ctx.keywords_off, sale_status=inv_status)
         else:
             with WingBrowser(profile_dir=_PROFILE, offscreen=True) as rank_browser:
                 warmup(rank_browser)
                 _process_account(report_acc, wb, ctx.naver, ctx.ai_key, rank_browser, metrics,
-                                 inv_by_vid, ctx.col_label, ctx.grow, log, ctx.partial)
+                                 inv_by_vid, ctx.col_label, ctx.grow, log, ctx.partial,
+                                 sale_status=inv_status)
         # 판매상태 불일치 경고: 쿠팡 재고 판매상태맵을 마스터 전체 상품에 vid로 대조해 저장(멱등).
         # 대장에서 빠진(판매중지 표기) 상품도 쿠팡 재고에 살아있으면 vid로 잡혀 "판매중"으로 채워진다.
         # 상태맵은 ①판매수집 로그인 세션에서만 확보되므로(②③엔 없음) 여기서 1회 반영, 렌더는 apply_style이 담당.
