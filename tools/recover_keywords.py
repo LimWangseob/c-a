@@ -31,16 +31,23 @@ except AttributeError:
 from coupang_analytics.workbook import OutputWorkbook, _key  # noqa: E402
 
 
-def _keyword_map(path: str) -> dict[tuple[str, str], list[str]]:
-    """백업 워크북 → {(사업자, 순수상품명): [키워드…]} (키워드 있는 상품만)."""
+def _keyword_map(path: str):
+    """백업 워크북 → ({(사업자,상품): [키워드…]}, {(사업자,상품,키워드): 검색량}). 키워드+검색량(F) 함께 회수."""
     wb = OutputWorkbook.load(path)
-    out: dict[tuple[str, str], list[str]] = {}
+    kw: dict[tuple[str, str], list[str]] = {}
+    vol: dict[tuple[str, str, str], object] = {}
     for biz in wb.account_sheets():
         for product in wb.products_of(biz):
             kws = wb.product_keywords(biz, product)
-            if kws:
-                out[(biz, _key(product))] = list(kws)
-    return out
+            if not kws:
+                continue
+            key = (biz, _key(product))
+            kw[key] = list(kws)
+            for k in kws:
+                v = wb.keyword_search(biz, product, k)      # F열 검색량(옛 v3도 C폴백 인덱스로 조회됨)
+                if v not in (None, ""):
+                    vol[(biz, _key(product), k)] = v
+    return kw, vol
 
 
 def main() -> int:
@@ -55,7 +62,7 @@ def main() -> int:
     dry = args.dry_run or not args.out
     force = args.force_backup
 
-    src_kw = _keyword_map(args.src)
+    src_kw, src_vol = _keyword_map(args.src)
     dst = OutputWorkbook.load(args.dst)
     dst_products = {(biz, _key(p)) for biz in dst.account_sheets() for p in dst.products_of(biz)}
 
@@ -98,6 +105,11 @@ def main() -> int:
         for kw in list(dst.product_keywords(biz, product)):  # 현재 키워드 전부 비움(순서·잔재 무관)
             dst.clear_keyword_row(biz, product, kw)
         dst.add_product_keywords(biz, product, new)          # 백업(동결) 키워드 전체 추가
+    # 검색량(F열) 복원 — add_product_keywords 는 이름만 채우므로 백업 검색량을 별도로 되살린다(우측 빈칸 방지)
+    n_vol = 0
+    for (biz, product, kw), v in src_vol.items():
+        if dst.set_keyword_search(biz, product, kw, v):
+            n_vol += 1
     dst.apply_style()   # 소헤더 자가복원 + v4 서식
     dst.save(args.out)
     # 검증(재로드)
@@ -106,6 +118,7 @@ def main() -> int:
     rep_ok = sum(1 for biz, product, _o, new in replace
                  if chk.product_keywords(biz, product) == new)
     print(f"\n  ✅ 저장: {args.out}")
+    print(f"  검색량(F) 복원: {n_vol}개")
     print(f"  검증(재로드): 빈블록 채움 {fill_ok}/{len(fill)} · 교체 정확 {rep_ok}/{len(replace)}")
     ok = (fill_ok == len(fill)) and (rep_ok == len(replace))
     return 0 if ok else 1
