@@ -386,6 +386,16 @@ def scenario_display_name_rename():
            "product_vids: 헤더 이름칸에서 vid 복원(숨김시트 아님)")
     _check(wb2.product_keywords("비즈-a1", "상품-a1") == ["kw1", "kw2"],
            "load 후에도 (사업자,등록상품명) 키로 키워드 조회됨(키 안정)")
+    # day4: **상품조회 상품명이 바뀜(같은 vid)** → 같은 블록 이어받아 이름 갱신·이력(09.01~03) 유지·중복 없음
+    #        (결과파일 상품명 = 상품조회 productName 을 매일 반영하되 vid 앵커로 시계열 안 끊김 검증)
+    P.run_full(_account_one_vid("vid-a1", "상품-a1-개명"), naver=None, out_dir=str(d), ai_key="sim",
+               date_from="2026-09-04", date_to="2026-09-04", carry_forward=True, on_log=lambda m: None)
+    names4 = _product_names(master, "비즈-a1")
+    _check(names4 == ["상품-a1-개명"], f"day4: 상품조회명 변경 → 블록명 갱신·중복 없음 — {names4}")
+    _check(_date_headers(master) == {"09.01", "09.02", "09.03", "09.04"}, "day4: 이력 유지(4일 누적)")
+    wb4 = OutputWorkbook.load(master)
+    _check(wb4.product_vids("비즈-a1", "상품-a1-개명") == ["vid-a1"], "day4: 같은 vid 승계(정체성 유지)")
+    _check(wb4.product_keywords("비즈-a1", "상품-a1-개명") == ["kw1", "kw2"], "day4: 키워드 이력 승계")
 
 
 def scenario_full_composition():
