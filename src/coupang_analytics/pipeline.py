@@ -508,6 +508,35 @@ class LoginCredentialError(Exception):
     같은 실행·야간 재개가 다시 제출하지 않게 한다. 사용자 지시(2026-09-15): 비번 1회 오류면 재시도 안 함."""
 
 
+def _dump_raw(account_id: str, log, out_dir: str = "output") -> None:
+    """수집한 3개 데이터 API 응답 **원문(가공 없음)** 을 계정별 gzip 사이드카로 저장 — 다양한 오프라인 분석용.
+
+    파싱/요약이 아니라 **쿠팡이 준 응답 바디 그대로**(F12 네트워크와 동일)를 남긴다. 재수집·재빌드 없이
+    중복 판별·필드 탐색 등에 쓴다. 저장 위치=output/_raw/{계정}_{api}_p{n}.json.gz, run_log 엔 위치만(원문이
+    커서 run_log 오염 방지). 설정(config.SAVE_RAW_RESPONSES) 끄면 no-op·버퍼 비면 no-op. 저장 실패는
+    비치명(로그만·수집은 계속). api = vendor_inventory | inventory | sales(각 페이지 p1·p2…)."""
+    if not config.SAVE_RAW_RESPONSES:
+        return
+    import gzip
+    from .collector import raw_dumps
+    dumps = raw_dumps()
+    if not dumps:
+        return
+    try:
+        d = Path(out_dir) / "_raw"
+        d.mkdir(parents=True, exist_ok=True)
+        n = 0
+        for api, bodies in dumps.items():
+            for i, body in enumerate(bodies, 1):
+                with gzip.open(d / f"{account_id}_{api}_p{i}.json.gz", "wt", encoding="utf-8") as fh:
+                    fh.write(body)
+                n += 1
+        if n:
+            log(f"  [원본저장] {account_id}: 응답 원문 {n}개 → output/_raw/{account_id}_*.json.gz (가공 없음·분석용)")
+    except Exception as exc:   # 저장 실패해도 수집은 계속(비치명)
+        log(f"  [원본저장] ⚠ {account_id} 응답 원문 저장 실패(비치명) — {exc.__class__.__name__}: {str(exc)[:80]}")
+
+
 def _login_and_discover(a: Account, date_from, date_to, get_password, log, login: bool = True,
                         semi: bool = False):
     """계정 하나: (필요시) 로그인 → **같은 신선한 세션**에서 즉시 판매분석 발견 + 지표.
@@ -521,13 +550,16 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
     semi=True(**반자동 판매수집**): 창을 **처음부터 보이게**(offscreen=False) 띄우고 **무인 아님**(사람이
     2차인증/직접로그인 처리)으로 로그인 → 그 신뢰 창에서 수집. ③ 반자동과 같은 '보이는 신뢰 세션' 방식.
     """
+    from . import collector
     from .collector import save_discovered   # 지연 import
     pw = get_password(a.account_id) if get_password else None
     # 기본은 **창 숨김**(offscreen). 반자동(semi)이면 처음부터 보이게 띄운다(사람이 2차인증 처리).
     with WingBrowser(profile_dir=account_profile(a.account_id), offscreen=not semi) as b:
         if not _ensure_login(b, a, pw, log, login=login, semi=semi):
             return None, {}, {}, {}, set()   # 이 계정 건너뜀(무인 비번없음·otp·로그인 미완료)
+        collector.reset_raw()                # 계정별 응답 원문 버퍼 초기화(파일 분리)
         found = _discover_products(b, a, date_from, date_to, log)
+        _dump_raw(a.account_id, log)         # 3 API 응답 원문 저장(가공 없음·분석용). found None(데이터없음)이어도 남김
         if found is None:                    # 판매분석·상품조회 모두 데이터 없음 → 건너뜀
             return None, {}, {}, {}, set()
         products, tracked, metrics, inventory, sale_status, upbundle_vids = found

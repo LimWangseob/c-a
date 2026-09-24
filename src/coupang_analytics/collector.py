@@ -196,6 +196,28 @@ def sale_status_by_vid(listings: list["VendorInventoryListing"], log=None) -> di
     return out
 
 
+# ── 응답 원문 보관(가공 없음·분석용, 소유자 2026-09-24) ───────────────────────────
+# 3개 데이터 API(상품조회·재고·판매분석)의 **순수 응답 바디**를 계정 단위로 모아 pipeline 이 gzip 사이드카로
+# 저장한다. 재수집·재빌드 없이 다양한 오프라인 분석(중복 판별·필드 탐색 등)을 하기 위함. 파싱값이 아니라 원문 그대로.
+_RAW: dict[str, list[str]] = {}
+
+
+def reset_raw() -> None:
+    """계정 수집 시작 시 원본 버퍼 초기화(계정별 파일 분리)."""
+    _RAW.clear()
+
+
+def raw_dumps() -> dict[str, list[str]]:
+    """모은 원본 응답 바디 {api: [body,…]} — 가공 없는 그대로(api=vendor_inventory|inventory|sales)."""
+    return {k: list(v) for k, v in _RAW.items()}
+
+
+def _raw_add(api: str, body) -> None:
+    """한 API 응답 바디(원문)를 버퍼에 추가(설정 켜졌을 때만). 비200 바디도 그대로 보관(분석용)."""
+    if config.SAVE_RAW_RESPONSES and body:
+        _RAW.setdefault(api, []).append(body if isinstance(body, str) else str(body))
+
+
 def _num(value) -> int:
     """지표 정수화(응답은 3.0 같은 실수). None/빈값은 0."""
     if value in (None, ""):
@@ -245,6 +267,7 @@ def fetch_sales_details(page, date_from: str, date_to: str, log=None) -> dict[st
                    "sortBy": "GMV", "sortOrder": "DESC", "includeSoldVICount": True}
         res = page.evaluate(_FETCH_JS, payload)
         status, body = res.get("status"), res.get("body", "")
+        _raw_add("sales", body)   # 순수 응답 원문 보관(분석용·비200도)
         if status != 200:
             raise SalesFetchError(
                 f"vi-detail-search 응답 status={status}"
@@ -351,6 +374,7 @@ def _fetch_inventory_status(page, hidden_status: str, log) -> tuple[dict, dict, 
                    "rrqContext": {"source": "IHD", "eventType": "RRQ_SEEN", "metadata": "{}"}}
         res = page.evaluate(_INV_FETCH_JS, payload)
         st, body = res.get("status"), res.get("body", "")
+        _raw_add("inventory", body)   # 순수 응답 원문 보관(분석용·비200도)
         if st != 200:
             raise InventoryFetchError(
                 f"inventory search 응답 status={st}"
@@ -445,6 +469,7 @@ def fetch_vendor_inventory(page, log=None) -> list[VendorInventoryListing]:
         payload = dict(_VI_SEARCH_BASE, page=page_num)
         res = page.evaluate(_VI_FETCH_JS, payload)
         status, body = res.get("status"), res.get("body", "")
+        _raw_add("vendor_inventory", body)   # 순수 응답 원문 보관(분석용·비200도)
         if status != 200:
             raise VendorInventoryFetchError(
                 f"vendor-inventory/search 응답 status={status}"

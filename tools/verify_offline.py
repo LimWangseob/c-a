@@ -286,6 +286,30 @@ def t1_sale_status_flag():
     _purge_upbundle_blocks(wbU, bzU, set(), lambda m: None)         # 빈 집합(상품조회 실패) → no-op
     assert set(wbU.products_of(bzU)) == _left, "업번들 집합 비면 삭제 안 함(잘못된 삭제 방지)"
     _ok("업번들 잔재 블록 vid 기준 자동삭제(변형·실vid 보존)·빈 집합=no-op")
+    # ── 응답 원문 보관(가공 없음·분석용, 소유자 2026-09-24): collector 버퍼 + pipeline gzip 사이드카 ──
+    import gzip as _gz
+    from coupang_analytics import collector as _col
+    from coupang_analytics.pipeline import _dump_raw
+    _col.reset_raw()
+    _col._raw_add("vendor_inventory", '{"success":true,"data":{"x":1}}')
+    _col._raw_add("inventory", '{"viProperties":[]}')
+    _col._raw_add("sales", '{"vendorItems":[]}')
+    dumps = _col.raw_dumps()
+    assert set(dumps) == {"vendor_inventory", "inventory", "sales"}, f"원문 버퍼 키 오류: {list(dumps)}"
+    assert dumps["vendor_inventory"] == ['{"success":true,"data":{"x":1}}'], "원문이 가공됨(그대로 보관 아님)"
+    _draw = Path(tempfile.mkdtemp())
+    _dump_raw("acctX", lambda m: None, out_dir=str(_draw))
+    _f = _draw / "_raw" / "acctX_vendor_inventory_p1.json.gz"
+    assert _f.exists(), "원문 gzip 파일 미생성"
+    assert _gz.open(_f, "rt", encoding="utf-8").read() == '{"success":true,"data":{"x":1}}', "저장 원문이 원본과 불일치"
+    _col.reset_raw()
+    assert _col.raw_dumps() == {}, "reset_raw 후 버퍼 비어야"
+    # 설정 끄면 no-op(파일 안 만듦)
+    _sv = config.SAVE_RAW_RESPONSES
+    config.SAVE_RAW_RESPONSES = False
+    _col._raw_add("sales", "x"); assert _col.raw_dumps() == {}, "설정 끄면 원문 수집 안 함"
+    config.SAVE_RAW_RESPONSES = _sv
+    _ok("응답 원문 보관: 3 API 원문 그대로 버퍼→gzip 사이드카 저장·재로드 일치·reset·설정 off no-op")
     # vid별 전개 + apply_sale_status 문자열 경로(판매자배송 NORMAL 상품도 상태 커버)
     def _li(name, vid, status, rt="NORMAL"):
         return VendorInventoryListing(product_name=name, vendor_inventory_id="g_" + vid,
