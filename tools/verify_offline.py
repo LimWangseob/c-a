@@ -562,7 +562,7 @@ def t1_vid_source_option_split():
     _ok("단일 블록 삭제(delete_product_block): 대상만 제거·나머지 온전·메타 정리·재로드 보존")
     # ── 같은 등록상품명(기본+옵션) 블록 인접 정렬(분산 치유·소유자 2026-09-25) ──
     # 옵션이 나중에 발견돼 시트 끝에 붙어 형제와 분산된 마스터를 apply_style 이 형제끼리 인접하게 재배치(값 무손실).
-    from coupang_analytics.workbook import _norm, _key
+    from coupang_analytics.workbook import _norm, _key, _unmerge_all
     bz3 = "정렬가게"
     wbR = OutputWorkbook.empty()
     wbR.ensure_product_block(bz3, "도마 (대)", config.KIND_CONTRACT, ["도마kw"], registered="도마"); wbR.set_product_vids(bz3, "도마 (대)", ["D1"])
@@ -616,6 +616,26 @@ def t1_vid_source_option_split():
     # 키워드명이 실제로 A열(v4)로 이동했는지
     assert _norm(wv5.wb[bz4].cell(_wr, 1).value) == "베개커버" and not _norm(wv5.wb[bz4].cell(_wr, 3).value), "키워드 C→A 물리이전 실패"
     _ok("옛 마스터(v3)→v4 마이그레이션: 키워드·순위·vid·판매방식·판매량 전부 무손실(C→A 이전·헤더꼬리→메타)·재로드 보존")
+    # ── 손상된 키워드 소헤더('키워드'@A 소실) 자가복원(2026-09-25 유실 사고 재발 방지) ──
+    # 마이그레이션 누락 빌드가 저장한 손상 마스터 = 키워드행(M_RANK)은 있는데 소헤더 A='키워드'가 사라진 상태.
+    # 그대로 apply_style 하면 키워드 구역을 못 찾아 키워드가 뭉개진다 → apply_style 이 소헤더를 자가복원해야.
+    wbC = OutputWorkbook.empty(); bzC = "손상가게"
+    wbC.ensure_product_block(bzC, "베개", config.KIND_CONTRACT, ["베개커버", "무형광베개"], registered="베개")
+    wbC.set_product_vids(bzC, "베개", ["vidP"])
+    wbC.set_keyword_rank(bzC, "베개", "베개커버", "09.24", 3)
+    wbC.apply_style()
+    wsC = wbC.wb[bzC]
+    kh = next(r for r in range(1, wsC.max_row + 1) if _norm(wsC.cell(r, 1).value) == "키워드")  # 소헤더행
+    _unmerge_all(wsC); wsC.cell(kh, 1).value = None                 # 소헤더 마커 A='키워드' 제거(손상 재현)
+    wbC._reindex()
+    assert not wbC.has_keyword_section(bzC, "베개"), "손상 재현 실패(소헤더 여전히 인식)"
+    pC = d / "손상.xlsx"; wbC.apply_style(); wbC.save(pC)           # apply_style 자가복원 기대
+    wbC2 = OutputWorkbook.load(pC)
+    assert wbC2.has_keyword_section(bzC, "베개"), "소헤더 자가복원 실패"
+    assert wbC2.product_keywords(bzC, "베개") == ["베개커버", "무형광베개"], f"자가복원 후 키워드 유실: {wbC2.product_keywords(bzC, '베개')}"
+    _rr2 = wbC2._kw_row[(bzC, "베개", "베개커버")]; _cc2 = wbC2._date_col[bzC]["09.24"]
+    assert wbC2.wb[bzC].cell(_rr2, _cc2).value == "3위", "자가복원 후 순위 유실"
+    _ok("손상 소헤더 자가복원: A='키워드' 소실 블록 → apply_style 이 복원 → 키워드·순위 무손실(유실 사고 재발 방지)")
 
 
 def t1_ledger_dedup():

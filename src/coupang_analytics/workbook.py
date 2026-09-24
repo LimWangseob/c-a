@@ -1212,31 +1212,52 @@ class OutputWorkbook:
                 ws.cell(row, 3, " / ".join(vids))
 
     def _migrate_keyword_col(self) -> None:
-        """옛 마스터(v3)의 키워드명·소헤더를 **C열 → A열**로 물리 이전(레이아웃 v4 좌측확장·유실 방지).
+        """옛 마스터(v3) 키워드 C→A 이전 + **손상된 키워드 소헤더 자가복원**(레이아웃 v4·유실 방지·재발 방지).
 
-        v3는 키워드명과 소헤더 '키워드'를 C열(_COL_NAME)에, 사업자명을 A열에 뒀다. v4는 키워드명을 A열
-        (병합 앵커)에서 읽으므로(A:E 병합 시 비앵커 C값은 저장에서 버려짐), 옛 마스터를 그대로 저장하면
-        키워드·순위가 유실된다. 저장(apply_style) 직전 한 번 옮긴다(멱등 — 이미 A열이면 no-op). 이전 후 재인덱스."""
+        (a) v3는 키워드명·소헤더 '키워드'를 C열(_COL_NAME)에, 사업자명을 A열에 뒀다. v4는 키워드명을 A열
+            (병합 앵커)에서 읽으므로 옛 마스터를 그대로 저장하면 A:E 병합의 비앵커 C값이 버려져 키워드·순위가
+            유실된다 → 저장 전 C→A 로 옮긴다.
+        (b) **자가복원(2026-09-25 유실 사고 재발 방지):** 키워드행(M_RANK)은 있는데 소헤더의 A='키워드'가
+            사라진 블록(마이그레이션 누락 빌드가 저장한 손상 마스터)은 `_find_kw_head`가 키워드 구역을 못 찾아
+            v4 서식이 키워드행을 지표행으로 오인·뭉갠다 → 소헤더행(첫 M_RANK 직전, F='검색량' 또는 G∈비고류로
+            검증)의 A를 '키워드'로 되살린다.
+        멱등(이미 A열/소헤더 정상이면 no-op). 변경 시 재인덱스. 저장 때마다 돌아 손상 마스터를 자동 치유한다."""
+        sub_g = {_LABEL_NOTE, "⛔ 판매중지", "🔴 체험단중"}
         moved = False
         for ws in self.wb.worksheets:
             if ws.title in _SPECIAL_SHEETS:
                 continue
-            # 먼저 (읽기 전용) 옛 포맷 키워드행/소헤더가 있는지 탐지(병합 셀도 앵커값은 읽힘)
-            targets = []
+            targets: list[tuple[int, str]] = []   # (행, A에 쓸 값)
+            # (a) 옛 포맷 키워드행/소헤더 C→A (병합 셀도 앵커값은 읽힘)
             for r in range(1, ws.max_row + 1):
                 g = _norm(ws.cell(r, _COL_METRIC).value)
                 c = _norm(ws.cell(r, _COL_NAME).value)
                 a = _norm(ws.cell(r, _COL_KW).value)
-                if _norm(ws.cell(r, _COL_NAME).value) == _LABEL_KEYWORD and a != _LABEL_KEYWORD:
+                if c == _LABEL_KEYWORD and a != _LABEL_KEYWORD:
                     targets.append((r, _LABEL_KEYWORD))           # 옛 소헤더: C='키워드'·A=사업자
                 elif g == config.M_RANK and c and not a:
                     targets.append((r, c))                        # 옛 키워드행: C=키워드명·A 공란
+            # (b) 손상된 소헤더 자가복원 — 블록별 첫 M_RANK 직전 소헤더에 A='키워드' 없으면 복원
+            headers = [r for r in range(1, ws.max_row + 1)
+                       if _norm(ws.cell(r, _COL_METRIC).value) == _LABEL_DATE]
+            for hi, hr in enumerate(headers):
+                end = (headers[hi + 1] - 1) if hi + 1 < len(headers) else ws.max_row
+                first_kw = next((r for r in range(hr, end + 1)
+                                 if _norm(ws.cell(r, _COL_METRIC).value) == config.M_RANK), None)
+                if not first_kw or first_kw <= hr:
+                    continue
+                sh = first_kw - 1
+                is_sub = (_norm(ws.cell(sh, _COL_SEARCH).value) == _LABEL_SEARCH
+                          or _norm(ws.cell(sh, _COL_METRIC).value) in sub_g)
+                if is_sub and _norm(ws.cell(sh, _COL_KW).value) != _LABEL_KEYWORD:
+                    targets.append((sh, _LABEL_KEYWORD))          # 소헤더 마커 복원
             if not targets:
                 continue
-            _unmerge_all(ws)                                       # 옛 병합(사업자 A:B 세로·키워드 C:E) 해제 후 쓰기
+            _unmerge_all(ws)                                       # 병합 해제 후 쓰기(apply_style 재병합)
             for r, val in targets:
                 ws.cell(r, _COL_KW, val)                          # A ← 키워드명/'키워드'
-                ws.cell(r, _COL_NAME).value = None                # C 비움(v4는 A가 앵커)
+                if val != _LABEL_KEYWORD or _norm(ws.cell(r, _COL_NAME).value) == _LABEL_KEYWORD:
+                    ws.cell(r, _COL_NAME).value = None            # 옛 C값(키워드명/'키워드') 비움(v4는 A가 앵커)
             moved = True
         if moved:
             self._reindex()
