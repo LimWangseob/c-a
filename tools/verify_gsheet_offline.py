@@ -375,7 +375,7 @@ def t5_stats_mirror() -> None:
         if "mergeCells" in r:
             assert r["mergeCells"]["mergeType"] in {"MERGE_ALL", "MERGE_ROWS", "MERGE_COLUMNS"}
     flat = str(next(r for r in reqs if "updateCells" in r))
-    assert "#gid=7&range=A1" in flat and "계정 목록" in flat               # 복귀 링크 → 계정목록 gid
+    assert "#gid=7&range=A1" in flat and "계정목록으로 이동" in flat        # 복귀 링크 문구 → 계정목록 gid
     _ok("전체교체 요청(병합해제·틀고정 H2·복귀 HYPERLINK) + 등록명 보존")
 
 
