@@ -217,26 +217,33 @@ def t1_sale_status_flag():
                                      registration_type="RFM", product_status="ON_SALE",
                                      options=[_opt("R_only2", "RFM", up=True)])
     assert products_from_vendor_inventory([only_ub]) == [], "업번들만 있는 리스팅은 제외"
-    # ── 재고 표기(소유자 2026-09-24): 재고현황 있으면 값(0=품절)·없고 판매중=미입고·없고 판매중지=공란 ──
-    from coupang_analytics.pipeline import _fill_product_metrics, _block_sellable
+    # ── 재고 표기(소유자 2026-09-24 개정): 재고현황 있으면 값(0=품절)·**없으면 판매중지 무관 미입고** ──
+    from coupang_analytics.pipeline import (_fill_product_metrics, _block_sale_status,
+                                            _purge_upbundle_blocks)
     from coupang_analytics.workbook import _norm, _key
-    assert _block_sellable(None, ["x"]) is True
-    assert _block_sellable({"x": "판매중"}, ["x"]) is True and _block_sellable({"x": "부분판매중"}, ["x"]) is True
-    assert _block_sellable({"x": "판매중지"}, ["x"]) is False
-    assert _block_sellable({"x": False}, ["x"]) is True and _block_sellable({"x": True}, ["x"]) is False
-    assert _block_sellable({"y": "판매중지"}, ["x"]) is True     # 정보 없는 vid → 기본 판매중
+    # 판매상태 블록 판정: 모두 같으면 그 상태·섞이면 부분판매중·없으면 ''(미상)·bool 폴백 지원
+    assert _block_sale_status(None, ["x"]) == ""
+    assert _block_sale_status({"x": "판매중"}, ["x"]) == "판매중"
+    assert _block_sale_status({"x": "판매중지"}, ["x"]) == "판매중지"
+    assert _block_sale_status({"a": "판매중", "b": "판매중지"}, ["a", "b"]) == "부분판매중"
+    assert _block_sale_status({"x": False}, ["x"]) == "판매중" and _block_sale_status({"x": True}, ["x"]) == "판매중지"
+    assert _block_sale_status({"y": "판매중지"}, ["x"]) == ""     # 이 블록 vid 상태 없음 → 미상
     wbI = OutputWorkbook.empty()
     bzI = "재고비즈"
     for nm in ("입고품", "품절품", "미입고품", "중지품"):
         wbI.ensure_product_block(bzI, nm, config.KIND_CONTRACT, ["kw"])
         wbI.set_keyword_rank(bzI, nm, "kw", "2026-09-24", 1)     # 날짜 컬럼 생성
 
-    def _raw_inv(nm):
-        row = wbI._metric_row.get((_norm(bzI), _key(nm), config.M_INVENTORY))
+    def _raw_metric(nm, metric):
+        row = wbI._metric_row.get((_norm(bzI), _key(nm), metric))
         dt = wbI.latest_date(bzI)
         col = wbI._date_col.get(bzI, {}).get(dt)
         return wbI.wb[bzI].cell(row, col).value if (row and col) else None
-    _fill_product_metrics(wbI, bzI, "입고품", ["V1"], config.KIND_CONTRACT, {}, {"V1": 7}, "2026-09-24")
+
+    def _raw_inv(nm):
+        return _raw_metric(nm, config.M_INVENTORY)
+    _fill_product_metrics(wbI, bzI, "입고품", ["V1"], config.KIND_CONTRACT, {}, {"V1": 7}, "2026-09-24",
+                          sale_status={"V1": "판매중"})
     _fill_product_metrics(wbI, bzI, "품절품", ["V2"], config.KIND_CONTRACT, {}, {"V2": 0}, "2026-09-24")
     _fill_product_metrics(wbI, bzI, "미입고품", ["V3"], config.KIND_CONTRACT, {}, {}, "2026-09-24",
                           sale_status={"V3": "판매중"})
@@ -245,11 +252,16 @@ def t1_sale_status_flag():
     assert _raw_inv("입고품") == 7, "입고=재고현황 값"
     assert _raw_inv("품절품") == 0, "입고됐지만 품절=0(공란 아님)"
     assert _raw_inv("미입고품") == config.INV_NOT_INBOUND, f"미입고 표기: {_raw_inv('미입고품')!r}"
-    assert _raw_inv("중지품") in (None, ""), f"판매중지=공란: {_raw_inv('중지품')!r}"
+    # 개정: 판매중지여도 재고현황 없으면 **미입고**(옛 공란 폐기 — 소유자 2026-09-24)
+    assert _raw_inv("중지품") == config.INV_NOT_INBOUND, f"판매중지+재고없음=미입고: {_raw_inv('중지품')!r}"
+    # 판매상태 지표행(실행일마다 쿠팡 판매상태 기록·쿠팡 존중·재고칸과 별도) — 소유자 2026-09-24
+    assert _raw_metric("입고품", config.M_SALE_STATUS) == "판매중", "판매상태행=판매중"
+    assert _raw_metric("중지품", config.M_SALE_STATUS) == "판매중지", "판매상태행=판매중지(쿠팡 존중)"
+    assert _raw_metric("품절품", config.M_SALE_STATUS) in (None, ""), "상태맵 없으면 판매상태 공란(미상)"
     # 역기록 가드: product_inventory 는 숫자만 반환('미입고' 문자열은 None → 대장 미접촉)
     assert wbI.product_inventory(bzI, "미입고품") is None, "'미입고' 문자열은 역기록 대상 아님"
     assert wbI.product_inventory(bzI, "품절품") == 0 and wbI.product_inventory(bzI, "입고품") == 7
-    # 결과파일 표기 보장: apply_style + 저장 + 재로드 후에도 '미입고' 문자열이 재고칸에 유지
+    # 결과파일 표기 보장: apply_style + 저장 + 재로드 후에도 '미입고'·판매상태 문자열이 유지
     _dtmp = Path(tempfile.mkdtemp())
     wbI.apply_style()
     wbI.save(_dtmp / "재고표기.xlsx")
@@ -257,7 +269,23 @@ def t1_sale_status_flag():
     _rowI = wbR._metric_row.get((_norm(bzI), _key("미입고품"), config.M_INVENTORY))
     _colI = wbR._date_col.get(bzI, {}).get(wbR.latest_date(bzI))
     assert wbR.wb[bzI].cell(_rowI, _colI).value == config.INV_NOT_INBOUND, "결과파일 저장 후 '미입고' 유실"
-    _ok("재고 표기(입고 값/품절 0/미입고 문자열/판매중지 공란)·역기록 숫자가드·결과파일 저장 후 미입고 유지")
+    _rowS = wbR._metric_row.get((_norm(bzI), _key("중지품"), config.M_SALE_STATUS))
+    assert wbR.wb[bzI].cell(_rowS, _colI).value == "판매중지", "결과파일 저장 후 판매상태 유실"
+    _ok("재고 표기(입고 값/품절 0/판매중지 무관 미입고)·판매상태 지표행(쿠팡 존중)·역기록 숫자가드·저장 후 유지")
+    # ── 업번들 잔재 블록 매 수집 자동삭제(vid 기준·소유자 2026-09-24) ──
+    wbU = OutputWorkbook.empty()
+    bzU = "업번들비즈"
+    wbU.ensure_product_block(bzU, "원상품", config.KIND_CONTRACT, ["kw"]); wbU.set_product_vids(bzU, "원상품", ["R_base"])
+    wbU.ensure_product_block(bzU, "묶음잔재 (2개)", config.KIND_CONTRACT, [], rank_rows=False)
+    wbU.set_product_vids(bzU, "묶음잔재 (2개)", ["R_2pack"])
+    wbU.ensure_product_block(bzU, "블랙변형", config.KIND_CONTRACT, [], rank_rows=False); wbU.set_product_vids(bzU, "블랙변형", ["R_black"])
+    _purge_upbundle_blocks(wbU, bzU, {"R_2pack"}, lambda m: None)   # 이번 상품조회 업번들 = R_2pack
+    _left = set(wbU.products_of(bzU))
+    assert "묶음잔재 (2개)" not in _left, "업번들 vid 블록 미삭제"
+    assert "원상품" in _left and "블랙변형" in _left, "실vid 블록(원상품·변형)은 보존돼야"
+    _purge_upbundle_blocks(wbU, bzU, set(), lambda m: None)         # 빈 집합(상품조회 실패) → no-op
+    assert set(wbU.products_of(bzU)) == _left, "업번들 집합 비면 삭제 안 함(잘못된 삭제 방지)"
+    _ok("업번들 잔재 블록 vid 기준 자동삭제(변형·실vid 보존)·빈 집합=no-op")
     # vid별 전개 + apply_sale_status 문자열 경로(판매자배송 NORMAL 상품도 상태 커버)
     def _li(name, vid, status, rt="NORMAL"):
         return VendorInventoryListing(product_name=name, vendor_inventory_id="g_" + vid,
@@ -519,7 +547,7 @@ def t1_date_columns():
 
 
 def t1_inventory_missing_error():
-    print("[15] 재고 표기 규칙 (재고현황 값/0=품절/미입고/판매중지 공란·재고=재고현황 API만·소유자 2026-09-24)")
+    print("[15] 재고 표기 규칙 (재고현황 값/0=품절/**판매중지 무관 미입고**·재고=재고현황 API만·소유자 2026-09-24 개정)")
     from coupang_analytics.pipeline import _fill_product_metrics
     from coupang_analytics.workbook import _norm, _key
     wb = OutputWorkbook.empty()
@@ -543,16 +571,19 @@ def t1_inventory_missing_error():
     assert _inv("로켓상품") == 5 and any("재고 5" in m for m in logs), f"재고 값 기록 실패: {logs}"
     _fill_product_metrics(wb, "재고샵", "품절상품", ["v2"], config.KIND_CONTRACT, {}, {"v2": 0}, "09.21")
     assert _inv("품절상품") == 0, "입고됐지만 품절=0(공란·미입고 아님)"
-    # (C) 판매중지 + 재고현황 없음 → 공란(판매중지 경고가 별도 처리·미입고 아님)
+    # (C) 판매중지 + 재고현황 없음 → **미입고**(소유자 2026-09-24 개정: 옛 공란 폐기·판매상태 무관). 판매상태는 별도 지표행에.
     _fill_product_metrics(wb, "재고샵", "중지상품", ["v3"], config.KIND_CONTRACT, {}, {}, "09.21",
                           sale_status={"v3": "판매중지"})
-    assert _inv("중지상품") in (None, ""), f"판매중지=공란 아님: {_inv('중지상품')!r}"
+    assert _inv("중지상품") == config.INV_NOT_INBOUND, f"판매중지+재고없음=미입고 아님: {_inv('중지상품')!r}"
+    _srow = wb._metric_row.get((_norm("재고샵"), _key("중지상품"), config.M_SALE_STATUS))
+    _scol = wb._date_col.get("재고샵", {}).get(wb.latest_date("재고샵"))
+    assert wb.wb["재고샵"].cell(_srow, _scol).value == "판매중지", "판매상태는 별도 지표행에 판매중지 기록"
     # (D) 판매자배송(개인)=재고 개념 없음 → 미입고/재고 표기 안 함
     logs.clear()
     _fill_product_metrics(wb, "재고샵", "개인상품", ["v4"], config.KIND_PERSONAL, {}, {}, "09.21", log=logs.append)
     assert _inv("개인상품") in (None, ""), "개인상품 재고칸 표기 오탐"
     assert all("vid=" in m for m in logs), f"항목 로그에 vid 누락(공통함수 _ilog): {logs}"
-    _ok("재고=재고현황(값/0=품절)·없고 판매중=미입고·판매중지 공란·개인상품 미표기·항목로그 vid 필수")
+    _ok("재고=재고현황(값/0=품절)·없으면 판매중지 무관 미입고·판매상태는 별도 지표행·개인상품 미표기·항목로그 vid 필수")
 
 
 def t1_delete_account():

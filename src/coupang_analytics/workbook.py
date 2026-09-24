@@ -530,6 +530,10 @@ class OutputWorkbook:
             if (kind in config.KINDS_WITH_INVENTORY
                     and (biz, product, config.M_INVENTORY) not in self._metric_row):
                 self._add_metric_row(biz, product, config.M_INVENTORY)
+            # 판매상태 지표행(실행일마다 쿠팡 판매상태 기록, 소유자 2026-09-24) — 옛 마스터 블록엔 없어
+            # 자동 추가한다(모든 구분 공통·개인상품 포함). 멱등(이미 있으면 미진입).
+            if (biz, product, config.M_SALE_STATUS) not in self._metric_row:
+                self._add_metric_row(biz, product, config.M_SALE_STATUS)
             return
         ws = self.ensure_account(biz)
         metrics = (config.CONTRACT_METRICS if kind in config.KINDS_WITH_INVENTORY
