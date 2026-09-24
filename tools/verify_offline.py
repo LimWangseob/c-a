@@ -195,8 +195,9 @@ def t1_sale_status_flag():
     # ── '둘다' 상품의 판매자배송(NORMAL) 중복 옵션 제외 = RFM(로켓그로스) vid 만 채택(재고 공란 방지) ──
     from coupang_analytics.collector import products_from_vendor_inventory
 
-    def _opt(vid, rt, valid="VALID"):
-        return VendorInventoryOption(vendor_item_id=vid, item_name="베이지", registration_type=rt, valid=valid)
+    def _opt(vid, rt, valid="VALID", up=False):
+        return VendorInventoryOption(vendor_item_id=vid, item_name="베이지", registration_type=rt,
+                                     valid=valid, is_upbundle=up)
     both = VendorInventoryListing(product_name="기저귀가방", vendor_inventory_id="g1",
                                   registration_type="", product_status="ON_SALE",
                                   options=[_opt("N_dup", "NORMAL"), _opt("R_real", "RFM")])
@@ -204,6 +205,18 @@ def t1_sale_status_flag():
     vids = [v for p in prods for o in p.options for v in o.vendor_item_ids]
     assert vids == ["R_real"], f"둘다 상품 NORMAL 중복 미제외(재고 공란 원인): {vids}"
     assert prods[0].kind == config.KIND_BOTH, "구분은 둘다 보존"
+    # ── 업번들(자동번들) 옵션 제외 = 실입고 원상품만 추적(소유자 2026-09-24) ──
+    ub = VendorInventoryListing(product_name="비타민", vendor_inventory_id="g2",
+                                registration_type="RFM", product_status="ON_SALE",
+                                options=[_opt("R_base", "RFM"), _opt("R_2pack", "RFM", up=True),
+                                         _opt("R_3pack", "RFM", up=True)])
+    ubv = [v for p in products_from_vendor_inventory([ub]) for o in p.options for v in o.vendor_item_ids]
+    assert ubv == ["R_base"], f"업번들 옵션 미제외(원상품만 남아야): {ubv}"
+    # 업번들만 있는 리스팅(원상품 없음·이론상 없음)은 제외돼 상품 0
+    only_ub = VendorInventoryListing(product_name="번들만", vendor_inventory_id="g3",
+                                     registration_type="RFM", product_status="ON_SALE",
+                                     options=[_opt("R_only2", "RFM", up=True)])
+    assert products_from_vendor_inventory([only_ub]) == [], "업번들만 있는 리스팅은 제외"
     # vid별 전개 + apply_sale_status 문자열 경로(판매자배송 NORMAL 상품도 상태 커버)
     def _li(name, vid, status, rt="NORMAL"):
         return VendorInventoryListing(product_name=name, vendor_inventory_id="g_" + vid,

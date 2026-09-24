@@ -44,7 +44,7 @@
 
 > ✅ **1~7단계 코드 구현 완료·오프라인 검증 3종 통과(simulate·verify_offline[12]·verify_gsheet). ⚠라이브(로그인·실제 마스터) 확인은 사무실 세션 필요.** 진행 상황:
 > - ✅ **1단계(collector)**: `fetch_vendor_inventory`(same-origin fetch + x-xsrf-token, page 1→N) + `VendorInventoryListing`/`VendorInventoryOption` + `_parse_vendor_inventory`(valid=INVALID 포함).
-> - ✅ **2단계(매칭)**: `products_from_vendor_inventory`(둘다=RFM만·kind '둘다' 보존·그룹키 `vendorInventoryId`) → 정밀매칭 `scope_to_ledger`/`augment_unmatched` 재사용.
+> - ✅ **2단계(매칭)**: `products_from_vendor_inventory`(**업번들(자동번들) 옵션 제외**[소유자 2026-09-24·`upbundlingInfo.upBundling`=별도 입고 없이 원상품 재고 공유하는 가상옵션이라 실입고 아님]·둘다=RFM만·kind '둘다' 보존·그룹키 `vendorInventoryId`) → 정밀매칭 `scope_to_ledger`/`augment_unmatched` 재사용.
 > - ✅ **3단계(vid 출처 반전)**: vid 출처=헤더 이름칸 'VID :' 꼬리. 인메모리 `_block_vids`(`_reindex`가 이름칸 파싱으로 채움)·`product_vids`=이름칸 읽기·`set_product_vids`=이름칸 즉시 렌더·숨김 `_상품ID` vid 3열 폐지(무손실 이관: 기존 마스터 이름칸에 이미 'VID :' 있음).
 > - ✅ **4단계(옵션 분리 블록)**: `ensure_product_block(..., rank_rows=, registered=)` — 다중옵션 2차 블록은 순위행 없음(판매정보만). `has_keyword_section`(2차 판정)·`pad_keyword_rows`/②가 2차 건너뜀.
 > - ✅ **5단계(소스 조인·set_display_name 중단)**: `_fill_product_metrics`=옵션(블록) vid별 지표(노출/판매/방문=vi-detail·재고=RFM). ③ 매칭=`sibling_vids`(같은 등록상품명 옵션 vid 합집합, 아이템위너 놓침 방지). set_display_name(노출명 교체) **중단**(블록명=등록상품명+옵션라벨 고정).

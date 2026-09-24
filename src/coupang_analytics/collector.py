@@ -151,6 +151,7 @@ class VendorInventoryOption:
     status: str = ""            # 옵션 승인/상태
     sale_price: int = 0          # 판매가
     vendor_inventory_item_id: str = ""   # 등록옵션ID(내부)
+    is_upbundle: bool = False    # 업번들(자동번들)=원상품 N개 묶음(upbundlingInfo.upBundling). 실입고 아님→추적 제외
 
 
 @dataclass
@@ -482,6 +483,7 @@ def _parse_vendor_inventory(product_list: list[dict]) -> list[VendorInventoryLis
                 status=str(it.get("status") or "").strip(),
                 sale_price=_num(it.get("salePrice")),
                 vendor_inventory_item_id=str(it.get("vendorInventoryItemId") or "").strip(),
+                is_upbundle=bool((it.get("upbundlingInfo") or {}).get("upBundling")),
             ))
         out.append(VendorInventoryListing(
             product_name=str(p.get("productName") or "").strip(),
@@ -775,23 +777,30 @@ def products_from_vendor_inventory(listings: list[VendorInventoryListing],
     log = log or (lambda m: None)
     out: list[Product] = []
     dropped_norm = 0
+    dropped_upbundle = 0
     skipped = 0
     for listing in listings:
-        if not listing.options:
+        # 업번들(자동번들=원상품 N개 묶음) 제외 — 별도 입고 없이 원상품 재고를 공유하는 가상옵션이라
+        # '실제 로켓그로스에 입고된 것'이 아니다(소유자 2026-09-24). 원상품만 추적/표기.
+        real_opts = [o for o in listing.options if not o.is_upbundle]
+        dropped_upbundle += len(listing.options) - len(real_opts)
+        if not real_opts:
             skipped += 1
             continue
-        kind = kind_of(o.registration_type for o in listing.options)   # 전 옵션 판별(둘다 보존)
-        opts = listing.options
+        kind = kind_of(o.registration_type for o in real_opts)   # 원상품(업번들 제외) 판별(둘다 보존)
+        opts = real_opts
         if kind == config.KIND_BOTH:
-            rfm = [o for o in listing.options if o.registration_type == "RFM"]
-            dropped_norm += len(listing.options) - len(rfm)
-            opts = rfm or listing.options            # 안전판: RFM 0개면(이론상 없음) 원본 유지
+            rfm = [o for o in real_opts if o.registration_type == "RFM"]
+            dropped_norm += len(real_opts) - len(rfm)
+            opts = rfm or real_opts                  # 안전판: RFM 0개면(이론상 없음) 원본 유지
         labels = [""] if len(opts) == 1 else _uniquify_labels(
             [o.item_name or o.vendor_item_id[-4:] for o in opts])
         options = [Option(label=lbl, vendor_item_ids=[o.vendor_item_id])
                    for lbl, o in zip(labels, opts)]
         name = listing.product_name
         out.append(Product(name=name, options=options, title=name, kind=kind))
+    if dropped_upbundle:
+        log(f"  [상품조회] 업번들(자동번들) 옵션 {dropped_upbundle}개 제외(실입고 원상품만 추적)")
     if dropped_norm:
         log(f"  [상품조회] 둘다 상품 판매자배송(NORMAL) 옵션 {dropped_norm}개 제외(vid=로켓그로스만)")
     if skipped:
