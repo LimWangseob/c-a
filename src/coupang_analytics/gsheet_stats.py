@@ -18,7 +18,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from . import config
 from .gsheet_index import INDEX_SHEET_NAME
-from .workbook import (_COL_METRIC, _COL_NAME, _LABEL_DATE, _LABEL_KEYWORD,
+from .workbook import (_COL_KW, _COL_METRIC, _COL_NAME, _LABEL_DATE, _LABEL_KEYWORD,
                        _SPECIAL_SHEETS, _key)
 
 # openpyxl 선(Side) 스타일 → Sheets 테두리 스타일
@@ -250,11 +250,18 @@ def push_statistics(client, wb, *, on_log=None) -> dict[str, int]:
 def read_staff_keywords(client, wb) -> dict[tuple[str, str], list[str]]:
     """결과 통계 시트에서 **상품별 키워드 목록**을 읽는다 → {(사업자, 상품): [키워드…]}.
 
-    통계 시트는 push_statistics 가 쓴 레이아웃(상품 헤더행 G='날짜'·C=노출명 / 키워드 소헤더 C='키워드' /
-    그 아래 키워드 행 C=키워드명)을 그대로 되읽는다. 프로그램이 쓴 AI 키워드 + **직원이 그 영역에 직접 타이핑한
-    키워드**를 모두 포함(위치 기반 파싱이라 직원 행에 G='노출 순위'가 없어도 잡힌다). 시트가 없으면 건너뜀.
+    통계 시트는 push_statistics 가 쓴 레이아웃(상품 헤더행 G='날짜'·**C=노출명** / 키워드 소헤더·키워드행 =
+    **A열**[레이아웃 v4 좌측확장 `_COL_KW`])을 그대로 되읽는다. 프로그램이 쓴 AI 키워드 + **직원이 그 영역에 직접
+    타이핑한 키워드**를 모두 포함(위치 기반 파싱이라 직원 행에 G='노출 순위'가 없어도 잡힌다). 시트가 없으면 건너뜀.
+
+    ⚠ 상품명은 항상 C열, 키워드명·소헤더는 **A열**(v4). 옛 마스터(v3, 키워드가 C열)는 **C 폴백**으로도 읽어
+    v3/v4 결과시트 둘 다 안전(2026-09-25 수정: v4 키워드 A열 이전 시 이 함수 미갱신으로 직원 키워드 미반영 버그).
     """
-    ci, gi = _COL_NAME - 1, _COL_METRIC - 1     # read_grid 값 격자는 0-based
+    ci, gi, ki = _COL_NAME - 1, _COL_METRIC - 1, _COL_KW - 1     # read_grid 격자 0-based: C=상품명, G=지표, A=키워드(v4)
+
+    def _at(rw, i):
+        return rw[i].strip() if len(rw) > i and rw[i] else ""
+
     titles = set(client.sheet_titles())
     out: dict[tuple[str, str], list[str]] = {}
     for biz in wb.account_sheets():
@@ -264,16 +271,17 @@ def read_staff_keywords(client, wb) -> dict[tuple[str, str], list[str]]:
         cur: str | None = None
         in_kw = False
         for row in values:
-            c = row[ci].strip() if len(row) > ci and row[ci] else ""
-            g = row[gi].strip() if len(row) > gi and row[gi] else ""
-            if g == _LABEL_DATE and c:                 # 상품 헤더행 → 새 상품(노출명 꼬리 제거)
-                cur, in_kw = _key(c), False
-            elif c == _LABEL_KEYWORD:                   # 키워드 소헤더 → 이 아래가 키워드 영역
+            name_c = _at(row, ci)                       # 상품 헤더 이름(항상 C)
+            g = _at(row, gi)
+            kw = _at(row, ki) or _at(row, ci)           # 키워드명: v4=A열, 옛=C열 폴백
+            if g == _LABEL_DATE and name_c:             # 상품 헤더행 → 새 상품(노출명 꼬리 제거)
+                cur, in_kw = _key(name_c), False
+            elif kw == _LABEL_KEYWORD:                  # 키워드 소헤더(v4=A '키워드' / 옛=C '키워드') → 이 아래 키워드 영역
                 in_kw = True
-            elif in_kw and cur and c and c != _LABEL_KEYWORD:
+            elif in_kw and cur and kw and kw != _LABEL_KEYWORD:
                 out.setdefault((biz, cur), [])
-                if c not in out[(biz, cur)]:
-                    out[(biz, cur)].append(c)
+                if kw not in out[(biz, cur)]:
+                    out[(biz, cur)].append(kw)
     return out
 
 

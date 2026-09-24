@@ -434,6 +434,15 @@ def _grow(c="", g=""):
     return r
 
 
+def _growA(a="", c="", g=""):
+    """레이아웃 v4 격자 행 — A(1열=index0)=키워드명/소헤더, C(index2)=상품명, G(index6)=지표."""
+    r = [""] * 7
+    r[0] = a
+    r[2] = c
+    r[6] = g
+    return r
+
+
 class _StatsFake:
     """사업자 시트명→격자 매핑을 돌려주는 최소 클라이언트(merge_staff_keywords 용)."""
     def __init__(self, grids): self._g = grids
@@ -460,7 +469,24 @@ def t7_staff_keywords_merge() -> None:
     kws = wb.product_keywords("가게A", "텀블러")
     assert kws[:2] == ["텀블러", "보온 텀블러"] and "국산 텀블러" in kws, kws   # 기존 보존 + 직원분 추가
     assert gsheet_stats.merge_staff_keywords(_StatsFake(grid), wb) == 0        # 재실행 무증가(idempotent)
-    _ok("직원 키워드 위치기반 파싱·1개 추가·기존 보존·재실행 idempotent(→그 상품 AI 선정 생략)")
+    _ok("직원 키워드(옛 C열 폴백) 위치기반 파싱·1개 추가·기존 보존·재실행 idempotent")
+    # 레이아웃 v4: 키워드명·소헤더가 **A열**인 결과시트도 정확히 읽어야(2026-09-25 read_staff_keywords A열 수정)
+    wb2 = _sample_workbook()   # 가게A/텀블러, 키워드 [텀블러, 보온 텀블러]
+    grid4 = {"가게A": [
+        _growA(),                                                  # 제목행
+        _growA(c="텀블러", g="날짜"),                               # 상품 헤더(상품명=C)
+        _growA(a="상품명"), _growA(a="VID"),                        # v4 좌측 라벨(A) — 키워드 아님(소헤더 전)
+        _growA(a="키워드", g="비고"),                               # 키워드 소헤더(A열)
+        _growA(a="텀블러", g="노출 순위"), _growA(a="보온 텀블러", g="노출 순위"),
+        _growA(a="v4직원키워드", g=""),                             # 직원 직접 입력(A열)
+    ]}
+    staff4 = gsheet_stats.read_staff_keywords(_StatsFake(grid4), wb2)
+    assert staff4.get(("가게A", "텀블러")) == ["텀블러", "보온 텀블러", "v4직원키워드"], staff4
+    n4 = gsheet_stats.merge_staff_keywords(_StatsFake(grid4), wb2)
+    assert n4 == 1 and "v4직원키워드" in wb2.product_keywords("가게A", "텀블러"), wb2.product_keywords("가게A", "텀블러")
+    # v4 A열 라벨(상품명/VID)은 키워드로 오인하지 않아야(소헤더 전이라 in_kw=False)
+    assert "상품명" not in staff4.get(("가게A", "텀블러"), []) and "VID" not in staff4.get(("가게A", "텀블러"), [])
+    _ok("직원 키워드 v4 A열 레이아웃 정확 파싱·좌측 라벨(상품명/VID) 오인 안 함·머지 반영")
 
 
 def t8_exec_retry() -> None:
