@@ -193,14 +193,16 @@ def t3_index_sync() -> None:
 
 
 class _FakeClient:
-    def __init__(self, values, titles=None, row_count=1000):
+    def __init__(self, values, titles=None, row_count=1000, col_count=26):
         self._v = values; self.batches = []
         self._row_count = row_count   # 그리드 행수(확장 판단용) — 기본 넉넉히
+        self._col_count = col_count   # 그리드 열수(확장 판단용) — 기본 넉넉히(신규 시트 26열)
         self._titles = titles if titles is not None else (["계정목록"] if values else [])
         self._ids = {t: 100 + i for i, t in enumerate(self._titles)}
     def sheet_titles(self): return list(self._titles)
     def sheet_id(self, title): return self._ids.get(title)
     def grid_row_count(self, title): return self._row_count
+    def grid_col_count(self, title): return self._col_count
     def ensure_sheet(self, name): return self._ids.get(name, 7)
     def read_grid(self, sheet, notes=False): return self._v, [[None] * len(r) for r in self._v]
     def batch_update(self, reqs):
@@ -283,6 +285,18 @@ def t3d_grid_autogrow() -> None:
     grow2 = [r for b in fc2.batches for r in b if "appendDimension" in r]
     assert not grow2, "여유 충분한데 불필요한 그리드 확장(멱등성 위반)"
     _ok("여유 충분한 그리드 → 확장 안 함")
+
+    # 열 확장: 옛 계정목록이 N_COLS(체험단효과 I열=9) 보다 좁으면 기록 전 COLUMNS 확장(라이브 400 방지)
+    fc3 = _FakeClient(existing_vals, row_count=1000, col_count=8)
+    gi.sync_index(fc3, desired)
+    cgrow = [r for b in fc3.batches for r in b
+             if r.get("appendDimension", {}).get("dimension") == "COLUMNS"]
+    assert cgrow and cgrow[0]["appendDimension"]["length"] == gi.N_COLS - 8, "좁은 그리드 열 확장 누락(400 재발)"
+    fc4 = _FakeClient(existing_vals, row_count=1000, col_count=gi.N_COLS)   # 이미 충분
+    gi.sync_index(fc4, desired)
+    assert not [r for b in fc4.batches for r in b
+                if r.get("appendDimension", {}).get("dimension") == "COLUMNS"], "충분한 열인데 불필요 확장"
+    _ok("좁은 열 그리드 → 체험단효과 I열 기록 전 열 자동 확장(넓으면 안 함)")
 
 
 def t3c_delete_accounts() -> None:

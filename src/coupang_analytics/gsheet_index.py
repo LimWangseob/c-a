@@ -501,11 +501,17 @@ def _grid_grow_requests(client, sheet: str, sheet_id: int, n_data_rows: int) -> 
     insertDimension(inheritFromBefore=False)은 startIndex < 현재 rowCount 라야 한다 — 데이터가 그리드를
     꽉 채우면 신규 삽입이 그리드 끝(==rowCount)을 넘어 400(라이브 2026-09-23 실측). 삽입 전 rowCount 를
     `헤더2 + 데이터행수 + 여유(_GRID_ROW_BUFFER)` 이상으로 맞춘다. rowCount 를 못 읽으면(폴백) 확장 생략."""
+    reqs: list[dict] = []
     need = DATA_START0 + n_data_rows + _GRID_ROW_BUFFER
     cur = client.grid_row_count(sheet)
     if cur is not None and cur < need:
-        return [{"appendDimension": {"sheetId": sheet_id, "dimension": "ROWS", "length": need - cur}}]
-    return []
+        reqs.append({"appendDimension": {"sheetId": sheet_id, "dimension": "ROWS", "length": need - cur}})
+    # 열 확장: 옛 계정목록 그리드가 N_COLS(체험단효과 I열 추가로 9) 보다 좁으면 updateCells 가 그리드 폭을
+    # 넘어 400(2026-09-24 라이브 실측). 기록 전 columnCount 를 N_COLS 이상으로 맞춘다(못 읽으면 생략).
+    ccur = client.grid_col_count(sheet)
+    if ccur is not None and ccur < N_COLS:
+        reqs.append({"appendDimension": {"sheetId": sheet_id, "dimension": "COLUMNS", "length": N_COLS - ccur}})
+    return reqs
 
 
 def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME) -> SyncPlan:

@@ -197,7 +197,8 @@ class GSheetClient:
             self._meta = self._exec(self._sheets().get(
                 spreadsheetId=self.spreadsheet_id,
                 fields=("properties.title,"
-                        "sheets.properties(sheetId,title,index,gridProperties.rowCount)")),
+                        "sheets.properties(sheetId,title,index,gridProperties.rowCount,"
+                        "gridProperties.columnCount)")),
                 "메타 조회")
         return self._meta
 
@@ -222,6 +223,16 @@ class GSheetClient:
         for s in self.meta().get("sheets", []):
             if s["properties"]["title"] == title:
                 return s["properties"].get("gridProperties", {}).get("rowCount")
+        return None
+
+    def grid_col_count(self, title: str) -> int | None:
+        """시트의 현재 그리드 열 수(columnCount). 없으면 None. 캐시(meta) 기반 — 확장 판단용.
+
+        updateCells 는 columnIndex < columnCount 라야 하므로(그리드 폭 넘으면 400), 열이 늘어난 서식(예
+        체험단효과 I열)을 기록하기 전 이 값으로 열 확장 필요 여부를 판단한다."""
+        for s in self.meta().get("sheets", []):
+            if s["properties"]["title"] == title:
+                return s["properties"].get("gridProperties", {}).get("columnCount")
         return None
 
     def ensure_sheet(self, title: str) -> int:
