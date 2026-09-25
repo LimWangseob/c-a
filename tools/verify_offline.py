@@ -949,6 +949,42 @@ def t1_dual_status_source():
     _ok("계정목록 상태=대장(판매중지)·판매상태 지표행=쿠팡(판매중)·두 소스 독립(이중 표기)")
 
 
+def t1_keyword_freeze_boundary():
+    print("[23] ⑨ 키워드 동결 — 1건이라도 있으면 담당자 간주(AI 생략)·가변개수(>4)·공란 미검색 (소유자 2026-09-25)")
+    import coupang_analytics.pipeline as pl
+    from coupang_analytics.pipeline import _ProcCtx, _resolve_keywords
+    BIZ = "키워드테스트"
+    # (A) 워크북 레벨: 가변개수·공란 — product_keywords 는 이름 있는 행만(공란 미추적/미검색)
+    wb = OutputWorkbook.empty()
+    wb.ensure_product_block(BIZ, "상품", config.KIND_CONTRACT, ["k1"], registered="상품")   # 1건
+    assert wb.product_keywords(BIZ, "상품") == ["k1"], "1건 동결 신호"
+    added = wb.add_product_keywords(BIZ, "상품", ["k2", "k3", "k4", "k5", "k6"])            # 총 6건(>4)
+    assert added == ["k2", "k3", "k4", "k5", "k6"]
+    assert wb.product_keywords(BIZ, "상품") == ["k1", "k2", "k3", "k4", "k5", "k6"], "가변개수(>4) 추적 실패"
+    wb.pad_keyword_rows(BIZ, "상품2" if False else "상품")   # 이미 6행 → 4행 하한 초과, no-op
+    wb.ensure_product_block(BIZ, "빈상품", config.KIND_CONTRACT, [], registered="빈상품")   # 키워드 0
+    wb.pad_keyword_rows(BIZ, "빈상품")                                                       # 빈 순위행 생성
+    assert wb.product_keywords(BIZ, "빈상품") == [], "공란 순위행이 키워드로 잡힘(미검색이어야)"
+    # (B) 동결 규칙: existing 있으면 _resolve_keywords 가 AI(select_keywords_light) 미호출·기존 그대로 반환
+    wb2 = OutputWorkbook.empty()
+    wb2.ensure_product_block(BIZ, "동결상품", config.KIND_CONTRACT, ["kA", "kB"], registered="동결상품")
+    wb2.set_keyword_search(BIZ, "동결상품", "kA", 100)   # 검색량 채워둠 → _fill_frozen 이 네이버 미호출
+    wb2.set_keyword_search(BIZ, "동결상품", "kB", 200)
+    _orig = pl.select_keywords_light
+    pl.select_keywords_light = lambda *a, **k: (_ for _ in ()).throw(AssertionError("동결인데 AI 선정 호출됨"))
+    try:
+        pctx = _ProcCtx(wb=wb2, naver=None, ai_key="x", browser=None, metrics=None, inv_by_vid=None,
+                        date_iso="2026-09-25", grow=False, skip_ranks=True, keywords_off=False,
+                        log=lambda m: None, save_path=None)
+        kws, ranks, track, roles = _resolve_keywords(pctx, BIZ, "동결상품", "동결상품",
+                                                     config.KIND_CONTRACT, "동결상품", ["v"], None, None, {})
+    finally:
+        pl.select_keywords_light = _orig
+    assert kws == ["kA", "kB"], f"동결 키워드 그대로 반환 실패: {kws}"
+    assert roles == {}, "동결 상품은 역할 재판정 안 함"
+    _ok("1건=동결(AI 생략)·가변개수(>4) 추적·공란 순위행 미검색·동결 시 AI 미호출")
+
+
 def t1_preflight_sync_check():
     print("[20] 시작 프리플라이트 싱크체크 (preflight_sync_check — 대장↔결과 [SYNC] 비변경 진단, 항목②③)")
     from coupang_analytics.input_list import Account, InputList
@@ -1205,6 +1241,7 @@ def main():
     t1_preflight_sync_check()
     t1_ledger_removal_delete()
     t1_dual_status_source()
+    t1_keyword_freeze_boundary()
     t1_product_match_precision()
     t1_vid_source_option_split()
     t1_ledger_dedup()
