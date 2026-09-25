@@ -1511,14 +1511,39 @@ def _column_label(date_from: str, date_to: str, date_label: str | None, log) -> 
     return col_label
 
 
+def _consolidate_renamed_accounts(wb, input_list: InputList, log) -> int:
+    """시트명 변경으로 같은 계정ID가 둘로 쪼개진 경우 일원화(2026-09-25).
+
+    관리대장은 담당자가 사업자명·대표자를 수시로 바꿔, 계정ID는 그대로인데 옛 시트명이 고아(전 상품 판매중지로
+    오분류)가 된다(예: 이종훈→원더폴리). 대장의 (계정ID → 현재 사업자명) 을 기준으로, 같은 계정ID인데 다른
+    이름을 가진 옛 시트를 현재 이름 시트로 **이력 보존하며 병합**한다. 삭제 판정보다 **먼저** 돌려, 옛 시트가
+    '판매중지'로 오분류되기 전에 흡수한다. 반환 = 이관한 상품 수 합계."""
+    target_of = {a.account_id: a.label for a in input_list.accounts if a.account_id and a.label}
+    if not target_of:
+        return 0
+    moved_total = 0
+    for biz in list(wb.account_sheets()):
+        aid = wb.account_id_of(biz)
+        target = target_of.get(aid) if aid else None
+        if not target or target.strip() == (biz or "").strip():
+            continue                                       # 대장에 없는 계정ID or 이미 현재 이름
+        moved = wb.merge_account(biz, target)
+        if moved:
+            moved_total += moved
+            log(f"== [{biz}] → [{target}] 일원화(계정ID {aid} 동일·시트명 변경) — 상품 {moved}개 이력 이관 ==")
+    return moved_total
+
+
 def _reconcile_ledger_accounts(wb, input_list: InputList, uncollected, log) -> list[tuple[str, str]]:
     """계정 단위 대조(2026-09-17 정책) — 관리대장 기준으로 결과 워크북의 계정을 정리한다.
 
+    - 시트명 변경(계정ID 동일)으로 쪼개진 계정 = **일원화**(먼저, 옛 이름 흡수).
     - 대장에서 **줄이 완전히 사라진 계정 = 완전 삭제**(시트·이력·메타).
     - 대장에 **줄은 남았으나 비활성**(전 상품 판매중지 등) = 판매중지 표기(유지·경고 기능).
     - 로그인 실패(uncollected)는 '사라짐' 아님 → 제외(다음에 수집).
     삭제 판정 = 계정ID가 대장에 아예 없음. 반환 = 완전 삭제한 (사업자, 계정ID) 목록.
     """
+    _consolidate_renamed_accounts(wb, input_list, log)     # 시트명 변경 계정 먼저 흡수(고아 오분류 방지)
     active_biz = {a.label for a in input_list.accounts}
     active_ids = input_list.ledger_account_ids            # 대장에 줄이 존재하는 계정ID(판매중지 포함)
     uncollected_biz = {a.label for a in uncollected}

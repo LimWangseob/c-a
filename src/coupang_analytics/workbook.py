@@ -1856,6 +1856,79 @@ class OutputWorkbook:
             self._reindex()
         return removed
 
+    def _copy_product_block(self, src: str, product: str, dst: str) -> None:
+        """src 시트의 상품 블록 하나를 dst 로 복제(이력·키워드·순위·검색량·메타 전부·일자 라벨로 정렬)."""
+        kind = self.product_kind(src, product) or config.KIND_PERSONAL
+        keywords = self.product_keywords(src, product)
+        reg = self.registered_name(src, product) or product
+        self.ensure_product_block(dst, product, kind, keywords, registered=reg)
+        self.set_product_vids(dst, product, self.product_vids(src, product))
+        self.set_product_kind(dst, product, kind)
+        self.set_sale_status(dst, product, self.sale_status(src, product))
+        self.set_discontinued(dst, product, self.is_discontinued(src, product))
+        ms, me, mm = self.marketing_of(src, product)
+        if ms or me or mm:
+            self.set_marketing(dst, product, ms, me, mm)
+        _price, inbound, summ = self._product_extra(src, product)
+        if inbound or summ:
+            self.set_product_extra(dst, product, inbound_date=inbound or None, inbound_summary=summ or None)
+        dates = dict(self._date_col.get(src, {}))
+        for metric in _ALL_METRICS:                        # 지표값 일자별 이관
+            srow = self._metric_row.get((src, product, metric))
+            if srow is None:
+                continue
+            for dlabel, dcol in dates.items():
+                v = self.wb[src].cell(srow, dcol).value
+                if v not in (None, ""):
+                    self.set_product_metric(dst, product, metric, dlabel, v)
+        for kw in keywords:                                # 키워드 검색량+순위값 일자별 이관
+            self.set_keyword_search(dst, product, kw, self.keyword_search(src, product, kw))
+            srow = self._kw_row.get((src, product, kw))
+            drow = self._kw_row.get((dst, product, kw))
+            if srow is None or drow is None:
+                continue
+            for dlabel, dcol in dates.items():
+                v = self.wb[src].cell(srow, dcol).value
+                if v not in (None, ""):
+                    self.wb[dst].cell(drow, self.ensure_date(dst, dlabel), v)
+
+    def merge_account(self, src: str, dst: str) -> int:
+        """같은 계정(계정ID 동일)이 **시트명 변경**(대표자명→사업자명 등)으로 둘로 쪼개졌을 때 **일원화**.
+
+        관리대장은 담당자가 사업자명·대표자 등을 수시로 바꾸므로, 계정ID는 그대로인데 시트명만 달라져 옛 시트가
+        고아(전부 판매중지)가 되는 사고를 막는다. dst 없으면 src 를 dst 로 **rename**(시트+메타 이관). dst 있으면
+        src 의 상품 중 **dst 에 없는 것만** 이력 보존하며 이관(dst 상품=더 최신, 유지) 후 src 삭제. 이관 상품 수 반환."""
+        src, dst = _norm(src), _norm(dst)
+        if not src or not dst or src == dst or src in _SPECIAL_SHEETS or dst in _SPECIAL_SHEETS:
+            return 0
+        if src not in self.wb.sheetnames:
+            return 0
+        if dst not in self.wb.sheetnames:                  # dst 없음 → 단순 rename(시트+메타 biz 컬럼 이관)
+            self.wb[src].title = dst[:31]
+            for meta in (_META_SHEET, _DISC_SHEET, _MKT_SHEET, _ACCT_SHEET):
+                if meta in self.wb.sheetnames:
+                    mws = self.wb[meta]
+                    for r in range(2, mws.max_row + 1):
+                        if _norm(mws.cell(r, 1).value) == src:
+                            mws.cell(r, 1, dst)
+            self._reindex()
+            return len(self.products_of(dst))
+        self.ensure_account(dst)                           # dst 존재 → 병합(없는 상품만)
+        dst_products = set(self.products_of(dst))
+        aid, rep = self.account_id_of(src), self.representative_of(src)
+        moved = 0
+        for product in self.products_of(src):
+            if product in dst_products:
+                continue                                   # dst 에 이미 있음(더 최신) → 스킵
+            self._copy_product_block(src, product, dst)
+            moved += 1
+        if aid and not self.account_id_of(dst):
+            self.set_account_id(dst, aid)
+        if rep and not self.representative_of(dst):
+            self.set_representative(dst, rep)
+        self.delete_account(src)                           # src 시트+메타 제거(reindex 포함)
+        return moved
+
     def blocks_with_registered_name(self, biz: str, reg: str) -> list[str]:
         """이 사업자에서 **등록상품명(reg)** 에 해당하는 기존 블록 이름들(블록명==reg 또는 registered_name==reg).
 

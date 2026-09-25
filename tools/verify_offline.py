@@ -784,6 +784,63 @@ def t1_delete_account():
     _ok("가게A 시트·이력·메타(계정정보/상품ID/마케팅) 완전 삭제·가게B 온전·계정목록에서도 사라짐")
 
 
+def t1_merge_account():
+    print("[16] 시트명 변경 계정 일원화 (workbook.merge_account — 계정ID 동일·이력 보존)")
+
+    def _kwcell(wb, biz, product, kw, dlabel):             # 키워드 행 · 일자칸 원값(순위 문자열)
+        row = wb._kw_row.get((biz, product, kw))
+        col = wb._date_col.get(biz, {}).get(dlabel)
+        return wb.wb[biz].cell(row, col).value if row and col else None
+
+    def _mcell(wb, biz, product, metric, dlabel):          # 지표 행 · 일자칸 원값
+        row = wb._metric_row.get((biz, product, metric))
+        col = wb._date_col.get(biz, {}).get(dlabel)
+        return wb.wb[biz].cell(row, col).value if row and col else None
+
+    # (A) dst 없음 → rename 분기
+    wb = OutputWorkbook.empty()
+    wb.set_account_id("이종훈", "oopean"); wb.set_representative("이종훈", "이종훈")
+    wb.ensure_product_block("이종훈", "옛상품", config.KIND_CONTRACT, ["kwA", "kwB"])
+    wb.set_product_vids("이종훈", "옛상품", ["v1"])
+    wb.set_keyword_rank("이종훈", "옛상품", "kwA", "2026-09-17", 5)
+    wb.set_product_metric("이종훈", "옛상품", config.M_SALES, "2026-09-17", 42)
+    moved = wb.merge_account("이종훈", "원더폴리")           # dst 없음 → rename
+    assert "이종훈" not in wb.account_sheets() and "원더폴리" in wb.account_sheets(), wb.account_sheets()
+    assert wb.account_id_of("원더폴리") == "oopean", "rename 후 계정ID 유실"
+    assert wb.product_keywords("원더폴리", "옛상품") == ["kwA", "kwB"], "rename 후 키워드 유실"
+    assert _kwcell(wb, "원더폴리", "옛상품", "kwA", "2026-09-17") == "5위", "rename 후 순위 유실"
+    assert moved >= 1
+
+    # (B) dst 존재 → 병합(dst 없는 상품만 이력 보존 이관 + src 삭제)
+    wb = OutputWorkbook.empty()
+    wb.set_account_id("이종훈", "oopean")                    # 옛 이름 시트(고아·판매중지)
+    wb.ensure_product_block("이종훈", "옛A", config.KIND_CONTRACT, ["k1"])
+    wb.set_discontinued("이종훈", "옛A", True)
+    wb.set_keyword_rank("이종훈", "옛A", "k1", "2026-09-10", 12)
+    wb.set_product_metric("이종훈", "옛A", config.M_SALES, "2026-09-10", 7)
+    wb.set_keyword_search("이종훈", "옛A", "k1", 3300)
+    wb.ensure_product_block("이종훈", "공통상품", config.KIND_CONTRACT, ["old"])  # dst에도 있음 → 스킵
+    wb.set_account_id("원더폴리", "oopean")                  # 현재 이름 시트(더 최신)
+    wb.ensure_product_block("원더폴리", "신A", config.KIND_CONTRACT, ["n1"])
+    wb.ensure_product_block("원더폴리", "공통상품", config.KIND_CONTRACT, ["new"])
+    moved = wb.merge_account("이종훈", "원더폴리")
+    assert "이종훈" not in wb.account_sheets(), "src 미삭제"
+    prods = set(wb.products_of("원더폴리"))
+    assert {"신A", "공통상품", "옛A"} <= prods, prods          # 옛A 이관·신A 유지·공통 1개
+    assert moved == 1, f"이관 수 {moved}(옛A만)"
+    assert wb.is_discontinued("원더폴리", "옛A") is True, "판매중지 이력 유실"
+    assert _kwcell(wb, "원더폴리", "옛A", "k1", "2026-09-10") == "12위", "순위 이력 유실"
+    assert _mcell(wb, "원더폴리", "옛A", config.M_SALES, "2026-09-10") == 7, "판매 이력 유실"
+    assert wb.keyword_search("원더폴리", "옛A", "k1") == 3300, "검색량 이력 유실"
+    assert wb.product_keywords("원더폴리", "공통상품") == ["new"], "dst 상품이 src로 덮임(스킵 실패)"
+    # 저장/재로드 왕복
+    d = Path(tempfile.mkdtemp()); path = d / "일원화.xlsx"
+    wb.apply_style(); wb.save(path)
+    wb2 = OutputWorkbook.load(path)
+    assert "이종훈" not in wb2.account_sheets() and set(wb2.products_of("원더폴리")) >= {"신A", "공통상품", "옛A"}
+    _ok("rename 분기·병합 분기(없는 상품만 이관·이력[순위/검색량/판매중지/판매] 보존·src 삭제·왕복 정합)")
+
+
 def t1_promo_effect():
     print("[13] 체험단효과(promo_effect) — 시작일 직전값→최신값 점 비교·최고순위·판정색")
     wb = OutputWorkbook.empty()
@@ -950,6 +1007,7 @@ def main():
     t1_sale_status_flag()
     t1_representative_column()
     t1_delete_account()
+    t1_merge_account()
     t1_product_match_precision()
     t1_vid_source_option_split()
     t1_ledger_dedup()
