@@ -32,10 +32,10 @@ from coupang_analytics.input_list import (Account, Product,  # noqa: E402
                                           parse_input_list, parse_input_rows, parse_password_rows)
 from coupang_analytics.workbook import OutputWorkbook  # noqa: E402
 
-_HEAD = ["대표자", "사업자", "상품명(클릭 이동)", "계정ID",
-         "체험단 시작일", "체험단 종료일", "모니터링 종료일", "상태"]   # 2026-09-17 대표자 컬럼 추가(8열)
+_HEAD = ["대표자", "사업자", "계정ID", "상품명(클릭 이동)",
+         "체험단 시작일", "체험단 종료일", "모니터링 종료일", "상태"]   # 항목④(2026-09-25): 계정ID를 상품명 왼쪽으로
 _HEAD_OLD7 = ["사업자", "상품명(클릭 이동)", "계정ID",
-              "체험단 시작일", "체험단 종료일", "모니터링 종료일", "상태"]   # 마이그레이션 대상 옛 7열
+              "체험단 시작일", "체험단 종료일", "모니터링 종료일", "상태"]   # 마이그레이션 대상 옛 7열(상품·계정ID 순)
 
 
 def _ok(msg: str) -> None:
@@ -211,6 +211,17 @@ class _FakeClient:
             ins = r.get("insertDimension")
             if ins and ins["range"].get("dimension") == "COLUMNS" and ins["range"].get("startIndex") == 0:
                 self._v = [[""] + list(row) for row in self._v]
+            mv = r.get("moveDimension")   # 항목④ 열 이동 재현: source 열을 destinationIndex 로(값 유지)
+            if mv and mv["source"].get("dimension") == "COLUMNS":
+                s = mv["source"]["startIndex"]; dest = mv["destinationIndex"]
+                new_v = []
+                for row in self._v:
+                    row = list(row)
+                    if s < len(row):
+                        col = row.pop(s)
+                        row.insert(dest if dest < s else dest - 1, col)
+                    new_v.append(row)
+                self._v = new_v
         return {}
 
 
@@ -235,9 +246,9 @@ def t3b_full_and_incremental() -> None:
 
     existing_vals = [
         ["계정목록 · 상품 3개"], list(_HEAD),
-        ["대표A", "biz_A", "상품1", "A", "2026-09-01", "2026-09-30", "", "체험단중"],
-        ["대표A", "biz_A", "상품2", "A", "", "", "", "예정"],
-        ["대표B", "biz_B", "상품3", "B", "", "", "", "예정"],
+        ["대표A", "biz_A", "A", "상품1", "2026-09-01", "2026-09-30", "", "체험단중"],
+        ["대표A", "biz_A", "A", "상품2", "", "", "", "예정"],
+        ["대표B", "biz_B", "B", "상품3", "", "", "", "예정"],
     ]
     fc2 = _FakeClient(existing_vals)
     p2 = gi.sync_index(fc2, desired)
@@ -257,6 +268,24 @@ def t3b_full_and_incremental() -> None:
     inserted_col = any("insertDimension" in r and r["insertDimension"]["range"].get("dimension") == "COLUMNS"
                        for batch in fc3.batches for r in batch)
     assert inserted_col, "옛 7열 → 대표자 열 삽입(마이그레이션) 누락"
+    assert len(p3.inserts) == 1 and p3.inserts[0][1].product == "상품4"
+    assert len(p3.discontinue) == 1
+
+    # 항목④: 옛 열순서(상품 C·계정ID D) 8열 시트 → moveDimension 으로 계정ID 를 C 로 물리 이전 후 정상 매칭
+    old_order = [
+        ["계정목록 · 상품 3개"],
+        ["대표자", "사업자", "상품명(클릭 이동)", "계정ID", "체험단 시작일", "체험단 종료일", "모니터링 종료일", "상태"],
+        ["대표A", "biz_A", "상품1", "A", "", "", "", "예정"],       # 옛 순서: C=상품·D=계정ID
+        ["대표B", "biz_B", "상품3", "B", "", "", "", "예정"],
+    ]
+    fc4 = _FakeClient(old_order)
+    p4 = gi.sync_index(fc4, desired)
+    moved = any("moveDimension" in r and r["moveDimension"]["source"].get("dimension") == "COLUMNS"
+                for batch in fc4.batches for r in batch)
+    assert moved, "옛 열순서(상품 C·계정ID D) → 계정ID 를 C 로 moveDimension 마이그레이션 누락"
+    assert len(p4.inserts) == 1 and p4.inserts[0][1].product == "상품4"   # 이전 후 상품1/3 매칭·상품4만 신규
+    assert len(p4.discontinue) == 0
+    _ok("항목④ 옛 열순서(상품C·계정ID D) → moveDimension 으로 계정ID를 C로 이전·매칭 정상")
     assert len(p3.inserts) == 1 and p3.inserts[0][1].product == "상품4"   # 삽입 후 위치 매칭 정상
     assert len(p3.discontinue) == 1
     _ok("옛 7열 시트 → 대표자 열 자동 삽입(마이그레이션) 후 증분 정상")
@@ -269,8 +298,8 @@ def t3d_grid_autogrow() -> None:
                _R("B", "상품3", gi.marketing_key("B", "상품3"))]
     existing_vals = [
         ["계정목록 · 상품 2개"], list(_HEAD),
-        ["대표A", "biz_A", "상품1", "A", "", "", "", "예정"],
-        ["대표B", "biz_B", "상품3", "B", "", "", "", "예정"],
+        ["대표A", "biz_A", "A", "상품1", "", "", "", "예정"],
+        ["대표B", "biz_B", "B", "상품3", "", "", "", "예정"],
     ]
     # 그리드가 데이터로 꽉 참(rowCount=4=헤더2+데이터2) → 신규 삽입이 그리드 끝을 넘어 400 위험 → 확장 필요
     fc = _FakeClient(existing_vals, row_count=4)
@@ -303,9 +332,9 @@ def t3e_delete_renamed() -> None:
     print("[3e] 일원화 옛 이름 정리(delete_renamed_accounts) — 같은 계정ID 공유해도 옛 이름 행만 삭제")
     vals = [
         ["계정목록 · 상품 3개"], list(_HEAD),
-        ["이종훈", "이종훈", "옛상품", "oopean", "체험", "", "", "판매중지"],   # 옛 이름(삭제 대상)
-        ["이종훈", "원더폴리", "신상품", "oopean", "체험", "", "", "예정"],     # 새 이름(계정ID·대표자 동일·보존)
-        ["대표B", "가게B", "상품3", "idB", "", "", "", "예정"],
+        ["이종훈", "이종훈", "oopean", "옛상품", "체험", "", "", "판매중지"],   # 옛 이름(삭제 대상)
+        ["이종훈", "원더폴리", "oopean", "신상품", "체험", "", "", "예정"],     # 새 이름(계정ID·대표자 동일·보존)
+        ["대표B", "가게B", "idB", "상품3", "", "", "", "예정"],
     ]
     fc = _FakeClient(vals, titles=["계정목록", "이종훈", "원더폴리", "가게B"])
     n = gi.delete_renamed_accounts(fc, [("이종훈", "oopean")])
@@ -326,9 +355,9 @@ def t3c_delete_accounts() -> None:
     print("[3c] 삭제된 계정 완전 제거(delete_accounts) — 계정목록 행 + 통계 시트")
     vals = [
         ["계정목록 · 상품 3개"], list(_HEAD),
-        ["대표A", "가게A", "상품1", "idA", "", "", "", "예정"],
-        ["대표X", "가게X", "상품9", "idX", "", "", "", "예정"],     # 삭제 대상
-        ["대표B", "가게B", "상품3", "idB", "", "", "", "예정"],
+        ["대표A", "가게A", "idA", "상품1", "", "", "", "예정"],
+        ["대표X", "가게X", "idX", "상품9", "", "", "", "예정"],     # 삭제 대상
+        ["대표B", "가게B", "idB", "상품3", "", "", "", "예정"],
     ]
     fc = _FakeClient(vals, titles=["계정목록", "가게A", "가게X", "가게B"])
     n = gi.delete_accounts(fc, [("가게X", "idX")])
@@ -350,9 +379,9 @@ def t4_marketing_merge() -> None:
     print("[4] 마케팅 역방향 머지(read_marketing/apply_marketing)")
     values = [
         ["계정목록 · 상품 3개"], list(_HEAD),
-        ["대표A", "가게A", "텀블러", "idA", "2026-09-01", "2026-09-30", "2026-10-31", "체험단중"],
-        ["대표A", "가게A", "보온병", "idA", "", "", "", "예정"],        # 마케팅 없음 → 스킵
-        ["대표B", "가게B", "우산", "idB", "2026-09-10", "", "", "예정"],
+        ["대표A", "가게A", "idA", "텀블러", "2026-09-01", "2026-09-30", "2026-10-31", "체험단중"],
+        ["대표A", "가게A", "idA", "보온병", "", "", "", "예정"],        # 마케팅 없음 → 스킵
+        ["대표B", "가게B", "idB", "우산", "2026-09-10", "", "", "예정"],
     ]
     fc = _FakeClient(values)
     m = gi.read_marketing(fc)

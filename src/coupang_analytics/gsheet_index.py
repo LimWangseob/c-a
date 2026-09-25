@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 # 열 인덱스(0-based)
 COL_REP = 0                                    # 대표자(2026-09-17 추가)
-COL_BUSINESS, COL_PRODUCT, COL_ACCOUNT = 1, 2, 3
+COL_BUSINESS, COL_ACCOUNT, COL_PRODUCT = 1, 2, 3   # 항목④(2026-09-25): 계정ID(C)를 상품명(D) **왼쪽**으로
 COL_MKT_START, COL_MKT_END, COL_MKT_MON = 4, 5, 6
 COL_STATUS = 7
 COL_PROMO = 8          # 체험단효과(자동열, 2026-09-24) — E~G 직원 마케팅 뒤(끝)에 추가해 미접촉
@@ -161,8 +161,8 @@ def _auto_cells_request(sheet_id: int, grid_row: int, row: IndexRow) -> list[dic
             "rows": [{"values": [
                 {**_s(row.representative), "userEnteredFormat": bg},              # A 대표자
                 {**_s(row.business), "note": row.key, "userEnteredFormat": bg},   # B 사업자 + 안정 키 메모
-                {**_product_cell(row), "userEnteredFormat": bg},                  # C 상품명(링크)
-                {**_s(row.account_id), "userEnteredFormat": bg},                  # D 계정ID
+                {**_s(row.account_id), "userEnteredFormat": bg},                  # C 계정ID(항목④: 상품명 왼쪽)
+                {**_product_cell(row), "userEnteredFormat": bg},                  # D 상품명(링크)
             ]}],
             "fields": "userEnteredValue,note,userEnteredFormat.backgroundColor",
         }
@@ -284,8 +284,8 @@ def _build_requests_for_plan(sheet_id: int, plan: SyncPlan,
     return reqs
 
 
-_HEADS = ["대표자", "사업자", "상품명(클릭 이동)", "계정ID", "체험단 시작일", "체험단 종료일",
-          "모니터링 종료일", "상태", "체험단효과"]
+_HEADS = ["대표자", "사업자", "계정ID", "상품명(클릭 이동)", "체험단 시작일", "체험단 종료일",
+          "모니터링 종료일", "상태", "체험단효과"]   # 항목④: 계정ID를 상품명 왼쪽으로
 _MKT_LABELS = (_HEADS[COL_MKT_START], _HEADS[COL_MKT_END], _HEADS[COL_MKT_MON])   # 체험단 3열 헤더 라벨
 _COL_WIDTHS = {COL_REP: 110, COL_BUSINESS: 150, COL_PRODUCT: 300, COL_ACCOUNT: 110,
                COL_MKT_START: 95, COL_MKT_END: 95, COL_MKT_MON: 100, COL_STATUS: 90,
@@ -451,6 +451,26 @@ def _ensure_rep_column(client, sheet: str, sheet_id: int) -> None:
         "inheritFromBefore": False}}])
 
 
+def _ensure_column_order(client, sheet: str, sheet_id: int) -> None:
+    """항목④(2026-09-25): 옛 열순서(상품명 C·계정ID D)를 새 순서(계정ID C·상품명 D)로 **물리 이전**.
+
+    `_header_request`+증분 updates 는 활성 행의 C/D 만 새로 쓰지만, **판매중지 행**은 C/D 를 안 건드려
+    옛 순서가 남는다 → 열 전체를 옮겨야 전 행(값·메모·서식·너비·하이퍼링크)이 일관된다. `moveDimension`으로
+    현재 '계정ID' 열을 COL_ACCOUNT(2) 위치로 이동한다(이미 새 순서면 no-op·신규/빈 시트도 no-op)."""
+    values, _ = client.read_grid(sheet)
+    if len(values) <= HEADER_ROW0:
+        return
+    hdr = [str(h).strip() for h in (values[HEADER_ROW0] or [])]
+    if "계정ID" not in hdr:
+        return                                            # 계정ID 열 라벨 못 찾음(옛 레이아웃 아님) → 손대지 않음
+    idx = hdr.index("계정ID")
+    if idx == COL_ACCOUNT:
+        return                                            # 이미 새 순서(C=계정ID)
+    client.batch_update([{"moveDimension": {
+        "source": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": idx, "endIndex": idx + 1},
+        "destinationIndex": COL_ACCOUNT}}])
+
+
 def delete_accounts(client, removed, *, sheet: str = INDEX_SHEET_NAME, on_log=None) -> int:
     """관리대장에서 **줄이 사라진 계정**을 결과 구글시트에서 완전 삭제 — 계정목록 행 + 그 사업자 통계 시트.
 
@@ -571,6 +591,7 @@ def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME
     """
     sheet_id = client.ensure_sheet(sheet)
     _ensure_rep_column(client, sheet, sheet_id)   # 옛 7열 시트면 A에 대표자 빈 열 삽입(멱등) → 아래 읽기는 새 레이아웃
+    _ensure_column_order(client, sheet, sheet_id)  # 항목④: 옛 순서(상품C·계정ID D)면 계정ID를 C로 물리 이전(멱등)
     existing = _read_existing(client, sheet)
     if not existing:
         grow = _grid_grow_requests(client, sheet, sheet_id, len(desired))

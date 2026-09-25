@@ -436,8 +436,10 @@ def t1_representative_column():
     wb.apply_style(); wb.save(path)
     ws = openpyxl.load_workbook(path)["계정 목록"]
     heads = [ws.cell(2, c).value for c in range(1, 9)]
-    assert heads[0] == "대표자" and heads[1] == "사업자" and heads[3] == "계정ID" and heads[7] == "상태", heads
-    assert ws.cell(3, 1).value == "홍길동" and ws.cell(3, 2).value == "가게A" and ws.cell(3, 4).value == "idA"
+    # 항목④: 대표자·사업자·계정ID(C)·상품명(D)·…·상태
+    assert heads[0] == "대표자" and heads[1] == "사업자" and heads[2] == "계정ID" and heads[7] == "상태", heads
+    assert heads[3].startswith("상품명"), heads
+    assert ws.cell(3, 1).value == "홍길동" and ws.cell(3, 2).value == "가게A" and ws.cell(3, 3).value == "idA"
     wb2 = OutputWorkbook.load(path)
     assert wb2.representative_of("가게A") == "홍길동" and wb2.has_sales("가게A", "09.17")
     _ok("계정목록 헤더 8열(A=대표자)·데이터행 대표자 렌더·판매수집일(3열)과 무충돌·재로드 보존")
@@ -1056,12 +1058,12 @@ def t1_multi_account_grouping():
     assert wb2.product_account_id(BIZ, "상품2") == "loum2", "재로드 후 상품별 계정ID 유실"
     assert wb2.has_sales("loum2", "09.25"), "재로드 후 계정 스탬프 유실"
     assert BIZ in wb2.account_sheets() and "_수집스탬프" not in wb2.account_sheets(), "스탬프 시트가 계정시트로 노출"
-    # ⑤-b 엑셀 계정 목록 D열 = **상품별** 계정ID(사업자 첫 계정ID로 뭉개지 않음)
+    # ⑤-b 엑셀 계정 목록 = **상품별** 계정ID(항목④ 열순서: C=계정ID·D=상품명)
     idx = openpyxl.load_workbook(path)["계정 목록"]
-    acc_by_prod = {idx.cell(rr, 3).value: idx.cell(rr, 4).value
+    acc_by_prod = {idx.cell(rr, 4).value: idx.cell(rr, 3).value    # D=상품명 → C=계정ID
                    for rr in range(3, idx.max_row + 1) if idx.cell(rr, 2).value == BIZ}
     assert acc_by_prod.get("상품1") == "loum1" and acc_by_prod.get("상품2") == "loum2", \
-        f"계정목록 D열 상품별 계정ID 아님: {acc_by_prod}"
+        f"계정목록 상품별 계정ID(C열) 아님: {acc_by_prod}"
     # ⑥ delete_account = 그 사업자 계정ID 스탬프도 정리
     wb2.delete_account(BIZ)
     assert not wb2.has_sales("loum1", "09.25") and not wb2.has_sales("loum2", "09.25"), "삭제 후 스탬프 잔존"

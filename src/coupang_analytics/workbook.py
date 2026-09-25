@@ -2226,8 +2226,8 @@ class OutputWorkbook:
         ws.cell(1, 1, f"{_INDEX_SHEET} · 상품 {n_prod}개").font = title_font
         ws.merge_cells("A1:I1")                            # 대표자+체험단효과로 9열(A~I)
         ws.cell(1, 1).alignment = center
-        # 열: 1 대표자 · 2 사업자 · 3 상품명 · 4 계정ID · 5~7 체험단(관리대장 입력·표시) · 8 상태 · 9 체험단효과.
-        heads = ["대표자", "사업자", "상품명(클릭 이동)", "계정ID",
+        # 열(항목④): 1 대표자 · 2 사업자 · 3 계정ID · 4 상품명 · 5~7 체험단(관리대장 입력·표시) · 8 상태 · 9 체험단효과.
+        heads = ["대표자", "사업자", "계정ID", "상품명(클릭 이동)",
                  _MKT_COLS[0], _MKT_COLS[1], _MKT_COLS[2], "상태", "체험단효과"]
         for c, h in enumerate(heads, 1):
             x = ws.cell(2, c, h)
@@ -2235,7 +2235,8 @@ class OutputWorkbook:
             x.fill = mkt_fill if 5 <= c <= 7 else head_fill   # 5~7열=마케팅(관리대장 값 표시)
         for r, (biz, prod, hdr, has_sheet) in enumerate(rows, start=3):
             self._index_row(ws, r, biz, prod, hdr, has_sheet, sty)
-        for c, w in {1: 16, 2: 22, 3: 40, 4: 15, 5: 13, 6: 13, 7: 14, 8: 10, 9: 26}.items():
+        # 항목④: 3=계정ID(좁게)·4=상품명(넓게)로 스왑
+        for c, w in {1: 16, 2: 22, 3: 15, 4: 40, 5: 13, 6: 13, 7: 14, 8: 10, 9: 26}.items():
             ws.column_dimensions[get_column_letter(c)].width = w
         ws.row_dimensions[1].height = 21
         ws.freeze_panes = "E3"                            # 제목·헤더 + 대표자/사업자/상품/계정ID 고정(가로 스크롤 시)
@@ -2251,16 +2252,16 @@ class OutputWorkbook:
         """목차 한 행 렌더 — 대표자·사업자·상품(점프 링크)·계정ID·마케팅 입력열·상태(판매중지/체험단중/미수집)."""
         ws.cell(r, 1, self.representative_of(biz)).font = sty.font if has_sheet else sty.gray_font
         ws.cell(r, 2, biz).font = sty.font if has_sheet else sty.gray_font
-        pcell = ws.cell(r, 3, prod if prod else ("(미수집)" if not has_sheet else "(상품없음)"))
+        # 항목④: C=계정ID(상품명 왼쪽) · D=상품명(점프 링크). 항목5: 계정ID=상품별(다계정ID)·없으면 첫 계정ID 폴백.
+        acct = (self.product_account_id(biz, prod) if prod else "") or self.account_id_of(biz)
+        ws.cell(r, 3, acct).font = sty.font if has_sheet else sty.gray_font
+        pcell = ws.cell(r, 4, prod if prod else ("(미수집)" if not has_sheet else "(상품없음)"))
         if has_sheet and prod and hdr:      # 상품 블록으로 점프(헤더행)
             pcell.hyperlink = Hyperlink(ref=pcell.coordinate,
                                         location=f"'{biz.replace(chr(39), chr(39) * 2)}'!A{hdr}")
             pcell.font = sty.link_font
         else:
             pcell.font = sty.gray_font
-        # 항목5: 계정ID = 상품(줄) 속성(다계정ID 사업자). 상품별 계정ID 우선, 없으면 사업자 첫 계정ID 폴백.
-        acct = (self.product_account_id(biz, prod) if prod else "") or self.account_id_of(biz)
-        ws.cell(r, 4, acct).font = sty.font if has_sheet else sty.gray_font
         start, end, mon = self.marketing_of(biz, prod)
         if has_sheet and prod and self.is_discontinued(biz, prod):
             status = "⛔ 판매중지"
