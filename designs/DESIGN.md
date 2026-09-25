@@ -99,7 +99,10 @@
   - **입력 검증 완화**: `validate_input_list`가 "같은 사업자명 다계정ID"를 치명(시트 덮어씀 차단)에서 **`[SYNC]` 병합 경고**로 완화(정상 케이스=한 시트 병합·상품별 계정ID 태깅). "같은 계정ID+다른 사업자명" 같은 진짜 위험은 별개.
   - **계정목록 계정ID·밴드**: `roster_from_workbook`이 계정ID=`product_account_id`(상품별)·밴드를 계정ID→**사업자명 기준**(같은 사업자 다계정ID=한 밴드색). 엑셀 `_index_row` D열도 상품별 계정ID(엑셀·구글 패리티). 안정키=`marketing_key(상품별 계정ID+등록명)`로 계정ID별 구분.
   - **일원화 다계정ID 인지**: `_consolidate_renamed_accounts`가 시트의 대장-존재 계정ID들이 **모두 한 사업자명에 동의할 때만** merge(전 상품 이관), 서로 다른 이름으로 **발산하면 자동 병합 보류+`[SYNC]` 경고**(수동 확인). 발산의 자동 분리는 미지원(경고만).
-  - 핀=verify_offline[17·18·19]·verify_gsheet[6b]. ⚠라이브 확인·재배포 남음. SSOT=메모 `handoff-9items-spec-260925`·`feature-account-consolidation`.
+  - **⭐reconcile 계정ID 스코핑(2026-09-26 버그수정, 정밀 시뮬 포착):** 한 사업자 시트에 여러 계정ID 상품이 섞이므로 `_process_account`의 `reconcile_account(..., account_id=report_acc.account_id)`가 **그 계정ID 소속 상품(`product_account_id`==account_id 또는 미태깅)만 대조**한다. 없으면 **계정 B 처리 시 계정 A 상품을 판매중지/완전삭제**(실운용=데이터 유실)하던 교차오염 버그. `_reconcile_ledger_accounts`의 비활성 경로는 account_id=''(전체·후방호환). 핀=verify_offline[24]. 교훈=다계정ID 시트단위 순회는 계정ID 스코핑 필수.
+  - 핀=verify_offline[17·18·19·24]·verify_gsheet[6b]. ⚠라이브 확인·재배포 남음. SSOT=메모 `handoff-9items-spec-260925`·`feature-business-name-grouping`·`fix-multiaccount-reconcile-scope`.
+- **키워드 공란시 선정(항목⑨, 2026-09-26 소유자 재검증):** `_resolve_keywords`가 `product_keywords`(이름 있는 순위행)가 **비면 AI 선정 실시**·**1건이라도 있으면 담당자 입력 간주 동결**(채워진 것만 검색량·순위). 4개 슬롯은 표시 하한(`pad_keyword_rows`)이라 공란 순위행은 `product_keywords` 미반환 → 선정 트리거. 가변개수(4 초과/미만·상한 `KW_MAX_TRACK=10`). 현행 정합 확인·핀 verify_offline[23]. SSOT=`designs/KEYWORD_SELECTION.md`.
+- **구글 결과파일 포맷 불일치 저항성(2026-09-26 검증):** 기존 구글 결과파일이 새 포맷과 달라도 정상 업데이트 — **계정목록**=옛 7열·옛 열순서를 `sync_index`가 rep 삽입·계정ID 열이동(moveDimension)·헤더 라벨 최신화·그리드 확장으로 **수렴**(안정키 note로 기존 행 매칭·중복 재생성 없음·신규만 삽입). **통계 시트**=`push_statistics`가 unmerge→그리드 resize(데이터 크기)→updateCells→merge **전체 교체**라 기존 치수/병합/포맷 무관 덮어쓰기. **데이터 매핑 원리**=정체성 앵커 보존(vid·등록명·계정ID·안정키·(사업자,상품,지표,일자) 키); 서식은 앵커 위에서 재렌더/재배치. 핀=verify_gsheet[9·10]·verify_render_precision.
 
 ## 0-000. 최신 반영 요약 (2026-09-17 — 판매상태 경고·재고행 공란 수정)
 
