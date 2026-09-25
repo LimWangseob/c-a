@@ -1,7 +1,9 @@
 """git 훅 설치/제거 — 회귀 게이트를 커밋/푸시에 자동 연결한다(버전관리 재설치용).
 
 3계층(designs/CODE_HEALTH_PLAN.md §단계1):
-  1) pre-commit  : 스테이징된 .py 문법 컴파일 + `run_checks.py --quick`(시뮬+구글시트, 빠른 오프라인).
+  1) pre-commit  : **메모리 백업**(`sync_memory.py --stage`=외부 .claude 메모리를 docs/memory/ 로 미러링·스테이징,
+                   세션·PC 바뀌어도 손실 방지) + **4묶음 알림**(코드 변경인데 DECISIONS.md 없으면 경고·비차단)
+                   + 스테이징된 .py 문법 컴파일 + `run_checks.py --quick`(시뮬+구글시트, 빠른 오프라인).
   2) pre-push    : `run_checks.py`(전체 3종) + `check_complexity.py`(MI 회귀 차단·괴물함수 경고).
 
 훅 본문은 이 파일이 유일 출처(SSOT)다. 새 PC/재설치:
@@ -27,8 +29,17 @@ except AttributeError:
 _MARK = "# coupang-analytics-hook"   # 우리가 설치한 훅 식별(덮어쓰기/제거 판단)
 
 PRE_COMMIT = f"""#!/bin/sh
-{_MARK} pre-commit — 회귀 게이트(빠른). 재설치: python tools/install_hooks.py
+{_MARK} pre-commit — 4묶음(메모리 백업+게이트+결정기록 알림). 재설치: python tools/install_hooks.py
 set -e
+# ① 메모리 백업 = 세션·PC 바뀌어도 손실 방지: 외부 .claude 메모리를 docs/memory/ 로 미러링해 이 커밋에 포함.
+python tools/sync_memory.py --stage
+# ② 4묶음 알림: 코드가 바뀌었는데 결정기록이 없으면 경고(확정사항 누락 방지·비차단).
+code=$(git diff --cached --name-only --diff-filter=ACM -- 'src/*.py' 'ui/*.py' 'tools/*.py')
+dec=$(git diff --cached --name-only -- docs/DECISIONS.md)
+if [ -n "$code" ] && [ -z "$dec" ]; then
+  echo "⚠ [4묶음] 코드 변경인데 docs/DECISIONS.md 갱신이 없습니다 — 확정사항이면 DECISIONS.md·designs/DESIGN.md·메모리도 이 커밋에 담으세요(commit-with-design-and-memory)."
+fi
+# ③ 회귀 게이트(빠른): 스테이징 .py 문법 + run_checks --quick.
 files=$(git diff --cached --name-only --diff-filter=ACM -- '*.py')
 if [ -n "$files" ]; then
   python -m py_compile $files
