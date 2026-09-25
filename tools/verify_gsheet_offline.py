@@ -428,7 +428,13 @@ def t5_stats_mirror() -> None:
             assert r["mergeCells"]["mergeType"] in {"MERGE_ALL", "MERGE_ROWS", "MERGE_COLUMNS"}
     flat = str(next(r for r in reqs if "updateCells" in r))
     assert "#gid=7&range=A1" in flat and "계정목록으로 이동" in flat        # 복귀 링크 문구 → 계정목록 gid
-    _ok("전체교체 요청(병합해제·틀고정 H2·복귀 HYPERLINK) + 등록명 보존")
+    # 항목3: 상품명 헤더의 **외부 쿠팡 링크**가 =HYPERLINK 로 미러링(내부 점프뿐 아니라 http 외부 링크도)
+    wb.set_product_pid("가게A", "스텐 텀블러 500ml", "98765")
+    wb.apply_style()
+    reqs2 = gsheet_stats.worksheet_to_requests(wb.wb["가게A"], 42, index_gid=7)
+    flat2 = str(next(r for r in reqs2 if "updateCells" in r))
+    assert 'HYPERLINK("https://www.coupang.com/vp/products/98765' in flat2, "상품명 외부 쿠팡 링크 미러링 실패"
+    _ok("전체교체 요청(병합해제·틀고정 H2·복귀 HYPERLINK) + 등록명 보존 + 상품명 쿠팡 외부링크 미러링(항목3)")
 
 
 def t6_roster_from_workbook() -> None:

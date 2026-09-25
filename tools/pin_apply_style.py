@@ -255,6 +255,26 @@ def pin_group_fill_alternation():
     _check(c_s != c_beige, "인접 상품군은 배경색이 다름(시각적 구분)")
 
 
+def pin_product_hyperlink():
+    print("[핀 S9] 상품명 헤더 C셀 → 쿠팡 노출상품 하이퍼링크(항목3): productId 정확 / 없으면 노출명 검색 폴백")
+    wb = _build()
+    wb.set_product_pid(BIZ, "상품S", "12345")          # productId 있음 → 정확 상품 페이지(vidS)
+    wb.apply_style()
+    ws = wb.wb[BIZ]
+    # 상품S: productId+vid → /vp/products/12345?vendorItemId=vidS
+    hs = _hdr_row(ws, "상품S")
+    lnk = ws.cell(hs, 3).hyperlink
+    _check(lnk is not None and _n(getattr(lnk, "target", "")) ==
+           "https://www.coupang.com/vp/products/12345?vendorItemId=vidS",
+           "productId 있으면 정확한 쿠팡 상품 페이지 링크")
+    # 중지상품: productId 없음 → 노출명 검색 폴백(https://www.coupang.com/np/search?q=...)
+    hd = _hdr_row(ws, "중지상품")
+    lnk2 = ws.cell(hd, 3).hyperlink
+    tgt2 = _n(getattr(lnk2, "target", "")) if lnk2 else ""
+    _check(tgt2.startswith("https://www.coupang.com/np/search?q="), "productId 없으면 노출명 검색 링크 폴백")
+    _check("hyperlink" not in tgt2 and "#gid" not in tgt2, "외부 http 링크(내부 점프 아님)")
+
+
 def main() -> int:
     print("=" * 60)
     print("  핀 테스트 — OutputWorkbook.apply_style 서식 출력")
@@ -266,6 +286,7 @@ def main() -> int:
     pin_marketing_fill()
     pin_group_edges()
     pin_group_fill_alternation()
+    pin_product_hyperlink()
     pin_trailing_trim()
     print("=" * 60)
     print("  [완료] 서식 핀 모두 통과")

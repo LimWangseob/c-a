@@ -1134,6 +1134,7 @@ def _process_option(pctx: _ProcCtx, biz: str, product, base: str, kind: str, tit
         mi = cap.get("제품")                        # 노출명은 로그로만(블록명은 등록상품명 유지)
         if mi is not None and getattr(mi, "name", ""):
             _ilog(log, "노출명", opt_vids, "", f"검색결과 노출명 = {_short(mi.name, 40)} (블록명은 등록상품명 고정)")
+            wb.set_product_pid(biz, pname, getattr(mi, "product_id", ""))   # 항목3: 상품명 하이퍼링크용 productId
     wb.set_product_vids(biz, pname, opt_vids)          # 대표 옵션 vid 저장(③은 sibling_vids 합집합으로 매칭)
     _apply_vid_meta(wb, biz, pname, kind, opt_vids, pctx.vid_meta, pctx.date_iso, product.inbound_summary)   # 판매가 지표행·판매일/최근입고 헤더
     _fill_product_metrics(wb, biz, pname, opt_vids, kind, pctx.metrics, pctx.inv_by_vid, date_iso,
@@ -1437,6 +1438,7 @@ def _measure_unfilled_once(wb, path, log) -> int:
                 mi = cap.get("제품")                    # 노출명은 로그로만(블록명=등록상품명 고정, set_display_name 중단)
                 if mi is not None and getattr(mi, "name", ""):
                     log(f"  [노출명] 검색결과 노출명 = {mi.name} (블록명은 등록상품명 고정)")
+                    wb.set_product_pid(biz, pname, getattr(mi, "product_id", ""))   # 항목3: 상품명 하이퍼링크용
                 wb.save(path)                        # 상품마다 저장(중단돼도 보존)
                 if halted:
                     break
@@ -2150,6 +2152,7 @@ def _measure_product_auto(browser, wb, path, biz: str, pname: str, date, log) ->
     mi = cap.get("제품")                   # 노출명은 로그로만(블록명=등록상품명 고정, set_display_name 중단)
     if mi is not None and getattr(mi, "name", ""):
         log(f"  [노출명] 검색결과 노출명 = {mi.name} (블록명은 등록상품명 고정)")
+        wb.set_product_pid(biz, pname, getattr(mi, "product_id", ""))   # 항목3: 상품명 하이퍼링크용 productId
     wb.save(path)   # **상품마다 저장** → 중단돼도 여기까지 보존(재실행 시 이어서)
     return halted, False
 
@@ -2609,5 +2612,6 @@ def _semi_record(wb, pg, matcher, biz, pname, kw, date, path, idx, total, log) -
     log(f"  ✅ 「{kw}」 순위 = {rank_label(rank) if rank else f'{scanned}위밖'}  — 기록 완료({idx}/{total})")
     if mi is not None and getattr(mi, "name", ""):   # 노출명은 로그로만(블록명=등록상품명 고정)
         log(f"  [노출명] 검색결과 노출명 = {mi.name} (블록명은 등록상품명 고정)")
+        wb.set_product_pid(biz, pname, getattr(mi, "product_id", ""))   # 항목3: 상품명 하이퍼링크용 productId
     wb.save(path)
     # (키워드 사이 간격은 _semi_track_product 상단에서 '검색 앞'에 적용 — 마지막 검색 뒤 자투리 대기 제거)

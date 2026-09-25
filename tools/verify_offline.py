@@ -988,7 +988,29 @@ def t1_keyword_freeze_boundary():
         pl.select_keywords_light = _orig
     assert kws == ["kA", "kB"], f"동결 키워드 그대로 반환 실패: {kws}"
     assert roles == {}, "동결 상품은 역할 재판정 안 함"
-    _ok("1건=동결(AI 생략)·가변개수(>4) 추적·공란 순위행 미검색·동결 시 AI 미호출")
+    # (C) 항목6: 키워드 **공란**(product_keywords 비어있음) → AI 선정 **실시**(select_keywords_light 호출)
+    from collections import namedtuple
+    _Trk = namedtuple("_Trk", "keyword volume comp_idx exposure_best role")
+    wb3 = OutputWorkbook.empty()
+    wb3.ensure_product_block(BIZ, "공란상품", config.KIND_CONTRACT, [], registered="공란상품")   # 키워드 0(공란)
+    wb3.pad_keyword_rows(BIZ, "공란상품")                          # 4행 빈 순위행(공란) 생성
+    assert wb3.product_keywords(BIZ, "공란상품") == [], "공란상품 키워드 0(선정 트리거 조건)"
+    _called = {"n": 0}
+    def _fake_sel(*a, **k):
+        _called["n"] += 1
+        return [_Trk("고른키워드", 500, "중간", 3, "REP")]
+    pl.select_keywords_light = _fake_sel
+    try:
+        pctx3 = _ProcCtx(wb=wb3, naver=None, ai_key="x", browser=None, metrics=None, inv_by_vid=None,
+                         date_iso="2026-09-25", grow=False, skip_ranks=True, keywords_off=False,
+                         log=lambda m: None, save_path=None)
+        kws3, _r3, _t3, _ro3 = _resolve_keywords(pctx3, BIZ, "공란상품", "공란상품",
+                                                 config.KIND_CONTRACT, "공란상품", ["v"], None, None, {})
+    finally:
+        pl.select_keywords_light = _orig
+    assert _called["n"] == 1, "공란(4키워드 비어있음)인데 AI 선정 미호출(항목6 위반)"
+    assert kws3 == ["고른키워드"], f"공란 → AI 선정 키워드 적재 실패: {kws3}"
+    _ok("1건=동결(AI 생략)·가변개수(>4)·공란 순위행 미검색·동결시 AI 미호출·**공란시 AI 선정 실시(항목6)**")
 
 
 def t1_preflight_sync_check():

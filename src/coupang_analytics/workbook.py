@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date as _date, datetime as _dt, timedelta as _td
 from pathlib import Path
+from urllib.parse import quote as _quote
 
 import openpyxl
 from openpyxl.cell.cell import Cell
@@ -870,6 +871,7 @@ class OutputWorkbook:
         ws.cell(1, 10, "최근입고요약")   # 관리대장 입고 요약(요청/작업/박스/파레트/완료/출고) — 헤더 로켓그로스 묶음
         ws.cell(1, 11, "판매방식")   # 구분(로켓그로스/판매자배송/둘다) — 레이아웃 v4 헤더 '판매방식' 줄 표시용(표시 전용·인덱스 아님)
         ws.cell(1, 12, "계정ID")   # 상품 소속 계정ID(항목5: 시트=사업자명, 다계정ID면 상품마다 어느 계정인지 태깅)
+        ws.cell(1, 13, "노출productId")   # 쿠팡 공개 상품ID(항목3: 순위매칭 SERP href에서 확보) — 상품명 하이퍼링크용
         return ws
 
     def set_product_extra(self, biz: str, product: str, sale_price=None, inbound_date=None,
@@ -946,6 +948,39 @@ class OutputWorkbook:
         if row is None or _META_SHEET not in self.wb.sheetnames:
             return ""
         return _norm(self.wb[_META_SHEET].cell(row, 12).value)
+
+    def set_product_pid(self, biz: str, product: str, product_id: str) -> None:
+        """상품의 **쿠팡 공개 상품ID(productId)** 를 숨김 메타 13열에 저장(항목3, 소유자 2026-09-26).
+
+        ③ 순위조회가 검색결과(SERP) href `/vp/products/{productId}` 에서 확보한다(우리 데이터API엔 없음). 통계
+        시트 상품명 하이퍼링크(쿠팡 노출상품 페이지)용. 빈값이면 no-op(기존 보존 — 순위 미매칭 실행이 안 지움)."""
+        biz, product, pid = _norm(biz), _key(product), _norm(product_id)
+        if not (biz and product and pid):
+            return
+        ws = self._meta_ws()
+        row = self._vid_row.get((biz, product))
+        if row is None:
+            row = ws.max_row + 1
+            ws.cell(row, 1, biz); ws.cell(row, 2, product)
+            self._vid_row[(biz, product)] = row
+        ws.cell(row, 13, pid)
+
+    def product_pid(self, biz: str, product: str) -> str:
+        """저장된 쿠팡 공개 상품ID(없으면 '' — 미매칭). 상품명 하이퍼링크 대상 URL 생성용."""
+        row = self._vid_row.get((_norm(biz), _key(product)))
+        if row is None or _META_SHEET not in self.wb.sheetnames:
+            return ""
+        return _norm(self.wb[_META_SHEET].cell(row, 13).value)
+
+    def product_url(self, biz: str, product: str) -> str:
+        """상품명 클릭 시 열 **쿠팡 노출상품 URL**(항목3). productId 있으면 정확한 상품 페이지, 없으면
+        상품명(노출명) 검색 페이지로 폴백. 순위매칭된 상품은 블록명이 정확 노출명이라 검색도 그 상품이 상단."""
+        pid = self.product_pid(biz, product)
+        vids = self.product_vids(biz, product)
+        if pid:
+            tail = f"?vendorItemId={vids[0]}" if vids else ""
+            return f"https://www.coupang.com/vp/products/{pid}{tail}"
+        return "https://www.coupang.com/np/search?q=" + _quote(_key(product))
 
     def set_product_vids(self, biz: str, product: str, vids) -> None:
         """상품의 고유ID(vendorItemId) 목록을 저장(③ 순위조회의 상품 매칭용).
@@ -1504,7 +1539,12 @@ class OutputWorkbook:
         # 키는 항상 구분자 앞부분이므로 _key 로 순수명 복원 후 vid 를 다시 붙여 표준화한다.
         nm = _key(ws.cell(hr, _COL_NAME).value)
         if nm:
-            ws.cell(hr, _COL_NAME).value = self._display_name(ws.title, nm)
+            c_name = ws.cell(hr, _COL_NAME)
+            c_name.value = self._display_name(ws.title, nm)
+            # 항목3(2026-09-26): 상품명 클릭 → **쿠팡 노출상품** 새 창(하이퍼링크). productId 있으면 정확 페이지,
+            # 없으면 노출명 검색 폴백. 멱등(매 apply_style 재설정). 서식은 _style_metric_rows 가 이어서 입힌다.
+            url = self.product_url(ws.title, nm)
+            c_name.hyperlink = Hyperlink(ref=c_name.coordinate, target=url)
         # 마케팅: 이 상품의 기간·상태 + 마케팅기간(시작~종료)에 해당하는 일자 컬럼 집합(배경색용)
         mstart, mend, _mmon = self.marketing_of(ws.title, nm)
         is_mkt = self._mkt_status(mstart, mend, _mmon) == "체험단중"

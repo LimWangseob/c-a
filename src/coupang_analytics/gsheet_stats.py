@@ -123,11 +123,17 @@ def _cell_value(cell, index_gid: int | None) -> dict | None:
     """openpyxl 셀 값 → Sheets userEnteredValue. 값 없으면 None.
 
     내부 하이퍼링크(예 '👈 계정 목록' 복귀 링크)는 구글 네이티브 `=HYPERLINK("#gid=..&range=A1", 텍스트)`
-    수식으로 옮긴다(계정목록 gid 필요). 그 외 문자열/숫자는 그대로."""
+    수식으로, **외부 http(s) 링크(항목3 상품명→쿠팡 노출상품)는 `=HYPERLINK("{url}", 텍스트)`** 로 옮긴다.
+    그 외 문자열/숫자는 그대로."""
     link = getattr(cell, "hyperlink", None)
-    if link is not None and getattr(link, "location", None) and index_gid is not None:
+    if link is not None:
         text = str(cell.value if cell.value is not None else "").replace('"', '""')
-        return {"formulaValue": f'=HYPERLINK("#gid={index_gid}&range=A1","{text}")'}
+        target = getattr(link, "target", None)
+        if target and str(target).startswith("http"):        # 항목3: 외부 URL(쿠팡 노출상품) → 새 창
+            url = str(target).replace('"', '""')
+            return {"formulaValue": f'=HYPERLINK("{url}","{text}")'}
+        if getattr(link, "location", None) and index_gid is not None:   # 내부 시트 점프(복귀 링크)
+            return {"formulaValue": f'=HYPERLINK("#gid={index_gid}&range=A1","{text}")'}
     v = cell.value
     if v is None or v == "":
         return None
