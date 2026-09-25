@@ -442,7 +442,11 @@ def t1_representative_column():
     assert ws.cell(3, 1).value == "홍길동" and ws.cell(3, 2).value == "가게A" and ws.cell(3, 3).value == "idA"
     wb2 = OutputWorkbook.load(path)
     assert wb2.representative_of("가게A") == "홍길동" and wb2.has_sales("가게A", "09.17")
-    _ok("계정목록 헤더 8열(A=대표자)·데이터행 대표자 렌더·판매수집일(3열)과 무충돌·재로드 보존")
+    # 항목④ 셀 폭 내용길이 자동맞춤(엑셀): C=계정ID 좁게·D=상품명 넓게·열별 min~max 클램프
+    wC = ws.column_dimensions["C"].width; wD = ws.column_dimensions["D"].width
+    assert 10 <= wC <= 20 and 16 <= wD <= 55, f"열너비 클램프 벗어남: C={wC} D={wD}"
+    assert wD >= wC, "상품명(D)이 계정ID(C)보다 넓어야(내용 기반)"
+    _ok("계정목록 헤더 8열(A=대표자·C=계정ID·D=상품명 항목④)·대표자 렌더·판매수집일 무충돌·폭 자동맞춤·재로드 보존")
 
 
 def t1_product_match_precision():

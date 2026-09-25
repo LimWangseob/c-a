@@ -2235,9 +2235,19 @@ class OutputWorkbook:
             x.fill = mkt_fill if 5 <= c <= 7 else head_fill   # 5~7열=마케팅(관리대장 값 표시)
         for r, (biz, prod, hdr, has_sheet) in enumerate(rows, start=3):
             self._index_row(ws, r, biz, prod, hdr, has_sheet, sty)
-        # 항목④: 3=계정ID(좁게)·4=상품명(넓게)로 스왑
-        for c, w in {1: 16, 2: 22, 3: 15, 4: 40, 5: 13, 6: 13, 7: 14, 8: 10, 9: 26}.items():
-            ws.column_dimensions[get_column_letter(c)].width = w
+        # 항목④: 셀 폭 **내용 길이 기반 자동맞춤**(구글 패리티). 헤더+데이터 최장 길이(한글=2폭)로 열별
+        # min~max 클램프. 마케팅 5~7(직원 입력)은 고정. 3=계정ID·4=상품명(스왑 반영).
+        def _dl(v) -> int:
+            return sum(2 if ord(ch) > 0x2000 else 1 for ch in str(v)) if v is not None else 0
+        _wmin = {1: 10, 2: 12, 3: 10, 4: 16, 8: 8, 9: 14}
+        _wmax = {1: 20, 2: 30, 3: 20, 4: 55, 8: 16, 9: 32}
+        _wfix = {5: 13, 6: 13, 7: 14}
+        for c in range(1, 10):
+            if c in _wfix:
+                ws.column_dimensions[get_column_letter(c)].width = _wfix[c]
+                continue
+            longest = max((_dl(ws.cell(r, c).value) for r in range(2, ws.max_row + 1)), default=0)
+            ws.column_dimensions[get_column_letter(c)].width = min(_wmax[c], max(_wmin[c], longest + 2))
         ws.row_dimensions[1].height = 21
         ws.freeze_panes = "E3"                            # 제목·헤더 + 대표자/사업자/상품/계정ID 고정(가로 스크롤 시)
         # '항상 고정': 첫 탭(index 0) + **파일 열면 항상 목차가 선택된 채로 열리게** 활성 시트로 지정.

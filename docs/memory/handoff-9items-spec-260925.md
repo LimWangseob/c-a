@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: d8c440ae-0a9a-47f8-a6d2-d96209afecc7
-  modified: 2026-09-25T14:27:40.531Z
+  modified: 2026-09-25T14:44:18.878Z
 ---
 
 **소유자 요구(2026-09-25, 이미지=로움컨설팅 2계정ID 예시) 9건**. 정밀분석+적용방안 확정, **구현은 미착수**(항목5=아키텍처라 새 세션·핀 먼저). 진행순서 소유자 확정=**⑤(그룹핑) 먼저**, 그룹키=**사업자명만 같으면 한 그룹**.
@@ -32,7 +32,8 @@ S1~S5 커밋(master)·핀 verify_offline[17·18·19]·verify_gsheet[6b]·게이�
 - **⑥ 완료(정책 전환)**: 관리대장에서 **줄 사라진 상품=이력 완전삭제**(소유자: 줄 사라진 상품도 삭제·가드 없이). 판매중지/취소선으로 **남은(줄 존재)**=유지. `Account.ledger_products`(줄 존재 전체)+`reconcile_account(...,delete_missing=True)`→(newly,deleted). 무결성 안전장치=ledger 비면 삭제 스킵. `_sweep_dead_duplicates`(API vanish) 미접촉. 핀 verify_offline[21].
 - **⑦⑧ 재검증 완료**: ⑦ `status_of`=대장 상태만(현행 이미 정합·쿠팡 미반영) ⑧ 이중 표기(계정목록=대장·`M_SALE_STATUS` 지표행=쿠팡·독립). 코드 변경 없이 핀 verify_offline[22]로 고정. 운용 PC 옛 코드면 재배포로 해소.
 - **⑨ 재검증 완료**: 현행 이미 충족(`_resolve_keywords` product_keywords 비지않으면 AI생략=동결·채워진 것만 순위/검색량·가변개수 add_product_keywords/pad_keyword_rows·상한 KW_MAX_TRACK=10·공란 미검색). 코드 변경 없이 핀 verify_offline[23]로 고정.
-- **다음 = ④(계정목록 계정ID를 상품명 왼쪽·셀 폭 자동맞춤·엑셀·구글 패리티)**.
+- **④ 완료**: ④-a 열순서=대표자·사업자·**계정ID·상품명**(계정ID 왼쪽·gsheet COL_ACCOUNT=2·COL_PRODUCT=3·엑셀 3/4·안정키 메모=B·마케팅 E~G 불변)·옛 순서는 `_ensure_column_order`(moveDimension) 물리 이전(판매중지 행 포함). ④-b 셀 폭=**내용 길이 기반 자동맞춤**(엑셀·구글 패리티·한글2폭·열별 min~max 클램프·마케팅 고정). 핀 verify_offline[9]·verify_gsheet[3b·6c].
+- **✅ 9개 요구 전부 완료(⑤·①②③·⑥⑦⑧·⑨·④) — 커밋 S1~S6, ①②③, ⑥⑦⑧, ⑨, ④a, ④b. ⚠전 항목 라이브 확인·운용 PC 재배포 남음.**
 
 ## 나머지 8건 현행/방안(요약)
 - **①②③ 시작 프리플라이트**: 앱 시작 첫 루틴에 (a)2파일 백업[`backup_sources` 이미 있음·호출시점을 앱시작으로] (b)관리대장↔결과 싱크체크(계정·사업자·취소선·상품명 유사도[product_match 이미 있음]) `[SYNC]` 로그. 불일치=관리대장 기준(⑥·⑦).

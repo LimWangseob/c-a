@@ -478,6 +478,30 @@ def t6_roster_from_workbook() -> None:
     _ok("노출명·안정키·통계링크 + 행 전체 사업자 밴드색(A~G, D~F는 값 보존한 채 배경만)")
 
 
+def t6c_content_col_widths() -> None:
+    print("[6c] 셀 폭 내용길이 자동맞춤(_col_width_requests) — 긴 상품명=넓게(상한)·짧은 계정ID=좁게·마케팅 고정 (항목④)")
+    short = IndexRow(business="가", product="짧", account_id="id1", status="예정", key="k")
+    long_prod = "아주아주기이이인상품명" * 4                      # 매우 긴 노출명
+    longr = IndexRow(business="사업자명아주긴것", product=long_prod, account_id="acct_아주_긴_계정ID_1234567890",
+                     status="예정", key="k", representative="대표자아주긴이름",
+                     promo_effect="판매 +38% · 순위 32→18 ↑")
+    reqs = gi._col_width_requests(7, [short, longr])
+    px = {r["updateDimensionProperties"]["range"]["startIndex"]:
+          r["updateDimensionProperties"]["properties"]["pixelSize"] for r in reqs}
+    # 상품명(D=COL_PRODUCT)=긴 내용 → 최대 클램프, 계정ID(C=COL_ACCOUNT)=상한 클램프(긴 것도 max 이하)
+    assert px[gi.COL_PRODUCT] == gi._COL_W_MAX[gi.COL_PRODUCT], f"긴 상품명 폭 상한 아님: {px[gi.COL_PRODUCT]}"
+    assert px[gi.COL_ACCOUNT] <= gi._COL_W_MAX[gi.COL_ACCOUNT], "계정ID 폭 상한 초과"
+    assert px[gi.COL_PRODUCT] > px[gi.COL_ACCOUNT], "상품명이 계정ID보다 넓어야(내용 기반)"
+    # 마케팅 E~G=고정
+    assert px[gi.COL_MKT_START] == gi._COL_W_MKT[gi.COL_MKT_START], "마케팅 열은 고정 폭"
+    # 짧은 내용만이면 최소 클램프
+    reqs2 = gi._col_width_requests(7, [short])
+    px2 = {r["updateDimensionProperties"]["range"]["startIndex"]:
+           r["updateDimensionProperties"]["properties"]["pixelSize"] for r in reqs2}
+    assert px2[gi.COL_ACCOUNT] >= gi._COL_W_MIN[gi.COL_ACCOUNT], "짧은 내용 최소 폭 미달"
+    _ok("긴 상품명=상한·계정ID 좁게·상품명>계정ID·마케팅 고정·짧은 내용=최소 클램프")
+
+
 def t6b_multi_account_roster() -> None:
     print("[6b] roster 다계정ID — 상품별 계정ID·사업자명 기준 밴드(한 사업자=한 밴드, 항목5)")
     BIZ = "로움컨설팅"
@@ -627,7 +651,7 @@ def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
     for fn in (t1_ledger_rows, t1b_ledger_strike, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
                t3d_grid_autogrow, t3c_delete_accounts, t3e_delete_renamed, t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook,
-               t6b_multi_account_roster, t7_staff_keywords_merge,
+               t6b_multi_account_roster, t6c_content_col_widths, t7_staff_keywords_merge,
                t8_exec_retry):
         fn()
     print("=== 전부 통과 ===")

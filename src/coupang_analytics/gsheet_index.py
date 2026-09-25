@@ -287,9 +287,33 @@ def _build_requests_for_plan(sheet_id: int, plan: SyncPlan,
 _HEADS = ["대표자", "사업자", "계정ID", "상품명(클릭 이동)", "체험단 시작일", "체험단 종료일",
           "모니터링 종료일", "상태", "체험단효과"]   # 항목④: 계정ID를 상품명 왼쪽으로
 _MKT_LABELS = (_HEADS[COL_MKT_START], _HEADS[COL_MKT_END], _HEADS[COL_MKT_MON])   # 체험단 3열 헤더 라벨
-_COL_WIDTHS = {COL_REP: 110, COL_BUSINESS: 150, COL_PRODUCT: 300, COL_ACCOUNT: 110,
-               COL_MKT_START: 95, COL_MKT_END: 95, COL_MKT_MON: 100, COL_STATUS: 90,
-               COL_PROMO: 190}
+# 항목④(2026-09-25): 셀 폭 **내용 길이 기반 자동맞춤**(엑셀 패리티). 자동열은 헤더+데이터 최장 길이로,
+# 마케팅 E~G(직원 입력)는 고정. 한글=2폭으로 계산하고 열별 최소·최대로 클램프(과도한 폭 방지).
+_COL_W_MIN = {COL_REP: 80, COL_BUSINESS: 100, COL_ACCOUNT: 80, COL_PRODUCT: 140, COL_STATUS: 70, COL_PROMO: 130}
+_COL_W_MAX = {COL_REP: 170, COL_BUSINESS: 260, COL_ACCOUNT: 170, COL_PRODUCT: 430, COL_STATUS: 150, COL_PROMO: 280}
+_COL_W_MKT = {COL_MKT_START: 95, COL_MKT_END: 95, COL_MKT_MON: 100}   # 직원 입력 열=고정
+
+
+def _disp_len(s) -> int:
+    """표시 폭(한글·전각=2, 그 외=1) — 열 너비 자동맞춤 계산용."""
+    return sum(2 if ord(ch) > 0x2000 else 1 for ch in str(s or ""))
+
+
+def _col_width_requests(sheet_id: int, desired: list[IndexRow]) -> list[dict]:
+    """자동열을 **내용 최장 길이**에 맞춰 픽셀 폭 설정(열별 min~max 클램프)·마케팅 E~G는 고정(항목④)."""
+    getters = {COL_REP: lambda r: r.representative, COL_BUSINESS: lambda r: r.business,
+               COL_ACCOUNT: lambda r: r.account_id, COL_PRODUCT: lambda r: r.product,
+               COL_STATUS: lambda r: r.status, COL_PROMO: lambda r: r.promo_effect}
+    widths: dict[int, int] = {}
+    for c, get in getters.items():
+        longest = _disp_len(_HEADS[c])
+        for r in desired:
+            longest = max(longest, _disp_len(get(r)))
+        widths[c] = min(_COL_W_MAX[c], max(_COL_W_MIN[c], longest * 8 + 16))
+    widths.update(_COL_W_MKT)
+    return [{"updateDimensionProperties": {
+        "range": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": c, "endIndex": c + 1},
+        "properties": {"pixelSize": w}, "fields": "pixelSize"}} for c, w in sorted(widths.items())]
 # 체험단효과 셀 배경 — 개선(연초록)·악화(연적색). 무판정/공란은 사업자 밴드색.
 _PROMO_UP_FILL = {"red": 0.788, "green": 0.902, "blue": 0.788}     # C9E6C9 연초록
 _PROMO_DOWN_FILL = {"red": 0.957, "green": 0.800, "blue": 0.800}   # F4CCCC 연적색
@@ -323,10 +347,7 @@ def _full_build_requests(sheet_id: int, desired: list[IndexRow]) -> list[dict]:
         "properties": {"sheetId": sheet_id,
                        "gridProperties": {"frozenRowCount": 2, "frozenColumnCount": 0}},
         "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount"}})
-    for c, w in _COL_WIDTHS.items():
-        reqs.append({"updateDimensionProperties": {
-            "range": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": c, "endIndex": c + 1},
-            "properties": {"pixelSize": w}, "fields": "pixelSize"}})
+    reqs += _col_width_requests(sheet_id, desired)   # 항목④: 내용 길이 기반 자동맞춤(마케팅 고정)
     return reqs
 
 
@@ -603,5 +624,6 @@ def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME
     band_by_acct = {r.account_id: r.band for r in desired}   # 판매중지 행도 계정 밴드색으로 칠하기 위함
     rep_by_acct = {r.account_id: r.representative for r in desired if r.representative}  # 판매중지 행 대표자 채움
     grow = _grid_grow_requests(client, sheet, sheet_id, plan.total_rows)
-    client.batch_update(grow + _build_requests_for_plan(sheet_id, plan, band_by_acct, rep_by_acct))
+    width = _col_width_requests(sheet_id, desired)   # 항목④: 증분도 내용 길이 기반 폭 갱신(신규 상품 반영)
+    client.batch_update(grow + _build_requests_for_plan(sheet_id, plan, band_by_acct, rep_by_acct) + width)
     return plan
