@@ -841,6 +841,25 @@ def t1_merge_account():
     _ok("rename 분기·병합 분기(없는 상품만 이관·이력[순위/검색량/판매중지/판매] 보존·src 삭제·왕복 정합)")
 
 
+def t1_validate_multi_account():
+    print("[18] 입력 검증 완화 — 같은 사업자명 다계정ID = 치명 아님·[SYNC] 경고 (항목5, 소유자 2026-09-25)")
+    from coupang_analytics.input_list import Account, InputList, validate_input_list
+    # 같은 사업자명 '로움컨설팅' 을 계정ID 2개가 공유(다계정ID) — 예전엔 치명 차단, 이제 병합 경고
+    accts = [Account("loum1", "김대표", "로움컨설팅", [object()]),
+             Account("loum2", "김대표", "로움컨설팅", [object()])]
+    il = InputList(accounts=accts, errors=[], struck=[], ledger_account_ids={"loum1", "loum2"})
+    fatals, warnings = validate_input_list(il)
+    assert not any("시트명 충돌" in f for f in fatals), f"다계정ID가 아직 치명 차단됨: {fatals}"
+    assert not fatals, f"다계정ID로 치명 오류 발생: {fatals}"
+    assert any("[SYNC]" in w and "다계정ID" in w for w in warnings), f"[SYNC] 병합 경고 없음: {warnings}"
+    # 단일 계정은 경고 없이 통과(회귀 방지)
+    il2 = InputList(accounts=[Account("solo", "박대표", "단독상사", [object()])],
+                    errors=[], struck=[], ledger_account_ids={"solo"})
+    f2, w2 = validate_input_list(il2)
+    assert not f2 and not any("[SYNC]" in w for w in w2), f"단일계정 오탐: {f2} / {w2}"
+    _ok("같은 사업자명 다계정ID=치명 아님·[SYNC] 병합 경고·단일계정 무경고(회귀 방지)")
+
+
 def t1_multi_account_grouping():
     print("[17] 사업자명 그룹핑 — 다계정ID 한 시트·상품별 계정ID·계정 단위 수집 스탬프 (항목5, 소유자 2026-09-25)")
     BIZ = "로움컨설팅"
@@ -1050,6 +1069,7 @@ def main():
     t1_delete_account()
     t1_merge_account()
     t1_multi_account_grouping()
+    t1_validate_multi_account()
     t1_product_match_precision()
     t1_vid_source_option_split()
     t1_ledger_dedup()

@@ -562,8 +562,13 @@ class InputValidationError(Exception):
 def validate_input_list(il: InputList) -> tuple[list[str], list[str]]:
     """작업 시작 전 입력 검증 → (치명적, 경고) 목록.
 
-    치명적(시작 차단): 파서 구조오류·유효계정 0개·계정ID 빈칸·시트명 충돌(다른 계정이 같은 시트명 → 덮어씀).
-    경고(진행하되 알림): 사업자명 빈칸(→대표자명/계정ID 대체)·상품 0개 계정(수집 시 건너뜀).
+    치명적(시작 차단): 파서 구조오류·유효계정 0개·계정ID 빈칸.
+    경고(진행하되 알림): **같은 사업자명 다계정ID(항목5: 한 시트로 병합)**·사업자명 빈칸(→대표자명/계정ID
+    대체)·상품 0개 계정(수집 시 건너뜀).
+
+    ⚠ 항목5(소유자 2026-09-25): 예전엔 '같은 시트명(label)을 여러 계정ID가 공유'를 **치명 오류로 차단**했다
+    (시트 덮어씀 방지). 이제 한 사업자에 계정ID가 여럿인 경우가 정상(다계정ID)이라, **한 시트로 병합**하고
+    상품마다 계정ID를 태깅한다 → 치명 대신 `[SYNC]` 경고로 알린다(덮어쓰지 않고 상품 누적).
     """
     fatals: list[str] = list(il.errors)     # 파서가 잡은 구조 오류
     warnings: list[str] = []
@@ -576,9 +581,9 @@ def validate_input_list(il: InputList) -> tuple[list[str], list[str]]:
     for a in accts:
         labels.setdefault(a.label, set()).add(a.account_id)
     for name, ids in labels.items():
-        if len(ids) > 1:                    # 서로 다른 계정이 같은 시트명 → 데이터 덮어씀
-            fatals.append(f"시트명 충돌: '{name}' 을 서로 다른 계정({', '.join(sorted(ids))})이 공유 "
-                          "→ 시트 덮어씀. 사업자명/대표자명으로 구분하세요.")
+        if len(ids) > 1:                    # 같은 사업자명(label) 다계정ID → 한 시트로 병합(항목5, 덮어쓰기 아님)
+            warnings.append(f"[SYNC] 다계정ID 사업자 '{name}': 계정ID {len(ids)}개"
+                            f"({', '.join(sorted(ids))}) 를 한 시트로 병합(상품별 계정ID 태깅).")
     for a in accts:
         if not (a.business_name or "").strip():
             warnings.append(f"계정 '{a.account_id}' 사업자명 없음 → 시트명 '{a.label}'(대표자명/계정ID) 사용.")
