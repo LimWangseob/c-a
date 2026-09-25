@@ -1405,6 +1405,11 @@ class OutputWorkbook:
                 continue
             self._style_sheet(ws, sty)
         self._build_index()   # 전 계정 요약·점프 링크의 '목차' 시트를 맨 앞에 재생성(멱등)
+        # 엑셀 하단 시트 탭 표시 보장(일부 파일서 탭이 숨겨져 보이던 문제)·목차를 활성 시트로
+        for _v in self.wb.views:
+            _v.showSheetTabs = True
+            _v.visibility = "visible"
+            _v.activeTab = 0
 
     def _style_sheet(self, ws, sty: _StyleCtx) -> None:
         """한 계정(사업자) 시트 서식 — 병합 초기화·꼬리행 정리·제목/틀고정/열너비 + 블록별 서식."""
@@ -1424,9 +1429,9 @@ class OutputWorkbook:
             ws.delete_rows(last_data + 1, ws.max_row - last_data)
         maxc = ws.max_column
         t = ws.cell(1, 1)
-        # 제목에 계정명(계정ID, 없으면 사업자명) 표기 — 어느 시트인지 한눈에(소유자 2026-09-25)
-        _aid = self.account_id_of(ws.title) or ws.title
-        t.value = f"{config.SELDOC_SHEET_TITLE}(계정명 : {_aid})"
+        # 제목에 (계정ID, 대표자, 사업자) — **값만** 표기(라벨 제외·소유자 2026-09-25). 빈 항목은 생략.
+        _parts = [x for x in (self.account_id_of(ws.title), self.representative_of(ws.title), ws.title) if x]
+        t.value = f"{config.SELDOC_SHEET_TITLE}({', '.join(_parts)})"
         t.font = sty.title_font
         t.alignment = sty.center
         t.border = Border(bottom=Side(style="medium"))
