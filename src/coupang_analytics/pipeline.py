@@ -1277,7 +1277,8 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
     _sweep_dead_duplicates(wb, biz, live_vids, log)
     # 대장 대조(항목⑥, 소유자 2026-09-25): **줄이 완전히 사라진 상품 = 이력 포함 완전삭제**(백업 안전망),
     # 대장에 **판매중지/취소선으로 남은(줄 존재)** 상품 = 판매중지 표기 유지. ledger_products=줄 존재 전체.
-    newly, deleted = wb.reconcile_account(biz, seen_products, report_acc.ledger_products, delete_missing=True)
+    newly, deleted = wb.reconcile_account(biz, seen_products, report_acc.ledger_products,
+                                          delete_missing=True, account_id=report_acc.account_id)   # 항목5: 계정ID 스코핑
     if deleted:
         log(f"  [SYNC] [{biz}] 관리대장에서 줄이 사라진 상품 {len(deleted)}개 → 완전삭제(이력 포함·백업 보존): "
             f"{deleted[:3]}{'…' if len(deleted) > 3 else ''}")

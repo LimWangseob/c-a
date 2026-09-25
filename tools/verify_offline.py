@@ -662,6 +662,27 @@ def t1_ledger_dedup():
     _ok(f"같은 상품명 3줄(공백차이 포함) → 1개만 추적 {names}·중복 경고 남김")
 
 
+def t1_reconcile_account_scope():
+    print("[24] reconcile 계정ID 스코핑 — 다계정ID 사업자에서 계정 B 대조가 계정 A 상품 미접촉 (항목5·2026-09-26 버그수정)")
+    BIZ = "로움컨설팅"
+    wb = OutputWorkbook.empty()
+    # 한 사업자 시트에 계정 A(타프)·계정 B(매트) 상품 공존(다계정ID)
+    wb.ensure_product_block(BIZ, "타프", config.KIND_CONTRACT, ["kw"], registered="타프")
+    wb.set_product_account_id(BIZ, "타프", "acctA")
+    wb.ensure_product_block(BIZ, "매트", config.KIND_PERSONAL, ["kw"], registered="매트")
+    wb.set_product_account_id(BIZ, "매트", "acctB")
+    # 계정 B(매트) 대조: seen=[매트]·ledger={매트}·delete_missing — **타프(acctA)는 건드리면 안 됨**
+    newly, deleted = wb.reconcile_account(BIZ, ["매트"], {"매트"}, delete_missing=True, account_id="acctB")
+    assert "타프" in wb.products_of(BIZ), "계정 B 대조가 계정 A 상품(타프)을 삭제함(스코핑 실패)"
+    assert not wb.is_discontinued(BIZ, "타프"), "계정 B 대조가 계정 A 상품(타프)을 판매중지 처리함(스코핑 실패)"
+    assert deleted == [] and newly == [], f"계정 B는 매트만 활성이라 변동 없어야: newly={newly} deleted={deleted}"
+    # 반대로 계정 A(타프) 대조에서 타프가 대장에 없으면 삭제(스코핑 내 정상 동작)·매트는 미접촉
+    _n2, del2 = wb.reconcile_account(BIZ, [], {"딴상품"}, delete_missing=True, account_id="acctA")
+    assert del2 == ["타프"], f"계정 A 대조: 줄 사라진 타프 삭제해야: {del2}"
+    assert "매트" in wb.products_of(BIZ) and not wb.is_discontinued(BIZ, "매트"), "계정 A 대조가 계정 B(매트) 침범"
+    _ok("다계정ID reconcile: 각 계정 대조가 자기 상품만 처리·타 계정 상품 미접촉(교차 삭제/중지 방지)")
+
+
 def t1_date_columns():
     print("[14] 일자 컬럼 — 연말/연초 경계 보정 (workbook _parse_date nearest-year·정규화 폭발 방지)")
     import coupang_analytics.workbook as wbmod
@@ -1274,6 +1295,7 @@ def main():
     t1_ledger_removal_delete()
     t1_dual_status_source()
     t1_keyword_freeze_boundary()
+    t1_reconcile_account_scope()
     t1_product_match_precision()
     t1_vid_source_option_split()
     t1_ledger_dedup()

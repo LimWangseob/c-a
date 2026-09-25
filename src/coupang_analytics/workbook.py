@@ -1886,8 +1886,12 @@ class OutputWorkbook:
         return False
 
     def reconcile_account(self, biz: str, seen_products, ledger_products=None,
-                          delete_missing: bool = False) -> tuple[list[str], list[str]]:
+                          delete_missing: bool = False, account_id: str = "") -> tuple[list[str], list[str]]:
         """대장 대조: 그 계정의 마스터 블록을 관리대장과 맞춘다. 반환=(새로 판매중지된 상품, 완전삭제된 상품).
+
+        ⚠ **항목5(다계정ID) 스코핑(2026-09-26)**: `account_id` 를 주면 그 사업자 시트에서 **그 계정ID 소속 상품**
+        (`product_account_id`==account_id, 또는 미태깅 '')만 대조한다. 한 사업자 시트에 여러 계정ID 상품이 섞일 수
+        있어(다계정ID), 계정 B 처리 시 계정 A 상품을 판매중지/삭제하는 사고를 막는다. account_id='' 면 전체(후방호환).
 
         - seen_products = 이번 대장에 **활성**으로 존재한 상품(블록명·vid 앵커로 해석). 여기 있으면 판매중지 해제.
         - **항목⑥(소유자 2026-09-25)**: `delete_missing=True`면 **관리대장에서 줄이 완전히 사라진 상품**(활성도
@@ -1897,9 +1901,12 @@ class OutputWorkbook:
           소유자가 거부한 '수집 실패 가드'와는 별개). delete_missing=False(기본)는 옛 동작=전부 판매중지 표기."""
         seen = {_key(p) for p in seen_products}
         ledger = {_key(p) for p in (ledger_products or [])}
+        acct = _norm(account_id)
         newly: list[str] = []
         deleted: list[str] = []
         for p in list(self.products_of(biz)):
+            if acct and self.product_account_id(biz, p) not in ("", acct):
+                continue                                           # 다른 계정ID 소속 상품 → 이 계정 대조서 제외(항목5)
             if p in seen:
                 self.set_discontinued(biz, p, False)               # 대장에 활성 → 판매중지 해제
                 continue
