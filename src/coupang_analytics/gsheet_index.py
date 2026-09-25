@@ -492,6 +492,54 @@ def delete_accounts(client, removed, *, sheet: str = INDEX_SHEET_NAME, on_log=No
     return n
 
 
+def _delete_index_rows_by_name(client, sheet: str, pairs: set, log) -> int:
+    """계정목록에서 (사업자명 B, 계정ID D) 가 pairs 에 든 행을 아래→위로 삭제. 삭제 행 수 반환(헬퍼)."""
+    if sheet not in client.sheet_titles():
+        return 0
+    sid = client.sheet_id(sheet)
+    values, _ = client.read_grid(sheet)
+    if sid is None or len(values) <= HEADER_ROW0:
+        return 0
+    hdr = [str(h).strip() for h in values[HEADER_ROW0]]
+    c_biz = hdr.index("사업자") if "사업자" in hdr else COL_BUSINESS
+    c_acct = hdr.index("계정ID") if "계정ID" in hdr else COL_ACCOUNT
+    del_rows = []
+    for gi in range(DATA_START0, len(values)):
+        row = values[gi]
+        biz = str(row[c_biz]).strip() if len(row) > c_biz and row[c_biz] else ""
+        acct = str(row[c_acct]).strip() if len(row) > c_acct and row[c_acct] else ""
+        if (biz, acct) in pairs:
+            del_rows.append(gi)
+    reqs = [{"deleteDimension": {"range": {"sheetId": sid, "dimension": "ROWS",
+            "startIndex": gi, "endIndex": gi + 1}}} for gi in sorted(del_rows, reverse=True)]
+    if not reqs:
+        return 0
+    client.batch_update(reqs)      # 아래→위라 한 배치 내 인덱스 안정
+    log(f"  [구글시트] 계정목록 옛 이름 행 {len(reqs)}개 삭제(일원화)")
+    return len(reqs)
+
+
+def delete_renamed_accounts(client, renamed, *, sheet: str = INDEX_SHEET_NAME, on_log=None) -> int:
+    """시트명 변경으로 **일원화**된 계정의 **옛 이름** 잔재를 계정목록에서 제거 — 옛 이름 행 + 옛 이름 통계 시트.
+
+    renamed = [(옛사업자명, 계정ID), …]. `delete_accounts` 와 달리 **계정ID 아니라 사업자명(B열)** 으로 행을
+    매칭한다 — 병합 후 옛·새 계정이 **같은 계정ID를 공유**하므로 ID로 지우면 살아남을 새 이름 행(직원 마케팅
+    E~G 포함)까지 지워진다. 계정ID 일치를 **함께** 요구해 동명 타 계정 오삭제 방지. 새 이름 시트/행은 이후
+    push_statistics·sync_index 가 미러링·갱신하므로 건드리지 않는다. ⚠ 되돌릴 수 없음. 삭제 요청 수 반환."""
+    log = on_log or (lambda m: None)
+    if not renamed:
+        return 0
+    pairs = {(str(nm).strip(), str(a).strip()) for nm, a in renamed if str(nm).strip()}
+    n = _delete_index_rows_by_name(client, sheet, pairs, log)   # 1) 옛 이름 행(B+D 일치)
+    for nm, _a in renamed:                                       # 2) 옛 이름 통계 시트(새 이름은 미러링)
+        sid = client.sheet_id(nm)
+        if sid is not None:
+            client.batch_update([{"deleteSheet": {"sheetId": sid}}])
+            n += 1
+            log(f"  [구글시트] 옛 통계 시트 '{nm}' 삭제(일원화)")
+    return n
+
+
 _GRID_ROW_BUFFER = 50   # 삽입 여유행(매 실행 재확장 방지 — 신규 상품/계정 몇 개는 그리드 확장 없이 소화)
 
 

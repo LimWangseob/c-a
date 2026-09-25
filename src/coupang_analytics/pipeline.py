@@ -1323,13 +1323,15 @@ def push_ledger_inventory(input_url: str | None, log, out_dir: str = "output") -
             f"{exc.__class__.__name__}: {str(exc)[:120]} ==")
 
 
-def _push_gsheet(wb, output_url: str | None, log, removed_accounts=None) -> None:
+def _push_gsheet(wb, output_url: str | None, log, removed_accounts=None, renamed_accounts=None) -> None:
     """완성된 openpyxl 마스터를 결과 구글시트로 반영 — 통계 시트 미러링 + 계정목록 증분 동기화.
 
     output_url 없거나 서비스계정 미등록이면 조용히 생략(정상 — 구글 통합 미사용). 반영 실패는 **로그로 명시**
     (조용한 무시 아님)하되 파이프라인을 죽이지 않는다: xlsx 마스터·스냅샷은 이미 저장됐다(오프라인 백업).
     removed_accounts=[(사업자, 계정ID)…]: 관리대장에서 **줄이 사라진** 계정 → 결과 구글시트에서도 완전 삭제
     (계정목록 행 + 통계 시트). '판매중지'로 남은 건 여기 없음(유지+경고).
+    renamed_accounts=[(옛사업자명, 계정ID)…]: 시트명 변경으로 **일원화**된 계정의 옛 이름 잔재 → 계정목록 옛
+    이름 행·옛 통계 시트를 **이름 기준**으로 제거(계정ID는 새 이름과 공유하므로 이름 매칭). 새 이름은 미러링/동기화.
     """
     # ⚠ 조용한 스킵 금지 — 반영 안 된 이유를 **항상 로그로** 남긴다(정상종료인데 반영 안 됨을 추적 가능하게).
     if not output_url:
@@ -1350,6 +1352,12 @@ def _push_gsheet(wb, output_url: str | None, log, removed_accounts=None) -> None
             d = gsheet_index.delete_accounts(client, removed_accounts, on_log=log)
             if d:
                 log(f"== [구글시트] 삭제된 계정 정리 — {len(removed_accounts)}개(계정목록 행·통계 시트 제거) ==")
+        if renamed_accounts:   # 일원화된 옛 이름 잔재 제거(이름 기준) → 새 이름은 아래 미러링/동기화
+            _phase = "일원화 옛이름 정리"
+            r = gsheet_index.delete_renamed_accounts(client, renamed_accounts, on_log=log)
+            if r:
+                log(f"== [구글시트] 일원화 옛 이름 정리 — {len(renamed_accounts)}개"
+                    f"({', '.join(nm for nm, _a in renamed_accounts)} 계정목록 행·옛 통계 시트 제거) ==")
         _phase = "통계 시트 미러링"
         log("== [구글시트] 통계 시트 미러링 중… ==")
         gids = gsheet_stats.push_statistics(client, wb, on_log=log)          # 사업자별 통계 시트 전체 미러링
@@ -1511,39 +1519,43 @@ def _column_label(date_from: str, date_to: str, date_label: str | None, log) -> 
     return col_label
 
 
-def _consolidate_renamed_accounts(wb, input_list: InputList, log) -> int:
+def _consolidate_renamed_accounts(wb, input_list: InputList, log) -> list[tuple[str, str]]:
     """시트명 변경으로 같은 계정ID가 둘로 쪼개진 경우 일원화(2026-09-25).
 
     관리대장은 담당자가 사업자명·대표자를 수시로 바꿔, 계정ID는 그대로인데 옛 시트명이 고아(전 상품 판매중지로
     오분류)가 된다(예: 이종훈→원더폴리). 대장의 (계정ID → 현재 사업자명) 을 기준으로, 같은 계정ID인데 다른
     이름을 가진 옛 시트를 현재 이름 시트로 **이력 보존하며 병합**한다. 삭제 판정보다 **먼저** 돌려, 옛 시트가
-    '판매중지'로 오분류되기 전에 흡수한다. 반환 = 이관한 상품 수 합계."""
+    '판매중지'로 오분류되기 전에 흡수한다. 반환 = 병합으로 사라진 **옛 이름** 목록 [(옛사업자명, 계정ID)…]
+    (구글시트 계정목록 행·옛 통계 시트를 이름 기준으로 정리하는 데 쓴다 — 계정ID는 새 이름과 공유하므로 이름 매칭)."""
     target_of = {a.account_id: a.label for a in input_list.accounts if a.account_id and a.label}
     if not target_of:
-        return 0
-    moved_total = 0
+        return []
+    renamed: list[tuple[str, str]] = []
     for biz in list(wb.account_sheets()):
         aid = wb.account_id_of(biz)
         target = target_of.get(aid) if aid else None
         if not target or target.strip() == (biz or "").strip():
             continue                                       # 대장에 없는 계정ID or 이미 현재 이름
+        old_name, old_aid = biz, aid
         moved = wb.merge_account(biz, target)
         if moved:
-            moved_total += moved
-            log(f"== [{biz}] → [{target}] 일원화(계정ID {aid} 동일·시트명 변경) — 상품 {moved}개 이력 이관 ==")
-    return moved_total
+            renamed.append((old_name, old_aid))            # 옛 이름 = 구글시트에서 정리할 잔재
+            log(f"== [{old_name}] → [{target}] 일원화(계정ID {aid} 동일·시트명 변경) — 상품 {moved}개 이력 이관 ==")
+    return renamed
 
 
-def _reconcile_ledger_accounts(wb, input_list: InputList, uncollected, log) -> list[tuple[str, str]]:
+def _reconcile_ledger_accounts(wb, input_list: InputList, uncollected, log
+                               ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """계정 단위 대조(2026-09-17 정책) — 관리대장 기준으로 결과 워크북의 계정을 정리한다.
 
     - 시트명 변경(계정ID 동일)으로 쪼개진 계정 = **일원화**(먼저, 옛 이름 흡수).
     - 대장에서 **줄이 완전히 사라진 계정 = 완전 삭제**(시트·이력·메타).
     - 대장에 **줄은 남았으나 비활성**(전 상품 판매중지 등) = 판매중지 표기(유지·경고 기능).
     - 로그인 실패(uncollected)는 '사라짐' 아님 → 제외(다음에 수집).
-    삭제 판정 = 계정ID가 대장에 아예 없음. 반환 = 완전 삭제한 (사업자, 계정ID) 목록.
+    삭제 판정 = 계정ID가 대장에 아예 없음.
+    반환 = (완전 삭제한 [(사업자, 계정ID)…], 일원화로 사라진 옛 이름 [(옛사업자명, 계정ID)…]).
     """
-    _consolidate_renamed_accounts(wb, input_list, log)     # 시트명 변경 계정 먼저 흡수(고아 오분류 방지)
+    renamed = _consolidate_renamed_accounts(wb, input_list, log)  # 시트명 변경 계정 먼저 흡수(고아 오분류 방지)
     active_biz = {a.label for a in input_list.accounts}
     active_ids = input_list.ledger_account_ids            # 대장에 줄이 존재하는 계정ID(판매중지 포함)
     uncollected_biz = {a.label for a in uncollected}
@@ -1560,7 +1572,7 @@ def _reconcile_ledger_accounts(wb, input_list: InputList, uncollected, log) -> l
             gone = wb.reconcile_account(biz, [])
             if gone:
                 log(f"== [{biz}] 대장에 남았으나 비활성 → 상품 {len(gone)}개 판매중지 표기 ==")
-    return removed_accounts
+    return removed_accounts, renamed
 
 
 @dataclass
@@ -1795,7 +1807,7 @@ def _validate_or_raise(input_list: InputList, log) -> None:
 
 
 def _finalize_run(ctx: _RunCtx, master: Path, prog: Path, now: datetime, gsheet_output_url,
-                  removed_accounts, uncollected) -> Path:
+                  removed_accounts, uncollected, renamed_accounts=None) -> Path:
     """통계 마스터/스냅샷 저장 + 결과 구글시트 반영 + 진행파일 정리. 반환=스냅샷 경로.
 
     로그인 못한 계정이 남았으면 진행분을 유지(같은 날 재실행이 미완료분만 이어서 처리), 없으면 진행파일을
@@ -1806,7 +1818,8 @@ def _finalize_run(ctx: _RunCtx, master: Path, prog: Path, now: datetime, gsheet_
     wb.apply_style()         # 가독성 서식(헤더 고정·상품 구분·정렬) — 최종본에만
     wb.save(master)          # 다음 날 이어쓸 마스터
     wb.save(snapshot)        # 그날 백업본(감사용)
-    _push_gsheet(wb, gsheet_output_url, log, removed_accounts=removed_accounts)   # 결과 반영 + 삭제 계정 정리
+    _push_gsheet(wb, gsheet_output_url, log, removed_accounts=removed_accounts,
+                 renamed_accounts=renamed_accounts)   # 결과 반영 + 삭제 계정 + 일원화 옛 이름 정리
     if uncollected:
         _save_ctx_progress(ctx)
         wb.save(ctx.partial)     # 재개 기준선(완료분 반영)
@@ -1896,7 +1909,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         log(f"== ⚠ 로그인 못한 계정 {len(uncollected)}개(세션만료+Akamai차단): "
             f"{', '.join(a.label for a in uncollected)} — 쉰 IP(내일 등)에 재실행 시 수집됨 ==")
 
-    removed_accounts = _reconcile_ledger_accounts(wb, input_list, uncollected, log)
+    removed_accounts, renamed_accounts = _reconcile_ledger_accounts(wb, input_list, uncollected, log)
 
     # 판매수집을 건너뛴(이미 오늘 수집됨) 계정도 키워드가 비어 있으면 선정(로그인 없이·워크북 기반).
     # 전체실행(①②③) 재실행에서 판매는 스킵하되 ②키워드가 빠지지 않게 한다(①판매수집 전용은 키워드 단계 없음).
@@ -1909,7 +1922,8 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         _backfill_ranks(wb, partial, log, was_blocked=_RANK_HALT["stop"])
 
     # 통계 마스터/스냅샷 저장 + 결과 구글시트 반영 + 진행파일 정리
-    return _finalize_run(ctx, master, prog, now, gsheet_output_url, removed_accounts, uncollected)
+    return _finalize_run(ctx, master, prog, now, gsheet_output_url, removed_accounts, uncollected,
+                         renamed_accounts=renamed_accounts)
 
 
 def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = "output",

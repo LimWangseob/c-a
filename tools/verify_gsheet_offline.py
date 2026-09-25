@@ -299,6 +299,29 @@ def t3d_grid_autogrow() -> None:
     _ok("좁은 열 그리드 → 체험단효과 I열 기록 전 열 자동 확장(넓으면 안 함)")
 
 
+def t3e_delete_renamed() -> None:
+    print("[3e] 일원화 옛 이름 정리(delete_renamed_accounts) — 같은 계정ID 공유해도 옛 이름 행만 삭제")
+    vals = [
+        ["계정목록 · 상품 3개"], list(_HEAD),
+        ["이종훈", "이종훈", "옛상품", "oopean", "체험", "", "", "판매중지"],   # 옛 이름(삭제 대상)
+        ["이종훈", "원더폴리", "신상품", "oopean", "체험", "", "", "예정"],     # 새 이름(계정ID·대표자 동일·보존)
+        ["대표B", "가게B", "상품3", "idB", "", "", "", "예정"],
+    ]
+    fc = _FakeClient(vals, titles=["계정목록", "이종훈", "원더폴리", "가게B"])
+    n = gi.delete_renamed_accounts(fc, [("이종훈", "oopean")])
+    del_rows = [r for b in fc.batches for r in b
+               if "deleteDimension" in r and r["deleteDimension"]["range"]["dimension"] == "ROWS"]
+    del_sheets = [r for b in fc.batches for r in b if "deleteSheet" in r]
+    assert len(del_rows) == 1, del_rows                                   # 이종훈 행 1개만(원더폴리 아님)
+    assert del_rows[0]["deleteDimension"]["range"]["startIndex"] == 2     # 0-based 격자행(옛 이름 행)
+    assert len(del_sheets) == 1 and del_sheets[0]["deleteSheet"]["sheetId"] == fc._ids["이종훈"]
+    # 새 이름(원더폴리)·타 계정 통계 시트 미접촉
+    assert not any(r for b in fc.batches for r in b if "deleteSheet" in r
+                   and r["deleteSheet"]["sheetId"] in (fc._ids["원더폴리"], fc._ids["가게B"]))
+    assert n == 2
+    _ok("계정ID(oopean) 공유해도 사업자명(B)로 옛 이름 '이종훈' 행·통계 시트만 삭제·원더폴리 보존")
+
+
 def t3c_delete_accounts() -> None:
     print("[3c] 삭제된 계정 완전 제거(delete_accounts) — 계정목록 행 + 통계 시트")
     vals = [
@@ -540,7 +563,7 @@ def t8_exec_retry() -> None:
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
     for fn in (t1_ledger_rows, t1b_ledger_strike, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
-               t3d_grid_autogrow, t3c_delete_accounts, t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook, t7_staff_keywords_merge,
+               t3d_grid_autogrow, t3c_delete_accounts, t3e_delete_renamed, t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook, t7_staff_keywords_merge,
                t8_exec_retry):
         fn()
     print("=== 전부 통과 ===")
