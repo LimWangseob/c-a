@@ -46,6 +46,8 @@ class _StyleCtx:
     title_font: Font
     f_prod: PatternFill
     f_prod2: PatternFill          # 상품군 교대 배경(같은 등록상품명=한 군, 인접 군을 두 색으로 구분)
+    f_prod_lt: PatternFill        # 값칸·키워드 옅은 상품군색(상품군 전체 은은히 통일)
+    f_prod2_lt: PatternFill
     f_label: PatternFill
     f_kwhead: PatternFill
     f_kind: PatternFill
@@ -1186,8 +1188,10 @@ class OutputWorkbook:
     # 사용자 `셀독 판매 데이터_서식.xlsx`(한컴 셀) 시각 서식을 재현한다. 행 스캔 방식이라
     # 계정(시트)·상품(블록)이 늘어도 자동 적용된다.
     _FN = "맑은 고딕"
-    _FILL_PROD = "FBE2D5"     # 상품명(살구) — 상품군 교대색 A
-    _FILL_PROD2 = "E2EFDA"    # 상품명(민트) — 상품군 교대색 B(같은 등록상품명=한 군, 인접 군을 시각 구분)
+    _FILL_PROD = "FBE2D5"     # 상품명·라벨칸(살구) — 상품군 교대색 A(진한 톤)
+    _FILL_PROD2 = "E2EFDA"    # 상품명·라벨칸(민트) — 상품군 교대색 B(같은 등록상품명=한 군, 인접 군을 시각 구분)
+    _FILL_PROD_LT = "FDF1EA"  # 값칸·키워드 옅은 살구 — 상품군 전체를 은은히 통일(소유자 2026-09-25)
+    _FILL_PROD2_LT = "F0F6EB"  # 값칸·키워드 옅은 민트
     _FILL_LABEL = "D9E9FA"    # G열 지표 라벨/순위(연파랑)
     _FILL_KWHEAD = "E8E8E8"   # 키워드 소헤더행(회색)
     _FILL_KIND = "FFFFFF"     # 구분(계약/개인)·사업자명(흰)
@@ -1383,6 +1387,8 @@ class OutputWorkbook:
             title_font=Font(name=self._FN, size=14, bold=True),
             f_prod=PatternFill("solid", fgColor=self._FILL_PROD),
             f_prod2=PatternFill("solid", fgColor=self._FILL_PROD2),
+            f_prod_lt=PatternFill("solid", fgColor=self._FILL_PROD_LT),
+            f_prod2_lt=PatternFill("solid", fgColor=self._FILL_PROD2_LT),
             f_label=PatternFill("solid", fgColor=self._FILL_LABEL),
             f_kwhead=PatternFill("solid", fgColor=self._FILL_KWHEAD),
             f_kind=PatternFill("solid", fgColor=self._FILL_KIND),
@@ -1476,9 +1482,11 @@ class OutputWorkbook:
         promo_cols = self._promo_cols(ws, mstart)   # 체험단 시작일~+1개월 → 노출순위 배경색(소유자 2026-09-24)
         kh = self._find_kw_head(ws, hr, end)   # 키워드 소헤더행(C='키워드')·없으면 None(2차 옵션 블록)
         m_end = (kh - 1) if kh else end
-        self._style_metric_rows(ws, sty, hr, m_end, mcols, maxc, prod_fill)
+        # 이 상품군의 옅은 톤(값칸·키워드 배경) — 상품군 전체를 은은히 통일(소유자 2026-09-25)
+        prod_fill_lt = sty.f_prod_lt if prod_fill is sty.f_prod else sty.f_prod2_lt
+        self._style_metric_rows(ws, sty, hr, m_end, mcols, maxc, prod_fill, prod_fill_lt)
         if kh:
-            self._style_keyword_rows(ws, sty, kh, end, promo_cols, maxc, is_disc, is_mkt)
+            self._style_keyword_rows(ws, sty, kh, end, promo_cols, maxc, is_disc, is_mkt, prod_fill_lt)
             self._flag_sale_mismatch(ws, sty, kh, nm, is_disc)
         self._style_block_edges(ws, sty, i, hr, end, m_end, kh, headers, regs, maxc)
 
@@ -1518,7 +1526,7 @@ class OutputWorkbook:
         return None
 
     def _style_metric_rows(self, ws, sty: _StyleCtx, hr: int, m_end: int, mcols: set, maxc: int,
-                           prod_fill: PatternFill) -> None:
+                           prod_fill: PatternFill, prod_fill_lt: PatternFill) -> None:
         """상품 헤더블록(레이아웃 v4·소유자 확정 2026-09-24): 좌측 A:B=라벨 칸(상품군색·굵게)·C:F=값 칸(흰) /
         우측 G=지표 라벨(연파랑)·H~=값(마케팅기간 배경). 좌측 라벨 7줄(상품명2·VID·판매방식·로켓그로스3)이
         우측 지표 7줄과 정렬(판매자배송 6줄은 로켓그로스 생략). prod_fill = 이 상품군의 교대 배경색.
@@ -1530,35 +1538,40 @@ class OutputWorkbook:
         values = self._v4_values(biz, nm, ws, hr)
         label_at = {a: lab for (a, _s, lab) in layout["ab"]}
         value_at = {a: key for (a, _s, key) in layout["cf"]}
-        # 상품명 값 칸(pos0 C:F)은 **상품군 색**으로 칠해 상품명을 강조하고 동일 상품군을 시각적으로 묶는다
-        # (소유자 2026-09-25). 나머지 값 칸(VID/판매방식/로켓그로스)은 흰색 유지(가독성). name_rows=상품명 세로칸.
+        # 상품명 값 칸(pos0 C:F)=**진한 상품군색**(강조)·나머지 값 칸(VID/판매방식/로켓그로스)=**옅은 상품군색**
+        # → 상품군 전체가 은은한 한 색으로 통일(동일 상품군=같은 스타일·소유자 2026-09-25). name_rows=상품명 세로칸.
         name_rows = {a + j for (a, span, key) in layout["cf"] if key == "name" for j in range(span)}
         for r in range(hr, m_end + 1):
-            _sty_cell(ws, r, 1, sty, fill=prod_fill, fnt=sty.bold, align=sty.wrap)   # A:B 라벨 칸(상품군색)
+            _sty_cell(ws, r, 1, sty, fill=prod_fill, fnt=sty.bold, align=sty.wrap)   # A:B 라벨 칸(진한 상품군색)
             _sty_cell(ws, r, 2, sty, fill=prod_fill, fnt=sty.bold, align=sty.wrap)
             in_name = r in name_rows
-            cf_fill = prod_fill if in_name else sty.f_kind                           # 상품명 칸=상품군색·나머지=흰
+            cf_fill = prod_fill if in_name else prod_fill_lt                         # 상품명=진한·나머지=옅은 상품군색
             cf_fnt = sty.bold if in_name else sty.font                               # 상품명=굵게(강조)
             for c in range(_COL_NAME, _COL_SEARCH + 1):
                 _sty_cell(ws, r, c, sty, fill=cf_fill, fnt=cf_fnt, align=sty.wrap)
-            _sty_cell(ws, r, _COL_METRIC, sty, fill=sty.f_label)                     # G 지표 라벨(연파랑)
+            _sty_cell(ws, r, _COL_METRIC, sty, fill=sty.f_label, fnt=sty.bold)        # G 지표 라벨(연파랑·굵게=제목)
+            is_hdr = (r == hr)                                                        # 날짜 헤더행(H~=날짜라벨=굵게)
             for c in range(_FIRST_DATE, maxc + 1):                                   # H~ 값(마케팅기간 배경)
-                _sty_cell(ws, r, c, sty, num=True, fill=(sty.mkt_fill if c in mcols else None))
+                _sty_cell(ws, r, c, sty, num=True, fnt=(sty.bold if is_hdr else None),
+                          fill=(sty.mkt_fill if c in mcols else None))
             if r in label_at:                        # 좌측 라벨(A) — 앵커행에만(세로병합 top-left)
                 ws.cell(r, 1, label_at[r])
             if r in value_at:                        # 좌측 값(C) — 앵커행에만
                 ws.cell(r, _COL_NAME, values.get(value_at[r], ""))
 
     def _style_keyword_rows(self, ws, sty: _StyleCtx, kh: int, end: int, mcols: set, maxc: int,
-                            is_disc: bool, is_mkt: bool) -> None:
+                            is_disc: bool, is_mkt: bool, prod_fill_lt: PatternFill) -> None:
         """키워드블록(레이아웃 v4): A~E 키워드명(가로 병합·좌측확장) · F 검색량 · G(소헤더 비고/순위라벨) · H~ 순위.
-        사업자명(A:B) 표기 폐지 — 키워드가 A~E 로 좌측 확장(소유자 확정 2026-09-24). 키워드명 앵커=A."""
+        사업자명(A:B) 표기 폐지 — 키워드가 A~E 로 좌측 확장(소유자 확정 2026-09-24). 키워드명 앵커=A.
+        소헤더=회색·키워드행 A~F=**옅은 상품군색**(상품군 전체 통일·소유자 2026-09-25)."""
         for r in range(kh, end + 1):
             head = (r == kh)
-            for c in range(_COL_KW, _COL_SEARCH):       # A~E 키워드명(항상 bold, 앵커=A)
-                _sty_cell(ws, r, c, sty, fill=(sty.f_kwhead if head else None), fnt=sty.bold, align=sty.wrap)
-            _sty_cell(ws, r, _COL_SEARCH, sty, fill=(sty.f_kwhead if head else None), num=not head)
-            _sty_cell(ws, r, _COL_METRIC, sty, fill=(sty.f_kwhead if head else sty.f_label))
+            kw_fill = sty.f_kwhead if head else prod_fill_lt   # 소헤더=회색·키워드행=옅은 상품군색
+            kw_fnt = sty.bold if head else sty.font            # 소헤더 '키워드'=굵게(제목)·키워드명=일반
+            for c in range(_COL_KW, _COL_SEARCH):       # A~E 키워드명(앵커=A)
+                _sty_cell(ws, r, c, sty, fill=kw_fill, fnt=kw_fnt, align=sty.wrap)
+            _sty_cell(ws, r, _COL_SEARCH, sty, fill=kw_fill, fnt=(sty.bold if head else None), num=not head)
+            _sty_cell(ws, r, _COL_METRIC, sty, fill=(sty.f_kwhead if head else sty.f_label), fnt=sty.bold)
             if head:   # 비고 자리(소헤더 G): 판매중지 > 체험단중 > 비고 (멱등 재계산)
                 gm = ws.cell(r, _COL_METRIC)
                 if is_disc:

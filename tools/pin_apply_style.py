@@ -114,8 +114,8 @@ def pin_block_fills():
     kh = _kw_head_row(ws, hr)
     # 좌측 A:B = 라벨 칸(상품군색), C:F = 값 칸. **상품명 칸(pos0 C:F)=상품군색**(강조), 나머지 값 칸=흰
     _check(_fill(ws, hr, 1).endswith(OutputWorkbook._FILL_PROD), "좌측 라벨 칸 A열 살구색(FBE2D5)")
-    _check(_fill(ws, hr, 3).endswith(OutputWorkbook._FILL_PROD), "상품명 값 칸 C열 상품군색(FBE2D5)")
-    _check(_fill(ws, hr + 2, 3).endswith(OutputWorkbook._FILL_KIND), "VID 값 칸 C열 흰색(FFFFFF)")
+    _check(_fill(ws, hr, 3).endswith(OutputWorkbook._FILL_PROD), "상품명 값 칸 C열 진한 상품군색(FBE2D5)")
+    _check(_fill(ws, hr + 2, 3).endswith(OutputWorkbook._FILL_PROD_LT), "VID 값 칸 C열 옅은 상품군색(FDF1EA)")
     _check(_fill(ws, hr + 1, 7).endswith(OutputWorkbook._FILL_LABEL), "지표 라벨 G열 연파랑(D9E9FA)")
     # 라벨/값 텍스트(pos0 상품명·pos2 VID·pos3 판매방식·pos4 로켓그로스)
     _check(_n(ws.cell(hr, 1).value) == "상품명", "pos0 라벨 A='상품명'")
@@ -137,6 +137,13 @@ def pin_block_fills():
     _check(_n(ws.cell(kh + 1, 1).value) == "kw1", "키워드명=A열(v4)")
     _check(f"A{kh + 1}:E{kh + 1}" in merged, "키워드 순위행 A~E 가로병합")
     _check(_n(ws.cell(kh, 7).value) == "비고", "정상 상품 소헤더 G='비고'")
+    # 폰트 불변식(소유자 2026-09-25): 제목류=굵게·키워드명/데이터=일반
+    _check(ws.cell(hr, 7).font.bold, "G 지표 라벨(날짜) 굵게=제목")
+    _check(ws.cell(kh, 6).font.bold, "F 검색량 제목 굵게")
+    _check(ws.cell(kh + 1, 7).font.bold, "노출 순위 라벨 굵게=제목")
+    _check(not ws.cell(kh + 1, 1).font.bold, "키워드명(kw1)=일반(굵게 아님)")
+    _hcol = max(wb._date_col.get(BIZ, {}).values())
+    _check(ws.cell(hr, _hcol).font.bold, "날짜 헤더값(09.xx) 굵게")
 
 
 def pin_sale_status_mismatch():
