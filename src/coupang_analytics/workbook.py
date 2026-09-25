@@ -1256,6 +1256,8 @@ class OutputWorkbook:
             _unmerge_all(ws)                                       # 병합 해제 후 쓰기(apply_style 재병합)
             for r, val in targets:
                 ws.cell(r, _COL_KW, val)                          # A ← 키워드명/'키워드'
+                if val == _LABEL_KEYWORD and not _norm(ws.cell(r, _COL_SEARCH).value):
+                    ws.cell(r, _COL_SEARCH, _LABEL_SEARCH)        # 소헤더 '검색량' 제목 복원(F열 공란 방지)
                 if val != _LABEL_KEYWORD or _norm(ws.cell(r, _COL_NAME).value) == _LABEL_KEYWORD:
                     ws.cell(r, _COL_NAME).value = None            # 옛 C값(키워드명/'키워드') 비움(v4는 A가 앵커)
             moved = True
@@ -1416,6 +1418,9 @@ class OutputWorkbook:
             ws.delete_rows(last_data + 1, ws.max_row - last_data)
         maxc = ws.max_column
         t = ws.cell(1, 1)
+        # 제목에 계정명(계정ID, 없으면 사업자명) 표기 — 어느 시트인지 한눈에(소유자 2026-09-25)
+        _aid = self.account_id_of(ws.title) or ws.title
+        t.value = f"{config.SELDOC_SHEET_TITLE}(계정명 : {_aid})"
         t.font = sty.title_font
         t.alignment = sty.center
         t.border = Border(bottom=Side(style="medium"))
