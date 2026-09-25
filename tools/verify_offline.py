@@ -860,6 +860,51 @@ def t1_validate_multi_account():
     _ok("같은 사업자명 다계정ID=치명 아님·[SYNC] 병합 경고·단일계정 무경고(회귀 방지)")
 
 
+def t1_consolidate_multi_account():
+    print("[19] 일원화 다계정ID 인지 (_consolidate_renamed_accounts — 전 계정 한 이름 동의 시만 병합·발산=보류, 항목5)")
+    from coupang_analytics.input_list import Account, InputList
+    from coupang_analytics.pipeline import _consolidate_renamed_accounts
+
+    def _il(accts):
+        return InputList(accounts=accts, errors=[], struck=[],
+                         ledger_account_ids={a.account_id for a in accts})
+
+    # (A) 단일 계정 rename — 옛 시트 '이종훈'(oopean) → 대장 현재 이름 '원더폴리' 로 병합(회귀 방지)
+    wbA = OutputWorkbook.empty()
+    wbA.set_account_id("이종훈", "oopean")
+    wbA.ensure_product_block("이종훈", "옛상품", config.KIND_CONTRACT, ["kw"])
+    wbA.set_product_account_id("이종훈", "옛상품", "oopean")
+    renamedA = _consolidate_renamed_accounts(wbA, _il([Account("oopean", "이종훈", "원더폴리", [object()])]), lambda m: None)
+    assert "이종훈" not in wbA.account_sheets() and "원더폴리" in wbA.account_sheets(), wbA.account_sheets()
+    assert ("이종훈", "oopean") in renamedA, renamedA
+
+    # (B) 다계정ID·이름 안 바뀜 — 두 계정 모두 현재 이름 = 시트명 → 병합 없음
+    wbB = OutputWorkbook.empty()
+    for aid, prod in (("loum1", "상품1"), ("loum2", "상품2")):
+        wbB.set_account_id("로움컨설팅", aid)
+        wbB.ensure_product_block("로움컨설팅", prod, config.KIND_CONTRACT, ["kw"])
+        wbB.set_product_account_id("로움컨설팅", prod, aid)
+    renamedB = _consolidate_renamed_accounts(
+        wbB, _il([Account("loum1", "김", "로움컨설팅", [object()]), Account("loum2", "김", "로움컨설팅", [object()])]),
+        lambda m: None)
+    assert renamedB == [] and "로움컨설팅" in wbB.account_sheets(), (renamedB, wbB.account_sheets())
+
+    # (C) 다계정ID 발산 — 한 시트의 두 계정이 서로 다른 사업자명으로 → 자동 병합 보류 + [SYNC] 경고
+    wbC = OutputWorkbook.empty()
+    for aid, prod in (("x1", "p1"), ("x2", "p2")):
+        wbC.set_account_id("혼합상사", aid)
+        wbC.ensure_product_block("혼합상사", prod, config.KIND_CONTRACT, ["kw"])
+        wbC.set_product_account_id("혼합상사", prod, aid)
+    logs = []
+    renamedC = _consolidate_renamed_accounts(
+        wbC, _il([Account("x1", "a", "혼합상사", [object()]), Account("x2", "b", "갈라진상사", [object()])]),
+        logs.append)
+    assert renamedC == [], f"발산인데 병합됨: {renamedC}"
+    assert "혼합상사" in wbC.account_sheets() and "갈라진상사" not in wbC.account_sheets()
+    assert any("[SYNC]" in m and "갈림" in m for m in logs), f"[SYNC] 발산 경고 없음: {logs}"
+    _ok("단일 rename 병합(회귀)·다계정ID 무변경 무병합·발산=자동병합 보류+[SYNC] 경고")
+
+
 def t1_multi_account_grouping():
     print("[17] 사업자명 그룹핑 — 다계정ID 한 시트·상품별 계정ID·계정 단위 수집 스탬프 (항목5, 소유자 2026-09-25)")
     BIZ = "로움컨설팅"
@@ -1076,6 +1121,7 @@ def main():
     t1_merge_account()
     t1_multi_account_grouping()
     t1_validate_multi_account()
+    t1_consolidate_multi_account()
     t1_product_match_precision()
     t1_vid_source_option_split()
     t1_ledger_dedup()

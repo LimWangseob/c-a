@@ -1534,15 +1534,24 @@ def _consolidate_renamed_accounts(wb, input_list: InputList, log) -> list[tuple[
         return []
     renamed: list[tuple[str, str]] = []
     for biz in list(wb.account_sheets()):
-        aid = wb.account_id_of(biz)
-        target = target_of.get(aid) if aid else None
-        if not target or target.strip() == (biz or "").strip():
-            continue                                       # 대장에 없는 계정ID or 이미 현재 이름
-        old_name, old_aid = biz, aid
+        # 항목5: 한 시트에 계정ID가 여럿일 수 있다(다계정ID). 대장에 있는 계정ID들의 현재 사업자명(target)을 모은다.
+        sheet_aids = wb.account_ids_of(biz) or ([wb.account_id_of(biz)] if wb.account_id_of(biz) else [])
+        ledger_aids = [a for a in sheet_aids if a in target_of]
+        targets = {target_of[a] for a in ledger_aids}
+        if not targets:
+            continue                                       # 대장에 없는 계정(들) → 삭제 판정에 맡김
+        if len(targets) > 1:                               # 다계정ID 사업자가 서로 다른 이름으로 발산 → 자동 병합 위험
+            log(f"== [SYNC] [{biz}] 다계정ID가 서로 다른 사업자명으로 갈림({sorted(targets)}) — "
+                "자동 일원화 보류(수동 확인 필요) ==")
+            continue
+        target = next(iter(targets))
+        if target.strip() == (biz or "").strip():
+            continue                                       # 이미 현재 이름
         moved = wb.merge_account(biz, target)
         if moved:
-            renamed.append((old_name, old_aid))            # 옛 이름 = 구글시트에서 정리할 잔재
-            log(f"== [{old_name}] → [{target}] 일원화(계정ID {aid} 동일·시트명 변경) — 상품 {moved}개 이력 이관 ==")
+            for a in ledger_aids:                          # 옛 이름 잔재 = (옛사업자명, 각 계정ID) 전부(구글시트 정리)
+                renamed.append((biz, a))
+            log(f"== [{biz}] → [{target}] 일원화(계정ID {ledger_aids} 동일·시트명 변경) — 상품 {moved}개 이력 이관 ==")
     return renamed
 
 
