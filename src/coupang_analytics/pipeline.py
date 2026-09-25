@@ -1267,8 +1267,10 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
                         keywords_off=keywords_off, log=log, save_path=save_path, sale_status=sale_status,
                         vid_meta=vid_meta)
         for i, opt in enumerate(opts):
-            seen_products.append(_block_name(base, opt.label if multi else ""))
+            bname = _block_name(base, opt.label if multi else "")
+            seen_products.append(bname)
             _process_option(pctx, biz, product, base, kind, title, i, opt, multi)
+            wb.set_product_account_id(biz, bname, report_acc.account_id)   # 항목5: 상품별 계정ID 태깅(다계정ID 사업자)
     # 죽은 중복 블록 정리(안전 규칙): live 형제 있고 vid 가 상품조회서 소멸한 잔재만 삭제(reconcile 판매중지 표기 전)
     _sweep_dead_duplicates(wb, biz, live_vids, log)
     # 대장 대조: 이번 대장에 없던 마스터 블록 = 판매중지/삭제 표기(데이터 보존, 다시 나타나면 자동 해제)
@@ -1640,7 +1642,7 @@ def _finish(ctx: _RunCtx, a: Account, report_acc, metrics, inv_by_vid, inv_statu
                 log(f"  [{a.label}] 쿠팡 판매상태 {n_flag}개 상품 반영(대장=판매중지·쿠팡=판매중이면 경고 표시)")
     else:                                        # 대장 상품 0개 → Chrome 개방 생략, 시트도 생략
         log(f"  [{a.label}] 대장 상품 0개 — 시트·키워드·순위 생략")
-    wb.mark_sales_collected(a.label, ctx.col_label)   # 오늘 판매수집 완료 스탬프(같은 날 재실행 시 생략 근거)
+    wb.mark_sales_collected(a.account_id, ctx.col_label)   # 오늘 판매수집 완료 스탬프(계정 단위·항목5, 같은 날 재실행 시 생략 근거)
     ctx.done.add(a.account_id)                    # 이 계정 완료 확정
     _save_ctx_progress(ctx)
     wb.save(ctx.partial)
@@ -1661,7 +1663,7 @@ def _collect_session_first(ctx: _RunCtx, accounts, get_password
         if a.account_id in done:                  # 완료 계정 → 건너뜀
             log(f"== [{i}/{total}] {a.label} — 이미 완료, 건너뜀 ==")
             continue
-        if wb.has_sales(a.label, col_label):      # 오늘 판매수집 이미 완료(스탬프) → 로그인·수집 생략(재실행)
+        if wb.has_sales(a.account_id, col_label):  # 오늘 판매수집 이미 완료(계정 단위 스탬프·항목5) → 로그인·수집 생략(재실행)
             log(f"== [{i}/{total}] {a.label} — 오늘({col_label}) 판매수집 완료됨 → 로그인·수집 생략(재실행). "
                 "키워드는 미보유분만 보완·순위는 미기입분만 조회 ==")
             done.add(a.account_id)
@@ -1669,7 +1671,7 @@ def _collect_session_first(ctx: _RunCtx, accounts, get_password
             sales_skipped.append(a)
             continue
         if ctx.carry and wb.has_marketing():      # 마케팅 설정됐을 때만 주기 게이팅(미설정=현행 매일 유지)
-            due, why = wb.account_due(a.label, ctx.date_to)
+            due, why = wb.account_due(a.label, ctx.date_to, a.account_id)   # 항목5: 그 계정ID 상품만으로 판정
             if not due:
                 log(f"== [{i}/{total}] {a.label} — {why} → 오늘 수집 안 함(로그인 생략) ==")
                 done.add(a.account_id)            # 오늘은 의도적 스킵으로 '처리됨'(완주 판정·재개 일관)

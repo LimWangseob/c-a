@@ -841,6 +841,47 @@ def t1_merge_account():
     _ok("rename 분기·병합 분기(없는 상품만 이관·이력[순위/검색량/판매중지/판매] 보존·src 삭제·왕복 정합)")
 
 
+def t1_multi_account_grouping():
+    print("[17] 사업자명 그룹핑 — 다계정ID 한 시트·상품별 계정ID·계정 단위 수집 스탬프 (항목5, 소유자 2026-09-25)")
+    BIZ = "로움컨설팅"
+    wb = OutputWorkbook.empty()
+    # 같은 사업자명 + 다른 계정ID 2개 → 한 시트에 상품 병합(항목5 그룹키=사업자명)
+    for aid, prod in (("loum1", "상품1"), ("loum2", "상품2")):
+        wb.set_account_id(BIZ, aid)
+        wb.ensure_product_block(BIZ, prod, config.KIND_CONTRACT, ["kw"], registered=prod)
+        wb.set_product_vids(BIZ, prod, ["v_" + aid])
+        wb.set_product_account_id(BIZ, prod, aid)          # 상품별 계정ID 태깅
+        wb.mark_sales_collected(aid, "09.25")              # 계정 단위 수집 스탬프
+    # ① 한 시트로 그룹핑(사업자명 1개), 두 계정 상품이 한 시트에
+    assert wb.account_sheets().count(BIZ) == 1, "다계정ID가 한 사업자 시트로 안 묶임"
+    assert set(wb.products_of(BIZ)) == {"상품1", "상품2"}, wb.products_of(BIZ)
+    # ② 계정ID 집합 누적(덮어쓰기 아님)·첫 개 후방호환
+    assert wb.account_ids_of(BIZ) == ["loum1", "loum2"], wb.account_ids_of(BIZ)
+    assert wb.account_id_of(BIZ) == "loum1", "account_id_of=첫 계정ID(후방호환)"
+    # ③ 상품별 계정ID 정확
+    assert wb.product_account_id(BIZ, "상품1") == "loum1" and wb.product_account_id(BIZ, "상품2") == "loum2"
+    # ④ 계정 단위 스탬프 — 첫 계정 수집돼도 둘째 계정은 '미완료'(예전 사업자단위 스킵 버그 해결)
+    assert wb.has_sales("loum1", "09.25") is True, "loum1 스탬프 유실"
+    assert wb.has_sales("loum2", "09.25") is True, "loum2 스탬프 유실"
+    wb2b = OutputWorkbook.empty()
+    wb2b.set_account_id(BIZ, "onlyA"); wb2b.set_account_id(BIZ, "onlyB")
+    wb2b.mark_sales_collected("onlyA", "09.25")            # A만 수집
+    assert wb2b.has_sales("onlyA", "09.25") and not wb2b.has_sales("onlyB", "09.25"), \
+        "계정 단위 스탬프 실패(둘째 계정이 이미완료로 오판)"
+    # ⑤ 저장/재로드 왕복 — 계정ID 집합·상품별 계정ID·스탬프 보존
+    d = Path(tempfile.mkdtemp()); path = d / "그룹핑.xlsx"
+    wb.apply_style(); wb.save(path)
+    wb2 = OutputWorkbook.load(path)
+    assert wb2.account_ids_of(BIZ) == ["loum1", "loum2"], "재로드 후 계정ID 집합 유실"
+    assert wb2.product_account_id(BIZ, "상품2") == "loum2", "재로드 후 상품별 계정ID 유실"
+    assert wb2.has_sales("loum2", "09.25"), "재로드 후 계정 스탬프 유실"
+    assert BIZ in wb2.account_sheets() and "_수집스탬프" not in wb2.account_sheets(), "스탬프 시트가 계정시트로 노출"
+    # ⑥ delete_account = 그 사업자 계정ID 스탬프도 정리
+    wb2.delete_account(BIZ)
+    assert not wb2.has_sales("loum1", "09.25") and not wb2.has_sales("loum2", "09.25"), "삭제 후 스탬프 잔존"
+    _ok("다계정ID 한 시트·계정ID 집합 누적·상품별 계정ID·계정 단위 스탬프(둘째 계정 버그 해결)·왕복·삭제 정리")
+
+
 def t1_promo_effect():
     print("[13] 체험단효과(promo_effect) — 시작일 직전값→최신값 점 비교·최고순위·판정색")
     wb = OutputWorkbook.empty()
@@ -1008,6 +1049,7 @@ def main():
     t1_representative_column()
     t1_delete_account()
     t1_merge_account()
+    t1_multi_account_grouping()
     t1_product_match_precision()
     t1_vid_source_option_split()
     t1_ledger_dedup()

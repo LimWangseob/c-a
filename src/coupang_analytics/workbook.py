@@ -121,12 +121,13 @@ _LABEL_KEYWORD = "키워드"
 _LABEL_SEARCH = "검색량"
 _LABEL_NOTE = "비고"
 _ALL_METRICS = frozenset(config.CONTRACT_METRICS + config.PERSONAL_METRICS)
-_META_SHEET = "_상품ID"   # 숨김 시트: (사업자,상품)→등록상품명·판매상태·제목캐시. ⚠vid(3열)는 폐지—vid 출처=헤더 이름칸(A)
+_META_SHEET = "_상품ID"   # 숨김 시트: (사업자,상품)→등록상품명·판매상태·제목캐시·**계정ID(col12, 항목5 상품별)**. ⚠vid(3열)는 폐지—vid 출처=헤더 이름칸(A)
 _INDEX_SHEET = "계정 목록"  # 첫 시트: 전 계정(사업자) 목록 + 하이퍼링크 점프 + 요약(계정 100개도 탐색 쉽게)
-_ACCT_SHEET = "_계정정보"  # 숨김 시트: (사업자)→계정ID 매핑. 목차에 계정ID 표시용(⚠ 비밀번호는 절대 저장 안 함)
+_ACCT_SHEET = "_계정정보"  # 숨김 시트: (사업자)→계정ID **집합**(항목5: 한 사업자 다계정ID 허용, ' / ' 조인). 목차 표시용(⚠ 비밀번호 절대 저장 안 함)
+_STAMP_SHEET = "_수집스탬프"  # 숨김 시트: (계정ID)→판매수집일. **계정 단위**(항목5: 다계정ID 사업자에서 계정마다 따로 수집 판정, 소유자 2026-09-25)
 _MKT_SHEET = "_마케팅"     # 숨김 시트: (사업자,상품)→마케팅 시작·종료·모니터링종료. 계정목록 입력을 보존(재생성돼도 유지)
 _DISC_SHEET = "_중단"      # 숨김 시트: (사업자,상품) 판매중지/삭제(대장에서 사라짐) 표기. 데이터는 보존, 표시만 구분
-_SPECIAL_SHEETS = (_META_SHEET, _INDEX_SHEET, _ACCT_SHEET, _MKT_SHEET, _DISC_SHEET)
+_SPECIAL_SHEETS = (_META_SHEET, _INDEX_SHEET, _ACCT_SHEET, _STAMP_SHEET, _MKT_SHEET, _DISC_SHEET)
 _MKT_COLS = ("체험단 시작일", "체험단 종료일", "모니터링 종료일")   # 계정목록 편집 열(직원 입력 = 체험단 기간)
 _MKT_COLS_LEGACY0 = "마케팅 시작일"   # 옛 라벨('마케팅 시작일') — 기존 마스터 계정목록에서 값 회수 시 인식용
 
@@ -253,7 +254,7 @@ class OutputWorkbook:
                     if vs:
                         meta_vids[(b, p)] = vs
         for ws in self.wb.worksheets:
-            if ws.title in (_INDEX_SHEET, _ACCT_SHEET, _MKT_SHEET, _DISC_SHEET):  # 특수시트 = 데이터 아님
+            if ws.title in (_INDEX_SHEET, _ACCT_SHEET, _STAMP_SHEET, _MKT_SHEET, _DISC_SHEET):  # 특수시트 = 데이터 아님
                 continue
             if ws.title == _META_SHEET:                 # 상품ID 매핑 시트 → 행 인덱스만 복원
                 for r in range(2, ws.max_row + 1):
@@ -346,7 +347,10 @@ class OutputWorkbook:
                 if s not in _SPECIAL_SHEETS and s.replace(" ", "") != idx_norm]
 
     def set_account_id(self, biz: str, account_id: str) -> None:
-        """(사업자)→계정ID 를 숨김 시트에 저장(목차 표시용). ⚠ 비밀번호는 저장하지 않는다."""
+        """(사업자)→계정ID **집합**에 누적(항목5: 한 사업자 다계정ID 허용, 소유자 2026-09-25). 목차 표시용.
+
+        ⚠ 예전엔 사업자당 계정ID 1개를 **덮어썼다**(다계정ID면 마지막 것만 남음). 이제 같은 사업자명에 여러
+        계정ID가 오면 col2 에 ' / ' 로 **집합 누적**한다(중복 제거·등장 순서 보존). 비밀번호는 저장하지 않는다."""
         aid = _norm(account_id)
         if not aid:
             return
@@ -358,19 +362,27 @@ class OutputWorkbook:
             ws.cell(1, 1, "사업자"); ws.cell(1, 2, "계정ID")
         for r in range(2, ws.max_row + 1):
             if _norm(ws.cell(r, 1).value) == biz:
-                ws.cell(r, 2, aid); return
+                cur = [x.strip() for x in _norm(ws.cell(r, 2).value).split("/") if x.strip()]
+                if aid not in cur:
+                    cur.append(aid)
+                ws.cell(r, 2, " / ".join(cur)); return
         row = ws.max_row + 1
         ws.cell(row, 1, biz); ws.cell(row, 2, aid)
 
-    def account_id_of(self, biz: str) -> str:
-        """저장된 계정ID(없으면 '')."""
+    def account_ids_of(self, biz: str) -> list[str]:
+        """그 사업자에 저장된 계정ID **목록**(등장 순서, 없으면 빈 리스트). 항목5 다계정ID 지원."""
         if _ACCT_SHEET not in self.wb.sheetnames:
-            return ""
+            return []
         ws = self.wb[_ACCT_SHEET]
         for r in range(2, ws.max_row + 1):
             if _norm(ws.cell(r, 1).value) == biz:
-                return _norm(ws.cell(r, 2).value)
-        return ""
+                return [x.strip() for x in _norm(ws.cell(r, 2).value).split("/") if x.strip()]
+        return []
+
+    def account_id_of(self, biz: str) -> str:
+        """저장된 **첫** 계정ID(없으면 ''). 다계정ID 사업자는 `account_ids_of` 로 전체를 얻는다(후방호환=첫 개)."""
+        ids = self.account_ids_of(biz)
+        return ids[0] if ids else ""
 
     def set_representative(self, biz: str, representative: str) -> None:
         """(사업자)→대표자명 을 숨김 계정정보 시트 **4열**에 저장(계정목록 대표자 컬럼 표시용).
@@ -404,46 +416,49 @@ class OutputWorkbook:
                 return _norm(ws.cell(r, 4).value)
         return ""
 
-    def mark_sales_collected(self, biz: str, date_label: str) -> None:
-        """이 계정의 '판매수집 완료(오늘=date_label 컬럼)' 스탬프를 숨김 계정정보 시트 3열에 기록.
+    def _stamp_ws(self):
+        """판매수집 스탬프 숨김 시트(없으면 생성). (계정ID)→판매수집일 — **계정 단위**(항목5)."""
+        if _STAMP_SHEET in self.wb.sheetnames:
+            return self.wb[_STAMP_SHEET]
+        ws = self.wb.create_sheet(_STAMP_SHEET)
+        ws.sheet_state = "hidden"
+        ws.cell(1, 1, "계정ID"); ws.cell(1, 2, "판매수집일")
+        return ws
+
+    def mark_sales_collected(self, account_id: str, date_label: str) -> None:
+        """이 **계정(계정ID)** 의 '판매수집 완료(오늘=date_label 컬럼)' 스탬프를 숨김 `_수집스탬프` 시트에 기록.
 
         판매지표는 0/공란도 정상(판매데이터 없음)이라 값으로 '수집됨'을 판정할 수 없으므로, **명시적 스탬프**로
         기록한다. 같은 날 재실행이 이 스탬프를 보고 그 계정의 로그인·수집을 생략한다(진행파일이 지워져도 마스터에
-        영속). date_label 은 워크북 일자 컬럼 라벨(yy.mm.dd 또는 from~to)과 동일 문자열."""
-        label = _norm(date_label)
-        if not label:
+        영속). **항목5(소유자 2026-09-25): 스탬프 키=계정ID**(사업자 아님) — 한 사업자 다계정ID면 계정마다
+        따로 수집 판정(예전 사업자 단위는 둘째 계정이 '이미 완료'로 스킵되던 버그). date_label 은 워크북 일자
+        컬럼 라벨(yy.mm.dd 또는 from~to)과 동일 문자열."""
+        aid, label = _norm(account_id), _norm(date_label)
+        if not (aid and label):
             return
-        if _ACCT_SHEET in self.wb.sheetnames:
-            ws = self.wb[_ACCT_SHEET]
-        else:
-            ws = self.wb.create_sheet(_ACCT_SHEET)
-            ws.sheet_state = "hidden"
-            ws.cell(1, 1, "사업자"); ws.cell(1, 2, "계정ID")
-        if _norm(ws.cell(1, 3).value) != "판매수집일":
-            ws.cell(1, 3, "판매수집일")
+        ws = self._stamp_ws()
         for r in range(2, ws.max_row + 1):
-            if _norm(ws.cell(r, 1).value) == biz:
-                ws.cell(r, 3, label); return
+            if _norm(ws.cell(r, 1).value) == aid:
+                ws.cell(r, 2, label); return
         row = ws.max_row + 1
-        ws.cell(row, 1, biz); ws.cell(row, 3, label)
+        ws.cell(row, 1, aid); ws.cell(row, 2, label)
 
-    def sales_collected_on(self, biz: str) -> str:
-        """그 계정에 마지막으로 기록된 판매수집일 라벨(없으면 '')."""
-        if _ACCT_SHEET not in self.wb.sheetnames:
+    def sales_collected_on(self, account_id: str) -> str:
+        """그 **계정(계정ID)** 에 마지막으로 기록된 판매수집일 라벨(없으면 '')."""
+        aid = _norm(account_id)
+        if not aid or _STAMP_SHEET not in self.wb.sheetnames:
             return ""
-        ws = self.wb[_ACCT_SHEET]
-        if _norm(ws.cell(1, 3).value) != "판매수집일":
-            return ""
+        ws = self.wb[_STAMP_SHEET]
         for r in range(2, ws.max_row + 1):
-            if _norm(ws.cell(r, 1).value) == biz:
-                return _norm(ws.cell(r, 3).value)
+            if _norm(ws.cell(r, 1).value) == aid:
+                return _norm(ws.cell(r, 2).value)
         return ""
 
-    def has_sales(self, biz: str, date_label: str) -> bool:
-        """그 계정의 판매수집이 date_label(오늘 컬럼) 기준으로 이미 완료됐는가(재실행 스킵 근거).
+    def has_sales(self, account_id: str, date_label: str) -> bool:
+        """그 **계정(계정ID)** 의 판매수집이 date_label(오늘 컬럼) 기준으로 이미 완료됐는가(재실행 스킵 근거).
 
         다른 날 라벨이면 False(자동으로 그날 새로 수집) → 날짜가 바뀌면 스탬프가 달라 재수집된다."""
-        return bool(_norm(date_label)) and self.sales_collected_on(biz) == _norm(date_label)
+        return bool(_norm(date_label)) and self.sales_collected_on(account_id) == _norm(date_label)
 
     def is_rank_filled(self, biz: str, product: str, keyword: str, date_iso: str) -> bool:
         row = self._kw_row.get((biz, product, keyword))
@@ -455,15 +470,15 @@ class OutputWorkbook:
         return self.wb[biz].cell(row=row, column=col).value not in (None, "", "-")
 
     def clear_sales_stamps(self) -> int:
-        """모든 계정의 '판매수집 완료' 스탬프(`_계정정보` 3열)를 해제 → '오늘 처음(다시)' 재수집 시
+        """모든 계정의 '판매수집 완료' 스탬프(`_수집스탬프` 시트)를 해제 → '오늘 처음(다시)' 재수집 시
         오늘 이미 완료한 계정도 다시 수집(has_sales 가 False 가 됨). 해제한 계정 수 반환."""
-        if _ACCT_SHEET not in self.wb.sheetnames:
+        if _STAMP_SHEET not in self.wb.sheetnames:
             return 0
-        ws = self.wb[_ACCT_SHEET]
+        ws = self.wb[_STAMP_SHEET]
         n = 0
         for r in range(2, ws.max_row + 1):
-            if _norm(ws.cell(r, 3).value):
-                ws.cell(r, 3).value = None
+            if _norm(ws.cell(r, 2).value):
+                ws.cell(r, 2).value = None
                 n += 1
         return n
 
@@ -854,6 +869,7 @@ class OutputWorkbook:
         ws.cell(1, 9, "로켓그로스판매일")   # saleStartedAt(판매일 근사) — 헤더 표시용, 판매자배송은 공란
         ws.cell(1, 10, "최근입고요약")   # 관리대장 입고 요약(요청/작업/박스/파레트/완료/출고) — 헤더 로켓그로스 묶음
         ws.cell(1, 11, "판매방식")   # 구분(로켓그로스/판매자배송/둘다) — 레이아웃 v4 헤더 '판매방식' 줄 표시용(표시 전용·인덱스 아님)
+        ws.cell(1, 12, "계정ID")   # 상품 소속 계정ID(항목5: 시트=사업자명, 다계정ID면 상품마다 어느 계정인지 태깅)
         return ws
 
     def set_product_extra(self, biz: str, product: str, sale_price=None, inbound_date=None,
@@ -907,6 +923,29 @@ class OutputWorkbook:
         if row is None or _META_SHEET not in self.wb.sheetnames:
             return ""
         return _norm(self.wb[_META_SHEET].cell(row, 11).value)
+
+    def set_product_account_id(self, biz: str, product: str, account_id: str) -> None:
+        """상품(줄)의 **소속 계정ID**를 숨김 메타시트 12열에 저장(항목5 소유자 2026-09-25).
+
+        시트는 사업자명 단위인데 한 사업자에 계정ID가 여럿일 수 있어(다계정ID), **어느 계정에서 온 상품인지**를
+        상품 속성으로 태깅한다. 계정목록(구글시트/엑셀) 계정ID 열·안정키가 이 값을 읽는다. 빈값이면 no-op(기존 보존)."""
+        biz, product, aid = _norm(biz), _key(product), _norm(account_id)
+        if not (biz and product and aid):
+            return
+        ws = self._meta_ws()
+        row = self._vid_row.get((biz, product))
+        if row is None:
+            row = ws.max_row + 1
+            ws.cell(row, 1, biz); ws.cell(row, 2, product)
+            self._vid_row[(biz, product)] = row
+        ws.cell(row, 12, aid)
+
+    def product_account_id(self, biz: str, product: str) -> str:
+        """저장된 상품 소속 계정ID(없으면 '' — 옛 마스터·미태깅). 계정목록 계정ID 열의 상품별 소스."""
+        row = self._vid_row.get((_norm(biz), _key(product)))
+        if row is None or _META_SHEET not in self.wb.sheetnames:
+            return ""
+        return _norm(self.wb[_META_SHEET].cell(row, 12).value)
 
     def set_product_vids(self, biz: str, product: str, vids) -> None:
         """상품의 고유ID(vendorItemId) 목록을 저장(③ 순위조회의 상품 매칭용).
@@ -1821,10 +1860,12 @@ class OutputWorkbook:
 
         ⚠ **되돌릴 수 없음**(그 사업자 통계 이력 소멸). 관리대장에 '상태=판매중지'로 **남아있는** 것과는 다르다
         (그건 유지+경고). 호출부(pipeline)가 '관리대장에 계정ID가 아예 없음'을 확인한 뒤에만 호출한다.
-        지운 게 있으면 True. `_계정정보`·`_상품ID`·`_중단`·`_마케팅`의 해당 사업자 행도 모두 제거한다."""
+        지운 게 있으면 True. `_계정정보`·`_상품ID`·`_중단`·`_마케팅`의 해당 사업자 행 + `_수집스탬프`의 그
+        사업자 계정ID 행도 모두 제거한다."""
         biz = _norm(biz)
         if not biz:
             return False
+        acct_ids = set(self.account_ids_of(biz))    # 스탬프(계정ID 키) 정리용 — 사업자행 삭제 전에 확보
         removed = False
         if biz in self.wb.sheetnames and biz not in _SPECIAL_SHEETS:
             del self.wb[biz]
@@ -1836,6 +1877,12 @@ class OutputWorkbook:
             for r in range(ws.max_row, 1, -1):          # 아래→위(삭제 시 인덱스 안정)
                 if _norm(ws.cell(r, 1).value) == biz:
                     ws.delete_rows(r)
+                    removed = True
+        if acct_ids and _STAMP_SHEET in self.wb.sheetnames:   # 계정 단위 수집 스탬프(계정ID 키) 정리
+            sws = self.wb[_STAMP_SHEET]
+            for r in range(sws.max_row, 1, -1):
+                if _norm(sws.cell(r, 1).value) in acct_ids:
+                    sws.delete_rows(r)
                     removed = True
         if removed:
             self._reindex()
@@ -1849,6 +1896,7 @@ class OutputWorkbook:
         self.ensure_product_block(dst, product, kind, keywords, registered=reg)
         self.set_product_vids(dst, product, self.product_vids(src, product))
         self.set_product_kind(dst, product, kind)
+        self.set_product_account_id(dst, product, self.product_account_id(src, product))   # 항목5 상품별 계정ID 이관
         self.set_sale_status(dst, product, self.sale_status(src, product))
         self.set_discontinued(dst, product, self.is_discontinued(src, product))
         ms, me, mm = self.marketing_of(src, product)
@@ -2027,9 +2075,16 @@ class OutputWorkbook:
             return False, f"3일 주기(최근 {self.product_latest_date(biz, product)})"
         return True, "3일 주기 도래"
 
-    def account_due(self, biz: str, target_iso: str) -> tuple[bool, str]:
-        """오늘 이 **계정**에 로그인할지(=상품이 하나라도 수집 대상). 로그인은 계정 단위라 OR 로 집계."""
+    def account_due(self, biz: str, target_iso: str, account_id: str = "") -> tuple[bool, str]:
+        """오늘 이 **계정**에 로그인할지(=상품이 하나라도 수집 대상). 로그인은 계정 단위라 OR 로 집계.
+
+        account_id 를 주면(항목5 다계정ID) 그 사업자 시트 상품 중 **그 계정ID 소속 상품만**으로 판정한다
+        (상품별 계정ID 태깅=`product_account_id`). 미태깅 상품(옛 마스터·판매자배송)은 포함(보수적으로 수집).
+        account_id 없으면 사업자 전체 상품(후방호환)."""
+        aid = _norm(account_id)
         prods = self.products_of(biz)
+        if aid:
+            prods = [p for p in prods if self.product_account_id(biz, p) in ("", aid)]
         if not prods:
             return True, "신규/상품없음(수집 시도)"
         for p in prods:
