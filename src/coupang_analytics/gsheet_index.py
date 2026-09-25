@@ -416,14 +416,15 @@ def roster_from_workbook(wb, stats_gids: dict[str, int]) -> list[IndexRow]:
     - B 하이퍼링크 = 그 사업자 통계 시트 gid(`stats_gids`) + 블록 헤더행(있을 때만).
     """
     rows: list[IndexRow] = []
-    band_by_acct: dict[str, int] = {}                # **계정ID** 등장 순서 → 밴드 인덱스(계정ID별 바탕색, 2026-09-17)
+    band_by_biz: dict[str, int] = {}                 # **사업자명** 등장 순서 → 밴드 인덱스(항목5: 사업자별 바탕색·다계정ID=한 밴드)
     for biz, prod, hdr, has_sheet in wb.product_roster():
-        acct = wb.account_id_of(biz)
+        # 항목5: 계정ID = 상품(줄) 속성(다계정ID 사업자). 상품별 계정ID 우선, 없으면 사업자 첫 계정ID 폴백.
+        acct = (wb.product_account_id(biz, prod) if prod else "") or wb.account_id_of(biz)
         registered = wb.registered_name(biz, prod) or prod
         key = marketing_key(acct, registered)
         linkable = bool(has_sheet and prod and hdr)
         gid = stats_gids.get(biz) if linkable else None
-        band = band_by_acct.setdefault(acct or biz, len(band_by_acct))   # 계정ID 기준(없으면 사업자 폴백)
+        band = band_by_biz.setdefault(biz, len(band_by_biz))   # 사업자명 기준(항목5: 같은 사업자 다계정ID=한 밴드색)
         effect, verdict = wb.promo_effect(biz, prod) if has_sheet else ("", "")   # 체험단효과(시작일 직전→최신)
         rows.append(IndexRow(business=biz, product=prod, account_id=acct,
                              status=wb.status_of(biz, prod, has_sheet), key=key,

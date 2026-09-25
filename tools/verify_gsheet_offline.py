@@ -449,6 +449,40 @@ def t6_roster_from_workbook() -> None:
     _ok("노출명·안정키·통계링크 + 행 전체 사업자 밴드색(A~G, D~F는 값 보존한 채 배경만)")
 
 
+def t6b_multi_account_roster() -> None:
+    print("[6b] roster 다계정ID — 상품별 계정ID·사업자명 기준 밴드(한 사업자=한 밴드, 항목5)")
+    BIZ = "로움컨설팅"
+    wb = OutputWorkbook.empty()
+    wb.set_representative(BIZ, "김대표")
+    for aid, prod in (("loum1", "상품1"), ("loum2", "상품2")):
+        wb.set_account_id(BIZ, aid)
+        wb.ensure_product_block(BIZ, prod, config.KIND_CONTRACT, ["kw"], registered=prod)
+        wb.set_product_vids(BIZ, prod, ["v_" + aid])
+        wb.set_product_account_id(BIZ, prod, aid)
+        wb.set_keyword_rank(BIZ, prod, "kw", "2026-09-25", 3)
+    # 다른 사업자 하나 더(밴드가 사업자별로 달라지는지)
+    wb.set_account_id("다른상사", "other1")
+    wb.ensure_product_block("다른상사", "상품X", config.KIND_CONTRACT, ["kw"], registered="상품X")
+    wb.set_product_account_id("다른상사", "상품X", "other1")
+    wb.set_keyword_rank("다른상사", "상품X", "kw", "2026-09-25", 1)
+    wb.apply_style()
+    roster = gi.roster_from_workbook(wb, {})
+    loum = [r for r in roster if r.business == BIZ and r.product]
+    other = [r for r in roster if r.business == "다른상사" and r.product]
+    # ① 상품별 계정ID = 각자 소속(덮어쓰기 아님)
+    by_prod = {r.product: r.account_id for r in loum}
+    assert by_prod == {"상품1": "loum1", "상품2": "loum2"}, by_prod
+    # ② 같은 사업자 다계정ID = 한 밴드(색), 상품 2줄 동일 밴드
+    loum_bands = {r.band for r in loum}
+    assert len(loum_bands) == 1, f"다계정ID가 한 밴드로 안 묶임: {loum_bands}"
+    # ③ 다른 사업자는 다른 밴드
+    assert other[0].band != loum[0].band, "다른 사업자인데 같은 밴드"
+    # ④ 안정키 = 상품별 계정ID + 등록명(상품마다 구분)
+    assert by_prod["상품1"] != by_prod["상품2"]
+    assert loum[0].key == gi.marketing_key("loum1", "상품1"), loum[0].key
+    _ok("상품별 계정ID·같은 사업자 다계정ID=한 밴드·다른 사업자=다른 밴드·안정키 계정ID별 구분")
+
+
 def _grow(c="", g=""):
     """통계 시트 한 행(0-based 격자) — C(3열=index2)=이름, G(7열=index6)=지표."""
     r = [""] * 7
@@ -563,7 +597,8 @@ def t8_exec_retry() -> None:
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
     for fn in (t1_ledger_rows, t1b_ledger_strike, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
-               t3d_grid_autogrow, t3c_delete_accounts, t3e_delete_renamed, t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook, t7_staff_keywords_merge,
+               t3d_grid_autogrow, t3c_delete_accounts, t3e_delete_renamed, t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook,
+               t6b_multi_account_roster, t7_staff_keywords_merge,
                t8_exec_retry):
         fn()
     print("=== 전부 통과 ===")
