@@ -1843,17 +1843,34 @@ class OutputWorkbook:
                 return True
         return False
 
-    def reconcile_account(self, biz: str, seen_products) -> list[str]:
-        """대장 대조: 그 계정의 마스터 블록 중 이번 대장에 **없는** 상품 = 판매중지 표기, 있는 것은 해제.
-        seen_products = 이번 실행에서 대장에 존재한 상품(블록명, vid 앵커로 해석된 pname) 집합. 반환=새로 중지된 상품."""
+    def reconcile_account(self, biz: str, seen_products, ledger_products=None,
+                          delete_missing: bool = False) -> tuple[list[str], list[str]]:
+        """대장 대조: 그 계정의 마스터 블록을 관리대장과 맞춘다. 반환=(새로 판매중지된 상품, 완전삭제된 상품).
+
+        - seen_products = 이번 대장에 **활성**으로 존재한 상품(블록명·vid 앵커로 해석). 여기 있으면 판매중지 해제.
+        - **항목⑥(소유자 2026-09-25)**: `delete_missing=True`면 **관리대장에서 줄이 완전히 사라진 상품**(활성도
+          아니고 `ledger_products`(줄 존재 전체=활성+판매중지/취소선)에도 없음) = **이력 포함 완전삭제**(백업이
+          안전망). 대장에 **판매중지/취소선으로 남은(줄 존재)** 상품은 삭제하지 않고 **판매중지 표기 유지**.
+          ⚠ `ledger_products` 가 비면(데이터 미전달) 완전삭제를 **건너뛴다**(대량 오삭제 방지 — 무결성 안전장치,
+          소유자가 거부한 '수집 실패 가드'와는 별개). delete_missing=False(기본)는 옛 동작=전부 판매중지 표기."""
         seen = {_key(p) for p in seen_products}
+        ledger = {_key(p) for p in (ledger_products or [])}
         newly: list[str] = []
-        for p in self.products_of(biz):
-            gone = p not in seen
-            if gone and not self.is_discontinued(biz, p):
-                newly.append(p)
-            self.set_discontinued(biz, p, gone)
-        return newly
+        deleted: list[str] = []
+        for p in list(self.products_of(biz)):
+            if p in seen:
+                self.set_discontinued(biz, p, False)               # 대장에 활성 → 판매중지 해제
+                continue
+            base = self.registered_name(biz, p) or p                # 옵션 블록('등록명 (옵션)')은 등록명으로도 대조
+            in_ledger = bool(ledger) and (p in ledger or base in ledger)
+            if delete_missing and ledger and not in_ledger:        # 줄이 사라짐 → 완전삭제(⑥)
+                if self.delete_product_block(biz, p):
+                    deleted.append(p)
+            else:                                                   # 줄 존재하나 비활성 → 판매중지 표기(유지)
+                if not self.is_discontinued(biz, p):
+                    newly.append(p)
+                self.set_discontinued(biz, p, True)
+        return newly, deleted
 
     def delete_account(self, biz: str) -> bool:
         """관리대장에서 **줄이 완전히 사라진 계정**을 결과에서 완전 삭제 — 시트(시계열 이력)+모든 메타행.

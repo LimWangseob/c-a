@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: d8c440ae-0a9a-47f8-a6d2-d96209afecc7
-  modified: 2026-09-25T13:58:20.391Z
+  modified: 2026-09-25T14:22:52.426Z
 ---
 
 **소유자 요구(2026-09-25, 이미지=로움컨설팅 2계정ID 예시) 9건**. 정밀분석+적용방안 확정, **구현은 미착수**(항목5=아키텍처라 새 세션·핀 먼저). 진행순서 소유자 확정=**⑤(그룹핑) 먼저**, 그룹키=**사업자명만 같으면 한 그룹**.
@@ -25,6 +25,13 @@ S1~S5 커밋(master)·핀 verify_offline[17·18·19]·verify_gsheet[6b]·게이�
 - gsheet 계정목록: 한 사업자=밴드 1색, 각 상품 줄에 그 상품의 계정ID(항목4 열순서와 함께). `delete_accounts`/`delete_renamed_accounts`/band를 **사업자 기준**으로 재설계(계정ID는 상품속성).
 - ⚠**오늘 만든 일원화와 충돌 조정 필요**: 사업자명 기준이 되면 "시트명 변경(계정ID 동일)" 일원화 로직과 겹침 → 재정의(사업자명=키라 rename 개념 달라짐).
 - **핀 먼저**: pin_apply_style·verify_offline·verify_gsheet에 "다계정ID 사업자=한 시트·상품별 계정ID·목록 한 밴드" 시나리오 추가 후 분해.
+
+## ✅ 진행(2026-09-25, master 커밋·게이트6+복잡도 초록·라이브 남음)
+- **⑤ 완료** — [[feature-business-name-grouping]] (S1~S5).
+- **①②③ 프리플라이트 완료**: ①백업(`backup_sources`)은 이미 모든 실행 시작부에 있음(유지). ②③ `pipeline.preflight_sync_check`(run_full 수집 직전·읽기전용 `[SYNC]`): 신규(대장O·결과X)·삭제예정(결과O·대장X)·사업자명 변경(일원화 예정)·취소선. 불일치 기준=관리대장. 핀 verify_offline[20].
+- **⑥ 완료(정책 전환)**: 관리대장에서 **줄 사라진 상품=이력 완전삭제**(소유자: 줄 사라진 상품도 삭제·가드 없이). 판매중지/취소선으로 **남은(줄 존재)**=유지. `Account.ledger_products`(줄 존재 전체)+`reconcile_account(...,delete_missing=True)`→(newly,deleted). 무결성 안전장치=ledger 비면 삭제 스킵. `_sweep_dead_duplicates`(API vanish) 미접촉. 핀 verify_offline[21].
+- **⑦⑧ 재검증 완료**: ⑦ `status_of`=대장 상태만(현행 이미 정합·쿠팡 미반영) ⑧ 이중 표기(계정목록=대장·`M_SALE_STATUS` 지표행=쿠팡·독립). 코드 변경 없이 핀 verify_offline[22]로 고정. 운용 PC 옛 코드면 재배포로 해소.
+- **다음 = ⑨(키워드 1건이라도=담당자·가변개수) → ④(계정목록 열순서/폭)**.
 
 ## 나머지 8건 현행/방안(요약)
 - **①②③ 시작 프리플라이트**: 앱 시작 첫 루틴에 (a)2파일 백업[`backup_sources` 이미 있음·호출시점을 앱시작으로] (b)관리대장↔결과 싱크체크(계정·사업자·취소선·상품명 유사도[product_match 이미 있음]) `[SYNC]` 로그. 불일치=관리대장 기준(⑥·⑦).

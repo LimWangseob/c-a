@@ -905,6 +905,50 @@ def t1_consolidate_multi_account():
     _ok("단일 rename 병합(회귀)·다계정ID 무변경 무병합·발산=자동병합 보류+[SYNC] 경고")
 
 
+def t1_ledger_removal_delete():
+    print("[21] ⑥ 이력무관 완전삭제 — 줄 사라진 상품=삭제·판매중지로 남은(줄 존재)=유지 (소유자 2026-09-25)")
+    BIZ = "삭제테스트"
+    wb = OutputWorkbook.empty()
+    for prod in ("상품활성", "상품판매중지", "상품삭제"):
+        wb.ensure_product_block(BIZ, prod, config.KIND_CONTRACT, ["kw"], registered=prod)
+        wb.set_product_vids(BIZ, prod, ["v_" + prod])
+        wb.set_keyword_rank(BIZ, prod, "kw", "2026-09-25", 3)
+    # seen=활성만 · ledger(줄 존재)=활성+판매중지(삭제는 줄 사라짐=없음) · delete_missing
+    newly, deleted = wb.reconcile_account(BIZ, ["상품활성"], {"상품활성", "상품판매중지"}, delete_missing=True)
+    assert deleted == ["상품삭제"], f"줄 사라진 상품 완전삭제 실패: {deleted}"
+    assert "상품삭제" not in wb.products_of(BIZ), "삭제 상품 블록 잔존"
+    assert newly == ["상품판매중지"], f"판매중지로 남은 상품 표기 실패: {newly}"
+    assert wb.is_discontinued(BIZ, "상품판매중지") and not wb.is_discontinued(BIZ, "상품활성")
+    assert "상품판매중지" in wb.products_of(BIZ), "판매중지(줄 존재) 상품이 삭제됨(유지 위반)"
+    # 무결성 안전장치: ledger_products 비면(데이터 미전달) 완전삭제 스킵 → 판매중지 표기(대량 오삭제 방지)
+    wb2 = OutputWorkbook.empty()
+    wb2.ensure_product_block(BIZ, "상품X", config.KIND_CONTRACT, ["kw"], registered="상품X")
+    wb2.set_product_vids(BIZ, "상품X", ["vX"])
+    n2, d2 = wb2.reconcile_account(BIZ, [], None, delete_missing=True)   # ledger 비어있음
+    assert d2 == [] and "상품X" in wb2.products_of(BIZ), f"빈 ledger 안전장치 실패(오삭제): {d2}"
+    assert n2 == ["상품X"], "빈 ledger → 판매중지 표기로 폴백해야"
+    _ok("줄 사라진 상품=완전삭제·판매중지(줄 존재)=유지·빈 ledger 안전장치(오삭제 방지)")
+
+
+def t1_dual_status_source():
+    print("[22] ⑦⑧ 이중 상태 표기 — 계정목록/비고=대장 상태·판매상태 지표행=쿠팡 상태(독립)")
+    BIZ = "상태테스트"
+    wb = OutputWorkbook.empty()
+    wb.ensure_product_block(BIZ, "상품", config.KIND_CONTRACT, ["kw"], registered="상품")
+    wb.set_product_vids(BIZ, "상품", ["vv"])
+    # ⑦ 계정목록 상태 = 대장 상태만: 대장에서 빠져 판매중지(reconcile) → status_of='⛔ 판매중지'
+    wb.reconcile_account(BIZ, [], {"상품"})    # 줄 존재하나 비활성 → 판매중지 표기(삭제 아님)
+    assert wb.is_discontinued(BIZ, "상품")
+    # 쿠팡 실제 상태는 '판매중'(대장과 불일치) — 판매상태 지표행(M_SALE_STATUS)에 기록
+    wb.apply_sale_status(BIZ, {"vv": "판매중"})
+    assert wb.sale_status(BIZ, "상품") == "판매중", "쿠팡 판매상태(지표행 소스) 저장 실패"
+    # ⑦ status_of(계정목록)=대장 상태(판매중지) — 쿠팡 판매중이 계정목록으로 새지 않음
+    assert wb.status_of(BIZ, "상품") == "⛔ 판매중지", f"계정목록 상태가 대장만이 아님: {wb.status_of(BIZ, '상품')}"
+    # ⑧ 두 소스가 독립: 계정목록=대장(판매중지) ≠ 판매상태 지표행=쿠팡(판매중)
+    assert wb.status_of(BIZ, "상품") != wb.sale_status(BIZ, "상품"), "대장/쿠팡 상태가 한 소스로 뭉개짐"
+    _ok("계정목록 상태=대장(판매중지)·판매상태 지표행=쿠팡(판매중)·두 소스 독립(이중 표기)")
+
+
 def t1_preflight_sync_check():
     print("[20] 시작 프리플라이트 싱크체크 (preflight_sync_check — 대장↔결과 [SYNC] 비변경 진단, 항목②③)")
     from coupang_analytics.input_list import Account, InputList
@@ -1159,6 +1203,8 @@ def main():
     t1_validate_multi_account()
     t1_consolidate_multi_account()
     t1_preflight_sync_check()
+    t1_ledger_removal_delete()
+    t1_dual_status_source()
     t1_product_match_precision()
     t1_vid_source_option_split()
     t1_ledger_dedup()

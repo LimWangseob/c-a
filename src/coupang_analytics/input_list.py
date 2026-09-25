@@ -47,6 +47,10 @@ class Account:
     representative: str
     business_name: str
     products: list[Product] = field(default_factory=list)
+    # 항목⑥(2026-09-25): 이 계정의 관리대장에 **줄이 존재하는 모든 상품명**(활성 + 판매중지/취소선 포함).
+    # `products`(활성만)와 달리, "줄이 사라진 상품(=대장에 없음)"과 "줄은 있으나 비활성(=판매중지 유지)"을
+    # 구분해 ⑥ 완전삭제 판정에 쓴다(줄 존재=삭제 대상 아님·유지).
+    ledger_products: set = field(default_factory=set)
 
     @property
     def label(self) -> str:
@@ -314,6 +318,8 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
         if prod:
             _finalize(current_prod)             # 이전 상품 마감(옵션 없으면 기본옵션)
             # 상품 제외 = 상태 컬럼 / 상품명 마커 / 취소선 중 하나라도 → 추적 제외
+            if current_acct is not None:
+                current_acct.ledger_products.add(prod)   # ⑥: 줄 존재(활성+판매중지/취소선) 전체 — 완전삭제 판정용
             if status_disc or _is_discontinued(prod) or _struck_cell(row_no, i_prod):
                 prod_cancelled = True
                 current_prod = None

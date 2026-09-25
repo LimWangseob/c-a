@@ -566,8 +566,9 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
         _persist_session(a, b, log)                                 # 세션 3요소+쿠키 영속(부가)
         session_state.observe_collection_done(a.account_id)         # 관측: 이 계정 수집 완료 시각
     save_discovered(a.account_id, products)   # (요약 로그는 위 with 블록에서 계정 단위로 남김)
-    return (Account(a.account_id, a.representative, a.business_name, tracked),
-            metrics, inventory, sale_status, upbundle_vids, live_all_vids, vid_meta)
+    report = Account(a.account_id, a.representative, a.business_name, tracked)
+    report.ledger_products = set(a.ledger_products)   # ⑥: 줄 존재 전체(활성+판매중지/취소선) 전파 — 완전삭제 판정용
+    return (report, metrics, inventory, sale_status, upbundle_vids, live_all_vids, vid_meta)
 
 
 def _ensure_login(b, a: Account, pw, log, *, login: bool = True, semi: bool = False) -> bool:
@@ -1273,10 +1274,14 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
             wb.set_product_account_id(biz, bname, report_acc.account_id)   # 항목5: 상품별 계정ID 태깅(다계정ID 사업자)
     # 죽은 중복 블록 정리(안전 규칙): live 형제 있고 vid 가 상품조회서 소멸한 잔재만 삭제(reconcile 판매중지 표기 전)
     _sweep_dead_duplicates(wb, biz, live_vids, log)
-    # 대장 대조: 이번 대장에 없던 마스터 블록 = 판매중지/삭제 표기(데이터 보존, 다시 나타나면 자동 해제)
-    newly = wb.reconcile_account(biz, seen_products)
+    # 대장 대조(항목⑥, 소유자 2026-09-25): **줄이 완전히 사라진 상품 = 이력 포함 완전삭제**(백업 안전망),
+    # 대장에 **판매중지/취소선으로 남은(줄 존재)** 상품 = 판매중지 표기 유지. ledger_products=줄 존재 전체.
+    newly, deleted = wb.reconcile_account(biz, seen_products, report_acc.ledger_products, delete_missing=True)
+    if deleted:
+        log(f"  [SYNC] [{biz}] 관리대장에서 줄이 사라진 상품 {len(deleted)}개 → 완전삭제(이력 포함·백업 보존): "
+            f"{deleted[:3]}{'…' if len(deleted) > 3 else ''}")
     if newly:
-        log(f"  [{biz}] 대장에서 사라진 상품 {len(newly)}개 → 판매중지 표기: "
+        log(f"  [{biz}] 대장에 판매중지로 남은 상품 {len(newly)}개 → 판매중지 표기(유지): "
             f"{newly[:3]}{'…' if len(newly) > 3 else ''}")
     wb.save(save_path)
 
@@ -1616,8 +1621,8 @@ def _reconcile_ledger_accounts(wb, input_list: InputList, uncollected, log
             if wb.delete_account(biz):
                 removed_accounts.append((biz, aid))
                 log(f"== [{biz}] 관리대장에서 삭제됨(줄 사라짐) → 결과 완전 삭제(시트·이력·메타) ==")
-        else:                                              # 대장에 남아있으나 비활성 → 판매중지(유지·경고)
-            gone = wb.reconcile_account(biz, [])
+        else:                                              # 대장에 남아있으나 비활성 → 판매중지(유지·경고, 삭제 안 함)
+            gone, _del = wb.reconcile_account(biz, [])       # delete_missing=False(기본): 줄 존재=유지
             if gone:
                 log(f"== [{biz}] 대장에 남았으나 비활성 → 상품 {len(gone)}개 판매중지 표기 ==")
     return removed_accounts, renamed
