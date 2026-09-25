@@ -2241,7 +2241,9 @@ class OutputWorkbook:
             pcell.font = sty.link_font
         else:
             pcell.font = sty.gray_font
-        ws.cell(r, 4, self.account_id_of(biz)).font = sty.font if has_sheet else sty.gray_font
+        # 항목5: 계정ID = 상품(줄) 속성(다계정ID 사업자). 상품별 계정ID 우선, 없으면 사업자 첫 계정ID 폴백.
+        acct = (self.product_account_id(biz, prod) if prod else "") or self.account_id_of(biz)
+        ws.cell(r, 4, acct).font = sty.font if has_sheet else sty.gray_font
         start, end, mon = self.marketing_of(biz, prod)
         if has_sheet and prod and self.is_discontinued(biz, prod):
             status = "⛔ 판매중지"

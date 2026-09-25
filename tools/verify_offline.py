@@ -895,6 +895,12 @@ def t1_multi_account_grouping():
     assert wb2.product_account_id(BIZ, "상품2") == "loum2", "재로드 후 상품별 계정ID 유실"
     assert wb2.has_sales("loum2", "09.25"), "재로드 후 계정 스탬프 유실"
     assert BIZ in wb2.account_sheets() and "_수집스탬프" not in wb2.account_sheets(), "스탬프 시트가 계정시트로 노출"
+    # ⑤-b 엑셀 계정 목록 D열 = **상품별** 계정ID(사업자 첫 계정ID로 뭉개지 않음)
+    idx = openpyxl.load_workbook(path)["계정 목록"]
+    acc_by_prod = {idx.cell(rr, 3).value: idx.cell(rr, 4).value
+                   for rr in range(3, idx.max_row + 1) if idx.cell(rr, 2).value == BIZ}
+    assert acc_by_prod.get("상품1") == "loum1" and acc_by_prod.get("상품2") == "loum2", \
+        f"계정목록 D열 상품별 계정ID 아님: {acc_by_prod}"
     # ⑥ delete_account = 그 사업자 계정ID 스탬프도 정리
     wb2.delete_account(BIZ)
     assert not wb2.has_sales("loum1", "09.25") and not wb2.has_sales("loum2", "09.25"), "삭제 후 스탬프 잔존"
