@@ -905,6 +905,42 @@ def t1_consolidate_multi_account():
     _ok("단일 rename 병합(회귀)·다계정ID 무변경 무병합·발산=자동병합 보류+[SYNC] 경고")
 
 
+def t1_preflight_sync_check():
+    print("[20] 시작 프리플라이트 싱크체크 (preflight_sync_check — 대장↔결과 [SYNC] 비변경 진단, 항목②③)")
+    from coupang_analytics.input_list import Account, InputList
+    from coupang_analytics.pipeline import preflight_sync_check
+    wb = OutputWorkbook.empty()
+    # 결과 워크북: 가게A(acctA·일치)·옛이름(acctOld·이름변경 예정)·폐업상사(acctGone·대장에 없음=삭제 예정)
+    for biz, aid, prod in (("가게A", "acctA", "상품A"), ("옛이름", "acctOld", "상품O"), ("폐업상사", "acctGone", "상품G")):
+        wb.set_account_id(biz, aid)
+        wb.ensure_product_block(biz, prod, config.KIND_CONTRACT, ["kw"])
+        wb.set_product_account_id(biz, prod, aid)
+    accts = [Account("acctA", "김", "가게A", [object()]),        # 일치
+             Account("acctNew", "박", "신규상사", [object()]),    # 대장O·결과X(신규)
+             Account("acctOld", "이", "새이름", [object()])]      # 계정ID 동일·이름 변경(일원화 예정)
+    il = InputList(accounts=accts, errors=[], struck=["취소상품 — 판매중지"],
+                   ledger_account_ids={"acctA", "acctNew", "acctOld"})
+    logs = []
+    s = preflight_sync_check(wb, il, logs.append)
+    assert s["new"] == ["acctNew"], s["new"]                       # 대장O·결과X
+    assert s["gone"] == ["acctGone"], s["gone"]                    # 결과O·대장X(삭제 예정)
+    assert s["renamed"] == [("옛이름", "새이름", "acctOld")], s["renamed"]   # 이름 변경(일원화 예정)
+    assert s["struck"] == ["취소상품 — 판매중지"], s["struck"]
+    assert any("[SYNC]" in m for m in logs), "SYNC 로그 없음"
+    assert not any("가게A" in m and "변경" in m for m in logs), "일치 계정을 이름변경으로 오탐"
+    # 완전 일치 → 단일 '일치' 로그(비변경)
+    wb2 = OutputWorkbook.empty()
+    wb2.set_account_id("가게A", "acctA")
+    wb2.ensure_product_block("가게A", "상품A", config.KIND_CONTRACT, ["kw"])
+    wb2.set_product_account_id("가게A", "상품A", "acctA")
+    logs2 = []
+    s2 = preflight_sync_check(wb2, InputList(accounts=[Account("acctA", "김", "가게A", [object()])],
+                                             errors=[], struck=[], ledger_account_ids={"acctA"}), logs2.append)
+    assert not any(s2[k] for k in ("new", "gone", "renamed", "struck")), s2
+    assert any("일치" in m for m in logs2), logs2
+    _ok("대장O/결과X(신규)·결과O/대장X(삭제예정)·이름변경(일원화예정)·취소선 [SYNC] 진단·완전일치=일치 로그·비변경")
+
+
 def t1_multi_account_grouping():
     print("[17] 사업자명 그룹핑 — 다계정ID 한 시트·상품별 계정ID·계정 단위 수집 스탬프 (항목5, 소유자 2026-09-25)")
     BIZ = "로움컨설팅"
@@ -1122,6 +1158,7 @@ def main():
     t1_multi_account_grouping()
     t1_validate_multi_account()
     t1_consolidate_multi_account()
+    t1_preflight_sync_check()
     t1_product_match_precision()
     t1_vid_source_option_split()
     t1_ledger_dedup()

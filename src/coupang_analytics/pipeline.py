@@ -1521,6 +1521,43 @@ def _column_label(date_from: str, date_to: str, date_label: str | None, log) -> 
     return col_label
 
 
+def preflight_sync_check(wb, input_list: InputList, log) -> dict:
+    """작업 시작 전 **관리대장↔결과 대조**(비변경 진단, 항목②③ 소유자 2026-09-25).
+
+    실제 정리(일원화 ⑤·삭제 ⑥·판매중지 ⑦)를 하기 **전에**, 관리대장과 결과 워크북의 불일치를 `[SYNC]` 로그로
+    미리 보여준다(담당자가 무엇이 바뀔지 예고받음). 아무것도 바꾸지 않는다(읽기 전용). 반환=집계 dict(테스트용).
+
+    검사: ①대장 O/결과 X(신규·미수집) ②결과 O/대장 X(삭제 예정 ⑥) ③사업자명 변경(계정ID 동일·시트명≠대장,
+    일원화 예정 ⑤) ④취소선 제외(관리대장에서 뺀 항목). 불일치 판정 기준 = **관리대장**(소유자 결정)."""
+    led_biz = {a.account_id: a.label for a in input_list.accounts if a.account_id}
+    led_ids = input_list.ledger_account_ids or set(led_biz)
+    res: dict[str, str] = {}                       # 결과 워크북의 계정ID → 사업자 시트명
+    for biz in wb.account_sheets():
+        for aid in (wb.account_ids_of(biz) or []):
+            res.setdefault(aid, biz)
+    new_ids = sorted(a for a in led_ids if a and a not in res)                  # 대장 O / 결과 X
+    gone_ids = sorted(a for a in res if led_ids and a not in led_ids)           # 결과 O / 대장 X(삭제 예정)
+    renamed = sorted((res[a], led_biz[a], a) for a in res                       # 사업자명 변경(일원화 예정)
+                     if a in led_biz and res[a].strip() != (led_biz[a] or "").strip())
+    struck = list(input_list.struck)
+    summary = {"new": new_ids, "gone": gone_ids, "renamed": renamed, "struck": struck}
+    if not (new_ids or gone_ids or renamed or struck):
+        log("== [SYNC] 관리대장↔결과 일치(신규·삭제·이름변경·취소선 없음) ==")
+        return summary
+    log(f"== [SYNC] 관리대장↔결과 대조: 신규 {len(new_ids)}·삭제예정 {len(gone_ids)}·"
+        f"이름변경 {len(renamed)}·취소선 {len(struck)} (실제 정리는 수집 후) ==")
+    if new_ids:
+        log(f"  [SYNC] 대장O·결과X(신규/미수집) {len(new_ids)}: {new_ids[:8]}{'…' if len(new_ids) > 8 else ''}")
+    if gone_ids:
+        log(f"  [SYNC] 결과O·대장X(삭제 예정, 관리대장 기준) {len(gone_ids)}: "
+            f"{gone_ids[:8]}{'…' if len(gone_ids) > 8 else ''}")
+    for old_biz, new_biz, aid in renamed[:8]:
+        log(f"  [SYNC] 사업자명 변경(일원화 예정): '{old_biz}' → '{new_biz}' (계정ID {aid})")
+    if struck:
+        log(f"  [SYNC] 관리대장 취소선 제외 {len(struck)}: {struck[:5]}{'…' if len(struck) > 5 else ''}")
+    return summary
+
+
 def _consolidate_renamed_accounts(wb, input_list: InputList, log) -> list[tuple[str, str]]:
     """시트명 변경으로 같은 계정ID가 둘로 쪼개진 경우 일원화(2026-09-25).
 
@@ -1902,6 +1939,8 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
         c2 = wb.clear_sales_stamps()
         wb.save(partial)          # 초기화분을 진행파일에도 반영(크래시 복구 기준선)
         log(f"  [오늘 초기화] 오늘({col_label}) 컬럼 값 {c1}칸·완료스탬프 {c2}계정 해제 — 전 계정 재수집(어제까지 유지)")
+
+    preflight_sync_check(wb, input_list, log)   # ②③ 시작 프리플라이트 — 대장↔결과 대조(비변경 진단·[SYNC] 로그)
 
     accounts = input_list.accounts
     total = len(accounts)
