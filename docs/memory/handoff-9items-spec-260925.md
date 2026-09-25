@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: d8c440ae-0a9a-47f8-a6d2-d96209afecc7
-  modified: 2026-09-25T13:15:35.176Z
+  modified: 2026-09-25T13:58:20.391Z
 ---
 
 **소유자 요구(2026-09-25, 이미지=로움컨설팅 2계정ID 예시) 9건**. 정밀분석+적용방안 확정, **구현은 미착수**(항목5=아키텍처라 새 세션·핀 먼저). 진행순서 소유자 확정=**⑤(그룹핑) 먼저**, 그룹키=**사업자명만 같으면 한 그룹**.
@@ -15,6 +15,9 @@ metadata:
 - `workbook._계정정보`(_ACCT_SHEET)=**사업자→계정ID 1행**(`set_account_id` overwrite·`account_id_of` 1개 반환). 3열=판매수집일·4열=대표자.
 - 계정ID 1:1 가정이 박힌 곳: `set_account_id`/`account_id_of`(overwrite·단일), gsheet `roster_from_workbook` band=계정ID, `gsheet_index.delete_accounts`=**계정ID 매칭**, `mark_sales_collected`(사업자 시트 단위), **오늘(9/25) 만든 일원화**(`_consolidate_renamed_accounts`·`merge_account`·`delete_renamed_accounts`)가 전부 계정ID 기준.
 - ⇒ 다계정ID 사업자에서 계정ID 메타 유실·별도 처리. **원리상 같은 label이면 한 시트여야** 하나 메타/gsheet가 계정ID 1:1이라 어긋남.
+
+## ✅ ⑤ 구현 완료(2026-09-25·라이브 남음) — [[feature-business-name-grouping]]
+S1~S5 커밋(master)·핀 verify_offline[17·18·19]·verify_gsheet[6b]·게이트6+복잡도 초록. 착수 전 소유자 확정=검증 완화(허용+[SYNC] 경고)·계정마다 따로 로그인·수집. 계정ID=상품 속성(메타 col12)·스탬프 계정 단위(`_수집스탬프`)·밴드 사업자명 기준·일원화 다계정 인지(발산=보류+경고). ⚠라이브·재배포 남음. **다음=①②③(프리플라이트) 또는 ⑥⑦⑧⑨④**. 아래는 원 분석(참고).
 
 ## ⑤ 적용방안(그룹키=사업자명)
 - **시트=사업자명 1개**, 계정ID를 **상품(줄) 속성**으로 이전: `_상품ID` 메타에 상품별 계정ID 열 추가(또는 새 메타), `set_account_id`→사업자별 **계정ID 집합** 보관.
