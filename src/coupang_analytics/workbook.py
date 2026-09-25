@@ -1072,21 +1072,6 @@ class OutputWorkbook:
                 out[_norm(biz)] = items
         return out
 
-    def inventory_by_registered_name(self) -> dict:
-        """{(사업자norm, 등록상품명key): 최신 재고} — 관리대장 '그로스 재고' 역기록 매칭용.
-
-        정체성은 vendorItemId 앵커라 ③이 노출명으로 바꿔도, **등록상품명(대장 원본명)** 으로 되돌려
-        대장의 상품명(AA)과 매칭한다(등록명 없으면 현재 블록명으로 폴백). 재고 있는 상품만 포함."""
-        out: dict = {}
-        for biz in self.account_sheets():
-            for p in self.products_of(biz):
-                inv = self.product_inventory(biz, p)
-                if inv is None:
-                    continue
-                reg = self.registered_name(biz, p) or p
-                out[(_norm(biz), _norm(reg))] = inv
-        return out
-
     def _display_name(self, biz: str, name: str) -> str:
         """헤더 C셀(pos0) 표시값 = **순수 상품명만**(레이아웃 v4·소유자 확정 2026-09-24).
 

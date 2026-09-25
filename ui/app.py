@@ -29,7 +29,6 @@ from coupang_analytics.browser import WingBrowser, find_chrome, reap_orphan_chro
 from coupang_analytics.input_list import parse_input_list, parse_password_file  # noqa: E402
 from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
-from coupang_analytics.kw_shopping import NaverShopCredentials  # noqa: E402
 from coupang_analytics.pipeline import (backup_sources, master_exists, plan_run_mode,  # noqa: E402
                                         restore_master_from_gsheet, resumable_progress, run_full,
                                         run_log_labels, run_title, select_keywords_stage,
@@ -162,7 +161,6 @@ class App(tk.Tk):
         self._setup_style()
         self.input_list = None
         self.naver_creds = None
-        self.naver_shop = None   # NaverShopCredentials (경쟁강도용, 선택)
         self.ai_key = os.environ.get("OPENAI_API_KEY", "")
         self.product_business: dict[str, str] = {}
         self.creds_store = CredStore()
@@ -271,14 +269,12 @@ class App(tk.Tk):
         self.naver_var = tk.StringVar(value="(네이버 API 키 미선택)")
         self.openai_var = tk.StringVar(
             value="(OpenAI 키: " + ("환경변수 감지됨)" if self.ai_key else "미설정 — 키워드 추출 불가)"))
-        self.shop_var = tk.StringVar(value="(선택) 네이버쇼핑 키 미설정 — 경쟁강도 미반영")
         self.pw_var = tk.StringVar(value="(입력 엑셀에 '비밀번호' 컬럼 있으면 자동 저장 · 별도 파일만 이 버튼)")
         for row, (text, cmd, var) in enumerate((
             ("입력 엑셀 열기", self.load_input, self.input_var),
             ("(선택) 비번 파일", self.load_passwords, self.pw_var),
             ("네이버 API 키 열기", self.load_naver, self.naver_var),
             ("OpenAI(ChatGPT) API 키 입력", self.load_openai, self.openai_var),
-            ("(선택) 네이버쇼핑 키 입력", self.load_naver_shop, self.shop_var),
         )):
             ttk.Button(fk, text=text, width=16, command=cmd).grid(row=row, column=0, padx=5, pady=4)
             ttk.Label(fk, textvariable=var, width=58).grid(row=row, column=1, sticky="w")
@@ -765,23 +761,6 @@ class App(tk.Tk):
         except Exception as exc:
             self.log(f"[OpenAI] 입력됨(저장 실패: {exc.__class__.__name__})")
 
-    def load_naver_shop(self):
-        """네이버쇼핑 검색 OpenAPI 키(개발자센터 Client ID/Secret) 입력 — 경쟁강도용(선택)."""
-        cid = simpledialog.askstring("네이버쇼핑 Client ID", "개발자센터 Client ID", parent=self)
-        if not cid:
-            return
-        sec = simpledialog.askstring("네이버쇼핑 Client Secret", "개발자센터 Client Secret", show="*", parent=self)
-        if not sec:
-            return
-        self.naver_shop = NaverShopCredentials(cid.strip(), sec.strip())
-        self.shop_var.set("(네이버쇼핑 키: 입력됨 — 경쟁강도 반영)")
-        try:
-            self.creds_store.set_password("__naver_shop__", json.dumps(
-                {"client_id": self.naver_shop.client_id, "client_secret": self.naver_shop.client_secret}))
-            self.log("[네이버쇼핑] 키 입력·저장됨 (경쟁강도 선정 반영)")
-        except Exception as exc:
-            self.log(f"[네이버쇼핑] 입력됨(저장 실패: {exc.__class__.__name__})")
-
     def _load_saved_secrets(self):
         """저장된 네이버/OpenAI 키를 자동 로드 (한 번 입력하면 계속 사용)."""
         try:
@@ -793,15 +772,6 @@ class App(tk.Tk):
             self.naver_creds = NaverCredentials(d["customer_id"], d["api_key"], d["secret_key"])
             self.naver_var.set(f"저장된 네이버 키 (고객 {d['customer_id']})")
             self.log("[네이버] 저장된 키 자동 로드됨")
-        try:
-            sj = self.creds_store.get_password("__naver_shop__")
-        except Exception:
-            sj = None
-        if sj:
-            d = json.loads(sj)
-            self.naver_shop = NaverShopCredentials(d["client_id"], d["client_secret"])
-            self.shop_var.set("(네이버쇼핑 키: 저장됨 — 경쟁강도 반영)")
-            self.log("[네이버쇼핑] 저장된 키 자동 로드됨")
         try:
             ak = self.creds_store.get_password("__openai__")
         except Exception:

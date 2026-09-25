@@ -286,13 +286,6 @@ class GSheetClient:
             spreadsheetId=self.spreadsheet_id, range=rng,
             valueInputOption="USER_ENTERED", body={"values": rows}), f"값 쓰기({sheet})")
 
-    def clear_values(self, sheet: str, cell_range: str | None = None) -> None:
-        """시트(또는 범위)의 값 지우기(서식은 유지)."""
-        rng = f"'{sheet}'" if cell_range is None else (
-            cell_range if "!" in cell_range else f"'{sheet}'!{cell_range}")
-        self._exec(self._sheets().values().clear(
-            spreadsheetId=self.spreadsheet_id, range=rng), f"값 지우기({sheet})")
-
     def read_grid(self, sheet: str, *, notes: bool = False) -> tuple[list[list[str]], list[list[str | None]]]:
         """시트의 (표시값 격자, 메모 격자)를 한 번에 읽는다.
 
