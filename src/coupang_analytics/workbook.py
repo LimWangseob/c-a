@@ -1453,8 +1453,10 @@ class OutputWorkbook:
             ws.delete_rows(last_data + 1, ws.max_row - last_data)
         maxc = ws.max_column
         t = ws.cell(1, 1)
-        # 제목에 (계정ID, 대표자, 사업자) — **값만** 표기(라벨 제외·소유자 2026-09-25). 빈 항목은 생략.
-        _parts = [x for x in (self.account_id_of(ws.title), self.representative_of(ws.title), ws.title) if x]
+        # 제목에 (대표자, 사업자, 계정ID) — **값만** 표기(라벨 제외·소유자 2026-09-26 순서 확정). 빈 항목은 생략.
+        # 다계정ID 사업자(항목5)는 계정ID를 ' / ' 로 모두 표기(account_ids_of).
+        _accts = " / ".join(self.account_ids_of(ws.title))
+        _parts = [x for x in (self.representative_of(ws.title), ws.title, _accts) if x]
         t.value = f"{config.SELDOC_SHEET_TITLE}({', '.join(_parts)})"
         t.font = sty.title_font
         t.alignment = sty.center

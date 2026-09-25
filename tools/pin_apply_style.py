@@ -80,9 +80,15 @@ def _build() -> OutputWorkbook:
     wb.set_discontinued(BIZ, "중지상품", True)
     wb.apply_sale_status(BIZ, {"vidD": "판매중"})
     # ④ 마케팅(체험단) 기간 상품 → 일자 컬럼 배경(연주황) + 소헤더 '🔴 체험단중' 검증용
+    # ⚠ 날짜 의존 픽스처 — **오늘 기준 상대 날짜**로 체험단중(start≤오늘≤end)이 항상 성립하게(날짜 롤오버 안전).
+    from datetime import date as _date, timedelta as _td
+    _today = _date.today()
+    _ms = "2026-09-19"                          # 시작=일자 컬럼(09-20) 이전 고정 → 09-20 배경 연주황 성립
+    _me = (_today + _td(days=3)).isoformat()    # 종료=3일 후 → 오늘은 체험단 기간 내(체험단중)
+    _mm = (_today + _td(days=10)).isoformat()   # 모니터링 종료
     wb.ensure_product_block(BIZ, "체험상품", config.KIND_PERSONAL, ["kwM"], registered="체험상품")
     wb.set_product_vids(BIZ, "체험상품", ["vidM"])
-    wb.set_marketing(BIZ, "체험상품", "2026-09-19", "2026-09-25", "2026-09-30")
+    wb.set_marketing(BIZ, "체험상품", _ms, _me, _mm)
     wb.ensure_date(BIZ, "2026-09-20")
     wb.set_product_metric(BIZ, "상품S", config.M_SALES, "2026-09-20", 7)
     return wb

@@ -1055,8 +1055,12 @@ def t1_multi_account_grouping():
     assert wb2b.has_sales("onlyA", "09.25") and not wb2b.has_sales("onlyB", "09.25"), \
         "계정 단위 스탬프 실패(둘째 계정이 이미완료로 오판)"
     # ⑤ 저장/재로드 왕복 — 계정ID 집합·상품별 계정ID·스탬프 보존
+    wb.set_representative(BIZ, "김대표")                       # 제목 검증용(대표자)
     d = Path(tempfile.mkdtemp()); path = d / "그룹핑.xlsx"
     wb.apply_style(); wb.save(path)
+    # 항목5(제목): 상단 제목 = 대표자·사업자·계정ID(다계정ID 모두) 순서(2026-09-26)
+    _title = openpyxl.load_workbook(path)[BIZ].cell(1, 1).value
+    assert _title == f"{config.SELDOC_SHEET_TITLE}(김대표, {BIZ}, loum1 / loum2)", f"제목 순서/다계정 표기 오류: {_title}"
     wb2 = OutputWorkbook.load(path)
     assert wb2.account_ids_of(BIZ) == ["loum1", "loum2"], "재로드 후 계정ID 집합 유실"
     assert wb2.product_account_id(BIZ, "상품2") == "loum2", "재로드 후 상품별 계정ID 유실"
