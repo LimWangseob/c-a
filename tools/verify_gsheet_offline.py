@@ -204,6 +204,15 @@ class _FakeClient:
     def grid_row_count(self, title): return self._row_count
     def grid_col_count(self, title): return self._col_count
     def ensure_sheet(self, name): return self._ids.get(name, 7)
+
+    def ensure_sheets(self, names):   # push_statistics 용(여러 시트 일괄 생성) — 없으면 새 id 부여
+        for nm in names:
+            if nm not in self._ids:
+                self._ids[nm] = 100 + len(self._ids)
+                if nm not in self._titles:
+                    self._titles.append(nm)
+        return {nm: self._ids[nm] for nm in names}
+
     def read_grid(self, sheet, notes=False): return self._v, [[None] * len(r) for r in self._v]
     def batch_update(self, reqs):
         self.batches.append(reqs)
@@ -653,12 +662,55 @@ def t8_exec_retry() -> None:
     _ok("공통 재시도(_exec): 일시적 timeout 흡수·영구 timeout 소진 실패·비일시적 즉시 실패")
 
 
+def t9_legacy_format_mismatch() -> None:
+    print("[9] 포맷 불일치 저항성 — 옛 결과 구글 계정목록(7열·상품/계정ID 옛순서)에 새 포맷 갱신이 정상 수렴")
+    # 기존 결과 구글시트 = 옛 레거시(7열·대표자 없음·순서 사업자→상품→계정ID→체험단3→상태). 새 포맷과 불일치.
+    old = [
+        ["계정목록 · 상품 2개"], list(_HEAD_OLD7),
+        ["biz_A", "상품1", "A", "2026-09-01", "2026-09-30", "", "체험단중"],   # 옛: 상품 C·계정ID D
+        ["biz_A", "상품2", "A", "", "", "", "예정"],
+    ]
+    fc = _FakeClient(old)
+    desired = [_R("A", "상품1", gi.marketing_key("A", "상품1"), "체험단중"),
+               _R("A", "상품2", gi.marketing_key("A", "상품2")),
+               _R("A", "상품9", gi.marketing_key("A", "상품9"))]   # 신규 1
+    plan = gi.sync_index(fc, desired)     # 예외 없이 수렴해야
+    kinds = [k for b in fc.batches for r in b for k in r]
+    assert any("insertDimension" in x for x in kinds), "옛 7열 → 대표자 열 삽입 마이그레이션 누락"
+    assert any("moveDimension" in x for x in kinds), "옛 순서(상품C·계정ID D) → 계정ID 열 이동 마이그레이션 누락"
+    assert any("appendDimension" in x or "insertDimension" in x for x in kinds), "그리드 확장/삽입 누락"
+    # 마이그레이션 적용 후: 기존 상품1·2는 매칭(update), 상품9만 신규 삽입 → 불일치인데도 중복 재생성 없음
+    assert len(plan.inserts) == 1 and plan.inserts[0][1].product == "상품9", f"불일치 수렴 실패: inserts={[(g,r.product) for g,r in plan.inserts]}"
+    # 최종 헤더가 새 포맷(대표자·사업자·계정ID·상품…)으로 수렴(_header_request가 라벨 최신화)
+    hdr_reqs = [r for b in fc.batches for r in b if "updateCells" in r
+                and r["updateCells"]["start"].get("rowIndex") == gi.HEADER_ROW0]
+    flat_hdr = str(hdr_reqs)
+    assert "계정ID" in flat_hdr and "대표자" in flat_hdr, "헤더 새 포맷 라벨 미기록"
+    _ok("옛 7열+옛 순서 계정목록 → rep삽입·열이동·헤더최신화·그리드확장으로 무오류 수렴(중복 재생성 없음)")
+
+
+def t10_stats_full_replace_mismatch() -> None:
+    print("[10] 포맷 불일치 저항성 — 통계 시트는 전체 교체라 옛 치수/병합 무관하게 정상 덮어쓰기")
+    wb = _sample_workbook()
+    # 기존 통계 시트가 있든 없든 push_statistics 는 ensure_sheets 후 전체교체(unmerge→resize→updateCells→merge)
+    fc = _FakeClient([], titles=[])   # 시트 없음(최초) — ensure_sheets 로 생성
+    gids = gsheet_stats.push_statistics(fc, wb, on_log=lambda m: None)
+    assert "가게A" in gids, "통계 시트 gid 반환 실패"
+    kinds = [k for b in fc.batches for r in b for k in r]
+    for need in ("unmergeCells", "updateSheetProperties", "updateCells"):
+        assert need in kinds, f"통계 전체교체 요청 누락: {need}"
+    # 그리드 리사이즈가 데이터 크기로 먼저 설정돼(치수 불일치 흡수) updateCells 가 그 안에 들어감
+    gp = next(r for b in fc.batches for r in b if "updateSheetProperties" in r)["updateSheetProperties"]["properties"]["gridProperties"]
+    assert gp["rowCount"] >= 1 and gp["columnCount"] >= 1, gp
+    _ok("통계 시트 전체교체(unmerge→resize→updateCells→merge) → 기존 포맷/치수/병합 무관 정상 덮어쓰기")
+
+
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
     for fn in (t1_ledger_rows, t1b_ledger_strike, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
                t3d_grid_autogrow, t3c_delete_accounts, t3e_delete_renamed, t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook,
                t6b_multi_account_roster, t6c_content_col_widths, t7_staff_keywords_merge,
-               t8_exec_retry):
+               t8_exec_retry, t9_legacy_format_mismatch, t10_stats_full_replace_mismatch):
         fn()
     print("=== 전부 통과 ===")
     return 0

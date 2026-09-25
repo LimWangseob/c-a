@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: c16f3da3-27f9-41ca-bf1d-0a9ab5b96704
-  modified: 2026-09-25T16:00:09.313Z
+  modified: 2026-09-25T16:20:44.431Z
 ---
 
 **정밀 렌더 시뮬레이션이 실제 버그 발견·수정(2026-09-26, 소유자 "각 시트·항목·값 정밀 시뮬 검증" 요청).**
@@ -17,5 +17,7 @@ metadata:
 **정밀 렌더 검증 도구(신설·상시 게이트):** `tools/verify_render_precision.py` — run_full 을 목킹으로 end-to-end 실행(다계정ID 한 사업자·다중옵션·마케팅·로켓그로스/개인) 후 렌더 xlsx 를 **셀 단위 29항목** 대조: 제목(대표자·사업자·계정ID)·상품블록(상품명+쿠팡링크·VID·판매방식·로켓그로스)·지표행 값(노출310·판매27·방문88·재고45·판매가19900·판매상태, 항목별 다른 값으로 정확 매핑)·키워드 순위/검색량·다중옵션 분리(대표=키워드/2차=판매정보만)·상품별 계정ID·상품군색(같은 등록명=같은색·다른상품=다른색)·계정목록(열순서 대표자·사업자·계정ID·상품·상태·체험단효과·상품별 계정ID·통계 점프 링크)·gsheet 미러(상품명 쿠팡 외부링크 =HYPERLINK·다계정=한 밴드). `run_checks.py` 7번째 게이트로 편입.
 
 **교훈:** 다계정ID(사업자명 그룹핑) 도입 후 **시트단위 순회 로직은 계정ID 스코핑 필수**(reconcile 외에도 유사 패턴 점검 대상). 정밀 시뮬(렌더 결과 셀단위 대조)이 값 assert만으론 못 잡는 교차 오염을 포착.
+
+**결과 구글시트 갱신 포맷 불일치 저항성(2026-09-26, 소유자 요청)**: 기존 구글 결과파일이 새 포맷과 달라도 정상 업데이트되는지 시뮬 검증. verify_gsheet_offline[9]=계정목록 레거시(옛 7열·상품/계정ID 옛순서)→`sync_index`가 rep 열삽입(`_ensure_rep_column`)·계정ID 열이동(`_ensure_column_order` moveDimension)·헤더 라벨 최신화(`_header_request`)·그리드 확장으로 **무오류 수렴**(기존 상품 매칭 유지·중복 재생성 없음·신규만 삽입). [10]=통계 시트는 `push_statistics`가 unmerge→그리드 resize(데이터 크기)→updateCells→merge **전체 교체**라 기존 치수/병합/포맷 무관 정상 덮어쓰기. 즉 계정목록=마이그레이션 수렴·통계=전체교체 → 둘 다 안전.
 
 관련: [[feature-business-name-grouping]] [[feature-product-coupang-link]] [[handoff-9items-spec-260925]] [[fix-from-real-evidence]] [[code-health-regression-gate]].
