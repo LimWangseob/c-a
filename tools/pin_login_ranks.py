@@ -29,6 +29,7 @@ from coupang_analytics import config  # noqa: E402
 from coupang_analytics import collector as C  # noqa: E402
 from coupang_analytics import pipeline as P  # noqa: E402
 from coupang_analytics import pipeline_ranks as PR  # noqa: E402  (③순위 분리 — rank 내부 patch 대상)
+from coupang_analytics import pipeline_sales as PS  # noqa: E402  (①판매/로그인 분리 — 로그인 내부 patch 대상)
 from coupang_analytics import rank as R  # noqa: E402
 from coupang_analytics.input_list import Account, Option, Product  # noqa: E402
 from coupang_analytics.report import OptionMetric  # noqa: E402
@@ -528,7 +529,8 @@ def main() -> int:
     config.RANK_NAV_DELAY_MIN_SEC = 0
     config.RANK_NAV_DELAY_MAX_SEC = 0
     # 경계 교체(브라우저) — collector/rank 는 각 시나리오에서 개별 설치
-    P.WingBrowser = _FakeWing        # 로그인(pipeline)
+    P.WingBrowser = _FakeWing        # 키워드-스테이지(pipeline)
+    PS.WingBrowser = _FakeWing       # 로그인·발견(pipeline_sales)
     PR.WingBrowser = _FakeWing       # 순위(pipeline_ranks)
     _orig_random = PR.random   # 순위 핀에서 pause=0 으로 바꾸므로 종료 시 원복(순위=pipeline_ranks.random)
     saved = {k: getattr(config, k, None) for k in (

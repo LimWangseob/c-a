@@ -27,6 +27,8 @@ import openpyxl  # noqa: E402
 from coupang_analytics import config  # noqa: E402
 from coupang_analytics import pipeline as P  # noqa: E402
 from coupang_analytics import pipeline_ranks as PR  # noqa: E402  (③순위 분리 — rank 내부 patch 대상)
+from coupang_analytics import pipeline_sales as PS  # noqa: E402,F401  (①판매/로그인 분리)
+from coupang_analytics import pipeline_process as PP  # noqa: E402  (①상품처리 분리 — 수집중 키워드 patch 대상)
 from coupang_analytics.input_list import Account, InputList, Option, Product  # noqa: E402
 from coupang_analytics.kw_recommend import TrackKeyword  # noqa: E402
 from coupang_analytics.rank import SearchItem  # noqa: E402
@@ -131,8 +133,11 @@ def _fake_track_ranks_semi(wb, path, log, should_stop):
 
 def _install_fakes():
     P._login_and_discover = _fake_login_and_discover
+    # select_keywords_light·recommend_title 은 pipeline(키워드-스테이지)과 pipeline_process(수집중) 이중 소속 → 둘 다 패치.
     P.select_keywords_light = _fake_keywords
+    PP.select_keywords_light = _fake_keywords
     P.recommend_title = lambda *a, **k: "권고 상품명 예시"
+    PP.recommend_title = lambda *a, **k: "권고 상품명 예시"
     # ③순위는 pipeline_ranks 로 분리 — rank 내부 호출은 PR 네임스페이스로 resolve 되므로 PR 을 패치한다.
     PR.organic_ranks_batch = _fake_batch
     PR.organic_ranks = _fake_organic_ranks

@@ -979,6 +979,7 @@ def t1_dual_status_source():
 def t1_keyword_freeze_boundary():
     print("[23] ⑨ 키워드 동결 — 1건이라도 있으면 담당자 간주(AI 생략)·가변개수(>4)·공란 미검색 (소유자 2026-09-25)")
     import coupang_analytics.pipeline as pl
+    import coupang_analytics.pipeline_process as ps   # _resolve_keywords 는 pipeline_process 소속 → 여기서 select_keywords_light 패치
     from coupang_analytics.pipeline import _ProcCtx, _resolve_keywords
     BIZ = "키워드테스트"
     # (A) 워크북 레벨: 가변개수·공란 — product_keywords 는 이름 있는 행만(공란 미추적/미검색)
@@ -997,8 +998,8 @@ def t1_keyword_freeze_boundary():
     wb2.ensure_product_block(BIZ, "동결상품", config.KIND_CONTRACT, ["kA", "kB"], registered="동결상품")
     wb2.set_keyword_search(BIZ, "동결상품", "kA", 100)   # 검색량 채워둠 → _fill_frozen 이 네이버 미호출
     wb2.set_keyword_search(BIZ, "동결상품", "kB", 200)
-    _orig = pl.select_keywords_light
-    pl.select_keywords_light = lambda *a, **k: (_ for _ in ()).throw(AssertionError("동결인데 AI 선정 호출됨"))
+    _orig = ps.select_keywords_light
+    ps.select_keywords_light = lambda *a, **k: (_ for _ in ()).throw(AssertionError("동결인데 AI 선정 호출됨"))
     try:
         pctx = _ProcCtx(wb=wb2, naver=None, ai_key="x", browser=None, metrics=None, inv_by_vid=None,
                         date_iso="2026-09-25", grow=False, skip_ranks=True, keywords_off=False,
@@ -1006,7 +1007,7 @@ def t1_keyword_freeze_boundary():
         kws, ranks, track, roles = _resolve_keywords(pctx, BIZ, "동결상품", "동결상품",
                                                      config.KIND_CONTRACT, "동결상품", ["v"], None, None, {})
     finally:
-        pl.select_keywords_light = _orig
+        ps.select_keywords_light = _orig
     assert kws == ["kA", "kB"], f"동결 키워드 그대로 반환 실패: {kws}"
     assert roles == {}, "동결 상품은 역할 재판정 안 함"
     # (C) 항목6: 키워드 **공란**(product_keywords 비어있음) → AI 선정 **실시**(select_keywords_light 호출)
@@ -1020,7 +1021,7 @@ def t1_keyword_freeze_boundary():
     def _fake_sel(*a, **k):
         _called["n"] += 1
         return [_Trk("고른키워드", 500, "중간", 3, "REP")]
-    pl.select_keywords_light = _fake_sel
+    ps.select_keywords_light = _fake_sel
     try:
         pctx3 = _ProcCtx(wb=wb3, naver=None, ai_key="x", browser=None, metrics=None, inv_by_vid=None,
                          date_iso="2026-09-25", grow=False, skip_ranks=True, keywords_off=False,
@@ -1028,7 +1029,7 @@ def t1_keyword_freeze_boundary():
         kws3, _r3, _t3, _ro3 = _resolve_keywords(pctx3, BIZ, "공란상품", "공란상품",
                                                  config.KIND_CONTRACT, "공란상품", ["v"], None, None, {})
     finally:
-        pl.select_keywords_light = _orig
+        ps.select_keywords_light = _orig
     assert _called["n"] == 1, "공란(4키워드 비어있음)인데 AI 선정 미호출(항목6 위반)"
     assert kws3 == ["고른키워드"], f"공란 → AI 선정 키워드 적재 실패: {kws3}"
     _ok("1건=동결(AI 생략)·가변개수(>4)·공란 순위행 미검색·동결시 AI 미호출·**공란시 AI 선정 실시(항목6)**")
