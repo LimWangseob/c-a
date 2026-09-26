@@ -1207,7 +1207,18 @@ def t1_apply_style_migrations():
         return _norm(ws.cell(kh, 7).value)
     assert _sub_g("상품M") == "판매중", f"비고=판매중 아님(항목3): {_sub_g('상품M')}"
     assert _sub_g("상품D") == "⛔ 판매중지", f"판매중지 블록 비고 오류: {_sub_g('상품D')}"
-    _ok("자가치유: 판매가/판매상태 보정 · 빈 키워드행 낡은순위 삭제 · 비고=판매중/판매중지")
+    # 검증 (d) 항목2 product_url = vendorItemId 기반(미입고·판매자배송 커버) — 라이브 실증: vid만으로 상품페이지 열림
+    wb.set_product_vids("가게M", "상품M", ["V100"])
+    wb.set_product_pid("가게M", "상품M", "P900")
+    assert wb.product_url("가게M", "상품M") == "https://www.coupang.com/vp/products/P900?vendorItemId=V100", \
+        f"pid+vid 정규 URL 오류: {wb.product_url('가게M','상품M')}"
+    wb.ensure_product_block("가게M", "미입고품", config.KIND_CONTRACT, ["kw"])   # pid 없음(미입고/판매자배송)
+    wb.set_product_vids("가게M", "미입고품", ["V200"])
+    assert wb.product_url("가게M", "미입고품") == "https://www.coupang.com/vp/products/0?vendorItemId=V200", \
+        f"vid만(pid없음) URL 오류: {wb.product_url('가게M','미입고품')}"
+    wb.ensure_product_block("가게M", "미매칭품", config.KIND_PERSONAL, ["kw"])   # vid 없음
+    assert "np/search?q=" in wb.product_url("가게M", "미매칭품"), "vid 없으면 검색 폴백이어야"
+    _ok("자가치유: 판매가/판매상태 보정 · 빈 키워드행 낡은순위 삭제 · 비고=판매중/판매중지 · product_url=vid기반(미입고/판매자배송 커버)")
 
 
 # ── [6] 키워드 Phase B 선정 로직 ───────────────────────────────

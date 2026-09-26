@@ -168,11 +168,12 @@ def main() -> int:
     _chk(_metric_val(ws, "타프 (베이지)", config.M_SALE_PRICE, dcol) == 19900, "판매가=19900")
     _chk(_n(_metric_val(ws, "타프 (베이지)", config.M_SALE_STATUS, dcol)) == "판매중", "판매상태=판매중")
 
-    # ── 항목2: 상품명 하이퍼링크 = 노출상품 페이지(productId, 판매분석∪재고에서 확보) ──
+    # ── 항목2: 상품명 하이퍼링크 = 노출상품 페이지(vendorItemId 기반, productId 있으면 정규 형태) ──
     wpid = OutputWorkbook.load(final)
     _url = wpid.product_url("로움컨설팅", "타프 (베이지)")
-    _chk("/vp/products/pid_" in _url, f"상품 페이지 링크(productId)={_url[:60]}")
-    _chk("np/search" not in _url, "검색 링크 폴백 아님(pid 확보됨)")
+    _chk("/vp/products/pid_" in _url and "vendorItemId=" in _url,
+         f"상품 페이지 링크(productId+vid)={_url[:70]}")
+    _chk("np/search" not in _url, "검색 링크 폴백 아님(vid 확보됨)")
 
     # ── 키워드(순위·검색량) ──
     print("[키워드 순위·검색량]")

@@ -975,13 +975,17 @@ class OutputWorkbook:
         return _norm(self.wb[_META_SHEET].cell(row, 13).value)
 
     def product_url(self, biz: str, product: str) -> str:
-        """상품명 클릭 시 열 **쿠팡 노출상품 URL**(항목3). productId 있으면 정확한 상품 페이지, 없으면
-        상품명(노출명) 검색 페이지로 폴백. 순위매칭된 상품은 블록명이 정확 노출명이라 검색도 그 상품이 상단."""
+        """상품명 클릭 시 열 **쿠팡 노출상품 URL**(항목2). **vendorItemId 만으로 상품 페이지가 열린다**
+        (라이브 실증 2026-09-26: `/vp/products/0?vendorItemId={vid}` 가 정확한 상품 페이지로 해석됨). 그래서
+        productId(판매분석·재고에만 있음·상품조회 응답엔 없음)가 없어도 **vid 만 있으면 링크**한다 →
+        **미입고 RFM·판매자배송까지 커버**(vid 는 상품조회 응답에 전 상품·전 옵션 항상 존재). productId 가
+        있으면 정규 형태(`/vp/products/{productId}?vendorItemId={vid}`), 없으면 `productId=0` 자리표시로 vid 로 해석.
+        vid 조차 없는(미매칭) 상품만 상품명(노출명) 검색 페이지로 폴백. 판매중지 vid 는 쿠팡이 '상품없음'을
+        내지만 실제 판매중지라 정상(대표 블록 vid=살아있는 옵션)."""
         pid = self.product_pid(biz, product)
         vids = self.product_vids(biz, product)
-        if pid:
-            tail = f"?vendorItemId={vids[0]}" if vids else ""
-            return f"https://www.coupang.com/vp/products/{pid}{tail}"
+        if vids:
+            return f"https://www.coupang.com/vp/products/{pid or 0}?vendorItemId={vids[0]}"
         return "https://www.coupang.com/np/search?q=" + _quote(_key(product))
 
     def set_product_vids(self, biz: str, product: str, vids) -> None:
