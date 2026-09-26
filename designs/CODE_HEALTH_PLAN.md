@@ -233,8 +233,11 @@ python tools/verify_offline.py && python tools/verify_gsheet_offline.py && pytho
 - 재배선 규칙(핵심): 이동 함수가 **내부 호출**하는 심볼은 **이동한 모듈**에서 monkeypatch. 이중 소속(warmup·WingBrowser·select_keywords_light·recommend_title)은 관련 모듈 모두 patch. run_full 이 호출하는 함수(_login_and_discover 등)는 P 재수출로 유효. 핀이 oracle.
 - ⚠**라이브 검증 남음**: pipeline_sales(로그인·Akamai·수집)는 오프라인 핀 100% 미커버 → 사무실 ①판매수집 1회 라이브 확인 권고([[fix-from-real-evidence]]).
 
-**🔄 workbook.py(2460줄·MI C) 남음**: 단일 클래스(OutputWorkbook, 129 메서드)라 **mixin 분리**.
+**🔄 workbook.py(현 2273줄·MI C) — mixin 분리 진행중**: 단일 클래스(OutputWorkbook, 129 메서드).
 - **저위험**: tools 가 OutputWorkbook 을 블랙박스로만 사용(내부 monkeypatch 0 확인) → 재배선 불필요. 핀(pin_apply_style·verify_render)이 렌더 oracle.
+- ✅ **6a 완료(커밋)**: `workbook_common.py`(leaf·A 51.5) 분리 — 상수·헬퍼·dataclass·openpyxl 재노출(`__all__` 49심볼). workbook.py `import *` 로 이어받음. 2460→2273줄. 게이트 7종 초록.
+- 🔄 **6b 남음(렌더 mixin)**: `workbook_render.py`(`_RenderMixin`)로 3개 구역 이동(현 줄번호): **C1=1088–1616**(팔레트 상수 `_FN`·`_FILL_*` + 마이그·regroup·`_v4_*`·apply_style·`_style_*`), **C2=1673–1773**(promo 클러스터 `_cell_num`/`_rank_num`/`_best_rank_at`/promo_effect/_promo_*), **C3=2133–EOF**(`_sync_marketing_from_index`/`_build_index`/`_index_row`/`_idx_*`). `_RenderMixin` 은 workbook_common `import *` + self 로 데이터메서드/인덱스 접근. `class OutputWorkbook(_RenderMixin)`. ⚠**팔레트 상수(_FILL_*·_FN)는 render 전용이라 mixin 에 함께**(self._FILL_PROD 로 참조). C1/C2/C3 경계는 **메서드 끝**에 맞출 것(주석 오귀속 주의: 1775 는 set_discontinued 주석=C2 제외, 1088–1090 은 팔레트 주석=C1 포함). 추출 후 workbook.py ~1500줄=**여전히 C 가능** → 필요시 **인덱스/날짜 mixin**(_reindex·normalize_date·_rebuild_date_grid·_build_index)까지 2차 분리해 <900줄·B. 스크립트 추출(pipeline_ranks 패턴)·매 단계 게이트 초록.
+- ⚠**렌더=가장 핀-집약 경로** → 마라톤 세션 말미 강행 금물([[recommend-new-session-when-degraded]]). 새 세션서 핀 초록 유지·작은 커밋.
 - **B 도달엔 ~900줄 이하 필요**(radon 포화) → **3~4파일** 예상: `workbook_common.py`(leaf: 상수 _COL_*·라벨·시트명 + 헬퍼 _norm/_key/_parse_date/_vids_from_cell/_unmerge_all/_sty_* + dataclass _StyleCtx/_IdxStyle) ← 순환방지 · `workbook_render.py`(`_RenderMixin`: apply_style+_style_*+_idx_*+_build_index+_sync_marketing+_v4_*+_group/_regroup/_snapshot/_rewrite+promo_effect 클러스터+migration _migrate_keyword_col/_kw_migrate/_migrate_vids_to_meta/_clear_blank/_backfill_metric_rows) · `workbook.py`(`class OutputWorkbook(_RenderMixin)`: 데이터/인덱스/조회 메서드). 필요시 인덱스 mixin 추가.
 - ⚠apply_style 은 가장 핀-집약 경로 → **핀 초록 유지하며 mixin 하나씩·작은 커밋**. 새 mixin 파일도 C면 게이트가 차단(pipeline_sales 처럼)하니 각 파일 <~900줄·B+ 로.
 
