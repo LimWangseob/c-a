@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 3588291b-3435-4968-8471-8410129d1b69
-  modified: 2026-09-26T07:00:41.142Z
+  modified: 2026-09-26T07:24:25.242Z
 ---
 
 소유자 요청 "전체 소스코드 점검(누더기·과거 정상→오류)" + "Tier A+B 연속" 지시로 착수. **Tier A 완료·미커밋 상태에서 커밋 진행**(이 메모 시점).
@@ -25,15 +25,13 @@ metadata:
 - **죽은 삼항식 제거**: `detail_images.py:149` `best[key][1] if False else src`→`src`.
 - **검증**: 게이트 7종(run_checks)+`check_complexity`(exit 0) 초록. `radon cc -n D <4파일>`=빈결과. 행동 불변(핀 3종·simulate·verify_render 불변 통과).
 
-## Tier B(모듈 분리·MI C→B) — 🔄 B1·B2·B3 완료(커밋), sales·workbook 남음
-- ✅ **B1 `pipeline_paths.py`**(경로/단계 헬퍼·상수·_load_latest_wb·leaf) — 커밋 `7b08dc2`(B1+B2).
-- ✅ **B2 `pipeline_gsheet.py`**(구글시트 연동·백업·복원 6함수) — 커밋 `7b08dc2`.
-- ✅ **B3 `pipeline_ranks.py`**(③순위 ≈810줄) MI **B(14.93)** — 커밋 `f28e34f`. 핀/시뮬 patch 를 PR 로 재배선(warmup·WingBrowser 이중 소속=양쪽·_track_ranks_semi→PR·organic_ranks*→PR).
-- **⚠MI 실측**: pipeline **2684→1628줄**인데 **여전히 MI C(0.00·radon 포화)**. B 도달하려면 **sales 블록(≈720줄)까지 분리**해 ~900줄로. pipeline_ranks 는 별 파일이라 B.
-- **⚠남은 판단(중요)**: sales(로그인·Akamai·발견·수집)=**라이브 최critical**이라 순수 이동이어도 오프라인 핀 100% 미커버(라이브 필요). MI B=미용지표·실회귀는 Tier A 게이트로 차단됨 → **sales/workbook 분리는 실익<위험**. 새 세션·핀 먼저·파일 하나씩 권고(SSOT CODE_HEALTH_PLAN §8-3).
-- **재배선 규칙**(핵심 교훈): 이동한 함수가 내부에서 호출하는 심볼·모듈전역은 **이동한 모듈**에서 monkeypatch. 이중 소속(warmup·WingBrowser)은 양쪽. 핀이 oracle(틀리면 게이트 red).
+## Tier B(모듈 분리·MI C→B) — ✅ pipeline 완전 해소, 🔄 workbook 남음
+- ✅ **pipeline 6모듈 전부 A/B**(원래 2684줄 C 몬스터): pipeline.py **A(20.94)**·pipeline_sales A(41)·pipeline_process A(27)·pipeline_ranks **B(14.93)**·pipeline_gsheet A·pipeline_paths A. 커밋 `f90d913`(A)·`7b08dc2`(B1·B2)·`f28e34f`(B3)·`d7c54f8`(B4·B5). 게이트 7종+복잡도 초록.
+- **재배선 규칙(교훈)**: 이동 함수가 **내부 호출**하는 심볼은 **이동한 모듈**에서 monkeypatch. 이중 소속(warmup·WingBrowser·select_keywords_light·recommend_title)은 관련 모듈 전부 patch. run_full 이 호출(_login_and_discover 등)=P 재수출 유효. 핀이 oracle(틀리면 게이트 red). 의존 DAG: paths←gsheet←ranks←sales←process←pipeline.
+- **🔄 workbook.py(2460줄·MI C) 남음**: 단일 클래스(129 메서드)→**mixin 분리**. **저위험**(tools 가 OutputWorkbook 블랙박스 사용·내부 monkeypatch 0 확인·재배선 불필요·핀이 렌더 oracle). B 도달엔 ~900줄 이하 필요→**3~4파일**: `workbook_common.py`(leaf 상수·헬퍼·dataclass)·`workbook_render.py`(_RenderMixin: apply_style+_style_*+_idx_*+_build_index+_v4_*+_group/_regroup+promo+migration)·`workbook.py`(데이터/인덱스/조회). ⚠apply_style=가장 핀-집약→핀 초록 유지·mixin 하나씩·작은 커밋·새 파일도 <900줄 B+(C면 게이트 차단). 계획 SSOT=CODE_HEALTH_PLAN §8-3.
+- **⚠라이브 검증**: pipeline_sales(로그인·Akamai·수집) 오프라인 핀 100% 미커버 → 사무실 ①판매수집 1회 라이브 확인 권고.
 
 ## 남은 것
-- Tier B sales/workbook(위·선택). 라이브 검증(운용 PC 재배포)은 [[handoff-9issues-images-260926]] 체크리스트 그대로 유효(별건).
+- workbook.py mixin 분리(위·새 세션 권고). 라이브 검증(운용 PC 재배포)은 [[handoff-9issues-images-260926]] 체크리스트 그대로 유효(별건).
 
 관련: [[handoff-code-health]] [[code-health-regression-gate]] [[fix-from-real-evidence]] [[commit-with-design-and-memory]] [[handoff-9issues-images-260926]].

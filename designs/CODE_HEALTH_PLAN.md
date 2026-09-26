@@ -218,7 +218,27 @@ python tools/verify_offline.py && python tools/verify_gsheet_offline.py && pytho
 - **죽은 삼항식 제거**: `detail_images.py:149` `best[key][1] if False else src` → `src`(오너 규칙 if False 우회 금지).
 - **검증**: 게이트 7종 + `check_complexity`(exit 0) 초록. `radon cc -n D <4파일>` = **빈 결과**(D+ 재전멸). 행동 불변(핀 3종·시뮬·렌더검증 그대로 통과).
 
-### 8-3. Tier B(모듈 분리·MI C→B) — 🔄 진행중(B1·B2·B3 완료, sales·workbook 남음)
+### 8-3. Tier B(모듈 분리·MI C→B) — ✅ pipeline 완료(B1~B5), 🔄 workbook 남음
+
+**✅ pipeline 완전 해소(2026-09-26)**: 원래 pipeline.py 2684줄 MI C(0.00) → **6모듈 전부 A/B**.
+| 모듈 | 줄 | MI |
+|---|---|---|
+| pipeline.py(오케스트레이터·run_full·stage·reconcile) | 754 | **A (20.94)** |
+| pipeline_sales.py(로그인·발견) | 430 | A (41.37) |
+| pipeline_process.py(상품/옵션 처리·키워드결정) | 502 | A (27.28) |
+| pipeline_ranks.py(③순위) | 837 | **B (14.93)** |
+| pipeline_gsheet.py(구글시트·백업·복원) | 207 | A (58.89) |
+| pipeline_paths.py(경로/단계 leaf) | 86 | A (73.02) |
+- 커밋 `f90d913`(Tier A)·`7b08dc2`(B1·B2)·`f28e34f`(B3)·`d7c54f8`(B4·B5). 게이트 7종+복잡도 초록.
+- 재배선 규칙(핵심): 이동 함수가 **내부 호출**하는 심볼은 **이동한 모듈**에서 monkeypatch. 이중 소속(warmup·WingBrowser·select_keywords_light·recommend_title)은 관련 모듈 모두 patch. run_full 이 호출하는 함수(_login_and_discover 등)는 P 재수출로 유효. 핀이 oracle.
+- ⚠**라이브 검증 남음**: pipeline_sales(로그인·Akamai·수집)는 오프라인 핀 100% 미커버 → 사무실 ①판매수집 1회 라이브 확인 권고([[fix-from-real-evidence]]).
+
+**🔄 workbook.py(2460줄·MI C) 남음**: 단일 클래스(OutputWorkbook, 129 메서드)라 **mixin 분리**.
+- **저위험**: tools 가 OutputWorkbook 을 블랙박스로만 사용(내부 monkeypatch 0 확인) → 재배선 불필요. 핀(pin_apply_style·verify_render)이 렌더 oracle.
+- **B 도달엔 ~900줄 이하 필요**(radon 포화) → **3~4파일** 예상: `workbook_common.py`(leaf: 상수 _COL_*·라벨·시트명 + 헬퍼 _norm/_key/_parse_date/_vids_from_cell/_unmerge_all/_sty_* + dataclass _StyleCtx/_IdxStyle) ← 순환방지 · `workbook_render.py`(`_RenderMixin`: apply_style+_style_*+_idx_*+_build_index+_sync_marketing+_v4_*+_group/_regroup/_snapshot/_rewrite+promo_effect 클러스터+migration _migrate_keyword_col/_kw_migrate/_migrate_vids_to_meta/_clear_blank/_backfill_metric_rows) · `workbook.py`(`class OutputWorkbook(_RenderMixin)`: 데이터/인덱스/조회 메서드). 필요시 인덱스 mixin 추가.
+- ⚠apply_style 은 가장 핀-집약 경로 → **핀 초록 유지하며 mixin 하나씩·작은 커밋**. 새 mixin 파일도 C면 게이트가 차단(pipeline_sales 처럼)하니 각 파일 <~900줄·B+ 로.
+
+### (구) 8-3 계획 메모(참고)
 - **왜 필요**: 함수 CC 를 낮춰도 pipeline·workbook·app_qt 는 **MI C(0.00) 포화** — 파일을 쪼개야 B↑.
 - ✅ **B1 `pipeline_paths.py`**(leaf: 경로/단계 헬퍼·상수·_load_latest_wb) — 순환 import 방지 기반.
 - ✅ **B2 `pipeline_gsheet.py`**(구글시트 연동·백업·복원 6함수·지연 import).
