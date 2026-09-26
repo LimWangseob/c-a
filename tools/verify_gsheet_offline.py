@@ -193,12 +193,14 @@ def t3_index_sync() -> None:
 
 
 class _FakeClient:
-    def __init__(self, values, titles=None, row_count=1000, col_count=26):
+    def __init__(self, values, titles=None, row_count=1000, col_count=26, merges=None):
         self._v = values; self.batches = []
         self._row_count = row_count   # 그리드 행수(확장 판단용) — 기본 넉넉히
         self._col_count = col_count   # 그리드 열수(확장 판단용) — 기본 넉넉히(신규 시트 26열)
         self._titles = titles if titles is not None else (["계정목록"] if values else [])
         self._ids = {t: 100 + i for i, t in enumerate(self._titles)}
+        # 병합 범위 [(r0,r1,c0,c1)] — Google 제약(병합 가로지르는 열 이동=400) 재현용
+        self._merges = list(merges) if merges else []
     def sheet_titles(self): return list(self._titles)
     def sheet_id(self, title): return self._ids.get(title)
     def grid_row_count(self, title): return self._row_count
@@ -220,9 +222,24 @@ class _FakeClient:
             ins = r.get("insertDimension")
             if ins and ins["range"].get("dimension") == "COLUMNS" and ins["range"].get("startIndex") == 0:
                 self._v = [[""] + list(row) for row in self._v]
+            mc = r.get("mergeCells")          # 병합 등록(Google 제약 재현용)
+            if mc:
+                rg = mc["range"]
+                self._merges.append((rg.get("startRowIndex", 0), rg.get("endRowIndex", 0),
+                                     rg.get("startColumnIndex", 0), rg.get("endColumnIndex", 0)))
+            um = r.get("unmergeCells")        # 병합 해제 — 범위와 겹치는 병합 제거
+            if um:
+                rg = um["range"]; r0, r1 = rg.get("startRowIndex", 0), rg.get("endRowIndex", 0)
+                c0, c1 = rg.get("startColumnIndex", 0), rg.get("endColumnIndex", 0)
+                self._merges = [m for m in self._merges
+                                if not (m[0] < r1 and m[1] > r0 and m[2] < c1 and m[3] > c0)]
             mv = r.get("moveDimension")   # 항목④ 열 이동 재현: source 열을 destinationIndex 로(값 유지)
             if mv and mv["source"].get("dimension") == "COLUMNS":
                 s = mv["source"]["startIndex"]; dest = mv["destinationIndex"]
+                # ⚠ Google 제약 재현: 병합을 **가로지르는** 열 이동은 400(병합보다 좁은 이동이 병합을 쪼갬)
+                for (mr0, mr1, mc0, mc1) in self._merges:
+                    if mc0 <= s < mc1 and (mc1 - mc0) > 1:
+                        raise RuntimeError("Invalid requests[].moveDimension: cannot move column across merged range (fake)")
                 new_v = []
                 for row in self._v:
                     row = list(row)
@@ -705,12 +722,40 @@ def t10_stats_full_replace_mismatch() -> None:
     _ok("통계 시트 전체교체(unmerge→resize→updateCells→merge) → 기존 포맷/치수/병합 무관 정상 덮어쓰기")
 
 
+def t11_move_across_title_merge() -> None:
+    print("[11] 라이브 400 수정 — 제목 병합(A1:I1) 있는 옛 시트도 계정ID 열이동이 병합해제→이동→재병합으로 무오류")
+    # 실측 재현: 옛 8열(체험단효과 없음)·옛 순서(상품 C·계정ID D)·제목 A1:H1 병합. 병합 가로지르는 열이동=Google 400.
+    old8 = ["대표자", "사업자", "상품명(클릭 이동)", "계정ID", "체험단 시작일", "체험단 종료일", "모니터링 종료일", "상태"]
+    vals = [
+        ["계정목록 · 상품 2개"], list(old8),
+        ["대표A", "biz_A", "상품1", "A", "", "", "", "예정"],       # 옛 순서: C=상품·D=계정ID
+        ["대표A", "biz_A", "상품2", "A", "", "", "", "판매중지"],
+    ]
+    # 제목 병합 A1:H1(0-based 행0·열0~8) — 이게 있으면 옛 코드의 raw moveDimension 은 FakeClient 가 400 재현
+    fc = _FakeClient(vals, col_count=8, merges=[(0, 1, 0, 8)])
+    desired = [_R("A", "상품1", gi.marketing_key("A", "상품1"), "체험단중"),
+               _R("A", "상품2", gi.marketing_key("A", "상품2"))]
+    plan = gi.sync_index(fc, desired)     # 수정 전이면 여기서 RuntimeError(400 재현)·수정 후 무오류
+    # 계정ID 열이동 배치에 unmergeCells → moveDimension → mergeCells 순서가 있어야(병합 안전)
+    move_batch = next((b for b in fc.batches if any("moveDimension" in r for r in b)), None)
+    assert move_batch is not None, "moveDimension 배치 없음(열이동 마이그레이션 누락)"
+    kinds = [next(iter(r)) for r in move_batch]
+    assert kinds.index("unmergeCells") < kinds.index("moveDimension") < kinds.index("mergeCells"), \
+        f"병합해제→이동→재병합 순서 아님: {kinds}"
+    # 옛 8열 → N_COLS 로 확장(재병합이 그리드 벗어나지 않게)
+    assert any("appendDimension" in r for r in move_batch), "옛 8열 → N_COLS 그리드 확장 누락"
+    # 최종 수렴: 기존 2상품 매칭·중복 재생성 없음
+    assert plan.total_rows == 2 and not plan.inserts, f"수렴 실패: total={plan.total_rows} inserts={len(plan.inserts)}"
+    _ok("제목 병합 있는 옛 시트 → 병합해제·열이동·재병합으로 400 없이 수렴(라이브 버그 수정)")
+
+
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
     for fn in (t1_ledger_rows, t1b_ledger_strike, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
                t3d_grid_autogrow, t3c_delete_accounts, t3e_delete_renamed, t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook,
                t6b_multi_account_roster, t6c_content_col_widths, t7_staff_keywords_merge,
-               t8_exec_retry, t9_legacy_format_mismatch, t10_stats_full_replace_mismatch):
+               t8_exec_retry, t9_legacy_format_mismatch, t10_stats_full_replace_mismatch,
+               t11_move_across_title_merge):
         fn()
     print("=== 전부 통과 ===")
     return 0
