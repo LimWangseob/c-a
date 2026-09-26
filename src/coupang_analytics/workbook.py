@@ -1087,19 +1087,6 @@ class OutputWorkbook(_RenderMixin, _IndexMixin):
         self.wb[biz].cell(row=row, column=self.ensure_date(biz, date_iso), value=val)
         return True
 
-    def _roster(self) -> list[tuple[str, bool]]:
-        """목차에 실을 계정 로스터 — (사업자, 데이터시트有無). 수집된 계정(시트 있음) 먼저, 그 뒤에
-        입력 로스터(`_계정정보`)엔 있으나 아직 시트가 없는 **미수집 계정**을 잇는다(전체 현황 파악)."""
-        out = [(b, True) for b in self.account_sheets()]
-        have = {b for b, _ in out}
-        if _ACCT_SHEET in self.wb.sheetnames:
-            ws = self.wb[_ACCT_SHEET]
-            for r in range(2, ws.max_row + 1):
-                b = _norm(ws.cell(r, 1).value)
-                if b and b not in have:
-                    out.append((b, False)); have.add(b)
-        return out
-
     # ── 마케팅 기간(계정 목록에서 입력 → 숨김시트 보존) ──────────
     def _mkt_ws(self, create: bool = False):
         if _MKT_SHEET in self.wb.sheetnames:

@@ -75,7 +75,7 @@ class RoundedTabs(ttk.Frame):
     def __init__(self, master, content_height=320, bar_bg="#e6ebf1", body_bg="#ffffff",
                  sel="#ffffff", sel_fg="#0f172a", unsel_fg="#5b6b7f", hover="#d6dee8"):
         super().__init__(master)
-        self._bar_bg, self._sel, self._sel_fg, self._unsel_fg, self._hover = bar_bg, sel, sel_fg, unsel_fg, hover
+        self._sel, self._sel_fg, self._unsel_fg, self._hover = sel, sel_fg, unsel_fg, hover
         self.canvas = tk.Canvas(self, height=self.BAR_H, highlightthickness=0, bg=bar_bg)
         self.canvas.grid(row=0, column=0, sticky="ew")
         self.body = tk.Frame(self, height=content_height, bg=body_bg)

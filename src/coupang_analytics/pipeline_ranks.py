@@ -581,7 +581,6 @@ def _wait_user_search(browser, kw: str, log, should_stop, timeout: float = 300.0
                 log(f"    …「{kw}」 검색은 인식됐으나 상품 목록이 아직 안 보입니다 — "
                     f"페이지가 다 뜰 때까지 잠시 기다리거나 새로고침 해주세요{extra}")
             elif other_qs:
-                opened = ", ".join(f"'{q}'" for q in other_qs)
                 _prefill_search(browser, kw)   # 창엔 옛 검색이 떠 있음 → 검색창을 kw로 재채움(사람은 Enter만)
                 log(f"    ⌨ 창엔 '{other_qs[0]}' 결과가 떠 있습니다 → 검색창에 「{kw}」를 다시 채웠으니"
                     f" **그 창에서 Enter** 하세요(안 채워졌으면 직접 입력: {kw})")

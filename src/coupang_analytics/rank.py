@@ -27,7 +27,6 @@ _BLOCK_HINTS = ("죄송", "Denied", "Access", "제한된", "사용권한")   # '
 # ── 사람처럼 검색어 타이핑(붙여넣기 금지) ─────────────────────────────
 # ⚠️ 실측(사용자): 쿠팡 Akamai는 **붙여넣기/즉시 채움(비신뢰 input·value setter)** 을 짧은 쿼리로 감지해 차단하고,
 #    **실제 키보드로 한 글자씩** 친 입력(신뢰 키이벤트)만 통과시킨다. 그래서 검색어는 반드시 키보드로 타이핑한다.
-_SEARCH_BOX_SEL = "input[name='q'], input.headerSearchKeyword, #headerSearchKeyword"
 _FOCUS_CLEAR_JS = r"""() => {
   const inputs = Array.from(document.querySelectorAll(
       "input[name='q'], input.headerSearchKeyword, #headerSearchKeyword"));
