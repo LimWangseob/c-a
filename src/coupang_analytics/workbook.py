@@ -649,8 +649,9 @@ class OutputWorkbook:
         headers = sorted(r for r in self._date_rows.get(biz, []) if r > start)
         end = (headers[0] - 1) if headers else ws.max_row
         for r in range(start, end + 1):
-            if (_key(ws.cell(r, _COL_KW).value) == _LABEL_KEYWORD   # 소헤더 '키워드'=A열(v4)
-                    and _norm(ws.cell(r, _COL_METRIC).value) == _LABEL_NOTE):
+            # 소헤더 판정 = **A열 '키워드'만**(`_find_kw_head`와 동일 기준). G(비고 자리)는 항목3(2026-09-26)에서
+            # 관리대장 판매상태(판매중/판매중지/체험단중)로 용도 전환돼 '비고'가 아닐 수 있으므로 G로 판정하지 않는다.
+            if _key(ws.cell(r, _COL_KW).value) == _LABEL_KEYWORD:   # 소헤더 '키워드'=A열(v4)
                 return True
         return False
 
@@ -950,10 +951,11 @@ class OutputWorkbook:
         return _norm(self.wb[_META_SHEET].cell(row, 12).value)
 
     def set_product_pid(self, biz: str, product: str, product_id: str) -> None:
-        """상품의 **쿠팡 공개 상품ID(productId)** 를 숨김 메타 13열에 저장(항목3, 소유자 2026-09-26).
+        """상품의 **쿠팡 공개 상품ID(productId)** 를 숨김 메타 13열에 저장(항목2, 소유자 2026-09-26).
 
-        ③ 순위조회가 검색결과(SERP) href `/vp/products/{productId}` 에서 확보한다(우리 데이터API엔 없음). 통계
-        시트 상품명 하이퍼링크(쿠팡 노출상품 페이지)용. 빈값이면 no-op(기존 보존 — 순위 미매칭 실행이 안 지움)."""
+        출처=**판매분석(vi-detail) ∪ 재고 API**(수집 시 vid→productId, 판매 0 상품까지 커버) 우선, 폴백=③
+        순위조회 검색결과(SERP) href `/vp/products/{productId}`. ⚠상품조회(vendor-inventory)엔 공개 productId
+        없음(실측 2026-09-26). 통계 시트 상품명 하이퍼링크(쿠팡 노출상품 페이지)용. 빈값이면 no-op(기존 보존)."""
         biz, product, pid = _norm(biz), _key(product), _norm(product_id)
         if not (biz and product and pid):
             return
@@ -1050,6 +1052,17 @@ class OutputWorkbook:
         if row is None or _META_SHEET not in self.wb.sheetnames:
             return ""
         return _norm(self.wb[_META_SHEET].cell(row, 6).value)
+
+    @staticmethod
+    def _group_key(product: str) -> str:
+        """상품군 그룹 키(소유자 2026-09-26 확정: 블록명 base) — 같은 상품군(기본+옵션·수량 1/2/3개·
+        로켓그로스+판매자배송 twin)이 **등록명 드리프트**(공란·'60정' 유무 등)로 다른 색·분리되던 문제 해소.
+
+        블록명에서 **마지막 ' (' 이후(옵션/수량 라벨: '(1개 60정)'·'(베이지)' 등)를 제거**한 base 를 공백
+        정규화해 반환. 같은 base = 한 상품군(연속·같은 색). registered_name 대신 이 키로 정렬·색·경계를 묶는다."""
+        p = _key(product)
+        base = p.rsplit(" (", 1)[0] if " (" in p else p
+        return " ".join(base.split())
 
     def set_sale_status(self, biz: str, product: str, status: str) -> None:
         """상품의 **쿠팡 실제 판매상태**(판매중/부분판매중/판매중지)를 숨김시트 7열에 저장.
@@ -1285,7 +1298,7 @@ class OutputWorkbook:
             v4 서식이 키워드행을 지표행으로 오인·뭉갠다 → 소헤더행(첫 M_RANK 직전, F='검색량' 또는 G∈비고류로
             검증)의 A를 '키워드'로 되살린다.
         멱등(이미 A열/소헤더 정상이면 no-op). 변경 시 재인덱스. 저장 때마다 돌아 손상 마스터를 자동 치유한다."""
-        sub_g = {_LABEL_NOTE, "⛔ 판매중지", "🔴 체험단중"}
+        sub_g = {_LABEL_NOTE, "판매중", "⛔ 판매중지", "🔴 체험단중"}   # 비고 자리=관리대장 판매상태(항목3) 포함
         moved = False
         for ws in self.wb.worksheets:
             if ws.title in _SPECIAL_SHEETS:
@@ -1327,6 +1340,46 @@ class OutputWorkbook:
         if moved:
             self._reindex()
 
+    def _clear_blank_keyword_ranks(self) -> None:
+        """빈(이름 공란) 키워드 순위행에 남은 낡은 순위값을 지운다(항목5·2026-09-26·소유자·실측 43행).
+
+        ensure_product_block 이 KW_TRACK_N 유지용으로 만든 **이름 공란 M_RANK 행**에, 과거 실행이 잘못
+        기록했거나 키워드가 나중에 삭제돼 비워진 뒤에도 옛 순위값('50위' 등)이 일자칸에 남아 '키워드 없는데
+        노출순위 표기'로 보이던 문제를 치유한다. 이름 있는 키워드행은 건드리지 않는다.
+        멱등(이미 공란이면 no-op)·값만 삭제(구조·행수 불변)라 재인덱스 불필요."""
+        for ws in self.wb.worksheets:
+            if ws.title in _SPECIAL_SHEETS:
+                continue
+            biz = ws.title
+            mc = ws.max_column
+            for p in self.products_of(biz):
+                for r, name in self._kw_block_rows(biz, p):
+                    if name:                                  # 이름 있는 키워드행 = 보존
+                        continue
+                    for c in range(_FIRST_DATE, mc + 1):      # 일자칸(H~)만 비움(A~G 라벨 불변)
+                        if ws.cell(r, c).value not in (None, ""):
+                            ws.cell(r, c).value = None
+
+    def _backfill_metric_rows(self) -> None:
+        """옛 블록에 빠진 **판매가·판매상태**(+로켓그로스면 재고현황) 지표행을 보정한다(항목4/6·2026-09-26).
+
+        판매가·판매상태는 2026-09-24 신설이라 그 이전 마스터 블록엔 없다. 파이프라인이 방문하는 상품은
+        ensure_product_block 이 이미 보정하지만, 대장에서 빠진(판매중지)·미로그인 계정처럼 **파이프라인이
+        방문하지 않는 옛 블록**은 지표행이 계속 비어(실측 13블록) 담당자가 판매가·판매상태를 볼 수 없었다.
+        저장(apply_style)마다 전 블록을 훑어 없는 행만 끼워 넣어(순서=재고<판매가<판매상태) 자동 치유한다.
+        재고는 판매방식이 로켓그로스/둘다(KINDS_WITH_INVENTORY)일 때만(옛 kind='' 미상 블록엔 강제 안 함).
+        멱등(_add_metric_row 가 이미 있으면 미진입·행 삽입 시 재인덱스)."""
+        for biz in self.account_sheets():
+            for p in self.products_of(biz):
+                kind = self.product_kind(biz, p)
+                if (kind in config.KINDS_WITH_INVENTORY
+                        and (biz, p, config.M_INVENTORY) not in self._metric_row):
+                    self._add_metric_row(biz, p, config.M_INVENTORY)
+                if (biz, p, config.M_SALE_PRICE) not in self._metric_row:
+                    self._add_metric_row(biz, p, config.M_SALE_PRICE)
+                if (biz, p, config.M_SALE_STATUS) not in self._metric_row:
+                    self._add_metric_row(biz, p, config.M_SALE_STATUS)
+
     def _group_sibling_blocks(self) -> None:
         """같은 등록상품명(기본+옵션) 블록을 **인접**하게 정렬(분산 치유·소유자 2026-09-25).
 
@@ -1350,8 +1403,7 @@ class OutputWorkbook:
         headers = sorted(self._date_rows.get(ws.title, []))
         if len(headers) < 2:
             return False
-        regs = [self.registered_name(ws.title, _key(ws.cell(h, _COL_NAME).value))
-                or _key(ws.cell(h, _COL_NAME).value) for h in headers]
+        regs = [self._group_key(ws.cell(h, _COL_NAME).value) for h in headers]   # 상품군=블록명 base(2026-09-26)
         first_idx: dict[str, int] = {}
         for i, rg in enumerate(regs):
             first_idx.setdefault(rg, i)
@@ -1438,6 +1490,8 @@ class OutputWorkbook:
         self.normalize_date_columns()
         self._migrate_vids_to_meta()   # 옛 마스터 vid(이름칸 꼬리) → 메타 col3(v4 name-only 렌더 전 유실 방지)
         self._migrate_keyword_col()    # 옛 마스터 키워드·소헤더 C열 → A열(v4 좌측확장·유실 방지)
+        self._backfill_metric_rows()   # 옛 블록에 빠진 판매가·판매상태(+로켓그로스 재고) 지표행 보정(항목4/6)
+        self._clear_blank_keyword_ranks()  # 빈 키워드행에 남은 낡은 순위값 삭제(항목5)
         self._group_sibling_blocks()   # 같은 등록상품명(기본+옵션) 블록 인접 정렬(분산 치유)
         thin = Side(style="thin", color="BFBFBF")
         sty = _StyleCtx(
@@ -1517,11 +1571,8 @@ class OutputWorkbook:
         headers = sorted(self._date_rows.get(ws.title, []))
         # fix ④: 같은 등록상품명(변형/옵션) 블록을 한 그룹으로 묶어 그룹 바깥만 굵은 선. 옵션 블록은
         # 생성 순서상 시트에서 인접하므로 **연속된 같은 등록명 = 한 그룹**으로 본다.
-        regs = []
-        for hr in headers:
-            _rnm = _key(ws.cell(hr, _COL_NAME).value)
-            regs.append(self.registered_name(ws.title, _rnm) or _rnm)
-        # 상품군(등록상품명) 교대 배경색: 같은 등록명 변형/옵션 = 한 군(연속) → 인접 상품군을 두 색으로
+        regs = [self._group_key(ws.cell(hr, _COL_NAME).value) for hr in headers]   # 상품군=블록명 base(2026-09-26)
+        # 상품군(블록명 base) 교대 배경색: 같은 base(기본+옵션·수량 1/2/3개·판매방식 twin) = 한 군(연속) → 인접 상품군을 두 색으로
         # 교대해 시각적으로 구분(소유자 2026-09-23). 그룹 경계 판정은 _style_block_edges 와 동일(regs 연속).
         g = 0
         for i, hr in enumerate(headers):
@@ -1643,7 +1694,9 @@ class OutputWorkbook:
                 _sty_cell(ws, r, c, sty, fill=kw_fill, fnt=kw_fnt, align=sty.wrap)
             _sty_cell(ws, r, _COL_SEARCH, sty, fill=kw_fill, fnt=(sty.bold if head else None), num=not head)
             _sty_cell(ws, r, _COL_METRIC, sty, fill=(sty.f_kwhead if head else sty.f_label), fnt=sty.bold)
-            if head:   # 비고 자리(소헤더 G): 판매중지 > 체험단중 > 비고 (멱등 재계산)
+            if head:   # 비고 자리(소헤더 G)=관리대장 판매상태(항목3·소유자 2026-09-26): 판매중지 > 체험단중 > 판매중
+                # 대장에서 빠짐=판매중지, 아니면 판매중(대장에 존재). 체험단중은 판매중의 마케팅 오버레이라
+                # 그대로 유지(체험단=판매중 상태). 옛 '비고' 라벨은 폐지(담당자가 한눈에 판매상태 파악).
                 gm = ws.cell(r, _COL_METRIC)
                 if is_disc:
                     gm.value = "⛔ 판매중지"
@@ -1652,7 +1705,8 @@ class OutputWorkbook:
                     gm.value = "🔴 체험단중"
                     gm.font = Font(name=self._FN, size=11, bold=True, color="C00000")
                 else:
-                    gm.value = _LABEL_NOTE
+                    gm.value = "판매중"
+                    gm.font = sty.bold
             for c in range(_FIRST_DATE, maxc + 1):
                 _sty_cell(ws, r, c, sty, fill=(sty.mkt_fill if c in mcols else None))
 

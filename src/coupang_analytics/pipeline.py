@@ -556,19 +556,20 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
     # 기본은 **창 숨김**(offscreen). 반자동(semi)이면 처음부터 보이게 띄운다(사람이 2차인증 처리).
     with WingBrowser(profile_dir=account_profile(a.account_id), offscreen=not semi) as b:
         if not _ensure_login(b, a, pw, log, login=login, semi=semi):
-            return None, {}, {}, {}, set(), set(), {}   # 이 계정 건너뜀(무인 비번없음·otp·로그인 미완료)
+            return None, {}, {}, {}, set(), set(), {}, {}   # 이 계정 건너뜀(무인 비번없음·otp·로그인 미완료)
         collector.reset_raw()                # 계정별 응답 원문 버퍼 초기화(파일 분리)
         found = _discover_products(b, a, date_from, date_to, log)
         _dump_raw(a.account_id, log)         # 3 API 응답 원문 저장(가공 없음·분석용). found None(데이터없음)이어도 남김
         if found is None:                    # 판매분석·상품조회 모두 데이터 없음 → 건너뜀
-            return None, {}, {}, {}, set(), set(), {}
-        products, tracked, metrics, inventory, sale_status, upbundle_vids, live_all_vids, vid_meta = found
+            return None, {}, {}, {}, set(), set(), {}, {}
+        (products, tracked, metrics, inventory, sale_status, upbundle_vids, live_all_vids,
+         vid_meta, pid_by_vid) = found
         _persist_session(a, b, log)                                 # 세션 3요소+쿠키 영속(부가)
         session_state.observe_collection_done(a.account_id)         # 관측: 이 계정 수집 완료 시각
     save_discovered(a.account_id, products)   # (요약 로그는 위 with 블록에서 계정 단위로 남김)
     report = Account(a.account_id, a.representative, a.business_name, tracked)
     report.ledger_products = set(a.ledger_products)   # ⑥: 줄 존재 전체(활성+판매중지/취소선) 전파 — 완전삭제 판정용
-    return (report, metrics, inventory, sale_status, upbundle_vids, live_all_vids, vid_meta)
+    return (report, metrics, inventory, sale_status, upbundle_vids, live_all_vids, vid_meta, pid_by_vid)
 
 
 def _ensure_login(b, a: Account, pw, log, *, login: bool = True, semi: bool = False) -> bool:
@@ -715,9 +716,10 @@ def _discover_products(b, a: Account, date_from, date_to, log):
     inventory: dict[str, int] = {}
     inv_names: dict[str, str] = {}
     rfm_status: dict[str, bool] = {}   # {vid: isSaleSuspended} — RFM 재고 API(로켓그로스만)
+    inv_pids: dict[str, str] = {}      # {vid: productId} — 재고 API 노출상품ID(판매 0 상품 커버, 항목2)
     if any(p.kind in config.KINDS_WITH_INVENTORY for p in products):
         try:
-            inventory, inv_names, rfm_status = fetch_inventory(b.page, log)   # 재고 수량 + vid→상품명 roster + 판매상태
+            inventory, inv_names, rfm_status, inv_pids = fetch_inventory(b.page, log)   # 재고 수량 + roster + 판매상태 + productId
             log(f"  [{a.label}] 재고현황 {len(inventory)}개 옵션 조회")
         except InventoryFetchError as exc:   # 부가지표 — 실패해도 수집 전체는 진행(사유 명시)
             log(f"  [{a.label}] ⚠ 재고현황 조회 실패(계속) — {str(exc)[:120]}")
@@ -734,6 +736,13 @@ def _discover_products(b, a: Account, date_from, date_to, log):
     # 정리(_sweep_dead_duplicates)의 기준 — 이 집합에 없는 vid = 코팡서 사라짐. 상품조회 실패면 빈 집합(정리 skip).
     live_all_vids = {o.vendor_item_id for lst in listings for o in lst.options if o.vendor_item_id}
     vid_meta = vid_meta_of(listings)   # {vid: (판매가, 판매시작일)} — 헤더 표시(상품판매가·입고일 근사)
+    # {vid: 노출상품ID(productId)} — 상품명 하이퍼링크(쿠팡 노출페이지, 항목2). 재고 API(판매 0 상품 커버) ∪
+    # 판매분석(활동 상품). 상품조회(vendor-inventory)엔 공개 productId 가 없어 이 두 소스로만 확보(실측 2026-09-26).
+    pid_by_vid: dict[str, str] = dict(inv_pids)
+    for oid, om in metrics.items():
+        pid = getattr(om, "product_id", "")
+        if pid and oid not in pid_by_vid:
+            pid_by_vid[oid] = pid
     # 추적 범위 = 입력 대장 상품(위탁 관리분)만. 당일 발견을 매칭해 노출제목·vid·구분 부여(지표는 당일 것).
     tracked, n_match = scope_to_ledger(a.products, products)
     tracked, n_match = _augment_vids(b, a, tracked, n_match, inv_names, date_to, log)
@@ -745,7 +754,8 @@ def _discover_products(b, a: Account, date_from, date_to, log):
     log(f"  [계정 {a.account_id}/{a.label}] 대장 {len(a.products)} → 추적 {len(tracked)}"
         f"(매칭 {n_match}·vid {vid_count}) · 미매칭(vid없음) {len(unmatched)}"
         + (f": {[_short(n, 22) for n in unmatched[:10]]}{'…' if len(unmatched) > 10 else ''}" if unmatched else ""))
-    return products, tracked, metrics, inventory, sale_status, upbundle_vids, live_all_vids, vid_meta
+    return (products, tracked, metrics, inventory, sale_status, upbundle_vids, live_all_vids,
+            vid_meta, pid_by_vid)
 
 
 def _run_discover(b, a: Account, date_from, date_to, has_vendor: bool, log):
@@ -992,6 +1002,7 @@ class _ProcCtx:
     save_path: object
     sale_status: object = None   # {vid: 판매상태(문자열) 또는 isSaleSuspended(bool)} — 미입고/판매중지 구분용
     vid_meta: object = None       # {vid: (판매가, 판매시작일)} — 헤더 표시(상품판매가·로켓그로스 입고일 근사)
+    pid_by_vid: object = None     # {vid: 노출상품ID(productId)} — 상품명 하이퍼링크(항목2·판매분석∪재고)
 
 
 def _frozen_keywords(pctx: _ProcCtx, biz: str, pname: str, base: str, kind: str, title: str,
@@ -1086,6 +1097,18 @@ def _apply_vid_meta(wb, biz: str, pname: str, kind: str, opt_vids, vid_meta, dat
         wb.set_product_extra(biz, pname, inbound_date=inbound, inbound_summary=summ)   # 헤더 로켓그로스 묶음
 
 
+def _apply_pid(wb, biz: str, pname: str, opt_vids, pid_by_vid) -> None:
+    """이 블록의 옵션 vid 중 하나로 노출상품ID(productId)를 찾아 저장(항목2 상품명 하이퍼링크).
+
+    productId 는 상품(노출페이지) 단위라 같은 상품의 옵션 vid 는 같은 값을 공유 → 첫 매칭 vid 로 충분.
+    소스=판매분석∪재고(상품조회엔 공개 productId 없음). 없으면 no-op(검색 링크 폴백 유지)."""
+    if not pid_by_vid:
+        return
+    pid = next((pid_by_vid[v] for v in opt_vids if v in pid_by_vid), "")
+    if pid:
+        wb.set_product_pid(biz, pname, pid)
+
+
 def _process_option(pctx: _ProcCtx, biz: str, product, base: str, kind: str, title: str,
                     i: int, opt, multi: bool) -> None:
     """상품의 옵션(vid) 한 개를 기록. 대표(i==0)=키워드/순위/지표, 2차 옵션=판매정보(지표·재고)만.
@@ -1101,6 +1124,7 @@ def _process_option(pctx: _ProcCtx, biz: str, product, base: str, kind: str, tit
         wb.ensure_product_block(biz, pname, kind, wb.product_keywords(biz, pname),
                                 rank_rows=is_rep, registered=base)
         wb.set_product_vids(biz, pname, opt_vids)
+        _apply_pid(wb, biz, pname, opt_vids, pctx.pid_by_vid)   # 노출상품ID(항목2 하이퍼링크·판매분석∪재고)
         _apply_vid_meta(wb, biz, pname, kind, opt_vids, pctx.vid_meta, pctx.date_iso, product.inbound_summary)   # 판매가 지표행·판매일/최근입고 헤더
         _fill_product_metrics(wb, biz, pname, opt_vids, kind, pctx.metrics, pctx.inv_by_vid,
                               pctx.date_iso, log=log, sale_status=pctx.sale_status)
@@ -1136,6 +1160,7 @@ def _process_option(pctx: _ProcCtx, biz: str, product, base: str, kind: str, tit
             _ilog(log, "노출명", opt_vids, "", f"검색결과 노출명 = {_short(mi.name, 40)} (블록명은 등록상품명 고정)")
             wb.set_product_pid(biz, pname, getattr(mi, "product_id", ""))   # 항목3: 상품명 하이퍼링크용 productId
     wb.set_product_vids(biz, pname, opt_vids)          # 대표 옵션 vid 저장(③은 sibling_vids 합집합으로 매칭)
+    _apply_pid(wb, biz, pname, opt_vids, pctx.pid_by_vid)   # 노출상품ID(항목2·판매분석∪재고·순위매칭 pid보다 완전)
     _apply_vid_meta(wb, biz, pname, kind, opt_vids, pctx.vid_meta, pctx.date_iso, product.inbound_summary)   # 판매가 지표행·판매일/최근입고 헤더
     _fill_product_metrics(wb, biz, pname, opt_vids, kind, pctx.metrics, pctx.inv_by_vid, date_iso,
                           log=log, sale_status=pctx.sale_status)
@@ -1225,7 +1250,7 @@ def _sweep_dead_duplicates(wb, biz: str, live_vids, log) -> None:
 def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid,
                      date_iso, grow, log, save_path, skip_ranks: bool = False,
                      keywords_off: bool = False, sale_status=None, upbundle_vids=None,
-                     live_vids=None, vid_meta=None) -> None:
+                     live_vids=None, vid_meta=None, pid_by_vid=None) -> None:
     """계정(시트) 하나: 상품마다 **옵션 블록**을 만들고 [대표=키워드/순위/지표, 2차=지표만] 기록·저장.
 
     다중옵션 상품은 옵션(vid)별 블록으로 분리한다 — **대표(첫 옵션)** 만 키워드 동결/선정·순위(리스팅 단위)를
@@ -1267,7 +1292,7 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
         pctx = _ProcCtx(wb=wb, naver=naver, ai_key=ai_key, browser=browser, metrics=metrics,
                         inv_by_vid=inv_by_vid, date_iso=date_iso, grow=grow, skip_ranks=skip_ranks,
                         keywords_off=keywords_off, log=log, save_path=save_path, sale_status=sale_status,
-                        vid_meta=vid_meta)
+                        vid_meta=vid_meta, pid_by_vid=pid_by_vid)
         for i, opt in enumerate(opts):
             bname = _block_name(base, opt.label if multi else "")
             seen_products.append(bname)
@@ -1660,7 +1685,7 @@ def _save_ctx_progress(ctx: _RunCtx) -> None:
 
 
 def _finish(ctx: _RunCtx, a: Account, report_acc, metrics, inv_by_vid, inv_status=None,
-            upbundle_vids=None, live_vids=None, vid_meta=None) -> None:
+            upbundle_vids=None, live_vids=None, vid_meta=None, pid_by_vid=None) -> None:
     """발견 결과를 워크북에 기록 + 진행 저장(1·2차 패스 공통). report_acc=None이면 무동작.
 
     upbundle_vids = 이번 상품조회의 업번들 vid 집합 → 마스터 잔재 업번들 블록 자동삭제.
@@ -1679,14 +1704,15 @@ def _finish(ctx: _RunCtx, a: Account, report_acc, metrics, inv_by_vid, inv_statu
             _process_account(report_acc, wb, ctx.naver, ctx.ai_key, None, metrics, inv_by_vid,
                              ctx.col_label, ctx.grow, log, ctx.partial, skip_ranks=ctx.skip_ranks,
                              keywords_off=ctx.keywords_off, sale_status=inv_status,
-                             upbundle_vids=upbundle_vids, live_vids=live_vids, vid_meta=vid_meta)
+                             upbundle_vids=upbundle_vids, live_vids=live_vids, vid_meta=vid_meta,
+                             pid_by_vid=pid_by_vid)
         else:
             with WingBrowser(profile_dir=_PROFILE, offscreen=True) as rank_browser:
                 warmup(rank_browser)
                 _process_account(report_acc, wb, ctx.naver, ctx.ai_key, rank_browser, metrics,
                                  inv_by_vid, ctx.col_label, ctx.grow, log, ctx.partial,
                                  sale_status=inv_status, upbundle_vids=upbundle_vids, live_vids=live_vids,
-                                 vid_meta=vid_meta)
+                                 vid_meta=vid_meta, pid_by_vid=pid_by_vid)
         # 판매상태 불일치 경고: 쿠팡 재고 판매상태맵을 마스터 전체 상품에 vid로 대조해 저장(멱등).
         # 대장에서 빠진(판매중지 표기) 상품도 쿠팡 재고에 살아있으면 vid로 잡혀 "판매중"으로 채워진다.
         # 상태맵은 ①판매수집 로그인 세션에서만 확보되므로(②③엔 없음) 여기서 1회 반영, 렌더는 apply_style이 담당.
@@ -1733,9 +1759,11 @@ def _collect_session_first(ctx: _RunCtx, accounts, get_password
                 continue
         log(f"== [{i}/{total}] {a.label} (계정ID: {a.account_id}) ==")
         try:   # 한 계정의 어떤 오류(수집·워크북쓰기)도 전체를 막지 않게 계정 전체를 격리
-            report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids, vid_meta = _login_and_discover(
+            (report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids,
+             vid_meta, pid_by_vid) = _login_and_discover(
                 a, ctx.date_from, ctx.date_to, get_password, log, login=False)
-            _finish(ctx, a, report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids, vid_meta)
+            _finish(ctx, a, report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids,
+                    vid_meta, pid_by_vid)
         except NeedLogin:                         # 세션 없음 → 뒤로 미룸(자동제출 안 함)
             login_needed.append((i, a))
             log(f"  [{a.label}] 세션 만료 → 로그인 대기열(세션 있는 계정 먼저 수집 후 처리)")
@@ -1766,10 +1794,12 @@ def _collect_with_login(ctx: _RunCtx, login_needed, get_password, sales_semi: bo
         attempted += 1
         log(f"== [{i}/{total}] {a.label} (계정ID: {a.account_id}) — 로그인 시도 ==")
         try:
-            report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids, vid_meta = _login_and_discover(
+            (report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids,
+             vid_meta, pid_by_vid) = _login_and_discover(
                 a, ctx.date_from, ctx.date_to, get_password, log, login=True, semi=sales_semi)
             blocks = 0                            # 로그인 성공 → 연속 차단 카운터 리셋
-            _finish(ctx, a, report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids, vid_meta)
+            _finish(ctx, a, report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids,
+                    vid_meta, pid_by_vid)
         except LoginBlocked:                      # Akamai 차단 → 서킷브레이커 카운트
             blocks += 1
             log(f"  [{a.label}] 로그인 차단 누적 {blocks}/{config.LOGIN_BLOCK_CIRCUIT}")

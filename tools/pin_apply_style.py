@@ -142,7 +142,7 @@ def pin_block_fills():
     _check(f"A{kh}:E{kh}" in merged, "키워드 소헤더 A~E 가로병합(좌측확장)")
     _check(_n(ws.cell(kh + 1, 1).value) == "kw1", "키워드명=A열(v4)")
     _check(f"A{kh + 1}:E{kh + 1}" in merged, "키워드 순위행 A~E 가로병합")
-    _check(_n(ws.cell(kh, 7).value) == "비고", "정상 상품 소헤더 G='비고'")
+    _check(_n(ws.cell(kh, 7).value) == "판매중", "정상 상품 소헤더 G=관리대장 판매상태 '판매중'(항목3)")
     # 폰트 불변식(소유자 2026-09-25): 제목류=굵게·키워드명/데이터=일반
     _check(ws.cell(hr, 7).font.bold, "G 지표 라벨(날짜) 굵게=제목")
     _check(ws.cell(kh, 6).font.bold, "F 검색량 제목 굵게")

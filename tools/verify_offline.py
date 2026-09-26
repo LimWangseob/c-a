@@ -1167,6 +1167,49 @@ def t1_promo_effect():
     _ok("체험단효과: +38%·32→18↑=개선 / 데이터부족=공란 / 악화=down / 위밖=순위 제외")
 
 
+def t1_apply_style_migrations():
+    print("[14] apply_style 자가치유 — 판매가/판매상태 지표행 보정(항목4/6)·빈 키워드행 낡은순위 삭제(항목5)·"
+          "비고=관리대장 판매상태(항목3)")
+    from coupang_analytics.workbook import _norm, _key
+    wb = OutputWorkbook.empty()
+    wb.ensure_product_block("가게M", "상품M", config.KIND_CONTRACT, ["kw1"])   # kw1 + 빈 순위행 3
+    ws = wb.wb["가게M"]
+    # (a) 옛 마스터 모사 — 판매가·판매상태 지표행을 물리 삭제(2026-09-24 이전 블록엔 없었음)
+    rows = sorted((wb._metric_row[("가게M", "상품M", m)]
+                   for m in (config.M_SALE_PRICE, config.M_SALE_STATUS)), reverse=True)
+    for r in rows:
+        ws.delete_rows(r, 1)
+    wb._reindex()
+    assert ("가게M", "상품M", config.M_SALE_PRICE) not in wb._metric_row, "사전조건: 판매가행 없음"
+    # (b) 빈(이름 공란) 키워드 순위행에 낡은 '50위' 심기
+    blanks = [r for r, name in wb._kw_block_rows("가게M", "상품M") if not name]
+    assert blanks, "빈 키워드행이 있어야(사전조건)"
+    dcol = max(wb._date_col.get("가게M", {}).values(), default=8)
+    ws.cell(blanks[0], dcol, "50위")
+    # (c) 판매중지 블록(비고=⛔ 판매중지 검증용) — 대장에서 빠짐
+    wb.ensure_product_block("가게M", "상품D", config.KIND_PERSONAL, ["kwd"])
+    wb.set_discontinued("가게M", "상품D", True)
+    wb.apply_style()
+    # 검증 (a) 판매가·판매상태 자동 보정
+    assert ("가게M", "상품M", config.M_SALE_PRICE) in wb._metric_row, "판매가행 미보정(항목4/6)"
+    assert ("가게M", "상품M", config.M_SALE_STATUS) in wb._metric_row, "판매상태행 미보정(항목4/6)"
+    # 검증 (b) 빈 키워드행 낡은 순위값 삭제
+    ws = wb.wb["가게M"]
+    mc = ws.max_column
+    stale = [(r, c) for r, name in wb._kw_block_rows("가게M", "상품M") if not name
+             for c in range(8, mc + 1) if ws.cell(r, c).value not in (None, "")]
+    assert not stale, f"빈 키워드행 낡은순위 잔존(항목5): {stale}"
+    # 검증 (c) 비고 소헤더 = 관리대장 판매상태
+    def _sub_g(pname):
+        hr = next(r for r in wb._date_rows["가게M"] if _key(ws.cell(r, 3).value) == pname)
+        kh = next(r for r in range(hr, ws.max_row + 1)
+                  if _key(ws.cell(r, 1).value) == "키워드")
+        return _norm(ws.cell(kh, 7).value)
+    assert _sub_g("상품M") == "판매중", f"비고=판매중 아님(항목3): {_sub_g('상품M')}"
+    assert _sub_g("상품D") == "⛔ 판매중지", f"판매중지 블록 비고 오류: {_sub_g('상품D')}"
+    _ok("자가치유: 판매가/판매상태 보정 · 빈 키워드행 낡은순위 삭제 · 비고=판매중/판매중지")
+
+
 # ── [6] 키워드 Phase B 선정 로직 ───────────────────────────────
 # 기본 = **결정적 모킹**(네이버·OpenAI 경계만 페이크, 실제 select_keywords_light 로직 그대로 실행).
 #        회귀 게이트가 빠르고(<2s) 결정적이려면 실 API 호출 금지(비용·네트워크·비결정성 제거).
@@ -1302,6 +1345,7 @@ def main():
     t1_date_columns()
     t1_inventory_missing_error()
     t1_promo_effect()
+    t1_apply_style_migrations()
     t2_keywords(store, il)
     print("=" * 60)
     print("  [완료] 로그인 불필요 부분 실증 종료")

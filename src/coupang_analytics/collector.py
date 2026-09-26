@@ -248,6 +248,7 @@ def _parse_vendor_items(items: list[dict]) -> dict[str, OptionMetric]:
             sales=_num(m.get("totalUnitsSold")),
             visitors=_num(m.get("totalUniqueVisitor")),
             registration_type=str(d.get("registrationType") or "").strip(),
+            product_id=str(d.get("productId") or "").strip(),   # 노출상품ID(항목2 하이퍼링크)
         )
     return out
 
@@ -342,10 +343,30 @@ def _parse_inventory_status(vi_props: list[dict]) -> dict[str, bool]:
     return out
 
 
-def fetch_inventory(page, log=None) -> tuple[dict[str, int], dict[str, str], dict[str, bool]]:
+def _parse_inventory_pids(vi_props: list[dict]) -> dict[str, str]:
+    """재고 search 의 viProperties → {옵션ID(vendorItemId): 노출상품ID(productId)}.
+
+    productId = listingDetails.productId(우선) 또는 creturnConfigViewDto.productId(폴백) — 라이브 캡처 확정.
+    판매분석(vi-detail)에 없는 판매 0 로켓그로스 상품도 재고 목록엔 있어 productId 를 줘(vid 306/519 실측),
+    상품명 하이퍼링크(쿠팡 노출페이지)를 걸 수 있게 하는 보강 소스(항목2·2026-09-26). productId 없는 옵션은 제외."""
+    out: dict[str, str] = {}
+    for vp in vi_props:
+        oid = str(vp.get("vendorItemId") or "").strip()
+        if not oid:
+            continue
+        ld = vp.get("listingDetails") or {}
+        cr = vp.get("creturnConfigViewDto") or {}
+        pid = str(ld.get("productId") or cr.get("productId") or "").strip()
+        if pid:
+            out[oid] = pid
+    return out
+
+
+def fetch_inventory(page, log=None) -> tuple[dict[str, int], dict[str, str], dict[str, bool], dict[str, str]]:
     """로켓그로스 재고현황 API(inventory-health-dashboard/search)를 **직접 fetch**.
 
-    반환: ({옵션ID: 판매가능 재고수량}, {옵션ID: 등록상품명}, {옵션ID: 판매중지여부}). 상품명 맵은
+    반환: ({옵션ID: 판매가능 재고수량}, {옵션ID: 등록상품명}, {옵션ID: 판매중지여부}, {옵션ID: 노출상품ID}).
+    productId 맵(4번째)=판매분석에 없는 판매 0 로켓그로스 상품까지 상품명 하이퍼링크(항목2) 소스. 상품명 맵은
     **판매 무관 vid 보강 소스**(그로스 상품은 판매 0이어도 재고 목록에 있어 vid·상품명을 준다 → 미매칭
     대장 상품 vid 보강에 사용). 판매중지여부 맵은 대장↔쿠팡 판매상태 불일치 경고에 쓴다(isSaleSuspended).
     page 는 **로그인된 wing.coupang.com 세션 페이지**(same-origin + 세션쿠키 + XSRF). 계약(RFM) 계정 전용
@@ -360,12 +381,13 @@ def fetch_inventory(page, log=None) -> tuple[dict[str, int], dict[str, str], dic
     return _fetch_inventory_status(page, "VISIBLE", log)
 
 
-def _fetch_inventory_status(page, hidden_status: str, log) -> tuple[dict, dict, dict]:
-    """한 hiddenStatus(VISIBLE|HIDDEN) 로 로켓그로스 재고 전량 조회 → (재고맵, 이름맵, 판매중지여부맵).
+def _fetch_inventory_status(page, hidden_status: str, log) -> tuple[dict, dict, dict, dict]:
+    """한 hiddenStatus(VISIBLE|HIDDEN) 로 로켓그로스 재고 전량 조회 → (재고맵, 이름맵, 판매중지여부맵, productId맵).
 
     fetch_inventory 의 실조회 본체(페이지네이션 + pageNumber 미진행 시 큰 pageSize 전량 재요청). 상태별로 호출."""
     names: dict[str, str] = {}   # {vid: 등록상품명} — 판매 무관 그로스 상품 roster(vid 보강용)
     status: dict[str, bool] = {}  # {vid: isSaleSuspended} — 대장↔쿠팡 판매상태 불일치 경고용
+    pids: dict[str, str] = {}    # {vid: productId} — 상품명 하이퍼링크(항목2) 소스(판매 0 상품 커버)
 
     def _fetch(page_size: int, page_num: int) -> tuple[list, int]:
         payload = {"paginationRequest": {"pageSize": page_size, "pageNumber": page_num,
@@ -397,6 +419,7 @@ def _fetch_inventory_status(page, hidden_status: str, log) -> tuple[dict, dict, 
         out.update(_parse_inventory(props))
         names.update(_parse_inventory_roster(props))
         status.update(_parse_inventory_status(props))
+        pids.update(_parse_inventory_pids(props))
         total = total or len(out)
         log(f"  [재고:{hidden_status}] search p{page_num + 1} — {len(props)}개 (누적 {len(out)}/{total})")
         if not props or len(out) >= total or len(out) == before:
@@ -410,13 +433,14 @@ def _fetch_inventory_status(page, hidden_status: str, log) -> tuple[dict, dict, 
             props, _ = _fetch(big, 0)
         except InventoryFetchError as exc:   # 큰 pageSize 거부 → 상위분 유지(회귀 없음)
             log(f"  [재고] ⚠ 전량 재요청 실패(pageSize {big}) — 상위 {len(out)}/{total}개만 유지 · {str(exc)[:80]}")
-            return out, names, status
+            return out, names, status, pids
         full = _parse_inventory(props)
         if len(full) > len(out):
             log(f"  [재고] 전량 재요청(pageSize {big}) → {len(full)}개 확보(이전 상위 {len(out)}개)")
-            return full, _parse_inventory_roster(props), _parse_inventory_status(props)
+            return (full, _parse_inventory_roster(props), _parse_inventory_status(props),
+                    _parse_inventory_pids(props))
         log(f"  [재고] ⚠ 전량 재요청도 {len(full)}개 — 상위 {len(out)}/{total}개만 유지(무한루프 방지)")
-    return out, names, status
+    return out, names, status, pids
 
 
 def _parse_vendor_inventory(product_list: list[dict]) -> list[VendorInventoryListing]:

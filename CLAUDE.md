@@ -67,6 +67,13 @@ python ui/app_qt.py     # 기본 UI = PySide6(Qt) + Windows 11 Fluent 스타일
   게이트) 보존. 매 추출 후 게이트 초록 유지, 커밋은 작게·자주.
 
 ## 현재 상태
+- **✅결과파일 이미지 9이슈 정밀분석+조치 구현(2026-09-26, 소유자 전수조사 요청, 메모 handoff-9issues-images-260926)**:
+  - **항목7/8/9 상품군 그룹키 = 블록명 base**(`workbook._group_key`, 옵션 접미 `" (라벨)"` 제거+공백정규화): 등록상품명 드리프트(레몬버베나 "…정"↔"…정 60정"·식기건조대 twin ''↔세트)로 같은 상품군이 다른색·분산되던 것 → `_regroup_sheet_blocks`·`_style_sheet` 그룹핑을 등록상품명→블록명 base. 기본+옵션 자동 인접·동색(실측 레몬버베나 3블록 통일).
+  - **항목4/6 판매가·판매상태 지표행 자가치유**(`_backfill_metric_rows`·apply_style): 2026-09-24 신설 이전 옛 블록(대장서 빠진 판매중지·미로그인 계정=파이프라인 미방문)엔 두 행 없음(실측 13블록) → 저장마다 없는 행만 삽입(재고<판매가<판매상태·재고는 KINDS_WITH_INVENTORY만).
+  - **항목5 빈 키워드행 낡은순위 삭제**(`_clear_blank_keyword_ranks`): 이름 공란 M_RANK 행에 남은 옛 '50위'(실측 43행)="키워드 없는데 순위 표기" → 저장마다 이름 공란 행 일자칸 삭제(이름 있는 행 불변).
+  - **항목3 비고 소헤더 = 관리대장 판매상태**(⛔판매중지>🔴체험단중>판매중, 옛 '비고' 라벨 폐지). ⚠`has_keyword_section` 소헤더 판정을 G('비고')+A('키워드')→**A('키워드')만**(항목3 G 용도전환 대응·`_find_kw_head`와 일관)·`_migrate_keyword_col` sub_g에 '판매중' 추가.
+  - **항목2 상품명 하이퍼링크 productId 출처 확대**: ⛔상품조회(vendor-inventory)엔 공개 productId 없음(실측 _raw). 기존=③순위 SERP 매칭 시만(미매칭=검색링크). → **판매분석(vi-detail `vendorItemDetails.productId`)∪재고(`listingDetails.productId`)** 로 수집 시 vid→productId(**재고 519 vid 중 306이 판매분석에 없음=재고 pid 필수**·실측). collector `OptionMetric.product_id`+`_parse_inventory_pids`·`fetch_inventory` 3→4튜플·pipeline `pid_by_vid`(inv∪sales) 배선(_discover→_login_and_discover 8튜플→_finish→_process_account→_ProcCtx→_process_option `_apply_pid`).
+  - **[검증]** 게이트 7종+`check_complexity`(exit 0). 핀 pin_apply_style[S1]·verify_offline[14]·verify_render_precision[항목2 링크·상품군색]·페이크 4튜플화. ⚠**라이브 확인·재배포·커밋/푸시/zip 남음**. SSOT=DESIGN §계정목록·§2.3.
 - **✅소유자 9개 요구 + 6개 추가요구 전부 구현·커밋·푸시(2026-09-25~26, ⚠라이브·운용PC 재배포 확인 남음, 메모 `handoff-9items-spec-260925`·`feature-business-name-grouping`·`feature-product-coupang-link`·`fix-multiaccount-reconcile-scope`)**:
   - **⑤ 사업자명 기준 그룹핑(아키텍처 전환)**: "사업자명 1개=계정ID 1개=시트 1개" 폐지 → **같은 사업자명 다계정ID를 한 시트**로·계정ID를 **상품(줄) 속성**(메타 `_상품ID` col12)으로. `set_account_id`=계정ID 집합 누적·`account_ids_of`·판매수집 스탬프 **계정 단위**(`_수집스탬프` 시트, 둘째 계정 스킵 버그 해결)·입력검증 완화(같은 사업자명 다계정ID=치명→`[SYNC]` 경고)·gsheet 밴드 사업자명 기준·일원화(rename) 다계정 인지(발산=보류+경고). 핀 verify_offline[17·18·19]·verify_gsheet[6b].
   - **①②③ 시작 프리플라이트**: `backup_sources`(2파일 백업, 이미 시작부 호출)+`preflight_sync_check`(관리대장↔결과 비변경 `[SYNC]` 진단: 신규·삭제예정·이름변경·취소선). 핀 verify_offline[20].

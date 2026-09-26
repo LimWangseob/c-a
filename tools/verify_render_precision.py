@@ -61,13 +61,16 @@ def _rich_discover(a, date_from, date_to, get_password, log, login=True, semi=Fa
     inventory: dict[str, int] = {}
     inv_status: dict[str, object] = {}
     vid_meta: dict[str, tuple] = {}
+    pid_by_vid: dict[str, str] = {}
     for product in a.products:
         rt = "RFM" if product.kind == config.KIND_CONTRACT else "NORMAL"
         for opt in product.options:
             for vid in opt.vendor_item_ids:
                 metrics[vid] = OptionMetric(option_id=vid, product_name=product.name,
                                             option_name=opt.label, item_id=f"item_{vid}",
-                                            views=310, sales=27, visitors=88, registration_type=rt)
+                                            views=310, sales=27, visitors=88, registration_type=rt,
+                                            product_id=f"pid_{vid}")
+                pid_by_vid[vid] = f"pid_{vid}"
                 if product.kind == config.KIND_CONTRACT:
                     inventory[vid] = 45
                     inv_status[vid] = "판매중"
@@ -75,7 +78,7 @@ def _rich_discover(a, date_from, date_to, get_password, log, login=True, semi=Fa
     live = {vid for p in a.products for o in p.options for vid in o.vendor_item_ids}
     log(f"  [{a.business_name}/{a.account_id}] 발견(정밀) 상품 {len(a.products)}개")
     return (Account(a.account_id, a.representative, a.business_name, a.products),
-            metrics, inventory, inv_status, set(), live, vid_meta)
+            metrics, inventory, inv_status, set(), live, vid_meta, pid_by_vid)
 
 
 def _fixture() -> InputList:
@@ -164,6 +167,12 @@ def main() -> int:
     _chk(_metric_val(ws, "타프 (베이지)", config.M_INVENTORY, dcol) == 45, "재고현황=45")
     _chk(_metric_val(ws, "타프 (베이지)", config.M_SALE_PRICE, dcol) == 19900, "판매가=19900")
     _chk(_n(_metric_val(ws, "타프 (베이지)", config.M_SALE_STATUS, dcol)) == "판매중", "판매상태=판매중")
+
+    # ── 항목2: 상품명 하이퍼링크 = 노출상품 페이지(productId, 판매분석∪재고에서 확보) ──
+    wpid = OutputWorkbook.load(final)
+    _url = wpid.product_url("로움컨설팅", "타프 (베이지)")
+    _chk("/vp/products/pid_" in _url, f"상품 페이지 링크(productId)={_url[:60]}")
+    _chk("np/search" not in _url, "검색 링크 폴백 아님(pid 확보됨)")
 
     # ── 키워드(순위·검색량) ──
     print("[키워드 순위·검색량]")

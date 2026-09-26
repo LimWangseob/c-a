@@ -46,6 +46,7 @@ class OptionMetric:
     sales: int            # 판매량 → 판매건수
     visitors: int         # 방문자 → 방문자건수
     registration_type: str = ""   # NORMAL(개인/판매자배송) / RFM(계약/로켓그로스) — 상품구분 판별
+    product_id: str = ""  # 노출상품ID(productId) — 상품명 하이퍼링크(쿠팡 노출페이지)용. 판매분석 응답서 확보(항목2)
 
 
 def parse_by_option(path: str | Path) -> dict[str, OptionMetric]:
