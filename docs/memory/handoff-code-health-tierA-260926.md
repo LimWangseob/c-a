@@ -1,14 +1,24 @@
 ---
 name: handoff-code-health-tiera-260926
-description: "코드건강 재점검(2026-09-26) — vulture/radon 측정으로 회귀 확증(9이슈 대량수정 부작용 D+ 8개 재유입), Tier A(제자리 분해+게이트 구멍 수정) 완료·게이트 초록. Tier B(모듈 분리 MI C→B) 다음."
+description: "코드건강 대정비 완료(2026-09-26) — Tier A(회귀 D+8 제자리분해+게이트구멍수정)+Tier B(pipeline 6모듈·workbook 4모듈 분리, 두 C몬스터 해소)+죽은코드 물리삭제(offscreen백필 포함). 정밀 시뮬 실측 통과(렌더31/0·시뮬78/0). 커밋·푸시·빌드 완료."
 metadata:
   node_type: memory
   type: project
   originSessionId: 3588291b-3435-4968-8471-8410129d1b69
-  modified: 2026-09-26T07:44:55.626Z
+  modified: 2026-09-26T14:08:16.436Z
 ---
 
-소유자 요청 "전체 소스코드 점검(누더기·과거 정상→오류)" + "Tier A+B 연속" 지시로 착수. **Tier A 완료·미커밋 상태에서 커밋 진행**(이 메모 시점).
+## ✅ 세션 완료 요약(2026-09-26)
+소유자 "전체 소스코드 점검 + 정밀 시뮬 실측 + 커밋/푸시/빌드" 지시. **전부 완료**.
+- **Tier A**: 회귀 D+ 8개 제자리분해·게이트 구멍(4파일 D+ 재유입 차단)·죽은삼항식(`f90d913`).
+- **Tier B**: pipeline 2684줄 C→**6모듈 A/B**·workbook 2460줄→**4모듈**(코어만 C·응집 데이터모델). `7b08dc2·f28e34f·d7c54f8·4b421a1`.
+- **죽은코드 삭제**: `_roster`·`_SEARCH_BOX_SEL`·`opened`·`_bar_bg` + offscreen 순위백필(`_backfill_ranks` 등·소유자 승인·가드/재수출/simulate까지). `842d0e4·b8dde4d`.
+- **정밀 시뮬 실측(오프라인)**: 렌더검증 셀단위 **31/0** · 시뮬 14시나리오 **78/0** · verify_offline exit0(26섹션) · verify_gsheet 11섹션 · 게이트 7종+복잡도 초록 · vulture 80%=0 · 실제 UI(app_qt·app) import OK. → 재구조화·삭제 **행동 불변** 확증.
+- ⚠**라이브 한계**: pipeline_sales(로그인·Akamai·수집) 오프라인 미커버 → 사무실 ①판매수집 1회 확인 권고.
+- **남은 C(보류)**: workbook.py 코어(응집 데이터모델)·ui/app_qt.py(이번 범위 밖·UI 1630줄 — 필요시 별 세션서 mixin/헬퍼 분리).
+
+---
+소유자 요청 "전체 소스코드 점검(누더기·과거 정상→오류)" + "Tier A+B 연속" 지시로 착수.
 
 ## 측정으로 회귀 확증 (재현=`designs/CODE_HEALTH_PLAN.md §6`)
 - **크기 폭증(9/22→9/26·9이슈 부작용)**: pipeline 1933→2684(+751)·workbook 1576→2460(+884)·collector 740→840(MI A→B).
