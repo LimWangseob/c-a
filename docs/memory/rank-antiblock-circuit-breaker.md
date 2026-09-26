@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: feedback
   originSessionId: 5de72db9-7e02-4d7c-8021-a6f0939dde64
-  modified: 2026-09-15T01:20:53.074Z
+  modified: 2026-09-26T13:11:01.806Z
 ---
 
 **사용자 목표**: 매일 노출현황 분석 → 대응 마케팅 계획 수립. **Why**: 폐쇄루프(순위↔방문↔판매↔매출)로 매일 의사결정.
@@ -15,7 +15,7 @@ metadata:
 - **노출순위 = 공개검색(www.coupang.com) → Akamai 차단 제약**. 이것만 문제.
 
 **차단 대응 방향**: **①측정 트래픽 최소화 + ②이상 시 정직하게 중단** + (2026-09-14부터) **실제 상호작용 재현 허용**.
-- **🔒 offscreen 자동 순위검색 폐기 = 반자동만(2026-09-15 정책 고정, 라이브 실증)**: 같은 warm IP에서 **offscreen 자동(공개 SERP 직접 fetch/네비, 백필 포함)은 0/237 전멸**(응답 23~59s→cooldown 2회 초과 당일중지), **visible 자동타이핑(③ 반자동)은 237/237 완주**. → Akamai는 "어떻게 검색하느냐(신뢰 키입력·실제 창)"에 민감 = **경로가 결정적.** 쿠팡 순위는 **반자동만**, `_backfill_ranks`/`_measure_unfilled_once`(offscreen 자동)는 **사문화**(skip_ranks·keywords_off 가드로 미호출, 코드는 잔존). **전체실행 = ①반자동 판매 → ②키워드선정(offscreen 노출측정 없음·단 쿠팡 자동완성=연관검색어는 사용 [[keyword-methodology-ai-anchor]]) → ③반자동, offscreen 전무**(UI `do_run_full` 조합). **Why**: offscreen 자동은 IP만 태우고 소득 0. **How to apply**: 순위는 항상 ③ 반자동(track_ranks_stage semi=True), 전체실행도 이 조합. DESIGN §5.2·§4.6·CLAUDE 제약 반영. [[semi-auto-rank-and-exposed-name]] [[session-current-state]]
+- **🔒 offscreen 자동 순위검색 폐기 = 반자동만(2026-09-15 정책 고정, 라이브 실증)**: 같은 warm IP에서 **offscreen 자동(공개 SERP 직접 fetch/네비, 백필 포함)은 0/237 전멸**(응답 23~59s→cooldown 2회 초과 당일중지), **visible 자동타이핑(③ 반자동)은 237/237 완주**. → Akamai는 "어떻게 검색하느냐(신뢰 키입력·실제 창)"에 민감 = **경로가 결정적.** 쿠팡 순위는 **반자동만**, `_backfill_ranks`/`_measure_unfilled_once`/`_count_unfilled_ranks`(offscreen 자동)는 **폐기·물리 삭제**(2026-09-26·코드에서 완전 제거). **전체실행 = ①반자동 판매 → ②키워드선정(offscreen 노출측정 없음·단 쿠팡 자동완성=연관검색어는 사용 [[keyword-methodology-ai-anchor]]) → ③반자동, offscreen 전무**(UI `do_run_full` 조합). **Why**: offscreen 자동은 IP만 태우고 소득 0. **How to apply**: 순위는 항상 ③ 반자동(track_ranks_stage semi=True), 전체실행도 이 조합. DESIGN §5.2·§4.6·CLAUDE 제약 반영. [[semi-auto-rank-and-exposed-name]] [[session-current-state]]
 - 🔄 **정책 변경(2026-09-14 사용자 지시 — "중요한 사항, 지금부터 허용")**: 이전 "행동 위장(마우스/스크롤/체류시간) 금지"(2026-09-10)를 **철회하고 허용**으로 전환. 근거=사용자 실측상 **타이핑(trusted 키이벤트)이 붙여넣기 대비 실제 통과 효과**([[coupang-blocks-paste-requires-typing]]) → 입력·상호작용의 진짜성이 변수일 수 있음(마우스/스크롤 효과는 미검증이나 "효과없음"으로 단정 못 함 — 통제 A/B 없었음). **허용 범위 = 실제 브라우저의 실제 입력**(CDP `Input` 마우스 이동·휠 스크롤·실제 페이지 네비 = 타이핑과 같은 계열). ⚠ 실행 전 **깨끗한 IP(핫스팟)에서 A/B로 실효성 검증**하고 **위탁계정 정지 위험** 유의(효과 미검증이므로 "개선 가정" 금지·[[fix-from-real-evidence]]).
 - **🔧 지문/TLS 위조 = 하드 금지 아님·소유자 판단(2026-09-14 정정)**: 이전에 Claude가 "여전히 금지"로 일방 단정했으나 **철회**. 자기 상품 순위 확인은 위법 아님 → 소유자가 결정. **단 정직한 실무 조언(도덕 아님·소유자 보호용)**: 지문/TLS 위조(가짜 UA·stealth·JA3·`_abck` 재생)는 **Akamai가 지문 불일치를 가장 잘 잡아 위탁계정 밴 위험이 제일 큼**(샵마인도 안 씀=실제 Chromium [[shopmine-architecture]]). ∴ **순서 권고**: 안전·유효한 것부터(실제 마우스/타이핑=완료·웜 세션·간격·IP) → 부족하면 지문 쪽을 **비핵심 컨텍스트 테스트+소유자 협의**로 조심스럽게. 유연하게 대응하되 밴 위험은 사실대로 알린다. [[login-policy-real-browser-only]]
 - ⛔ 엔드포인트별 방어강도 단정 금지("상세페이지가 검색보다 약하다" 등 근거없음). "N회 임계치" 단정 금지(Akamai는 복합 신호로 Bot Score).

@@ -44,7 +44,7 @@
 
 ### 1-4. 죽은 코드 vulture
 - 신뢰도 80%: **1건**(`detail_images.py:149` ternary). 60%: 59건(대부분 오탐=동적호출·미사용인자).
-- 알려진 사문화(가드로 미호출): `pipeline._backfill_ranks`/`_measure_unfilled_once`, `kw_shopping.py`(네이버쇼핑 API 종료). vulture가 못 잡음(참조는 남아서). 분해 중 함께 제거 검토.
+- ✅ **제거됨**: `pipeline._backfill_ranks`/`_measure_unfilled_once`/`_count_unfilled_ranks`(offscreen 순위백필·폐기·2026-09-26 물리 삭제)·`kw_shopping.py`(네이버쇼핑 API 종료·2026-09-25 삭제).
 
 ### 1-5. 테스트/훅 인프라 = 없음
 - pytest·`tests/`·`pytest.ini`·git 훅 **전무**. 테스트=수동 스크립트 3개:

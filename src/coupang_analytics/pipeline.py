@@ -37,7 +37,7 @@ from .pipeline_gsheet import (  # noqa: E402,F401
     push_ledger_inventory, restore_master_from_gsheet)
 # ③ 순위(측정·서킷브레이커·자동/반자동 검색·스테이지)는 pipeline_ranks 로 분리. pipeline.X 로 다시 노출
 # (핀/시뮬 monkeypatch 대상은 pipeline_ranks). core(_fill_product_metrics·_finalize_run)가 _best/
-# _measure_safe/_reset_rank_state/_backfill_ranks/_RANK_HALT 를 호출하므로 재수출 필요.
+# _measure_safe/_reset_rank_state/_RANK_HALT 를 호출하므로 재수출 필요.
 # ① 판매수집 엔진(로그인·발견·계정처리)은 pipeline_sales 로 분리. pipeline.X 로 다시 노출
 # (run_full 이 _login_and_discover·_process_account 호출·NeedLogin류 catch·도구/핀이 여러 심볼 import).
 from .pipeline_sales import (  # noqa: E402,F401
@@ -53,9 +53,9 @@ from .pipeline_process import (  # noqa: E402,F401
     _migrate_product_blocks, _process_account, _process_option, _product_matcher,
     _purge_upbundle_blocks, _resolve_keywords, _sweep_dead_duplicates)
 from .pipeline_ranks import (  # noqa: E402,F401
-    RankHalt, _RANK_CB, _RANK_HALT, _RANK_TELEMETRY_ID, _all_pages, _backfill_ranks, _best,
-    _count_unfilled_ranks, _interruptible_sleep, _live_url, _looks_blocked, _measure,
-    _measure_nav_serial, _measure_product_auto, _measure_safe, _measure_unfilled_once,
+    RankHalt, _RANK_CB, _RANK_HALT, _RANK_TELEMETRY_ID, _all_pages, _best,
+    _interruptible_sleep, _live_url, _looks_blocked, _measure,
+    _measure_nav_serial, _measure_product_auto, _measure_safe,
     _prefill_search, _rank_cooldown, _rank_matcher, _reset_rank_state, _search_q,
     _semi_browser_prep, _semi_on_miss, _semi_prep_product, _semi_record, _semi_search_one,
     _semi_start_log, _semi_summary_log, _semi_track_product, _submit_search, _track_ranks_semi,
@@ -667,11 +667,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     if sales_skipped and not keywords_off:
         _select_keywords_for_skipped(wb, partial, sales_skipped, naver, ai_key, log)
 
-    if not skip_ranks and not keywords_off:   # 노출순위 미처리분 자동 재시도(쿨다운·진전없으면 중단).
-        # ⚠ keywords_off(①판매수집 전용)는 순위를 절대 다루지 않으므로 백필도 하지 않는다(과거 resume가
-        #    skip_ranks=False를 물려받으면 ①이 헛도는 offscreen 백필을 시도하던 잠재버그 방지).
-        _backfill_ranks(wb, partial, log, was_blocked=_RANK_HALT["stop"])
-
+    # (offscreen 순위백필 _backfill_ranks 는 폐기·물리 삭제 — 2026-09-26. ③순위는 반자동만·§DESIGN §5.2)
     # 통계 마스터/스냅샷 저장 + 결과 구글시트 반영 + 진행파일 정리
     return _finalize_run(ctx, master, prog, now, gsheet_output_url, removed_accounts, uncollected,
                          renamed_accounts=renamed_accounts)

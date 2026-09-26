@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 3a577ce1-852a-4bb4-b64f-e6d46ce615f6
-  modified: 2026-09-20T07:19:05.579Z
+  modified: 2026-09-26T13:11:12.722Z
 ---
 
 **⭐2026-09-20-11 (후속 5건 + 키워드=시트값 + 작업전 백업·커밋 ac12649·53174ef·7f6511d): 옵션분리 위 마무리.** 이 세션 4커밋(모두 로컬 master·미푸시). ①**옵션분리 후속 5건**(ac12649): 계정목록=상품별 1줄(`_is_secondary_option`+`_product_rows` 필터·2차옵션 제외)·동결키워드 검색량 네이버채움(`keyword_search`+`_fill_frozen_search_volumes`)·**마스터없으면 gsheet복원**(`restore_master_from_gsheet`, UI가 master_exists 판정 전 호출)·변형상품 서식 그룹화(apply_style 같은 등록명 그룹 바깥만 굵은선)·실행모드 용어("오늘 것만 다시 수집"·"통계 전체 초기화(백업 후)"). ②**키워드=구글시트 셀 값 기준**(53174ef, 소유자 최종확정·이력보존 폐기): 시트에 채워진 키워드=추적대상·변경체크 없이 그대로·삭제=`clear_keyword_row`(과거값까지 삭제)·**AI 톱업 없음**(4개 중 2개만 있으면 2개만·빈칸 공란)·새상품(0개)만 AI·상한 `KW_MAX_TRACK=10`(가변)·안전장치(시트 0개면 미변경). 중간에 넣었던 중단/이력보존(69e7561)은 되돌림. ③**작업 전 자동 백업**(7f6511d): `backup_sources`가 모든 작업 시작 시 로컬 마스터+결과시트+관리대장을 `output/백업/`에 타임스탬프 저장(UI 전 진입점). ④정밀시뮬 stale 수정(simulate_stages `_rows`가 4행패딩 빈행을 키워드로 오인→제외, 18/0 통과). **실측: 실제 구글시트에 담당자 키워드 편집 2건 대기**(휴라엘 거북목교정기·캠핑타프)→다음 18시 실행이 반영(옛 키워드·이력 삭제). SA 편집권한 2시트 확인·구글시트 사본 백업 완료. 검증 4종 통과. SSOT=DESIGN §0-000000·§0-0000000, [[daily-stats-keyword-freeze]] [[pending-code-fixes-next-session]].
@@ -50,7 +50,7 @@ metadata:
 
 **⭐2026-09-16 업데이트(최신)**: ①**상세페이지 이미지 추출** 기능 신설(A안 CDP attach·[[detail-image-extraction]])·②**재부팅 자동복구** 구현([[reboot-recovery]])·③app_qt **창 크기** 화면제한+자유리사이즈 수정·④스케줄러 스크립트 인코딩(BOM) 수정+python소스용 `install_schedule_py.bat` 추가. **이 세션 작업 커밋 완료.** ⚠**미결**: (a)09-15 저녁 전체실행이 **01:29 Windows업데이트 재부팅으로 중단**(③순위 59%=249/424키워드, 판매25/25·키워드 완료). 마스터 `통계.xlsx` 01:29저장분 안전. 마커 없어 자동복구 안 됨 → 앱 **"③순위(반자동)"로 수동 마무리** 필요(순위41%+그로스재고+구글시트). (b)사용자가 `install_schedule_py.bat`(관리자) 실행해 스케줄러 등록 + Windows "재시작후 자동로그인 완료"는 켜둠. (c)사용자 선호=**쉬운말·전문용어 금지**([[plain-language-no-jargon]]).
 
-**⭐전체실행 재설계(2026-09-15, 확정·운용): offscreen 전무.** 전체실행 = **①반자동 판매 → ②키워드선정(노출측정 없음·단 쿠팡 자동완성=연관검색어는 사용) → ③반자동 순위**. 구현=`do_run_full`(app_qt·app.py)이 `run_full(keywords_off=True, sales_semi=True, skip_ranks=True)` → `select_keywords_stage()` → `track_ranks_stage(semi=True)` 순차. **무인 `--auto`도 동일 반자동 조합**(start_auto, 무인이어도 방식=반자동). Task Scheduler(`deploy/install_schedule.ps1`)가 18:00 `--auto` 시작·06:00 자동종료. `_backfill_ranks` 가드=`not skip_ranks and not keywords_off`(offscreen 순위경로 사문화). 근거=**offscreen 자동은 warm IP서 0/237 전멸 vs visible 자동타이핑 237/237 완주** 라이브 실증([[semi-auto-rank-and-exposed-name]] [[rank-antiblock-circuit-breaker]]). SSOT=DESIGN §0-0.
+**⭐전체실행 재설계(2026-09-15, 확정·운용): offscreen 전무.** 전체실행 = **①반자동 판매 → ②키워드선정(노출측정 없음·단 쿠팡 자동완성=연관검색어는 사용) → ③반자동 순위**. 구현=`do_run_full`(app_qt·app.py)이 `run_full(keywords_off=True, sales_semi=True, skip_ranks=True)` → `select_keywords_stage()` → `track_ranks_stage(semi=True)` 순차. **무인 `--auto`도 동일 반자동 조합**(start_auto, 무인이어도 방식=반자동). Task Scheduler(`deploy/install_schedule.ps1`)가 18:00 `--auto` 시작·06:00 자동종료. offscreen 순위백필(`_backfill_ranks`/`_measure_unfilled_once`)은 폐기·물리 삭제(2026-09-26). 근거=**offscreen 자동은 warm IP서 0/237 전멸 vs visible 자동타이핑 237/237 완주** 라이브 실증([[semi-auto-rank-and-exposed-name]] [[rank-antiblock-circuit-breaker]]). SSOT=DESIGN §0-0.
 
 **⭐이번 세션(2026-09-15) 완료·커밋**:
 - **그로스 재고 역기록** — 전체실행·무인 종료 시 수집 재고를 관리대장 `AD` 컬럼에 씀. 매칭키=계정+등록상품명 **유사도(IDF+핵심토큰 게이팅)**. 라이브 75행·19매칭·오매칭0, 이전 오기록(베타글루칸=2→0) 교정. 상세 [[input-ledger-format]]. (커밋 7df0ecb·af2096f)

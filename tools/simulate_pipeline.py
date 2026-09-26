@@ -419,19 +419,16 @@ def scenario_full_composition():
     """새 전체실행 = do_run_full 전체실행 분기의 3단계 조합(2026-09-15, offscreen 추방).
 
     ①run_full(keywords_off=True,sales_semi=True,skip_ranks=True)=판매만 → ②select_keywords_stage()=키워드
-    (노출측정 없음) → ③track_ranks_stage(semi=True)=반자동 순위. 각 단계가 워크북을 올바르게 진전시키는지,
-    그리고 ①(keywords_off)이 offscreen 순위백필을 절대 안 하는지(가드) 검증."""
-    print("[시나리오 10] 새 전체실행 조합 — ①반자동(판매만)→②키워드선정→③반자동 순위 + 백필가드")
+    (노출측정 없음) → ③track_ranks_stage(semi=True)=반자동 순위. 각 단계가 워크북을 올바르게 진전시키는지 검증.
+    (offscreen 순위백필 _backfill_ranks 는 2026-09-26 폐기·물리 삭제 — ③은 반자동만.)"""
+    print("[시나리오 10] 새 전체실행 조합 — ①반자동(판매만)→②키워드선정→③반자동 순위")
     _STATE.update(select_calls=0, crash_at=None, error_at=None)
-    backfill_calls = {"n": 0}
-    # _backfill_ranks=run_full(core)이 호출→P 패치. _track_ranks_semi=track_ranks_stage(pipeline_ranks)가 호출→PR 패치.
-    orig_backfill, orig_semi = P._backfill_ranks, PR._track_ranks_semi
-    P._backfill_ranks = lambda *a, **k: backfill_calls.__setitem__("n", backfill_calls["n"] + 1)
+    orig_semi = PR._track_ranks_semi   # ③=track_ranks_stage(pipeline_ranks)가 호출→PR 패치
     PR._track_ranks_semi = _fake_track_ranks_semi
     try:
         d = Path(tempfile.mkdtemp())
         il = _accounts(["a1", "b1"])
-        # ① 반자동 판매수집만 — 키워드·순위·백필 없음
+        # ① 반자동 판매수집만 — 키워드·순위 없음
         snap = P.run_full(il, naver=None, out_dir=str(d), ai_key="sim",
                           date_from="2026-09-14", date_to="2026-09-14", resume=False,
                           carry_forward=False, grow_keywords=False, skip_ranks=True,
@@ -440,7 +437,6 @@ def scenario_full_composition():
         _check(_has_value(snap, 7), "① 판매량(7) 기록됨")
         _check(_keywords_in(snap) == set(), "① 단계엔 키워드 없음(키워드는 ②)")
         _check(not _has_value(snap, "3위"), "① 단계엔 순위 없음(순위는 ③)")
-        _check(backfill_calls["n"] == 0, "① keywords_off는 순위백필 안 함")
         # ② 키워드 선정 — 노출측정(measure_ranks) 없이 AI 선정만
         p2 = P.select_keywords_stage(naver=None, ai_key="sim", out_dir=str(d),
                                      grow=False, on_log=lambda m: None)
@@ -449,15 +445,8 @@ def scenario_full_composition():
         # ③ 반자동 순위
         p3 = P.track_ranks_stage(out_dir=str(d), semi=True, on_log=lambda m: None)
         _check(_has_value(p3, "3위"), "③ 반자동 순위(3위) 기록됨")
-        # 가드 직접 검증: keywords_off=True면 skip_ranks=False여도 백필 안 함(옛 잠재버그 차단)
-        backfill_calls["n"] = 0
-        d2 = Path(tempfile.mkdtemp())
-        P.run_full(_accounts(["a1"]), naver=None, out_dir=str(d2), ai_key="sim",
-                   date_from="2026-09-14", date_to="2026-09-14", resume=False,
-                   skip_ranks=False, keywords_off=True, sales_semi=True, on_log=lambda m: None)
-        _check(backfill_calls["n"] == 0, "가드: keywords_off=True는 skip_ranks=False여도 백필 안 함")
     finally:
-        P._backfill_ranks, PR._track_ranks_semi = orig_backfill, orig_semi
+        PR._track_ranks_semi = orig_semi
 
 
 def scenario_option_split():
