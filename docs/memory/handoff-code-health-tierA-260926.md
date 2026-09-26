@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 3588291b-3435-4968-8471-8410129d1b69
-  modified: 2026-09-26T07:31:58.092Z
+  modified: 2026-09-26T07:44:55.626Z
 ---
 
 소유자 요청 "전체 소스코드 점검(누더기·과거 정상→오류)" + "Tier A+B 연속" 지시로 착수. **Tier A 완료·미커밋 상태에서 커밋 진행**(이 메모 시점).
@@ -28,10 +28,8 @@ metadata:
 ## Tier B(모듈 분리·MI C→B) — ✅ pipeline 완전 해소, 🔄 workbook 남음
 - ✅ **pipeline 6모듈 전부 A/B**(원래 2684줄 C 몬스터): pipeline.py **A(20.94)**·pipeline_sales A(41)·pipeline_process A(27)·pipeline_ranks **B(14.93)**·pipeline_gsheet A·pipeline_paths A. 커밋 `f90d913`(A)·`7b08dc2`(B1·B2)·`f28e34f`(B3)·`d7c54f8`(B4·B5). 게이트 7종+복잡도 초록.
 - **재배선 규칙(교훈)**: 이동 함수가 **내부 호출**하는 심볼은 **이동한 모듈**에서 monkeypatch. 이중 소속(warmup·WingBrowser·select_keywords_light·recommend_title)은 관련 모듈 전부 patch. run_full 이 호출(_login_and_discover 등)=P 재수출 유효. 핀이 oracle(틀리면 게이트 red). 의존 DAG: paths←gsheet←ranks←sales←process←pipeline.
-- **🔄 workbook.py(현 2273줄·MI C) — mixin 분리 진행중**(저위험: monkeypatch 0·핀 oracle·재배선 불필요):
-  - ✅ **6a 완료(커밋)**: `workbook_common.py`(leaf·A) 분리(상수·헬퍼·dataclass·openpyxl 재노출·`__all__` 49). workbook.py `import *`. 2460→2273줄·게이트 초록.
-  - 🔄 **6b 남음(렌더 mixin·새 세션 권고)**: `workbook_render.py`(_RenderMixin)로 3구역 이동 — **C1=1088–1616**(팔레트 상수 _FN/_FILL_* + 마이그·regroup·_v4_*·apply_style·_style_*), **C2=1673–1773**(promo), **C3=2133–EOF**(index build). class OutputWorkbook(_RenderMixin). ⚠팔레트 상수는 render 전용이라 mixin 에 함께(self._FILL_*). 경계=메서드 끝(주석 오귀속 주의). 추출 후에도 C면 인덱스/날짜 mixin 2차. 스크립트 추출(pipeline_ranks 패턴)·핀 초록 유지. SSOT=CODE_HEALTH_PLAN §8-3.
-  - ⚠렌더=가장 핀-집약 → 마라톤 세션 말미 강행 금물. 새 세션서.
+- ✅ **workbook 렌더/인덱스 분리 완료(6a·6b 커밋)**: workbook 2460 → workbook.py 1501(C·KNOWN_BAD) + `workbook_common`(A 51.5·상수·헬퍼·dataclass) + `workbook_render`(A 23.2·apply_style·_style_*·_v4_*·regroup·migration·팔레트상수) + `workbook_index`(A 37.3·_build_index·_index_row·_idx_*·promo_effect). `class OutputWorkbook(_RenderMixin, _IndexMixin)`. monkeypatch 재배선 0(블랙박스·핀 oracle). 게이트 7종+복잡도 초록·행동 불변. 커밋 `4b421a1`.
+  - ⚠**workbook.py 코어(1501) 는 여전히 C**(응집 데이터모델) — 추가 분해=diminishing returns 로 **보류**(복잡도 게이트는 KNOWN_BAD 통과·실제 rot=복잡 렌더는 A급 모듈로 해소). 굳이 B 원하면 setter/getter mixin 추가 분리(저위험).
 - **⚠라이브 검증**: pipeline_sales(로그인·Akamai·수집) 오프라인 핀 100% 미커버 → 사무실 ①판매수집 1회 라이브 확인 권고.
 
 ## 남은 것
