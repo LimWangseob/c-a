@@ -218,14 +218,21 @@ python tools/verify_offline.py && python tools/verify_gsheet_offline.py && pytho
 - **죽은 삼항식 제거**: `detail_images.py:149` `best[key][1] if False else src` → `src`(오너 규칙 if False 우회 금지).
 - **검증**: 게이트 7종 + `check_complexity`(exit 0) 초록. `radon cc -n D <4파일>` = **빈 결과**(D+ 재전멸). 행동 불변(핀 3종·시뮬·렌더검증 그대로 통과).
 
-### 8-3. Tier B(모듈 분리·MI C→B) — 🔄 다음
-- **왜 필요**: 함수 CC 를 낮춰도 pipeline(2684)·workbook(2460)·app_qt(1630) 은 **MI C(0.00) 포화** — 파일을 쪼개야 B↑.
-- **계획**(§3 단계4 재확인·행동 불변·핀 먼저·매 추출 게이트 초록):
-  - `pipeline.py` → `pipeline_sales.py`(①로그인·발견·판매: `_login_and_discover`/`_discover_products`/`_process_account` 계열)·
-    `pipeline_ranks.py`(③순위: `track_ranks_stage`/`_track_ranks_semi`/자동순위)·`pipeline_gsheet.py`(`_push_gsheet`/`push_ledger_inventory`/복원)·
-    `pipeline.py`=오케스트레이터(`run_full` 단계 호출자).
-  - `workbook.py` → 렌더(`apply_style`/`_style_*`/`_idx_*`)·인덱스/날짜(`_reindex`/`_reindex_sheet`/날짜정규화) 분리 검토(⚠openpyxl 상태 결합 주의).
-  - ⚠**테스트 가로채기 재배선 위험**(핀/시뮬이 `pipeline.X` 를 monkeypatch·import) — 이동 시 import 경로·`_install_fakes` 대상 갱신. 파일 하나씩·작은 커밋.
+### 8-3. Tier B(모듈 분리·MI C→B) — 🔄 진행중(B1·B2·B3 완료, sales·workbook 남음)
+- **왜 필요**: 함수 CC 를 낮춰도 pipeline·workbook·app_qt 는 **MI C(0.00) 포화** — 파일을 쪼개야 B↑.
+- ✅ **B1 `pipeline_paths.py`**(leaf: 경로/단계 헬퍼·상수·_load_latest_wb) — 순환 import 방지 기반.
+- ✅ **B2 `pipeline_gsheet.py`**(구글시트 연동·백업·복원 6함수·지연 import).
+- ✅ **B3 `pipeline_ranks.py`**(③순위 ≈810줄: 측정·서킷브레이커·자동/반자동 검색·track_ranks_stage) — MI **B(14.93)**.
+  핀/시뮬 monkeypatch 를 pipeline_ranks(PR)로 재배선(warmup·WingBrowser 는 이중 소속=양쪽 patch, _track_ranks_semi 는 PR).
+- **결과·⚠MI 실측**: pipeline **2684→1628줄**이나 **여전히 MI C(0.00)** — radon MI 는 1628줄에서도 포화. pipeline_ranks 는 별 파일이라 B.
+  → **pipeline.py 를 B 로 올리려면 sales 블록(≈720줄)까지 분리**해 ~900줄로 낮춰야 함. **이게 남은 핵심 판단**:
+  sales(로그인·Akamai·발견·수집)는 **라이브 최critical 경로**라 순수 이동이어도 오프라인 핀이 100% 못 덮음(라이브 실측 필요).
+  MI B 는 **미용 지표**이고 실제 회귀는 Tier A(게이트)로 이미 차단됨 → **sales 분리는 실익 대비 위험 큼**(별 세션·핀 먼저 신중히 권고).
+- **남은 후보**(하려면 파일 하나씩·핀 먼저·매 추출 게이트 초록):
+  - `pipeline_sales.py`: `_login_and_discover`/`_ensure_login`/`_fresh_login`/`_discover_products`/`_process_account`/`_process_option` 계열.
+    ⚠재배선: `_login_and_discover`(P 재수출·run_full 이 호출)·WingBrowser(로그인=sales 로 이동 시 pin 의 P.WingBrowser→PS 재배선 필요·이중 소속).
+  - `workbook.py`(2460·MI C): 렌더(`apply_style`/`_style_*`/`_idx_*`)·인덱스/날짜(`_reindex*`/날짜정규화) 분리. ⚠openpyxl 상태 결합·pin_apply_style/verify_render 재배선.
+  - ⚠**테스트 가로채기 재배선 위험**(핀/시뮬이 `모듈.X` 를 monkeypatch) — 이동한 함수가 내부에서 호출하는 심볼은 **이동한 모듈**에서 patch. 이중 소속(warmup·WingBrowser 류)은 양쪽 patch. 핀이 oracle(틀리면 게이트 red).
 
 ## 7. 현재 상태 / 맥락
 - 직전 세션에서 폴더/경로 재설계·복원 버그2·config.json 완료(커밋 `dbcb11f`). 배포본 빌드됨(`dist/쿠팡애널리틱스_배포.zip`, 폴더 `coupang-analytics`, 씨앗 마스터 포함). ⚠라이브 배포·오염 마스터 정리 미완(별건).

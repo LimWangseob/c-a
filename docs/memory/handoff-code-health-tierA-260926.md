@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 3588291b-3435-4968-8471-8410129d1b69
-  modified: 2026-09-26T06:22:09.555Z
+  modified: 2026-09-26T07:00:41.142Z
 ---
 
 소유자 요청 "전체 소스코드 점검(누더기·과거 정상→오류)" + "Tier A+B 연속" 지시로 착수. **Tier A 완료·미커밋 상태에서 커밋 진행**(이 메모 시점).
@@ -25,12 +25,15 @@ metadata:
 - **죽은 삼항식 제거**: `detail_images.py:149` `best[key][1] if False else src`→`src`.
 - **검증**: 게이트 7종(run_checks)+`check_complexity`(exit 0) 초록. `radon cc -n D <4파일>`=빈결과. 행동 불변(핀 3종·simulate·verify_render 불변 통과).
 
-## Tier B(모듈 분리·MI C→B) — 🔄 다음(이 세션 이어서 or 새 세션)
-- **왜**: 함수 CC 낮춰도 pipeline(2684)·workbook(2460)·app_qt(1630)=MI C 포화 → 파일을 쪼개야 B↑.
-- **계획**(SSOT `designs/CODE_HEALTH_PLAN.md §8-3`·§3단계4): pipeline→`pipeline_sales.py`/`pipeline_ranks.py`/`pipeline_gsheet.py`+오케스트레이터·workbook→렌더/인덱스·날짜 분리(⚠openpyxl 상태결합).
-- **⚠핀 가로채기 재배선 위험**: `simulate_pipeline._install_fakes` 가 `pipeline.X` monkeypatch·import → 함수 이동 시 import 경로·페이크 대상 갱신 필요. **파일 하나씩·작은 커밋·매 추출 게이트 초록**.
+## Tier B(모듈 분리·MI C→B) — 🔄 B1·B2·B3 완료(커밋), sales·workbook 남음
+- ✅ **B1 `pipeline_paths.py`**(경로/단계 헬퍼·상수·_load_latest_wb·leaf) — 커밋 `7b08dc2`(B1+B2).
+- ✅ **B2 `pipeline_gsheet.py`**(구글시트 연동·백업·복원 6함수) — 커밋 `7b08dc2`.
+- ✅ **B3 `pipeline_ranks.py`**(③순위 ≈810줄) MI **B(14.93)** — 커밋 `f28e34f`. 핀/시뮬 patch 를 PR 로 재배선(warmup·WingBrowser 이중 소속=양쪽·_track_ranks_semi→PR·organic_ranks*→PR).
+- **⚠MI 실측**: pipeline **2684→1628줄**인데 **여전히 MI C(0.00·radon 포화)**. B 도달하려면 **sales 블록(≈720줄)까지 분리**해 ~900줄로. pipeline_ranks 는 별 파일이라 B.
+- **⚠남은 판단(중요)**: sales(로그인·Akamai·발견·수집)=**라이브 최critical**이라 순수 이동이어도 오프라인 핀 100% 미커버(라이브 필요). MI B=미용지표·실회귀는 Tier A 게이트로 차단됨 → **sales/workbook 분리는 실익<위험**. 새 세션·핀 먼저·파일 하나씩 권고(SSOT CODE_HEALTH_PLAN §8-3).
+- **재배선 규칙**(핵심 교훈): 이동한 함수가 내부에서 호출하는 심볼·모듈전역은 **이동한 모듈**에서 monkeypatch. 이중 소속(warmup·WingBrowser)은 양쪽. 핀이 oracle(틀리면 게이트 red).
 
 ## 남은 것
-- Tier B 착수(위). 라이브 검증(운용 PC 재배포)은 [[handoff-9issues-images-260926]] 체크리스트 그대로 유효(별건).
+- Tier B sales/workbook(위·선택). 라이브 검증(운용 PC 재배포)은 [[handoff-9issues-images-260926]] 체크리스트 그대로 유효(별건).
 
 관련: [[handoff-code-health]] [[code-health-regression-gate]] [[fix-from-real-evidence]] [[commit-with-design-and-memory]] [[handoff-9issues-images-260926]].
