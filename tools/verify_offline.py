@@ -1221,6 +1221,27 @@ def t1_apply_style_migrations():
     _ok("자가치유: 판매가/판매상태 보정 · 빈 키워드행 낡은순위 삭제 · 비고=판매중/판매중지 · product_url=vid기반(미입고/판매자배송 커버)")
 
 
+def t1_invalid_product_name():
+    print("[15] 상품명 아닌 행('--' 등) 파싱 제외 — 블록/시트/계정목록 생성 안 함(소유자 2026-09-26)")
+    from coupang_analytics.input_list import parse_input_rows
+    rows = [
+        ["대표자명", "사업자명", "계정아이디", "상품명"],       # 헤더
+        ["김대표", "벅스", "bux1004", "보냉백 BG001"],
+        ["", "", "", "--"],            # 상품명 아님(자리표시)
+        ["", "", "", "  -  "],         # 공백+대시만 = 상품명 아님
+        ["", "", "", "변신큐브 A003"],
+    ]
+    il = parse_input_rows(rows)
+    a = next(x for x in il.accounts if x.account_id == "bux1004")
+    names = [p.name for p in a.products]
+    assert names == ["보냉백 BG001", "변신큐브 A003"], f"상품명 아닌 행 미제외: {names}"
+    # 자리표시는 ledger_products 에도 없어야(완전삭제 판정 오염·기존 잔재 블록 reconcile 삭제 유도)
+    assert not any("-" == p or "--" == p for p in a.ledger_products), \
+        f"자리표시가 ledger_products 에 포함됨: {a.ledger_products}"
+    assert "보냉백 BG001" in a.ledger_products, "실상품명 누락"
+    _ok("상품명 아님('--'·기호만) 파싱 제외 · ledger_products 미포함(잔재 블록 reconcile 삭제 유도)")
+
+
 # ── [6] 키워드 Phase B 선정 로직 ───────────────────────────────
 # 기본 = **결정적 모킹**(네이버·OpenAI 경계만 페이크, 실제 select_keywords_light 로직 그대로 실행).
 #        회귀 게이트가 빠르고(<2s) 결정적이려면 실 API 호출 금지(비용·네트워크·비결정성 제거).
@@ -1357,6 +1378,7 @@ def main():
     t1_inventory_missing_error()
     t1_promo_effect()
     t1_apply_style_migrations()
+    t1_invalid_product_name()
     t2_keywords(store, il)
     print("=" * 60)
     print("  [완료] 로그인 불필요 부분 실증 종료")

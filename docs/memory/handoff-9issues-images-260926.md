@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: c16f3da3-27f9-41ca-bf1d-0a9ab5b96704
-  modified: 2026-09-26T02:27:36.690Z
+  modified: 2026-09-26T02:47:19.273Z
 ---
 
 소유자가 결과 구글시트 5개 이미지 + 9개 이슈로 전수조사/원인분석/조치 요청. 전부 구현·게이트 통과, **라이브 확인·재배포 남음**.
@@ -18,6 +18,8 @@ metadata:
 5. **항목2 상품명 하이퍼링크 = vendorItemId 기반(라이브 실증 후 최종)**: ⚠상품조회(vendor-inventory) 응답엔 공개 productId **없음이 20계정 _raw 전수 확정**(0/20·vendorInventoryId·vendorItemId·skuId만). productId 는 판매분석·재고에만 → **미입고 RFM·무활동 판매자배송 확보 불가**(화면 노출상품ID는 WING 화면의 별도 4번째 API·우리 3 API·로그엔 없음·9557485279 전수 0). **⭐라이브 실증(내장 브라우저 2026-09-26)**: `https://www.coupang.com/vp/products/0?vendorItemId={vid}` 가 productId 자리 `0` 이어도 **정확한 상품 페이지로 열림**(벅스 보냉백·쿠팡상품번호 9557485279 로드). 판매중지 vid(95546377159)는 '상품없음'(실제 판매중지라 정상). → `workbook.product_url` = **vid 있으면 `/vp/products/{pid or 0}?vendorItemId={vid}`**(pid 있으면 정규·없으면 0 자리표시)·**vid 없으면 검색 폴백.** vendorItemId 는 상품조회 전 상품·전 옵션 항상 존재 → 미입고·판매자배송 커버(실측 기존 마스터 상품페이지 링크 88→109·검색폴백은 vid없는 미매칭 20만). pid_by_vid(판매분석∪재고=collector `OptionMetric.product_id`+`_parse_inventory_pids`·`fetch_inventory` 3→4튜플·pipeline `_apply_pid` 배선)는 정규 URL 용으로 유지. 핀 pin_apply_style[S9]·verify_offline[14 (d)]·verify_render[항목2].
 
 **검증**: 게이트 7종+`check_complexity`(exit 0·경고는 기존 타 파일 괴물함수). 핀 pin_apply_style[S1 비고=판매중]·verify_offline[14 자가치유 3종]·verify_render_precision[항목2 링크·상품군색]·페이크 4튜플화(pin_login_ranks·simulate·verify_render). run6 실측 치유 0/0/0.
+
+**항목5 후속(소유자 2026-09-26 확정)**: '50위 삭제'(`_clear_blank_keyword_ranks`)는 판매중지 상품 청소용으로만 맞음(소유자 동의·유지). 활성 공란의 실제 원인=①하성진=로그인 실패로 수집 안 됨(버그 아님·OK) ②벅스 '--'=대장 상품명이 자리표시. → **상품명 아닌 대장 행 파싱 제외 구현**: `input_list._is_real_product_name`(글자[한글·영문·숫자] 하나라도 있어야 True)로 `_parse_grid` 상품행 맨 앞에서 걸러 추적/블록/시트/계정목록 생성 제외·ledger_products 미포함(기존 '--' 잔재는 reconcile 완전삭제 유도). 핀 verify_offline[15].
 
 ⚠**남은 것**: 라이브 재수집으로 실렌더 확인 + 운용 PC 재배포 + 커밋/푸시/zip 재빌드.
 

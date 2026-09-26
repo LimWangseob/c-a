@@ -206,6 +206,15 @@ def _is_discontinued(name: str) -> bool:
     return any(m in n for m in _DISCONTINUED)
 
 
+def _is_real_product_name(name: str) -> bool:
+    """상품명 칸 값이 **실제 상품명**인지(소유자 2026-09-26). 글자(한글·영문·숫자)가 하나라도 있어야 True.
+
+    담당자가 빈 칸 표시로 넣는 자리표시('--'·'-'·'.'·'·'·공백 등, 구두점/기호만)는 상품명이 아님 → False.
+    False 인 행은 추적 상품으로 만들지 않는다(블록·시트·계정목록 생성 제외·ledger_products 미포함으로 기존
+    잔재 블록도 reconcile 삭제). 실상품명은 규격·영문(BG001 등) 때문에 반드시 글자를 포함한다."""
+    return bool(re.search(r"[0-9A-Za-z가-힣]", str(name or "")))
+
+
 def _status_discontinued(status) -> bool:
     """관리대장 '상태' 컬럼 값이 판매중지/삭제 계열이면 True.
 
@@ -317,6 +326,13 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
             continue
         if prod:
             _finalize(current_prod)             # 이전 상품 마감(옵션 없으면 기본옵션)
+            # 상품명이 아닌 자리표시('--' 등)는 추적 상품으로 만들지 않는다(소유자 2026-09-26):
+            # 블록·시트·계정목록 생성 제외 + ledger_products 미포함 → 기존 잔재 블록도 reconcile 삭제.
+            if not _is_real_product_name(prod):
+                struck.append(f"상품명 아님 '{prod}' (계정 {acct or (current_acct.account_id if current_acct else '?')}) — 제외")
+                current_prod = None
+                prod_cancelled = True            # 아래 옵션 행도 건너뜀
+                continue
             # 상품 제외 = 상태 컬럼 / 상품명 마커 / 취소선 중 하나라도 → 추적 제외
             if current_acct is not None:
                 current_acct.ledger_products.add(prod)   # ⑥: 줄 존재(활성+판매중지/취소선) 전체 — 완전삭제 판정용

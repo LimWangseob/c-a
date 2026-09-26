@@ -10,7 +10,8 @@
 - **빈 키워드행 낡은순위 삭제**(`_clear_blank_keyword_ranks`): 이름 공란 M_RANK 행에 남은 옛 '50위'(실측 43행)="키워드 없는데 순위 표기"를 저장마다 일자칸 삭제(이름 있는 행 불변). [항목5]
 - **비고 소헤더 = 관리대장 판매상태**(⛔판매중지>🔴체험단중>판매중, 옛 '비고' 라벨 폐지). ⚠`has_keyword_section` 소헤더 판정을 G('비고')+A('키워드')→**A('키워드')만**(항목3 G 용도전환 대응·`_find_kw_head`와 일관). [항목3]
 - **상품명 하이퍼링크 = vendorItemId 기반**(라이브 실증 2026-09-26·아래 링크 항목 참조). ⛔상품조회 응답엔 공개 productId 없음(20계정 _raw 전수 확정 0/20)·판매분석·재고에만 있어 미입고 RFM·무활동 판매자배송 불가. 실증: `/vp/products/0?vendorItemId={vid}` 가 vid 만으로 상품 페이지 열림 → `product_url` 이 pid 있으면 정규(`/{pid}?vendorItemId={vid}`)·없어도 vid 있으면 `/0?vendorItemId={vid}`·vid 없으면 검색 폴백. vendorItemId 는 상품조회 전 상품·전 옵션 항상 존재 → 미입고·판매자배송 커버. pid_by_vid(판매분석∪재고)는 정규 URL 용 유지.
-- **검증**: 게이트 7종+`check_complexity`(exit 0). 핀 pin_apply_style[S1]·verify_offline[14]·verify_render_precision[항목2 링크·상품군색]·페이크(pin_login_ranks·simulate·verify_render) 4튜플화.
+- **상품명 아닌 대장 행 파싱 제외**(`input_list._is_real_product_name`·`_parse_grid`): 자리표시('--'·기호/공백만)는 추적 상품으로 만들지 않음(블록·시트·계정목록 생성 제외·ledger_products 미포함→기존 잔재 reconcile 삭제). [항목5 후속·소유자 2026-09-26]
+- **검증**: 게이트 7종+`check_complexity`(exit 0). 핀 pin_apply_style[S1·S9]·verify_offline[14·15]·verify_render_precision[항목2 링크·상품군색]·페이크(pin_login_ranks·simulate·verify_render) 4튜플화.
 
 ## 0-0000000. 최신 반영 요약 (2026-09-20 후속2 — 키워드 = 구글시트 셀 값 기준·상한 10)
 
