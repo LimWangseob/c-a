@@ -28,6 +28,7 @@ except AttributeError:
 from coupang_analytics import config  # noqa: E402
 from coupang_analytics import collector as C  # noqa: E402
 from coupang_analytics import pipeline as P  # noqa: E402
+from coupang_analytics import pipeline_ranks as PR  # noqa: E402  (③순위 분리 — rank 내부 patch 대상)
 from coupang_analytics import rank as R  # noqa: E402
 from coupang_analytics.input_list import Account, Option, Product  # noqa: E402
 from coupang_analytics.report import OptionMetric  # noqa: E402
@@ -322,11 +323,12 @@ def _install_rank_fakes(wait_results, serp=None):
         return wait_results[min(i, len(wait_results) - 1)]
 
     serp = serp if serp is not None else ({"제품": (3, None)}, 3)
-    P._prefill_search = lambda browser, kw: True
-    P._submit_search = lambda browser: None
-    P._wait_results_loaded = fake_wait
-    P.human_mouse = SimpleNamespace(browse_serp=lambda pg: None)
-    P.random = SimpleNamespace(uniform=lambda a, b: 0.0)   # 타이핑 후 '짧게 멈춤' pause 를 0으로(시험 단축)
+    # ③순위는 pipeline_ranks 로 분리 — rank 내부 호출은 PR 네임스페이스로 resolve 되므로 PR 을 패치한다.
+    PR._prefill_search = lambda browser, kw: True
+    PR._submit_search = lambda browser: None
+    PR._wait_results_loaded = fake_wait
+    PR.human_mouse = SimpleNamespace(browse_serp=lambda pg: None)
+    PR.random = SimpleNamespace(uniform=lambda a, b: 0.0)   # 타이핑 후 '짧게 멈춤' pause 를 0으로(시험 단축)
     R.parse_serp_rank = lambda pg, matcher, max_rank=None: serp   # (result, scanned) 튜플
     return state
 
@@ -440,10 +442,10 @@ def pin_rank_auto_success():
     _SPEC.clear(); _COUNT.clear()
     d = Path(tempfile.mkdtemp())
     _rank_master(d)
-    P.WingBrowser = _FakeWing
-    P.warmup = lambda browser: None
-    P._best = lambda v: v
-    P._measure = lambda browser, todo, matcher, log, matched_out=None: {kw: 3 for kw in todo}
+    PR.WingBrowser = _FakeWing
+    PR.warmup = lambda browser: None
+    PR._best = lambda v: v
+    PR._measure = lambda browser, todo, matcher, log, matched_out=None: {kw: 3 for kw in todo}
     P.track_ranks_stage(out_dir=str(d), semi=False, on_log=lambda m: None)
     from coupang_analytics.workbook import OutputWorkbook
     wb = OutputWorkbook.load(P._master_path(d))
@@ -457,14 +459,14 @@ def pin_rank_auto_halt():
     _SPEC.clear(); _COUNT.clear()
     d = Path(tempfile.mkdtemp())
     _rank_master(d)
-    P.WingBrowser = _FakeWing
-    P.warmup = lambda browser: None
-    P._best = lambda v: v
+    PR.WingBrowser = _FakeWing
+    PR.warmup = lambda browser: None
+    PR._best = lambda v: v
 
     def fake_measure(browser, todo, matcher, log, matched_out=None):
-        raise P.RankHalt(partial={todo[0]: 7})   # 첫 키워드만 측정하고 차단 감지
+        raise PR.RankHalt(partial={todo[0]: 7})   # 첫 키워드만 측정하고 차단 감지
 
-    P._measure = fake_measure
+    PR._measure = fake_measure
     P.track_ranks_stage(out_dir=str(d), semi=False, on_log=lambda m: None)
     from coupang_analytics.workbook import OutputWorkbook
     wb = OutputWorkbook.load(P._master_path(d))
@@ -508,7 +510,7 @@ def pin_rank_manual_mode():
         i = detected["i"]; detected["i"] += 1
         return detected["seq"][min(i, len(detected["seq"]) - 1)]
 
-    P._wait_user_search = fake_user_search
+    PR._wait_user_search = fake_user_search
     logs: list[str] = []
     P._track_ranks_semi(wb, path, logs.append, lambda: False)
     joined = "\n".join(logs)
@@ -526,8 +528,9 @@ def main() -> int:
     config.RANK_NAV_DELAY_MIN_SEC = 0
     config.RANK_NAV_DELAY_MAX_SEC = 0
     # 경계 교체(브라우저) — collector/rank 는 각 시나리오에서 개별 설치
-    P.WingBrowser = _FakeWing
-    _orig_random = P.random   # 순위 핀에서 pause=0 으로 바꾸므로 종료 시 원복
+    P.WingBrowser = _FakeWing        # 로그인(pipeline)
+    PR.WingBrowser = _FakeWing       # 순위(pipeline_ranks)
+    _orig_random = PR.random   # 순위 핀에서 pause=0 으로 바꾸므로 종료 시 원복(순위=pipeline_ranks.random)
     saved = {k: getattr(config, k, None) for k in (
         "RANK_SEMI_AUTOSUBMIT", "RANK_SEMI_AUTO_MAX_MISS", "RANK_SEMI_COOLDOWN_SEC",
         "RANK_SEMI_COOLDOWN_MAX")}
@@ -556,7 +559,7 @@ def main() -> int:
     finally:
         for k, v in saved.items():   # 순위 config 원복(다른 검증 오염 방지 — 별 프로세스지만 방어적)
             setattr(config, k, v)
-        P.random = _orig_random
+        PR.random = _orig_random
     print("=" * 60)
     print("  [완료] 핀 테스트 모두 통과")
     print("=" * 60)

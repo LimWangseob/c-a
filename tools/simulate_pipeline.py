@@ -26,6 +26,7 @@ import openpyxl  # noqa: E402
 
 from coupang_analytics import config  # noqa: E402
 from coupang_analytics import pipeline as P  # noqa: E402
+from coupang_analytics import pipeline_ranks as PR  # noqa: E402  (③순위 분리 — rank 내부 patch 대상)
 from coupang_analytics.input_list import Account, InputList, Option, Product  # noqa: E402
 from coupang_analytics.kw_recommend import TrackKeyword  # noqa: E402
 from coupang_analytics.rank import SearchItem  # noqa: E402
@@ -132,10 +133,14 @@ def _install_fakes():
     P._login_and_discover = _fake_login_and_discover
     P.select_keywords_light = _fake_keywords
     P.recommend_title = lambda *a, **k: "권고 상품명 예시"
-    P.organic_ranks_batch = _fake_batch
-    P.organic_ranks = _fake_organic_ranks
+    # ③순위는 pipeline_ranks 로 분리 — rank 내부 호출은 PR 네임스페이스로 resolve 되므로 PR 을 패치한다.
+    PR.organic_ranks_batch = _fake_batch
+    PR.organic_ranks = _fake_organic_ranks
+    # warmup·WingBrowser 은 pipeline(판매·키워드)과 pipeline_ranks(순위) 양쪽에서 호출되는 이중 소속 → 둘 다 패치.
     P.warmup = lambda browser: None
-    P.WingBrowser = _FakeBrowser
+    PR.warmup = lambda browser: None
+    P.WingBrowser = _FakeBrowser        # 로그인·판매·키워드(pipeline)
+    PR.WingBrowser = _FakeBrowser       # 순위(pipeline_ranks)
 
 
 # ── 검증 헬퍼 ─────────────────────────────────────────────────
@@ -414,9 +419,10 @@ def scenario_full_composition():
     print("[시나리오 10] 새 전체실행 조합 — ①반자동(판매만)→②키워드선정→③반자동 순위 + 백필가드")
     _STATE.update(select_calls=0, crash_at=None, error_at=None)
     backfill_calls = {"n": 0}
-    orig_backfill, orig_semi = P._backfill_ranks, P._track_ranks_semi
+    # _backfill_ranks=run_full(core)이 호출→P 패치. _track_ranks_semi=track_ranks_stage(pipeline_ranks)가 호출→PR 패치.
+    orig_backfill, orig_semi = P._backfill_ranks, PR._track_ranks_semi
     P._backfill_ranks = lambda *a, **k: backfill_calls.__setitem__("n", backfill_calls["n"] + 1)
-    P._track_ranks_semi = _fake_track_ranks_semi
+    PR._track_ranks_semi = _fake_track_ranks_semi
     try:
         d = Path(tempfile.mkdtemp())
         il = _accounts(["a1", "b1"])
@@ -446,7 +452,7 @@ def scenario_full_composition():
                    skip_ranks=False, keywords_off=True, sales_semi=True, on_log=lambda m: None)
         _check(backfill_calls["n"] == 0, "가드: keywords_off=True는 skip_ranks=False여도 백필 안 함")
     finally:
-        P._backfill_ranks, P._track_ranks_semi = orig_backfill, orig_semi
+        P._backfill_ranks, PR._track_ranks_semi = orig_backfill, orig_semi
 
 
 def scenario_option_split():
