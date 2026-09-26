@@ -689,8 +689,7 @@ def _discover_products(b, a: Account, date_from, date_to, log):
     반환: (products, tracked, metrics, inventory, sale_status, upbundle_vids). 판매분석·상품조회 **모두
     데이터 없음**이면 None(호출부가 (None,{},{},{},set()) 로 이 계정 건너뜀). upbundle_vids = 이번 상품조회의
     업번들(자동번들) 옵션 vid 집합(마스터 잔재 블록 자동삭제용, 소유자 2026-09-24). 제어흐름은 분해 전과 동일하다."""
-    from .collector import (fetch_inventory, InventoryFetchError,
-                            fetch_vendor_inventory, products_from_vendor_inventory,
+    from .collector import (fetch_vendor_inventory, products_from_vendor_inventory,
                             VendorInventoryFetchError, sale_status_by_vid, vid_meta_of)
     from .product_match import scope_to_ledger
     # ── vid·옵션·상품 = 상품조회/수정(전 상품·전 옵션 나열, 당일 판매 0 상품도 포함). 폴백=판매분석 발견 ──
@@ -711,18 +710,7 @@ def _discover_products(b, a: Account, date_from, date_to, log):
     products, metrics = got
     if vendor_products is not None:
         products = vendor_products   # vid 출처 = 상품조회/수정(전 상품·전 옵션). 지표는 metrics(vi-detail)로 조인
-    # 로켓그로스 파트가 있는 상품(로켓그로스·둘다)이 있으면 같은 세션에서 재고현황도 직접조회
-    # (판매자배송 전용 계정은 재고 없음 → 생략)
-    inventory: dict[str, int] = {}
-    inv_names: dict[str, str] = {}
-    rfm_status: dict[str, bool] = {}   # {vid: isSaleSuspended} — RFM 재고 API(로켓그로스만)
-    inv_pids: dict[str, str] = {}      # {vid: productId} — 재고 API 노출상품ID(판매 0 상품 커버, 항목2)
-    if any(p.kind in config.KINDS_WITH_INVENTORY for p in products):
-        try:
-            inventory, inv_names, rfm_status, inv_pids = fetch_inventory(b.page, log)   # 재고 수량 + roster + 판매상태 + productId
-            log(f"  [{a.label}] 재고현황 {len(inventory)}개 옵션 조회")
-        except InventoryFetchError as exc:   # 부가지표 — 실패해도 수집 전체는 진행(사유 명시)
-            log(f"  [{a.label}] ⚠ 재고현황 조회 실패(계속) — {str(exc)[:120]}")
+    inventory, inv_names, rfm_status, inv_pids = _discover_inventory(b, a, products, log)
     # 판매상태 출처(§2.3 대장↔쿠팡 불일치 경고) = **상품조회 productStatus(전 상품·판매자배송 포함)** 우선,
     # 없으면(상품조회 실패) RFM isSaleSuspended(로켓그로스만) 폴백. 라이브 실측(2026-09-20 nicoable/sg0141n)에서
     # productStatus 가 ON_SALE/PARTIAL_ON_SALE/SUSPENDED 로 정상 변동·**화면 판매/승인상태와 일치** 확인.
@@ -736,17 +724,45 @@ def _discover_products(b, a: Account, date_from, date_to, log):
     # 정리(_sweep_dead_duplicates)의 기준 — 이 집합에 없는 vid = 코팡서 사라짐. 상품조회 실패면 빈 집합(정리 skip).
     live_all_vids = {o.vendor_item_id for lst in listings for o in lst.options if o.vendor_item_id}
     vid_meta = vid_meta_of(listings)   # {vid: (판매가, 판매시작일)} — 헤더 표시(상품판매가·입고일 근사)
-    # {vid: 노출상품ID(productId)} — 상품명 하이퍼링크(쿠팡 노출페이지, 항목2). 재고 API(판매 0 상품 커버) ∪
-    # 판매분석(활동 상품). 상품조회(vendor-inventory)엔 공개 productId 가 없어 이 두 소스로만 확보(실측 2026-09-26).
+    pid_by_vid = _pid_by_vid(inv_pids, metrics)
+    # 추적 범위 = 입력 대장 상품(위탁 관리분)만. 당일 발견을 매칭해 노출제목·vid·구분 부여(지표는 당일 것).
+    tracked, n_match = scope_to_ledger(a.products, products)
+    tracked, n_match = _augment_vids(b, a, tracked, n_match, inv_names, date_to, log)
+    _log_discover_summary(a, products, metrics, inventory, sale_status, tracked, n_match, log)
+    return (products, tracked, metrics, inventory, sale_status, upbundle_vids, live_all_vids,
+            vid_meta, pid_by_vid)
+
+
+def _discover_inventory(b, a: Account, products, log):
+    """로켓그로스/둘다 상품이 있으면 재고현황(RFM) 직접조회 — (inventory, inv_names, rfm_status, inv_pids).
+    판매자배송 전용 계정은 재고 없어 생략. 실패해도 수집 전체는 진행(부가지표·사유 명시)."""
+    from .collector import fetch_inventory, InventoryFetchError
+    inventory: dict[str, int] = {}
+    inv_names: dict[str, str] = {}
+    rfm_status: dict[str, bool] = {}   # {vid: isSaleSuspended} — RFM 재고 API(로켓그로스만)
+    inv_pids: dict[str, str] = {}      # {vid: productId} — 재고 API 노출상품ID(판매 0 상품 커버, 항목2)
+    if any(p.kind in config.KINDS_WITH_INVENTORY for p in products):
+        try:
+            inventory, inv_names, rfm_status, inv_pids = fetch_inventory(b.page, log)   # 재고 수량 + roster + 판매상태 + productId
+            log(f"  [{a.label}] 재고현황 {len(inventory)}개 옵션 조회")
+        except InventoryFetchError as exc:   # 부가지표 — 실패해도 수집 전체는 진행(사유 명시)
+            log(f"  [{a.label}] ⚠ 재고현황 조회 실패(계속) — {str(exc)[:120]}")
+    return inventory, inv_names, rfm_status, inv_pids
+
+
+def _pid_by_vid(inv_pids: dict, metrics: dict) -> dict[str, str]:
+    """{vid: 노출상품ID(productId)} — 상품명 하이퍼링크(항목2). 재고 API(판매 0 상품 커버) ∪ 판매분석(활동 상품).
+    상품조회(vendor-inventory)엔 공개 productId 가 없어 이 두 소스로만 확보(실측 2026-09-26)."""
     pid_by_vid: dict[str, str] = dict(inv_pids)
     for oid, om in metrics.items():
         pid = getattr(om, "product_id", "")
         if pid and oid not in pid_by_vid:
             pid_by_vid[oid] = pid
-    # 추적 범위 = 입력 대장 상품(위탁 관리분)만. 당일 발견을 매칭해 노출제목·vid·구분 부여(지표는 당일 것).
-    tracked, n_match = scope_to_ledger(a.products, products)
-    tracked, n_match = _augment_vids(b, a, tracked, n_match, inv_names, date_to, log)
-    # ── 계정 요약(진행경과·오류추적): 소스별 개수 + 대장 매칭/미매칭(vid 없는 상품은 등록명으로 추적) ──
+    return pid_by_vid
+
+
+def _log_discover_summary(a: Account, products, metrics, inventory, sale_status, tracked, n_match, log) -> None:
+    """계정 요약(진행경과·오류추적): 소스별 개수 + 대장 매칭/미매칭(vid 없는 상품은 등록명으로 추적)."""
     unmatched = [tp.name for tp in tracked if not any(o.vendor_item_ids for o in tp.options)]
     vid_count = sum(len(o.vendor_item_ids) for tp in tracked for o in tp.options)
     log(f"  [계정 {a.account_id}/{a.label}] 소스: 상품조회 {len(products)}상품 · 판매분석 {len(metrics)}옵션"
@@ -754,8 +770,6 @@ def _discover_products(b, a: Account, date_from, date_to, log):
     log(f"  [계정 {a.account_id}/{a.label}] 대장 {len(a.products)} → 추적 {len(tracked)}"
         f"(매칭 {n_match}·vid {vid_count}) · 미매칭(vid없음) {len(unmatched)}"
         + (f": {[_short(n, 22) for n in unmatched[:10]]}{'…' if len(unmatched) > 10 else ''}" if unmatched else ""))
-    return (products, tracked, metrics, inventory, sale_status, upbundle_vids, live_all_vids,
-            vid_meta, pid_by_vid)
 
 
 def _run_discover(b, a: Account, date_from, date_to, has_vendor: bool, log):
@@ -1562,6 +1576,13 @@ def preflight_sync_check(wb, input_list: InputList, log) -> dict:
 
     검사: ①대장 O/결과 X(신규·미수집) ②결과 O/대장 X(삭제 예정 ⑥) ③사업자명 변경(계정ID 동일·시트명≠대장,
     일원화 예정 ⑤) ④취소선 제외(관리대장에서 뺀 항목). 불일치 판정 기준 = **관리대장**(소유자 결정)."""
+    summary = _preflight_summary(wb, input_list)
+    _log_preflight(log, summary)
+    return summary
+
+
+def _preflight_summary(wb, input_list: InputList) -> dict:
+    """관리대장↔결과 불일치 집계(읽기 전용) — 신규/삭제예정/이름변경/취소선."""
     led_biz = {a.account_id: a.label for a in input_list.accounts if a.account_id}
     led_ids = input_list.ledger_account_ids or set(led_biz)
     res: dict[str, str] = {}                       # 결과 워크북의 계정ID → 사업자 시트명
@@ -1572,11 +1593,16 @@ def preflight_sync_check(wb, input_list: InputList, log) -> dict:
     gone_ids = sorted(a for a in res if led_ids and a not in led_ids)           # 결과 O / 대장 X(삭제 예정)
     renamed = sorted((res[a], led_biz[a], a) for a in res                       # 사업자명 변경(일원화 예정)
                      if a in led_biz and res[a].strip() != (led_biz[a] or "").strip())
-    struck = list(input_list.struck)
-    summary = {"new": new_ids, "gone": gone_ids, "renamed": renamed, "struck": struck}
+    return {"new": new_ids, "gone": gone_ids, "renamed": renamed, "struck": list(input_list.struck)}
+
+
+def _log_preflight(log, summary: dict) -> None:
+    """preflight 집계를 [SYNC] 로그로 출력(읽기 전용·아무것도 안 바꿈)."""
+    new_ids, gone_ids = summary["new"], summary["gone"]
+    renamed, struck = summary["renamed"], summary["struck"]
     if not (new_ids or gone_ids or renamed or struck):
         log("== [SYNC] 관리대장↔결과 일치(신규·삭제·이름변경·취소선 없음) ==")
-        return summary
+        return
     log(f"== [SYNC] 관리대장↔결과 대조: 신규 {len(new_ids)}·삭제예정 {len(gone_ids)}·"
         f"이름변경 {len(renamed)}·취소선 {len(struck)} (실제 정리는 수집 후) ==")
     if new_ids:
@@ -1588,7 +1614,6 @@ def preflight_sync_check(wb, input_list: InputList, log) -> dict:
         log(f"  [SYNC] 사업자명 변경(일원화 예정): '{old_biz}' → '{new_biz}' (계정ID {aid})")
     if struck:
         log(f"  [SYNC] 관리대장 취소선 제외 {len(struck)}: {struck[:5]}{'…' if len(struck) > 5 else ''}")
-    return summary
 
 
 def _consolidate_renamed_accounts(wb, input_list: InputList, log) -> list[tuple[str, str]]:
@@ -2525,25 +2550,36 @@ def _semi_browser_prep(browser, autosubmit: bool, log) -> None:
         log("  [반자동] ⬆ 창 여러 개 중 **하단에 빨간 띠('반자동 순위조회 창')**가 있는 창에서 검색하세요")
 
 
-def _semi_track_product(st: _SemiState, browser, wb, biz, pname, date, path, should_stop, log) -> None:
-    """한 상품의 미기입 키워드를 순회하며 반자동 검색·순위 기록(상태기계는 st 로 공유)."""
+def _semi_prep_product(st: _SemiState, wb, biz, pname, date, log):
+    """반자동 순위 추적 전 가드/준비 — 대상 아니면 None, 대상이면 (matcher, todo).
+
+    생략: 수집주기 밖·판매중지(rank_suppressed)·키워드 없음(2차 옵션)·미기입 todo 없음.
+    matcher = sibling_vids(전 옵션 vid 합집합·아이템위너 놓침 방지), vid 없으면 상품명(부분일치)."""
     if wb.has_marketing() and not wb.product_due(biz, pname, date)[0]:
-        return                             # 상품 수집 주기(마케팅 상품만 매일) — 오늘 대상 아니면 순위도 생략
+        return None                        # 상품 수집 주기(마케팅 상품만 매일) — 오늘 대상 아니면 순위도 생략
     if wb.rank_suppressed(biz, pname):     # 판매중지·임시저장·승인반려·대장취소선 → 순위 제외(소유자 2026-09-22)
-        return
+        return None
     vids = wb.sibling_vids(biz, pname)     # 리스팅 전 옵션 vid 합집합(아이템위너 놓침 방지)
     keywords = wb.product_keywords(biz, pname)
     if not keywords:                       # 2차 옵션 블록(키워드 없음)은 순위 대상 아님
-        return
+        return None
     if not vids and not (pname or "").strip():   # 매칭 근거(vid·상품명) 전무 → 측정 불가(이례)
         st.noname_products += 1
-        return
+        return None
     todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
     if not todo:
-        return
+        return None
     if not vids:   # 판매 0 등으로 vid 없음 → 상품명(부분일치)으로 매칭(건너뛰지 않음)
         log(f"  [순위] {biz} · {pname} — vid 없음(판매 0 등) → 상품명으로 매칭")
-    matcher = _rank_matcher(vids, pname)
+    return _rank_matcher(vids, pname), todo
+
+
+def _semi_track_product(st: _SemiState, browser, wb, biz, pname, date, path, should_stop, log) -> None:
+    """한 상품의 미기입 키워드를 순회하며 반자동 검색·순위 기록(상태기계는 st 로 공유)."""
+    prep = _semi_prep_product(st, wb, biz, pname, date, log)
+    if prep is None:
+        return
+    matcher, todo = prep
     for idx, kw in enumerate(todo, 1):
         if should_stop() or st.halted:
             break

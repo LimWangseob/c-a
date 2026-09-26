@@ -197,6 +197,36 @@ python tools/verify_offline.py && python tools/verify_gsheet_offline.py && pytho
 ```
 (vulture·radon는 pip 설치됨. 없으면 `python -m pip install vulture radon`.)
 
+## 8. 2026-09-26 회귀 재발견 + Tier A(제자리 분해·게이트 구멍) — ✅ 완료
+
+### 8-1. 재측정(2026-09-26, 재현 §6) — 회귀 확증
+- **크기 폭증(9/22→9/26, 9이슈 대량 수정 부작용)**: pipeline 1933→**2684**(+751)·workbook 1576→**2460**(+884)·collector 740→**840**(MI A→B). app_qt 1630·app 876.
+- **MI**: pipeline·workbook·app_qt = **C(0.00)**(대형 파일 포화·모듈 분리 전까진 안 오름)·app = B(11.54).
+- **⚠D+ 재유입**: 9/22 "4파일 D/E/F 전멸"이 깨져 **새 D 8개**가 pipeline·workbook 에 기어듦(전부 9이슈 신규/대폭수정 함수):
+  pipeline `preflight_sync_check` D28·`_discover_products` D26·`_semi_track_product` D21 /
+  workbook `_reindex` D27·`_migrate_keyword_col` D27·`_index_row` D23·`promo_effect` D22·`_regroup_sheet_blocks` D21.
+- **원인=게이트 구멍**: `check_complexity.py` 가 4파일 **내부** D+ 를 경고조차 안 함 → 회귀 무저항 유입. (죽은코드는 vulture 80% 0건.)
+
+### 8-2. Tier A(저위험·회귀 즉시 차단) — ✅ 완료
+- **8개 D 함수 제자리·행동 불변 분해**(전부 ≤C, 게이트 매 단계 초록):
+  - workbook: `_regroup_sheet_blocks`→`_snapshot_blocks`+`_rewrite_blocks` · `promo_effect`→`_promo_series_ba`+`_promo_sales_part`+`_promo_rank_part` ·
+    `_reindex`→`_scan_meta_vids`+`_reindex_meta_rows`+`_reindex_sheet` · `_migrate_keyword_col`→`_kw_migrate_targets`+`_apply_kw_migrate` ·
+    `_index_row`→`_idx_name_cell`+`_idx_status`+`_idx_promo_cell`.
+  - pipeline: `preflight_sync_check`→`_preflight_summary`+`_log_preflight` · `_discover_products`→`_discover_inventory`+`_pid_by_vid`+`_log_discover_summary` ·
+    `_semi_track_product`→`_semi_prep_product`(가드/준비) + 루프만 본체.
+- **게이트 구멍 수정**(`check_complexity.py`): 4파일은 MI C 허용하되 **D+ 괴물함수 0 유지가 규칙**(재유입 시 exit 1 차단). 건강 파일 기존 D+(7개)는 경고 유지.
+- **죽은 삼항식 제거**: `detail_images.py:149` `best[key][1] if False else src` → `src`(오너 규칙 if False 우회 금지).
+- **검증**: 게이트 7종 + `check_complexity`(exit 0) 초록. `radon cc -n D <4파일>` = **빈 결과**(D+ 재전멸). 행동 불변(핀 3종·시뮬·렌더검증 그대로 통과).
+
+### 8-3. Tier B(모듈 분리·MI C→B) — 🔄 다음
+- **왜 필요**: 함수 CC 를 낮춰도 pipeline(2684)·workbook(2460)·app_qt(1630) 은 **MI C(0.00) 포화** — 파일을 쪼개야 B↑.
+- **계획**(§3 단계4 재확인·행동 불변·핀 먼저·매 추출 게이트 초록):
+  - `pipeline.py` → `pipeline_sales.py`(①로그인·발견·판매: `_login_and_discover`/`_discover_products`/`_process_account` 계열)·
+    `pipeline_ranks.py`(③순위: `track_ranks_stage`/`_track_ranks_semi`/자동순위)·`pipeline_gsheet.py`(`_push_gsheet`/`push_ledger_inventory`/복원)·
+    `pipeline.py`=오케스트레이터(`run_full` 단계 호출자).
+  - `workbook.py` → 렌더(`apply_style`/`_style_*`/`_idx_*`)·인덱스/날짜(`_reindex`/`_reindex_sheet`/날짜정규화) 분리 검토(⚠openpyxl 상태 결합 주의).
+  - ⚠**테스트 가로채기 재배선 위험**(핀/시뮬이 `pipeline.X` 를 monkeypatch·import) — 이동 시 import 경로·`_install_fakes` 대상 갱신. 파일 하나씩·작은 커밋.
+
 ## 7. 현재 상태 / 맥락
 - 직전 세션에서 폴더/경로 재설계·복원 버그2·config.json 완료(커밋 `dbcb11f`). 배포본 빌드됨(`dist/쿠팡애널리틱스_배포.zip`, 폴더 `coupang-analytics`, 씨앗 마스터 포함). ⚠라이브 배포·오염 마스터 정리 미완(별건).
 - 관련 메모리: [[handoff-code-health]] [[fix-from-real-evidence]] [[commit-with-design-and-memory]] [[recommend-new-session-when-degraded]] [[exe-packaging-deploy]].

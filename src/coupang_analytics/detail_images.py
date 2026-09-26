@@ -146,7 +146,7 @@ def _dedup(items: list[dict], upscale: bool) -> list[str]:
             order.append(key)
             best[key] = (area, src)
         elif area > best[key][0]:
-            best[key] = (area, best[key][1] if False else src)
+            best[key] = (area, src)   # 더 큰 이미지(area↑) 발견 → 그 src 로 대표 교체
     urls = []
     for key in order:
         _, src = best[key]

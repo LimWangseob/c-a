@@ -244,6 +244,17 @@ class OutputWorkbook:
         self._block_vids.clear()
         # vid 출처(A안, 레이아웃 v4)=숨김 메타시트 `_상품ID` col3. 헤더 이름칸 꼬리는 옛 마스터 폴백용.
         # 메타시트가 계정시트 뒤에 올 수 있어 **먼저 한 번** 스캔해 {(사업자,상품): [vid…]} 를 만든다.
+        meta_vids = self._scan_meta_vids()
+        for ws in self.wb.worksheets:
+            if ws.title in (_INDEX_SHEET, _ACCT_SHEET, _STAMP_SHEET, _MKT_SHEET, _DISC_SHEET):  # 특수시트 = 데이터 아님
+                continue
+            if ws.title == _META_SHEET:                 # 상품ID 매핑 시트 → 행 인덱스만 복원
+                self._reindex_meta_rows(ws)
+                continue
+            self._reindex_sheet(ws, meta_vids)
+
+    def _scan_meta_vids(self) -> dict[tuple[str, str], list[str]]:
+        """숨김 메타시트(_상품ID) col3 을 먼저 스캔 → {(사업자,상품): [vid…]}."""
         meta_vids: dict[tuple[str, str], list[str]] = {}
         if _META_SHEET in self.wb.sheetnames:
             mws = self.wb[_META_SHEET]
@@ -254,45 +265,47 @@ class OutputWorkbook:
                     vs = [x.strip() for x in raw.split("/") if x.strip()]
                     if vs:
                         meta_vids[(b, p)] = vs
-        for ws in self.wb.worksheets:
-            if ws.title in (_INDEX_SHEET, _ACCT_SHEET, _STAMP_SHEET, _MKT_SHEET, _DISC_SHEET):  # 특수시트 = 데이터 아님
-                continue
-            if ws.title == _META_SHEET:                 # 상품ID 매핑 시트 → 행 인덱스만 복원
-                for r in range(2, ws.max_row + 1):
-                    b = _norm(ws.cell(r, 1).value); p = _norm(ws.cell(r, 2).value)
-                    if b and p:
-                        self._vid_row[(b, p)] = r
-                continue
-            biz = ws.title
-            self._date_col[biz] = {}
-            self._date_rows[biz] = []
-            cur_prod = ""
-            for r in range(1, ws.max_row + 1):
-                # 이름칸엔 표시용 vid 꼬리가 붙을 수 있으므로 **키(순수 상품명)** 로 복원해 읽는다.
-                # (키워드 셀엔 구분자가 없어 _key == _norm — 무해.)
-                raw_name = ws.cell(r, _COL_NAME).value
-                name = _key(raw_name)
-                metric = _norm(ws.cell(r, _COL_METRIC).value)
-                if metric == _LABEL_DATE:                       # 상품 헤더행 → 새 상품
-                    cur_prod = name
-                    self._date_rows[biz].append(r)
-                    # vid 출처=메타 col3(우선). 없으면 옛 마스터 이름칸 'VID :' 꼬리서 폴백 복원(무손실 마이그레이션).
-                    vids = meta_vids.get((biz, cur_prod)) or _vids_from_cell(raw_name)
-                    if vids:
-                        self._block_vids[(biz, cur_prod)] = vids
-                    for c in range(_FIRST_DATE, ws.max_column + 1):
-                        d = _norm(ws.cell(r, c).value)
-                        if d:
-                            self._date_col[biz].setdefault(d, c)
-                elif metric in _ALL_METRICS:                    # 상품 지표행
-                    if cur_prod:
-                        self._metric_row[(biz, cur_prod, metric)] = r
-                elif metric == config.M_RANK:                    # 키워드 순위행 — 키워드명=A열(v4 좌측확장 앵커)
-                    # 옛 마스터(v3)는 키워드가 C열에 있으므로 A 없으면 **C 폴백**으로 읽어 동결 유지
-                    # (물리 이전은 apply_style 의 _migrate_keyword_col 이 수행 — 여기선 인덱스만 올바르게).
-                    kwn = _key(ws.cell(r, _COL_KW).value) or _key(ws.cell(r, _COL_NAME).value)
-                    if cur_prod and kwn:
-                        self._kw_row[(biz, cur_prod, kwn)] = r
+        return meta_vids
+
+    def _reindex_meta_rows(self, ws) -> None:
+        """메타시트(_상품ID) 행 인덱스(_vid_row) 복원."""
+        for r in range(2, ws.max_row + 1):
+            b = _norm(ws.cell(r, 1).value); p = _norm(ws.cell(r, 2).value)
+            if b and p:
+                self._vid_row[(b, p)] = r
+
+    def _reindex_sheet(self, ws, meta_vids: dict[tuple[str, str], list[str]]) -> None:
+        """한 사업자 시트를 스캔해 날짜/지표/키워드/블록vid 인덱스를 복원."""
+        biz = ws.title
+        self._date_col[biz] = {}
+        self._date_rows[biz] = []
+        cur_prod = ""
+        for r in range(1, ws.max_row + 1):
+            # 이름칸엔 표시용 vid 꼬리가 붙을 수 있으므로 **키(순수 상품명)** 로 복원해 읽는다.
+            # (키워드 셀엔 구분자가 없어 _key == _norm — 무해.)
+            raw_name = ws.cell(r, _COL_NAME).value
+            name = _key(raw_name)
+            metric = _norm(ws.cell(r, _COL_METRIC).value)
+            if metric == _LABEL_DATE:                       # 상품 헤더행 → 새 상품
+                cur_prod = name
+                self._date_rows[biz].append(r)
+                # vid 출처=메타 col3(우선). 없으면 옛 마스터 이름칸 'VID :' 꼬리서 폴백 복원(무손실 마이그레이션).
+                vids = meta_vids.get((biz, cur_prod)) or _vids_from_cell(raw_name)
+                if vids:
+                    self._block_vids[(biz, cur_prod)] = vids
+                for c in range(_FIRST_DATE, ws.max_column + 1):
+                    d = _norm(ws.cell(r, c).value)
+                    if d:
+                        self._date_col[biz].setdefault(d, c)
+            elif metric in _ALL_METRICS:                    # 상품 지표행
+                if cur_prod:
+                    self._metric_row[(biz, cur_prod, metric)] = r
+            elif metric == config.M_RANK:                    # 키워드 순위행 — 키워드명=A열(v4 좌측확장 앵커)
+                # 옛 마스터(v3)는 키워드가 C열에 있으므로 A 없으면 **C 폴백**으로 읽어 동결 유지
+                # (물리 이전은 apply_style 의 _migrate_keyword_col 이 수행 — 여기선 인덱스만 올바르게).
+                kwn = _key(ws.cell(r, _COL_KW).value) or _key(ws.cell(r, _COL_NAME).value)
+                if cur_prod and kwn:
+                    self._kw_row[(biz, cur_prod, kwn)] = r
 
     # ── 재개(이어서)용 조회 ──────────────────────────────────
     def has_product(self, biz: str, product: str) -> bool:
@@ -1307,42 +1320,51 @@ class OutputWorkbook:
         for ws in self.wb.worksheets:
             if ws.title in _SPECIAL_SHEETS:
                 continue
-            targets: list[tuple[int, str]] = []   # (행, A에 쓸 값)
-            # (a) 옛 포맷 키워드행/소헤더 C→A (병합 셀도 앵커값은 읽힘)
-            for r in range(1, ws.max_row + 1):
-                g = _norm(ws.cell(r, _COL_METRIC).value)
-                c = _norm(ws.cell(r, _COL_NAME).value)
-                a = _norm(ws.cell(r, _COL_KW).value)
-                if c == _LABEL_KEYWORD and a != _LABEL_KEYWORD:
-                    targets.append((r, _LABEL_KEYWORD))           # 옛 소헤더: C='키워드'·A=사업자
-                elif g == config.M_RANK and c and not a:
-                    targets.append((r, c))                        # 옛 키워드행: C=키워드명·A 공란
-            # (b) 손상된 소헤더 자가복원 — 블록별 첫 M_RANK 직전 소헤더에 A='키워드' 없으면 복원
-            headers = [r for r in range(1, ws.max_row + 1)
-                       if _norm(ws.cell(r, _COL_METRIC).value) == _LABEL_DATE]
-            for hi, hr in enumerate(headers):
-                end = (headers[hi + 1] - 1) if hi + 1 < len(headers) else ws.max_row
-                first_kw = next((r for r in range(hr, end + 1)
-                                 if _norm(ws.cell(r, _COL_METRIC).value) == config.M_RANK), None)
-                if not first_kw or first_kw <= hr:
-                    continue
-                sh = first_kw - 1
-                is_sub = (_norm(ws.cell(sh, _COL_SEARCH).value) == _LABEL_SEARCH
-                          or _norm(ws.cell(sh, _COL_METRIC).value) in sub_g)
-                if is_sub and _norm(ws.cell(sh, _COL_KW).value) != _LABEL_KEYWORD:
-                    targets.append((sh, _LABEL_KEYWORD))          # 소헤더 마커 복원
+            targets = self._kw_migrate_targets(ws, sub_g)
             if not targets:
                 continue
-            _unmerge_all(ws)                                       # 병합 해제 후 쓰기(apply_style 재병합)
-            for r, val in targets:
-                ws.cell(r, _COL_KW, val)                          # A ← 키워드명/'키워드'
-                if val == _LABEL_KEYWORD and not _norm(ws.cell(r, _COL_SEARCH).value):
-                    ws.cell(r, _COL_SEARCH, _LABEL_SEARCH)        # 소헤더 '검색량' 제목 복원(F열 공란 방지)
-                if val != _LABEL_KEYWORD or _norm(ws.cell(r, _COL_NAME).value) == _LABEL_KEYWORD:
-                    ws.cell(r, _COL_NAME).value = None            # 옛 C값(키워드명/'키워드') 비움(v4는 A가 앵커)
+            self._apply_kw_migrate(ws, targets)
             moved = True
         if moved:
             self._reindex()
+
+    def _kw_migrate_targets(self, ws, sub_g: set) -> list[tuple[int, str]]:
+        """(a) 옛 C→A 키워드행/소헤더 + (b) 손상 소헤더 자가복원 대상 (행, A에 쓸 값) 수집."""
+        targets: list[tuple[int, str]] = []
+        # (a) 옛 포맷 키워드행/소헤더 C→A (병합 셀도 앵커값은 읽힘)
+        for r in range(1, ws.max_row + 1):
+            g = _norm(ws.cell(r, _COL_METRIC).value)
+            c = _norm(ws.cell(r, _COL_NAME).value)
+            a = _norm(ws.cell(r, _COL_KW).value)
+            if c == _LABEL_KEYWORD and a != _LABEL_KEYWORD:
+                targets.append((r, _LABEL_KEYWORD))           # 옛 소헤더: C='키워드'·A=사업자
+            elif g == config.M_RANK and c and not a:
+                targets.append((r, c))                        # 옛 키워드행: C=키워드명·A 공란
+        # (b) 손상된 소헤더 자가복원 — 블록별 첫 M_RANK 직전 소헤더에 A='키워드' 없으면 복원
+        headers = [r for r in range(1, ws.max_row + 1)
+                   if _norm(ws.cell(r, _COL_METRIC).value) == _LABEL_DATE]
+        for hi, hr in enumerate(headers):
+            end = (headers[hi + 1] - 1) if hi + 1 < len(headers) else ws.max_row
+            first_kw = next((r for r in range(hr, end + 1)
+                             if _norm(ws.cell(r, _COL_METRIC).value) == config.M_RANK), None)
+            if not first_kw or first_kw <= hr:
+                continue
+            sh = first_kw - 1
+            is_sub = (_norm(ws.cell(sh, _COL_SEARCH).value) == _LABEL_SEARCH
+                      or _norm(ws.cell(sh, _COL_METRIC).value) in sub_g)
+            if is_sub and _norm(ws.cell(sh, _COL_KW).value) != _LABEL_KEYWORD:
+                targets.append((sh, _LABEL_KEYWORD))          # 소헤더 마커 복원
+        return targets
+
+    def _apply_kw_migrate(self, ws, targets: list[tuple[int, str]]) -> None:
+        """수집된 (행, A값) 을 A열에 쓰고 옛 C값을 정리(병합 해제 후·apply_style 재병합)."""
+        _unmerge_all(ws)                                       # 병합 해제 후 쓰기(apply_style 재병합)
+        for r, val in targets:
+            ws.cell(r, _COL_KW, val)                          # A ← 키워드명/'키워드'
+            if val == _LABEL_KEYWORD and not _norm(ws.cell(r, _COL_SEARCH).value):
+                ws.cell(r, _COL_SEARCH, _LABEL_SEARCH)        # 소헤더 '검색량' 제목 복원(F열 공란 방지)
+            if val != _LABEL_KEYWORD or _norm(ws.cell(r, _COL_NAME).value) == _LABEL_KEYWORD:
+                ws.cell(r, _COL_NAME).value = None            # 옛 C값(키워드명/'키워드') 비움(v4는 A가 앵커)
 
     def _clear_blank_keyword_ranks(self) -> None:
         """빈(이름 공란) 키워드 순위행에 남은 낡은 순위값을 지운다(항목5·2026-09-26·소유자·실측 43행).
@@ -1418,13 +1440,24 @@ class OutputWorkbook:
         last_data = max((r for r in range(1, ws.max_row + 1)
                          if any(ws.cell(r, c).value not in (None, "") for c in range(1, maxc + 1))),
                         default=headers[0])
-        snaps = []                                   # 블록별 값 스냅샷(꼬리 빈 행 제거)
+        snaps = self._snapshot_blocks(ws, headers, last_data, maxc)
+        self._rewrite_blocks(ws, headers, last_data, desired, snaps, maxc)
+        return True
+
+    def _snapshot_blocks(self, ws, headers: list[int], last_data: int, maxc: int) -> list[list[list]]:
+        """블록별 값 스냅샷(꼬리 빈 행 제거) — 재배치 전에 값을 떠 둔다."""
+        snaps: list[list[list]] = []
         for i, h in enumerate(headers):
             stop = headers[i + 1] if i + 1 < len(headers) else last_data + 1
             rows = list(range(h, stop))
             while len(rows) > 1 and all(_norm(ws.cell(rows[-1], c).value) == "" for c in range(1, maxc + 1)):
                 rows.pop()
             snaps.append([[ws.cell(r, c).value for c in range(1, maxc + 1)] for r in rows])
+        return snaps
+
+    def _rewrite_blocks(self, ws, headers: list[int], last_data: int,
+                        desired: list[int], snaps: list[list[list]], maxc: int) -> None:
+        """블록 영역을 비우고 desired 순서로 재기록(블록 사이 빈 줄 1). 병합은 apply_style 이 뒤에서 재생성."""
         _unmerge_all(ws)                             # 값 이동 전 병합 해제(쓰기 안전, apply_style 재병합)
         for r in range(headers[0], last_data + 1):   # 블록 영역 비우기
             for c in range(1, maxc + 1):
@@ -1437,7 +1470,6 @@ class OutputWorkbook:
                         ws.cell(w, c, v)
                 w += 1
             w += 1
-        return True
 
     def _v4_layout(self, hr: int, m_end: int) -> dict:
         """레이아웃 v4 헤더 라벨/값 칸 배치(소유자 확정 2026-09-24). 우측 지표 N줄과 정렬되도록 좌측
@@ -1882,36 +1914,51 @@ class OutputWorkbook:
             return "", ""
         ws = self.wb[biz]
 
-        def _series_ba(getter):
-            """계열의 (직전값, 최신값) — 값이 있는 컬럼만: before=시작 직전 마지막 측정치, after=시작 후 최신치.
-            gap-fill 빈 컬럼(값 None)은 건너뛰어 실제 측정된 값끼리 비교한다."""
-            before = after = None
-            for d, c in dated:
-                v = getter(c)
-                if v is None:
-                    continue
-                if d < start_d:
-                    before = v
-                else:
-                    after = v
-            return before, after
-
         parts: list[str] = []
         score = 0
         srow = self._metric_row.get((biz, product, config.M_SALES))
-        sb, sa = _series_ba(lambda c: self._cell_num(ws, srow, c)) if srow else (None, None)
-        if sb is not None and sa is not None and sb > 0:
-            pct = round((sa - sb) / sb * 100)
-            parts.append(f"판매 {pct:+d}%")
-            score += (1 if pct > 0 else -1 if pct < 0 else 0)
-        rb, ra = _series_ba(lambda c: self._best_rank_at(biz, product, c))
-        if rb is not None and ra is not None:
-            arrow = "↑" if ra < rb else ("↓" if ra > rb else "→")   # 순위 숫자↓ = 상위 노출 = 개선
-            parts.append(f"순위 {rb}→{ra} {arrow}")
-            score += (1 if ra < rb else -1 if ra > rb else 0)
+        s_part, s_score = self._promo_sales_part(ws, srow, dated, start_d)
+        if s_part:
+            parts.append(s_part); score += s_score
+        r_part, r_score = self._promo_rank_part(biz, product, dated, start_d)
+        if r_part:
+            parts.append(r_part); score += r_score
         if not parts:
             return "", ""                                   # 판매·순위 둘 다 데이터 부족 → 공란
         return " · ".join(parts), ("up" if score > 0 else "down" if score < 0 else "")
+
+    @staticmethod
+    def _promo_series_ba(dated: list[tuple], start_d, getter) -> tuple:
+        """계열의 (직전값, 최신값) — 값이 있는 컬럼만: before=시작 직전 마지막 측정치, after=시작 후 최신치.
+        gap-fill 빈 컬럼(값 None)은 건너뛰어 실제 측정된 값끼리 비교한다."""
+        before = after = None
+        for d, c in dated:
+            v = getter(c)
+            if v is None:
+                continue
+            if d < start_d:
+                before = v
+            else:
+                after = v
+        return before, after
+
+    def _promo_sales_part(self, ws, srow, dated: list[tuple], start_d) -> tuple[str, int]:
+        """체험단 효과 판매 부분 — (표시문자열 또는 '', 점수증분)."""
+        if not srow:
+            return "", 0
+        sb, sa = self._promo_series_ba(dated, start_d, lambda c: self._cell_num(ws, srow, c))
+        if sb is not None and sa is not None and sb > 0:
+            pct = round((sa - sb) / sb * 100)
+            return f"판매 {pct:+d}%", (1 if pct > 0 else -1 if pct < 0 else 0)
+        return "", 0
+
+    def _promo_rank_part(self, biz: str, product: str, dated: list[tuple], start_d) -> tuple[str, int]:
+        """체험단 효과 순위 부분 — 모든 키워드 최고 순위(숫자 최소) before→after. (표시문자열 또는 '', 점수증분)."""
+        rb, ra = self._promo_series_ba(dated, start_d, lambda c: self._best_rank_at(biz, product, c))
+        if rb is not None and ra is not None:
+            arrow = "↑" if ra < rb else ("↓" if ra > rb else "→")   # 순위 숫자↓ = 상위 노출 = 개선
+            return f"순위 {rb}→{ra} {arrow}", (1 if ra < rb else -1 if ra > rb else 0)
+        return "", 0
 
     # ── 판매중지/삭제(대장에서 사라짐) 표기 — 데이터는 보존, 표시만 구분 ──────
     def set_discontinued(self, biz: str, product: str, flag: bool) -> None:
@@ -2367,11 +2414,28 @@ class OutputWorkbook:
 
     def _index_row(self, ws, r: int, biz: str, prod: str, hdr, has_sheet: bool, sty: _IdxStyle) -> None:
         """목차 한 행 렌더 — 대표자·사업자·상품(점프 링크)·계정ID·마케팅 입력열·상태(판매중지/체험단중/미수집)."""
-        ws.cell(r, 1, self.representative_of(biz)).font = sty.font if has_sheet else sty.gray_font
-        ws.cell(r, 2, biz).font = sty.font if has_sheet else sty.gray_font
+        base = sty.font if has_sheet else sty.gray_font
+        ws.cell(r, 1, self.representative_of(biz)).font = base
+        ws.cell(r, 2, biz).font = base
         # 항목④: C=계정ID(상품명 왼쪽) · D=상품명(점프 링크). 항목5: 계정ID=상품별(다계정ID)·없으면 첫 계정ID 폴백.
         acct = (self.product_account_id(biz, prod) if prod else "") or self.account_id_of(biz)
-        ws.cell(r, 3, acct).font = sty.font if has_sheet else sty.gray_font
+        ws.cell(r, 3, acct).font = base
+        self._idx_name_cell(ws, r, biz, prod, hdr, has_sheet, sty)
+        start, end, mon = self.marketing_of(biz, prod)
+        status = self._idx_status(biz, prod, has_sheet, start, end, mon)
+        for c, v in ((5, start), (6, end), (7, mon)):   # 마케팅(관리대장 값 표시)
+            x = ws.cell(r, c, v)
+            x.font = sty.font; x.alignment = sty.center; x.border = sty.box; x.fill = sty.mkt_fill
+        st = ws.cell(r, 8, status); st.alignment = sty.center; st.border = sty.box
+        _gray = ("미수집", "종료", "⛔ 판매중지", "판매중지", "임시저장", "승인반려")   # 미판매/비활성 = 옅게
+        st.font = sty.red_bold if status == "체험단중" else (sty.gray_font if status in _gray else sty.font)
+        self._idx_promo_cell(ws, r, biz, prod, has_sheet, sty)
+        for c in (1, 2, 3, 4):
+            ws.cell(r, c).alignment = sty.left if c == 3 else sty.center
+            ws.cell(r, c).border = sty.box
+
+    def _idx_name_cell(self, ws, r: int, biz: str, prod: str, hdr, has_sheet: bool, sty: _IdxStyle) -> None:
+        """D열 상품명 셀 — 있으면 상품 블록 헤더로 점프 링크, 없으면 (미수집)/(상품없음)."""
         pcell = ws.cell(r, 4, prod if prod else ("(미수집)" if not has_sheet else "(상품없음)"))
         if has_sheet and prod and hdr:      # 상품 블록으로 점프(헤더행)
             pcell.hyperlink = Hyperlink(ref=pcell.coordinate,
@@ -2379,23 +2443,18 @@ class OutputWorkbook:
             pcell.font = sty.link_font
         else:
             pcell.font = sty.gray_font
-        start, end, mon = self.marketing_of(biz, prod)
+
+    def _idx_status(self, biz: str, prod: str, has_sheet: bool, start, end, mon) -> str:
+        """H열 상태 — 판매중지(대장) > 마케팅 상태 > 미수집."""
         if has_sheet and prod and self.is_discontinued(biz, prod):
-            status = "⛔ 판매중지"
-        else:
-            status = self._mkt_status(start, end, mon) if has_sheet else "미수집"
-        for c, v in ((5, start), (6, end), (7, mon)):   # 마케팅(관리대장 값 표시)
-            x = ws.cell(r, c, v)
-            x.font = sty.font; x.alignment = sty.center; x.border = sty.box; x.fill = sty.mkt_fill
-        st = ws.cell(r, 8, status); st.alignment = sty.center; st.border = sty.box
-        _gray = ("미수집", "종료", "⛔ 판매중지", "판매중지", "임시저장", "승인반려")   # 미판매/비활성 = 옅게
-        st.font = sty.red_bold if status == "체험단중" else (sty.gray_font if status in _gray else sty.font)
+            return "⛔ 판매중지"
+        return self._mkt_status(start, end, mon) if has_sheet else "미수집"
+
+    def _idx_promo_cell(self, ws, r: int, biz: str, prod: str, has_sheet: bool, sty: _IdxStyle) -> None:
+        """I열 체험단효과 — 시작일 직전→최신 비교, 개선=연초록·악화=연적색."""
         eff, verdict = self.promo_effect(biz, prod) if has_sheet else ("", "")   # 9열 체험단효과(시작일 직전→최신)
         pe = ws.cell(r, 9, eff); pe.alignment = sty.center; pe.border = sty.box; pe.font = sty.font
         if verdict == "up":
             pe.fill = PatternFill("solid", fgColor="C9E6C9")   # 개선=연초록
         elif verdict == "down":
             pe.fill = PatternFill("solid", fgColor="F4CCCC")   # 악화=연적색
-        for c in (1, 2, 3, 4):
-            ws.cell(r, c).alignment = sty.left if c == 3 else sty.center
-            ws.cell(r, c).border = sty.box
