@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: c16f3da3-27f9-41ca-bf1d-0a9ab5b96704
-  modified: 2026-09-26T00:17:41.992Z
+  modified: 2026-09-27T00:34:37.717Z
 ---
 
 **증상(실측)**: 운용 PC 새 코드 첫 실행(2026-09-26 02:13·03:14·07:11 3회) 로그 `단계='계정목록 동기화' · GSheetError status=400 · Invalid requests[0].moveDimension`(로그는 소스에서 "requests[0].m"까지 절단). 통계 25시트 미러링 완료 후 계정목록 동기화에서만 실패.
@@ -19,5 +19,12 @@ metadata:
 **영향 범위(무손실)**: 로컬 마스터·스냅샷·구글 **통계 25시트**는 정상(새 포맷·상품군 정렬 치유·쿠팡링크 40/40·⑥완전삭제 14건·계정ID열 C 적용 확인). **구글 계정목록 탭만** 미갱신이었음(옛 포맷 유지). 데이터 유실 없음.
 
 **즉시 우회(코드 없이)**: 구글 결과시트 `계정목록` 탭 삭제 → 다음 실행이 `_full_build`로 새 포맷 생성(빈 시트라 moveDimension 없음·400 없음). ⚠단 계정목록 직원 마케팅 E~G 입력은 삭제 전 백업.
+
+---
+## ⚠2차 재발·근본수정(2026-09-27, 운용 PC output(7) 실측)
+**증상**: 2026-09-26 단일배치 수정을 배포했는데도 운용 PC 전체실행(9/26 23:28→9/27 04:24)에서 **계정목록 동기화 400 3회 반복**(매 단계). 로그 `Invalid requests[2].moveDimension`(옛 8열 시트라 appendDimension[0]→unmerge[1]→**move[2]**→merge[3]).
+**Why(진짜 근본원인)**: **Google 은 moveDimension 을 배치 시작 시점 병합상태로 검증**한다 → **같은 배치 안에서 unmergeCells 를 먼저 둬도 아직 미반영이라 move 가 여전히 400**. 2026-09-26 "한 배치(unmerge→move→merge)" 수정이 이 때문에 무효였음. FakeClient 가 배치 내 순차처리(unmerge 후 self._merges 비움)라 오프라인은 통과했던 것(fake↔live 갭 2차).
+**How(2배치 분리)**: `_ensure_column_order` 를 **배치1(appendDimension+unmergeCells)을 먼저 커밋 → 배치2(moveDimension+mergeCells)**로 분리. 이동 시점엔 제목 병합이 이미 해제(선커밋)돼 400 없음. **FakeClient 는 moveDimension 을 `merges_at_start`(배치 시작 스냅샷)로 검증**하도록 수정(같은 배치 unmerge 무시=라이브 재현). t11 갱신: unmerge 배치 인덱스 < move 배치 인덱스·move<merge·appendDimension은 unmerge 배치에. **재현→수정→검증 순서로 t11 이 수정 전 raise·수정 후 통과** 확인·게이트 7종+복잡도 초록.
+**교훈**: 배치 API 는 요청 간 검증 시점(pre-batch vs sequential)을 실측해야 함. 병합 가로지르는 moveDimension 은 **unmerge 를 반드시 별도 선행 배치**로. [[fix-from-real-evidence]].
 
 관련: [[feature-business-name-grouping]] [[feature-product-coupang-link]] [[fix-multiaccount-reconcile-scope]] [[fix-from-real-evidence]] [[gsheet-unified-spec]].

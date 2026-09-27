@@ -487,20 +487,22 @@ def _ensure_column_order(client, sheet: str, sheet_id: int) -> None:
     idx = hdr.index("계정ID")
     if idx == COL_ACCOUNT:
         return                                            # 이미 새 순서(C=계정ID)
-    # ⚠ 라이브 400 수정(2026-09-26): 1행 제목이 A1:I1 로 **병합**돼 있어, 그 병합을 가로지르는 열 이동을
-    # Google 이 거부한다(Invalid requests[0].moveDimension). → **제목 병합 해제 → 이동 → 재병합**을 한 배치로.
-    # 재병합이 그리드를 벗어나지 않게(엣지: 옛 8열 시트) 먼저 열을 N_COLS 로 확장한다.
-    reqs: list[dict] = []
-    ccur = client.grid_col_count(sheet)
-    if ccur is not None and ccur < N_COLS:
-        reqs.append({"appendDimension": {"sheetId": sheet_id, "dimension": "COLUMNS", "length": N_COLS - ccur}})
+    # ⚠ 라이브 400 수정(2026-09-27): 1행 제목이 A1:I1 로 **병합**돼 있어, 그 병합을 가로지르는 열 이동을
+    # Google 이 거부한다. ⚠**Google 은 moveDimension 을 배치 시작 시점 병합상태로 검증**하므로, 같은 배치 안에서
+    # unmergeCells 를 먼저 둬도 소용없다(라이브 실측 `Invalid requests[2].moveDimension`). → **2배치로 분리**:
+    # 배치1(열확장+제목 병합 해제)을 **먼저 커밋**한 뒤, 배치2(열 이동+제목 재병합)를 보낸다(이동 시점엔 병합 없음).
     title = {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1, "startColumnIndex": 0, "endColumnIndex": N_COLS}
-    reqs.append({"unmergeCells": {"range": title}})       # 제목 병합 해제(없으면 no-op) → 열 이동 허용
-    reqs.append({"moveDimension": {
-        "source": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": idx, "endIndex": idx + 1},
-        "destinationIndex": COL_ACCOUNT}})
-    reqs.append({"mergeCells": {"range": title, "mergeType": "MERGE_ALL"}})   # 제목 병합 복원(A1:I1)
-    client.batch_update(reqs)
+    pre: list[dict] = []
+    ccur = client.grid_col_count(sheet)
+    if ccur is not None and ccur < N_COLS:   # 재병합이 그리드를 벗어나지 않게(엣지: 옛 8열 시트) 먼저 열 확장
+        pre.append({"appendDimension": {"sheetId": sheet_id, "dimension": "COLUMNS", "length": N_COLS - ccur}})
+    pre.append({"unmergeCells": {"range": title}})        # 제목 병합 해제(없으면 no-op) — **배치1로 선커밋**
+    client.batch_update(pre)
+    client.batch_update([                                  # 배치2: 병합 없는 상태에서 열 이동 → 400 없음
+        {"moveDimension": {
+            "source": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": idx, "endIndex": idx + 1},
+            "destinationIndex": COL_ACCOUNT}},
+        {"mergeCells": {"range": title, "mergeType": "MERGE_ALL"}}])   # 제목 병합 복원(A1:I1)
 
 
 def delete_accounts(client, removed, *, sheet: str = INDEX_SHEET_NAME, on_log=None) -> int:

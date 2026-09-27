@@ -218,6 +218,9 @@ class _FakeClient:
     def read_grid(self, sheet, notes=False): return self._v, [[None] * len(r) for r in self._v]
     def batch_update(self, reqs):
         self.batches.append(reqs)
+        # ⚠ Google 실측: moveDimension 은 **배치 시작 시점**의 병합상태로 검증한다(같은 배치 안의 unmergeCells 는
+        #   아직 반영 전 → 400). 이 스냅샷으로 라이브 400 을 재현한다(같은 배치 unmerge+move 는 못 통과).
+        merges_at_start = list(self._merges)
         for r in reqs:   # 마이그레이션 재현: A열(0) 컬럼 삽입 → 모든 행 오른쪽으로 밀림(값 유지)
             ins = r.get("insertDimension")
             if ins and ins["range"].get("dimension") == "COLUMNS" and ins["range"].get("startIndex") == 0:
@@ -236,8 +239,9 @@ class _FakeClient:
             mv = r.get("moveDimension")   # 항목④ 열 이동 재현: source 열을 destinationIndex 로(값 유지)
             if mv and mv["source"].get("dimension") == "COLUMNS":
                 s = mv["source"]["startIndex"]; dest = mv["destinationIndex"]
-                # ⚠ Google 제약 재현: 병합을 **가로지르는** 열 이동은 400(병합보다 좁은 이동이 병합을 쪼갬)
-                for (mr0, mr1, mc0, mc1) in self._merges:
+                # ⚠ Google 제약 재현: 병합을 **가로지르는** 열 이동은 400(병합보다 좁은 이동이 병합을 쪼갬).
+                #   검증은 **배치 시작 시점 병합상태**로(같은 배치 안 unmergeCells 는 아직 미반영 — 라이브 400 재현).
+                for (mr0, mr1, mc0, mc1) in merges_at_start:
                     if mc0 <= s < mc1 and (mc1 - mc0) > 1:
                         raise RuntimeError("Invalid requests[].moveDimension: cannot move column across merged range (fake)")
                 new_v = []
@@ -736,14 +740,18 @@ def t11_move_across_title_merge() -> None:
     desired = [_R("A", "상품1", gi.marketing_key("A", "상품1"), "체험단중"),
                _R("A", "상품2", gi.marketing_key("A", "상품2"))]
     plan = gi.sync_index(fc, desired)     # 수정 전이면 여기서 RuntimeError(400 재현)·수정 후 무오류
-    # 계정ID 열이동 배치에 unmergeCells → moveDimension → mergeCells 순서가 있어야(병합 안전)
-    move_batch = next((b for b in fc.batches if any("moveDimension" in r for r in b)), None)
-    assert move_batch is not None, "moveDimension 배치 없음(열이동 마이그레이션 누락)"
+    # ⚠ 2배치 구조(라이브 400 근본수정 2026-09-27): unmergeCells 는 **move 보다 이전 배치**에서 선커밋돼야 한다
+    #   (Google 이 moveDimension 을 배치 시작 병합상태로 검증 → 같은 배치 unmerge 는 소용없음).
+    um_bi = next((i for i, b in enumerate(fc.batches) if any("unmergeCells" in r for r in b)), None)
+    mv_bi = next((i for i, b in enumerate(fc.batches) if any("moveDimension" in r for r in b)), None)
+    assert um_bi is not None and mv_bi is not None, "unmerge/move 배치 없음(열이동 마이그레이션 누락)"
+    assert um_bi < mv_bi, f"unmergeCells 가 moveDimension 보다 앞 배치여야(선커밋): unmerge={um_bi} move={mv_bi}"
+    move_batch = fc.batches[mv_bi]
     kinds = [next(iter(r)) for r in move_batch]
-    assert kinds.index("unmergeCells") < kinds.index("moveDimension") < kinds.index("mergeCells"), \
-        f"병합해제→이동→재병합 순서 아님: {kinds}"
-    # 옛 8열 → N_COLS 로 확장(재병합이 그리드 벗어나지 않게)
-    assert any("appendDimension" in r for r in move_batch), "옛 8열 → N_COLS 그리드 확장 누락"
+    assert kinds.index("moveDimension") < kinds.index("mergeCells"), \
+        f"이동→재병합 순서 아님: {kinds}"
+    # 옛 8열 → N_COLS 로 확장(재병합이 그리드 벗어나지 않게) — unmerge 배치에 함께
+    assert any("appendDimension" in r for r in fc.batches[um_bi]), "옛 8열 → N_COLS 그리드 확장 누락"
     # 최종 수렴: 기존 2상품 매칭·중복 재생성 없음
     assert plan.total_rows == 2 and not plan.inserts, f"수렴 실패: total={plan.total_rows} inserts={len(plan.inserts)}"
     _ok("제목 병합 있는 옛 시트 → 병합해제·열이동·재병합으로 400 없이 수렴(라이브 버그 수정)")
