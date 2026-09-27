@@ -802,18 +802,18 @@ class OutputWorkbook(_RenderMixin, _IndexMixin):
         return _norm(self.wb[_META_SHEET].cell(row, 13).value)
 
     def product_url(self, biz: str, product: str) -> str:
-        """상품명 클릭 시 열 **쿠팡 노출상품 URL**(항목2). **vendorItemId 만으로 상품 페이지가 열린다**
-        (라이브 실증 2026-09-26: `/vp/products/0?vendorItemId={vid}` 가 정확한 상품 페이지로 해석됨). 그래서
-        productId(판매분석·재고에만 있음·상품조회 응답엔 없음)가 없어도 **vid 만 있으면 링크**한다 →
-        **미입고 RFM·판매자배송까지 커버**(vid 는 상품조회 응답에 전 상품·전 옵션 항상 존재). productId 가
-        있으면 정규 형태(`/vp/products/{productId}?vendorItemId={vid}`), 없으면 `productId=0` 자리표시로 vid 로 해석.
-        vid 조차 없는(미매칭) 상품만 상품명(노출명) 검색 페이지로 폴백. 판매중지 vid 는 쿠팡이 '상품없음'을
-        내지만 실제 판매중지라 정상(대표 블록 vid=살아있는 옵션)."""
+        """상품명 클릭 시 열 **쿠팡 노출상품 URL**(항목2). productId(정규 상품ID)가 있으면
+        `/vp/products/{productId}?vendorItemId={vid}` 로 **정확한 상품 페이지**를 연다(정규).
+
+        ⚠**vid-only URL 은 실측상 불가**(2026-09-27 내장 브라우저: `/vp/products/0?vendorItemId={vid}`=서버오류·
+        `/vp/products?vendorItemId={vid}`=301). 옛 `productId=0` 자리표시 트릭은 **폐기**. productId 는 재고 API·
+        판매분석 응답에만 있으므로, **판매중지·미입고 상품도 수집하면(#8) 재고 API 로 pid 를 확보**해 정규 링크가 된다.
+        pid 가 정말 없는(완전 미매칭/미수집) 경우에만 **불가피하게** 노출명 검색으로 조건부 폴백한다([[no-silent-fallback-principle]])."""
         pid = self.product_pid(biz, product)
         vids = self.product_vids(biz, product)
-        if vids:
-            return f"https://www.coupang.com/vp/products/{pid or 0}?vendorItemId={vids[0]}"
-        return "https://www.coupang.com/np/search?q=" + _quote(_key(product))
+        if pid and vids:
+            return f"https://www.coupang.com/vp/products/{pid}?vendorItemId={vids[0]}"
+        return "https://www.coupang.com/np/search?q=" + _quote(_key(product))   # pid 없음(불가피)=노출명 검색
 
     def set_product_vids(self, biz: str, product: str, vids) -> None:
         """상품의 고유ID(vendorItemId) 목록을 저장(③ 순위조회의 상품 매칭용).

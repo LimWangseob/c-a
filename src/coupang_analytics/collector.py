@@ -677,11 +677,25 @@ def _uniquify_labels(raw: list[str]) -> list[str]:
     return labels
 
 
+def _option_label(name: str, vid: str) -> str:
+    """쿠팡 노출명 "{제품명}, {옵션1}, {옵션2}" 에서 **옵션 부분만**(첫 콤마 뒤) 추출(항목#2 2026-09-27).
+
+    블록명=등록상품명+옵션라벨인데, 옵션라벨을 노출명 전체로 쓰면 "등록명 (등록명, 블랙, …)" 처럼 제품명이 반복된다.
+    쿠팡 관례상 노출명 첫 콤마 앞=제목, 뒤=옵션·규격이므로 **콤마 뒤**를 라벨로. 콤마 없으면 원문(옵션정보 없음),
+    빈값이면 vid 꼬리 4자리."""
+    name = (name or "").strip()
+    if not name:
+        return vid[-4:]
+    head, _, tail = name.partition(",")
+    tail = tail.strip()
+    return tail if tail else name
+
+
 def _unique_labels(opts: list[OptionMetric]) -> list[str]:
     """옵션 라벨을 유일하게. 단일 옵션은 "" (상품 전체), 복수는 옵션명(빈/중복은 ID 보정)."""
     if len(opts) == 1:
         return [""]
-    return _uniquify_labels([o.option_name or o.option_id[-4:] for o in opts])
+    return _uniquify_labels([_option_label(o.option_name, o.option_id) for o in opts])
 
 
 def _display_title(product_name: str, opts: list[OptionMetric]) -> str:
@@ -798,7 +812,7 @@ def products_from_vendor_inventory(listings: list[VendorInventoryListing],
             skipped += 1
             continue
         labels = [""] if len(opts) == 1 else _uniquify_labels(
-            [o.item_name or o.vendor_item_id[-4:] for o in opts])
+            [_option_label(o.item_name, o.vendor_item_id) for o in opts])
         options = [Option(label=lbl, vendor_item_ids=[o.vendor_item_id])
                    for lbl, o in zip(labels, opts)]
         name = listing.product_name

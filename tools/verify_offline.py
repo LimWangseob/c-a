@@ -215,6 +215,15 @@ def t1_sale_status_flag():
                                      registration_type="RFM", product_status="ON_SALE",
                                      options=[_opt("R_only2", "RFM", up=True)])
     assert products_from_vendor_inventory([only_ub]) == [], "업번들만 있는 리스팅은 제외"
+    # ── #2(2026-09-27): 다중옵션 라벨 = 노출명 첫 콤마 뒤(옵션부분)만 → 블록명 "등록명 (등록명, …)" 중복 방지 ──
+    def _mopt(vid, item):
+        return VendorInventoryOption(vendor_item_id=vid, item_name=item, registration_type="RFM", valid="VALID")
+    multi = VendorInventoryListing(product_name="변신큐브", vendor_inventory_id="g4",
+                                   registration_type="RFM", product_status="ON_SALE",
+                                   options=[_mopt("R_a", "변신큐브 아기 블럭, 1개, 블랙, 80x80"),
+                                            _mopt("R_b", "변신큐브 아기 블럭, 1개, 핑크, 80x80")])
+    mlabels = [o.label for p in products_from_vendor_inventory([multi]) for o in p.options]
+    assert mlabels == ["1개, 블랙, 80x80", "1개, 핑크, 80x80"], f"#2 옵션라벨 제품명 접두 미제거: {mlabels}"
     # ── 재고 표기(소유자 2026-09-24 개정): 재고현황 있으면 값(0=품절)·**없으면 판매중지 무관 미입고** ──
     from coupang_analytics.pipeline import (_fill_product_metrics, _block_sale_status,
                                             _purge_upbundle_blocks)
@@ -1215,8 +1224,9 @@ def t1_apply_style_migrations():
         f"pid+vid 정규 URL 오류: {wb.product_url('가게M','상품M')}"
     wb.ensure_product_block("가게M", "미입고품", config.KIND_CONTRACT, ["kw"])   # pid 없음(미입고/판매자배송)
     wb.set_product_vids("가게M", "미입고품", ["V200"])
-    assert wb.product_url("가게M", "미입고품") == "https://www.coupang.com/vp/products/0?vendorItemId=V200", \
-        f"vid만(pid없음) URL 오류: {wb.product_url('가게M','미입고품')}"
+    # pid 없으면 vid-only URL 은 실측상 서버오류(/0)·301 → 노출명 검색 폴백(불가피 조건부, 2026-09-27). 근본=수집으로 pid 확보(#8)
+    assert "np/search?q=" in wb.product_url("가게M", "미입고품"), \
+        f"pid 없으면 검색 폴백이어야(vid-only URL 불가): {wb.product_url('가게M','미입고품')}"
     wb.ensure_product_block("가게M", "미매칭품", config.KIND_PERSONAL, ["kw"])   # vid 없음
     assert "np/search?q=" in wb.product_url("가게M", "미매칭품"), "vid 없으면 검색 폴백이어야"
     _ok("자가치유: 판매가/판매상태 보정 · 빈 키워드행 낡은순위 삭제 · 비고=판매중/판매중지 · product_url=vid기반(미입고/판매자배송 커버)")

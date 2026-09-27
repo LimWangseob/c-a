@@ -273,16 +273,16 @@ def pin_product_hyperlink():
     _check(lnk is not None and _n(getattr(lnk, "target", "")) ==
            "https://www.coupang.com/vp/products/12345?vendorItemId=vidS",
            "productId 있으면 정규 형태(pid+vid) 링크")
-    # 미입고품: pid 없음·vid 있음 → /vp/products/0?vendorItemId=vidI (vid 기반 커버)
+    # 미입고품: pid 없음·vid 있음 → vid-only URL 은 실측상 불가(서버오류/301)라 **노출명 검색 폴백**(불가피 조건부,
+    # 2026-09-27). 근본=수집으로 pid 확보(#8)해 정규 링크. [[no-silent-fallback-principle]].
     hi = _hdr_row(ws, "미입고품")
     lnki = ws.cell(hi, 3).hyperlink
-    _check(lnki is not None and _n(getattr(lnki, "target", "")) ==
-           "https://www.coupang.com/vp/products/0?vendorItemId=vidI",
-           "pid 없어도 vid 있으면 상품 페이지 링크(미입고/판매자배송)")
-    # 중지상품: vid 있음(vidD) → 마찬가지로 vid 기반(판매중지 vid 는 쿠팡이 '상품없음' 내지만 실제 판매중지라 정상)
+    _check(lnki is not None and _n(getattr(lnki, "target", "")).startswith("https://www.coupang.com/np/search?q="),
+           "pid 없으면 검색 폴백(vid-only URL 불가·pid=0 트릭 폐기)")
+    # 중지상품: pid 없음·vid 있음(vidD) → 마찬가지로 검색 폴백(pid 확보 전까지)
     hd = _hdr_row(ws, "중지상품")
     tgtd = _n(getattr(ws.cell(hd, 3).hyperlink, "target", "")) if ws.cell(hd, 3).hyperlink else ""
-    _check(tgtd == "https://www.coupang.com/vp/products/0?vendorItemId=vidD", "vid 있으면 vid 기반 링크")
+    _check(tgtd.startswith("https://www.coupang.com/np/search?q="), "pid 없으면 검색 폴백")
     # 미매칭품: vid 없음 → 노출명 검색 폴백
     hu = _hdr_row(ws, "미매칭품")
     lnk2 = ws.cell(hu, 3).hyperlink

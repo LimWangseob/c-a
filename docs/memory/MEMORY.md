@@ -31,6 +31,7 @@
 - [재부팅 자동복구](reboot-recovery.md) — 야간 Windows업데이트 재부팅 시 --resume(로그온 트리거)로 판매수집 스킵·순위부터 이어서. 단계마커 _실행단계.json. Windows 자동로그인 켜야 동작. 앱통합 완료.
 
 ## 작업 원칙(피드백)
+- [폴백 최소화 원칙(중요)](no-silent-fallback-principle.md) — 모든 소스코드에서 폴백 신중히·최대한 금지·불가피할 때만 조건부(로그 명시). 무조건 폴백 금지. 근본 해결/실측 우선. 소유자 강조 2026-09-27.
 - [분석 요청=코드 수정 금지](analysis-request-no-code-change.md) — "분석해줘"면 분석만, 명시 수정요청 전까지 파일 편집·커밋 금지.
 - [진단명령=사용자PC 콘솔창 뜸](diagnostic-commands-pop-consoles.md) — 확인 명령 최소화, PowerShell은 bash로 감싸지 말고 직접(따옴표·한글 깨짐 방지).
 - [쉬운 말·전문용어 금지](plain-language-no-jargon.md) — 군사·조어(재무장 등) 싫어함, 평범한 한국어로.
