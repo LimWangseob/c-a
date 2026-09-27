@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 3588291b-3435-4968-8471-8410129d1b69
-  modified: 2026-09-27T14:28:51.109Z
+  modified: 2026-09-27T14:52:32.387Z
 ---
 
 **세션 상태(2026-09-27): 전부 커밋·푸시 완료(미푸시 0·tracked 변경 없음)·배포 zip 재빌드 완료. 남은 실행 작업 = 운용 PC 재배포 하나.**
@@ -14,6 +14,7 @@ metadata:
 1. **Cause C — 여러 줄 대장 상품명(커밋 5cc64a6·2d02b7c)**: 담당자가 상품명 칸에 `상품명\n\n(노출명)`처럼 여러 줄 입력→중복 블록·관리대장↔결과 계정목록 미정합. `input_list._parse_grid`가 개행 있으면 첫 줄만 채택. 부수로 사문화된 옵션파싱(opt/vids/pids/prod_cancelled/_split_ids) 물리삭제(F821 잠재 제거). 핀 verify_offline[C].
 2. **상품명 깨짐 — 비-헤더 C셀 URL 잔재(커밋 a6055e4)**: 옛 배포가 판매상태/판매가/빈 행 C셀에 검색URL을 값으로 남겨 상품명이 URL로 보임. `workbook_render._clear_stray_url_cells`(헤더 아닌 C셀 http값·링크 삭제)를 apply_style에 배선. 실측 웰빙곳간 8→0·정상 상품명/링크 보존. 핀 pin_apply_style[S10].
 3. **output(8) 정밀 분석(커밋 4e484d0·코드변경 없음)**: 메모 [[analysis-output8-260927]] 참조.
+4. **계정목록 상태 낡은 판매중지 교정(커밋 7f0a7e7)**: 소유자 지적(대장 정상인데 계정목록 판매중지). `_중단`이 수집·대조 시에만 갱신돼 이어쓰기/미수집/이름드리프트 시 낡은 "Y" 잔존→정상 상품이 판매중지로 뜸(실측 커스텀존 이큐나라·하성진 등 5건). `workbook.sync_discontinued_from_ledger`(대장 활성→해제·판매중지→표기·미상 불변·옵션 등록명 대조) 신설 + `pipeline._reconcile_ledger_accounts`가 매 실행 대장 기준 전 계정 동기화. 핀 verify_offline[25]. ⚠**코드 변경 있음→배포 zip 재빌드 완료.**
 
 ## output(8) 분석 결론 — 소유자 보고 4이슈 (SSOT=[[analysis-output8-260927]])
 - **#1 검색링크→상품링크**: "둘다"(NORMAL+RFM 같은 옵션) 상품에서 옛 배포가 pid 없는 NORMAL vid 저장→검색폴백. **현재 코드 `collector._tracked_listing_options`는 RFM vid(pid 있음) 정확 선택=이미 수정됨**(실측 파미젠: RFM vid 96075356358→pid 8359540267). 순수 판매자배송(RFM 형제 없음)은 3 API 어디에도 공개 pid 없어 검색링크 불가피(상품조회 pid 0/20 전수 확정).
