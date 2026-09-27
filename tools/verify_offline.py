@@ -1267,6 +1267,27 @@ def t1_invalid_product_name():
     _ok("상품명 아님('--'·기호만) 파싱 제외 · ledger_products 미포함(잔재 블록 reconcile 삭제 유도)")
 
 
+def t1_multiline_product_name():
+    print("[C] 여러 줄 대장 상품명 — 첫 줄만 채택(담당자가 '담당자명\\n\\n(노출명)' 입력 시 중복 블록 방지, 2026-09-27)")
+    from coupang_analytics.input_list import parse_input_rows
+    rows = [
+        ["대표자명", "사업자명", "계정아이디", "상품명"],       # 헤더
+        ["김대표", "비엔케이", "bnk01", "손목마사지기 W102\n\n(디프 3D 에어 온열 손목 발목 마사지기)"],
+        ["", "", "", "근막마사지기 MS007\n\n(&picks 전동 근막 마사지기 MS007)"],
+        ["", "", "", "정상상품 A1"],   # 여러 줄 아님 = 그대로
+    ]
+    il = parse_input_rows(rows)
+    a = next(x for x in il.accounts if x.account_id == "bnk01")
+    names = [p.name for p in a.products]
+    assert names == ["손목마사지기 W102", "근막마사지기 MS007", "정상상품 A1"], \
+        f"여러 줄 상품명 첫 줄 미채택(중복 블록 원인): {names}"
+    # ledger_products(완전삭제 판정용)에도 첫 줄만 — 노출명 꼬리가 남으면 잔재 블록 유발
+    assert "손목마사지기 W102" in a.ledger_products, "첫 줄 이름 누락"
+    assert not any("\n" in p or "디프 3D" in p for p in a.ledger_products), \
+        f"노출명 꼬리가 ledger_products 에 남음: {a.ledger_products}"
+    _ok("여러 줄 대장 상품명 = 첫 줄(담당자명)만 채택 · 노출명 꼬리 폐기(중복 블록 방지)")
+
+
 # ── [6] 키워드 Phase B 선정 로직 ───────────────────────────────
 # 기본 = **결정적 모킹**(네이버·OpenAI 경계만 페이크, 실제 select_keywords_light 로직 그대로 실행).
 #        회귀 게이트가 빠르고(<2s) 결정적이려면 실 API 호출 금지(비용·네트워크·비결정성 제거).
@@ -1404,6 +1425,7 @@ def main():
     t1_promo_effect()
     t1_apply_style_migrations()
     t1_invalid_product_name()
+    t1_multiline_product_name()
     t2_keywords(store, il)
     print("=" * 60)
     print("  [완료] 로그인 불필요 부분 실증 종료")

@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: e9438a2f-e201-48d4-bf71-5cdf2500b598
-  modified: 2026-09-27T01:01:50.494Z
+  modified: 2026-09-27T01:58:34.744Z
 ---
 
 입력 기준 파일 = **셀독 관리대장**(구글시트 원본, 본체시트=`셀독리스트`). 규모 ~22계정·65상품(취소선 7건 제외 후).
@@ -13,6 +13,8 @@ metadata:
 **구조**: 헤더 2행(행1=잔여 예시값, 행2=헤더). **가져오는 값=사업자·계정아이디·상품명(필수 3개)**(대표자명 선택). **옵션/vendorItemId/productId 미파싱**(대장에 없음·미사용, vid는 판매분석 API가 라이브 발견). 계정식별열이 상품행에 세로병합 → 다운로드/API 모두 상단행에만 값 → 파서 '빈 계정칸=상속' 그룹핑(정상). 헤더 1~8행 자동감지(`_find_header_row`, 파일=헤더1행 하위호환).
 
 **대장 중복 상품 정책(2026-09-20 소유자)**: 한 계정에 **같은 상품명 2줄 이상**=담당자 오입력 → **첫 줄만 추적**, 나머지 중복 줄 제거(공백정리 후 동일 판정·대소문자 유지·`struck` 경고). `_parse_grid` 말미 계정별 dedup(파일·구글시트 공용). 계기=알부민이 대장 2줄이라 쿠팡 1개를 1줄만 매칭·나머지 미매칭이던 문제. 검증 verify_offline[13].
+
+**여러 줄 상품명 = 첫 줄만(Cause C, 2026-09-27)**: 담당자가 **한 칸(셀) 안에** `담당자명\n\n(노출명 전체)` 처럼 **여러 줄**로 입력하는 경우가 있음(실측 비엔케이 "손목마사지기 W102\n\n(디프 3D 에어…)"·근막마사지기·브릿지웍스). 개행 포함 문자열이 정체성 키가 돼 **대장명 블록 + 노출명 블록 중복** 생성→관리대장↔결과 계정목록 미정합의 근본원인. 수정=`_parse_grid`에서 `if "\n" in prod: prod = prod.split("\n")[0].strip()`(첫 줄=담당자 상품명만 채택, products·ledger_products 공통). 기존 잔재 중복 블록은 다음 실행 reconcile(⑥ 완전삭제)로 자동 정리. 핀 verify_offline[C]. **부수 정리**: 이 대장엔 옵션/vid/pid 컬럼이 없어(`i_opt=i_vid=i_pid=None` 고정) 사문화돼 있던 옵션행 파싱 분기(`opt`/`vids`/`pids`/`prod_cancelled`·`_split_ids`)를 물리 삭제(F821 NameError 잠재 제거). vid 는 라이브 판매수집(product_match)에서 확보. [[fix-from-real-evidence]]·[[no-silent-fallback-principle]].
 
 **연동**: 원본 구글시트를 **서비스계정 Sheets API 직접** 읽음(`read_ledger_rows`→`(title, rows, strike_grid)`, `parse_input_rows`). 무인 실행이 매번 최신 시트 fetch(URL=QSettings `gsheet/input_url`). ⚠ 내려받은 값에 평문 비번 → 파싱 직후 DPAPI 저장·임시삭제(평문 금지).
 

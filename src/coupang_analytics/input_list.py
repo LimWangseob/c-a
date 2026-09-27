@@ -71,10 +71,6 @@ def _norm(value) -> str:
     return str(value).strip() if value is not None else ""
 
 
-def _split_ids(value) -> list[str]:
-    return [t for t in re.split(r"[,\s;]+", _norm(value)) if t.isdigit()]
-
-
 # 헤더가 1행이 아닐 수 있음(예: 셀독 관리대장은 1행=예시값, 2행=실제 헤더). 상단 몇 행을 스캔.
 _HEADER_SCAN_ROWS = 8
 
@@ -273,7 +269,7 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
     i_rep = idx.get(config.IN_COL_REPRESENTATIVE)   # 선택(없으면 None → 라벨 폴백에서만 무시)
     i_biz = idx[config.IN_COL_BUSINESS]
     i_acct, i_prod = idx[config.IN_COL_ACCOUNT_ID], idx[config.IN_COL_PRODUCT]
-    i_opt = i_vid = i_pid = None                     # 옵션/vid/pid 미파싱(입력 정리 — 라이브에서 vid 확보)
+    # 옵션/vid/pid 는 이 관리대장에 없고 미사용(vid 는 라이브 판매수집에서 확보) → 파싱하지 않음.
     i_ms, i_me, i_mm = idx.get("mkt_start"), idx.get("mkt_end"), idx.get("mkt_mon")   # 마케팅(선택)
     i_status = idx.get("status")                     # 상태 컬럼(선택) — 판매중지/삭제 감지
 
@@ -288,14 +284,15 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
     current_rep = ""
     current_acct: Account | None = None
     current_prod: Product | None = None
-    acct_cancelled = False                    # 현재 계정이 해지/삭제 → 아래 상품·옵션 전부 제외
-    prod_cancelled = False                    # 현재 상품이 품절/중지 → 아래 옵션 제외
+    acct_cancelled = False                    # 현재 계정이 해지/삭제 → 아래 상품 전부 제외
 
     for row_no, row in enumerate(rows[hrow + 1:], start=hrow + 2):
         rep, biz = _norm(_cell(row, i_rep)), _norm(_cell(row, i_biz))
         acct, prod = _norm(_cell(row, i_acct)), _norm(_cell(row, i_prod))
-        opt = _norm(_cell(row, i_opt))
-        vids, pids = _split_ids(_cell(row, i_vid)), _split_ids(_cell(row, i_pid))
+        # #C(2026-09-27): 담당자가 상품명 칸에 "담당자명\n\n(노출명 전체)" 처럼 **여러 줄**로 입력하면 정체성 키가
+        # 오염돼 대장명 블록 + 노출명 블록이 중복 생성됨(실측: 비엔케이·브릿지웍스). → **첫 줄(담당자 상품명)만** 채택.
+        if "\n" in prod:
+            prod = prod.split("\n")[0].strip()
         status_disc = _status_discontinued(_cell(row, i_status)) if i_status is not None else False
 
         if rep:
@@ -306,13 +303,11 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
             if status_disc or _struck_cell(row_no, i_acct):
                 _finalize(current_prod)
                 acct_cancelled = True
-                prod_cancelled = False
                 current_acct = current_prod = None
                 reason = "상태=판매중지/삭제" if status_disc else "취소선(해지)"
                 struck.append(f"계정 '{acct}'({biz or current_rep}) — {reason}")
             else:
                 acct_cancelled = False
-                prod_cancelled = False
                 if acct in by_id:               # 같은 계정ID 재등장 → 기존 계정에 상품 이어붙임(분리·누락 방지)
                     current_acct = by_id[acct]
                     if not current_acct.business_name and biz:   # 뒤 행에 사업자명 있으면 채움
@@ -332,7 +327,6 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
             if not _is_real_product_name(prod):
                 struck.append(f"상품명 아님 '{prod}' (계정 {acct or (current_acct.account_id if current_acct else '?')}) — 제외")
                 current_prod = None
-                prod_cancelled = True            # 아래 옵션 행도 건너뜀
                 continue
             # 상품 제외 = 상태 컬럼 / 상품명 마커 / 취소선 중 하나라도 → 추적 제외
             if current_acct is not None:
@@ -340,7 +334,6 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
             # #8(2026-09-27): 판매중지/취소선도 **수집 대상에 포함**(discontinued=True)하고 ③순위만 제외한다.
             # (옛 정책: 완전 제외 → 판매가/판매상태 공란·상품링크 검색폴백의 원인이었음). 옵션행도 처리(vid 매칭).
             disc = bool(status_disc or _is_discontinued(prod) or _struck_cell(row_no, i_prod))
-            prod_cancelled = False
             current_prod = Product(prod, mkt_start=_norm_date(_cell(row, i_ms)),
                                    mkt_end=_norm_date(_cell(row, i_me)),
                                    mkt_mon=_norm_date(_cell(row, i_mm)),
@@ -353,14 +346,6 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
                 reason = ("상태=판매중지/삭제" if status_disc else
                           "판매중지" if _is_discontinued(prod) else "취소선(품절/중지)")
                 struck.append(f"상품 '{prod}' — {reason} (수집·순위만 제외)")
-        if prod_cancelled:                      # 제외된 상품 아래 옵션 행 건너뜀
-            continue
-        # 옵션 행 (옵션명 또는 vid 가 있으면 현재 상품의 옵션)
-        if opt or vids or pids:
-            if current_prod is None:
-                errors.append(f"{row_no}행: 소속 상품 없이 옵션/ID")
-            else:
-                current_prod.options.append(Option(opt, vids, pids))
     _finalize(current_prod)
 
     if emit_strike_warning:   # 파일인데 취소선을 못 읽었음을 알림(수동 확인 유도). 값 파싱은 정상.
