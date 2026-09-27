@@ -706,6 +706,30 @@ def t1_reconcile_account_scope():
     _ok("다계정ID reconcile: 각 계정 대조가 자기 상품만 처리·타 계정 상품 미접촉(교차 삭제/중지 방지)")
 
 
+def t1_sync_discontinued_ledger():
+    print("[25] 대장 기준 판매중지 플래그 동기화 — 이어쓰기/미수집으로 낡은 '판매중지'가 정상 상품에 남던 문제 교정(2026-09-27)")
+    BIZ = "동기화비즈"
+    wb = OutputWorkbook.empty()
+    # A=정상인데 낡은 'Y'(오표기)·B=진짜 판매중지·C=대장에 없는 블록(노출명 잔재 등)
+    wb.ensure_product_block(BIZ, "정상상품A", config.KIND_CONTRACT, ["kw"], registered="정상상품A")
+    wb.set_discontinued(BIZ, "정상상품A", True)       # 낡은 오표기(이전 실행 잔재 모사)
+    wb.ensure_product_block(BIZ, "중지상품B", config.KIND_PERSONAL, ["kw"], registered="중지상품B")
+    wb.ensure_product_block(BIZ, "모르는블록C", config.KIND_PERSONAL, ["kw"], registered="모르는블록C")
+    assert wb.is_discontinued(BIZ, "정상상품A"), "사전조건: A에 낡은 Y"
+    # 대장: A=활성·B=판매중지·C=대장에 없음
+    flipped = wb.sync_discontinued_from_ledger(BIZ, ["정상상품A"], ["중지상품B"], "")
+    assert not wb.is_discontinued(BIZ, "정상상품A"), "대장 활성 A의 낡은 '판매중지'가 해제돼야(핵심)"
+    assert wb.is_discontinued(BIZ, "중지상품B"), "대장 판매중지 B는 표기돼야"
+    assert not wb.is_discontinued(BIZ, "모르는블록C"), "대장에 없는 블록 C는 건드리면 안 됨(불변)"
+    assert flipped == ["중지상품B"], f"새로 판매중지된 건 B만: {flipped}"
+    # 옵션 블록도 등록명(base)으로 대조 — '정상상품A (옵션)' 이 대장 활성명 '정상상품A' 로 해제되는지
+    wb.ensure_product_block(BIZ, "정상상품A (블랙)", config.KIND_CONTRACT, [], rank_rows=False, registered="정상상품A")
+    wb.set_discontinued(BIZ, "정상상품A (블랙)", True)
+    wb.sync_discontinued_from_ledger(BIZ, ["정상상품A"], [], "")
+    assert not wb.is_discontinued(BIZ, "정상상품A (블랙)"), "옵션 블록도 등록명으로 대조해 해제돼야"
+    _ok("대장 동기화: 활성=낡은 판매중지 해제·판매중지=표기·미상 블록 불변·옵션은 등록명 대조")
+
+
 def t1_date_columns():
     print("[14] 일자 컬럼 — 연말/연초 경계 보정 (workbook _parse_date nearest-year·정규화 폭발 방지)")
     import coupang_analytics.workbook as wbmod
@@ -1417,6 +1441,7 @@ def main():
     t1_dual_status_source()
     t1_keyword_freeze_boundary()
     t1_reconcile_account_scope()
+    t1_sync_discontinued_ledger()
     t1_product_match_precision()
     t1_vid_source_option_split()
     t1_ledger_dedup()

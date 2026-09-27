@@ -300,6 +300,18 @@ def _reconcile_ledger_accounts(wb, input_list: InputList, uncollected, log
     반환 = (완전 삭제한 [(사업자, 계정ID)…], 일원화로 사라진 옛 이름 [(옛사업자명, 계정ID)…]).
     """
     renamed = _consolidate_renamed_accounts(wb, input_list, log)  # 시트명 변경 계정 먼저 흡수(고아 오분류 방지)
+    # 관리대장 기준 판매중지 플래그 동기화(매 실행·수집 여부 무관, 2026-09-27) — 이어쓰기/미수집으로
+    # 대조가 누락돼 **정상 상품이 계정목록에 '판매중지'로 남던** 문제 교정(대장 활성=해제·판매중지=표기·
+    # 대장에 없는 블록=불변). 실측 커스텀존 이큐나라·하성진. 계정 단위(다계정ID 스코핑).
+    sheets = set(wb.account_sheets())
+    for a in input_list.accounts:
+        if a.label not in sheets:
+            continue                                          # 시트 없음(신규 첫날 등) → 건너뜀
+        act = [p.name for p in a.products if not p.discontinued]
+        dis = [p.name for p in a.products if p.discontinued]
+        flipped = wb.sync_discontinued_from_ledger(a.label, act, dis, a.account_id)
+        if flipped:
+            log(f"   [상태동기화] {a.label}: 대장 기준 판매중지 표기 {len(flipped)}개")
     active_biz = {a.label for a in input_list.accounts}
     active_ids = input_list.ledger_account_ids            # 대장에 줄이 존재하는 계정ID(판매중지 포함)
     uncollected_biz = {a.label for a in uncollected}

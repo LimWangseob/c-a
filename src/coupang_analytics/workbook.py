@@ -1195,6 +1195,36 @@ class OutputWorkbook(_RenderMixin, _IndexMixin):
                 self.set_discontinued(biz, p, True)
         return newly, deleted
 
+    def sync_discontinued_from_ledger(self, biz: str, active_products, discontinued_products,
+                                      account_id: str = "") -> list[str]:
+        """관리대장 기준으로 판매중지 플래그(_중단)를 **매 실행 동기화**한다(수집 여부 무관·2026-09-27).
+
+        배경: `_중단` "Y"는 수집·대조(`reconcile_account`)할 때만 갱신돼, **이어쓰기(resume)로 ①판매수집을
+        건너뛰거나 로그인 실패(미수집)면 낡은 "Y"가 남아** 정상 상품이 계정목록에 '판매중지'로 뜬다(실측
+        커스텀존 이큐나라·하성진). 이 메서드는 대장이 **아는 상품만** 손대 안전하게 교정한다:
+        - 대장 활성(active) 상품 → 판매중지 해제(False) — **낡은 오표기 제거(핵심)**.
+        - 대장 판매중지(discontinued) 상품 → 판매중지 표기(True).
+        - 대장에 **없는** 블록(노출명 매칭분·완전삭제 대상 등) → **건드리지 않음**(다른 경로가 처리).
+
+        블록명이 '등록명 (옵션)' 이어도 등록명(base)으로 대조한다. `account_id` 주면 그 계정ID 상품만(다계정ID
+        스코핑, [[fix-multiaccount-reconcile-scope]]). 반환=새로 판매중지로 바뀐 블록명 목록."""
+        active = {_key(p) for p in active_products}
+        disc = {_key(p) for p in discontinued_products}
+        acct = _norm(account_id)
+        newly: list[str] = []
+        for p in list(self.products_of(biz)):
+            if acct and self.product_account_id(biz, p) not in ("", acct):
+                continue                                       # 다른 계정ID 소속 → 제외(다계정ID 교차오염 방지)
+            base = self.registered_name(biz, p) or p           # 옵션 블록은 등록명으로도 대조
+            if p in active or base in active:
+                self.set_discontinued(biz, p, False)           # 대장 활성 → 낡은 '판매중지' 해제
+            elif p in disc or base in disc:
+                if not self.is_discontinued(biz, p):
+                    newly.append(p)
+                self.set_discontinued(biz, p, True)            # 대장 판매중지 → 표기
+            # else: 대장에 없는 블록 → 불변(완전삭제/노출명 매칭 등은 다른 경로가 처리)
+        return newly
+
     def delete_account(self, biz: str) -> bool:
         """관리대장에서 **줄이 완전히 사라진 계정**을 결과에서 완전 삭제 — 시트(시계열 이력)+모든 메타행.
 
