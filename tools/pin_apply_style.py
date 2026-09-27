@@ -291,6 +291,26 @@ def pin_product_hyperlink():
     _check("hyperlink" not in tgt2 and "#gid" not in tgt2, "외부 http 링크(내부 점프 아님)")
 
 
+def pin_stray_url_cleanup() -> None:
+    print("[핀 S10] 비-헤더 C셀 URL 잔재 삭제(상품명 깨짐·2026-09-27): 옛 배포가 판매상태/판매가/빈 행 C에 "
+          "검색URL을 값으로 남긴 것을 apply_style 이 청소·헤더 C(상품명+링크)는 보존")
+    from openpyxl.worksheet.hyperlink import Hyperlink
+    wb = _build()
+    wb.apply_style()
+    ws = wb.wb[BIZ]
+    hs = _hdr_row(ws, "상품S")
+    stray = hs + 3   # 헤더 아래 값/지표 행(비-헤더) — 잔재 URL 모사
+    ws.cell(stray, 3).value = "https://www.coupang.com/np/search?q=stray"
+    ws.cell(stray, 3).hyperlink = Hyperlink(ref=ws.cell(stray, 3).coordinate,
+                                            target="https://www.coupang.com/np/search?q=stray")
+    wb.apply_style()   # 재렌더 → 청소돼야
+    _check(not (isinstance(ws.cell(stray, 3).value, str) and ws.cell(stray, 3).value.startswith("http")),
+           "비-헤더 C셀의 URL 값 삭제됨")
+    _check(ws.cell(stray, 3).hyperlink is None, "비-헤더 C셀의 하이퍼링크 제거됨")
+    lnk = ws.cell(_hdr_row(ws, "상품S"), 3).hyperlink   # 헤더 링크는 보존
+    _check(lnk is not None and _n(getattr(lnk, "target", "")).startswith("http"), "상품명 헤더 C 링크는 보존")
+
+
 def main() -> int:
     print("=" * 60)
     print("  핀 테스트 — OutputWorkbook.apply_style 서식 출력")
@@ -303,6 +323,7 @@ def main() -> int:
     pin_group_edges()
     pin_group_fill_alternation()
     pin_product_hyperlink()
+    pin_stray_url_cleanup()
     pin_trailing_trim()
     print("=" * 60)
     print("  [완료] 서식 핀 모두 통과")

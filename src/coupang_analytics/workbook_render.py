@@ -123,6 +123,25 @@ class _RenderMixin:
                         if ws.cell(r, c).value not in (None, ""):
                             ws.cell(r, c).value = None
 
+    def _clear_stray_url_cells(self) -> None:
+        """비-헤더 C열(_COL_NAME)에 값으로 박힌 http(s) URL 잔재를 지운다(상품명 깨짐·2026-09-27·실측 웰빙곳간 8셀).
+
+        상품명 하이퍼링크는 **상품명 헤더행 C**에만 정상 존재(값=상품명·링크=쿠팡URL). 옛 배포 코드가
+        판매상태/판매가/블록 사이 빈 행 등 **헤더가 아닌 C 셀**에 검색URL을 값으로 남겨(그 칸이 URL 텍스트로
+        보임=상품명 깨짐), 현재 렌더는 그 칸을 안 건드려 잔존한다. 헤더행(_date_rows)이 아닌 C셀의 값이
+        http 로 시작하면 값·하이퍼링크를 제거한다(정상 데이터엔 URL이 없어 안전·멱등·재인덱스 불필요)."""
+        for ws in self.wb.worksheets:
+            if ws.title in _SPECIAL_SHEETS:
+                continue
+            hdr = set(self._date_rows.get(ws.title, []))
+            for r in range(1, ws.max_row + 1):
+                if r in hdr:                                   # 상품명 헤더행 C = 정상 상품명+링크(보존)
+                    continue
+                c = ws.cell(r, _COL_NAME)
+                if isinstance(c.value, str) and c.value.startswith("http"):
+                    c.value = None
+                    c.hyperlink = None
+
     def _backfill_metric_rows(self) -> None:
         """옛 블록에 빠진 **판매가·판매상태**(+로켓그로스면 재고현황) 지표행을 보정한다(항목4/6·2026-09-26).
 
@@ -265,6 +284,7 @@ class _RenderMixin:
         self._migrate_keyword_col()    # 옛 마스터 키워드·소헤더 C열 → A열(v4 좌측확장·유실 방지)
         self._backfill_metric_rows()   # 옛 블록에 빠진 판매가·판매상태(+로켓그로스 재고) 지표행 보정(항목4/6)
         self._clear_blank_keyword_ranks()  # 빈 키워드행에 남은 낡은 순위값 삭제(항목5)
+        self._clear_stray_url_cells()      # 비-헤더 C열의 URL 잔재 삭제(상품명 깨짐·2026-09-27)
         self._group_sibling_blocks()   # 같은 등록상품명(기본+옵션) 블록 인접 정렬(분산 치유)
         thin = Side(style="thin", color="BFBFBF")
         sty = _StyleCtx(
