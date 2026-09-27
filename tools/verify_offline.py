@@ -235,6 +235,20 @@ def t1_sale_status_flag():
     assert _block_sale_status({"a": "판매중", "b": "판매중지"}, ["a", "b"]) == "부분판매중"
     assert _block_sale_status({"x": False}, ["x"]) == "판매중" and _block_sale_status({"x": True}, ["x"]) == "판매중지"
     assert _block_sale_status({"y": "판매중지"}, ["x"]) == ""     # 이 블록 vid 상태 없음 → 미상
+    # ── #8(2026-09-27): 대장 판매중지/취소선도 **수집**(discontinued 이월)·순위만 제외(rank_suppressed) ──
+    from coupang_analytics.input_list import Option as _O8, Product as _P8
+    from coupang_analytics.product_match import scope_to_ledger as _scope8
+    _led8 = [_P8("살아있는상품", options=[_O8("", ["Vx"])]),
+             _P8("중지상품", options=[_O8("", ["Vy"])], discontinued=True)]
+    _sc8, _ = _scope8(_led8, [])                                  # 발견 없음(미매칭 분기)에도 discontinued 이월돼야
+    assert _sc8[1].discontinued and not _sc8[0].discontinued, "scope_to_ledger discontinued 이월 실패"
+    wb8 = OutputWorkbook.empty()
+    wb8.ensure_product_block("비즈8", "중지상품", config.KIND_CONTRACT, ["kw8"])
+    wb8.set_discontinued("비즈8", "중지상품", True)
+    assert wb8.rank_suppressed("비즈8", "중지상품"), "판매중지=rank_suppressed(순위 제외)"
+    wb8.set_product_metric("비즈8", "중지상품", config.M_SALES, "2026-09-27", 5)   # 판매정보는 채움
+    assert wb8.rank_suppressed("비즈8", "중지상품"), "지표 채워도 순위는 계속 제외"
+    _ok("#8 판매중지/취소선 수집(discontinued 이월)·지표 채움·순위만 제외")
     wbI = OutputWorkbook.empty()
     bzI = "재고비즈"
     for nm in ("입고품", "품절품", "미입고품", "중지품"):

@@ -102,8 +102,8 @@ def t1c_real_ledger_shape() -> None:
         H,                                                                       # 행2 헤더
         ["0", "박명진", "송창호", "웰빙곳간", "wellbing", "pw1", "볶은맥문동환", ""],   # 계정A 첫 상품(식별열 값)
         ["",  "",     "",     "",       "",         "",    "알부민맥스",   ""],   # 병합 상속(빈 계정칸)
-        ["",  "",     "",     "",       "",         "",    "커큐민플러스", "판매중지"],  # 상태=판매중지 → 상품 제외
-        ["",  "",     "",     "",       "",         "",    "퀘르세틴",     ""],   # 취소선 → 상품 제외
+        ["",  "",     "",     "",       "",         "",    "커큐민플러스", "판매중지"],  # 상태=판매중지 → #8: 수집·순위만 제외
+        ["",  "",     "",     "",       "",         "",    "퀘르세틴",     ""],   # 취소선 → #8: 수집·순위만 제외
         ["0", "박명진", "이재필", "커스텀존", "unipang",  "pw2", "불멍화로",     ""],   # 계정B 첫 상품
         ["",  "",     "",     "",       "",         "",    "NMN정",       ""],   # 병합 상속
     ]
@@ -113,7 +113,10 @@ def t1c_real_ledger_shape() -> None:
     il = parse_input_rows(rows, strike)
     got = {a.account_id: [p.name for p in a.products] for a in il.accounts}
     assert list(got.keys()) == ["wellbing", "unipang"], list(got.keys())
-    assert got["wellbing"] == ["볶은맥문동환", "알부민맥스"], got["wellbing"]   # 판매중지·취소선 2개 제외
+    # #8(2026-09-27): 판매중지·취소선도 **수집 포함**(discontinued=True)·순위만 제외 → 4개 모두 파싱
+    assert got["wellbing"] == ["볶은맥문동환", "알부민맥스", "커큐민플러스", "퀘르세틴"], got["wellbing"]
+    disc = {p.name: p.discontinued for a in il.accounts for p in a.products}
+    assert disc["커큐민플러스"] and disc["퀘르세틴"] and not disc["볶은맥문동환"], disc   # 판매중지=discontinued 플래그
     assert got["unipang"] == ["불멍화로", "NMN정"], got["unipang"]
     assert il.accounts[0].business_name == "웰빙곳간" and il.accounts[0].representative == "송창호"
     assert any("커큐민플러스" in s for s in il.struck) and any("퀘르세틴" in s for s in il.struck)

@@ -487,6 +487,9 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
             seen_products.append(bname)
             _process_option(pctx, biz, product, base, kind, title, i, opt, multi)
             wb.set_product_account_id(biz, bname, report_acc.account_id)   # 항목5: 상품별 계정ID 태깅(다계정ID 사업자)
+            # #8(2026-09-27): 대장 판매중지/취소선도 수집(위에서 지표·재고·판매가·판매상태 채움)하되 ③순위만 제외.
+            # rank_suppressed(is_discontinued) 가 순위를 건너뛴다. 재판매(취소선 해제)면 False 로 해제.
+            wb.set_discontinued(biz, bname, product.discontinued)
     # 죽은 중복 블록 정리(안전 규칙): live 형제 있고 vid 가 상품조회서 소멸한 잔재만 삭제(reconcile 판매중지 표기 전)
     _sweep_dead_duplicates(wb, biz, live_vids, log)
     # 대장 대조(항목⑥, 소유자 2026-09-25): **줄이 완전히 사라진 상품 = 이력 포함 완전삭제**(백업 안전망),

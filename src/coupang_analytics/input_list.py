@@ -34,6 +34,7 @@ class Product:
     mkt_end: str = ""               # 마케팅 종료일
     mkt_mon: str = ""               # 모니터링 종료일(이후 수집 중단)
     inbound_summary: str = ""       # 로켓그로스 최근입고 요약(관리대장) — 헤더 '최근입고 : …'(소유자 2026-09-24)
+    discontinued: bool = False      # 대장 판매중지/취소선(#8 2026-09-27): 수집은 하되 ③순위만 제외
 
     @property
     def display_title(self) -> str:
@@ -336,22 +337,22 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
             # 상품 제외 = 상태 컬럼 / 상품명 마커 / 취소선 중 하나라도 → 추적 제외
             if current_acct is not None:
                 current_acct.ledger_products.add(prod)   # ⑥: 줄 존재(활성+판매중지/취소선) 전체 — 완전삭제 판정용
-            if status_disc or _is_discontinued(prod) or _struck_cell(row_no, i_prod):
-                prod_cancelled = True
-                current_prod = None
+            # #8(2026-09-27): 판매중지/취소선도 **수집 대상에 포함**(discontinued=True)하고 ③순위만 제외한다.
+            # (옛 정책: 완전 제외 → 판매가/판매상태 공란·상품링크 검색폴백의 원인이었음). 옵션행도 처리(vid 매칭).
+            disc = bool(status_disc or _is_discontinued(prod) or _struck_cell(row_no, i_prod))
+            prod_cancelled = False
+            current_prod = Product(prod, mkt_start=_norm_date(_cell(row, i_ms)),
+                                   mkt_end=_norm_date(_cell(row, i_me)),
+                                   mkt_mon=_norm_date(_cell(row, i_mm)),
+                                   inbound_summary=_inbound_summary(row, idx), discontinued=disc)
+            if current_acct is None:
+                errors.append(f"{row_no}행: 소속 계정 없이 상품 '{prod}'")
+            else:
+                current_acct.products.append(current_prod)
+            if disc:
                 reason = ("상태=판매중지/삭제" if status_disc else
                           "판매중지" if _is_discontinued(prod) else "취소선(품절/중지)")
-                struck.append(f"상품 '{prod}' — {reason}")
-            else:
-                prod_cancelled = False
-                current_prod = Product(prod, mkt_start=_norm_date(_cell(row, i_ms)),
-                                       mkt_end=_norm_date(_cell(row, i_me)),
-                                       mkt_mon=_norm_date(_cell(row, i_mm)),
-                                       inbound_summary=_inbound_summary(row, idx))
-                if current_acct is None:
-                    errors.append(f"{row_no}행: 소속 계정 없이 상품 '{prod}'")
-                else:
-                    current_acct.products.append(current_prod)
+                struck.append(f"상품 '{prod}' — {reason} (수집·순위만 제외)")
         if prod_cancelled:                      # 제외된 상품 아래 옵션 행 건너뜀
             continue
         # 옵션 행 (옵션명 또는 vid 가 있으면 현재 상품의 옵션)

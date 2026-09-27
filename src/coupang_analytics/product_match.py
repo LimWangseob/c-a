@@ -160,11 +160,11 @@ def scope_to_ledger(ledger: list[Product], discovered: list[Product]) -> tuple[l
                 name=_title(d), title=_title(d), kind=d.kind,
                 options=[Option(o.label, list(o.vendor_item_ids), list(o.product_ids)) for o in d.options],
                 mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon,
-                inbound_summary=lp.inbound_summary))   # 대장 마케팅·입고요약 이월
+                inbound_summary=lp.inbound_summary, discontinued=lp.discontinued))   # 대장 마케팅·입고요약·판매중지(#8) 이월
         else:
             out.append(Product(name=lp.name, title=lp.name, kind=config.KIND_PERSONAL, options=[Option("")],
                                mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon,
-                               inbound_summary=lp.inbound_summary))
+                               inbound_summary=lp.inbound_summary, discontinued=lp.discontinued))
     return out, len(res)
 
 
