@@ -185,13 +185,16 @@
 
 계층 분담: **통합**(pipeline_* 공유 배선·훅·쿠팡확인 값 산출) · **D8_ledger**(registry 쓰기/조회 함수 = 아래 인터페이스 구현) · **H_ui**(실행 시작 트리거·버튼·입력소스 UI). 도메인 로직은 D8, 조립 훅은 통합, 화면은 H_ui — 서로 직접 import 금지, 인터페이스로 연결.
 
-**D8 ↔ 통합 인터페이스 계약(D8가 이 시그니처로 구현 → 통합이 pipeline에서 호출)**
+**D8 ↔ 통합 인터페이스 계약(D8가 이 시그니처로 구현 → 통합이 pipeline에서 호출)** — 시그니처 확정 2026-09-28(D8 검토 반영: 줄 단위 키·reg 인자·password_map·dry_run)
 | 작업 | D8 제공 함수(신규/기존) | 용도 |
 |---|---|---|
 | 2-1 | `registry_gsheet.run_sync(client, read_ledger, *, now, log, dry_run, backup_dir)` **(기존·L1 계약)** | 실행 시작 시 원장 동기화 1회 |
-| 2-2 | `registry_gsheet.write_coupang_check(client, checks: dict[str,tuple[str,str]], *, on_log=None) -> int` **(신규)** | 계정별 (쿠팡확인값, 확인일)만 갱신·이력 미기록(§4-1) |
-| 2-3 | `registry.previous_password(account_id) -> str | None` **(신규)** | 계정이력 직전 비밀번호 조회 |
-| 2-4 | `registry.to_input_list(as_of=None) -> InputList` **(신규)** | 관리상태=관리중 계정·상품·비번으로 입력 구성 |
+| 2-2 | `registry_gsheet.write_coupang_check(client, checks: dict[str | tuple[str,str], tuple[str,str]], *, dry_run=False, on_log=None) -> int` **(신규)** | **줄(계정×상품) 단위** 쿠팡확인·확인일만 갱신·이력 미기록(§4-1). 키=account_id → 그 계정 모든 줄, 키=(account_id,상품명·공백정규화) → 그 줄만·계정키보다 우선. 값 6종/날짜형식 아니면 ValueError, 원장 없으면 RegistryIntegrityError, 없는 키는 경고+건너뜀. 반환=갱신 줄 수 |
+| 2-3 | `registry.previous_password(reg, account_id) -> str | None` **(신규)** | 계정이력 직전 비밀번호(현재와 다르고 빈값 아님·계정아이디 변경 추적·로그에 값 금지) |
+| 2-4 | `registry.to_input_list(reg, as_of=None) -> InputList` · `registry.password_map(reg) -> dict[str,str]` **(신규)** | 관리상태=관리중 계정·상품으로 입력 구성 + 관리중 계정 비번맵(credstore용, InputList엔 비번칸 없음) |
+
+- **키 단위 근거(§4-1)**: 미등록·판매중(불일치)·확인됨·판매중지=**상품 단위**, 로그인실패·비밀번호불일치=**계정 단위** → 2-2 배선은 계정키(실패류)+ (계정,상품)키(성공류)를 섞어 넘긴다.
+- **reg 출처**: `registry_gsheet.load_registry(client)`(기존)로 얻어 인자로 넘김(전역상태·숨은 client 없음).
 
 **2-1 원장 자동 반영**: 실행 시작(백업 직후)에 `run_sync` 1회. 트리거는 `backup_sources` 와 같은 자리(현재 UI 핸들러 `app_qt` 1130·1202·1295·1337·1359 → H_ui). 실패 비치명(로그 남기고 진행). 입력 URL=`gsheet/input_url`·원장 URL=`registry/url`. ⚠ 원장 쓰기 동시 실행 잠금은 D8가 `run_sync` 안에.
 
@@ -202,9 +205,13 @@
 
 **2-3 이전 비밀번호 1회(A안·사람 클릭 시 1회·자동 재시도 없음)**: H_ui 가 비번불일치 목록+버튼. 누르면 `previous_password`(D8)로 직전 비번을 얻어 `pipeline_sales._login_and_discover(get_password=…, login=True)` 얇은 단일계정 진입점(통합)으로 1회 로그인. 성공 → 쿠팡확인=확인됨(원장 값은 대장 기준 유지·안내).
 
-**2-4 입력소스 원장**: 설정 입력소스(구글대장/PC엑셀/원장). '원장' 선택 시 `to_input_list`(D8)로 관리중만 로드. UI 스위치·`_auto_load_input` 분기=H_ui. **원장 며칠 정상 확인 후**(§10) 착수.
+**2-4 입력소스 원장(소유자 2026-09-28: 지금 같이 착수)**: 설정 입력소스(구글대장/PC엑셀/원장). '원장' 선택 시 `to_input_list`+`password_map`(D8)로 **관리중만** 로드. UI 스위치·`_auto_load_input` 분기=H_ui.
+- **(a) 관리중 계정 안 관리중단 상품 = 입력에서 제외**(§10 '관리중만' 충실). 단 `InputList.ledger_products`·`ledger_account_ids` 에는 **원장 전체 줄(관리중단 포함)** 을 넣어 pipeline ⑥ 완전삭제가 결과 이력을 지우지 않게 한다(원장 원칙=지우지 않음). 기존 대장 #8(취소선=수집·순위만 제외)과 달리 원장 전환에선 관리중단=수집 제외.
+- **(b) 원장에 없는 대장 항목**: 마케팅(mkt_*)은 원장에 열 추가하지 않고 **기존 결과시트 `read_marketing` 역머지 경로 유지**(원장 입력이어도 그대로). 그로스 '요청일자'는 원장 그로스이력에 없어 **최근입고 요약 일부 공란 + 로그로 명시**, 열 추가는 별도 소유자 결정(보류).
 
-**순서** 2-1→2-2→2-3, 2-4 나중. **안전규약** dry-run→승인→실행→원장(DOMAIN_DESIGN §5.4)·무인 쓰기 금지·라이브(로그인)=사무실. **통합이 실제 넣는 코드**=2-2 산출·수집·호출(pipeline.py)뿐이며 **D8 인터페이스 확정 후** 연결(그 전엔 스텁). 2-1 트리거·2-3/2-4 UI=H_ui, 원장 함수 4종=D8.
+**순서** 2-1→2-2→2-3→2-4(지금 함께). **안전규약** dry-run→승인→실행→원장(DOMAIN_DESIGN §5.4)·라이브(로그인)=사무실.
+**무인(--auto) 쓰기 = 쿠팡확인만 허용(소유자 2026-09-28)**: `write_coupang_check`는 **이력 없는 상태 열** 갱신이라 그로스 재고 역기록(이미 무인)과 **동급** → 무인 허용(§5.4 '실운영 사고 위험' 범주 아님). `dry_run=False` 인자로 미리보기 지원. 등록·주문처리·배송·가격변경 같은 실운영 쓰기는 무인 금지 유지.
+**통합이 실제 넣는 코드**=2-2 산출·수집·호출(pipeline.py)뿐이며 **D8 인터페이스 확정 후** 연결(그 전엔 스텁). 2-1 트리거·2-3/2-4 UI=H_ui, 원장 함수(write_coupang_check·previous_password·to_input_list·password_map)=D8.
 
 ## 11. 구현 구성 (1단계 구현 2026-09-28)
 
