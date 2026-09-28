@@ -727,6 +727,34 @@ def t1_product_id_source():
     _ok("productId 소스: 전 상품 GET 파싱·실패 비치명·pid_by_vid 병합 우선순위(전상품>재고>판매분석)")
 
 
+def t1_data_quality_summary():
+    print("[27] 데이터 품질 자가점검(data_quality_summary) — 판매중 순위공란·pid미확보·미매칭 카운트(2026-09-28)")
+    BIZ = "품질비즈"
+    wb = OutputWorkbook.empty()
+    wb.ensure_account(BIZ)
+    # ① 정상 + 순위 채움 → 이상 아님
+    wb.ensure_product_block(BIZ, "정상랭크", config.KIND_CONTRACT, ["kwA"], registered="정상랭크")
+    wb.set_product_vids(BIZ, "정상랭크", ["v1"]); wb.set_product_pid(BIZ, "정상랭크", "111")
+    wb.set_keyword_rank(BIZ, "정상랭크", "kwA", "2026-09-28", 5)
+    # ② 정상(판매중)인데 순위 공란 → active_blank_rank(핵심 이상치)
+    wb.ensure_product_block(BIZ, "공란랭크", config.KIND_CONTRACT, ["kwB"], registered="공란랭크")
+    wb.set_product_vids(BIZ, "공란랭크", ["v2"]); wb.set_product_pid(BIZ, "공란랭크", "222")
+    wb.ensure_date(BIZ, "2026-09-28")   # 일자칸만 만들고 값은 공란
+    # ③ 판매중지(억제) + 순위 공란 → 이상 아님(억제라 당연히 공란)
+    wb.ensure_product_block(BIZ, "중지랭크", config.KIND_CONTRACT, ["kwC"], registered="중지랭크")
+    wb.set_product_vids(BIZ, "중지랭크", ["v3"]); wb.set_product_pid(BIZ, "중지랭크", "333")
+    wb.set_discontinued(BIZ, "중지랭크", True)
+    # ④ pid·vid 없음 → 검색링크(search_link)+미매칭(miss_vid), 순위는 채워 blank 오탐 배제
+    wb.ensure_product_block(BIZ, "미매칭품", config.KIND_PERSONAL, ["kwD"], registered="미매칭품")
+    wb.set_keyword_rank(BIZ, "미매칭품", "kwD", "2026-09-28", 9)
+    wb.apply_style()
+    q = wb.data_quality_summary()
+    assert q["active_blank_rank"] == 1, f"판매중 순위공란=1(공란랭크만·중지/채움 제외): {q}"
+    assert q["search_link"] == 1, f"검색폴백(pid없음)=1(미매칭품만): {q}"
+    assert q["miss_vid"] == 1, f"미매칭(vid없음)=1(미매칭품만): {q}"
+    _ok("데이터 품질: 판매중 순위공란·pid미확보·미매칭 카운트 정확(억제/채움 상품은 제외)")
+
+
 def t1_reconcile_account_scope():
     print("[24] reconcile 계정ID 스코핑 — 다계정ID 사업자에서 계정 B 대조가 계정 A 상품 미접촉 (항목5·2026-09-26 버그수정)")
     BIZ = "로움컨설팅"
@@ -1485,6 +1513,7 @@ def main():
     t1_reconcile_account_scope()
     t1_sync_discontinued_ledger()
     t1_product_id_source()
+    t1_data_quality_summary()
     t1_product_match_precision()
     t1_vid_source_option_split()
     t1_ledger_dedup()

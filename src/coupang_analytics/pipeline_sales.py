@@ -264,10 +264,9 @@ def _discover_products(b, a: Account, date_from, date_to, log):
     # 정리(_sweep_dead_duplicates)의 기준 — 이 집합에 없는 vid = 코팡서 사라짐. 상품조회 실패면 빈 집합(정리 skip).
     live_all_vids = {o.vendor_item_id for lst in listings for o in lst.options if o.vendor_item_id}
     vid_meta = vid_meta_of(listings)   # {vid: (판매가, 판매시작일)} — 헤더 표시(상품판매가·입고일 근사)
-    # 노출상품ID(productId) = **전 상품** vendor-inventory-items-with-vendorItems GET(판매방식·판매여부 무관·라이브
-    # 실측 2026-09-28) — 상품조회로 얻은 등록상품ID(vendor_inventory_id)마다 조회. 재고/판매분석 pid 보다 완전
-    # (순수 판매자배송·무판매 상품도 커버) → 우선 병합. 상품조회 실패(listings=[])면 빈 map(재고/판매분석만).
-    vinv_ids = [l.vendor_inventory_id for l in listings if l.vendor_inventory_id]
+    # 노출상품ID(productId) = vendor-inventory-items-with-vendorItems GET(판매방식·판매여부 무관·라이브 실측 2026-09-28)
+    # — 상품조회로 얻은 등록상품ID(vendor_inventory_id)마다 조회. 재고/판매분석 pid 보다 완전 → 우선 병합.
+    vinv_ids = _vinv_ids_for_pid(listings, inv_pids, metrics)
     item_pids = fetch_product_ids(b.page, vinv_ids, log) if vinv_ids else {}
     pid_by_vid = _pid_by_vid(inv_pids, metrics, item_pids)
     # 추적 범위 = 입력 대장 상품(위탁 관리분)만. 당일 발견을 매칭해 노출제목·vid·구분 부여(지표는 당일 것).
@@ -293,6 +292,18 @@ def _discover_inventory(b, a: Account, products, log):
         except InventoryFetchError as exc:   # 부가지표 — 실패해도 수집 전체는 진행(사유 명시)
             log(f"  [{a.label}] ⚠ 재고현황 조회 실패(계속) — {str(exc)[:120]}")
     return inventory, inv_names, rfm_status, inv_pids
+
+
+def _vinv_ids_for_pid(listings: list, inv_pids: dict, metrics: dict) -> list[str]:
+    """노출상품ID GET 대상 등록상품ID(vendor_inventory_id) 목록 — `config.PRODUCT_ID_FETCH_ALL`.
+
+    True=전 상품(판매자배송·무판매까지 완전 커버). False=미확보만 보강(재고/판매분석에서 pid 못 얻은 옵션을
+    가진 상품만 → 트래픽↓). 상품조회 실패(listings=[])면 빈 목록."""
+    if config.PRODUCT_ID_FETCH_ALL:
+        return [l.vendor_inventory_id for l in listings if l.vendor_inventory_id]
+    known = set(inv_pids) | {oid for oid, om in metrics.items() if getattr(om, "product_id", "")}
+    return [l.vendor_inventory_id for l in listings if l.vendor_inventory_id
+            and any(o.vendor_item_id not in known for o in l.options)]
 
 
 def _pid_by_vid(inv_pids: dict, metrics: dict, item_pids: dict | None = None) -> dict[str, str]:

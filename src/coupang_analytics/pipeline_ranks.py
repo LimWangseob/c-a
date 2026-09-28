@@ -171,6 +171,24 @@ def _rank_matcher(vids, pname: str = ""):
                                  name_substr=None if vset else (pname or "").strip())}
 
 
+def _log_quality_summary(wb, log) -> None:
+    """③ 순위까지 끝난 뒤 데이터 품질 자가점검을 run_log 에 남긴다(2026-09-28, [[verify-by-data-not-status]]).
+
+    '✅ 완료'가 가리는 불완전(판매중인데 순위 공란=차단/미측정·pid 미확보·미매칭)을 매 실행 즉시 가시화한다.
+    순위가 최종 반영된 ③ 종료 시점에만 호출(①만 끝난 시점엔 순위가 당연히 공란이라 오탐). 읽기만·비치명."""
+    try:
+        q = wb.data_quality_summary()
+    except Exception as exc:
+        log(f"  [데이터점검] ⚠ 요약 생성 실패(비치명) — {exc.__class__.__name__}: {str(exc)[:80]}")
+        return
+    anomalies = q["active_blank_rank"] + q["search_link"] + q["miss_vid"]
+    head = "⚠ 확인 필요" if anomalies else "이상 없음"
+    log(f"== [데이터점검] {head} — 상품 {q['products']} · 판매중인데 순위 공란 {q['active_blank_rank']} · "
+        f"상품링크 검색폴백(pid 미확보) {q['search_link']} · 미매칭(vid없음) {q['miss_vid']} ==")
+    if anomalies:
+        log("==   ↳ '완료'여도 위 수치가 크면 불완전(차단·미수집·미매칭) — 데이터로 확인 후 재실행/재배포 판단 ==")
+
+
 def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
                       should_stop=None, gsheet_output_url: str | None = None) -> Path | None:
     """③ 노출순위 조회 전용 — 최신 워크북 로드, 상품(고유ID)+키워드로 순위 측정·기록. 로그인 불필요.
@@ -190,6 +208,7 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
     if semi:
         result = _track_ranks_semi(wb, path, log, should_stop or (lambda: False))
         _push_gsheet(wb, gsheet_output_url, log)   # ③ 반자동 순위 채운 뒤 결과 구글시트에도 반영
+        _log_quality_summary(wb, log)   # 데이터 품질 자가점검(완료가 가리는 불완전 가시화·③ 최종 시점)
         return result
     log(f"== 노출순위 조회 시작 — {path.name} ==")
     _reset_rank_state()          # 이번 실행 차단 플래그·서킷브레이커(cooldown) 초기화
@@ -222,6 +241,7 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
     else:
         log("== 노출순위 조회 완료 ==")
     _push_gsheet(wb, gsheet_output_url, log)   # ③ 자동 순위 채운 뒤 결과 구글시트에도 반영(차단 중단이어도 진행분 반영)
+    _log_quality_summary(wb, log)   # 데이터 품질 자가점검(완료가 가리는 불완전 가시화·③ 최종 시점)
     return path
 
 

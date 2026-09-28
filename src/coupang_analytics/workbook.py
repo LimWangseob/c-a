@@ -1225,6 +1225,33 @@ class OutputWorkbook(_RenderMixin, _IndexMixin):
             # else: 대장에 없는 블록 → 불변(완전삭제/노출명 매칭 등은 다른 경로가 처리)
         return newly
 
+    def data_quality_summary(self) -> dict:
+        """실행 종료 데이터 품질 자가점검(2026-09-28) — 로그의 '✅ 완료'가 가리는 **불완전**을 수치화한다.
+
+        소유자 원칙([[verify-by-data-not-status]]): 완료 표시가 아니라 **데이터**로 정상 판정. 읽기만(값·구조 불변).
+        반환 {products, search_link, miss_vid, active_blank_rank}:
+        - search_link = 상품링크가 검색폴백(pid 미확보) 수(정상상품인데 검색링크면 productId 미확보 신호)
+        - miss_vid = vid 없는(미매칭) 상품 수
+        - active_blank_rank = **판매중(비억제) 상품인데 최신 일자 순위가 전부 공란**(=미측정/차단 의심·핵심 이상치)"""
+        search_link = miss_vid = active_blank = total = 0
+        for biz in self.wb.sheetnames:
+            if biz in _SPECIAL_SHEETS or biz.startswith("_") or "계정" in biz or "목차" in biz:
+                continue
+            ws = self.wb[biz]
+            latest = min(self._date_col.get(biz, {}).values(), default=None)   # 최신=가장 왼쪽 일자칸
+            for p in self.products_of(biz):
+                total += 1
+                if "np/search" in self.product_url(biz, p):
+                    search_link += 1
+                if not self.product_vids(biz, p):
+                    miss_vid += 1
+                if latest and not self.rank_suppressed(biz, p):
+                    named = [(r, nm) for (r, nm) in self._kw_block_rows(biz, p) if nm]
+                    if named and all(_norm(ws.cell(r, latest).value) == "" for (r, _nm) in named):
+                        active_blank += 1
+        return {"products": total, "search_link": search_link, "miss_vid": miss_vid,
+                "active_blank_rank": active_blank}
+
     def delete_account(self, biz: str) -> bool:
         """관리대장에서 **줄이 완전히 사라진 계정**을 결과에서 완전 삭제 — 시트(시계열 이력)+모든 메타행.
 
