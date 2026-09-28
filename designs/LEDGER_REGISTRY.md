@@ -212,6 +212,7 @@
 **순서** 2-1→2-2→2-3→2-4(지금 함께). **안전규약** dry-run→승인→실행→원장(DOMAIN_DESIGN §5.4)·라이브(로그인)=사무실.
 **무인(--auto) 쓰기 = 쿠팡확인만 허용(소유자 2026-09-28)**: `write_coupang_check`는 **이력 없는 상태 열** 갱신이라 그로스 재고 역기록(이미 무인)과 **동급** → 무인 허용(§5.4 '실운영 사고 위험' 범주 아님). `dry_run=False` 인자로 미리보기 지원. 등록·주문처리·배송·가격변경 같은 실운영 쓰기는 무인 금지 유지.
 **통합이 실제 넣는 코드**=2-2 산출·수집·호출(pipeline.py)뿐이며 **D8 인터페이스 확정 후** 연결(그 전엔 스텁). 2-1 트리거·2-3/2-4 UI=H_ui, 원장 함수(write_coupang_check·previous_password·to_input_list·password_map)=D8.
+- **✅원장 동시 쓰기 잠금 완료(2026-09-29·D8)**: `registry_lock.registry_lock`(OS 파일 잠금·크래시 자동해제·wait_sec 120)로 run_sync·run_backfill·write_coupang_check 가 읽기→비교→쓰기 전체를 잠금(dry_run 제외·lock_path keyword 하위호환). 겹치면 대기 로그 후 최대 120초, 초과 시 RegistryLockError·쓰기 0건. 같은 PC 한정(PC간=운용 원칙). 핀 R20(자식 kill→부모 즉시 획득 실증 포함)·게이트 9종+복잡도 초록. push_coupang_checks 는 수정 불필요(함수 안 잠금).
 - **✅2-2 배선 통합 구현 완료(2026-09-29)**: `pipeline._RunCtx.coupang_checks` 누적 · `compute_coupang_checks`/`_product_coupang_check`(§4-1 값 산출·값=`COUPANG_CHECK_VALUES` 언팩) · 산출 3지점(`_finish` 성공→확인됨/미등록/판매중(불일치)/판매중지, `except LoginBlocked`→로그인실패, `except LoginCredentialError`→비밀번호불일치) · `_finalize_run`에서 `push_coupang_checks`(pipeline_gsheet·비치명·무인 허용) 1회 · `run_full(registry_url=)` 인자(없으면 no-op). 핀 verify_offline[28]. 게이트 9종+복잡도 초록. ⚠**남음**: 2-1 트리거·2-3/2-4 UI(H_ui)에서 `registry_url` 전달·라이브(사무실 로그인 후 실채움)·동시 쓰기 잠금(D8 다음).
 
 ## 11. 구현 구성 (1단계 구현 2026-09-28)
@@ -226,6 +227,7 @@
 | `registry.py` | `sync` 진입점 + 급감 안전장치 + 요약, 공개 API 재수출 |
 | `registry_gsheet.py` | 시트 5개 생성·서식(헤더·고정·필터·관리중단 회색·확인상태 드롭다운·경고 보호), RAW 쓰기, 이력 맨 위 삽입, 로컬 백업, `run_sync`, **`write_coupang_check`(2단계·쿠팡확인 줄 단위·두 열만 RAW·헤더 이름 탐지)** |
 | `registry_input.py` **(2단계)** | 원장 → 앱 입력 변환: `previous_password`(직전 비번)·`to_input_list`(관리중만·ledger엔 전체 줄)·`password_map`(관리중 비번맵). `registry.py` 재수출 |
+| `registry_lock.py` **(2단계)** | 원장 동시 쓰기 잠금 `registry_lock`(OS 파일 잠금 msvcrt/fcntl·크래시 자동해제·wait_sec 기본 120)·`RegistryLockError`. run_sync·run_backfill·write_coupang_check 가 읽기→쓰기 전체를 잠금(dry_run 제외·같은 PC 한정) |
 | `tools/registry_sync.py` | 실행 도구 (`--dry-run` 미리보기, 설정 `registry/url`·`gsheet/input_url`) |
 
 - `gsheet_api.GSheetClient.write_values(..., raw=False)` 옵션 추가(기본 동작 불변) — 원장은 RAW(비밀번호 '0012' 보존).
