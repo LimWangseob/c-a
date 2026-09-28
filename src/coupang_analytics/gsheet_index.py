@@ -472,7 +472,7 @@ def _ensure_rep_column(client, sheet: str, sheet_id: int) -> None:
         "inheritFromBefore": False}}])
 
 
-def _ensure_column_order(client, sheet: str, sheet_id: int) -> None:
+def _ensure_column_order(client, sheet: str, sheet_id: int, on_log=None) -> None:
     """항목④(2026-09-25): 옛 열순서(상품명 C·계정ID D)를 새 순서(계정ID C·상품명 D)로 **물리 이전**.
 
     `_header_request`+증분 updates 는 활성 행의 C/D 만 새로 쓰지만, **판매중지 행**은 C/D 를 안 건드려
@@ -498,11 +498,21 @@ def _ensure_column_order(client, sheet: str, sheet_id: int) -> None:
         pre.append({"appendDimension": {"sheetId": sheet_id, "dimension": "COLUMNS", "length": N_COLS - ccur}})
     pre.append({"unmergeCells": {"range": title}})        # 제목 병합 해제(없으면 no-op) — **배치1로 선커밋**
     client.batch_update(pre)
-    client.batch_update([                                  # 배치2: 병합 없는 상태에서 열 이동 → 400 없음
+    # 배치2: **열 이동만 단독 커밋** — 성공 시 계정ID 위치(#3)가 확정된다. batchUpdate 는 원자적이라, 아래
+    # 재병합(장식)을 같은 배치에 두면 그 실패가 열 이동까지 롤백해 계정목록이 옛 순서로 방치되고 매 실행
+    # 재시도·재실패했다(라이브 실측 `Invalid requests[1].mergeCells`, output(9) 2026-09-28). → 이동을 먼저 확정.
+    client.batch_update([
         {"moveDimension": {
             "source": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": idx, "endIndex": idx + 1},
-            "destinationIndex": COL_ACCOUNT}},
-        {"mergeCells": {"range": title, "mergeType": "MERGE_ALL"}}])   # 제목 병합 복원(A1:I1)
+            "destinationIndex": COL_ACCOUNT}}])
+    # 배치3: 제목 재병합(A1:I1)은 **장식** — 실패해도 계정ID 이동·데이터 동기화는 이미 성공이므로 비치명 처리
+    # (로그만 남기고 진행). 재병합 실패의 정확한 Google 사유는 로그(pipeline_gsheet)가 전체 표시한다.
+    from .gsheet_api import GSheetError
+    try:
+        client.batch_update([{"mergeCells": {"range": title, "mergeType": "MERGE_ALL"}}])
+    except GSheetError as exc:
+        (on_log or (lambda m: None))(
+            f"  [구글시트] ⚠ 계정목록 제목 재병합 건너뜀(장식·비치명) — {str(exc)[:200]}")
 
 
 def delete_accounts(client, removed, *, sheet: str = INDEX_SHEET_NAME, on_log=None) -> int:
@@ -617,7 +627,7 @@ def _grid_grow_requests(client, sheet: str, sheet_id: int, n_data_rows: int) -> 
     return reqs
 
 
-def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME) -> SyncPlan:
+def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME, on_log=None) -> SyncPlan:
     """결과 구글시트의 `계정목록`을 원하는 로스터에 맞춰 생성/동기화하고 계획을 반환.
 
     비어 있으면 전체 생성, 아니면 증분(자동열만 갱신·신규 삽입·판매중지 표기). 마케팅 D~F는 안 건드린다.
@@ -625,7 +635,7 @@ def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME
     """
     sheet_id = client.ensure_sheet(sheet)
     _ensure_rep_column(client, sheet, sheet_id)   # 옛 7열 시트면 A에 대표자 빈 열 삽입(멱등) → 아래 읽기는 새 레이아웃
-    _ensure_column_order(client, sheet, sheet_id)  # 항목④: 옛 순서(상품C·계정ID D)면 계정ID를 C로 물리 이전(멱등)
+    _ensure_column_order(client, sheet, sheet_id, on_log)  # 항목④: 옛 순서(상품C·계정ID D)면 계정ID를 C로 물리 이전(멱등)
     existing = _read_existing(client, sheet)
     if not existing:
         grow = _grid_grow_requests(client, sheet, sheet_id, len(desired))

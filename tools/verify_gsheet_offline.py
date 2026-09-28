@@ -196,8 +196,9 @@ def t3_index_sync() -> None:
 
 
 class _FakeClient:
-    def __init__(self, values, titles=None, row_count=1000, col_count=26, merges=None):
+    def __init__(self, values, titles=None, row_count=1000, col_count=26, merges=None, raise_on_merge=False):
         self._v = values; self.batches = []
+        self._raise_on_merge = raise_on_merge   # mergeCells 400 시뮬(제목 재병합 실패 재현·비치명 검증용)
         self._row_count = row_count   # 그리드 행수(확장 판단용) — 기본 넉넉히
         self._col_count = col_count   # 그리드 열수(확장 판단용) — 기본 넉넉히(신규 시트 26열)
         self._titles = titles if titles is not None else (["계정목록"] if values else [])
@@ -230,6 +231,9 @@ class _FakeClient:
                 self._v = [[""] + list(row) for row in self._v]
             mc = r.get("mergeCells")          # 병합 등록(Google 제약 재현용)
             if mc:
+                if self._raise_on_merge:      # mergeCells 400 시뮬(제목 재병합 실패 재현) — GSheetError 로 올림
+                    from coupang_analytics.gsheet_api import GSheetError
+                    raise GSheetError('구글 시트 API 오류(status=400): Invalid requests[0].mergeCells (fake)')
                 rg = mc["range"]
                 self._merges.append((rg.get("startRowIndex", 0), rg.get("endRowIndex", 0),
                                      rg.get("startColumnIndex", 0), rg.get("endColumnIndex", 0)))
@@ -743,21 +747,38 @@ def t11_move_across_title_merge() -> None:
     desired = [_R("A", "상품1", gi.marketing_key("A", "상품1"), "체험단중"),
                _R("A", "상품2", gi.marketing_key("A", "상품2"))]
     plan = gi.sync_index(fc, desired)     # 수정 전이면 여기서 RuntimeError(400 재현)·수정 후 무오류
-    # ⚠ 2배치 구조(라이브 400 근본수정 2026-09-27): unmergeCells 는 **move 보다 이전 배치**에서 선커밋돼야 한다
-    #   (Google 이 moveDimension 을 배치 시작 병합상태로 검증 → 같은 배치 unmerge 는 소용없음).
+    # ⚠ 3배치 구조(라이브 400 근본수정 2026-09-28·output(9)): ①unmerge(+열확장) ②moveDimension **단독** ③mergeCells 단독.
+    #   moveDimension 을 단독 배치로 먼저 확정해야, 재병합(장식) 실패가 열이동까지 롤백하지 않는다(atomic).
     um_bi = next((i for i, b in enumerate(fc.batches) if any("unmergeCells" in r for r in b)), None)
     mv_bi = next((i for i, b in enumerate(fc.batches) if any("moveDimension" in r for r in b)), None)
-    assert um_bi is not None and mv_bi is not None, "unmerge/move 배치 없음(열이동 마이그레이션 누락)"
-    assert um_bi < mv_bi, f"unmergeCells 가 moveDimension 보다 앞 배치여야(선커밋): unmerge={um_bi} move={mv_bi}"
-    move_batch = fc.batches[mv_bi]
-    kinds = [next(iter(r)) for r in move_batch]
-    assert kinds.index("moveDimension") < kinds.index("mergeCells"), \
-        f"이동→재병합 순서 아님: {kinds}"
-    # 옛 8열 → N_COLS 로 확장(재병합이 그리드 벗어나지 않게) — unmerge 배치에 함께
+    mg_bi = next((i for i, b in enumerate(fc.batches) if any("mergeCells" in r for r in b)), None)
+    assert um_bi is not None and mv_bi is not None and mg_bi is not None, "unmerge/move/merge 배치 없음"
+    assert um_bi < mv_bi < mg_bi, f"순서(unmerge<move<merge) 위반: um={um_bi} mv={mv_bi} mg={mg_bi}"
+    assert all("mergeCells" not in r for r in fc.batches[mv_bi]), "moveDimension 배치에 mergeCells 섞임(단독 아님·롤백 위험)"
     assert any("appendDimension" in r for r in fc.batches[um_bi]), "옛 8열 → N_COLS 그리드 확장 누락"
-    # 최종 수렴: 기존 2상품 매칭·중복 재생성 없음
     assert plan.total_rows == 2 and not plan.inserts, f"수렴 실패: total={plan.total_rows} inserts={len(plan.inserts)}"
-    _ok("제목 병합 있는 옛 시트 → 병합해제·열이동·재병합으로 400 없이 수렴(라이브 버그 수정)")
+    _ok("제목 병합 옛 시트 → 3배치(해제·이동단독·재병합)로 400 없이 수렴")
+
+
+def t11b_merge_failure_nonfatal() -> None:
+    print("[11b] 제목 재병합 400 이어도 비치명 — 계정ID 열이동은 확정되고 계정목록 동기화 완주(output(9) 2026-09-28)")
+    old8 = ["대표자", "사업자", "상품명(클릭 이동)", "계정ID", "체험단 시작일", "체험단 종료일", "모니터링 종료일", "상태"]
+    vals = [["계정목록 · 상품 2개"], list(old8),
+            ["대표A", "biz_A", "상품1", "A", "", "", "", "예정"],
+            ["대표A", "biz_A", "상품2", "A", "", "", "", "판매중지"]]
+    logs: list[str] = []
+    fc = _FakeClient(vals, col_count=8, merges=[(0, 1, 0, 8)], raise_on_merge=True)   # mergeCells=400 시뮬
+    desired = [_R("A", "상품1", gi.marketing_key("A", "상품1")),
+               _R("A", "상품2", gi.marketing_key("A", "상품2"))]
+    plan = gi.sync_index(fc, desired, on_log=logs.append)   # 재병합 실패해도 예외 전파 없이 완주해야
+    mv_bi = next((i for i, b in enumerate(fc.batches) if any("moveDimension" in r for r in b)), None)
+    assert mv_bi is not None, "열이동 배치 없음"
+    # move 는 merge(400) 이전에 단독 커밋됐으므로 _v 에 반영(계정ID 가 C(2)로 이동)
+    hdr = fc._v[1]
+    assert hdr[gi.COL_ACCOUNT] == "계정ID", f"열이동 미확정(계정ID 가 C 로 안 옴): {hdr}"
+    assert plan.total_rows == 2, f"재병합 실패로 동기화 중단됨(비치명 아님): total={plan.total_rows}"
+    assert any("제목 재병합 건너뜀" in m for m in logs), f"재병합 실패 경고 로그 없음(조용한 실패 금지): {logs}"
+    _ok("재병합 400 = 비치명(로그만)·열이동/동기화는 정상 완주(계정목록 갱신 보장)")
 
 
 def main() -> int:
@@ -766,7 +787,7 @@ def main() -> int:
                t3d_grid_autogrow, t3c_delete_accounts, t3e_delete_renamed, t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook,
                t6b_multi_account_roster, t6c_content_col_widths, t7_staff_keywords_merge,
                t8_exec_retry, t9_legacy_format_mismatch, t10_stats_full_replace_mismatch,
-               t11_move_across_title_merge):
+               t11_move_across_title_merge, t11b_merge_failure_nonfatal):
         fn()
     print("=== 전부 통과 ===")
     return 0

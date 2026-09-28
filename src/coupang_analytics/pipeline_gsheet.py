@@ -196,12 +196,17 @@ def _push_gsheet(wb, output_url: str | None, log, removed_accounts=None, renamed
         _phase = "계정목록 동기화"
         log(f"== [구글시트] 통계 {len(gids)}시트 미러링 완료 → 계정목록 동기화 중… ==")
         roster = gsheet_index.roster_from_workbook(wb, gids)                 # 계정목록 로스터(등록명 기반 안정키)
-        plan = gsheet_index.sync_index(client, roster)                      # 계정목록 증분(마케팅 D~F 보존)
+        plan = gsheet_index.sync_index(client, roster, on_log=log)          # 계정목록 증분(마케팅 D~F 보존)
         log(f"== [구글시트] ✅ 결과 반영 완료 — 통계 {len(gids)}시트 · 계정목록 "
             f"갱신 {len(plan.updates)}·신규 {len(plan.inserts)}·판매중지 {len(plan.discontinue)} ==")
     except Exception as exc:
         # ⚠ 조용한 실패 금지 — 계정목록/통계가 최신이 아닐 수 있음을 **눈에 띄게** 경고(과거 이 실패를
         # 한 줄로 삼켜 계정목록이 옛 상태로 방치됨, 라이브 2026-09-23). 실행은 계속(xlsx 는 보존).
         log("== [구글시트] ❌❌ 결과 반영 실패 — **계정목록/통계가 최신이 아닐 수 있습니다(확인 필요)** ==")
-        log(f"==   단계='{_phase}' · {exc.__class__.__name__}: {str(exc)[:200]} ==")
+        # ⚠ 잘림 금지(2026-09-28): 옛 `str(exc)[:200]` 은 긴 URL 뒤의 **Google 실제 사유**(returned "Invalid …")를
+        # 잘라 원인 규명을 막았다(output(9) mergeCells 400 미확인). 사유 문구를 따로 뽑아 온전히 남긴다.
+        _msg = str(exc)
+        _reason = _msg.split("returned ", 1)[-1] if "returned " in _msg else _msg
+        log(f"==   단계='{_phase}' · {exc.__class__.__name__}: {_msg[:150]} ==")
+        log(f"==   Google 응답 사유: {_reason[:600]} ==")
         log("==   xlsx 마스터·스냅샷은 정상 저장됨. SA 편집권한·시트 공유·URL 확인 후 재실행하면 반영됩니다 ==")
