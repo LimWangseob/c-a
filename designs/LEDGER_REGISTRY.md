@@ -181,6 +181,31 @@
    `managed_between(기간)` 계정 전부(관리중단 포함).
 3. 전환 스위치는 설정 탭 입력 소스(구글 대장 / PC 엑셀 / **원장**). 문제 시 대장 기준으로 되돌릴 수 있게 둔다.
 
+### 10-1. 2단계 배선 설계 (통합 세션 확정 2026-09-28 — 실측 근거)
+
+계층 분담: **통합**(pipeline_* 공유 배선·훅·쿠팡확인 값 산출) · **D8_ledger**(registry 쓰기/조회 함수 = 아래 인터페이스 구현) · **H_ui**(실행 시작 트리거·버튼·입력소스 UI). 도메인 로직은 D8, 조립 훅은 통합, 화면은 H_ui — 서로 직접 import 금지, 인터페이스로 연결.
+
+**D8 ↔ 통합 인터페이스 계약(D8가 이 시그니처로 구현 → 통합이 pipeline에서 호출)**
+| 작업 | D8 제공 함수(신규/기존) | 용도 |
+|---|---|---|
+| 2-1 | `registry_gsheet.run_sync(client, read_ledger, *, now, log, dry_run, backup_dir)` **(기존·L1 계약)** | 실행 시작 시 원장 동기화 1회 |
+| 2-2 | `registry_gsheet.write_coupang_check(client, checks: dict[str,tuple[str,str]], *, on_log=None) -> int` **(신규)** | 계정별 (쿠팡확인값, 확인일)만 갱신·이력 미기록(§4-1) |
+| 2-3 | `registry.previous_password(account_id) -> str | None` **(신규)** | 계정이력 직전 비밀번호 조회 |
+| 2-4 | `registry.to_input_list(as_of=None) -> InputList` **(신규)** | 관리상태=관리중 계정·상품·비번으로 입력 구성 |
+
+**2-1 원장 자동 반영**: 실행 시작(백업 직후)에 `run_sync` 1회. 트리거는 `backup_sources` 와 같은 자리(현재 UI 핸들러 `app_qt` 1130·1202·1295·1337·1359 → H_ui). 실패 비치명(로그 남기고 진행). 입력 URL=`gsheet/input_url`·원장 URL=`registry/url`. ⚠ 원장 쓰기 동시 실행 잠금은 D8가 `run_sync` 안에.
+
+**2-2 쿠팡확인 채우기 (통합 배선 핵심)** — 데이터 산출 지점(실측 `pipeline.py`):
+- `_finish` 도달(성공, line 440·476): `report_acc` 매칭 → 확인됨/미등록, `inv_status`(productStatus) → 판매중(불일치)/판매중지.
+- `except LoginBlocked`(478) → 로그인실패 · `except LoginCredentialError`(481) → 비밀번호불일치.
+- 통합이 계정별 `{account_id: (값, 확인일)}` 를 `_RunCtx` 에 누적 → **①판매수집 종료 시 1회** `write_coupang_check` 호출. 값 매핑(§4-1 표)은 판정 근거가 이미 pipeline 에 있어(classify_login·productStatus·매칭) 통합이 산출, **쓰기만 D8**.
+
+**2-3 이전 비밀번호 1회(A안·사람 클릭 시 1회·자동 재시도 없음)**: H_ui 가 비번불일치 목록+버튼. 누르면 `previous_password`(D8)로 직전 비번을 얻어 `pipeline_sales._login_and_discover(get_password=…, login=True)` 얇은 단일계정 진입점(통합)으로 1회 로그인. 성공 → 쿠팡확인=확인됨(원장 값은 대장 기준 유지·안내).
+
+**2-4 입력소스 원장**: 설정 입력소스(구글대장/PC엑셀/원장). '원장' 선택 시 `to_input_list`(D8)로 관리중만 로드. UI 스위치·`_auto_load_input` 분기=H_ui. **원장 며칠 정상 확인 후**(§10) 착수.
+
+**순서** 2-1→2-2→2-3, 2-4 나중. **안전규약** dry-run→승인→실행→원장(DOMAIN_DESIGN §5.4)·무인 쓰기 금지·라이브(로그인)=사무실. **통합이 실제 넣는 코드**=2-2 산출·수집·호출(pipeline.py)뿐이며 **D8 인터페이스 확정 후** 연결(그 전엔 스텁). 2-1 트리거·2-3/2-4 UI=H_ui, 원장 함수 4종=D8.
+
 ## 11. 구현 구성 (1단계 구현 2026-09-28)
 
 | 모듈 | 책임 |
