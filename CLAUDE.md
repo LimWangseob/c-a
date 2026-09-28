@@ -66,6 +66,15 @@ python ui/app_qt.py     # 기본 UI = PySide6(Qt) + Windows 11 Fluent 스타일
 - **분해는 행동 불변**(로직 바꾸지 말고 위치만): 정책·엣지케이스(로그인 판정·Akamai·날짜라벨·옵션분리·매칭
   게이트) 보존. 매 추출 후 게이트 초록 유지, 커밋은 작게·자주.
 
+## 병렬 개발 (응답 대기 단축 — SSOT=`docs/PARALLEL_DEV.md`)
+> 여러 세션이 **코드 편집만** 병렬. ⚠**런타임은 병렬화 금지**(단일 브라우저·위탁계정·Akamai·단일 마스터/시트 → 실행은
+> 야간 단일 순차·라이브 테스트도 한 번에 한 세션). 상세·레인표·병합 프로토콜=`docs/PARALLEL_DEV.md`.
+- **격리**: 세션마다 **자기 worktree+브랜치**에서 편집(master 직접 편집 금지). **비겹침 레인**(다른 파일집합)이라 merge 깨끗.
+- **레인(편집 소유)**: A 수집/판매(`collector`·`pipeline_sales`·`pipeline_process`·`product_match`·`report`) · B 키워드(`kw_*`·`keyword_store`) · C 순위(`rank`·`pipeline_ranks`) · D 이미지(`detail_images`) · E 원장/정산(`registry_*`·`input_list`) · F 구글시트(`gsheet*`·`pipeline_gsheet`) · G 워크북(`workbook*`) · H UI(`ui/*`).
+- **공유=직렬화**(한 번에 한 세션 or 통합 세션): `config.py`·`pipeline.py`·`browser.py`·`credstore.py`·`CLAUDE.md`·`designs/`·`docs/DECISIONS.md`. 레인이 config 값 필요하면 통제 세션에 요청(직접 편집 금지).
+- **충돌 핫스팟**: 게이트/핀 파일(`tools/verify_offline.py` 등)=핀 함수 append+등록 1줄만 충돌 · DECISIONS/메모리=append-only.
+- **병합**: 각 레인 `run_checks` 초록 후 push → **master 병합은 직렬**(한 브랜치씩·게이트 재실행). **2~3레인이 최적**(7레인 통제 관료제 불필요).
+
 ## 현재 상태
 - **🆕셀독등록원장 1단계 구현(2026-09-28, 소유자 설계 승인, SSOT=`designs/LEDGER_REGISTRY.md`)**: 매일 바뀌는 관리대장과 별도로 **지우지 않고 쌓는 원장 파일**(시트 5개: 셀독원장·계정이력·상품이력·그로스이력·동기화기록). 대장 삭제/취소선=관리상태 '관리중단'+중단일(줄 보존)·이력 추가만·**관리상태는 이력에서 계산**·상품명/계정아이디 변경=자동병합 금지 '확인필요'·대장 급감=중단·무결성 점검·실행마다 로컬 백업·`as_of`/`managed_between`(기간 정산 대상). ⚠**비밀번호 원문 저장=원장 파일 한정 예외(소유자 결정)**. 모듈 `registry_*.py` 7개·도구 `tools/registry_sync.py [--dry-run]`(설정 `registry/url`). **기존 실행 흐름 미접촉**. ⚠**라이브 미실행**(원장 구글시트 링크·SA 편집 공유 대기)·과거 계정 소급·앱 연계(2단계) 남음.
 - **✅관리대장↔결과 정합성 미정합 근본수정(2026-09-27, 소유자 "정합성 체크·근본원인 실측 분석·수정" 요청, 메모 [[input-ledger-format]])**: 미정합 7계정 실측 3분류 — **A**(판매중지 제외)=#8로 이미 해소(수집하되 순위만 제외)·**B**(미수집 stale)=정상 동작·**C**(진짜 버그)=담당자가 상품명 칸 **한 셀에** `상품명\n\n(노출명 전체)`처럼 여러 줄 입력→개행 포함 문자열이 정체성 키 오염→**대장명 블록+노출명 블록 중복**(실측 비엔케이 손목/근막마사지기·브릿지웍스). 수정=`input_list._parse_grid`가 개행 있으면 **첫 줄(담당자 상품명)만** 채택(products·ledger_products 공통·기존 잔재는 다음 실행 reconcile 자동정리). **부수: 죽은 옵션파싱 물리삭제**(이 대장엔 옵션/vid/pid 컬럼 없어 `opt`/`vids`/`pids`/`prod_cancelled`/`_split_ids` 사문화→F821 잠재 NameError 제거·vid는 라이브 수집서 확보). 핀 verify_offline[C]. 게이트 7종+복잡도 초록. 커밋 `5cc64a6`. ⚠**라이브·운용PC 재배포 남음**.
