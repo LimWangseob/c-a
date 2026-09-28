@@ -53,6 +53,7 @@
 - [샵마인 아키텍처 실증](shopmine-architecture.md) — .NET+WebView2(실제 Chromium)+SQLite, 지문위조 아님, 세션영속+쿠키 HTTP 재사용.
 
 ## 입력·수집·데이터
+- [노출상품ID(productId) 범용 소스 API(2026-09-28 라이브 확정)](api-productid-source-vendor-items-with-vendoritems.md) — `GET vendor-inventory/vendor-inventory-items-with-vendorItems/{vendorInventoryId}` 가 옵션별 **productId**(=노출상품ID)+아이템위너(WINNER_AT/LOSER_AT)+가격·재고 제공. **상품조회 search 엔 productId 없음** 확정 → 이 API로 판매방식·판매여부 무관 전 상품 정상 상품링크 가능. 비용=상품당 1 GET(스코프 결정 필요).
 - [입력=셀독 관리대장](input-ledger-format.md) — 헤더 2행·vid/pid 없음, 구글시트 원본, 취소선·상태컬럼으로 제외. 그로스재고 역기록(AD열·계정+등록명 유사도매칭).
 - [대장 스코핑 추적](ledger-scoped-tracking.md) — 추적범위=대장 상품만, product_match.scope_to_ledger로 대장↔발견 매칭.
 - [판매데이터 API 직접조회](sales-data-api-vi-detail-search.md) — vi-detail-search POST(x-xsrf-token), 지표매핑 확정, 당일 무활동 상품 vid 보강(라이브 검증됨).

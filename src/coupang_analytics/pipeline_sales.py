@@ -229,7 +229,7 @@ def _discover_products(b, a: Account, date_from, date_to, log):
     반환: (products, tracked, metrics, inventory, sale_status, upbundle_vids). 판매분석·상품조회 **모두
     데이터 없음**이면 None(호출부가 (None,{},{},{},set()) 로 이 계정 건너뜀). upbundle_vids = 이번 상품조회의
     업번들(자동번들) 옵션 vid 집합(마스터 잔재 블록 자동삭제용, 소유자 2026-09-24). 제어흐름은 분해 전과 동일하다."""
-    from .collector import (fetch_vendor_inventory, products_from_vendor_inventory,
+    from .collector import (fetch_vendor_inventory, fetch_product_ids, products_from_vendor_inventory,
                             VendorInventoryFetchError, sale_status_by_vid, vid_meta_of)
     from .product_match import scope_to_ledger
     # ── vid·옵션·상품 = 상품조회/수정(전 상품·전 옵션 나열, 당일 판매 0 상품도 포함). 폴백=판매분석 발견 ──
@@ -264,7 +264,12 @@ def _discover_products(b, a: Account, date_from, date_to, log):
     # 정리(_sweep_dead_duplicates)의 기준 — 이 집합에 없는 vid = 코팡서 사라짐. 상품조회 실패면 빈 집합(정리 skip).
     live_all_vids = {o.vendor_item_id for lst in listings for o in lst.options if o.vendor_item_id}
     vid_meta = vid_meta_of(listings)   # {vid: (판매가, 판매시작일)} — 헤더 표시(상품판매가·입고일 근사)
-    pid_by_vid = _pid_by_vid(inv_pids, metrics)
+    # 노출상품ID(productId) = **전 상품** vendor-inventory-items-with-vendorItems GET(판매방식·판매여부 무관·라이브
+    # 실측 2026-09-28) — 상품조회로 얻은 등록상품ID(vendor_inventory_id)마다 조회. 재고/판매분석 pid 보다 완전
+    # (순수 판매자배송·무판매 상품도 커버) → 우선 병합. 상품조회 실패(listings=[])면 빈 map(재고/판매분석만).
+    vinv_ids = [l.vendor_inventory_id for l in listings if l.vendor_inventory_id]
+    item_pids = fetch_product_ids(b.page, vinv_ids, log) if vinv_ids else {}
+    pid_by_vid = _pid_by_vid(inv_pids, metrics, item_pids)
     # 추적 범위 = 입력 대장 상품(위탁 관리분)만. 당일 발견을 매칭해 노출제목·vid·구분 부여(지표는 당일 것).
     tracked, n_match = scope_to_ledger(a.products, products)
     tracked, n_match = _augment_vids(b, a, tracked, n_match, inv_names, date_to, log)
@@ -290,11 +295,17 @@ def _discover_inventory(b, a: Account, products, log):
     return inventory, inv_names, rfm_status, inv_pids
 
 
-def _pid_by_vid(inv_pids: dict, metrics: dict) -> dict[str, str]:
-    """{vid: 노출상품ID(productId)} — 상품명 하이퍼링크(항목2). 재고 API(판매 0 상품 커버) ∪ 판매분석(활동 상품).
-    상품조회(vendor-inventory)엔 공개 productId 가 없어 이 두 소스로만 확보(실측 2026-09-26)."""
-    pid_by_vid: dict[str, str] = dict(inv_pids)
-    for oid, om in metrics.items():
+def _pid_by_vid(inv_pids: dict, metrics: dict, item_pids: dict | None = None) -> dict[str, str]:
+    """{vid: 노출상품ID(productId)} — 상품명 하이퍼링크(항목2).
+
+    소스 3종 병합: ①**전 상품** vendor-inventory-items-with-vendorItems(`item_pids`·판매방식/판매여부 무관·가장 완전,
+    2026-09-28) ② 재고 API(로켓그로스 재고 상품) ③ 판매분석(활동 상품). ①을 우선(전 상품 커버)하고, ①에 없는
+    vid 만 ②③으로 보강(①실패·부분실패 대비). 상품조회(search) 응답엔 공개 productId 가 없음(실측 2026-09-26)."""
+    pid_by_vid: dict[str, str] = dict(item_pids or {})     # ① 전 상품(가장 완전) 우선
+    for oid, pid in dict(inv_pids).items():                 # ② 재고 보강(①에 없을 때만)
+        if pid and oid not in pid_by_vid:
+            pid_by_vid[oid] = pid
+    for oid, om in metrics.items():                         # ③ 판매분석 보강(①②에 없을 때만)
         pid = getattr(om, "product_id", "")
         if pid and oid not in pid_by_vid:
             pid_by_vid[oid] = pid

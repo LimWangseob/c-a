@@ -73,6 +73,24 @@ _FETCH_JS = _POST_JSON_JS % _SALES_API
 _INV_FETCH_JS = _POST_JSON_JS % _INVENTORY_API
 _VI_FETCH_JS = _POST_JSON_JS % _VENDOR_INVENTORY_API
 
+# GET(url 인자) — 노출상품ID(productId) 조회용. url 마다 vendorInventoryId 가 달라 URL 을 payload 로 받는다.
+_GET_JSON_JS = """
+async (url) => {
+  const m = document.cookie.match(/(?:^|;\\s*)XSRF-TOKEN=([^;]+)/);
+  const token = m ? decodeURIComponent(m[1]) : '';
+  const r = await fetch(url, {
+    method: 'GET', credentials: 'include',
+    headers: {'accept': 'application/json, text/plain, */*', 'x-xsrf-token': token},
+  });
+  return {status: r.status, body: await r.text(), hasToken: !!token};
+}
+"""
+# 노출상품ID(공개 productId) 소스 — 상품조회/재고/판매분석 어디서도 못 얻는 순수 판매자배송·무판매 상품까지
+# 전 옵션 productId 제공(라이브 실측 2026-09-28). 경로 {vinv}=등록상품ID(vendorInventoryId, 상품조회로 확보).
+_VI_ITEMS_URL = ("https://wing.coupang.com/tenants/seller-web/v2/vendor-inventory/"
+                 "vendor-inventory-items-with-vendorItems/{vinv}"
+                 "?hasProgressiveDiscountRule=true&queryNonVariationJustificationProof=true&queryMpnProof=true")
+
 _VI_PAGE_SIZE = 50         # 상품조회 countPerPage(캡처와 동일값). page 1→totalPages 반복.
 # 전량 수집 핵심 파라미터(캡처 확정): exposureStatus="ALL"(아이템위너 누락 방지)·salesMethod="ALL"·
 # productStatus=["ALL"]·displayDeletedProduct=false. sortMethod 는 결과 순서만 바꾼다.
@@ -534,6 +552,43 @@ def fetch_vendor_inventory(page, log=None) -> list[VendorInventoryListing]:
             break
         page_num += 1
     return all_listings
+
+
+def fetch_product_ids(page, vendor_inventory_ids, log=None) -> dict[str, str]:
+    """등록상품ID(vendorInventoryId)마다 vendor-inventory-items-with-vendorItems GET → **{vendorItemId: 노출상품ID(productId)}**.
+
+    상품조회(search)엔 공개 productId 가 없고, 재고/판매분석은 로켓그로스 재고·판매 있는 상품만 커버한다.
+    이 엔드포인트는 **판매방식·판매여부 무관 전 옵션 productId** 를 줘(라이브 실측 2026-09-28), 순수 판매자배송·
+    무판매 상품까지 상품명 하이퍼링크(`/vp/products/{productId}?vendorItemId={vid}`)가 정상 생성되게 한다.
+
+    상품마다 GET 1회(계정당 N회). page 는 로그인된 wing 세션 페이지. 한 상품이 실패(비200/파싱실패)해도
+    **로그로 명시하고 다음 상품으로 진행**(그 상품 productId 만 미확보 → 재고/판매분석 병합·없으면 검색폴백,
+    불가피 조건부). 전체 중단 금지(부분 실패가 링크 보강 기능만 떨어뜨림·수집 본류엔 영향 없음)."""
+    log = log or (lambda m: None)
+    ids = [str(i).strip() for i in dict.fromkeys(vendor_inventory_ids) if str(i).strip()]
+    pids: dict[str, str] = {}
+    fail = 0
+    for vinv in ids:
+        res = page.evaluate(_GET_JSON_JS, _VI_ITEMS_URL.format(vinv=vinv))
+        status, body = res.get("status"), res.get("body", "")
+        if status != 200:
+            fail += 1
+            log(f"  [노출상품ID] ⚠ 조회 실패(status={status}) vendorInventoryId={vinv} — 이 상품 productId 미확보(진행)")
+            continue
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            fail += 1
+            log(f"  [노출상품ID] ⚠ JSON 파싱 실패 vendorInventoryId={vinv} — 이 상품 productId 미확보(진행)")
+            continue
+        for row in (data.get("data") or []):
+            vid = str(row.get("vendorItemId") or "").strip()
+            pid = str(row.get("productId") or "").strip()
+            if vid and pid:
+                pids[vid] = pid
+    log(f"  [노출상품ID] {len(ids)}상품 중 {len(ids) - fail}상품 조회 → vid {len(pids)}개 productId 확보"
+        + (f" (실패 {fail}상품)" if fail else ""))
+    return pids
 
 
 def _folder_snapshot(d: Path) -> list[str]:

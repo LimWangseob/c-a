@@ -685,6 +685,48 @@ def t1_ledger_dedup():
     _ok(f"같은 상품명 3줄(공백차이 포함) → 1개만 추적 {names}·중복 경고 남김")
 
 
+def t1_product_id_source():
+    print("[26] 노출상품ID(productId) 소스 — 전 상품 vendor-inventory-items GET 파싱 + pid_by_vid 병합 우선순위(2026-09-28)")
+    import json as _json
+    from coupang_analytics import collector
+    from coupang_analytics.pipeline_sales import _pid_by_vid
+
+    # (a) collector.fetch_product_ids: 라이브 실측 응답(기저귀가방 CHMM01) 형태로 vid→productId 파싱
+    resp = {"success": True, "message": None, "data": [
+        {"vendorInventoryId": 16213436874, "vendorItemId": 95462666213, "productId": 9555958648,
+         "registrationType": "NORMAL"},
+        {"vendorInventoryId": 16213436874, "vendorItemId": 95468098380, "productId": 9555958648,
+         "registrationType": "RFM"}]}
+
+    class _FakePage:
+        def __init__(self): self.calls = []
+        def evaluate(self, js, arg):
+            self.calls.append(arg)               # arg = 조회 URL(vendorInventoryId 포함)
+            return {"status": 200, "body": _json.dumps(resp), "hasToken": True}
+    fp = _FakePage()
+    pids = collector.fetch_product_ids(fp, ["16213436874"], log=lambda m: None)
+    assert pids == {"95462666213": "9555958648", "95468098380": "9555958648"}, f"파싱 오류: {pids}"
+    assert fp.calls and "16213436874" in fp.calls[0] and "vendor-inventory-items-with-vendorItems" in fp.calls[0], \
+        f"조회 URL(등록상품ID 경로) 오류: {fp.calls}"
+
+    # (b) 비200이어도 비치명(그 상품만 건너뜀·전체 진행)
+    class _FailPage:
+        def evaluate(self, js, arg): return {"status": 404, "body": "not found", "hasToken": True}
+    assert collector.fetch_product_ids(_FailPage(), ["999"], log=lambda m: None) == {}, "실패 시 빈 map(비치명)"
+
+    # (c) _pid_by_vid 병합 우선순위: item_pids(전 상품) > 재고 > 판매분석, 없는 것만 보강
+    class _OM:
+        def __init__(self, p): self.product_id = p
+    item_pids = {"vNORMAL": "P_ALL"}                       # ① 전 상품(판매자배송도 커버)
+    inv_pids = {"vRFM": "P_INV", "vNORMAL": "P_INV_DUP"}   # ② 재고(vNORMAL 은 ①이 우선)
+    metrics = {"vSALES": _OM("P_SALES"), "vRFM": _OM("P_SALES_DUP")}  # ③ 판매분석(vRFM 은 ②가 우선)
+    merged = _pid_by_vid(inv_pids, metrics, item_pids)
+    assert merged == {"vNORMAL": "P_ALL", "vRFM": "P_INV", "vSALES": "P_SALES"}, f"병합 우선순위 오류: {merged}"
+    # item_pids 없이도(옛 경로) 재고∪판매분석 동작(하위호환)
+    assert _pid_by_vid({"a": "1"}, {"b": _OM("2")}) == {"a": "1", "b": "2"}, "하위호환(item_pids 생략) 실패"
+    _ok("productId 소스: 전 상품 GET 파싱·실패 비치명·pid_by_vid 병합 우선순위(전상품>재고>판매분석)")
+
+
 def t1_reconcile_account_scope():
     print("[24] reconcile 계정ID 스코핑 — 다계정ID 사업자에서 계정 B 대조가 계정 A 상품 미접촉 (항목5·2026-09-26 버그수정)")
     BIZ = "로움컨설팅"
@@ -1442,6 +1484,7 @@ def main():
     t1_keyword_freeze_boundary()
     t1_reconcile_account_scope()
     t1_sync_discontinued_ledger()
+    t1_product_id_source()
     t1_product_match_precision()
     t1_vid_source_option_split()
     t1_ledger_dedup()
