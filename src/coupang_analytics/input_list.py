@@ -377,7 +377,7 @@ def _tok(s: str) -> list:
     return [t for t in _norm(s).split() if t]
 
 
-def _build_idf(names: list):
+def build_idf(names: list):
     """상품명 corpus 로 IDF 가중함수 생성 — 흔한 규격·브랜드어(120정·프리미엄·MAX·웰빙곳간)는 df↑→가중↓,
     상품 핵심어(베타글루칸·알부민·맥문동)는 df↓→가중↑. corpus 가 넓어야(전체 상품명) 규격어가 제대로 눌린다."""
     import math
@@ -462,7 +462,7 @@ def write_ledger_inventory(client, wb, on_log=None, *, sheet: str = "셀독리�
               if _norm(_cell(values[r], i_prod))]
     for items in inv_by_biz.values():
         corpus += [nm for nm, _ in items]
-    w = _build_idf(corpus)
+    w = build_idf(corpus)
     col_out: list[list] = []
     cur_biz = ""
     updated = 0

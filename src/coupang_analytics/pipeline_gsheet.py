@@ -111,7 +111,7 @@ def backup_sources(out_dir: str | Path = "output", *, input_url: str | None = No
     return saved
 
 
-def _pull_gsheet_keywords(wb, output_url: str | None, log) -> None:
+def pull_gsheet_keywords(wb, output_url: str | None, log) -> None:
     """실행 시작 시 결과 통계 시트의 **직원 입력 키워드**를 워크북으로 역머지(그 상품은 AI 선정 대신 동결).
 
     output_url 없거나 SA 미등록이면 조용히 생략(정상 — 구글 통합 미사용). 실패는 로그로 명시하되 실행을
@@ -155,7 +155,7 @@ def push_ledger_inventory(input_url: str | None, log, out_dir: str = "output") -
             f"{exc.__class__.__name__}: {str(exc)[:120]} ==")
 
 
-def _push_gsheet(wb, output_url: str | None, log, removed_accounts=None, renamed_accounts=None) -> None:
+def push_gsheet(wb, output_url: str | None, log, removed_accounts=None, renamed_accounts=None) -> None:
     """완성된 openpyxl 마스터를 결과 구글시트로 반영 — 통계 시트 미러링 + 계정목록 증분 동기화.
 
     output_url 없거나 서비스계정 미등록이면 조용히 생략(정상 — 구글 통합 미사용). 반영 실패는 **로그로 명시**

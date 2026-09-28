@@ -19,7 +19,7 @@ from .browser import WingBrowser
 from .kw_recommend import rank_label
 from .rank import (RankBlocked, human_type_query, make_matcher, organic_ranks,
                    organic_ranks_batch, warmup)
-from .pipeline_gsheet import _push_gsheet   # track_ranks_stage 종료 시 결과 반영(한 방향·순환 없음)
+from .pipeline_gsheet import push_gsheet   # track_ranks_stage 종료 시 결과 반영(한 방향·순환 없음)
 from .pipeline_paths import _PROFILE, _load_latest_wb
 
 
@@ -207,7 +207,7 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
         return None
     if semi:
         result = _track_ranks_semi(wb, path, log, should_stop or (lambda: False))
-        _push_gsheet(wb, gsheet_output_url, log)   # ③ 반자동 순위 채운 뒤 결과 구글시트에도 반영
+        push_gsheet(wb, gsheet_output_url, log)   # ③ 반자동 순위 채운 뒤 결과 구글시트에도 반영
         _log_quality_summary(wb, log)   # 데이터 품질 자가점검(완료가 가리는 불완전 가시화·③ 최종 시점)
         return result
     log(f"== 노출순위 조회 시작 — {path.name} ==")
@@ -240,7 +240,7 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
             "쉰 IP/시간에 다시 실행하면 남은 것부터 이어서 조회합니다 ==")
     else:
         log("== 노출순위 조회 완료 ==")
-    _push_gsheet(wb, gsheet_output_url, log)   # ③ 자동 순위 채운 뒤 결과 구글시트에도 반영(차단 중단이어도 진행분 반영)
+    push_gsheet(wb, gsheet_output_url, log)   # ③ 자동 순위 채운 뒤 결과 구글시트에도 반영(차단 중단이어도 진행분 반영)
     _log_quality_summary(wb, log)   # 데이터 품질 자가점검(완료가 가리는 불완전 가시화·③ 최종 시점)
     return path
 

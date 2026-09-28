@@ -42,13 +42,13 @@ L3 조립·표현: pipeline(+_sales/_ranks/_process/_paths/_gsheet) · ui/app_qt
 
 ## 4. 점진 이행 로드맵 (big-bang 금지)
 1. **경계 명문화(문서만·지금)**: 이 문서로 L0/L1/L2 경계·의존 규칙 확정. 코드 이동 없음.
-2. **계약 지점 식별**: 도메인이 L1을 부르는 실제 진입함수(예: collector fetch_*, workbook 기록 API, registry read/write)를 목록화 → "공개 API"로 고정(핀으로 보호).
+2. **계약 지점 식별 ✅(2026-09-28 완료)**: 도메인이 L1을 부르는 실제 진입함수(collector `discover`/`fetch_*`, workbook 기록 API, input_list/gsheet/registry read/write)를 실측 목록화 → "공개 API"로 고정. SSOT=`docs/L1_CONTRACT.md`, 핀=`tools/pin_l1_contract.py`(run_checks 편입). 부수로 밑줄 진입점 3건(`push_gsheet`·`pull_gsheet_keywords`·`build_idf`) 공개화.
 3. **신규 도메인은 규칙대로**: 소싱/등록/주문은 처음부터 L2 규칙(아래로만 의존·백본 경유 융합)으로 신설.
 4. **기존 강결합 완화는 측정 기반**(죽은코드·복잡도·중복)으로 제자리 점진 — 급하게 재배치 금지.
 
 ## 5. 다음 세션 착수점 (이 문서의 목적)
 - 새 세션은 이 문서 + `docs/PARALLEL_DEV.md` + `MEMORY.md` 를 먼저 읽는다.
-- **1차 작업 후보**(병렬 가능·독립도순): ① L1 "공개 API 계약" 목록화(통합 세션) ② 신규 도메인 스캐폴딩(소싱 등) ③ 기존 도메인(이미지·정산·키워드) 개선을 각 레인 병렬.
+- **1차 작업 후보**(병렬 가능·독립도순): ① L1 "공개 API 계약" 목록화(통합 세션) **✅완료(`docs/L1_CONTRACT.md`)** ② 신규 도메인 스캐폴딩(소싱 등) ③ 기존 도메인(이미지·정산·키워드) 개선을 각 레인 병렬.
 - 병합·공유파일은 통합 세션 경유. 2~3레인부터 시작(§PARALLEL_DEV).
 
 SSOT = 이 문서(아키텍처·계층·세션모델) · `docs/PARALLEL_DEV.md`(운영 how-to) · `docs/DECISIONS.md`(확정 결정).

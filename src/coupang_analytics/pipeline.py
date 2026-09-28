@@ -33,7 +33,7 @@ from .pipeline_paths import (  # noqa: E402
 from .pipeline_paths import master_exists, read_run_stage, write_run_stage  # noqa: E402,F401
 # 구글시트 연동·백업·복원은 pipeline_gsheet 로 분리(대형 파일 정비). pipeline.X 로 다시 노출.
 from .pipeline_gsheet import (  # noqa: E402,F401
-    _pull_gsheet_keywords, _push_gsheet, backup_sources,
+    pull_gsheet_keywords, push_gsheet, backup_sources,
     push_ledger_inventory, restore_master_from_gsheet)
 # ③ 순위(측정·서킷브레이커·자동/반자동 검색·스테이지)는 pipeline_ranks 로 분리. pipeline.X 로 다시 노출
 # (핀/시뮬 monkeypatch 대상은 pipeline_ranks). core(_fill_product_metrics·_finalize_run)가 _best/
@@ -579,7 +579,7 @@ def _finalize_run(ctx: _RunCtx, master: Path, prog: Path, now: datetime, gsheet_
     wb.apply_style()         # 가독성 서식(헤더 고정·상품 구분·정렬) — 최종본에만
     wb.save(master)          # 다음 날 이어쓸 마스터
     wb.save(snapshot)        # 그날 백업본(감사용)
-    _push_gsheet(wb, gsheet_output_url, log, removed_accounts=removed_accounts,
+    push_gsheet(wb, gsheet_output_url, log, removed_accounts=removed_accounts,
                  renamed_accounts=renamed_accounts)   # 결과 반영 + 삭제 계정 + 일원화 옛 이름 정리
     if uncollected:
         _save_ctx_progress(ctx)
@@ -642,7 +642,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     # 직원이 결과 통계 시트에 직접 넣은 키워드를 역머지(값 있으면 그 상품은 AI 선정 대신 동결). 미러링 전에 워크북에
     # 들어가야 종료 시 전체 교체돼도 보존된다. 새 상품(블록 없음)은 대상 아님(첫 수집 후 시트가 생겨야 입력 가능).
     if not keywords_off:                       # ①판매수집 전용은 키워드 단계가 없어 역머지 불필요
-        _pull_gsheet_keywords(wb, gsheet_output_url, log)
+        pull_gsheet_keywords(wb, gsheet_output_url, log)
 
     # 일자 컬럼 라벨 = **작업 실행날짜**(date_label). 순위(③)는 같은 실행날짜 컬럼(latest_date)에 기록돼
     # '오늘 순위 + 전일 판매'가 한 컬럼에 나란히 쌓인다.
@@ -715,7 +715,7 @@ def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = 
         log(f"  [키워드행] 4행 미만 상품에 빈 순위행 {padded}개 추가(키워드 없어도 4행 유지·공란)")
     wb.apply_style()   # 추가한 키워드 행까지 표준 서식 고정(시트간 서식 섞임 방지)
     wb.save(path)
-    _push_gsheet(wb, gsheet_output_url, log)   # ② 개별 실행도 결과 구글시트에 반영(키워드 갱신)
+    push_gsheet(wb, gsheet_output_url, log)   # ② 개별 실행도 결과 구글시트에 반영(키워드 갱신)
     log("== 키워드 선정 완료 ==")
     return path
 

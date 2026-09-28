@@ -1,10 +1,10 @@
-"""회귀 게이트 — 오프라인 검증 6종을 순차 실행하고 하나라도 실패하면 exit 1.
+"""회귀 게이트 — 오프라인 검증 9종을 순차 실행하고 하나라도 실패하면 exit 1.
 
 용도: 커밋/푸시 전(git 훅) 또는 수동으로 회귀를 잡는다. 모두 **로그인·실 API 없이** 결정적으로 돈다
 (verify_offline [6]도 기본은 결정적 모킹 — 실 API는 VERIFY_REAL_API=1 옵트인).
 
-    python tools/run_checks.py           # 전체 6종 (pre-push, <30s)
-    python tools/run_checks.py --quick   # 빠른 5종 (pre-commit, verify_offline 제외)
+    python tools/run_checks.py           # 전체 9종 (pre-push)
+    python tools/run_checks.py --quick   # 빠른 8종 (pre-commit, verify_offline 제외)
 
 각 스크립트는 실패 시 non-zero로 끝난다(assert/SystemExit). 여기선 하나가 죽어도 나머지를 계속
 돌려 **전체 결과를 한 번에** 보여주고, 실패가 하나라도 있으면 최종 exit 1.
@@ -29,6 +29,7 @@ CHECKS = [
     ("핀(로그인·발견·반자동순위 실제코드)", "tools/pin_login_ranks.py", True),
     ("핀(apply_style 서식 출력)", "tools/pin_apply_style.py", True),
     ("핀(실행모드 결정 plan_run_mode)", "tools/pin_run_plan.py", True),
+    ("핀(L1 데이터 백본 공개 API 계약)", "tools/pin_l1_contract.py", True),
     ("구글시트 오프라인 검증", "tools/verify_gsheet_offline.py", True),
     ("정밀 렌더 검증(시트·항목·값 end-to-end)", "tools/verify_render_precision.py", True),
     ("셀독등록원장(대장→원장·이력·복원)", "tools/verify_registry_offline.py", True),

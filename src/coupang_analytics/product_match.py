@@ -19,7 +19,7 @@ import re
 from collections import Counter
 
 from . import config
-from .input_list import Option, Product, _build_idf
+from .input_list import Option, Product, build_idf
 
 _STOP = {"프리미엄", "정품", "1위", "추천", "신형", "max", "plus", "premium", "ml", "mg",
          "세트", "대형", "소형", "중형"}
@@ -91,7 +91,7 @@ def _assign(ledger: list[Product], discovered: list[Product]) -> dict[int, Produ
     thr = max(3, int(len(discovered) * 0.6))
     brand = {t for t, c in dc.items() if c >= thr}
     # IDF 가중 = 계정 코퍼스(발견 제목 + 대장명) 기반 → 규격·브랜드어(정·30포 등) 눌러 상품 핵심어 부각
-    w = _build_idf([_title(d) for d in discovered] + [lp.name for lp in ledger])
+    w = build_idf([_title(d) for d in discovered] + [lp.name for lp in ledger])
     ndisc = [_norm(_title(d)) for d in discovered]   # 공백 제거 발견제목 — 정체성 매칭은 띄어쓰기 무관(부분일치)
 
     qualified: list[tuple[int, float, int, int]] = []   # (괄호정확?, 재현율, 대장i, 발견i)
