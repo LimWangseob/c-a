@@ -14,6 +14,7 @@ from .registry_apply import _add_account, _update_account
 from .registry_core import Registry, RegistryGuardError, RegistryIntegrityError, _Run, _stop_item
 from .registry_history import as_of, check_integrity, managed_between
 from .registry_input import password_map, previous_password, to_input_list
+from .registry_lock import RegistryLockError
 from .registry_model import (C_PENDING, K_EDIT, K_INIT, K_NEW_ACCT, K_NEW_PROD, K_RESUME, K_STOP, SHEET_ACCT,
                              SHEET_GROWTH, SHEET_PROD, LedgerSnapshot)
 from .registry_rename import _hold_account_renames, _resolve_confirmations
@@ -82,5 +83,5 @@ def sync(reg: Registry, snap: LedgerSnapshot, *, now: datetime) -> SyncResult:
     return SyncResult(reg, ctx.events, _summary(ctx), ctx.warnings)
 
 
-__all__ = ["Registry", "RegistryGuardError", "RegistryIntegrityError", "SyncResult", "as_of",
+__all__ = ["Registry", "RegistryGuardError", "RegistryIntegrityError", "RegistryLockError", "SyncResult", "as_of",
            "check_integrity", "managed_between", "password_map", "previous_password", "sync", "to_input_list"]

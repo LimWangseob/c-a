@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import re
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from openpyxl.utils import get_column_letter
 
 from .registry import Registry, RegistryIntegrityError, SyncResult, check_integrity, sync
 from .registry_core import _replay_status, _row_status
+from .registry_lock import DEFAULT_LOCK_PATH, registry_lock
 from .registry_model import (ALL_SHEETS, CONFIRM_CHOICES, COUPANG_CHECK_VALUES, GROWTH_FIELDS, HIST_HEADER,
                              HISTORY_SHEETS,
                              MAIN_HEADER, SHEET_MAIN, SHEET_SYNC, ST_ACTIVE, STOCK_FIELD, SYNC_HEADER, HistRow,
@@ -127,6 +129,11 @@ def save_registry(client, reg: Registry, res: SyncResult, now: datetime) -> None
     _insert_top(client, lines)
 
 
+def _write_lock(dry_run: bool, lock_path, log):
+    """원장 쓰기 잠금(읽기→비교→쓰기 전체). 미리보기(dry_run)는 읽기 전용이라 잠그지 않는다."""
+    return nullcontext() if dry_run else registry_lock(lock_path, on_log=log)
+
+
 # ── 쿠팡확인(§4-1) ───────────────────────────────────────────────
 _ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
@@ -181,22 +188,25 @@ def _plan_checks(main: list, checks: dict, log) -> tuple[list[list[str]], int, i
     return grid, i_chk, changed, len(unknown)
 
 
-def write_coupang_check(client, checks: dict, *, dry_run: bool = False, on_log=None) -> int:
+def write_coupang_check(client, checks: dict, *, dry_run: bool = False, on_log=None,
+                        lock_path: str | Path = DEFAULT_LOCK_PATH) -> int:
     """셀독원장의 **쿠팡확인·쿠팡확인일 두 열만** 갱신(§4-1). 이력엔 기록하지 않는다(그로스 재고와 같은 방식).
 
     checks = {계정아이디: (값, YYYY-MM-DD)} → 그 계정 모든 줄 / {(계정아이디, 상품명): (값, 날짜)} → 그 줄만(우선).
     값 6종·날짜 형식이 아니면 ValueError, 원장 시트 없으면 RegistryIntegrityError, 원장에 없는 키 = 경고+건너뜀.
-    반환 = 값이 바뀌는 줄 수(dry_run 이면 쓰지 않고 수만 계산)."""
+    반환 = 값이 바뀌는 줄 수(dry_run 이면 쓰지 않고 수만 계산). 쓰기는 원장 잠금(lock_path) 안에서만 —
+    다른 원장 쓰기가 끝나지 않으면 RegistryLockError(아무것도 안 씀)."""
     log = on_log or (lambda m: None)
     _validate_checks(checks)
-    if SHEET_MAIN not in client.sheet_titles():
-        raise RegistryIntegrityError(f"원장 시트 '{SHEET_MAIN}' 없음 — 쿠팡확인 기록 불가")
-    main = client.read_values(SHEET_MAIN)
-    if not main:
-        raise RegistryIntegrityError(f"원장 시트 '{SHEET_MAIN}' 가 비어 있음(헤더 없음)")
-    grid, i_chk, changed, unknown = _plan_checks(main, checks, log)
-    if changed and not dry_run:
-        client.write_values(SHEET_MAIN, grid, start=f"{get_column_letter(i_chk + 1)}2", raw=True)
+    with _write_lock(dry_run, lock_path, log):
+        if SHEET_MAIN not in client.sheet_titles():
+            raise RegistryIntegrityError(f"원장 시트 '{SHEET_MAIN}' 없음 — 쿠팡확인 기록 불가")
+        main = client.read_values(SHEET_MAIN)
+        if not main:
+            raise RegistryIntegrityError(f"원장 시트 '{SHEET_MAIN}' 가 비어 있음(헤더 없음)")
+        grid, i_chk, changed, unknown = _plan_checks(main, checks, log)
+        if changed and not dry_run:
+            client.write_values(SHEET_MAIN, grid, start=f"{get_column_letter(i_chk + 1)}2", raw=True)
     log(f"== [원장] 쿠팡확인 {'미리보기(저장 안 함) ' if dry_run else ''}— 갱신 {changed}줄"
         + (f" · 원장에 없는 대상 {unknown}건" if unknown else "") + " ==")
     return changed
@@ -307,12 +317,18 @@ def _replay_snapshots(snapshots, log) -> tuple[Registry, list]:
 
 
 def run_backfill(client, snapshots: list, *, log=None, dry_run: bool = False,
-                 backup_dir: str | Path | None = "output/백업") -> list:
+                 backup_dir: str | Path | None = "output/백업", lock_path: str | Path = DEFAULT_LOCK_PATH) -> list:
     """과거 대장 사본으로 원장을 **처음부터** 소급 구축. snapshots = [(시각, 이름, read()→(시트명, 값, 취소선))].
 
     효력일 = 그 변동이 처음 보인 사본의 날짜. 동기화기록엔 사본마다 1줄(출처 사본 이름). 원장에 이미 데이터가 있으면
-    거부(중복·이력 순서 꼬임 방지). 재생·무결성이 모두 통과해야 쓴다(중간 실패 = 아무것도 안 씀)."""
+    거부(중복·이력 순서 꼬임 방지). 재생·무결성이 모두 통과해야 쓴다(중간 실패 = 아무것도 안 씀).
+    원장 읽기부터 쓰기까지 원장 잠금(lock_path) 안에서(미리보기 제외)."""
     log = log or (lambda m: None)
+    with _write_lock(dry_run, lock_path, log):
+        return _backfill_locked(client, snapshots, log, dry_run, backup_dir)
+
+
+def _backfill_locked(client, snapshots: list, log, dry_run: bool, backup_dir) -> list:
     exists, _, cur = _load_existing(client)
     if cur.rows or cur.history:
         raise RegistryIntegrityError("원장에 이미 데이터가 있어 소급할 수 없습니다 — 빈 원장 파일에서만 실행하세요")
@@ -341,12 +357,18 @@ def run_backfill(client, snapshots: list, *, log=None, dry_run: bool = False,
 
 
 def run_sync(client, read_ledger, *, now: datetime | None = None, log=None, dry_run: bool = False,
-             backup_dir: str | Path | None = "output/백업") -> SyncResult:
-    """대장 → 원장 동기화 1회. read_ledger() → (시트명, 값격자, 취소선격자). 실패는 예외로 전파(쓰기 없음)."""
+             backup_dir: str | Path | None = "output/백업", lock_path: str | Path = DEFAULT_LOCK_PATH) -> SyncResult:
+    """대장 → 원장 동기화 1회. read_ledger() → (시트명, 값격자, 취소선격자). 실패는 예외로 전파(쓰기 없음).
+    원장 읽기부터 쓰기까지 원장 잠금(lock_path) 안에서(미리보기 제외) — 못 얻으면 RegistryLockError."""
     log = log or (lambda m: None)
     now = now or datetime.now()
     title, rows, strike = read_ledger()                       # 실패 = 여기서 중단(원장 미접촉)
     snap = parse_ledger(rows, strike, title)
+    with _write_lock(dry_run, lock_path, log):
+        return _sync_locked(client, snap, now, log, dry_run, backup_dir)
+
+
+def _sync_locked(client, snap, now: datetime, log, dry_run: bool, backup_dir) -> SyncResult:
     exists, raws, reg = _load_existing(client)
     check_integrity(reg)
     if backup_dir and exists and not dry_run:

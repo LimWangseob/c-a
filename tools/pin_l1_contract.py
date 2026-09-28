@@ -111,12 +111,12 @@ FUNC_CONTRACTS: dict = {
         ("password_map", "P:reg:0"),
     ],
     registry_gsheet: [
-        ("run_sync", "P:client:0 P:read_ledger:0 K:now:1 K:log:1 K:dry_run:1 K:backup_dir:1"),
-        ("run_backfill", "P:client:0 P:snapshots:0 K:log:1 K:dry_run:1 K:backup_dir:1"),
+        ("run_sync", "P:client:0 P:read_ledger:0 K:now:1 K:log:1 K:dry_run:1 K:backup_dir:1 K:lock_path:1"),
+        ("run_backfill", "P:client:0 P:snapshots:0 K:log:1 K:dry_run:1 K:backup_dir:1 K:lock_path:1"),
         ("load_registry", "P:client:0"),
         ("save_registry", "P:client:0 P:reg:0 P:res:0 P:now:0"),
         # 2단계(§10-1): 쿠팡확인 줄 단위 쓰기(이력 미기록·두 열만 RAW)
-        ("write_coupang_check", "P:client:0 P:checks:0 K:dry_run:1 K:on_log:1"),
+        ("write_coupang_check", "P:client:0 P:checks:0 K:dry_run:1 K:on_log:1 K:lock_path:1"),
     ],
     registry_model: [
         ("parse_ledger", "P:rows:0 P:strike_grid:1 P:sheet:1"),

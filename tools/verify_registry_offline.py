@@ -24,6 +24,9 @@ from coupang_analytics import registry as R  # noqa: E402
 from coupang_analytics import registry_gsheet as RG  # noqa: E402
 from coupang_analytics import registry_model as M  # noqa: E402
 
+# 원장 잠금 격리 — 테스트가 실제 output/_원장.lock 을 건드리지 않게(임시 폴더).
+LOCK = str(Path(tempfile.mkdtemp(prefix="reglock_")) / "_원장.lock")
+
 # ── 가짜 관리대장 ─────────────────────────────────────────────────
 # 실제 셀독리스트처럼 1행=예시, 2행=헤더. '완료일자'가 뒤(체험단)에 한 번 더 있다(앞쪽=그로스를 써야 함).
 HDR = ["구분", "대표자명", "사업자명", "계정아이디", "비밀번호", "계약금", "체험단 주체", "상품명",
@@ -407,7 +410,7 @@ def t13_io_roundtrip():
     print("[R13] 구글시트 입출력 — 시트 5개·RAW 쓰기·최신이 위·번호 연속·재로드 일치")
     cli = FakeClient()
     with tempfile.TemporaryDirectory() as tmp:
-        res = RG.run_sync(cli, reader(base()), now=day(1), backup_dir=tmp)
+        res = RG.run_sync(cli, reader(base()), now=day(1), backup_dir=tmp, lock_path=LOCK)
         assert set(cli.grids) >= {M.SHEET_MAIN, M.SHEET_ACCT, M.SHEET_PROD, M.SHEET_GROWTH, M.SHEET_SYNC}
         assert cli.grids[M.SHEET_MAIN][0] == list(M.MAIN_HEADER)
         assert "쿠팡확인" in M.MAIN_HEADER and "쿠팡확인일" in M.MAIN_HEADER
@@ -419,7 +422,7 @@ def t13_io_roundtrip():
         assert main[1][ix["관리상태"]] == M.ST_ACTIVE                              # 관리중 먼저 정렬
         acc = copy.deepcopy(base())
         acc[0]["pw"] = "new#456"
-        RG.run_sync(cli, reader(acc), now=day(2), backup_dir=tmp)
+        RG.run_sync(cli, reader(acc), now=day(2), backup_dir=tmp, lock_path=LOCK)
         ah = cli.grids[M.SHEET_ACCT]
         hx = {h: i for i, h in enumerate(ah[0])}
         nos = [int(r[hx["번호"]]) for r in ah[1:]]
@@ -432,19 +435,19 @@ def t13_io_roundtrip():
         assert len(list(Path(tmp).glob("원장_*.xlsx"))) >= 1                       # 실행마다 로컬 백업
         # 승인 흐름: 사람이 시트의 확인상태 칸을 바꾼다
         acc[0]["products"][1]["name"] = "예시 오메가3 60캡슐 2개"
-        RG.run_sync(cli, reader(acc), now=day(3), backup_dir=tmp)
+        RG.run_sync(cli, reader(acc), now=day(3), backup_dir=tmp, lock_path=LOCK)
         ph = cli.grids[M.SHEET_PROD]
         px = {h: i for i, h in enumerate(ph[0])}
         assert ph[1][px["확인상태"]] == M.C_PENDING
         ph[1][px["확인상태"]] = M.C_APPROVE
-        RG.run_sync(cli, reader(acc), now=day(4), backup_dir=tmp)
+        RG.run_sync(cli, reader(acc), now=day(4), backup_dir=tmp, lock_path=LOCK)
         reg = RG.load_registry(cli)
         assert ("example01", "예시 오메가3 60캡슐 2개") in reg.rows
         # 이력 줄 삭제(누가 지움) → 무결성 중단·쓰기 없음
         del cli.grids[M.SHEET_ACCT][2]
         n_writes = len(cli.writes)
         try:
-            RG.run_sync(cli, reader(acc), now=day(5), backup_dir=tmp)
+            RG.run_sync(cli, reader(acc), now=day(5), backup_dir=tmp, lock_path=LOCK)
         except R.RegistryIntegrityError:
             pass
         else:
@@ -460,13 +463,13 @@ def t14_ledger_read_fail_and_dry_run():
     def boom():
         raise RuntimeError("403 권한 없음")
     try:
-        RG.run_sync(cli, boom, now=day(1), backup_dir=None)
+        RG.run_sync(cli, boom, now=day(1), backup_dir=None, lock_path=LOCK)
     except RuntimeError:
         pass
     else:
         raise AssertionError("대장 읽기 실패인데 진행됨")
     assert cli.writes == [] and cli.batches == [] and cli.grids == {}
-    res = RG.run_sync(cli, reader(base()), now=day(1), backup_dir=None, dry_run=True)
+    res = RG.run_sync(cli, reader(base()), now=day(1), backup_dir=None, dry_run=True, lock_path=LOCK)
     assert res.events and cli.writes == [] and cli.grids == {}
     ok("읽기 실패=아무것도 안 씀·미리보기=변경 목록만")
 
@@ -501,10 +504,10 @@ def t16_backfill():
              (day(1), "관리대장_261001.xlsx", reader(day1)),
              (day(2), "관리대장_261002.xlsx", reader(day2))]
     cli = FakeClient()
-    res = RG.run_backfill(cli, snaps, dry_run=True)
+    res = RG.run_backfill(cli, snaps, dry_run=True, lock_path=LOCK)
     assert cli.grids == {} and len(res) == 3                                         # 미리보기=쓰기 없음
     with tempfile.TemporaryDirectory() as tmp:
-        res = RG.run_backfill(cli, snaps, backup_dir=tmp)
+        res = RG.run_backfill(cli, snaps, backup_dir=tmp, lock_path=LOCK)
         reg = RG.load_registry(cli)
         R.check_integrity(reg)
         pw = [h for h in reg.history if h.item == "비밀번호"][0]
@@ -517,7 +520,7 @@ def t16_backfill():
         assert len(list(Path(tmp).glob("원장_*.xlsx"))) == 1                         # 소급 결과 로컬 백업
         n = len(cli.writes)
         try:
-            RG.run_backfill(cli, snaps, backup_dir=tmp)
+            RG.run_backfill(cli, snaps, backup_dir=tmp, lock_path=LOCK)
         except R.RegistryIntegrityError as exc:
             assert "이미" in str(exc)
         else:
@@ -538,7 +541,7 @@ def t17_write_coupang_check():
     print("[R17] 쿠팡확인 쓰기 — 두 열만·줄키 우선·이력 불변·헤더 이름 탐지·검증")
     cli = FakeClient()
     with tempfile.TemporaryDirectory() as tmp:
-        RG.run_sync(cli, reader(base()), now=day(1), backup_dir=tmp)
+        RG.run_sync(cli, reader(base()), now=day(1), backup_dir=tmp, lock_path=LOCK)
     before = copy.deepcopy(cli.grids)
     ix = {h: i for i, h in enumerate(cli.grids[M.SHEET_MAIN][0])}
     other = [c for h, c in ix.items() if h not in ("쿠팡확인", "쿠팡확인일")]
@@ -548,10 +551,10 @@ def t17_write_coupang_check():
               "ghost": ("로그인실패", "2026-10-02")}                                  # 원장에 없음 → 경고
     logs: list = []
     n_writes = len(cli.writes)
-    assert RG.write_coupang_check(cli, checks, dry_run=True, on_log=logs.append) == 3
+    assert RG.write_coupang_check(cli, checks, dry_run=True, on_log=logs.append, lock_path=LOCK) == 3
     assert cli.grids == before and len(cli.writes) == n_writes                       # 미리보기 = 무변경
     assert any("ghost" in m for m in logs), logs
-    assert RG.write_coupang_check(cli, checks) == 3
+    assert RG.write_coupang_check(cli, checks, lock_path=LOCK) == 3
     main = cli.grids[M.SHEET_MAIN]
     got = {(r[ix["계정아이디"]], r[ix["상품명"]]): (r[ix["쿠팡확인"]], r[ix["쿠팡확인일"]]) for r in main[1:]}
     assert got[("example01", "예시 비타민C 120정")] == ("확인됨", "2026-10-02")
@@ -567,18 +570,18 @@ def t17_write_coupang_check():
     reg = RG.load_registry(cli)
     R.check_integrity(reg)
     assert reg.rows[("example01", "예시 오메가3 60캡슐")].coupang == "미등록"
-    assert RG.write_coupang_check(cli, {"example01": ("확인됨", "2026-10-02")}) == 1   # 이미 확인됨인 줄은 변경 아님
+    assert RG.write_coupang_check(cli, {"example01": ("확인됨", "2026-10-02")}, lock_path=LOCK) == 1   # 이미 확인됨인 줄은 변경 아님
     # 헤더 이름으로 탐지: 열 순서가 바뀌어도 쿠팡확인 칸을 찾는다
     moved = FakeClient()
     moved.grids[M.SHEET_MAIN] = [["메모", *main[0]], *[["x", *r] for r in main[1:]]]
-    assert RG.write_coupang_check(moved, {"sample22": ("판매중지", "2026-10-03")}) == 1
+    assert RG.write_coupang_check(moved, {"sample22": ("판매중지", "2026-10-03")}, lock_path=LOCK) == 1
     mx = {h: i for i, h in enumerate(moved.grids[M.SHEET_MAIN][0])}
     row = next(r for r in moved.grids[M.SHEET_MAIN][1:] if r[mx["계정아이디"]] == "sample22")
     assert (row[mx["쿠팡확인"]], row[mx["쿠팡확인일"]], row[0]) == ("판매중지", "2026-10-03", "x")
     # 검증: 값 6종·날짜 형식·원장 없음
-    _expect(ValueError, lambda: RG.write_coupang_check(cli, {"example01": ("정상", "2026-10-02")}), "미지 값")
-    _expect(ValueError, lambda: RG.write_coupang_check(cli, {"example01": ("확인됨", "26.10.02")}), "날짜 형식")
-    _expect(R.RegistryIntegrityError, lambda: RG.write_coupang_check(FakeClient(), {}), "원장 없음")
+    _expect(ValueError, lambda: RG.write_coupang_check(cli, {"example01": ("정상", "2026-10-02")}, lock_path=LOCK), "미지 값")
+    _expect(ValueError, lambda: RG.write_coupang_check(cli, {"example01": ("확인됨", "26.10.02")}, lock_path=LOCK), "날짜 형식")
+    _expect(R.RegistryIntegrityError, lambda: RG.write_coupang_check(FakeClient(), {}, lock_path=LOCK), "원장 없음")
     ok("미리보기 무변경·줄키 우선·다른 열/이력 불변·S2 RAW·재로드·열 이동 탐지·검증 예외")
 
 
@@ -643,6 +646,54 @@ def t19_to_input_list():
     ok("관리중 계정·상품만·ledger_products/ids 전체·요약·as_of 과거·비번맵(중단 계정 제외)")
 
 
+def t20_write_lock():
+    print("[R20] 원장 쓰기 잠금 — 겹치면 대기 후 중단(쓰기 0)·미리보기 통과·예외 시 해제·프로세스 강제종료 시 OS 자동 해제")
+    import subprocess
+    from coupang_analytics import registry_lock as RL
+    lock = str(Path(tempfile.mkdtemp(prefix="reglock20_")) / "_원장.lock")
+    cli = FakeClient()
+    RG.run_sync(cli, reader(base()), now=day(1), backup_dir=None, lock_path=lock)
+    orig_wait = RL.LOCK_WAIT_SEC
+    RL.LOCK_WAIT_SEC = 0.3
+    try:
+        with RL.registry_lock(lock):                               # 다른 원장 쓰기가 진행 중인 상황
+            n, nb = len(cli.writes), len(cli.batches)
+            logs: list = []
+            _expect(R.RegistryLockError, lambda: RG.run_sync(cli, reader(base()), now=day(2), backup_dir=None,
+                                                             lock_path=lock, log=logs.append), "run_sync 잠금")
+            _expect(R.RegistryLockError, lambda: RG.write_coupang_check(
+                cli, {"example01": ("확인됨", "2026-10-02")}, lock_path=lock), "쿠팡확인 잠금")
+            _expect(R.RegistryLockError, lambda: RG.run_backfill(FakeClient(), [], lock_path=lock), "소급 잠금")
+            assert len(cli.writes) == n and len(cli.batches) == nb, cli.writes[n:]   # 막히면 쓰기 0
+            assert any("대기" in m for m in logs), logs
+            assert RG.write_coupang_check(cli, {"example01": ("확인됨", "2026-10-02")}, dry_run=True,
+                                          lock_path=lock) == 2                    # 미리보기는 잠금 무관
+            RG.run_sync(cli, reader(base()), now=day(2), backup_dir=None, dry_run=True, lock_path=lock)
+        try:                                                        # 블록 안 예외 → 해제
+            with RL.registry_lock(lock):
+                raise KeyError("boom")
+        except KeyError:
+            pass
+        assert RG.write_coupang_check(cli, {"example01": ("확인됨", "2026-10-02")}, lock_path=lock) == 2
+        # 다른 프로세스가 잠금을 쥔 채 강제 종료 → OS 가 풀어 즉시 획득(오래된 잠금 추측 로직 없음)
+        code = ("import sys,time; sys.path.insert(0, sys.argv[1]);"
+                "from coupang_analytics.registry_lock import registry_lock\n"
+                "with registry_lock(sys.argv[2]):\n print('LOCKED', flush=True); time.sleep(60)")
+        child = subprocess.Popen([sys.executable, "-c", code, str(ROOT / "src"), lock],
+                                 stdout=subprocess.PIPE, text=True)
+        try:
+            assert child.stdout.readline().strip() == "LOCKED"
+            _expect(R.RegistryLockError, lambda: RL.registry_lock(lock).__enter__(), "자식이 쥔 잠금")
+        finally:
+            child.kill()
+            child.wait(10)
+        with RL.registry_lock(lock, wait_sec=5):
+            pass
+    finally:
+        RL.LOCK_WAIT_SEC = orig_wait
+    ok("run_sync·쿠팡확인·소급 잠금 중단+쓰기 0·대기 로그·미리보기 통과·예외 해제·강제종료 후 즉시 획득")
+
+
 def main():
     t16_backfill()
     t15_format_equivalence()
@@ -663,6 +714,7 @@ def main():
     t17_write_coupang_check()
     t18_previous_password()
     t19_to_input_list()
+    t20_write_lock()
     print("셀독등록원장 오프라인 검증 통과")
 
 
