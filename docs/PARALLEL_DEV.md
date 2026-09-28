@@ -11,6 +11,20 @@
 2. **비겹침 레인 = 충돌 0**: 서로 **다른 파일 집합**만 편집하면 `git merge`가 거의 항상 깨끗하다.
 3. **게이트가 통합 안전망**: 비겹침이어도 함수 시그니처 변경 등 통합 깨짐은 `tools/run_checks.py`가 잡는다.
 
+## 도메인 세션 착수 체크리스트 (⚠ 메모리는 세션별로 분리됨)
+
+각 worktree 세션은 **자기 폴더 경로의 별도 메모리**(`~/.claude/projects/<경로>/memory/`)를 쓴다 = 본체(`D:\coupang-analytics`)의
+`MEMORY.md`·`handoff-*` 가 **자동 주입되지 않는다**(worktree 세션은 빈 메모리로 시작). 전역 정책(`~/.claude/CLAUDE.md`)과
+git 추적 파일(프로젝트 `CLAUDE.md`·`designs/`·`docs/`·`docs/memory/`)은 사본으로 따라오지만 **읽어야** 맥락이 잡힌다.
+그래서 세션 간 공유가 필요한 인계·맥락은 **git 문서(`docs/`·`designs/`)에 남긴다**(메모리 아님).
+
+**도메인 세션은 착수 시 먼저:**
+1. `docs/ARCHITECTURE.md`·이 파일(`docs/PARALLEL_DEV.md`)·`docs/DOMAIN_DESIGN.md`·`docs/L1_CONTRACT.md` 읽기(계층·레인·계약).
+2. `docs/memory/`(본체 메모리의 git 미러)와 자기 도메인 관련 `designs/*.md` 읽기(과거 맥락·인계).
+3. base 최신화: 통제 세션이 새 커밋을 올렸으면 `git merge --ff-only master`(또는 ccd_host sync_with_base_branch)로 자기 브랜치를 맞춤.
+4. 게이트 준비 확인: 새 클론/worktree면 `python tools/install_hooks.py` 1회(훅은 공유 `.git` 이라 보통 1회면 충분).
+5. 인계·결정은 커밋 시 `docs/`(+DECISIONS)에 남긴다 — 자기 로컬 메모리에만 쓰면 다른 세션·본체가 못 본다.
+
 ## 레인 (편집 소유 파일 — 비겹침)
 
 | 레인 | 편집 소유 파일 | 비고 |
