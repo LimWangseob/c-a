@@ -5,14 +5,17 @@
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from pathlib import Path
 
 import openpyxl
+from openpyxl.utils import get_column_letter
 
 from .registry import Registry, RegistryIntegrityError, SyncResult, check_integrity, sync
 from .registry_core import _replay_status, _row_status
-from .registry_model import (ALL_SHEETS, CONFIRM_CHOICES, GROWTH_FIELDS, HIST_HEADER, HISTORY_SHEETS,
+from .registry_model import (ALL_SHEETS, CONFIRM_CHOICES, COUPANG_CHECK_VALUES, GROWTH_FIELDS, HIST_HEADER,
+                             HISTORY_SHEETS,
                              MAIN_HEADER, SHEET_MAIN, SHEET_SYNC, ST_ACTIVE, STOCK_FIELD, SYNC_HEADER, HistRow,
                              RegRow, parse_ledger)
 
@@ -122,6 +125,81 @@ def save_registry(client, reg: Registry, res: SyncResult, now: datetime) -> None
     run_id = res.events[0].run_id if res.events else now.strftime("R%y%m%d-%H%M%S")
     lines[SHEET_SYNC] = [_sync_line(res, run_id, now.strftime("%Y-%m-%d %H:%M:%S"))]
     _insert_top(client, lines)
+
+
+# ── 쿠팡확인(§4-1) ───────────────────────────────────────────────
+_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _validate_checks(checks: dict) -> None:
+    for key, val in checks.items():
+        if not (isinstance(val, tuple) and len(val) == 2):
+            raise ValueError(f"쿠팡확인 값은 (값, 확인일) 이어야 함: {key} → {val!r}")
+        value, day = val
+        if value not in COUPANG_CHECK_VALUES:
+            raise ValueError(f"쿠팡확인 값 '{value}'(키 {key}) 은 허용값 아님 — {', '.join(COUPANG_CHECK_VALUES)}")
+        if not (isinstance(day, str) and _ISO_DATE.fullmatch(day)):
+            raise ValueError(f"쿠팡확인일 '{day}'(키 {key}) 은 YYYY-MM-DD 형식이 아님")
+
+
+def _check_column(header: list[str]) -> int:
+    """쿠팡확인 열 위치(헤더 이름으로 탐지). 필요한 열이 없거나 확인일이 바로 오른쪽이 아니면 무결성 오류."""
+    missing = [h for h in ("계정아이디", "상품명", "쿠팡확인", "쿠팡확인일") if h not in header]
+    if missing:
+        raise RegistryIntegrityError(f"셀독원장 헤더에 열 없음: {missing}")
+    i_chk = header.index("쿠팡확인")
+    if header.index("쿠팡확인일") != i_chk + 1:
+        raise RegistryIntegrityError("셀독원장 '쿠팡확인일' 열이 '쿠팡확인' 바로 오른쪽이 아님 — 헤더 확인 필요")
+    return i_chk
+
+
+def _split_checks(checks: dict) -> dict:
+    """키 정규화 — (계정, 상품명) 줄 키는 상품명 공백 정규화, 계정 키는 그대로."""
+    return {((k[0], " ".join(str(k[1]).split())) if isinstance(k, tuple) else k): v for k, v in checks.items()}
+
+
+def _plan_checks(main: list, checks: dict, log) -> tuple[list[list[str]], int, int, int]:
+    """셀독원장 값 격자 → (쿠팡확인·확인일 두 열의 새 값 격자, 쿠팡확인 열 위치, 갱신 줄 수, 원장에 없는 키 수).
+    줄 키 (계정, 상품명) 이 계정 키보다 우선. 상품명은 공백 정규화로 대조."""
+    header = [str(h) for h in main[0]]
+    i_chk = _check_column(header)
+    keyed = _split_checks(checks)
+    grid: list[list[str]] = []
+    changed, seen = 0, set[object]()
+    for row in main[1:]:
+        d = _cellmap(header, row)
+        aid, prod = str(d["계정아이디"]), " ".join(str(d["상품명"]).split())
+        hit = [k for k in ((aid, prod), aid) if k in keyed]            # 줄 키 먼저 = 우선
+        seen.update(hit)
+        cur = [str(d["쿠팡확인"]), str(d["쿠팡확인일"])]
+        new = list(keyed[hit[0]]) if hit else cur
+        changed += new != cur
+        grid.append(new)
+    unknown = [k for k in keyed if k not in seen]
+    for k in unknown:
+        log(f"  [원장] ⚠ 쿠팡확인 대상이 원장에 없음 — 건너뜀: {k}")
+    return grid, i_chk, changed, len(unknown)
+
+
+def write_coupang_check(client, checks: dict, *, dry_run: bool = False, on_log=None) -> int:
+    """셀독원장의 **쿠팡확인·쿠팡확인일 두 열만** 갱신(§4-1). 이력엔 기록하지 않는다(그로스 재고와 같은 방식).
+
+    checks = {계정아이디: (값, YYYY-MM-DD)} → 그 계정 모든 줄 / {(계정아이디, 상품명): (값, 날짜)} → 그 줄만(우선).
+    값 6종·날짜 형식이 아니면 ValueError, 원장 시트 없으면 RegistryIntegrityError, 원장에 없는 키 = 경고+건너뜀.
+    반환 = 값이 바뀌는 줄 수(dry_run 이면 쓰지 않고 수만 계산)."""
+    log = on_log or (lambda m: None)
+    _validate_checks(checks)
+    if SHEET_MAIN not in client.sheet_titles():
+        raise RegistryIntegrityError(f"원장 시트 '{SHEET_MAIN}' 없음 — 쿠팡확인 기록 불가")
+    main = client.read_values(SHEET_MAIN)
+    if not main:
+        raise RegistryIntegrityError(f"원장 시트 '{SHEET_MAIN}' 가 비어 있음(헤더 없음)")
+    grid, i_chk, changed, unknown = _plan_checks(main, checks, log)
+    if changed and not dry_run:
+        client.write_values(SHEET_MAIN, grid, start=f"{get_column_letter(i_chk + 1)}2", raw=True)
+    log(f"== [원장] 쿠팡확인 {'미리보기(저장 안 함) ' if dry_run else ''}— 갱신 {changed}줄"
+        + (f" · 원장에 없는 대상 {unknown}건" if unknown else "") + " ==")
+    return changed
 
 
 # ── 시트 생성·서식 ───────────────────────────────────────────────

@@ -64,6 +64,9 @@ C_APPROVE = "승인"
 C_REJECT = "반려"
 CONFIRM_CHOICES = (C_AUTO, C_PENDING, C_APPROVE, C_REJECT)
 
+# 쿠팡확인 값(§4-1) — ①판매수집 로그인 결과. 이력 없음(최신값만).
+COUPANG_CHECK_VALUES = ("확인됨", "미등록", "판매중(불일치)", "판매중지", "로그인실패", "비밀번호불일치")
+
 ITEM_STATUS = "관리상태"
 ITEM_PROD_NAME = "상품명"
 ITEM_ACCT_ID = "계정아이디"

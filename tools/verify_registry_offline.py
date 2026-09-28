@@ -370,10 +370,20 @@ class FakeClient:
         self.writes.append((sheet, start, raw))
         g = self.grids[sheet]
         r0 = int(re.sub(r"\D", "", start)) - 1
+        c0 = 0
+        for ch in re.sub(r"\d", "", start):
+            c0 = c0 * 26 + ord(ch) - 64
+        c0 -= 1
         while len(g) < r0 + len(rows):
             g.append([])
         for i, row in enumerate(rows):
-            g[r0 + i] = [("" if v is None else str(v)) for v in row]
+            vals = [("" if v is None else str(v)) for v in row]
+            if c0 == 0:
+                g[r0 + i] = vals
+            else:                                       # 열 범위 쓰기 = 그 칸들만 덮어씀(나머지 열 보존)
+                cur = list(g[r0 + i]) + [""] * max(0, c0 + len(vals) - len(g[r0 + i]))
+                cur[c0:c0 + len(vals)] = vals
+                g[r0 + i] = cur
 
     def batch_update(self, requests):
         self.batches.append(requests)
@@ -516,6 +526,123 @@ def t16_backfill():
     ok("날짜순·효력일=사본날짜·사본별 기록·백업·재실행 거부")
 
 
+def _expect(exc, fn, what):
+    try:
+        fn()
+    except exc:
+        return
+    raise AssertionError(f"{what} — {exc.__name__} 안 남")
+
+
+def t17_write_coupang_check():
+    print("[R17] 쿠팡확인 쓰기 — 두 열만·줄키 우선·이력 불변·헤더 이름 탐지·검증")
+    cli = FakeClient()
+    with tempfile.TemporaryDirectory() as tmp:
+        RG.run_sync(cli, reader(base()), now=day(1), backup_dir=tmp)
+    before = copy.deepcopy(cli.grids)
+    ix = {h: i for i, h in enumerate(cli.grids[M.SHEET_MAIN][0])}
+    other = [c for h, c in ix.items() if h not in ("쿠팡확인", "쿠팡확인일")]
+    checks = {"example01": ("확인됨", "2026-10-02"),
+              ("example01", " 예시  오메가3 60캡슐 "): ("미등록", "2026-10-02"),     # 줄키(공백 정규화)가 우선
+              "demo333": ("비밀번호불일치", "2026-10-02"),
+              "ghost": ("로그인실패", "2026-10-02")}                                  # 원장에 없음 → 경고
+    logs: list = []
+    n_writes = len(cli.writes)
+    assert RG.write_coupang_check(cli, checks, dry_run=True, on_log=logs.append) == 3
+    assert cli.grids == before and len(cli.writes) == n_writes                       # 미리보기 = 무변경
+    assert any("ghost" in m for m in logs), logs
+    assert RG.write_coupang_check(cli, checks) == 3
+    main = cli.grids[M.SHEET_MAIN]
+    got = {(r[ix["계정아이디"]], r[ix["상품명"]]): (r[ix["쿠팡확인"]], r[ix["쿠팡확인일"]]) for r in main[1:]}
+    assert got[("example01", "예시 비타민C 120정")] == ("확인됨", "2026-10-02")
+    assert got[("example01", "예시 오메가3 60캡슐")] == ("미등록", "2026-10-02")
+    assert got[("demo333", "예시 마스카라")] == ("비밀번호불일치", "2026-10-02")
+    assert got[("sample22", "예시 캠핑테이블")] == ("", "")                         # 대상 아님 = 그대로
+    old_main = {(r[ix["계정아이디"]], r[ix["상품명"]]): r for r in before[M.SHEET_MAIN][1:]}
+    for r in main[1:]:
+        o = old_main[(r[ix["계정아이디"]], r[ix["상품명"]])]
+        assert [r[c] for c in other] == [o[c] if c < len(o) else "" for c in other], r   # 다른 열 불변
+    assert all(cli.grids[s] == before[s] for s in (*M.HISTORY_SHEETS, M.SHEET_SYNC))   # 이력·동기화기록 불변
+    assert cli.writes[-1] == (M.SHEET_MAIN, "S2", True), cli.writes[-1]              # 두 열 범위·RAW
+    reg = RG.load_registry(cli)
+    R.check_integrity(reg)
+    assert reg.rows[("example01", "예시 오메가3 60캡슐")].coupang == "미등록"
+    assert RG.write_coupang_check(cli, {"example01": ("확인됨", "2026-10-02")}) == 1   # 이미 확인됨인 줄은 변경 아님
+    # 헤더 이름으로 탐지: 열 순서가 바뀌어도 쿠팡확인 칸을 찾는다
+    moved = FakeClient()
+    moved.grids[M.SHEET_MAIN] = [["메모", *main[0]], *[["x", *r] for r in main[1:]]]
+    assert RG.write_coupang_check(moved, {"sample22": ("판매중지", "2026-10-03")}) == 1
+    mx = {h: i for i, h in enumerate(moved.grids[M.SHEET_MAIN][0])}
+    row = next(r for r in moved.grids[M.SHEET_MAIN][1:] if r[mx["계정아이디"]] == "sample22")
+    assert (row[mx["쿠팡확인"]], row[mx["쿠팡확인일"]], row[0]) == ("판매중지", "2026-10-03", "x")
+    # 검증: 값 6종·날짜 형식·원장 없음
+    _expect(ValueError, lambda: RG.write_coupang_check(cli, {"example01": ("정상", "2026-10-02")}), "미지 값")
+    _expect(ValueError, lambda: RG.write_coupang_check(cli, {"example01": ("확인됨", "26.10.02")}), "날짜 형식")
+    _expect(R.RegistryIntegrityError, lambda: RG.write_coupang_check(FakeClient(), {}), "원장 없음")
+    ok("미리보기 무변경·줄키 우선·다른 열/이력 불변·S2 RAW·재로드·열 이동 탐지·검증 예외")
+
+
+def t18_previous_password():
+    print("[R18] 직전 비밀번호 — 변경 없음=None·직전값·계정아이디 변경 추적")
+    reg = R.Registry()
+    acc = base()
+    R.sync(reg, snap_of(acc), now=day(1))
+    assert R.previous_password(reg, "example01") is None
+    assert R.previous_password(reg, "없는계정") is None
+    acc[0]["pw"] = "second#2"
+    R.sync(reg, snap_of(acc), now=day(2))
+    assert R.previous_password(reg, "example01") == "pass!123"
+    acc[0]["pw"] = "third#3"
+    R.sync(reg, snap_of(acc), now=day(3))
+    assert R.previous_password(reg, "example01") == "second#2"
+    acc[0]["pw"] = "second#2"                                     # 이전 값으로 되돌림 → 현재와 같은 값은 건너뜀
+    R.sync(reg, snap_of(acc), now=day(4))
+    assert R.previous_password(reg, "example01") == "third#3"
+    acc[1]["pw"] = ""                                             # 비움 → 같은 값 복원: 이전값 '' 건너뛰고
+    R.sync(reg, snap_of(acc), now=day(5))                         # 현재와 같은 '0012' 도 건너뜀 → None
+    acc[1]["pw"] = "0012"
+    acc[3]["pw"] = "np!2"
+    R.sync(reg, snap_of(acc), now=day(5, 19))
+    assert R.previous_password(reg, "sample22") is None
+    for a in acc:
+        if a["aid"] == "nopd":
+            a["aid"] = "nopd2"
+    res = R.sync(reg, snap_of(acc), now=day(6))
+    assert (M.SHEET_ACCT, M.K_RENAME_ACCT, "nopd2", "", "계정아이디") in kinds(res.events), kinds(res.events)
+    res.events[[e.kind for e in res.events].index(M.K_RENAME_ACCT)].confirm = M.C_APPROVE
+    R.sync(reg, snap_of(acc), now=day(7))
+    assert ("nopd2", "") in reg.rows
+    assert R.previous_password(reg, "nopd2") == "np!1"                   # 옛 아이디(nopd) 이력까지 이어 봄
+    ok("None·직전값·되돌림 건너뜀·계정아이디 변경 추적")
+
+
+def t19_to_input_list():
+    print("[R19] 원장 → 입력 — 관리중만·ledger 전체 줄·비번맵·as_of")
+    reg = R.Registry()
+    acc = base()
+    acc[0]["products"].append(P("예시 유산균 30포"))
+    R.sync(reg, snap_of(acc), now=day(1))
+    acc[0]["products"][1]["struck"] = True                        # 오메가3 관리중단(10/2)
+    R.sync(reg, snap_of(acc), now=day(2))
+    il = R.to_input_list(reg)
+    by = {a.account_id: a for a in il.accounts}
+    assert set(by) == {"example01", "sample22", "nopd"}, set(by)  # demo333(계정 취소선) 제외
+    ex = by["example01"]
+    assert [p.name for p in ex.products] == ["예시 비타민C 120정", "예시 유산균 30포"]
+    assert ex.ledger_products == {"예시 비타민C 120정", "예시 오메가3 60캡슐", "예시 유산균 30포"}
+    assert (ex.representative, ex.business_name) == ("홍길동", "(주)예시상사")
+    assert by["sample22"].products == [] and by["sample22"].ledger_products == {"예시 캠핑테이블"}
+    assert by["nopd"].products == []
+    assert il.ledger_account_ids == {"example01", "sample22", "demo333", "nopd"}   # 관리중단 계정도 줄 존재
+    assert all(p.options and p.options[0].label == "" for p in ex.products)
+    assert ex.products[0].inbound_summary == "출고일 : 2026-09-12\n요청수량 : 100 · 작업수량 : 80 · 박스 : 3"
+    past = {a.account_id: a for a in R.to_input_list(reg, "2026-10-01").accounts}
+    assert "예시 오메가3 60캡슐" in [p.name for p in past["example01"].products]   # 10/1엔 관리중
+    pw = R.password_map(reg)
+    assert pw == {"example01": "pass!123", "sample22": "0012", "nopd": "np!1"}, pw
+    ok("관리중 계정·상품만·ledger_products/ids 전체·요약·as_of 과거·비번맵(중단 계정 제외)")
+
+
 def main():
     t16_backfill()
     t15_format_equivalence()
@@ -533,6 +660,9 @@ def main():
     t12_managed_between(reg)
     t13_io_roundtrip()
     t14_ledger_read_fail_and_dry_run()
+    t17_write_coupang_check()
+    t18_previous_password()
+    t19_to_input_list()
     print("셀독등록원장 오프라인 검증 통과")
 
 
