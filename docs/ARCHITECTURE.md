@@ -18,9 +18,9 @@
 ```
 L0 플랫폼(공통·가장 안정·변경=계약): config·appconfig·apppaths·credstore·browser(+human_typing/mouse)·
       session_store/state·wing_session·gsheet_api·gsheet
-L1 데이터 백본(공통): 수집(collector)·출력저장(workbook*)·입력/원장(input_list·registry_*)·시트동기(gsheet_index·gsheet_stats·pipeline_gsheet)
+L1 데이터 백본(공통): 조회 프리미티브(collector·rank ← 2026-09-28 rank 편입·§DOMAIN_DESIGN 5.3)·출력저장(workbook*)·입력/원장(input_list·registry_*)·시트동기(gsheet_index·gsheet_stats·pipeline_gsheet)
 L2 도메인(개별·병렬 개발 단위):
-     · 상품분석(키워드·노출): kw_*·keyword_store·rank·product_match·report
+     · 상품분석(키워드·노출): kw_*·keyword_store·product_match·report  (rank·collector=L1 조회 프리미티브·호출)
      · 이미지: detail_images
      · 정산/원장: registry_* 상위·input_list 역기록
      · (신규) 소싱 · 등록 · 주문 : 아직 없음 → L0/L1 위에 새 모듈로 추가

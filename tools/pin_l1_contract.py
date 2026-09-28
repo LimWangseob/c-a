@@ -29,7 +29,7 @@ except AttributeError:
 
 from coupang_analytics import (  # noqa: E402
     collector, gsheet_index, gsheet_stats, input_list, pipeline_gsheet,
-    registry, registry_gsheet, registry_model)
+    rank, registry, registry_gsheet, registry_model)
 from coupang_analytics.workbook import OutputWorkbook  # noqa: E402
 
 _KIND = {
@@ -115,6 +115,18 @@ FUNC_CONTRACTS: dict = {
     registry_model: [
         ("parse_ledger", "P:rows:0 P:strike_grid:1 P:sheet:1"),
     ],
+    # rank = L1 조회 프리미티브(2026-09-28 재분류·R4 확정). collector 와 동급 순위 조회 수단.
+    # 도메인(kw_recommend·kw_metrics)+조립(pipeline_sales/process/ranks)이 공유 → "도메인→L1" 합법.
+    rank: [
+        ("warmup", "P:browser:0"),
+        ("make_matcher", "P:product_ids:1 P:vendor_item_ids:1 P:name_substr:1"),
+        ("human_type_query", "P:page:0 P:text:0"),
+        ("organic_ranks", "P:browser:0 P:keyword:0 P:matchers:0 P:max_rank:1 P:mobile:1 P:log:1 P:matched_out:1"),
+        ("organic_ranks_batch", "P:browser:0 P:keywords:0 P:matchers:0 P:max_rank:1 P:mobile:1 P:log:1"),
+        ("organic_rank", "P:browser:0 P:keyword:0 P:matches:0 P:max_rank:1"),
+        ("extract_items", "P:page:0"),
+        ("parse_serp_rank", "P:page:0 P:matchers:0 P:max_rank:1"),
+    ],
 }
 
 # OutputWorkbook 핵심 기록/조회 메서드(파라미터 구조까지 고정)
@@ -163,6 +175,7 @@ TYPE_CONTRACTS = [
                  "SalesFetchError", "InventoryFetchError", "VendorInventoryFetchError"]),
     (input_list, ["Account", "Product", "Option", "InputList", "InputValidationError"]),
     (registry, ["Registry"]),
+    (rank, ["SearchItem", "RankBlocked"]),
 ]
 
 

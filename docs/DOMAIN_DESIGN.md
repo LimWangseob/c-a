@@ -38,7 +38,7 @@ WING API 호출 패턴, 세션/크리덴셜 기반. "전체 분석"이 아니라
 | # | 도메인(레인) | 상태 | 한 줄 역할 |
 |---|---|---|---|
 | — | **L0 로그인/세션관리** | ✅ | 모든 도메인이 공유하는 로그인된 WING 세션·크리덴셜·세션영속(플랫폼) |
-| D1 | **상품 분석**(키워드·순위·노출) | ✅ | 키워드 발굴·AI 선정·오가닉 순위·노출/판매/방문 지표 |
+| D1 | **상품 분석**(키워드·순위·노출) | ✅ | 키워드 발굴·AI 선정·오가닉 순위·노출/판매/방문 지표 (rank·collector 는 L1 공유·호출) |
 | D2 | **소싱** | 🆕 | 판매 상품 발굴·경쟁 분석·후보 선별(분석 재사용) |
 | D3 | **상품 등록** | 🆕 | WING 상품 등록/수정(쓰기)·옵션·이미지 연계 |
 | D4 | **상품 관리**(재고·가격·판매상태) | 🟡 | 재고현황·가격·판매상태 조회는 있음, 변경(쓰기)은 신규 |
@@ -60,7 +60,7 @@ WING API 호출 패턴, 세션/크리덴셜 기반. "전체 분석"이 아니라
 - **갭**: 세션 blob 복원 소비(load→주입 재로그인 생략)는 미구현(현재 `profile_dir` 재사용 의존). 신규 도메인 확장 전 사무실 라이브 1회 검증 필요(wing_session 자체 명시).
 
 ### D1 상품 분석 ✅
-- **모듈**: `kw_*`(ai·recommend·volume·suggest·metrics)·`rank`·`collector`(수집)·`product_match`·`report`.
+- **모듈(소유)**: `kw_*`(ai·recommend·volume·suggest·metrics)·`product_match`·`report`. **호출만(L1 공유)**: `rank`(순위 조회 프리미티브·§5.3)·`collector`(수집).
 - **역할**: AI 앵커 키워드 선정 + 네이버 검색량 + 쿠팡 자동완성 → 순위 진단·권고제목 / 오가닉 순위(최대 300위) / 판매지표·재고 수집.
 - **갭 없음**(핵심 완성). 단 경계위반(kw→rank) §5.3.
 
@@ -113,7 +113,7 @@ WING API 호출 패턴, 세션/크리덴셜 기반. "전체 분석"이 아니라
 L0 플랫폼(공유·가장 안정): config·appconfig·apppaths·credstore·browser(+human_*)·
         session_store·session_state·wing_session·gsheet_api·gsheet
 L1 데이터 백본(공유): 
-   · 조회 프리미티브: collector(WING 데이터 API)  [·rank(오가닉 순위)=편입 여부 §5.3 재검토 중]
+   · 조회 프리미티브: collector(WING 데이터 API) · rank(오가닉 순위)  ← §5.3 (a) 확정(2026-09-28)
    · 저장/출력: workbook*·gsheet_index·gsheet_stats·pipeline_gsheet
    · 입력/원장: input_list·registry_*·product_match·report·keyword_store
 L2 도메인(개별·레인): D1 분석(kw_*)·D2 소싱·D3 등록·D4 상품관리·D5 주문·D6 배송·D7 이미지·D8 정산상위·D9 통계상위
@@ -161,10 +161,11 @@ L3 조립·표현: pipeline(+_sales/_ranks/_process/_paths/_gsheet)·ui/app_qt·
 - 주문·배송·등록 변경은 **원장에 먼저 기록(append)** → 상태는 이력 replay로 계산(registry 패턴). 되돌림·감사추적·중복방지 확보.
 - 무결성 규칙 재사용: 번호 연속·이력 전부 되돌리면 빈 원장(손수정 검출)·실행마다 로컬 백업(registry 기설계).
 
-### 5.3 경계 위반 해소 — `rank` 재분류 (⚠소유자 재검토 중·보류, 2026-09-28)
-- 실측: `kw_recommend`·`kw_metrics`(D1 도메인)가 `rank` 직접 import. `rank`는 browser 기반 **순위 조회 프리미티브**로 collector 와 동급(WING/공개 SERP 조회).
-- **제안(보류)**: `rank`·`collector` 를 **L1 조회 프리미티브**로 규정 → "도메인→L1" 이 되어 규칙 합치(재분류만·물리 이동 없음·최소 diff). 향후 여러 도메인(소싱 D2도 순위 필요)이 안전하게 공유.
-- **대안**: (a) rank 를 L1 로 재분류(위 제안) · (b) rank 는 D1(분석) 내부에 두고, 다른 도메인은 D1 이 제공하는 인터페이스 경유(직접 import 금지 유지) · (c) 현행 유지(위반 허용). 소유자 재검토 후 확정 → 그때 §3 계층도·이 절 갱신.
+### 5.3 경계 위반 해소 — `rank` 를 L1 "조회 프리미티브"로 재분류 ✅확정 (a안, 2026-09-28)
+- 실측: `rank` 공개 API(`organic_ranks`·`organic_ranks_batch`·`warmup`·`make_matcher`·`human_type_query`·`extract_items`·`parse_serp_rank`+`SearchItem`·`RankBlocked`)는 **순위를 가져오는 조회 수단**(비즈니스 로직 아님). 사용처 6곳=도메인(`kw_recommend`·`kw_metrics`)+조립(`pipeline_sales`·`pipeline_process`·`pipeline_ranks`·`pipeline`) → 여러 계층 공유.
+- **결정(a)**: `rank`·`collector` 를 **L1 조회 프리미티브**로 규정 → `kw_*`→`rank` 가 "도메인→L1" 이 되어 규칙 합치. **코드 이동 없음**(rank.py 그대로)·문서+계약핀만. 검토했던 (b)D1 내부 유지(조립도 rank 직접 사용이라 우회 인위적)·(c)현행 유지(규칙 무력화)는 기각.
+- **규율**: rank 는 **순수 조회만** 유지(순위 도메인 고유 로직은 `pipeline_ranks`=조립에). L1 계약=`docs/L1_CONTRACT.md §10`·핀=`pin_l1_contract`(rank 섹션).
+- ⚠남은 누수: `kw_metrics` 가 `rank._load_results`(밑줄) 직접 import → 정리 후보(§ L1_CONTRACT §9).
 
 ### 5.4 쓰기 도메인 안전 규약 (D3 등록·D4 변경·D5 주문처리·D6 배송)
 현재 전 코드가 **읽기 전용**. 쓰기 도입 시 강제:
@@ -185,7 +186,7 @@ L3 조립·표현: pipeline(+_sales/_ranks/_process/_paths/_gsheet)·ui/app_qt·
 | 세션 | 담당 | 권한 |
 |---|---|---|
 | **통합(플랫폼)** | L0·L1 계약·`config`·`pipeline`·병합 | 공유 단독 수정·계약 버전관리·직렬 병합 |
-| **D1 분석** | `kw_*`·`rank`(호출)·`collector`·`product_match`·`report` | 자기 레인·L0/L1 호출만 |
+| **D1 분석** | `kw_*`·`product_match`·`report` (rank·collector=L1 공유·호출만) | 자기 레인·L0/L1 호출만 |
 | **D2 소싱** 🆕 | `sourcing*`(신규) | 〃 |
 | **D3 등록** 🆕 | `register*`(신규)+D7 연계 | 〃·쓰기 안전 규약 |
 | **D5 주문 / D6 배송** 🆕 | `order*`·`shipping*`(신규) | 〃·거래 원장 |
@@ -217,9 +218,9 @@ L3 조립·표현: pipeline(+_sales/_ranks/_process/_paths/_gsheet)·ui/app_qt·
 - **R1 쓰기 도메인 범위·시점** ⏳: 등록/주문처리/배송/가격변경은 실운영 사고 위험이 큼. 초기엔 **조회만**(소싱·주문/배송 조회)으로 가치 검증 후 쓰기 도입 권장 — 구현 착수 시 확정.
 - **R2 거래 원장 저장소** ⏳미정: 주문/배송 이력을 registry식 **구글시트/원장 파일**로 갈지, **로컬 SQLite**(대량·트랜잭션 유리)로 갈지 — **해당 도메인 구현 착수 시 결정**(소유자). 참고: registry=시트+로컬백업, session_state=SQLite(관측).
 - **R3 신규 도메인 착수 순서** ⏳: 로드맵 §8-4 우선순위(소싱→주문조회→배송조회→쓰기)는 **제안**. **구현은 별도 세션에서**(이번엔 설계만 확정·소유자 결정).
-- **R4 rank 재분류** ⏳재검토: L1 조회 프리미티브 편입은 **보류**(§5.3 대안 a/b/c 중 소유자 재검토 후 확정).
+- **R4 rank 재분류** ✅확정(a·2026-09-28): rank 를 collector 와 함께 **L1 조회 프리미티브**로 규정(§5.3). 코드 이동 없음·문서+계약핀. `kw_*`→`rank` 위반 해소.
 
-**이번 확정(✅)**: 도메인 지도(§1)·계층 규칙(§3, rank 편입만 보류)·연계 메커니즘(§4, 세션 공유+백본 이원화)·
-통제 4축(§5.1)·쓰기 안전 규약(§5.4)·세션 레인 배치(§7). 구현 착수는 소유자 지시 시.
+**이번 확정(✅)**: 도메인 지도(§1)·계층 규칙(§3, rank L1 편입 확정)·연계 메커니즘(§4, 세션 공유+백본 이원화)·
+통제 4축(§5.1)·경계위반 해소(§5.3 rank L1)·쓰기 안전 규약(§5.4)·세션 레인 배치(§7). 구현 착수는 소유자 지시 시.
 
 SSOT = 이 문서(도메인 상세) · `docs/ARCHITECTURE.md`(계층 골격) · `docs/L1_CONTRACT.md`(계약) · `docs/PARALLEL_DEV.md`(운영).

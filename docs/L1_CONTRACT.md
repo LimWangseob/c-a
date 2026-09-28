@@ -88,6 +88,22 @@
 | `registry_model.parse_ledger(rows, strike_grid=None, sheet='셀독리스트')` | P:rows:0 P:strike_grid:1 P:sheet:1 |
 - ⚠ registry_core/apply/history/rename 는 registry 패밀리 **내부 전용**(외부 호출 없음) — 계약 아님.
 
+## 7-b. rank (순위 조회 프리미티브) — 호출처: 도메인(kw_recommend·kw_metrics)+조립(pipeline_sales·process·ranks·pipeline)
+> R4 확정(2026-09-28·DOMAIN_DESIGN §5.3): `rank` 를 `collector` 와 함께 **L1 조회 프리미티브**로 규정.
+> 순위를 가져오는 순수 조회 수단(비즈니스 로직 아님)이라 여러 계층이 공유 → "도메인→L1" 합법.
+
+| 공개 진입점 | 파라미터 구조 |
+|---|---|
+| `warmup(browser)` | P:browser:0 |
+| `make_matcher(product_ids=None, vendor_item_ids=None, name_substr=None)` | P:product_ids:1 P:vendor_item_ids:1 P:name_substr:1 |
+| `human_type_query(page, text)` | P:page:0 P:text:0 |
+| `organic_ranks(browser, keyword, matchers, max_rank=…, mobile=…, log=None, matched_out=None)` | P:browser:0 P:keyword:0 P:matchers:0 P:max_rank:1 P:mobile:1 P:log:1 P:matched_out:1 |
+| `organic_ranks_batch(browser, keywords, matchers, max_rank=…, mobile=…, log=None)` | P:browser:0 P:keywords:0 P:matchers:0 P:max_rank:1 P:mobile:1 P:log:1 |
+| `organic_rank(browser, keyword, matches, max_rank=…)` | P:browser:0 P:keyword:0 P:matches:0 P:max_rank:1 |
+| `extract_items(page)` · `parse_serp_rank(page, matchers, max_rank=…)` | SERP 파싱 |
+- 데이터/예외 타입: `SearchItem`·`RankBlocked`.
+- **규율**: rank 는 순수 조회만(순위 도메인 고유 로직은 `pipeline_ranks`=조립).
+
 ## 8. 정리 완료 기록 — 밑줄 진입점의 공개화 (2026-09-28)
 소유자 결정으로 "내부용(밑줄) 문패인데 프로덕션이 부르던" 3건을 정식 공개 이름으로 정리:
 - `pipeline_gsheet._push_gsheet` → **`push_gsheet`** (호출처 pipeline.py·pipeline_ranks.py + pipeline 재수출)
@@ -100,6 +116,7 @@
 아래는 **테스트/도구**가 L1 내부 심볼(밑줄)에 의존하는 경우다. 프로덕션 계약은 아니나 정리 대상:
 - `gsheet_stats.py` 가 `workbook`(=workbook_common) 내부 상수/함수 `_COL_KW`·`_COL_METRIC`·`_COL_NAME`·`_LABEL_DATE`·`_LABEL_KEYWORD`·`_SPECIAL_SHEETS`·`_key` import.
 - `registry_model.py` 가 `input_list` 내부 심볼(`_alias_index`·`_find_header_row`·`_is_discontinued` 등) import — registry 패밀리 내부지만 밑줄 의존.
+- `kw_metrics.py` 가 `rank._load_results`(밑줄) 직접 import — rank 를 L1 프리미티브로 올린 뒤 남은 누수(공개화 후보).
 - 도구: `collector._raw_add`·`OutputWorkbook._FILL_*`/`_key`/`_date_col`·`gsheet_index._auto_cells_request` 등을 pin/verify 도구가 직접 참조.
 
 SSOT = 이 문서 + `tools/pin_l1_contract.py`(골든값·자동 검증).
