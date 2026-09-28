@@ -1490,6 +1490,29 @@ def t2_keywords(store, il):
         ", ".join(f"[{k.relevance or '?'}]{k.keyword}(월{k.volume},{k.grade})" for k in picked))
 
 
+def t1_coupang_check_compute():
+    print("[28] 2-2 쿠팡확인 값 산출(compute_coupang_checks·§4-1) — 확인됨/미등록/판매중(불일치)/판매중지·bool폴백·값 계약 정합")
+    from coupang_analytics.pipeline import compute_coupang_checks
+    from coupang_analytics.input_list import Account, Product, Option
+    from coupang_analytics.registry_model import COUPANG_CHECK_VALUES
+    D = "2026-09-29"
+    acc = Account("a1", "대표", "비즈", [
+        Product("A", [Option("", ["v1"])]),                        # 판매중 → 확인됨
+        Product("B", [Option("", ["v2"])], discontinued=True),     # 대장 관리중단 + 쿠팡 판매중 → 판매중(불일치)
+        Product("C", [Option("", ["v3"])]),                        # productStatus 판매중지 → 판매중지
+        Product("D", [Option("", ["v4"])]),                        # RFM isSaleSuspended bool True 폴백 → 판매중지
+    ])
+    acc.ledger_products = {"A", "B", "C", "D", "E"}                 # E=대장엔 있는데 미매칭 → 미등록
+    inv = {"v1": "판매중", "v2": "판매중", "v3": "판매중지", "v4": True}
+    r = compute_coupang_checks(acc, inv, D)
+    exp = {("a1", "A"): ("확인됨", D), ("a1", "B"): ("판매중(불일치)", D),
+           ("a1", "C"): ("판매중지", D), ("a1", "D"): ("판매중지", D), ("a1", "E"): ("미등록", D)}
+    assert r == exp, f"쿠팡확인 산출 불일치: {r}"
+    vals = {v[0] for v in r.values()}
+    assert vals <= set(COUPANG_CHECK_VALUES), f"계약(COUPANG_CHECK_VALUES) 밖 값: {vals - set(COUPANG_CHECK_VALUES)}"
+    print("    [통과] 5줄 산출(확인됨·판매중(불일치)·판매중지×2·미등록)·값 6종 계약 정합")
+
+
 def main():
     print("=" * 60)
     print("  로그인 불필요 부분 실증 (실제 실행 — 가짜 아님)")
@@ -1523,6 +1546,7 @@ def main():
     t1_apply_style_migrations()
     t1_invalid_product_name()
     t1_multiline_product_name()
+    t1_coupang_check_compute()
     t2_keywords(store, il)
     print("=" * 60)
     print("  [완료] 로그인 불필요 부분 실증 종료")

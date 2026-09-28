@@ -212,6 +212,7 @@
 **순서** 2-1→2-2→2-3→2-4(지금 함께). **안전규약** dry-run→승인→실행→원장(DOMAIN_DESIGN §5.4)·라이브(로그인)=사무실.
 **무인(--auto) 쓰기 = 쿠팡확인만 허용(소유자 2026-09-28)**: `write_coupang_check`는 **이력 없는 상태 열** 갱신이라 그로스 재고 역기록(이미 무인)과 **동급** → 무인 허용(§5.4 '실운영 사고 위험' 범주 아님). `dry_run=False` 인자로 미리보기 지원. 등록·주문처리·배송·가격변경 같은 실운영 쓰기는 무인 금지 유지.
 **통합이 실제 넣는 코드**=2-2 산출·수집·호출(pipeline.py)뿐이며 **D8 인터페이스 확정 후** 연결(그 전엔 스텁). 2-1 트리거·2-3/2-4 UI=H_ui, 원장 함수(write_coupang_check·previous_password·to_input_list·password_map)=D8.
+- **✅2-2 배선 통합 구현 완료(2026-09-29)**: `pipeline._RunCtx.coupang_checks` 누적 · `compute_coupang_checks`/`_product_coupang_check`(§4-1 값 산출·값=`COUPANG_CHECK_VALUES` 언팩) · 산출 3지점(`_finish` 성공→확인됨/미등록/판매중(불일치)/판매중지, `except LoginBlocked`→로그인실패, `except LoginCredentialError`→비밀번호불일치) · `_finalize_run`에서 `push_coupang_checks`(pipeline_gsheet·비치명·무인 허용) 1회 · `run_full(registry_url=)` 인자(없으면 no-op). 핀 verify_offline[28]. 게이트 9종+복잡도 초록. ⚠**남음**: 2-1 트리거·2-3/2-4 UI(H_ui)에서 `registry_url` 전달·라이브(사무실 로그인 후 실채움)·동시 쓰기 잠금(D8 다음).
 
 ## 11. 구현 구성 (1단계 구현 2026-09-28)
 

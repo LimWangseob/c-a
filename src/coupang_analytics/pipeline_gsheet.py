@@ -155,6 +155,23 @@ def push_ledger_inventory(input_url: str | None, log, out_dir: str = "output") -
             f"{exc.__class__.__name__}: {str(exc)[:120]} ==")
 
 
+def push_coupang_checks(registry_url: str | None, checks: dict, log) -> None:
+    """2-2(§10-1): ①판매수집에서 산출한 쿠팡확인을 셀독등록원장에 **1회** 기록(비치명).
+
+    registry_url 없거나 checks 비면 no-op(원장 미사용·②③·수집 0). write_coupang_check 는 폴백 없이
+    예외를 올리므로 여기서 try/로그로 감싼다(원장 실패해도 xlsx·수집은 진행). 무인(--auto)에서도 호출됨
+    (쿠팡확인=이력 없는 상태 열·그로스 재고 역기록과 동급, 소유자 2026-09-28)."""
+    if not registry_url or not checks:
+        return
+    try:
+        from . import gsheet_api, registry_gsheet   # 지연 import(순환 회피)
+        client = gsheet_api.GSheetClient(registry_url, on_log=log)
+        n = registry_gsheet.write_coupang_check(client, checks, on_log=log)
+        log(f"== [원장] 쿠팡확인 {n}줄 기록 ==")
+    except Exception as exc:
+        log(f"== [원장] ⚠ 쿠팡확인 기록 실패(진행): {exc.__class__.__name__}: {str(exc)[:120]} ==")
+
+
 def push_gsheet(wb, output_url: str | None, log, removed_accounts=None, renamed_accounts=None) -> None:
     """완성된 openpyxl 마스터를 결과 구글시트로 반영 — 통계 시트 미러링 + 계정목록 증분 동기화.
 

@@ -33,7 +33,7 @@ from .pipeline_paths import (  # noqa: E402
 from .pipeline_paths import master_exists, read_run_stage, write_run_stage  # noqa: E402,F401
 # 구글시트 연동·백업·복원은 pipeline_gsheet 로 분리(대형 파일 정비). pipeline.X 로 다시 노출.
 from .pipeline_gsheet import (  # noqa: E402,F401
-    pull_gsheet_keywords, push_gsheet, backup_sources,
+    pull_gsheet_keywords, push_gsheet, push_coupang_checks, backup_sources,
     push_ledger_inventory, restore_master_from_gsheet)
 # ③ 순위(측정·서킷브레이커·자동/반자동 검색·스테이지)는 pipeline_ranks 로 분리. pipeline.X 로 다시 노출
 # (핀/시뮬 monkeypatch 대상은 pipeline_ranks). core(_fill_product_metrics·_finalize_run)가 _best/
@@ -351,12 +351,49 @@ class _RunCtx:
     naver: NaverAdApi
     ai_key: str | None
     log: object
+    coupang_checks: dict   # 2-2(§10-1): {account_id | (account_id,상품명): (쿠팡확인값, 확인일)} — ①종료 시 원장 기록
 
 
 def _save_ctx_progress(ctx: _RunCtx) -> None:
     """실행 컨텍스트로 진행 상태 저장(_실행단계 진행파일). 9인자 호출 반복을 한 곳으로."""
     _save_progress(ctx.out, ctx.date_from, ctx.date_to, ctx.started_at, ctx.done,
                    ctx.carry, ctx.grow, ctx.skip_ranks, ctx.date_label)
+
+
+from .registry_model import COUPANG_CHECK_VALUES as _CCV  # noqa: E402  (2-2 쿠팡확인 값 정합)
+# 순서=registry_model.COUPANG_CHECK_VALUES(SSOT). 순서 바뀌면 핀이 잡는다.
+_CC_OK, _CC_UNREG, _CC_MISMATCH, _CC_SUSPEND, _CC_LOGINFAIL, _CC_PWFAIL = _CCV
+_CC_ONSALE = ("판매중", "부분판매중")
+
+
+def _product_coupang_check(product, inv_status: dict) -> str:
+    """한 상품의 쿠팡확인 값(성공 경로·§4-1). inv_status=vid→상태(한글 productStatus 또는 bool 폴백)."""
+    vids = [v for opt in product.options for v in opt.vendor_item_ids]
+    states = [inv_status.get(v) for v in vids if v in inv_status]
+    strs = [s for s in states if isinstance(s, str)]
+    if states and all(s is True for s in states):            # RFM isSaleSuspended 폴백(bool)
+        return _CC_SUSPEND
+    if strs and all(s == _CC_SUSPEND for s in strs):          # productStatus 전부 판매중지
+        return _CC_SUSPEND
+    if product.discontinued and any(s in _CC_ONSALE for s in strs):   # 대장 관리중단인데 쿠팡 판매중
+        return _CC_MISMATCH
+    return _CC_OK
+
+
+def compute_coupang_checks(report_acc, inv_status, date_iso: str) -> dict:
+    """성공 계정의 쿠팡확인(줄 단위): 매칭 상품=확인됨/판매중지/판매중(불일치), 대장엔 있는데 미매칭=미등록.
+    키=(account_id, 상품명)·값=(쿠팡확인값, 확인일). write_coupang_check(§10-1)로 원장에 1회 기록."""
+    aid = report_acc.account_id
+    inv = inv_status or {}
+    out: dict = {}
+    matched = set()
+    for p in report_acc.products:
+        matched.add(p.name.strip())
+        out[(aid, p.name)] = (_product_coupang_check(p, inv), date_iso)
+    for name in (report_acc.ledger_products or set()):
+        if name.strip() not in matched:
+            out[(aid, name)] = (_CC_UNREG, date_iso)
+    return out
 
 
 def _finish(ctx: _RunCtx, a: Account, report_acc, metrics, inv_by_vid, inv_status=None,
@@ -368,6 +405,9 @@ def _finish(ctx: _RunCtx, a: Account, report_acc, metrics, inv_by_vid, inv_statu
     wb, log = ctx.wb, ctx.log
     if report_acc is None:      # 로그인 미완료/데이터 없음 → 다음 계정(전체 안 막힘)
         return
+    # 2-2(§10-1): 쿠팡확인(성공) 산출 — 로그인 성공+매칭 결과를 줄 단위로. ①종료 시 원장에 1회 기록.
+    ctx.coupang_checks.update(
+        compute_coupang_checks(report_acc, inv_status, datetime.now().strftime("%Y-%m-%d")))
     wb.set_account_id(a.label, a.account_id)   # 목차 계정ID 표시용(비번은 저장 안 함)
     wb.set_representative(a.label, a.representative)   # 계정목록 대표자 컬럼(관리대장 대표자명)
     # 자동완성(키워드 후보)·순위 모두 비로그인 쿠팡 세션이 필요하다. 로그인 브라우저가 닫힌 뒤 별도로
@@ -477,9 +517,11 @@ def _collect_with_login(ctx: _RunCtx, login_needed, get_password, sales_semi: bo
                     vid_meta, pid_by_vid)
         except LoginBlocked:                      # Akamai 차단 → 서킷브레이커 카운트
             blocks += 1
+            ctx.coupang_checks[a.account_id] = (_CC_LOGINFAIL, datetime.now().strftime("%Y-%m-%d"))
             log(f"  [{a.label}] 로그인 차단 누적 {blocks}/{config.LOGIN_BLOCK_CIRCUIT}")
         except LoginCredentialError:              # 비번오류/계정잠금 → 재시도 금지: '처리됨'으로 표시해
             done.add(a.account_id)                # 야간 재개·같은 날 재실행이 비번을 다시 제출하지 않게(계정잠금 방지).
+            ctx.coupang_checks[a.account_id] = (_CC_PWFAIL, datetime.now().strftime("%Y-%m-%d"))
             _save_ctx_progress(ctx)
             log(f"  [{a.label}] 비밀번호 오류/계정 상태로 건너뜀 — 자동 재시도 안 함(계정잠금 방지). "
                 "관리대장에서 비번 수정 후 새 실행(다음 날/진행분 초기화)에서 재시도됨")
@@ -568,7 +610,7 @@ def _validate_or_raise(input_list: InputList, log) -> None:
 
 
 def _finalize_run(ctx: _RunCtx, master: Path, prog: Path, now: datetime, gsheet_output_url,
-                  removed_accounts, uncollected, renamed_accounts=None) -> Path:
+                  removed_accounts, uncollected, renamed_accounts=None, registry_url=None) -> Path:
     """통계 마스터/스냅샷 저장 + 결과 구글시트 반영 + 진행파일 정리. 반환=스냅샷 경로.
 
     로그인 못한 계정이 남았으면 진행분을 유지(같은 날 재실행이 미완료분만 이어서 처리), 없으면 진행파일을
@@ -581,6 +623,7 @@ def _finalize_run(ctx: _RunCtx, master: Path, prog: Path, now: datetime, gsheet_
     wb.save(snapshot)        # 그날 백업본(감사용)
     push_gsheet(wb, gsheet_output_url, log, removed_accounts=removed_accounts,
                  renamed_accounts=renamed_accounts)   # 결과 반영 + 삭제 계정 + 일원화 옛 이름 정리
+    push_coupang_checks(registry_url, ctx.coupang_checks, log)   # 2-2: 쿠팡확인 원장 기록(registry_url 없으면 no-op·비치명)
     if uncollected:
         _save_ctx_progress(ctx)
         wb.save(ctx.partial)     # 재개 기준선(완료분 반영)
@@ -598,7 +641,8 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
              get_password=None, resume: bool = False, carry_forward: bool = False,
              grow_keywords: bool = False, skip_ranks: bool = False, redo_today: bool = False,
              sales_semi: bool = False, date_label: str | None = None,
-             keywords_off: bool = False, on_log=None, gsheet_output_url: str | None = None) -> Path:
+             keywords_off: bool = False, on_log=None, gsheet_output_url: str | None = None,
+             registry_url: str | None = None) -> Path:
     """계정별 end-to-end 완결 + **같은 날 이어서 하기** + **통계 마스터 이어쓰기(cross-day)**.
 
     실행 모드(3택, UI 실행모드와 대응):
@@ -661,7 +705,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     ctx = _RunCtx(wb=wb, out=out, partial=partial, date_from=date_from, date_to=date_to,
                   date_label=date_label, started_at=started_at, done=done, carry=carry, grow=grow,
                   skip_ranks=skip_ranks, keywords_off=keywords_off, col_label=col_label, total=total,
-                  naver=naver, ai_key=ai_key, log=log)
+                  naver=naver, ai_key=ai_key, log=log, coupang_checks={})
 
     # 계정 수집 = 2패스(세션우선 → 로그인). Akamai IP 차단을 줄이려 로그인 없는 계정을 먼저 다 확보한다.
     login_needed, sales_skipped = _collect_session_first(ctx, accounts, get_password)
@@ -682,7 +726,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     # (offscreen 순위백필 _backfill_ranks 는 폐기·물리 삭제 — 2026-09-26. ③순위는 반자동만·§DESIGN §5.2)
     # 통계 마스터/스냅샷 저장 + 결과 구글시트 반영 + 진행파일 정리
     return _finalize_run(ctx, master, prog, now, gsheet_output_url, removed_accounts, uncollected,
-                         renamed_accounts=renamed_accounts)
+                         renamed_accounts=renamed_accounts, registry_url=registry_url)
 
 
 def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = "output",
