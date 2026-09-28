@@ -200,6 +200,14 @@ LOGIN_SEMI_WAIT_SEC = 90         # 그 1회 재시도의 로그인 완료 최대
 LOGIN_NIGHT_RESUME = True
 LOGIN_NIGHT_RESUME_COOLDOWN_SEC = 1800   # 재개 전 쿨다운(초). 30분(사용자 지정)
 
+# ── 셀독등록원장(designs/LEDGER_REGISTRY.md) ─────────────────────
+# 대장 계정 급감 안전장치: 원장 관리중 계정이 REGISTRY_DROP_MIN 개 이상인데 대장에 그 중 REGISTRY_DROP_GUARD
+# 비율 미만만 남아 있으면 대장 일부 유실로 보고 반영을 중단한다(전부 관리중단 처리되는 사고 방지).
+REGISTRY_DROP_MIN = 5
+REGISTRY_DROP_GUARD = 0.7
+# 상품명 변경 의심 판정 유사도(0~1). 같은 계정에서 사라진 상품과 새 상품의 이름이 이 이상 비슷하면 '확인필요' 보류.
+REGISTRY_RENAME_SIM = 0.6
+
 # ── 출력 파일 ──────────────────────────────────────────────────
 OUTPUT_FILE_PREFIX = "쿠팡데이타분석"   # {prefix}_통계.xlsx / _통계_yymmdd.xlsx(스냅샷)
 

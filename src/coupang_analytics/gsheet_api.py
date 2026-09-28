@@ -279,12 +279,14 @@ class GSheetClient:
             dateTimeRenderOption="FORMATTED_STRING"), f"값 읽기({sheet})")
         return resp.get("values", [])
 
-    def write_values(self, sheet: str, rows: list[list[Any]], start: str = "A1") -> None:
-        """rows 를 start(예 'A1')부터 덮어쓴다(USER_ENTERED — 수식/하이퍼링크 반영)."""
+    def write_values(self, sheet: str, rows: list[list[Any]], start: str = "A1", raw: bool = False) -> None:
+        """rows 를 start(예 'A1')부터 덮어쓴다(USER_ENTERED — 수식/하이퍼링크 반영).
+
+        raw=True 면 RAW(입력값 그대로 문자열 저장) — 비밀번호 '0012'·'=abc' 처럼 해석되면 안 되는 값(원장)."""
         rng = f"'{sheet}'!{start}"
         self._exec(self._sheets().values().update(
             spreadsheetId=self.spreadsheet_id, range=rng,
-            valueInputOption="USER_ENTERED", body={"values": rows}), f"값 쓰기({sheet})")
+            valueInputOption="RAW" if raw else "USER_ENTERED", body={"values": rows}), f"값 쓰기({sheet})")
 
     def read_grid(self, sheet: str, *, notes: bool = False) -> tuple[list[list[str]], list[list[str | None]]]:
         """시트의 (표시값 격자, 메모 격자)를 한 번에 읽는다.

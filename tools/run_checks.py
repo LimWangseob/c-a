@@ -31,6 +31,7 @@ CHECKS = [
     ("핀(실행모드 결정 plan_run_mode)", "tools/pin_run_plan.py", True),
     ("구글시트 오프라인 검증", "tools/verify_gsheet_offline.py", True),
     ("정밀 렌더 검증(시트·항목·값 end-to-end)", "tools/verify_render_precision.py", True),
+    ("셀독등록원장(대장→원장·이력·복원)", "tools/verify_registry_offline.py", True),
     ("오프라인 실증(워크북·매칭·키워드선정)", "tools/verify_offline.py", False),
 ]
 
