@@ -105,12 +105,18 @@ FUNC_CONTRACTS: dict = {
     ],
     registry: [
         ("sync", "P:reg:0 P:snap:0 K:now:0"),
+        # 2단계(§10-1): 원장→앱 입력 변환·직전 비번(registry_input, registry 재수출)
+        ("previous_password", "P:reg:0 P:account_id:0"),
+        ("to_input_list", "P:reg:0 P:as_of:1 K:on_log:1"),
+        ("password_map", "P:reg:0"),
     ],
     registry_gsheet: [
         ("run_sync", "P:client:0 P:read_ledger:0 K:now:1 K:log:1 K:dry_run:1 K:backup_dir:1"),
         ("run_backfill", "P:client:0 P:snapshots:0 K:log:1 K:dry_run:1 K:backup_dir:1"),
         ("load_registry", "P:client:0"),
         ("save_registry", "P:client:0 P:reg:0 P:res:0 P:now:0"),
+        # 2단계(§10-1): 쿠팡확인 줄 단위 쓰기(이력 미기록·두 열만 RAW)
+        ("write_coupang_check", "P:client:0 P:checks:0 K:dry_run:1 K:on_log:1"),
     ],
     registry_model: [
         ("parse_ledger", "P:rows:0 P:strike_grid:1 P:sheet:1"),
@@ -175,6 +181,7 @@ TYPE_CONTRACTS = [
                  "SalesFetchError", "InventoryFetchError", "VendorInventoryFetchError"]),
     (input_list, ["Account", "Product", "Option", "InputList", "InputValidationError"]),
     (registry, ["Registry"]),
+    (registry_model, ["COUPANG_CHECK_VALUES"]),   # 2-2 쿠팡확인 값 6종(오타 방지 상수)
     (rank, ["SearchItem", "RankBlocked"]),
 ]
 

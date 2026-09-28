@@ -86,7 +86,13 @@
 | `registry_gsheet.run_backfill(client, snapshots, *, log=None, dry_run=False, backup_dir='output/백업')` | P:client:0 P:snapshots:0 K:log:1 K:dry_run:1 K:backup_dir:1 |
 | `registry_gsheet.load_registry(client)` · `save_registry(client, reg, res, now)` | 읽기·쓰기 |
 | `registry_model.parse_ledger(rows, strike_grid=None, sheet='셀독리스트')` | P:rows:0 P:strike_grid:1 P:sheet:1 |
+| `registry_gsheet.write_coupang_check(client, checks, *, dry_run=False, on_log=None)` **(2단계)** | P:client:0 P:checks:0 K:dry_run:1 K:on_log:1 |
+| `registry.previous_password(reg, account_id)` **(2단계·registry_input)** | P:reg:0 P:account_id:0 |
+| `registry.to_input_list(reg, as_of=None, *, on_log=None)` **(2단계)** | P:reg:0 P:as_of:1 K:on_log:1 |
+| `registry.password_map(reg)` **(2단계)** | P:reg:0 |
+| `registry_model.COUPANG_CHECK_VALUES` **(2단계·상수 6종)** | 쿠팡확인 값 오타 방지 |
 - ⚠ registry_core/apply/history/rename 는 registry 패밀리 **내부 전용**(외부 호출 없음) — 계약 아님.
+- 2단계 신규는 `registry_input.py`(원장→앱 입력 변환)에 구현·`registry.py` 재수출. 호출처=통합(pipeline 2-2 배선)·H_ui(UI).
 
 ## 7-b. rank (순위 조회 프리미티브) — 호출처: 도메인(kw_recommend·kw_metrics)+조립(pipeline_sales·process·ranks·pipeline)
 > R4 확정(2026-09-28·DOMAIN_DESIGN §5.3): `rank` 를 `collector` 와 함께 **L1 조회 프리미티브**로 규정.

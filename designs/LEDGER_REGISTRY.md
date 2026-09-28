@@ -191,7 +191,7 @@
 | 2-1 | `registry_gsheet.run_sync(client, read_ledger, *, now, log, dry_run, backup_dir)` **(기존·L1 계약)** | 실행 시작 시 원장 동기화 1회 |
 | 2-2 | `registry_gsheet.write_coupang_check(client, checks: dict[str | tuple[str,str], tuple[str,str]], *, dry_run=False, on_log=None) -> int` **(신규)** | **줄(계정×상품) 단위** 쿠팡확인·확인일만 갱신·이력 미기록(§4-1). 키=account_id → 그 계정 모든 줄, 키=(account_id,상품명·공백정규화) → 그 줄만·계정키보다 우선. 값 6종/날짜형식 아니면 ValueError, 원장 없으면 RegistryIntegrityError, 없는 키는 경고+건너뜀. 반환=갱신 줄 수 |
 | 2-3 | `registry.previous_password(reg, account_id) -> str | None` **(신규)** | 계정이력 직전 비밀번호(현재와 다르고 빈값 아님·계정아이디 변경 추적·로그에 값 금지) |
-| 2-4 | `registry.to_input_list(reg, as_of=None) -> InputList` · `registry.password_map(reg) -> dict[str,str]` **(신규)** | 관리상태=관리중 계정·상품으로 입력 구성 + 관리중 계정 비번맵(credstore용, InputList엔 비번칸 없음) |
+| 2-4 | `registry.to_input_list(reg, as_of=None, *, on_log=None) -> InputList` · `registry.password_map(reg) -> dict[str,str]` **(신규)** | 관리상태=관리중 계정·상품으로 입력 구성(on_log=요약·'원장에 없는 항목' 로그) + 관리중 계정 비번맵(credstore용, InputList엔 비번칸 없음) |
 
 - **키 단위 근거(§4-1)**: 미등록·판매중(불일치)·확인됨·판매중지=**상품 단위**, 로그인실패·비밀번호불일치=**계정 단위** → 2-2 배선은 계정키(실패류)+ (계정,상품)키(성공류)를 섞어 넘긴다.
 - **reg 출처**: `registry_gsheet.load_registry(client)`(기존)로 얻어 인자로 넘김(전역상태·숨은 client 없음).
@@ -223,14 +223,15 @@
 | `registry_apply.py` | 계정·상품 추가/수정/관리중단/재개 반영, 그로스 이력, 재고=값만 |
 | `registry_history.py` | `as_of`·`managed_between`·`check_integrity`(번호 연속 + 이력 전부 되돌리면 빈 원장) |
 | `registry.py` | `sync` 진입점 + 급감 안전장치 + 요약, 공개 API 재수출 |
-| `registry_gsheet.py` | 시트 5개 생성·서식(헤더·고정·필터·관리중단 회색·확인상태 드롭다운·경고 보호), RAW 쓰기, 이력 맨 위 삽입, 로컬 백업, `run_sync` |
+| `registry_gsheet.py` | 시트 5개 생성·서식(헤더·고정·필터·관리중단 회색·확인상태 드롭다운·경고 보호), RAW 쓰기, 이력 맨 위 삽입, 로컬 백업, `run_sync`, **`write_coupang_check`(2단계·쿠팡확인 줄 단위·두 열만 RAW·헤더 이름 탐지)** |
+| `registry_input.py` **(2단계)** | 원장 → 앱 입력 변환: `previous_password`(직전 비번)·`to_input_list`(관리중만·ledger엔 전체 줄)·`password_map`(관리중 비번맵). `registry.py` 재수출 |
 | `tools/registry_sync.py` | 실행 도구 (`--dry-run` 미리보기, 설정 `registry/url`·`gsheet/input_url`) |
 
 - `gsheet_api.GSheetClient.write_values(..., raw=False)` 옵션 추가(기본 동작 불변) — 원장은 RAW(비밀번호 '0012' 보존).
 - 설정값 `config.REGISTRY_DROP_MIN=5`·`REGISTRY_DROP_GUARD=0.7`·`REGISTRY_RENAME_SIM=0.6`.
-- 검증: `tools/verify_registry_offline.py` 14시나리오(R1~R14) — `run_checks` 8번째 게이트(quick 포함). 변이 3종
-  (이름변경 판정·급감 안전장치·무결성 비교 무력화)을 잡는 것 확인. 9/20 실제 대장 백업 미리보기: 관리중 26계정·72상품
-  = 기존 input_list 해석과 일치, 관리중단 8상품, 무결성 통과.
+- 검증: `tools/verify_registry_offline.py` **19시나리오(R1~R19)** — `run_checks` 8번째 게이트(quick 포함). 변이(이름변경 판정·급감 안전장치·
+  무결성 비교 무력화 + 2단계 R17~R19: 줄키 우선·A열 전체쓰기·관리중단 포함·현재값 제외·빈값 제외)를 잡는 것 확인. 9/20 실제 대장 백업 미리보기:
+  관리중 26계정·72상품 = 기존 input_list 해석과 일치, 관리중단 8상품, 무결성 통과. R17~R19(2단계 함수)=실 API 없이 모킹 통과.
 - 쿠팡확인·쿠팡확인일 열은 만들어 두고 **비워 둔다**(2단계에서 ①판매수집 로그인 시 채움).
 - 남은 단계: 과거 계정 소급(§12-2), 앱 연계(§10 — 실행 전 자동 동기화·입력 소스 전환·[이전 비밀번호로 1회 시도] 버튼).
 - **2단계 담당(2026-09-28 인계)**: **D8_ledger 세션 주도** + H_ui(app_qt UI)·통합 세션(pipeline_* 배선) 협력. 작업 4개(2-1 원장 자동반영·2-2 쿠팡확인 채우기·2-3 이전 비번 1회·2-4 입력소스 원장). 쓰기 안전규약(dry-run→승인→실행→원장, DOMAIN_DESIGN §5.4). 인계 메모=`docs/memory/handoff-ledger-stage2-260928.md`. ("쿠팡 정산 기능 개발" 세션 승계·그 세션은 2단계 미착수·삭제됨.)
