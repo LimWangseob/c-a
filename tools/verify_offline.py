@@ -590,6 +590,19 @@ def t1_product_match_precision():
     assert v6[2] == ["v_massage"], f"괄호 노출제목 폴백 매칭 실패: {v6[2]}"
     assert n6 == 3, f"원인② 매칭 수 {n6} (기대 3)"
     _ok("원인②: 괄호=색상/메모면 본문명으로 매칭·본문이 코드뿐이면 괄호(노출제목) 폴백")
+    # 색상별 대장 줄 분리(소유자 2026-09-29): 대장 (블랙)/(베이지) 2줄 → 쿠팡 1상품의 색상 옵션(vid)별 별도 블록.
+    disc_c = [Product(name="신형타프 R008", title="신형타프 R008", kind=config.KIND_CONTRACT,
+                      options=[Option("블랙 Free", ["v_black"], []), Option("베이지 Free", ["v_beige"], [])])]
+    tc, nc = scope_to_ledger([Product(name="신형타프 R008 (블랙)"), Product(name="신형타프 R008 (베이지)")], disc_c)
+    vc = {tp.name: sorted(v for o in tp.options for v in o.vendor_item_ids) for tp in tc}
+    assert vc.get("신형타프 R008 (블랙 Free)") == ["v_black"], f"블랙 색상분리 실패: {vc}"
+    assert vc.get("신형타프 R008 (베이지 Free)") == ["v_beige"], f"베이지 색상분리 실패: {vc}"
+    assert nc == 2, f"색상분리 매칭 수 {nc} (기대 2)"
+    # #2 없는 색상(초록)=미매칭(오매칭 방지). #3 단일 괄호(메모)·색상 지정 없는 줄은 기존 전체 매칭 유지(원인② 위에서 확인).
+    tc2, nc2 = scope_to_ledger([Product(name="신형타프 R008 (블랙)"), Product(name="신형타프 R008 (초록)")], disc_c)
+    green = next(tp for tp in tc2 if "초록" in tp.name)
+    assert not [v for o in green.options for v in o.vendor_item_ids] and nc2 == 1, "없는 색상(초록)은 미매칭이어야(오매칭 방지)"
+    _ok("색상별 대장 줄 → 색상 옵션(vid)별 별도 블록(계정목록 별도 줄)·없는 색상=미매칭·메모 괄호 불변")
     # AI 의미 매칭 폴백(소유자 2026-09-29): 토큰이 안 겹쳐도 같은 상품이면 주입식 매처로 보강(미매칭에만·실 API 아님).
     from coupang_analytics.product_match import augment_ai
     disc7 = [disc("의료용 경추 거북목 교정기 견인기 넥 스트레쳐 넥메딕스", "v_neck")]

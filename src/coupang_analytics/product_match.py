@@ -234,26 +234,96 @@ def _merge_same_name(discovered: list[Product], dis: list[int]) -> Product:
                    sale_status=d0.sale_status)
 
 
+def _base_name(name: str) -> str:
+    """색상/옵션 괄호를 뗀 base(마지막 ' (' 이후 제거) — 색상별 대장 줄을 한 상품군으로 묶는 그룹키."""
+    return name.rsplit(" (", 1)[0].rstrip() if " (" in name else name
+
+
+def _spec_in_label(spec: str, label: str) -> bool:
+    """대장 괄호 색상(spec)이 쿠팡 옵션 라벨에 포함되는가(공백무시 부분일치). 예 '블랙'⊂'블랙 Free'."""
+    s = _norm(spec)
+    return bool(s) and s in _norm(label)
+
+
+def _is_variant(d: Product) -> bool:
+    """발견상품이 **색상형**(구분되는 라벨의 옵션 2개 이상) — 색상 배정/미배정 판정 대상."""
+    labs = {(o.label or "").strip() for o in d.options if (o.label or "").strip()}
+    return len(d.options) >= 2 and len(labs) >= 2
+
+
+def _color_overrides(ledger: list[Product], discovered: list[Product],
+                     res: dict[int, Product]) -> dict[int, object]:
+    """색상별 대장 줄 → 그 색상 옵션만 배정(소유자 2026-09-29). 반환 {대장i: (발견상품, [Option]) | None(미매칭)}.
+
+    - #1 대장 괄호 색상이 발견 옵션 라벨에 있으면 그 옵션만 배정(색상별 별도 블록).
+    - #2 색상 줄이 2개 이상(명확한 색상 분리)인데 그 색상이 옵션에 없으면 미매칭(오매칭 방지).
+    - #3 색상 지정 없는 줄·단일 괄호(메모일 수 있음)는 손대지 않음(기존 전체 매칭 유지).
+    """
+    from collections import defaultdict
+    groups: dict[str, list[int]] = defaultdict(list)
+    for li, lp in enumerate(ledger):
+        groups[_norm(_base_name(lp.name))].append(li)
+    overrides: dict[int, object] = {}
+    for _base, lis in groups.items():
+        color_lis = [li for li in lis if _norm(_paren(ledger[li].name))]
+        if not color_lis:
+            continue                                   # #3 색상 지정 없음
+        d = next((res[li] for li in lis if res.get(li) is not None), None)
+        if d is None:
+            continue                                   # 그룹 전체 미매칭 → 색상 근거 없음(기존 유지)
+        strict = len(color_lis) >= 2                    # 색상 줄 2개↑ = 명확한 색상 분리
+        for li in color_lis:
+            spec = _paren(ledger[li].name)
+            opts = [o for o in d.options if _spec_in_label(spec, o.label)]
+            if opts:
+                overrides[li] = (d, opts)              # #1 색상별 옵션 배정
+            elif strict and _is_variant(d):
+                overrides[li] = None                   # #2 색상 없음(2줄↑·색상형) → 미매칭
+            # else: 메모/단일 → 손대지 않음(#3)
+    return overrides
+
+
 def scope_to_ledger(ledger: list[Product], discovered: list[Product]) -> tuple[list[Product], int]:
     """대장 상품만 추적 대상으로. 반환: (추적 Product 목록, 매칭된 개수).
 
     매칭 상품 = 발견 노출제목/vid/구분 부여(시트 표시=노출제목). 미매칭 = 대장명으로 추적(지표·재고 공란).
+    **색상별 대장 줄**(신형타프 (블랙)/(베이지))은 그 색상 옵션(vid)만 배정해 별도 블록·별도 계정목록 줄이
+    되게 한다(소유자 2026-09-29·재고관리상 색상 분리). 색상 지정 없는 줄은 기존대로 전체 옵션.
     """
     res = _assign(ledger, discovered)
+    over = _color_overrides(ledger, discovered, res)
+
+    def _unmatched(lp: Product) -> Product:
+        return Product(name=lp.name, title=lp.name, kind=config.KIND_PERSONAL, options=[Option("")],
+                       mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon,
+                       inbound_summary=lp.inbound_summary, discontinued=lp.discontinued)
+
+    def _tracked(lp: Product, d: Product, opts: list[Option], name: str) -> Product:
+        return Product(name=name, title=name, kind=d.kind,
+                       options=[Option(o.label, list(o.vendor_item_ids), list(o.product_ids)) for o in opts],
+                       mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon,
+                       inbound_summary=lp.inbound_summary, discontinued=lp.discontinued)   # 대장 마케팅·입고·판매중지 이월
+
     out: list[Product] = []
+    matched = 0
     for li, lp in enumerate(ledger):
+        if li in over:
+            ov = over[li]
+            if ov is None:                             # #2 색상 미매칭
+                out.append(_unmatched(lp))
+            else:                                       # #1 색상별 배정 — 블록명에 색상 옵션 라벨 붙여 구분
+                d, opts = ov                            # type: ignore[misc]
+                nm = f"{_title(d)} ({opts[0].label})" if (opts and opts[0].label) else _title(d)
+                out.append(_tracked(lp, d, opts, nm))
+                matched += 1
+            continue
         d = res.get(li)
         if d is not None:
-            out.append(Product(
-                name=_title(d), title=_title(d), kind=d.kind,
-                options=[Option(o.label, list(o.vendor_item_ids), list(o.product_ids)) for o in d.options],
-                mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon,
-                inbound_summary=lp.inbound_summary, discontinued=lp.discontinued))   # 대장 마케팅·입고요약·판매중지(#8) 이월
+            out.append(_tracked(lp, d, list(d.options), _title(d)))
+            matched += 1
         else:
-            out.append(Product(name=lp.name, title=lp.name, kind=config.KIND_PERSONAL, options=[Option("")],
-                               mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon,
-                               inbound_summary=lp.inbound_summary, discontinued=lp.discontinued))
-    return out, len(res)
+            out.append(_unmatched(lp))
+    return out, matched
 
 
 def augment_unmatched(ledger: list[Product], tracked: list[Product],
