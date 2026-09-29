@@ -43,6 +43,7 @@
   - `add_business_days(start, n, holidays) -> date` (start **다음** 영업일부터 n영업일 가산)
   - `next_business_day(d, holidays) -> date` (d 포함, 이후 첫 영업일)
 - **테스트 주입(확정)**: 골든 케이스 `_meta.holidays_used`를 공휴일 집합으로 주입해 API 없이 검증(게이트 오프라인·`code-health-regression-gate`). 라이브만 실제 API.
+- **구현 확정(2026-09-29 D8)**: `holidays(year, *, fetch=None, cache_dir, extra=())`가 **fetch 결과(대체공휴일 포함 가정)를 그대로 사용**·연 캐시·`extra`로 임시공휴일 수동 추가·실패=`HolidaySourceError`(빈 결과·조회 예외·다른 해 포함). 대체공휴일 **규칙**은 `substitute_holidays(entries)`로 **별도 제공**(광복절 토→8/17·추석 토 무대체·겹침→다음날·추석 일요일·설 토일 검증됨). ⚠**2단계에 특일정보 API 실응답을 보고** 대체공휴일을 API가 이미 주는지/`substitute_holidays`로 계산할지 확정(fetch 주입부 현재 비어 있음·실 API 미연동).
 
 ## 3. 지급일 (`payout.py` · POLICY `PAYOUT_*`)
 
@@ -62,6 +63,7 @@
   - `MP_WEEKLY_FINAL` = 매출인식월 +2개월의 **1일 그대로**(요일 무관·보정 없음). 실측 2025-03-01(토) 지급.
   - `RG_WEEKLY_FINAL` = 판매마감월 +2개월 1일의 `next_business_day`.
 - **공개 함수(안)**: `payout_date(policy, *, week_end=None, revenue_month=None, holidays) -> date`. policy별 필요 인자 검증(누락=ERROR).
+- **구현 확정(2026-09-29 D8)**: 주정산은 넘겨받은 `week_end`를 **그 주 일요일로 정규화**(`week_sunday(d)=d+(6−weekday)`) 후 영업일 가산. 골든의 월 경계 분할 행(`2026-08-31(월) 단독`)도 원래 주 일요일(9/6) 기준이 되어 09-01~09-06 행과 **같은 지급일**(9/29)로 수렴 — §3 "지급일은 주 마감일 기준 동일"의 코드 구현.
 - **금액 반올림(확정)**: 70/30 금액은 **행 단위 반올림 후 합산**(xlsb 동작). 계산값=예측용, **실지급은 API/파일 값이 정본**(원 단위 차이 허용). → 계산 결과에 `is_estimate=True` 표기.
 - **빠른정산(셀러월렛)**: 전일 구매확정분 90% 익일 — `[미확인: 수수료·조건]`. 1단계 제외.
 
@@ -88,6 +90,7 @@
 ```
 - 골든: cost=1,583,840+185,391+132,844+89,732+2,220−0=**1,994,027**, 이익=3,591,960−1,994,027=**1,597,933**, 마진=**44.5%**.
 - **상품원가 미포함** → 앱의 순이익 = 이 값 − 원가 − 외부비용(원가는 원장/입력, 별도 산출).
+- **구현 확정(2026-09-29 D8)**: 마진% = **매출 0이면 `None`**(0%로 꾸미지 않음·정의 불가 명시)·비 0이면 사사오입 반올림(12.25→12.3·은행가 아님). 금액 입력이 정수 아니면 `TypeError`(silent 변환 금지). `mp_revenue`/`rg_payout`/`rg_home_profit` 전부 keyword-only.
 
 ## 5. 파싱·불변식 (`settlement_parse.py` · POLICY `PARSE_COUPANG_XLSX`)
 
