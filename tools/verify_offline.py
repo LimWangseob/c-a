@@ -559,6 +559,25 @@ def t1_product_match_precision():
     t5, _ = scope_to_ledger([Product(name="트렁크정리함 YG0204")], disc5)
     assert not any(o.vendor_item_ids for o in t5[0].options), "동일코드 중복리스팅이 매칭됨(오매칭)"
     _ok("모델코드 타이브레이커: 문자시작 코드(ST6645·BG001)로 애매쌍 정확 확정·동일코드 중복은 미매칭 유지")
+    # 원인②(2026-09-29): 대장 본문에 정체성 토큰이 있으면 본문 우선(괄호=색상/옵션/메모는 무시),
+    # 본문이 코드뿐이면 괄호(노출제목)로 폴백 — 담당자 대장 본문명을 최대한 존중.
+    disc6 = [
+        disc("신형타프 R008", "v_tarp"),
+        disc("문어발선풍기 M10", "v_fan"),
+        disc("웰빙곳간 프리미엄 무선 안마기 대형 HB100", "v_massage"),   # 본문 코드뿐 대장의 괄호=이 노출제목
+    ]
+    led6 = [
+        Product(name="신형타프 R008 (블랙)"),         # 괄호=색상 → 본문 '신형타프 R008' 로 매칭
+        Product(name="문어발선풍기m10 (대체요망)"),    # 괄호=메모 → 본문으로 매칭
+        Product(name="HB100 (웰빙곳간 프리미엄 무선 안마기 대형)"),  # 본문 코드뿐 → 괄호(노출제목) 폴백
+    ]
+    t6, n6 = scope_to_ledger(led6, disc6)
+    v6 = [sorted(v for o in tp.options for v in o.vendor_item_ids) for tp in t6]
+    assert v6[0] == ["v_tarp"], f"신형타프(블랙) 본문 매칭 실패: {v6[0]}"
+    assert v6[1] == ["v_fan"], f"문어발선풍기(대체요망) 본문 매칭 실패: {v6[1]}"
+    assert v6[2] == ["v_massage"], f"괄호 노출제목 폴백 매칭 실패: {v6[2]}"
+    assert n6 == 3, f"원인② 매칭 수 {n6} (기대 3)"
+    _ok("원인②: 괄호=색상/메모면 본문명으로 매칭·본문이 코드뿐이면 괄호(노출제목) 폴백")
 
 
 def t1_vid_source_option_split():

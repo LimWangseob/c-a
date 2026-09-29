@@ -7,6 +7,9 @@
 - **정밀 우선 매칭(2026-09-18)**: 괄호 노출제목 정확일치 = 최우선. 아니면 **대장 핵심어(IDF 최고 토큰)를
   발견제목이 포함** + **핵심어 IDF 재현율·2등 마진** 통과 시에만 매칭. 미달이면 **미매칭**으로 둔다 —
   흔한 단어 하나로 **비관리 상품에 잘못 붙는(오매칭)** 것보다 통계 공란이 안전(소유자 지시).
+- **본문명 우선(2026-09-29·원인②)**: ② 핵심어는 대장 **본문**(코드·상품명)에 정체성 토큰이 있으면 본문에서
+  뽑고 괄호(색상/옵션/메모: '블랙'·'대체요망')는 무시한다 — 담당자 본문명을 최대한 존중. 본문이 코드뿐이면
+  괄호(노출제목)로 폴백. 괄호 정확일치는 ①에서 이미 처리.
 - **동점 타이브레이커(2026-09-29)**: 한글접두가 중복(예 '차량용청소기 ST6645' vs 'Q808')이라 핵심어만으론
   마진 미달(애매)일 때, 동률권 후보를 **규격토큰(`_spec_tokens`·숫자시작)** 또는 **모델코드(`_code_tokens`·
   `_CODE_TAIL`이 떼는 ST6645·BG001 등)** 로 가른다 — 그 보조키를 담은 후보가 **정확히 1개**면 확정, 아니면
@@ -123,11 +126,17 @@ def _assign(ledger: list[Product], discovered: list[Product]) -> dict[int, Produ
             if hit is not None:
                 qualified.append((1, 1.0, li, hit))
                 continue
-        # ② 핵심어 게이트 + IDF 재현율 + 마진. 괄호가 있으면 그 노출제목 토큰으로, 없으면 대장명 토큰으로.
-        core_text = _paren(lp.name) or lp.name
-        ptoks = {t for t in _tokens(core_text) if t not in brand} or set(_tokens(core_text))
+        # ② 핵심어 게이트 + IDF 재현율 + 마진. 대장 **본문**(코드·상품명)에 정체성 토큰이 있으면 본문 우선으로
+        # 매칭하고 괄호(색상/옵션/메모)는 무시 — 담당자 대장 본문명을 최대한 존중(원인②). 본문이 코드뿐이면
+        # 괄호(노출제목)로 폴백. ⚠괄호 정확일치는 위 ①에서 이미 처리(여기 도달=①실패).
+        base_toks = {t for t in _tokens(lp.name) if t not in brand} or set(_tokens(lp.name))
+        if base_toks:
+            core_text, ptoks = lp.name, base_toks       # 본문 우선(괄호=색상/옵션/메모 무시)
+        else:
+            core_text = _paren(lp.name) or lp.name       # 본문이 코드뿐 → 괄호(노출제목) 폴백
+            ptoks = {t for t in _tokens(core_text) if t not in brand} or set(_tokens(core_text))
         if not ptoks:
-            continue                                    # 순수 코드명 등 → 미매칭(공란)
+            continue                                    # 순수 코드명·괄호도 없음 → 미매칭(공란)
         pden = sum(w(t) for t in ptoks) or 1.0
         top = max(ptoks, key=lambda t: (w(t), len(t)))   # 최고가중(희소=핵심) 토큰, IDF 동점이면 긴 토큰
         # 핵심 게이트=핵심어가 발견제목(공백 제거)에 부분일치 + IDF 재현율(대장 토큰이 발견제목에 부분일치).
