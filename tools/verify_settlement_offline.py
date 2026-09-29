@@ -204,6 +204,77 @@ def p4_parse():
     ok("열 순서 무관·빈 행·음수 행·ID/비율 문자열·메타 강제(시리얼 날짜)·헤더/값 실패 오류·불변식 위반=경고")
 
 
+class _Resp:
+    """requests.Response 대역(녹화 응답)."""
+    def __init__(self, payload=None, *, status=200, text=None):
+        self.status_code = status
+        self._payload = payload
+        self.text = text if text is not None else json.dumps(payload, ensure_ascii=False)
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("not json")
+        return self._payload
+
+
+def _kasi(items, total=None, code="00"):
+    body_items = "" if items == [] else {"item": items[0] if len(items) == 1 else items}
+    return {"response": {"header": {"resultCode": code, "resultMsg": "NORMAL SERVICE."},
+                         "body": {"items": body_items, "numOfRows": 100, "pageNo": 1,
+                                  "totalCount": len(items) if total is None else total}}}
+
+
+def p5_holiday_source():
+    print("[P5] 공휴일 API(특일정보) — 녹화 응답 파싱·오류 코드·holiday_kr 연결(실 API 미호출)")
+    from coupang_analytics import holiday_source as HS
+    y2026 = [{"dateKind": "01", "dateName": "광복절", "isHoliday": "Y", "locdate": 20260815, "seq": 1},
+             {"dateKind": "01", "dateName": "대체공휴일", "isHoliday": "Y", "locdate": 20260817, "seq": 1},
+             {"dateKind": "01", "dateName": "추석", "isHoliday": "Y", "locdate": 20260924, "seq": 1},
+             {"dateKind": "01", "dateName": "추석", "isHoliday": "Y", "locdate": 20260925, "seq": 1},
+             {"dateKind": "01", "dateName": "추석", "isHoliday": "Y", "locdate": 20260926, "seq": 1},
+             {"dateKind": "01", "dateName": "제헌절", "isHoliday": "N", "locdate": 20260717, "seq": 1}]
+    sent = []
+
+    def get(resp):
+        def http_get(url, params=None, timeout=None):
+            sent.append((url, dict(params)))
+            return resp
+        return http_get
+    days = HS.make_fetch("KEY", http_get=get(_Resp(_kasi(y2026))))(2026)
+    assert days == {D("2026-08-15"), D("2026-08-17"), D("2026-09-24"), D("2026-09-25"), D("2026-09-26")}, days
+    url, params = sent[-1]
+    assert url == HS.ENDPOINT and params["solYear"] == "2026" and params["_type"] == "json" and params["ServiceKey"] == "KEY"
+    assert HS.make_fetch("K", http_get=get(_Resp(_kasi(y2026[:1]))))(2026) == {D("2026-08-15")}   # 1건 = dict 응답
+    assert HS.parse_rest_days(_kasi([]), 2026) == set()                                          # 0건 = items ""
+    xml = ("<OpenAPI_ServiceResponse><cmmMsgHeader><returnAuthMsg>SERVICE_KEY_IS_NOT_REGISTERED_ERROR"
+           "</returnAuthMsg><returnReasonCode>30</returnReasonCode></cmmMsgHeader></OpenAPI_ServiceResponse>")
+    bad = [("인증오류 XML", _Resp(None, text=xml)), ("HTTP 500", _Resp(None, status=500, text="err")),
+           ("서비스 오류코드", _Resp(_kasi(y2026, code="22"))), ("건수 불일치", _Resp(_kasi(y2026, total=120))),
+           ("JSON 아님", _Resp(None, text="oops")),
+           ("다른 해", _Resp(_kasi([{"isHoliday": "Y", "locdate": 20250101}])))]
+    for what, resp in bad:
+        expect(HS.HolidayApiError, lambda r=resp: HS.make_fetch("K", http_get=get(r))(2026), what)
+    for resp in (_Resp(None, text=xml), _Resp(None, status=500, text="err"), _Resp(None, text="oops")):
+        try:
+            HS.make_fetch("SECRET-9f3a", http_get=get(resp))(2026)
+        except HS.HolidayApiError as exc:
+            assert "SECRET-9f3a" not in str(exc), exc                            # 오류 문구에 키 노출 금지
+    try:
+        HS.make_fetch("K", http_get=get(_Resp(None, text=xml)))(2026)
+    except HS.HolidayApiError as exc:
+        msg = str(exc)                                                           # 원인 문구·코드를 풀어서 보여줌
+        assert "인증" in msg and "SERVICE_KEY_IS_NOT_REGISTERED_ERROR" in msg and "코드 30" in msg, msg
+    expect(HS.HolidayApiError, lambda: HS.make_fetch("  "), "키 없음")
+    expect(HS.HolidayApiError, lambda: HS.fetch_from_store(SimpleNamespace(get_password=lambda k: None)), "저장 키 없음")
+    with tempfile.TemporaryDirectory() as tmp:                                     # holiday_kr 연결: 실패=HolidaySourceError
+        expect(HK.HolidaySourceError,
+               lambda: HK.holidays(2026, cache_dir=tmp, fetch=HS.make_fetch("K", http_get=get(_Resp(None, text=xml)))),
+               "API 오류 → 지급일 계산 중단")
+        hol = HK.holidays(2026, cache_dir=tmp, fetch=HS.make_fetch("K", http_get=get(_Resp(_kasi(y2026)))))
+        assert P.payout_date(P.PAYOUT_MP_WEEKLY_1ST, week_end=D("2026-08-09"), holidays=hol) == D("2026-08-31")
+    ok("대체·연휴 포함·isHoliday=N 제외·1건 dict·0건·인증 XML/HTTP/코드/건수/형식/다른 해 오류·키 없음·홀리데이 연결")
+
+
 def main():
     g1_payout_dates()
     g2_amounts()
@@ -212,6 +283,7 @@ def main():
     p2_payout_rules()
     p3_amount_rules()
     p4_parse()
+    p5_holiday_source()
     print("정산 계산 모듈 오프라인 검증 통과(골든 payout 12·amount 2·불변식 4행/3식 100%)")
 
 
