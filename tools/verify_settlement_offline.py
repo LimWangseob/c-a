@@ -275,6 +275,33 @@ def p5_holiday_source():
     ok("대체·연휴 포함·isHoliday=N 제외·1건 dict·0건·인증 XML/HTTP/코드/건수/형식/다른 해 오류·키 없음·홀리데이 연결")
 
 
+def p6_diag_no_values():
+    print("[P6] 정산 주소 실측 도구 — 구조만 기록·값(금액·이름·주문번호·질의값) 비저장")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("diag_se", ROOT / "tools" / "diag_settlement_endpoints.py")
+    DG = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(DG)
+    payload = {"data": [{"orderId": "31234567890", "productName": "비밀상품명", "settlementAmount": 3764453,
+                         "detail": {"fee": 414947, "items": [{"vendorItemId": "94632081597"}]}}], "total": 7}
+    e = DG.entry("POST", "https://wing.coupang.com/tenants/settlement/v2/search?vendorId=A00123&from=2026-09-01",
+                 200, "fetch", "application/json;charset=UTF-8",
+                 json.dumps({"vendorId": "A00123", "period": {"from": "2026-09-01"}}), payload)
+    dumped = json.dumps(e, ensure_ascii=False)
+    for secret in ("31234567890", "비밀상품명", "3764453", "414947", "94632081597", "A00123", "2026-09-01"):
+        assert secret not in dumped, (secret, dumped)
+    assert e["query"] == ["from", "vendorId"] and e["path"] == "/tenants/settlement/v2/search"
+    assert e["response"]["data"]["item"]["detail"]["fee"] == "int" and e["response"]["data"]["__list__"] == 1
+    assert e["request"] == {"vendorId": "str", "period": {"from": "str"}}
+    assert DG.body_keys("a=1&b=secret") == {"__form__": ["a", "b"]} and DG.body_keys("rawtext") == {"__text_len__": 7}
+    keyed = DG.shape({"94632081597": {"qty": 3}, "95222903297": {"qty": 1}, "2026-09-01": 5, "20260902": 6,
+                      "status": "DONE"})
+    assert keyed == {"<숫자키>": {"qty": "int"}, "<날짜키>": "int", "status": "str"}, keyed   # ID·날짜 키 비노출
+    other = DG.entry("GET", "https://wing.coupang.com/tenants/common/menu", 200, "xhr", "text/html", None, None)
+    lines = DG.summarize([other, e, e])
+    assert len(lines) == 2 and lines[0].startswith("★") and "settlement" in lines[0]    # 정산 주소 먼저·중복 1줄
+    ok("값 7종 비노출·질의 이름만·요청/응답 구조·폼/텍스트 본문·정산 주소 우선 요약·중복 제거")
+
+
 def main():
     g1_payout_dates()
     g2_amounts()
@@ -284,6 +311,7 @@ def main():
     p3_amount_rules()
     p4_parse()
     p5_holiday_source()
+    p6_diag_no_values()
     print("정산 계산 모듈 오프라인 검증 통과(골든 payout 12·amount 2·불변식 4행/3식 100%)")
 
 
