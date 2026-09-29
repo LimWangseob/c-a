@@ -43,7 +43,8 @@
   - `add_business_days(start, n, holidays) -> date` (start **다음** 영업일부터 n영업일 가산)
   - `next_business_day(d, holidays) -> date` (d 포함, 이후 첫 영업일)
 - **테스트 주입(확정)**: 골든 케이스 `_meta.holidays_used`를 공휴일 집합으로 주입해 API 없이 검증(게이트 오프라인·`code-health-regression-gate`). 라이브만 실제 API.
-- **구현 확정(2026-09-29 D8)**: `holidays(year, *, fetch=None, cache_dir, extra=())`가 **fetch 결과(대체공휴일 포함 가정)를 그대로 사용**·연 캐시·`extra`로 임시공휴일 수동 추가·실패=`HolidaySourceError`(빈 결과·조회 예외·다른 해 포함). 대체공휴일 **규칙**은 `substitute_holidays(entries)`로 **별도 제공**(광복절 토→8/17·추석 토 무대체·겹침→다음날·추석 일요일·설 토일 검증됨). ⚠**2단계에 특일정보 API 실응답을 보고** 대체공휴일을 API가 이미 주는지/`substitute_holidays`로 계산할지 확정(fetch 주입부 현재 비어 있음·실 API 미연동).
+- **구현 확정(2026-09-29 D8)**: `holidays(year, *, fetch=None, cache_dir, extra=())`가 **fetch 결과(대체공휴일 포함 가정)를 그대로 사용**·연 캐시·`extra`로 임시공휴일 수동 추가·실패=`HolidaySourceError`(빈 결과·조회 예외·다른 해 포함). 대체공휴일 **규칙**은 `substitute_holidays(entries)`로 **별도 제공**(광복절 토→8/17·추석 토 무대체·겹침→다음날·추석 일요일·설 토일 검증됨). ⚠**2단계에 특일정보 API 실응답을 보고** 대체공휴일을 API가 이미 주는지/`substitute_holidays`로 계산할지 확정.
+- **2단계 실 소스 구현(2026-09-30 D8·`holiday_source.py`)**: 한국천문연구원 특일정보 `getRestDeInfo`(data.go.kr)를 `make_fetch(key)`로 감싸 `holidays(fetch=)` 주입. `isHoliday=='Y'`만·서비스키=credstore `__holiday_kr__`(키 미로그)·공공데이터 특이점(1건 dict·0건 ""·인증오류 XML) 처리·전 실패 `HolidayApiError`→`HolidaySourceError`(계산 중단). 검증 P5=녹화 응답 13종·실 API 미호출. **라이브 남음**: 키 발급→UI 등록(H_ui)→1회 조회 확인.
 
 ## 3. 지급일 (`payout.py` · POLICY `PAYOUT_*`)
 
@@ -161,6 +162,7 @@
   - 윙 정산내역 = Open API `GET /v2/providers/marketplace_openapi/apis/api/v1/settlement-histories?revenueRecognitionYearMonth=YYYY-MM`(settlementType·status·finalAmount 등) — **확인됨**.
   - 윙 매출내역·로켓그로스 판매수수료 리포트·부가 리포트(밀크런·광고·CFS)·판매분석 = API `[미확인]`(화면 엑셀 다운로드로 우회 가능).
   - ⛔ 위탁계정=판매자 OpenAPI 키 발급 불가(`coupang-openapi-not-available-consignment`) → settlement-histories도 **WING 세션 경유**만 가능한지 라이브 확인 필요.
+  - **실측 도구(2026-09-30 D8·`tools/diag_settlement_endpoints.py <계정ID>`)**: 사무실에서 사람이 정산 메뉴를 누르는 동안 xhr/fetch를 **관찰만**(스스로 요청 안 보냄)해 방식·경로·질의 이름·요청/응답 **구조**를 기록(금액·이름·주문번호 등 **값 비저장**·숫자ID/날짜 키도 자리표시로 마스킹·엑셀은 파일명만). 결과 `output/_diag/`. **이 결과가 나와야 collector 확장(통합 계약) 설계 가능.** 검증 P6=값 비노출.
 - **미구매확정 구간(함정 4)**: 결제일 기준 월 집계는 익월 중순 이후 확정 → 화면/출력에 "미확정 구간" 표시.
 
 ## 10. 구현 단계 (D8_ledger 레인 인계)
