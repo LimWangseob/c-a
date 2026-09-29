@@ -817,7 +817,7 @@ class App(RegistryPanelMixin, QtWidgets.QMainWindow):
                     raise ValueError("원장 링크 미등록")
                 return self._apply_input_registry(reg_url)
             except Exception as exc:
-                self.log(f"[입력] 원장 자동 로드 실패({exc.__class__.__name__}): {exc} — 구글 관리대장으로 넘어감")
+                self.log(f"== [입력] 원장 로드 실패 → 관리대장으로 전환: {exc.__class__.__name__}: {exc} ==")
         if src in ("gsheet", registry_ui.SOURCE_REGISTRY) and url:
             try:
                 return self._apply_input_gsheet(url, persist=(src == "gsheet"))

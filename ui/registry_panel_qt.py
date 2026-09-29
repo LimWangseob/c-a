@@ -24,6 +24,7 @@ class RegistryPanelMixin:
     _save_shared: Callable[[str, str], None]
     _set_input_list: Callable[[Any, str], None]
     _store_passwords_map: Callable[..., int]
+    _guard_busy: Callable[[], bool]
     # ── 설정 카드 ────────────────────────────────────────────
     def _registry_card(self):
         st = QtCore.QSettings("coupang-analytics", "ui")
@@ -53,8 +54,11 @@ class RegistryPanelMixin:
         self.reg_pw_refresh_btn = QtWidgets.QPushButton("불일치 목록 보기")
         self.reg_pw_refresh_btn.clicked.connect(self.do_registry_pw_mismatch)
         self.reg_pw_retry_btn = QtWidgets.QPushButton("이전 비밀번호로 1회 시도")
-        self.reg_pw_retry_btn.setEnabled(False)
-        self.reg_pw_retry_btn.setToolTip("준비 중 — 한 계정 로그인 진입점(통합 세션 제공) 연결 후 사용")
+        self.reg_pw_retry_btn.setEnabled(False)          # 목록에서 계정을 골라야 켜짐
+        self.reg_pw_retry_btn.setToolTip("고른 계정만 원장 이력의 직전 비밀번호로 1회 로그인(자동 재시도 없음)")
+        self.reg_pw_retry_btn.clicked.connect(self.do_registry_pw_retry)
+        self.reg_pw_list.itemSelectionChanged.connect(
+            lambda: self.reg_pw_retry_btn.setEnabled(bool(self.reg_pw_list.selectedItems())))
         pw_btns.addWidget(self.reg_pw_refresh_btn)
         pw_btns.addWidget(self.reg_pw_retry_btn)
         pw_btns.addStretch(1)
@@ -102,6 +106,34 @@ class RegistryPanelMixin:
             self.reg_pw_list.addItem(item)
         self.log(f"[원장] 비밀번호 불일치 {len(rows)}개 계정"
                  + (" — 쿠팡 비밀번호 변경 여부 확인 필요" if rows else ""))
+
+    def do_registry_pw_retry(self):
+        """2-3(A안): 고른 계정의 직전 비밀번호를 원장 이력에서 찾아 → 사람 확인 → 1회 로그인."""
+        items = self.reg_pw_list.selectedItems()
+        reg_url, _ = self._registry_urls()
+        if not items or not reg_url or self._guard_busy():
+            return
+        aid = items[0].data(QtCore.Qt.UserRole)
+        self.run_bg(lambda: registry_ui.previous_password(reg_url, self.creds_store, aid, self.log),
+                    on_done=lambda pw: self._confirm_pw_retry(reg_url, aid, pw), btn=self.reg_pw_retry_btn)
+
+    def _confirm_pw_retry(self, reg_url: str, aid: str, pw):
+        if not pw:
+            self.log(f"[원장] {aid} 이전 비밀번호 없음(계정이력에 비밀번호 변경 기록 없음) — 시도하지 않습니다")
+            QtWidgets.QMessageBox.information(self, "이전 비밀번호 없음",
+                                              f"{aid} 계정은 원장 이력에 이전 비밀번호가 없습니다.")
+            return
+        if self._guard_busy() or QtWidgets.QMessageBox.question(
+                self, "이전 비밀번호로 1회 시도",
+                f"{aid} 계정을 원장 이력의 **직전 비밀번호**로 1회만 로그인합니다.\n"
+                "보이는 창이 뜨며, 2차인증이 나오면 직접 처리하세요. 실패해도 다시 시도하지 않습니다.\n\n진행할까요?"
+        ) != QtWidgets.QMessageBox.Yes:
+            self.log(f"[원장] {aid} 이전 비밀번호 시도 취소됨")
+            return
+        self.log(f"[원장] {aid} 이전 비밀번호로 1회 로그인 시도")
+        self.run_bg(lambda: registry_ui.try_previous_password(reg_url, self.creds_store, aid, pw, self.log),
+                    on_done=lambda ok: self.do_registry_pw_mismatch() if ok else None,
+                    btn=self.reg_pw_retry_btn, exclusive=True)   # 브라우저 = 다른 실행과 동시 금지
 
     # ── 2-4: 입력소스 = 원장 ────────────────────────────────
     def _apply_input_registry(self, url: str) -> bool:
