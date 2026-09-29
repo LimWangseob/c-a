@@ -33,7 +33,8 @@ from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
 from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_credentials_file  # noqa: E402
 from coupang_analytics.pipeline import (_interruptible_sleep, backup_sources,  # noqa: E402
-                                        master_exists, plan_run_mode, push_ledger_inventory,
+                                        master_exists, plan_run_mode, push_company_stock,
+                                        push_ledger_inventory,
                                         read_run_stage, resumable_progress, restore_master_from_gsheet,
                                         run_full, run_log_labels, run_title,
                                         select_keywords_stage,
@@ -41,6 +42,7 @@ from coupang_analytics.pipeline import (_interruptible_sleep, backup_sources,  #
 from coupang_analytics.rank import make_matcher, organic_rank, warmup  # noqa: E402
 import registry_ui  # noqa: E402
 from registry_panel_qt import RegistryPanelMixin  # noqa: E402
+from stock_panel_qt import StockPanelMixin  # noqa: E402
 
 _PROFILE = "data/chrome-ui"
 _IMG_PROFILE = "data/chrome-images"   # 상세이미지 전용 Chrome 프로필(사용자가 여기 코팡 로그인 → warm 영속)
@@ -166,7 +168,7 @@ def _prevent_sleep(on: bool) -> None:
         pass
 
 
-class App(RegistryPanelMixin, QtWidgets.QMainWindow):
+class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
     log_signal = QtCore.Signal(str)
     finish_signal = QtCore.Signal(object, object, object, object)   # (btn, on_done, result, err)
 
@@ -262,6 +264,7 @@ class App(RegistryPanelMixin, QtWidgets.QMainWindow):
         grid.setColumnStretch(1, 1)
         v.addWidget(fk)
         v.addWidget(self._gsheet_card())   # 구글 시트 연동(입력 관리대장 · 출력 결과시트 · 서비스계정)
+        v.addWidget(self._stock_card())     # 회사 재고(판매자배송) — 재고현황 → 관리대장 '회사보유재고'
         v.addWidget(self._registry_card())  # 셀독등록원장(원장 링크·미리보기/반영·비밀번호 불일치)
         # 키워드/순위 등 세부 설정값 입력란은 제거(사용자 미사용 · 영속 저장도 안 됨). 값은 config.py 에서 관리.
         v.addStretch(1)
@@ -1184,6 +1187,7 @@ class App(RegistryPanelMixin, QtWidgets.QMainWindow):
                                    on_log=self.log, gsheet_output_url=gs_out)
         # 입력 관리대장의 '그로스 재고'(AD) 컬럼을 수집 재고로 역기록(SA 편집권한 필요·없으면 로그 후 비치명)
         push_ledger_inventory(gs_in, self.log)   # gs_in = 위에서 정의(백업·역기록 공용)
+        push_company_stock(self._stock_url(), gs_in, self.log)   # 회사보유재고(판매자배송) 역기록(비치명)
         if not (stop is not None and stop.is_set()):
             write_run_stage("done")             # 전부 완료 표시(재부팅 복구 안 함)
         return result
@@ -1268,6 +1272,7 @@ class App(RegistryPanelMixin, QtWidgets.QMainWindow):
                 # 입력 관리대장의 '그로스 재고'(AD) 컬럼을 수집 재고로 역기록(SA 편집권한 필요·없으면 비치명)
                 if not stop.is_set():
                     push_ledger_inventory(gs_in, self.log)   # gs_in = 위에서 정의(백업·역기록 공용)
+                    push_company_stock(self._stock_url(), gs_in, self.log)   # 회사보유재고 역기록(비치명)
                     write_run_stage("done")        # 전부 완료 표시
                 # (결과는 구글 시트 통합으로 결과시트에 직접 반영 — rclone 업로드 제거)
             except Exception as exc:                # 무인: 어떤 오류도 앱을 매달아두지 않게 로그 후 종료로
@@ -1346,6 +1351,7 @@ class App(RegistryPanelMixin, QtWidgets.QMainWindow):
                                       gsheet_output_url=gs_out)
                 if not stop.is_set():              # 마무리: 그로스 재고 역기록 + 완료 표시
                     push_ledger_inventory(gs_in, self.log)
+                    push_company_stock(self._stock_url(), gs_in, self.log)   # 회사보유재고 역기록(비치명)
                     write_run_stage("done")
             except Exception as exc:               # 복구도 무인이라 어떤 오류도 매달지 않고 로그 후 종료
                 self.log(f"[재부팅 복구] 실행 중 오류: {exc.__class__.__name__}: {exc}")
@@ -1531,11 +1537,12 @@ def _check_icon_path() -> str:
 # 담는 값: QSettings(구글시트 링크·입력소스) + credstore 키 3개(네이버·OpenAI·구글SA).
 # ⚠ 내보낸 파일은 **평문**(API/SA 키 포함) → 배포 zip 안에서만·설치 시 즉시 이 PC용 암호화(DPAPI) 후 삭제.
 # 계정 비밀번호는 담지 않는다(관리대장 '비밀번호' 컬럼에서 매 실행 자동 로드).
-_EXPORT_QKEYS = ("gsheet/input_url", "gsheet/output_url", "input/source", "registry/url")
+_EXPORT_QKEYS = ("gsheet/input_url", "gsheet/output_url", "input/source", "registry/url", "stock/url")
 _EXPORT_CREDS = ("__naver__", "__openai__", "__gsheet_sa__")
 # config.json(보존 폴더)에 두는 **공유 설정** 키 — 무인/양쪽 UI 공통(구글시트 링크·입력소스·마지막 입력파일).
 # dir/*(마지막 폴더)는 per-PC UI 편의라 레지스트리에만 둔다.
-_CONFIG_SHARED_KEYS = ("gsheet/input_url", "gsheet/output_url", "input/source", "file/input", "registry/url")
+_CONFIG_SHARED_KEYS = ("gsheet/input_url", "gsheet/output_url", "input/source", "file/input", "registry/url",
+                       "stock/url")
 
 
 def _cfg_save_shared(key: str, value: str) -> None:
