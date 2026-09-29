@@ -755,6 +755,49 @@ def t21_company_stock():
     ok("탭 선택·창고별 표기(같은 창고 합산)·'-'=0·음수/비숫자 경고·공백/대소문자/첫 줄 매칭·계정 공통값·미매칭 보존·그 열만·미리보기 0")
 
 
+def t22_name_rules():
+    print("[R22] 이름 규칙 — 띄어쓰기·대소문자만 변경=자동 이름변경 · 색상 분리=옛 줄 중단+색상 신규 · 진짜 변경=보류 유지")
+    g = ("100", "80", "3", "", "", "")
+    reg = R.Registry()
+    base_acc = [A("fe1", "대표", "비엔케이", "pw", products=[P("와이어 빨래줄 R20", g), P("신형타프 R008"),
+                                                             P("보냉백 BG001")])]
+    R.sync(reg, snap_of(base_acc), now=day(1))
+    acc = [A("fe1", "대표", "비엔케이", "pw", products=[P("와이어빨래줄 r20", ("100", "90", "3", "", "", "")),
+                                                        P("신형타프 R008 (블랙)"), P("신형타프 R008 (베이지)"),
+                                                        P("보냉백 BG002")])]
+    res = R.sync(reg, snap_of(acc), now=day(2))
+    ks = kinds(res.events)
+    # 1) 띄어쓰기·대소문자만 → 즉시 이름 변경(확인완료·자동반영), 보류 없음·이력 이어짐·같은 실행 그로스 수정도 새 이름에
+    auto = [e for e in res.events if e.kind == M.K_CONFIRMED]
+    assert [(e.old, e.new, e.confirm) for e in auto] == [("와이어 빨래줄 R20", "와이어빨래줄 r20", M.C_AUTO)], auto
+    assert ("fe1", "와이어빨래줄 r20") in reg.rows and ("fe1", "와이어 빨래줄 R20") not in reg.rows
+    assert reg.rows[("fe1", "와이어빨래줄 r20")].registered == "2026-10-01"                       # 이력 이어짐
+    assert (M.SHEET_GROWTH, M.K_EDIT, "fe1", "와이어빨래줄 r20", "그로스 작업수량") in ks
+    assert status(reg, "fe1", "와이어빨래줄 r20") == (M.ST_ACTIVE, "")
+    # 2) 색상 분리 → 옛 줄 관리중단 + 색상 줄 신규(이름변경 보류 아님)
+    assert (M.SHEET_PROD, M.K_STOP, "fe1", "신형타프 R008", "관리상태") in ks
+    assert (M.SHEET_PROD, M.K_NEW_PROD, "fe1", "신형타프 R008 (블랙)", "") in ks
+    assert (M.SHEET_PROD, M.K_NEW_PROD, "fe1", "신형타프 R008 (베이지)", "") in ks
+    # 3) 진짜 이름 변경(코드 변경)은 여전히 확인필요 보류
+    held = [e for e in res.events if e.kind == M.K_RENAME_PROD]
+    assert [(e.old, e.new, e.confirm) for e in held] == [("보냉백 BG001", "보냉백 BG002", M.C_PENDING)], held
+    assert not any(e.kind == M.K_RENAME_PROD and "신형타프" in e.new for e in res.events)
+    il = R.to_input_list(reg)
+    assert sorted(p.name for p in il.accounts[0].products) == [
+        "보냉백 BG001", "신형타프 R008 (베이지)", "신형타프 R008 (블랙)", "와이어빨래줄 r20"]      # 대장과 일치(보류 1건 제외)
+    R.check_integrity(reg)
+    old = R.as_of(reg, "2026-10-01")
+    assert ("fe1", "와이어 빨래줄 R20") in old and ("fe1", "와이어빨래줄 r20") not in old          # 과거 복원 = 옛 이름
+    assert old[("fe1", "와이어 빨래줄 R20")]["그로스 작업수량"] == "80"
+    assert R.sync(reg, snap_of(acc), now=day(3)).events == []                                     # 재실행 잡음 없음
+    # 1:1 이 아니면(같은 키 새 이름 2개) 자동 판단 안 함 → 일반 규칙
+    reg2 = R.Registry()
+    R.sync(reg2, snap_of([A("x1", "대", "상사", "pw", products=[P("캠핑 의자")])]), now=day(1))
+    r2 = R.sync(reg2, snap_of([A("x1", "대", "상사", "pw", products=[P("캠핑의자"), P("캠핑의 자")])]), now=day(2))
+    assert not any(e.kind == M.K_CONFIRMED for e in r2.events), kinds(r2.events)
+    ok("자동 이름변경(자동반영·이력/그로스 이어짐·과거 복원)·색상 분리=중단+신규·진짜 변경 보류·1:1 아닐 때 제외")
+
+
 def main():
     t16_backfill()
     t15_format_equivalence()
@@ -777,6 +820,7 @@ def main():
     t19_to_input_list()
     t20_write_lock()
     t21_company_stock()
+    t22_name_rules()
     print("셀독등록원장 오프라인 검증 통과")
 
 

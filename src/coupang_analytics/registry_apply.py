@@ -2,8 +2,10 @@
 """
 from __future__ import annotations
 
+from .company_stock import name_key
+from .product_match import _base_name
 from .registry_core import _resume_item, _Run, _stop_item
-from .registry_model import (ACCOUNT_FIELDS, GROWTH_FIELDS, ITEM_PROD_NAME, K_EDIT, K_INIT, K_NEW_ACCT,
+from .registry_model import (ACCOUNT_FIELDS, GROWTH_FIELDS, ITEM_PROD_NAME, K_CONFIRMED, K_EDIT, K_INIT, K_NEW_ACCT,
                              K_NEW_PROD, K_RENAME_PROD, K_RESUME, K_STOP, SHEET_ACCT, SHEET_GROWTH, SHEET_PROD,
                              RegRow, SnapAccount, SnapProduct)
 from .registry_rename import _hold_renames, _pair_by_similarity, _rejected_pairs
@@ -78,14 +80,51 @@ def _update_product(ctx: _Run, sa: SnapAccount, sp: SnapProduct) -> None:
                  source=ctx.snap.ref("상품명", sp.row_no), **_resume_item())
 
 
+def _removed_added(ctx: _Run, sa: SnapAccount) -> tuple[set, list, list]:
+    aid = sa.account_id
+    existing = {r.product for r in ctx.reg.account_rows(aid)}
+    removed = [p for p in existing if p and p not in sa.products and not ctx.prod_stopped(aid, p)]
+    added = [p for p in sa.products if p not in existing]
+    return existing, removed, added
+
+
+def _auto_rename_spacing(ctx: _Run, sa: SnapAccount, removed: list, added: list) -> int:
+    """띄어쓰기·대소문자만 다른 1:1 쌍 = 같은 상품(매칭 규칙 4, 소유자 2026-09-29) → 보류 없이 즉시 이름 변경.
+
+    이력엔 확인완료(확인상태=자동반영) 1줄 — 승인된 이름 변경과 같은 기록이라 복원·무결성이 그대로 동작."""
+    def same(a: str, b: str) -> bool:
+        return name_key(a) == name_key(b)
+    n = 0
+    for o in removed:
+        news = [x for x in added if same(x, o)]
+        if len(news) != 1 or sum(1 for x in removed if same(x, o)) != 1:
+            continue                                   # 1:1 이 아니면 자동 판단하지 않음(일반 규칙으로)
+        new = news[0]
+        row = ctx.reg.rows.pop((sa.account_id, o))
+        row.product = new
+        ctx.reg.rows[row.key] = row
+        ctx.emit(SHEET_PROD, K_CONFIRMED, sa.account_id, product=new, item=ITEM_PROD_NAME, old=o, new=new,
+                 source=ctx.snap.ref("상품명", sa.products[new].row_no), note="자동 — 띄어쓰기·대소문자만 다름")
+        n += 1
+    return n
+
+
+def _variant_pairs(aid: str, removed: list, added: list) -> set:
+    """괄호(색상·옵션)만 다른 쌍 — 색상별 대장 줄=별도 상품(매칭 규칙 1) → 이름 변경 후보에서 제외.
+    옛 줄은 관리중단, 색상 줄은 신규로 처리된다(옛 줄 이력은 거기서 끝남, 소유자 2026-09-29)."""
+    return {(aid, o, n) for o in removed for n in added
+            if name_key(_base_name(o)) == name_key(_base_name(n)) and name_key(o) != name_key(n)}
+
+
 def _update_account(ctx: _Run, sa: SnapAccount) -> None:
     aid = sa.account_id
     _update_account_fields(ctx, sa)
     _update_account_status(ctx, sa)
-    existing = {r.product for r in ctx.reg.account_rows(aid)}
-    removed = [p for p in existing if p and p not in sa.products and not ctx.prod_stopped(aid, p)]
-    added = [p for p in sa.products if p not in existing]
-    pairs = _pair_by_similarity(removed, added, _rejected_pairs(ctx.reg, SHEET_PROD), aid)
+    existing, removed, added = _removed_added(ctx, sa)
+    if _auto_rename_spacing(ctx, sa, removed, added):
+        existing, removed, added = _removed_added(ctx, sa)
+    skip = _rejected_pairs(ctx.reg, SHEET_PROD) | _variant_pairs(aid, removed, added)
+    pairs = _pair_by_similarity(removed, added, skip, aid)
     held_old, held_new = _hold_renames(ctx, SHEET_PROD, K_RENAME_PROD, ITEM_PROD_NAME, aid, pairs,
                                        lambda n: ctx.snap.ref("상품명", sa.products[n].row_no))
     for name, sp in sa.products.items():
