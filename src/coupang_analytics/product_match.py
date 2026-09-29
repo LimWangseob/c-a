@@ -288,3 +288,62 @@ def augment_unmatched(ledger: list[Product], tracked: list[Product],
                                inbound_summary=lp.inbound_summary)   # 대장 마케팅·입고요약 이월
         added += 1
     return out, added
+
+
+def _tracked_from(lp: Product, d: Product) -> Product:
+    """발견 상품 d 의 정체(노출명·vid·구분)를 부여하고 대장 lp 의 마케팅·입고요약·판매중지를 이월한 추적 Product."""
+    return Product(
+        name=_title(d), title=_title(d), kind=d.kind,
+        options=[Option(o.label, list(o.vendor_item_ids), list(o.product_ids)) for o in d.options],
+        mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon,
+        inbound_summary=lp.inbound_summary, discontinued=lp.discontinued)
+
+
+def _vids_of(p: Product) -> set:
+    return {v for o in p.options for v in o.vendor_item_ids}
+
+
+def _ai_targets(tracked: list[Product], discovered: list[Product]) -> tuple[list[int], list[int], set]:
+    """AI 폴백 대상 — (미매칭 대장 위치 idxs, 아직 안 쓰인 발견 di 후보, 쓰인 vid 집합)."""
+    idxs = [i for i, tp in enumerate(tracked) if not _vids_of(tp)]
+    used = {v for tp in tracked for v in _vids_of(tp)}
+    cand = [di for di, d in enumerate(discovered) if not (used & _vids_of(d))]
+    return idxs, cand, used
+
+
+def _valid_pick(v, n: int) -> int:
+    """0..n-1 범위의 정수면 그 값, 아니면 -1(잘못된 AI 응답 방어)."""
+    try:
+        i = int(v)
+    except (TypeError, ValueError):
+        return -1
+    return i if 0 <= i < n else -1
+
+
+def augment_ai(ledger: list[Product], tracked: list[Product], discovered: list[Product],
+               matcher, log=None) -> tuple[list[Product], int]:
+    """정밀·roster 매칭 후에도 **남은 미매칭** 대장 상품을 **AI 의미(문맥) 매칭**으로 보강(폴백·소유자 2026-09-29).
+
+    토큰이 안 겹쳐도 의미가 같은 상품('목견인기'↔'거북목 교정기 견인기')을 잡는다. **미매칭에만** 적용하고
+    정밀 매칭 결과는 안 건드린다. `matcher(대장명들, 후보제목들) -> {대장i: 후보i}` 주입식(오프라인 테스트는
+    페이크·실 API 는 kw_ai). **확신 없으면 matcher 가 그 줄을 비운다 = 공란 유지(오매칭 방지)**. 이미 쓰인 vid
+    후보 제외·한 후보는 한 대장에만(유일 배정). 반환: (보강된 tracked, AI로 채운 개수)."""
+    log = log or (lambda m: None)
+    idxs, cand, used = _ai_targets(tracked, discovered)
+    if not idxs or not cand:
+        return tracked, 0
+    picks = matcher([ledger[i].name for i in idxs], [_title(discovered[di]) for di in cand]) or {}
+    out = list(tracked)
+    added = 0
+    for u_local, c_local in picks.items():
+        ui, ci = _valid_pick(u_local, len(idxs)), _valid_pick(c_local, len(cand))
+        if ui < 0 or ci < 0:
+            continue
+        i, d = idxs[ui], discovered[cand[ci]]
+        if _vids_of(d) & used:                                   # 이미 다른 대장에 배정 → 스킵(유일 배정)
+            continue
+        out[i] = _tracked_from(ledger[i], d)
+        used |= _vids_of(d)
+        added += 1
+        log(f"  [AI매칭] '{ledger[i].name}' ↔ '{_title(d)}'(의미 매칭·미매칭 폴백)")
+    return out, added

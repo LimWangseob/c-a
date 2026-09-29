@@ -477,7 +477,7 @@ def _collect_session_first(ctx: _RunCtx, accounts, get_password
         try:   # 한 계정의 어떤 오류(수집·워크북쓰기)도 전체를 막지 않게 계정 전체를 격리
             (report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids,
              vid_meta, pid_by_vid) = _login_and_discover(
-                a, ctx.date_from, ctx.date_to, get_password, log, login=False)
+                a, ctx.date_from, ctx.date_to, get_password, log, login=False, ai_key=ctx.ai_key)
             _finish(ctx, a, report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids,
                     vid_meta, pid_by_vid)
         except NeedLogin:                         # 세션 없음 → 뒤로 미룸(자동제출 안 함)
@@ -512,7 +512,7 @@ def _collect_with_login(ctx: _RunCtx, login_needed, get_password, sales_semi: bo
         try:
             (report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids,
              vid_meta, pid_by_vid) = _login_and_discover(
-                a, ctx.date_from, ctx.date_to, get_password, log, login=True, semi=sales_semi)
+                a, ctx.date_from, ctx.date_to, get_password, log, login=True, semi=sales_semi, ai_key=ctx.ai_key)
             blocks = 0                            # 로그인 성공 → 연속 차단 카운터 리셋
             _finish(ctx, a, report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids,
                     vid_meta, pid_by_vid)

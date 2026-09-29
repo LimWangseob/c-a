@@ -94,7 +94,7 @@ def try_login_once(account_id: str, password: str, *, on_log=None) -> bool:
 
 
 def _login_and_discover(a: Account, date_from, date_to, get_password, log, login: bool = True,
-                        semi: bool = False):
+                        semi: bool = False, ai_key: str | None = None):
     """계정 하나: (필요시) 로그인 → **같은 신선한 세션**에서 즉시 판매분석 발견 + 지표.
 
     반환: (report_account[활동 상품만] | None, {옵션ID: OptionMetric}, {옵션ID: 재고수량},
@@ -114,7 +114,7 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
         if not _ensure_login(b, a, pw, log, login=login, semi=semi):
             return None, {}, {}, {}, set(), set(), {}, {}   # 이 계정 건너뜀(무인 비번없음·otp·로그인 미완료)
         collector.reset_raw()                # 계정별 응답 원문 버퍼 초기화(파일 분리)
-        found = _discover_products(b, a, date_from, date_to, log)
+        found = _discover_products(b, a, date_from, date_to, log, ai_key=ai_key)
         _dump_raw(a.account_id, log)         # 3 API 응답 원문 저장(가공 없음·분석용). found None(데이터없음)이어도 남김
         if found is None:                    # 판매분석·상품조회 모두 데이터 없음 → 건너뜀
             return None, {}, {}, {}, set(), set(), {}, {}
@@ -239,7 +239,7 @@ def _resolve_login_failure(b, a: Account, log, cred_fail: bool) -> bool:
     return False
 
 
-def _discover_products(b, a: Account, date_from, date_to, log):
+def _discover_products(b, a: Account, date_from, date_to, log, ai_key: str | None = None):
     """발견 국면 — 상품조회/수정(vid 출처)·판매분석(지표)·재고현황·대장 스코핑/보강.
 
     반환: (products, tracked, metrics, inventory, sale_status, upbundle_vids). 판매분석·상품조회 **모두
@@ -288,9 +288,29 @@ def _discover_products(b, a: Account, date_from, date_to, log):
     # 추적 범위 = 입력 대장 상품(위탁 관리분)만. 당일 발견을 매칭해 노출제목·vid·구분 부여(지표는 당일 것).
     tracked, n_match = scope_to_ledger(a.products, products)
     tracked, n_match = _augment_vids(b, a, tracked, n_match, inv_names, date_to, log)
+    tracked, n_match = _augment_ai_match(a, tracked, products, n_match, ai_key, log)  # 남은 미매칭 = AI 의미 매칭 폴백
     _log_discover_summary(a, products, metrics, inventory, sale_status, tracked, n_match, log)
     return (products, tracked, metrics, inventory, sale_status, upbundle_vids, live_all_vids,
             vid_meta, pid_by_vid)
+
+
+def _augment_ai_match(a: Account, tracked, products, n_match: int, ai_key, log):
+    """정밀·roster 매칭 후 **남은 미매칭**을 AI 의미(문맥) 매칭으로 보강(폴백·소유자 2026-09-29).
+
+    ai_key 없으면 그대로(no-op). '목견인기'↔'거북목 교정기 견인기'처럼 토큰이 안 겹쳐도 같은 상품을 잡는다.
+    실 API 실패는 kw_ai.match_products 가 빈 결과+로그로 삼켜 비치명(수집은 계속). 확신 없으면 공란 유지."""
+    if not ai_key:
+        return tracked, n_match
+    from .kw_ai import match_products
+    from .product_match import augment_ai
+
+    def matcher(names, titles):
+        return match_products(names, titles, api_key=ai_key, log=log)
+
+    tracked, n_ai = augment_ai(a.products, tracked, products, matcher, log=log)
+    if n_ai:
+        log(f"  [{a.label}] AI 의미 매칭으로 미매칭 {n_ai}개 보강(정밀 매칭 폴백)")
+    return tracked, n_match + n_ai
 
 
 def _discover_inventory(b, a: Account, products, log):

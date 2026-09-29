@@ -589,6 +589,21 @@ def t1_product_match_precision():
     assert v6[2] == ["v_massage"], f"괄호 노출제목 폴백 매칭 실패: {v6[2]}"
     assert n6 == 3, f"원인② 매칭 수 {n6} (기대 3)"
     _ok("원인②: 괄호=색상/메모면 본문명으로 매칭·본문이 코드뿐이면 괄호(노출제목) 폴백")
+    # AI 의미 매칭 폴백(소유자 2026-09-29): 토큰이 안 겹쳐도 같은 상품이면 주입식 매처로 보강(미매칭에만·실 API 아님).
+    from coupang_analytics.product_match import augment_ai
+    disc7 = [disc("의료용 경추 거북목 교정기 견인기 넥 스트레쳐 넥메딕스", "v_neck")]
+    led7 = [Product(name="목견인기")]                                    # 토큰 안 겹침(견인기는 부분어) → 정밀 미매칭
+    t7, _ = scope_to_ledger(led7, disc7)
+    assert not any(o.vendor_item_ids for o in t7[0].options), "전제: 정밀 매칭이 목견인기를 미매칭으로 둬야"
+
+    def _fake_ai(names, titles):
+        return {0: 0} if names and titles else {}                        # 같은 상품 판정(페이크)
+
+    t7b, n7 = augment_ai(led7, t7, disc7, _fake_ai)
+    assert n7 == 1 and [v for o in t7b[0].options for v in o.vendor_item_ids] == ["v_neck"], "AI 폴백 매칭 실패"
+    t7c, n7c = augment_ai(led7, t7, disc7, lambda n, t: {})              # 확신 없음(빈 결과)
+    assert n7c == 0 and not any(o.vendor_item_ids for o in t7c[0].options), "AI none인데 매칭됨(공란 유지 실패)"
+    _ok("AI 의미 매칭 폴백: 토큰 안 겹쳐도 주입식 매처로 미매칭 보강·none이면 공란 유지(오매칭 방지)")
 
 
 def t1_vid_source_option_split():

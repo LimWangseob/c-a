@@ -56,7 +56,7 @@ def _n(v) -> str:
 
 
 # ── 풍부한 수집 대역(항목별 값 구분) ─────────────────────────────
-def _rich_discover(a, date_from, date_to, get_password, log, login=True, semi=False):
+def _rich_discover(a, date_from, date_to, get_password, log, login=True, semi=False, ai_key=None):
     metrics: dict[str, OptionMetric] = {}
     inventory: dict[str, int] = {}
     inv_status: dict[str, object] = {}

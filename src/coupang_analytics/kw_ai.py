@@ -310,6 +310,49 @@ def recommend_title(current_title: str, keywords: list[str], brand: str = "",
     return str(obj.get("title", "")).strip()
 
 
+_MATCH_SYSTEM = (
+    "너는 판매자의 내부 관리대장 상품명을 쿠팡 등록 상품명(노출명)과 매칭한다. 대장명은 내부 약칭이라 쿠팡 "
+    "노출명과 표현이 다를 수 있다(예: '목견인기'와 '의료용 경추 거북목 교정기 견인기 넥 스트레쳐'는 같은 상품). "
+    "규칙:\n"
+    "- **같은 실제 상품**일 때만 매칭한다. 카테고리·용도만 비슷하고 다른 상품이면 매칭하지 않는다.\n"
+    "- 확신이 없으면 그 대장 상품은 비운다(넣지 않는다). 틀린 매칭보다 공란이 낫다.\n"
+    "- 한 후보는 한 대장 상품에만 매칭한다. 대장·후보는 0부터 시작하는 번호로 답한다.\n"
+    '반드시 JSON 객체로만 답한다: {"matches": {"대장번호": 후보번호, ...}} (매칭 없으면 {"matches": {}}).'
+)
+
+
+def _match_user(names: list[str], titles: list[str]) -> str:
+    nn = "\n".join(f"{i}. {s}" for i, s in enumerate(names))
+    tt = "\n".join(f"{i}. {s}" for i, s in enumerate(titles))
+    return f"[대장 상품(매칭 대상)]\n{nn}\n\n[쿠팡 등록 상품(후보)]\n{tt}\n\n같은 상품끼리 번호를 매칭하라."
+
+
+def match_products(names: list[str], titles: list[str], *, api_key: str | None = None,
+                   model: str | None = None, log=None) -> dict[int, int]:
+    """미매칭 대장명 ↔ 발견 노출명 **의미(문맥) 매칭**(정밀 매칭 폴백). 반환 {대장i: 후보i} — **같은 상품 확신만**,
+    애매하면 비움(공란 유지·오매칭 방지). 실패(키·호출·JSON)는 예외 아님 → 빈 dict + 로그(비치명·폴백 생략)."""
+    log = log or (lambda m: None)
+    if not names or not titles:
+        return {}
+    try:
+        client = _client(api_key)
+        text = _ask(client, model or config.KW_AI_MODEL, _MATCH_SYSTEM, _match_user(names, titles),
+                    max_tokens=512)
+        obj = _json_object(text)
+    except KeywordAIError as exc:
+        log(f"  [AI매칭] 실패(폴백 생략·비치명): {exc}")
+        return {}
+    out: dict[int, int] = {}
+    for k, v in (obj.get("matches") or {}).items():
+        try:
+            ki, vi = int(k), int(v)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= ki < len(names) and 0 <= vi < len(titles) and vi not in out.values():
+            out[ki] = vi                                          # 한 후보는 한 대장에만(유일)
+    return out
+
+
 # ── 공통 헬퍼 ─────────────────────────────────────────────────────
 def _client(api_key: str | None) -> OpenAI:
     try:
