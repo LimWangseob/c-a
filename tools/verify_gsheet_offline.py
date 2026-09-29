@@ -196,11 +196,13 @@ def t3_index_sync() -> None:
 
 
 class _FakeClient:
-    def __init__(self, values, titles=None, row_count=1000, col_count=26, merges=None, raise_on_merge=False):
+    def __init__(self, values, titles=None, row_count=1000, col_count=26, merges=None, raise_on_merge=False,
+                 frozen_cols=0):
         self._v = values; self.batches = []
         self._raise_on_merge = raise_on_merge   # mergeCells 400 시뮬(제목 재병합 실패 재현·비치명 검증용)
         self._row_count = row_count   # 그리드 행수(확장 판단용) — 기본 넉넉히
         self._col_count = col_count   # 그리드 열수(확장 판단용) — 기본 넉넉히(신규 시트 26열)
+        self._frozen_cols = frozen_cols   # 고정 열 수 — Google 제약(고정 경계 가로지르는 병합=400) 재현용(D8 2026-09-29)
         self._titles = titles if titles is not None else (["계정목록"] if values else [])
         self._ids = {t: 100 + i for i, t in enumerate(self._titles)}
         # 병합 범위 [(r0,r1,c0,c1)] — Google 제약(병합 가로지르는 열 이동=400) 재현용
@@ -225,18 +227,28 @@ class _FakeClient:
         # ⚠ Google 실측: moveDimension 은 **배치 시작 시점**의 병합상태로 검증한다(같은 배치 안의 unmergeCells 는
         #   아직 반영 전 → 400). 이 스냅샷으로 라이브 400 을 재현한다(같은 배치 unmerge+move 는 못 통과).
         merges_at_start = list(self._merges)
+        frozen_at_start = self._frozen_cols   # ⚠ 병합도 **배치 시작 시점** 고정열 상태로 검증(같은 배치 unfreeze 무효)
         for r in reqs:   # 마이그레이션 재현: A열(0) 컬럼 삽입 → 모든 행 오른쪽으로 밀림(값 유지)
             ins = r.get("insertDimension")
             if ins and ins["range"].get("dimension") == "COLUMNS" and ins["range"].get("startIndex") == 0:
                 self._v = [[""] + list(row) for row in self._v]
+            usp = r.get("updateSheetProperties")   # 고정 열 변경 반영(다음 배치의 병합 검증에 쓰임)
+            if usp:
+                fcnt = (usp.get("properties", {}).get("gridProperties", {}) or {}).get("frozenColumnCount")
+                if fcnt is not None:
+                    self._frozen_cols = fcnt
             mc = r.get("mergeCells")          # 병합 등록(Google 제약 재현용)
             if mc:
+                rgm = mc["range"]
+                c0m, c1m = rgm.get("startColumnIndex", 0), rgm.get("endColumnIndex", 0)
+                if c0m < frozen_at_start < c1m:   # ⚠ 고정/비고정 열 경계 가로지르는 병합 = 400(D8 라이브 2026-09-29)
+                    from coupang_analytics.gsheet_api import GSheetError
+                    raise GSheetError("구글 시트 API 오류(status=400): You can't merge frozen and non-frozen columns (fake)")
                 if self._raise_on_merge:      # mergeCells 400 시뮬(제목 재병합 실패 재현) — GSheetError 로 올림
                     from coupang_analytics.gsheet_api import GSheetError
                     raise GSheetError('구글 시트 API 오류(status=400): Invalid requests[0].mergeCells (fake)')
-                rg = mc["range"]
-                self._merges.append((rg.get("startRowIndex", 0), rg.get("endRowIndex", 0),
-                                     rg.get("startColumnIndex", 0), rg.get("endColumnIndex", 0)))
+                self._merges.append((rgm.get("startRowIndex", 0), rgm.get("endRowIndex", 0),
+                                     rgm.get("startColumnIndex", 0), rgm.get("endColumnIndex", 0)))
             um = r.get("unmergeCells")        # 병합 해제 — 범위와 겹치는 병합 제거
             if um:
                 rg = um["range"]; r0, r1 = rg.get("startRowIndex", 0), rg.get("endRowIndex", 0)
@@ -781,13 +793,35 @@ def t11b_merge_failure_nonfatal() -> None:
     _ok("재병합 400 = 비치명(로그만)·열이동/동기화는 정상 완주(계정목록 갱신 보장)")
 
 
+def t11c_stock_migration_frozen_cols() -> None:
+    print("[11c] 회사재고·그로스재고 삽입 마이그레이션 — 고정 열(frozen=9) 시트도 제목 재병합 400 없이 수렴(D8 2026-09-29)")
+    # 옛 포맷(회사재고·그로스재고 없음·rep+계정ID 새 순서) 9열 + 제목 A1:I1 병합 + 고정 열 9.
+    hdr9 = ["대표자", "사업자", "계정ID", "상품명(클릭 이동)", "체험단 시작일", "체험단 종료일",
+            "모니터링 종료일", "상태", "체험단효과"]
+    vals = [["계정목록 · 상품 1개"], list(hdr9),
+            ["대표A", "biz_A", "A", "상품1", "", "", "", "예정", ""]]
+    fc = _FakeClient(vals, col_count=9, merges=[(0, 1, 0, 9)], frozen_cols=9)   # 라이브 조건 재현(A1:I1·고정 9)
+    logs: list[str] = []
+    # 직접 마이그레이션 호출(예외 없이 통과해야 — 고정 열을 batch1에서 0으로 리셋하므로 A1:K1 재병합 성공)
+    gi._ensure_stock_columns(fc, "계정목록", fc.sheet_id("계정목록"), on_log=logs.append)
+    assert fc._frozen_cols == 0, f"고정 열 미리셋(재병합 400 재발): frozen={fc._frozen_cols}"
+    assert (0, 1, 0, gi.N_COLS) in fc._merges, f"제목 A1:K1 재병합 안 됨: {fc._merges}"
+    assert not any("제목 재병합 건너뜀" in m for m in logs), f"재병합이 400으로 건너뛰어짐(고정 리셋 실패): {logs}"
+    # batch1(선커밋)에 고정 해제(updateSheetProperties frozenColumnCount=0)가 있어야
+    b1 = fc.batches[0]
+    assert any((r.get("updateSheetProperties", {}).get("properties", {})
+                .get("gridProperties", {}) or {}).get("frozenColumnCount") == 0 for r in b1), \
+        "batch1에 고정 열 해제 요청 없음(재병합 400 회피 실패)"
+    _ok("고정 열 시트도 batch1 고정 해제 선커밋으로 제목 A1:K1 재병합 정상(400 없음)·비치명 경고도 안 남음")
+
+
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
     for fn in (t1_ledger_rows, t1b_ledger_strike, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
                t3d_grid_autogrow, t3c_delete_accounts, t3e_delete_renamed, t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook,
                t6b_multi_account_roster, t6c_content_col_widths, t7_staff_keywords_merge,
                t8_exec_retry, t9_legacy_format_mismatch, t10_stats_full_replace_mismatch,
-               t11_move_across_title_merge, t11b_merge_failure_nonfatal):
+               t11_move_across_title_merge, t11b_merge_failure_nonfatal, t11c_stock_migration_frozen_cols):
         fn()
     print("=== 전부 통과 ===")
     return 0

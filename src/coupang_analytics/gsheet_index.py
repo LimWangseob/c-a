@@ -506,6 +506,15 @@ def _ensure_rep_column(client, sheet: str, sheet_id: int) -> None:
         "inheritFromBefore": False}}])
 
 
+def _unfreeze_cols_request(sheet_id: int) -> dict:
+    """계정목록 **열 고정 해제**(frozenColumnCount=0) 요청. 제목(A1:K1) 병합이 고정 열 경계를 가로지르면
+    Google 이 "can't merge frozen and non-frozen columns" 400(D8 라이브 2026-09-29). 전체생성도 열 고정 0이
+    설계 의도(제목이 전 열 병합이라)라, 마이그레이션 선커밋에서 0으로 맞춰 재병합 400을 없앤다(행 고정 2는 유지)."""
+    return {"updateSheetProperties": {
+        "properties": {"sheetId": sheet_id, "gridProperties": {"frozenColumnCount": 0}},
+        "fields": "gridProperties.frozenColumnCount"}}
+
+
 def _ensure_column_order(client, sheet: str, sheet_id: int, on_log=None) -> None:
     """항목④(2026-09-25): 옛 열순서(상품명 C·계정ID D)를 새 순서(계정ID C·상품명 D)로 **물리 이전**.
 
@@ -531,6 +540,7 @@ def _ensure_column_order(client, sheet: str, sheet_id: int, on_log=None) -> None
     if ccur is not None and ccur < N_COLS:   # 재병합이 그리드를 벗어나지 않게(엣지: 옛 8열 시트) 먼저 열 확장
         pre.append({"appendDimension": {"sheetId": sheet_id, "dimension": "COLUMNS", "length": N_COLS - ccur}})
     pre.append({"unmergeCells": {"range": title}})        # 제목 병합 해제(없으면 no-op) — **배치1로 선커밋**
+    pre.append(_unfreeze_cols_request(sheet_id))          # 열 고정 해제(재병합 A1:K1이 고정 경계 가로질러 400 방지)
     client.batch_update(pre)
     # 배치2: **열 이동만 단독 커밋** — 성공 시 계정ID 위치(#3)가 확정된다. batchUpdate 는 원자적이라, 아래
     # 재병합(장식)을 같은 배치에 두면 그 실패가 열 이동까지 롤백해 계정목록이 옛 순서로 방치되고 매 실행
@@ -563,10 +573,13 @@ def _ensure_stock_columns(client, sheet: str, sheet_id: int, on_log=None) -> Non
     if mkt_i is None or mkt_i >= COL_MKT_START:
         return                                            # 마케팅 라벨 없음(이상) or 이미 새 위치(회사재고·그로스재고 있음)
     ccur = client.grid_col_count(sheet) or N_COLS
-    # 배치1: 제목 병합 해제(삽입이 병합 가로지르지 않게) — **선커밋**(Google 은 삽입을 배치 시작 병합상태로 검증)
-    client.batch_update([{"unmergeCells": {"range": {
-        "sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1,
-        "startColumnIndex": 0, "endColumnIndex": max(ccur, N_COLS)}}}])
+    # 배치1: 제목 병합 해제(삽입이 병합 가로지르지 않게) + 열 고정 해제 — **선커밋**(Google 은 삽입을 배치 시작
+    # 병합상태로 검증). 열 고정 해제는 재병합 A1:K1이 고정 경계(예 frozen=9)를 가로질러 400 나는 것 방지(D8 라이브).
+    client.batch_update([
+        {"unmergeCells": {"range": {
+            "sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1,
+            "startColumnIndex": 0, "endColumnIndex": max(ccur, N_COLS)}}},
+        _unfreeze_cols_request(sheet_id)])
     # 배치2: 상품명 오른쪽(COL_STOCK=4)에 빈 열 2개 삽입 — 마케팅·상태·체험단효과가 값·서식 그대로 오른쪽으로 밀림
     client.batch_update([{"insertDimension": {
         "range": {"sheetId": sheet_id, "dimension": "COLUMNS",
