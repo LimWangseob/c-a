@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 36f26e1a-466b-4e04-9814-a4e46aceddf1
-  modified: 2026-09-28T23:57:30.972Z
+  modified: 2026-09-29T00:10:12.457Z
 ---
 
 **통합(플랫폼) 세션(2026-09-28~29). 전부 origin push 완료(HEAD=b70f6ab).**
@@ -25,7 +25,10 @@ metadata:
 ## 정산 2단계 현황 (SSOT=designs/LEDGER_REGISTRY.md §10-1)
 - ✅ registry 4함수(write_coupang_check·previous_password·to_input_list·password_map)+동시쓰기잠금(registry_lock)·계약핀·2-2 pipeline 배선(쿠팡확인 산출→원장 기록).
 - ✅ 2-4 (a)관리중만 입력·ledger엔 관리중단 포함 (b)마케팅=결과시트 유지·그로스 요청일자 공란+로그.
-- 🔄 **H_ui UI 진행 중**(방금 착수 지시): 2-1 원장카드·[미리보기/반영]·실행시작 run_sync 트리거·registry_url 전달 / 2-3 [이전 비번 1회] 버튼 / 2-4 입력소스 '원장' 라디오. ui/ 만 편집.
+- ✅ **try_login_once 공개 진입점**(통합·98693a3): `pipeline.try_login_once(account_id, password, *, on_log)` — 2-3용 한 계정 반자동 1회 로그인(A안). pin·L1_CONTRACT §7-c.
+- 🔄 **H_ui UI 진행 중**(착수 지시·계획 승인 회신 완료): 2-1 원장카드·[미리보기/반영]·실행시작 run_sync 트리거(전체실행·①·무인·재개, ②③ 제외)·registry_url=run_full에만 / 2-3 [이전 비번 1회]=try_login_once / 2-4 입력소스 '원장' 라디오. **ui/registry_ui.py 얇은 도우미**로(app_qt 비대 방지). ui/ 만 편집. 착수순서 2-1→2-4→2-3.
+- **2-4 원장 로드 실패 = 대장 폴백(소유자 2026-09-29)** + 명확 로그(no-silent-fallback: 불가피 폴백은 로그 명시). registry/url = 결과·입력과 별도 칸(QSettings·config 이식).
+- H_ui 회신(UI 완료/단계 커밋) 오면 통합이 병합·(필요시)핀·문서. HEAD=98693a3(origin push 완료).
 - ⏳ **라이브(사무실)**: 로그인 후 쿠팡확인 실채움·원장 실제 쓰기 확인 남음.
 - ⏳ PC간 잠금(범위 밖·운용 원칙으로 충분)·다음 D8 작업 없음.
 
