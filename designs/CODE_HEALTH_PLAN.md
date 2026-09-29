@@ -40,7 +40,7 @@
 | `do_run_full` | E (33/34) | app_qt.py:1032 · app.py:438 |
 | `_build_index` D29 · `normalize_date_columns` D26 · `set_display_name` D21 | D | workbook.py |
 | `track_ranks_stage` D27 · `select_keywords_stage` D25 | D | pipeline.py |
-| `wait_for_login` D27 (browser) · `organic_ranks_batch` D25 (rank) · `write_ledger_inventory` D22 (input_list) | D | (단발성, 우선순위 낮음) |
+| `wait_for_login` D27 (browser) · `organic_ranks_batch` D25 (rank) · `write_ledger_inventory` D22 (input_list) | D | ✅ 전부 분해 완료(2026-09-29·행동 불변·D+ 전멸) |
 
 ### 1-4. 죽은 코드 vulture
 - 신뢰도 80%: **1건**(`detail_images.py:149` ternary). 60%: 59건(대부분 오탐=동적호출·미사용인자).
