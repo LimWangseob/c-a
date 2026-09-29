@@ -250,8 +250,9 @@ class _IndexMixin:
         gi.font = sty.font; gi.alignment = sty.center; gi.border = sty.box
 
     def _idx_name_cell(self, ws, r: int, biz: str, prod: str, hdr, has_sheet: bool, sty: _IdxStyle) -> None:
-        """D열 상품명 셀 — 있으면 상품 블록 헤더로 점프 링크, 없으면 (미수집)/(상품없음)."""
-        pcell = ws.cell(r, 4, prod if prod else ("(미수집)" if not has_sheet else "(상품없음)"))
+        """D열 상품명 셀 — 있으면 상품 블록 헤더로 점프 링크, 없으면 (미수집)/(상품없음). 표시명=옵션 접미 정리(정체성 불변)."""
+        disp = self.index_display_name(biz, prod) if prod else prod
+        pcell = ws.cell(r, 4, disp if disp else ("(미수집)" if not has_sheet else "(상품없음)"))
         if has_sheet and prod and hdr:      # 상품 블록으로 점프(헤더행)
             pcell.hyperlink = Hyperlink(ref=pcell.coordinate,
                                         location=f"'{biz.replace(chr(39), chr(39) * 2)}'!A{hdr}")

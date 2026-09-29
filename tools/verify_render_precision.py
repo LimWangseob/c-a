@@ -219,12 +219,12 @@ def main() -> int:
     for r in range(3, idx.max_row + 1):
         if _n(idx.cell(r, 2).value) == "로움컨설팅":
             rows[_n(idx.cell(r, 4).value)] = _n(idx.cell(r, 3).value)   # 상품명(대표옵션 블록명) → 계정ID
-    # 계정목록 = 상품별 1줄(대표 옵션만): 타프 대표=베이지 블록명 '타프 (베이지)'·매트
-    _chk(rows.get("타프 (베이지)") == "loum1" and rows.get("매트") == "loum2", f"계정목록 상품별 계정ID={rows}")
-    _chk("타프 (그레이)" not in rows, "2차 옵션(그레이)은 계정목록 제외(상품별 1줄)")
+    # 계정목록 = 상품별 1줄(대표 옵션만): 타프 대표=베이지지만 **표시명은 옵션 접미 정리**('타프', 소유자 2026-09-29)·매트
+    _chk(rows.get("타프") == "loum1" and rows.get("매트") == "loum2", f"계정목록 상품별 계정ID={rows}")
+    _chk("타프 (베이지)" not in rows and "타프 (그레이)" not in rows, "2차 옵션 제외 + 대표 표시명 옵션접미 정리(상품별 1줄·깔끔)")
     # 상품명 셀(D열) = 통계 시트 점프 하이퍼링크(항목2)
     drow = next(r for r in range(3, idx.max_row + 1)
-                if _n(idx.cell(r, 2).value) == "로움컨설팅" and _n(idx.cell(r, 4).value) == "타프 (베이지)")
+                if _n(idx.cell(r, 2).value) == "로움컨설팅" and _n(idx.cell(r, 4).value) == "타프")
     _chk(idx.cell(drow, 4).hyperlink is not None, "계정목록 상품명=통계 점프 링크(항목2)")
     # 그로스재고(F=6열) = 워크북 최신 재고현황 숫자(타프 베이지=45), 회사보유재고(E=5열)는 미주입 시 공란
     _chk(idx.cell(drow, 6).value == 45, f"계정목록 그로스재고=최신 재고현황 숫자({idx.cell(drow, 6).value})")

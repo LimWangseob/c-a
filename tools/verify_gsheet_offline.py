@@ -815,13 +815,36 @@ def t11c_stock_migration_frozen_cols() -> None:
     _ok("고정 열 시트도 batch1 고정 해제 선커밋으로 제목 A1:K1 재병합 정상(400 없음)·비치명 경고도 안 남음")
 
 
+def t12_delete_ghost_product_rows() -> None:
+    print("[12] 유령 상품 행 삭제 — 마스터에 없는 상품 행만 삭제·미수집 계정/현행 상품/판매중지(대장) 보존(소유자 2026-09-29)")
+    heads = gi._heads()
+    def _row(rep, biz, aid, prod, st=""):
+        r = [rep, biz, aid, prod] + [""] * (gi.N_COLS - 4)
+        r[gi.COL_STATUS] = st
+        return r
+    vals = [["계정목록"], list(heads),
+            _row("대표A", "가게A", "idA", "상품1"),                 # 행2(idx2) 현행 → 유지
+            _row("대표A", "가게A", "idA", "유령상품", "⛔ 판매중지"),  # 행3(idx3) 마스터에 없음 → 삭제
+            _row("대표B", "가게B", "idB", "상품2")]                 # 행4(idx4) 미수집 계정(로스터에 없음) → 유지
+    fc = _FakeClient(vals, col_count=gi.N_COLS)
+    desired = [gi.IndexRow(business="가게A", product="상품1", account_id="idA", status="",
+                           key=gi._synth_key("idA", "상품1"))]   # 로스터=가게A 상품1만
+    n = gi._delete_missing_product_rows(fc, "계정목록", desired)
+    assert n == 1, f"삭제 행수 {n} (유령상품만 삭제돼야)"
+    dels = [r for b in fc.batches for r in b if "deleteDimension" in r]
+    assert len(dels) == 1 and dels[0]["deleteDimension"]["range"]["startIndex"] == 3, f"유령상품(idx3) 삭제 아님: {dels}"
+    # 미수집 계정(가게B/idB)은 desired 에 없음 → 건드리지 않음(계정 통째 삭제는 delete_accounts 담당)
+    _ok("마스터에 없는 유령 상품 행만 삭제 · 현행 상품·미수집 계정 행 보존(원장은 관리중단 이력 보존)")
+
+
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
     for fn in (t1_ledger_rows, t1b_ledger_strike, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
                t3d_grid_autogrow, t3c_delete_accounts, t3e_delete_renamed, t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook,
                t6b_multi_account_roster, t6c_content_col_widths, t7_staff_keywords_merge,
                t8_exec_retry, t9_legacy_format_mismatch, t10_stats_full_replace_mismatch,
-               t11_move_across_title_merge, t11b_merge_failure_nonfatal, t11c_stock_migration_frozen_cols):
+               t11_move_across_title_merge, t11b_merge_failure_nonfatal, t11c_stock_migration_frozen_cols,
+               t12_delete_ghost_product_rows):
         fn()
     print("=== 전부 통과 ===")
     return 0

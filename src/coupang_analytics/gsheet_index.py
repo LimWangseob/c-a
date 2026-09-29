@@ -480,7 +480,8 @@ def roster_from_workbook(wb, stats_gids: dict[str, int]) -> list[IndexRow]:
         effect, verdict = wb.promo_effect(biz, prod) if has_sheet else ("", "")   # 체험단효과(시작일 직전→최신)
         stock = wb.company_stock_of(biz, prod) if (has_sheet and prod) else ""   # E 회사보유재고(주입값)
         inv = wb.product_inventory(biz, prod) if (has_sheet and prod) else None  # F 그로스재고(최신 숫자)
-        rows.append(IndexRow(business=biz, product=prod, account_id=acct,
+        disp = wb.index_display_name(biz, prod) if prod else prod   # 표시명=옵션 접미 정리(정체성/키는 불변)
+        rows.append(IndexRow(business=biz, product=disp, account_id=acct,
                              status=wb.status_of(biz, prod, has_sheet), key=key,
                              link_gid=gid, link_row=(hdr if (linkable and gid is not None) else None),
                              band=band, representative=wb.representative_of(biz),
@@ -685,6 +686,33 @@ def delete_renamed_accounts(client, renamed, *, sheet: str = INDEX_SHEET_NAME, o
     return n
 
 
+def _delete_missing_product_rows(client, sheet: str, desired: list[IndexRow], on_log=None) -> int:
+    """마스터 로스터에 **없는 상품 행**을 계정목록에서 삭제 — 유령(옛 노출명·옛 옵션) 행 정리(소유자 2026-09-29).
+
+    구글시트 계정목록은 상품 행을 지우지 않고 판매중지로만 표기해, 노출명 변경·옵션 재등록 때마다 **옛 행이
+    판매중지로 쌓였다**(마스터는 이미 정리됨). 규칙: **그 계정이 로스터에 있고(=이번에 처리됨) 그 행의 안정키가
+    로스터에 없으면** 유령으로 보고 행 삭제. 로스터에 아예 없는 계정(미수집 등)은 건드리지 않는다(계정 통째
+    삭제는 delete_accounts 담당). 삭제분 이력은 셀독등록원장이 '관리중단'으로 보존한다. 삭제 행 수 반환.
+
+    ⚠ 삭제는 아래→위(deleteDimension)로 한 배치 — 인덱스 안정. plan_sync 전에 선행 실행해 정리된 시트를 만든다."""
+    log = on_log or (lambda m: None)
+    existing = _read_existing(client, sheet)
+    if not existing:
+        return 0
+    desired_keys = {d.key for d in desired}
+    desired_accts = {d.account_id for d in desired}
+    ghosts = [e.grid_row for e in existing
+              if e.account_id in desired_accts and e.key not in desired_keys]
+    if not ghosts:
+        return 0
+    sid = client.sheet_id(sheet)
+    reqs = [{"deleteDimension": {"range": {"sheetId": sid, "dimension": "ROWS",
+             "startIndex": g, "endIndex": g + 1}}} for g in sorted(ghosts, reverse=True)]
+    client.batch_update(reqs)
+    log(f"  [구글시트] 계정목록 유령 상품 행 {len(reqs)}개 삭제(마스터에 없음·원장은 관리중단 보존)")
+    return len(reqs)
+
+
 _GRID_ROW_BUFFER = 50   # 삽입 여유행(매 실행 재확장 방지 — 신규 상품/계정 몇 개는 그리드 확장 없이 소화)
 
 
@@ -719,6 +747,7 @@ def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME
     _ensure_rep_column(client, sheet, sheet_id)   # 옛 7열 시트면 A에 대표자 빈 열 삽입(멱등) → 아래 읽기는 새 레이아웃
     _ensure_column_order(client, sheet, sheet_id, on_log)  # 항목④: 옛 순서(상품C·계정ID D)면 계정ID를 C로 물리 이전(멱등)
     _ensure_stock_columns(client, sheet, sheet_id, on_log)  # 2026-09-29: 상품명 오른쪽에 회사재고·그로스재고 2열 삽입(멱등)
+    _delete_missing_product_rows(client, sheet, desired, on_log)   # 2026-09-29: 마스터에 없는 유령 상품 행 삭제(그다음 증분)
     existing = _read_existing(client, sheet)
     if not existing:
         grow = _grid_grow_requests(client, sheet, sheet_id, len(desired))

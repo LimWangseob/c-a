@@ -887,6 +887,20 @@ class OutputWorkbook(_RenderMixin, _IndexMixin):
             return ""
         return _norm(self.wb[_META_SHEET].cell(row, 6).value)
 
+    def index_display_name(self, biz: str, product: str) -> str:
+        """계정목록(엑셀·구글) **표시 상품명** — 대표 옵션 블록의 수량/옵션 접미('(1개 120정)')를 정리(소유자 2026-09-29).
+
+        같은 상품군(블록명 base)의 수량 옵션(1개/2개/3개)은 `_is_secondary_option` 이 2차를 빼 **대표 1줄**만
+        남는데, 그 대표 이름(노출명)에 '(1개 …)' 접미가 붙어 지저분했다. 그룹 안에 **대표가 유일**하면(수량
+        옵션뿐) 접미를 떼 깔끔히, **여럿**이면(색상 등 별도 상품 대표가 공존) 구분 위해 원래 이름 유지. 블록
+        정체성(매칭키·하이퍼링크)은 안 바뀐다(표시만). ⚠계정목록은 **노출명 표시**(대장명으로 치환하지 않음)."""
+        if " (" not in product:
+            return product
+        gk = self._group_key(product)
+        sibs = [p for p in self.products_of(biz)
+                if not self._is_secondary_option(biz, p) and self._group_key(p) == gk]
+        return product.rsplit(" (", 1)[0].rstrip() if len(sibs) <= 1 else product
+
     @staticmethod
     def _group_key(product: str) -> str:
         """상품군 그룹 키(소유자 2026-09-26 확정: 블록명 base) — 같은 상품군(기본+옵션·수량 1/2/3개·
