@@ -81,7 +81,7 @@ FUNC_CONTRACTS: dict = {
     ],
     gsheet_index: [
         ("roster_from_workbook", "P:wb:0 P:stats_gids:0"),
-        ("sync_index", "P:client:0 P:desired:0 K:sheet:1 K:on_log:1"),
+        ("sync_index", "P:client:0 P:desired:0 K:sheet:1 K:on_log:1 K:growth_asof:1"),
         ("delete_accounts", "P:client:0 P:removed:0 K:sheet:1 K:on_log:1"),
         ("delete_renamed_accounts", "P:client:0 P:renamed:0 K:sheet:1 K:on_log:1"),
         ("read_marketing", "P:client:0 K:sheet:1"),

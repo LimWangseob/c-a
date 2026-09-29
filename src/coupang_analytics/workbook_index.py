@@ -138,6 +138,13 @@ class _IndexMixin:
             if start or end or mon:
                 self.set_marketing(biz, prod, start, end, mon)
 
+    def growth_asof(self) -> str:
+        """그로스재고 헤더의 자동갱신일자 — 마스터 전체에서 가장 최신 일자 컬럼 라벨('월.일'). 없으면 ''.
+
+        엑셀 계정목록(_build_index)과 구글시트 계정목록(gsheet_index via pipeline_gsheet) 공통 SSOT."""
+        dates = [d for b in self.account_sheets() if (d := self.latest_date(b))]
+        return max(dates, default="")
+
     def _build_index(self) -> None:
         """첫 시트 '계정 목록' 재생성 — 상품 단위 로스터 + 마케팅 기간 입력열 + 점프 링크 + 상태.
 
@@ -170,25 +177,28 @@ class _IndexMixin:
         n_prod = sum(1 for _b, p, _h, hs in rows if hs and p)
 
         ws.cell(1, 1, f"{_INDEX_SHEET} · 상품 {n_prod}개").font = title_font
-        ws.merge_cells("A1:I1")                            # 대표자+체험단효과로 9열(A~I)
+        ws.merge_cells("A1:K1")                            # 대표자~체험단효과로 11열(A~K)
         ws.cell(1, 1).alignment = center
-        # 열(항목④): 1 대표자 · 2 사업자 · 3 계정ID · 4 상품명 · 5~7 체험단(관리대장 입력·표시) · 8 상태 · 9 체험단효과.
-        heads = ["대표자", "사업자", "계정ID", "상품명(클릭 이동)",
+        # 열: 1 대표자 · 2 사업자 · 3 계정ID · 4 상품명 · **5 회사보유재고 · 6 그로스재고(자동갱신 MM.DD)** ·
+        # 7~9 체험단(관리대장 입력·표시) · 10 상태 · 11 체험단효과. 회사재고·그로스재고=상품명 오른쪽(소유자 2026-09-29).
+        growth_asof = self.growth_asof()   # 그로스재고 헤더 자동갱신일자(최신 일자 컬럼 '월.일')
+        growth_head = f"그로스재고 (자동갱신 {growth_asof})" if growth_asof else "그로스재고"
+        heads = ["대표자", "사업자", "계정ID", "상품명(클릭 이동)", "회사보유재고", growth_head,
                  _MKT_COLS[0], _MKT_COLS[1], _MKT_COLS[2], "상태", "체험단효과"]
         for c, h in enumerate(heads, 1):
             x = ws.cell(2, c, h)
             x.font = bold; x.alignment = center; x.border = box
-            x.fill = mkt_fill if 5 <= c <= 7 else head_fill   # 5~7열=마케팅(관리대장 값 표시)
+            x.fill = mkt_fill if 7 <= c <= 9 else head_fill   # 7~9열=마케팅(관리대장 값 표시)
         for r, (biz, prod, hdr, has_sheet) in enumerate(rows, start=3):
             self._index_row(ws, r, biz, prod, hdr, has_sheet, sty)
-        # 항목④: 셀 폭 **내용 길이 기반 자동맞춤**(구글 패리티). 헤더+데이터 최장 길이(한글=2폭)로 열별
-        # min~max 클램프. 마케팅 5~7(직원 입력)은 고정. 3=계정ID·4=상품명(스왑 반영).
+        # 셀 폭 **내용 길이 기반 자동맞춤**(구글 패리티). 헤더+데이터 최장 길이(한글=2폭)로 열별 min~max
+        # 클램프. 마케팅 7~9(직원 입력)은 고정. 5=회사보유재고·6=그로스재고·10=상태·11=체험단효과.
         def _dl(v) -> int:
             return sum(2 if ord(ch) > 0x2000 else 1 for ch in str(v)) if v is not None else 0
-        _wmin = {1: 10, 2: 12, 3: 10, 4: 16, 8: 8, 9: 14}
-        _wmax = {1: 20, 2: 30, 3: 20, 4: 55, 8: 16, 9: 32}
-        _wfix = {5: 13, 6: 13, 7: 14}
-        for c in range(1, 10):
+        _wmin = {1: 10, 2: 12, 3: 10, 4: 16, 5: 12, 6: 10, 10: 8, 11: 14}
+        _wmax = {1: 20, 2: 30, 3: 20, 4: 55, 5: 34, 6: 14, 10: 16, 11: 32}
+        _wfix = {7: 13, 8: 13, 9: 14}
+        for c in range(1, 12):
             if c in _wfix:
                 ws.column_dimensions[get_column_letter(c)].width = _wfix[c]
                 continue
@@ -213,18 +223,31 @@ class _IndexMixin:
         acct = (self.product_account_id(biz, prod) if prod else "") or self.account_id_of(biz)
         ws.cell(r, 3, acct).font = base
         self._idx_name_cell(ws, r, biz, prod, hdr, has_sheet, sty)
+        self._idx_stock_cells(ws, r, biz, prod, has_sheet, sty)   # 5 회사보유재고 · 6 그로스재고(상품명 오른쪽)
         start, end, mon = self.marketing_of(biz, prod)
         status = self._idx_status(biz, prod, has_sheet, start, end, mon)
-        for c, v in ((5, start), (6, end), (7, mon)):   # 마케팅(관리대장 값 표시)
+        for c, v in ((7, start), (8, end), (9, mon)):   # 마케팅(관리대장 값 표시) — 회사재고·그로스재고 뒤로 밀림
             x = ws.cell(r, c, v)
             x.font = sty.font; x.alignment = sty.center; x.border = sty.box; x.fill = sty.mkt_fill
-        st = ws.cell(r, 8, status); st.alignment = sty.center; st.border = sty.box
+        st = ws.cell(r, 10, status); st.alignment = sty.center; st.border = sty.box
         _gray = ("미수집", "종료", "⛔ 판매중지", "판매중지", "임시저장", "승인반려")   # 미판매/비활성 = 옅게
         st.font = sty.red_bold if status == "체험단중" else (sty.gray_font if status in _gray else sty.font)
         self._idx_promo_cell(ws, r, biz, prod, has_sheet, sty)
         for c in (1, 2, 3, 4):
             ws.cell(r, c).alignment = sty.left if c == 3 else sty.center
             ws.cell(r, c).border = sty.box
+
+    def _idx_stock_cells(self, ws, r: int, biz: str, prod: str, has_sheet: bool, sty: _IdxStyle) -> None:
+        """5 회사보유재고(판매자배송 자체재고·'창고 , 수량개') · 6 그로스재고(로켓그로스 최신 재고 숫자).
+
+        회사보유재고=매 실행 재고현황 시트에서 주입(company_stock.apply_to_workbook·없으면 공란). 그로스재고=워크북
+        최신 일자 재고현황(숫자·없으면 공란). 갱신일자는 헤더에 한 번(소유자 2026-09-29)."""
+        stock = self.company_stock_of(biz, prod) if (has_sheet and prod) else ""
+        cs = ws.cell(r, 5, stock or None)
+        cs.font = sty.font; cs.alignment = sty.center; cs.border = sty.box
+        inv = self.product_inventory(biz, prod) if (has_sheet and prod) else None
+        gi = ws.cell(r, 6, inv)
+        gi.font = sty.font; gi.alignment = sty.center; gi.border = sty.box
 
     def _idx_name_cell(self, ws, r: int, biz: str, prod: str, hdr, has_sheet: bool, sty: _IdxStyle) -> None:
         """D열 상품명 셀 — 있으면 상품 블록 헤더로 점프 링크, 없으면 (미수집)/(상품없음)."""
@@ -243,9 +266,9 @@ class _IndexMixin:
         return self._mkt_status(start, end, mon) if has_sheet else "미수집"
 
     def _idx_promo_cell(self, ws, r: int, biz: str, prod: str, has_sheet: bool, sty: _IdxStyle) -> None:
-        """I열 체험단효과 — 시작일 직전→최신 비교, 개선=연초록·악화=연적색."""
-        eff, verdict = self.promo_effect(biz, prod) if has_sheet else ("", "")   # 9열 체험단효과(시작일 직전→최신)
-        pe = ws.cell(r, 9, eff); pe.alignment = sty.center; pe.border = sty.box; pe.font = sty.font
+        """K열 체험단효과 — 시작일 직전→최신 비교, 개선=연초록·악화=연적색."""
+        eff, verdict = self.promo_effect(biz, prod) if has_sheet else ("", "")   # 11열 체험단효과(시작일 직전→최신)
+        pe = ws.cell(r, 11, eff); pe.alignment = sty.center; pe.border = sty.box; pe.font = sty.font
         if verdict == "up":
             pe.fill = PatternFill("solid", fgColor="C9E6C9")   # 개선=연초록
         elif verdict == "down":

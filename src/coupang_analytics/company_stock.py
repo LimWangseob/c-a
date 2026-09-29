@@ -118,6 +118,21 @@ def _ledger_rows(values: list) -> tuple[int, int, list]:
     return hrow, nz.index(STOCK_COL), out
 
 
+def apply_to_workbook(wb, stock: dict) -> int:
+    """재고현황 값(`read_stock` 결과)을 워크북 상품에 **동일 상품명 매칭**해 회사보유재고로 주입. 주입 상품 수 반환.
+
+    계정목록(엑셀·구글시트) 5열 표기용(계정목록 렌더 전에 호출). 매칭키 = 등록명(있으면·대장 원본명) name_key.
+    미매칭·재고현황에 없는 상품은 주입 안 함(계정목록에서 공란). 값 = 관리대장 역기록과 동일한 '창고 , 수량개'."""
+    n = 0
+    for biz in wb.account_sheets():
+        for prod in wb.products_of(biz):
+            hit = stock.get(name_key(wb.registered_name(biz, prod) or prod))
+            if hit:
+                wb.set_company_stock(biz, prod, stock_text(hit[1]))
+                n += 1
+    return n
+
+
 def write_company_stock(client, stock: dict, *, dry_run: bool = False,
                         sheet: str = "셀독리스트") -> StockResult:
     """관리대장 '회사보유재고' 열에 재고현황 '창고 , 수량개'를 기록(매칭 줄만·미매칭은 기존값 보존).

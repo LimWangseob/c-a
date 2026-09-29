@@ -209,9 +209,11 @@ def main() -> int:
     # ── 계정목록(항목4 열순서·링크·밴드) ──
     print("[계정 목록 시트]")
     idx = wb["계정 목록"]
-    heads = [_n(idx.cell(2, c).value) for c in range(1, 10)]
+    heads = [_n(idx.cell(2, c).value) for c in range(1, 12)]
     _chk(heads[:4] == ["대표자", "사업자", "계정ID", "상품명(클릭 이동)"], f"열순서(계정ID 상품 왼쪽)={heads[:4]}")
-    _chk(heads[7] == "상태" and heads[8] == "체험단효과", "상태·체험단효과 열")
+    _chk(heads[4] == "회사보유재고" and heads[5].startswith("그로스재고"),
+         f"회사보유재고·그로스재고 열(상품명 오른쪽)={heads[4:6]}")
+    _chk(heads[9] == "상태" and heads[10] == "체험단효과", "상태·체험단효과 열")
     # 로움컨설팅 상품 2줄(타프·매트), 각 상품별 계정ID
     rows = {}
     for r in range(3, idx.max_row + 1):
@@ -224,6 +226,8 @@ def main() -> int:
     drow = next(r for r in range(3, idx.max_row + 1)
                 if _n(idx.cell(r, 2).value) == "로움컨설팅" and _n(idx.cell(r, 4).value) == "타프 (베이지)")
     _chk(idx.cell(drow, 4).hyperlink is not None, "계정목록 상품명=통계 점프 링크(항목2)")
+    # 그로스재고(F=6열) = 워크북 최신 재고현황 숫자(타프 베이지=45), 회사보유재고(E=5열)는 미주입 시 공란
+    _chk(idx.cell(drow, 6).value == 45, f"계정목록 그로스재고=최신 재고현황 숫자({idx.cell(drow, 6).value})")
 
     # ── 항목1: gsheet 미러링(통계 셀단위 자동미러 + 상품명 외부링크 =HYPERLINK) ──
     print("[항목1] gsheet 미러링")

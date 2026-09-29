@@ -1,10 +1,12 @@
 """출력 결과 구글시트의 `계정목록` 시트 생성·동기화 (Sheets API).
 
-스키마(기존 openpyxl `계정 목록`과 동일 8열, designs/GSHEET_UNIFIED.md 확정):
-    A 대표자 | B 사업자 | C 상품명(클릭 이동·노출명·통계시트 하이퍼링크) | D 계정ID |
-    E 체험단 시작일 | F 체험단 종료일 | G 모니터링 종료일 | H 상태
+스키마(기존 openpyxl `계정 목록`과 동일 11열, designs/GSHEET_UNIFIED.md 확정):
+    A 대표자 | B 사업자 | C 계정ID | D 상품명(클릭 이동·노출명·통계시트 하이퍼링크) |
+    E 회사보유재고 | F 그로스재고(자동갱신 MM.DD) | G 체험단 시작일 | H 체험단 종료일 |
+    I 모니터링 종료일 | J 상태 | K 체험단효과
 
-- **자동 열 = A·B·C·D·H** (프로그램이 씀). **직원 입력 열 = E·F·G**(온라인 편집) → 프로그램이 **절대 안 씀**.
+- **자동 열 = A·B·C·D·E·F·J·K** (프로그램이 씀). **직원 입력 열 = G·H·I**(온라인 편집) → 프로그램이 **절대 안 씀**.
+- 회사보유재고(E)·그로스재고(F)는 2026-09-29 추가(상품명 오른쪽). 기존 시트는 sync 시 상품명 오른쪽에 **빈 열 2개 삽입**으로 자동 마이그레이션(마케팅·상태·체험단효과 값·메모·서식이 오른쪽으로 밀려 새 위치와 정확히 일치).
 - 대표자(A)는 2026-09-17 추가. 기존 7열 시트는 sync 시 **A에 빈 열 1개 삽입**으로 자동 마이그레이션(모든 값·메모·서식이 오른쪽으로 밀려 새 위치와 정확히 일치).
 - 신규 상품은 **계정별 그룹 맨 마지막**에 `insertDimension`으로 빈 행을 끼워 넣는다(기존 마케팅 행은
   통째로 아래로 밀리며 D~F 값·서식 그대로 보존 = 동시편집 안전). 관리대장에서 사라진 상품은 행을 지우지
@@ -20,10 +22,11 @@ from dataclasses import dataclass
 # 열 인덱스(0-based)
 COL_REP = 0                                    # 대표자(2026-09-17 추가)
 COL_BUSINESS, COL_ACCOUNT, COL_PRODUCT = 1, 2, 3   # 항목④(2026-09-25): 계정ID(C)를 상품명(D) **왼쪽**으로
-COL_MKT_START, COL_MKT_END, COL_MKT_MON = 4, 5, 6
-COL_STATUS = 7
-COL_PROMO = 8          # 체험단효과(자동열, 2026-09-24) — E~G 직원 마케팅 뒤(끝)에 추가해 미접촉
-N_COLS = 9
+COL_STOCK, COL_GROWTH = 4, 5   # 회사보유재고·그로스재고(2026-09-29) — 상품명 오른쪽·자동열(마케팅 앞)
+COL_MKT_START, COL_MKT_END, COL_MKT_MON = 6, 7, 8
+COL_STATUS = 9
+COL_PROMO = 10         # 체험단효과(자동열, 2026-09-24) — 직원 마케팅 뒤(끝)에 추가해 미접촉
+N_COLS = 11
 HEADER_ROW0 = 1        # 헤더가 있는 0-based 행(=시트 2행). 0행=제목.
 DATA_START0 = 2        # 데이터 시작 0-based 행(=시트 3행)
 DISCONTINUED = "⛔ 판매중지"
@@ -53,16 +56,18 @@ def _band_fill(band: int) -> dict:
 class IndexRow:
     """계정목록 한 행의 **자동 열** 데이터(프로그램 산출). 마케팅 3열은 여기 없다(직원 소유)."""
     business: str            # B
-    product: str             # C 표시명(노출명)
-    account_id: str          # D
-    status: str              # H 예: 예정/체험단중/모니터링/종료/미수집/⛔ 판매중지
+    product: str             # D 표시명(노출명)
+    account_id: str          # C
+    status: str              # J 예: 예정/체험단중/모니터링/종료/미수집/⛔ 판매중지
     key: str                 # 안정 매칭 키(계정ID+vid 앵커). 노출명이 바뀌어도 불변
-    link_gid: int | None = None   # C 하이퍼링크 대상 통계시트 gid
-    link_row: int | None = None   # C 하이퍼링크 대상 행(상품 블록 헤더)
+    link_gid: int | None = None   # D 하이퍼링크 대상 통계시트 gid
+    link_row: int | None = None   # D 하이퍼링크 대상 행(상품 블록 헤더)
     band: int = 0            # 사업자 등장 순서 인덱스 → 바탕색 밴딩(사업자별 시각 구분)
     representative: str = ""  # A 대표자(관리대장 대표자명)
-    promo_effect: str = ""   # I 체험단효과 표시문자열(예 "판매 +38% · 순위 32→18 ↑"). 없으면 공란
+    promo_effect: str = ""   # K 체험단효과 표시문자열(예 "판매 +38% · 순위 32→18 ↑"). 없으면 공란
     promo_verdict: str = ""  # 판정: 'up'(개선=초록)·'down'(악화=적색)·''(혼조/무변화=밴드색)
+    company_stock: str = ""  # E 회사보유재고(판매자배송 자체재고 '창고 , 수량개'). 없으면 공란
+    growth_inv: object = ""  # F 그로스재고(로켓그로스 최신 숫자). 없으면 공란
 
 
 @dataclass
@@ -152,9 +157,21 @@ def _product_cell(row: IndexRow) -> dict:
     return _s(row.product)
 
 
+def _stock_cell(v, bg: dict) -> dict:
+    """E 회사보유재고 셀 — 값('창고 , 수량개') 있으면 문자열, 없으면 빈 값(fields 로 클리어)."""
+    return ({**_s(str(v)), "userEnteredFormat": bg} if v not in (None, "")
+            else {"userEnteredFormat": bg})
+
+
+def _growth_cell(v, bg: dict) -> dict:
+    """F 그로스재고 셀 — 숫자면 numberValue, 아니면 빈 값(fields 로 클리어)."""
+    return ({"userEnteredValue": {"numberValue": v}, "userEnteredFormat": bg}
+            if isinstance(v, (int, float)) else {"userEnteredFormat": bg})
+
+
 def _auto_cells_request(sheet_id: int, grid_row: int, row: IndexRow) -> list[dict]:
-    """A·B·C·D(+B열=사업자 셀에 키 메모)와 H(상태)만 쓰는 updateCells 요청(마케팅 E~G는 건드리지 않음)."""
-    bg = {"backgroundColor": _band_fill(row.band)}   # 사업자별 밴드색(A·B·C·D·H만 — E~G 마케팅색 불변)
+    """A·B·C·D·E·F(+B열=사업자 셀에 키 메모)와 J(상태)·K(체험단효과)만 쓰는 updateCells(마케팅 G~I는 미접촉)."""
+    bg = {"backgroundColor": _band_fill(row.band)}   # 사업자별 밴드색(자동열만 — G~I 마케팅색 불변)
     abcd = {
         "updateCells": {
             "start": {"sheetId": sheet_id, "rowIndex": grid_row, "columnIndex": COL_REP},
@@ -163,6 +180,8 @@ def _auto_cells_request(sheet_id: int, grid_row: int, row: IndexRow) -> list[dic
                 {**_s(row.business), "note": row.key, "userEnteredFormat": bg},   # B 사업자 + 안정 키 메모
                 {**_s(row.account_id), "userEnteredFormat": bg},                  # C 계정ID(항목④: 상품명 왼쪽)
                 {**_product_cell(row), "userEnteredFormat": bg},                  # D 상품명(링크)
+                _stock_cell(row.company_stock, bg),                              # E 회사보유재고
+                _growth_cell(row.growth_inv, bg),                                # F 그로스재고(숫자)
             ]}],
             "fields": "userEnteredValue,note,userEnteredFormat.backgroundColor",
         }
@@ -235,11 +254,11 @@ def _row_band_fill_request(sheet_id: int, grid_row: int, band: int) -> dict:
     }
 
 
-def _header_request(sheet_id: int) -> dict:
-    """헤더행(2행)을 현재 `_HEADS` 라벨·서식으로 (재)기록. 전체생성·증분 모두에서 호출해 라벨 변경
-    (예 '마케팅 시작일'→'체험단 시작일')이 **기존 시트에도** 반영되게 한다(증분은 헤더를 안 건드렸던 문제 보완)."""
+def _header_request(sheet_id: int, growth_asof: str = "") -> dict:
+    """헤더행(2행)을 현재 헤더 라벨·서식으로 (재)기록. 전체생성·증분 모두에서 호출해 라벨 변경
+    (예 그로스재고 자동갱신일자)이 **기존 시트에도** 반영되게 한다(증분은 헤더를 안 건드렸던 문제 보완)."""
     head_vals = []
-    for h in _HEADS:                                  # 제목줄 전체 동일 색(_HEAD_FILL) — 열마다 안 다르게
+    for h in _heads(growth_asof):                     # 제목줄 전체 동일 색(_HEAD_FILL) — 열마다 안 다르게
         head_vals.append({**_s(h), "userEnteredFormat": {
             "textFormat": {"bold": True}, "horizontalAlignment": "CENTER", "backgroundColor": _HEAD_FILL}})
     return {"updateCells": {
@@ -258,7 +277,8 @@ def _rep_cell_request(sheet_id: int, grid_row: int, rep: str, band: int) -> dict
 
 def _build_requests_for_plan(sheet_id: int, plan: SyncPlan,
                              band_by_acct: dict[str, int] | None = None,
-                             rep_by_acct: dict[str, str] | None = None) -> list[dict]:
+                             rep_by_acct: dict[str, str] | None = None,
+                             growth_asof: str = "") -> list[dict]:
     """증분 동기화 요청 묶음. 삽입은 최종 위치 오름차순으로(선삽입이 후위치 인덱스를 맞춰줌).
 
     band_by_acct: 계정ID→밴드(desired 로스터에서). 판매중지 행을 그 계정 밴드색으로 칠하는 데 쓴다.
@@ -266,7 +286,7 @@ def _build_requests_for_plan(sheet_id: int, plan: SyncPlan,
     (계정이 로스터에서 완전히 사라졌으면 없음 → 색·대표자는 그대로 두고 상태만 갱신)."""
     band_by_acct = band_by_acct or {}
     rep_by_acct = rep_by_acct or {}
-    reqs: list[dict] = [_header_request(sheet_id)]   # 헤더 라벨 항상 최신화(행 1=헤더, 삽입 대상 밖이라 안전)
+    reqs: list[dict] = [_header_request(sheet_id, growth_asof)]   # 헤더 라벨 항상 최신화(행 1=헤더, 삽입 대상 밖이라 안전)
     for grid_row, _row in sorted(plan.inserts, key=lambda t: t[0]):
         reqs.append(_insert_blank_row_request(sheet_id, grid_row))
     for grid_row, row in plan.inserts:
@@ -284,13 +304,23 @@ def _build_requests_for_plan(sheet_id: int, plan: SyncPlan,
     return reqs
 
 
-_HEADS = ["대표자", "사업자", "계정ID", "상품명(클릭 이동)", "체험단 시작일", "체험단 종료일",
-          "모니터링 종료일", "상태", "체험단효과"]   # 항목④: 계정ID를 상품명 왼쪽으로
+_HEADS = ["대표자", "사업자", "계정ID", "상품명(클릭 이동)", "회사보유재고", "그로스재고",
+          "체험단 시작일", "체험단 종료일", "모니터링 종료일", "상태", "체험단효과"]   # 회사재고·그로스재고=상품명 오른쪽
 _MKT_LABELS = (_HEADS[COL_MKT_START], _HEADS[COL_MKT_END], _HEADS[COL_MKT_MON])   # 체험단 3열 헤더 라벨
+
+
+def _heads(growth_asof: str = "") -> list[str]:
+    """헤더 라벨 — 그로스재고(F)에 자동갱신일자('월.일')를 붙인다(있으면). 나머지는 `_HEADS` 그대로."""
+    heads = list(_HEADS)
+    if growth_asof:
+        heads[COL_GROWTH] = f"그로스재고 (자동갱신 {growth_asof})"
+    return heads
 # 항목④(2026-09-25): 셀 폭 **내용 길이 기반 자동맞춤**(엑셀 패리티). 자동열은 헤더+데이터 최장 길이로,
 # 마케팅 E~G(직원 입력)는 고정. 한글=2폭으로 계산하고 열별 최소·최대로 클램프(과도한 폭 방지).
-_COL_W_MIN = {COL_REP: 80, COL_BUSINESS: 100, COL_ACCOUNT: 80, COL_PRODUCT: 140, COL_STATUS: 70, COL_PROMO: 130}
-_COL_W_MAX = {COL_REP: 170, COL_BUSINESS: 260, COL_ACCOUNT: 170, COL_PRODUCT: 430, COL_STATUS: 150, COL_PROMO: 280}
+_COL_W_MIN = {COL_REP: 80, COL_BUSINESS: 100, COL_ACCOUNT: 80, COL_PRODUCT: 140,
+              COL_STOCK: 90, COL_GROWTH: 80, COL_STATUS: 70, COL_PROMO: 130}
+_COL_W_MAX = {COL_REP: 170, COL_BUSINESS: 260, COL_ACCOUNT: 170, COL_PRODUCT: 430,
+              COL_STOCK: 260, COL_GROWTH: 120, COL_STATUS: 150, COL_PROMO: 280}
 _COL_W_MKT = {COL_MKT_START: 95, COL_MKT_END: 95, COL_MKT_MON: 100}   # 직원 입력 열=고정
 
 
@@ -303,6 +333,7 @@ def _col_width_requests(sheet_id: int, desired: list[IndexRow]) -> list[dict]:
     """자동열을 **내용 최장 길이**에 맞춰 픽셀 폭 설정(열별 min~max 클램프)·마케팅 E~G는 고정(항목④)."""
     getters = {COL_REP: lambda r: r.representative, COL_BUSINESS: lambda r: r.business,
                COL_ACCOUNT: lambda r: r.account_id, COL_PRODUCT: lambda r: r.product,
+               COL_STOCK: lambda r: r.company_stock, COL_GROWTH: lambda r: r.growth_inv,
                COL_STATUS: lambda r: r.status, COL_PROMO: lambda r: r.promo_effect}
     widths: dict[int, int] = {}
     for c, get in getters.items():
@@ -319,13 +350,13 @@ _PROMO_UP_FILL = {"red": 0.788, "green": 0.902, "blue": 0.788}     # C9E6C9 연�
 _PROMO_DOWN_FILL = {"red": 0.957, "green": 0.800, "blue": 0.800}   # F4CCCC 연적색
 
 
-def _full_build_requests(sheet_id: int, desired: list[IndexRow]) -> list[dict]:
+def _full_build_requests(sheet_id: int, desired: list[IndexRow], growth_asof: str = "") -> list[dict]:
     """빈 계정목록 최초 생성 — 제목·헤더·전체 행·서식(틀고정·마케팅색·열너비)."""
     reqs: list[dict] = []
-    # 제목(A1:G1 병합)
+    # 제목(A1:K1 병합)
     reqs.append({"mergeCells": {"range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1,
                                           "startColumnIndex": 0, "endColumnIndex": N_COLS},
-                                "mergeType": "MERGE_ALL"}})   # 제목 A1:G1 한 칸으로(‘MERGE_ROW’는 무효값)
+                                "mergeType": "MERGE_ALL"}})   # 제목 A1:K1 한 칸으로(‘MERGE_ROW’는 무효값)
     n_prod = sum(1 for d in desired if d.status != DISCONTINUED)
     reqs.append({"updateCells": {
         "start": {"sheetId": sheet_id, "rowIndex": 0, "columnIndex": 0},
@@ -333,7 +364,7 @@ def _full_build_requests(sheet_id: int, desired: list[IndexRow]) -> list[dict]:
                               "userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 14},
                                                     "horizontalAlignment": "CENTER"}}]}],
         "fields": "userEnteredValue,userEnteredFormat"}})
-    reqs.append(_header_request(sheet_id))    # 헤더(2행) 라벨·서식
+    reqs.append(_header_request(sheet_id, growth_asof))    # 헤더(2행) 라벨·서식
     # 데이터 행
     for i, row in enumerate(desired):
         grid = DATA_START0 + i
@@ -447,11 +478,14 @@ def roster_from_workbook(wb, stats_gids: dict[str, int]) -> list[IndexRow]:
         gid = stats_gids.get(biz) if linkable else None
         band = band_by_biz.setdefault(biz, len(band_by_biz))   # 사업자명 기준(항목5: 같은 사업자 다계정ID=한 밴드색)
         effect, verdict = wb.promo_effect(biz, prod) if has_sheet else ("", "")   # 체험단효과(시작일 직전→최신)
+        stock = wb.company_stock_of(biz, prod) if (has_sheet and prod) else ""   # E 회사보유재고(주입값)
+        inv = wb.product_inventory(biz, prod) if (has_sheet and prod) else None  # F 그로스재고(최신 숫자)
         rows.append(IndexRow(business=biz, product=prod, account_id=acct,
                              status=wb.status_of(biz, prod, has_sheet), key=key,
                              link_gid=gid, link_row=(hdr if (linkable and gid is not None) else None),
                              band=band, representative=wb.representative_of(biz),
-                             promo_effect=effect, promo_verdict=verdict))
+                             promo_effect=effect, promo_verdict=verdict,
+                             company_stock=stock, growth_inv=(inv if inv is not None else "")))
     return rows
 
 
@@ -508,6 +542,39 @@ def _ensure_column_order(client, sheet: str, sheet_id: int, on_log=None) -> None
     # 배치3: 제목 재병합(A1:I1)은 **장식** — 실패해도 계정ID 이동·데이터 동기화는 이미 성공이므로 비치명 처리
     # (로그만 남기고 진행). 재병합 실패의 정확한 Google 사유는 로그(pipeline_gsheet)가 전체 표시한다.
     from .gsheet_api import GSheetError
+    try:
+        client.batch_update([{"mergeCells": {"range": title, "mergeType": "MERGE_ALL"}}])
+    except GSheetError as exc:
+        (on_log or (lambda m: None))(
+            f"  [구글시트] ⚠ 계정목록 제목 재병합 건너뜀(장식·비치명) — {str(exc)[:200]}")
+
+
+def _ensure_stock_columns(client, sheet: str, sheet_id: int, on_log=None) -> None:
+    """2026-09-29: 회사보유재고(E)·그로스재고(F)를 상품명(D) 오른쪽에 **빈 열 2개 삽입**으로 자동 마이그레이션.
+
+    삽입은 마케팅(직원 입력)·상태·체험단효과를 값·메모·서식 그대로 오른쪽으로 민다. 판정=마케팅 시작 라벨
+    위치: COL_MKT_START(6)면 이미 완료(no-op)·옛 위치(4)면 삽입. ⚠ 제목 병합(A1:*)을 가로지르는 삽입은
+    Google 400 → `_ensure_column_order`와 같은 **다배치 패턴**(병합 해제 선커밋 → 삽입 → 재병합)으로 회피."""
+    values, _ = client.read_grid(sheet)
+    if len(values) <= HEADER_ROW0:
+        return                                            # 신규/빈 시트 → full build 가 새 레이아웃으로 생성
+    hdr = [str(h).strip() for h in (values[HEADER_ROW0] or [])]
+    mkt_i = hdr.index(_MKT_LABELS[0]) if _MKT_LABELS[0] in hdr else None
+    if mkt_i is None or mkt_i >= COL_MKT_START:
+        return                                            # 마케팅 라벨 없음(이상) or 이미 새 위치(회사재고·그로스재고 있음)
+    ccur = client.grid_col_count(sheet) or N_COLS
+    # 배치1: 제목 병합 해제(삽입이 병합 가로지르지 않게) — **선커밋**(Google 은 삽입을 배치 시작 병합상태로 검증)
+    client.batch_update([{"unmergeCells": {"range": {
+        "sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1,
+        "startColumnIndex": 0, "endColumnIndex": max(ccur, N_COLS)}}}])
+    # 배치2: 상품명 오른쪽(COL_STOCK=4)에 빈 열 2개 삽입 — 마케팅·상태·체험단효과가 값·서식 그대로 오른쪽으로 밀림
+    client.batch_update([{"insertDimension": {
+        "range": {"sheetId": sheet_id, "dimension": "COLUMNS",
+                  "startIndex": COL_STOCK, "endIndex": COL_STOCK + 2},
+        "inheritFromBefore": False}}])
+    # 배치3: 제목 재병합(A1:K1)은 장식 — 실패해도 열 삽입·동기화는 이미 성공(비치명·로그).
+    from .gsheet_api import GSheetError
+    title = {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1, "startColumnIndex": 0, "endColumnIndex": N_COLS}
     try:
         client.batch_update([{"mergeCells": {"range": title, "mergeType": "MERGE_ALL"}}])
     except GSheetError as exc:
@@ -627,19 +694,22 @@ def _grid_grow_requests(client, sheet: str, sheet_id: int, n_data_rows: int) -> 
     return reqs
 
 
-def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME, on_log=None) -> SyncPlan:
+def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME, on_log=None,
+               growth_asof: str = "") -> SyncPlan:
     """결과 구글시트의 `계정목록`을 원하는 로스터에 맞춰 생성/동기화하고 계획을 반환.
 
-    비어 있으면 전체 생성, 아니면 증분(자동열만 갱신·신규 삽입·판매중지 표기). 마케팅 D~F는 안 건드린다.
+    비어 있으면 전체 생성, 아니면 증분(자동열만 갱신·신규 삽입·판매중지 표기). 마케팅 G~I는 안 건드린다.
     삽입이 그리드 끝을 넘지 않게 **미리 그리드를 확장**한다(부족할 때만 — insertDimension 400 방지).
+    growth_asof = 그로스재고 헤더 자동갱신일자('월.일').
     """
     sheet_id = client.ensure_sheet(sheet)
     _ensure_rep_column(client, sheet, sheet_id)   # 옛 7열 시트면 A에 대표자 빈 열 삽입(멱등) → 아래 읽기는 새 레이아웃
     _ensure_column_order(client, sheet, sheet_id, on_log)  # 항목④: 옛 순서(상품C·계정ID D)면 계정ID를 C로 물리 이전(멱등)
+    _ensure_stock_columns(client, sheet, sheet_id, on_log)  # 2026-09-29: 상품명 오른쪽에 회사재고·그로스재고 2열 삽입(멱등)
     existing = _read_existing(client, sheet)
     if not existing:
         grow = _grid_grow_requests(client, sheet, sheet_id, len(desired))
-        client.batch_update(grow + _full_build_requests(sheet_id, desired))
+        client.batch_update(grow + _full_build_requests(sheet_id, desired, growth_asof))
         # 최초 생성도 계획 형태로 반환(삽입=전체)
         return SyncPlan(updates=[], inserts=[(DATA_START0 + i, d) for i, d in enumerate(desired)],
                         discontinue=[], total_rows=len(desired))
@@ -648,5 +718,5 @@ def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME
     rep_by_acct = {r.account_id: r.representative for r in desired if r.representative}  # 판매중지 행 대표자 채움
     grow = _grid_grow_requests(client, sheet, sheet_id, plan.total_rows)
     width = _col_width_requests(sheet_id, desired)   # 항목④: 증분도 내용 길이 기반 폭 갱신(신규 상품 반영)
-    client.batch_update(grow + _build_requests_for_plan(sheet_id, plan, band_by_acct, rep_by_acct) + width)
+    client.batch_update(grow + _build_requests_for_plan(sheet_id, plan, band_by_acct, rep_by_acct, growth_asof) + width)
     return plan

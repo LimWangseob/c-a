@@ -174,6 +174,27 @@ def push_company_stock(stock_url: str | None, input_url: str | None, log) -> Non
             f"{exc.__class__.__name__}: {str(exc)[:120]} ==")
 
 
+def inject_company_stock(wb, stock_url: str | None, log) -> None:
+    """재고현황 시트 → 워크북 **회사보유재고** 주입(계정목록 5열 표기용). apply_style(계정목록 렌더) 전에 호출.
+
+    관리대장 역기록(push_company_stock)과 **별개**로, 계정목록에 보여주려 매 실행 재고현황을 읽어 워크북 인메모리에
+    넣는다(마스터 미저장·다음 실행 재주입). stock_url 없거나 SA 미등록이면 no-op(정상 — 계정목록 공란). 실패는
+    로그·비치명(계정목록·통계는 그대로 렌더). 읽기 전용(재고현황 시트를 쓰지 않음)."""
+    if not stock_url:
+        return
+    try:
+        from . import company_stock, gsheet_api
+        if not gsheet_api.load_sa_info():
+            return
+        client = gsheet_api.GSheetClient(stock_url, on_log=log)
+        tab = company_stock.resolve_tab(client, stock_url)
+        stock, _warnings = company_stock.read_stock(client.read_values(tab))
+        n = company_stock.apply_to_workbook(wb, stock)
+        log(f"== [회사재고] 계정목록 표기 — 재고현황 '{tab}' {len(stock)}품목 → {n}개 상품 주입 ==")
+    except Exception as exc:
+        log(f"== [회사재고] ⚠ 계정목록 표기 생략(진행): {exc.__class__.__name__}: {str(exc)[:120]} ==")
+
+
 def push_coupang_checks(registry_url: str | None, checks: dict, log) -> None:
     """2-2(§10-1): ①판매수집에서 산출한 쿠팡확인을 셀독등록원장에 **1회** 기록(비치명).
 
@@ -232,7 +253,9 @@ def push_gsheet(wb, output_url: str | None, log, removed_accounts=None, renamed_
         _phase = "계정목록 동기화"
         log(f"== [구글시트] 통계 {len(gids)}시트 미러링 완료 → 계정목록 동기화 중… ==")
         roster = gsheet_index.roster_from_workbook(wb, gids)                 # 계정목록 로스터(등록명 기반 안정키)
-        plan = gsheet_index.sync_index(client, roster, on_log=log)          # 계정목록 증분(마케팅 D~F 보존)
+        plan = gsheet_index.sync_index(client, roster, on_log=log,          # 계정목록 증분(마케팅 G~I 보존)
+                                       growth_asof=wb.growth_asof())          # 그로스재고 헤더 자동갱신일자
+
         log(f"== [구글시트] ✅ 결과 반영 완료 — 통계 {len(gids)}시트 · 계정목록 "
             f"갱신 {len(plan.updates)}·신규 {len(plan.inserts)}·판매중지 {len(plan.discontinue)} ==")
     except Exception as exc:

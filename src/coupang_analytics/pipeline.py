@@ -34,7 +34,7 @@ from .pipeline_paths import master_exists, read_run_stage, write_run_stage  # no
 # 구글시트 연동·백업·복원은 pipeline_gsheet 로 분리(대형 파일 정비). pipeline.X 로 다시 노출.
 from .pipeline_gsheet import (  # noqa: E402,F401
     pull_gsheet_keywords, push_gsheet, push_coupang_checks, backup_sources,
-    push_ledger_inventory, push_company_stock, restore_master_from_gsheet)
+    push_ledger_inventory, push_company_stock, inject_company_stock, restore_master_from_gsheet)
 # ③ 순위(측정·서킷브레이커·자동/반자동 검색·스테이지)는 pipeline_ranks 로 분리. pipeline.X 로 다시 노출
 # (핀/시뮬 monkeypatch 대상은 pipeline_ranks). core(_fill_product_metrics·_finalize_run)가 _best/
 # _measure_safe/_reset_rank_state/_RANK_HALT 를 호출하므로 재수출 필요.
@@ -611,7 +611,8 @@ def _validate_or_raise(input_list: InputList, log) -> None:
 
 
 def _finalize_run(ctx: _RunCtx, master: Path, prog: Path, now: datetime, gsheet_output_url,
-                  removed_accounts, uncollected, renamed_accounts=None, registry_url=None) -> Path:
+                  removed_accounts, uncollected, renamed_accounts=None, registry_url=None,
+                  stock_url=None) -> Path:
     """통계 마스터/스냅샷 저장 + 결과 구글시트 반영 + 진행파일 정리. 반환=스냅샷 경로.
 
     로그인 못한 계정이 남았으면 진행분을 유지(같은 날 재실행이 미완료분만 이어서 처리), 없으면 진행파일을
@@ -619,6 +620,7 @@ def _finalize_run(ctx: _RunCtx, master: Path, prog: Path, now: datetime, gsheet_
     """
     wb, log = ctx.wb, ctx.log
     snapshot = _snapshot_path(ctx.out, now)
+    inject_company_stock(wb, stock_url, log)   # 회사보유재고 → 워크북(계정목록 5열) · apply_style 전
     wb.apply_style()         # 가독성 서식(헤더 고정·상품 구분·정렬) — 최종본에만
     wb.save(master)          # 다음 날 이어쓸 마스터
     wb.save(snapshot)        # 그날 백업본(감사용)
@@ -643,7 +645,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
              grow_keywords: bool = False, skip_ranks: bool = False, redo_today: bool = False,
              sales_semi: bool = False, date_label: str | None = None,
              keywords_off: bool = False, on_log=None, gsheet_output_url: str | None = None,
-             registry_url: str | None = None) -> Path:
+             registry_url: str | None = None, stock_url: str | None = None) -> Path:
     """계정별 end-to-end 완결 + **같은 날 이어서 하기** + **통계 마스터 이어쓰기(cross-day)**.
 
     실행 모드(3택, UI 실행모드와 대응):
@@ -727,11 +729,12 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     # (offscreen 순위백필 _backfill_ranks 는 폐기·물리 삭제 — 2026-09-26. ③순위는 반자동만·§DESIGN §5.2)
     # 통계 마스터/스냅샷 저장 + 결과 구글시트 반영 + 진행파일 정리
     return _finalize_run(ctx, master, prog, now, gsheet_output_url, removed_accounts, uncollected,
-                         renamed_accounts=renamed_accounts, registry_url=registry_url)
+                         renamed_accounts=renamed_accounts, registry_url=registry_url, stock_url=stock_url)
 
 
 def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = "output",
-                          grow: bool = False, on_log=None, gsheet_output_url: str | None = None) -> Path | None:
+                          grow: bool = False, on_log=None, gsheet_output_url: str | None = None,
+                          stock_url: str | None = None) -> Path | None:
     """② 키워드 선정 전용 — 최신 워크북 로드, 상품별 키워드(**순위 조회 없음**) 선정·기록. 로그인 불필요.
 
     ①(판매수집)로 상품이 이미 워크북에 있어야 한다. 기존 키워드가 있으면 동결(grow=True면 상한 내 발굴
@@ -758,6 +761,7 @@ def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = 
     padded = sum(wb.pad_keyword_rows(biz, p) for biz in wb.account_sheets() for p in wb.products_of(biz))
     if padded:
         log(f"  [키워드행] 4행 미만 상품에 빈 순위행 {padded}개 추가(키워드 없어도 4행 유지·공란)")
+    inject_company_stock(wb, stock_url, log)   # 회사보유재고 → 워크북(계정목록 5열) · apply_style 전
     wb.apply_style()   # 추가한 키워드 행까지 표준 서식 고정(시트간 서식 섞임 방지)
     wb.save(path)
     push_gsheet(wb, gsheet_output_url, log)   # ② 개별 실행도 결과 구글시트에 반영(키워드 갱신)

@@ -458,10 +458,11 @@ def t1_representative_column():
     d = Path(tempfile.mkdtemp()); path = d / "대표자.xlsx"
     wb.apply_style(); wb.save(path)
     ws = openpyxl.load_workbook(path)["계정 목록"]
-    heads = [ws.cell(2, c).value for c in range(1, 9)]
-    # 항목④: 대표자·사업자·계정ID(C)·상품명(D)·…·상태
-    assert heads[0] == "대표자" and heads[1] == "사업자" and heads[2] == "계정ID" and heads[7] == "상태", heads
+    heads = [ws.cell(2, c).value for c in range(1, 12)]
+    # 대표자·사업자·계정ID(C)·상품명(D)·회사보유재고(E)·그로스재고(F)·체험단3(G~I)·상태(J)·체험단효과(K)
+    assert heads[0] == "대표자" and heads[1] == "사업자" and heads[2] == "계정ID" and heads[9] == "상태", heads
     assert heads[3].startswith("상품명"), heads
+    assert heads[4] == "회사보유재고" and heads[5].startswith("그로스재고"), heads
     assert ws.cell(3, 1).value == "홍길동" and ws.cell(3, 2).value == "가게A" and ws.cell(3, 3).value == "idA"
     wb2 = OutputWorkbook.load(path)
     assert wb2.representative_of("가게A") == "홍길동" and wb2.has_sales("가게A", "09.17")

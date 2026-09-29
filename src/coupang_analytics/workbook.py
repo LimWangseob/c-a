@@ -33,6 +33,9 @@ class OutputWorkbook(_RenderMixin, _IndexMixin):
         self._kw_row: dict[tuple[str, str, str], int] = {}      # {(사업자,상품,키워드): 행}
         self._vid_row: dict[tuple[str, str], int] = {}          # {(사업자,상품): _상품ID 시트 행(등록명·판매상태·제목캐시)}
         self._block_vids: dict[tuple[str, str], list[str]] = {}  # {(사업자,상품): vid 목록} — 헤더 이름칸 'VID :' 꼬리에서 복원(출처=(A))
+        # 회사보유재고(판매자배송 자체재고) — 매 실행 재고현황 시트에서 주입(company_stock.apply_to_workbook).
+        # 계정목록 렌더 전용·마스터에 저장 안 함(재로드 시 비고, 다음 실행이 재주입). {(사업자,상품): '창고 , 수량개'}.
+        self._company_stock: dict[tuple[str, str], str] = {}
         self._reindex()
 
     # ── 생성/로드/저장 ────────────────────────────────────────
@@ -55,7 +58,7 @@ class OutputWorkbook(_RenderMixin, _IndexMixin):
     def _reindex(self) -> None:
         self._date_col.clear(); self._date_rows.clear()
         self._metric_row.clear(); self._kw_row.clear(); self._vid_row.clear()
-        self._block_vids.clear()
+        self._block_vids.clear(); self._company_stock.clear()
         # vid 출처(A안, 레이아웃 v4)=숨김 메타시트 `_상품ID` col3. 헤더 이름칸 꼬리는 옛 마스터 폴백용.
         # 메타시트가 계정시트 뒤에 올 수 있어 **먼저 한 번** 스캔해 {(사업자,상품): [vid…]} 를 만든다.
         meta_vids = self._scan_meta_vids()
@@ -972,6 +975,16 @@ class OutputWorkbook(_RenderMixin, _IndexMixin):
         v = self.wb[biz].cell(row, col).value
         # 관리대장 '그로스 재고' 역기록은 **숫자 재고만** — '미입고'(문자열)·공란은 대상 아님(대장값 보존).
         return v if isinstance(v, (int, float)) else None
+
+    def set_company_stock(self, biz: str, product: str, text: str) -> None:
+        """계정목록 표기용 **회사보유재고**(판매자배송 자체재고) 텍스트 저장 — 매 실행 재고현황에서 주입.
+
+        값 = 관리대장 역기록과 동일한 '창고 , 수량개' 문자열(company_stock.stock_text). 인메모리(마스터 미저장)."""
+        self._company_stock[(biz, product)] = text
+
+    def company_stock_of(self, biz: str, product: str) -> str:
+        """이 상품의 회사보유재고 표기 문자열(없으면 공란) — 계정목록 5열."""
+        return self._company_stock.get((biz, product), "")
 
     def inventory_by_biz(self) -> dict:
         """{사업자norm: [(상품명, 재고), …]} — 재고 있는 상품만. 관리대장 역기록 **유사도 매칭**용.

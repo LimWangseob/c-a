@@ -1163,12 +1163,13 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         backup_sources(input_url=gs_in, output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
         input_list, reg_url = self._registry_presync(input_list, gs_in)   # 원장 자동 반영(비치명·2-1)
         naver = NaverAdApi(naver_creds)
+        stock_url = self._stock_url()           # 회사보유재고 재고현황 링크(계정목록 표기 + 대장 역기록 공용)
         # ① 반자동 판매수집 — 순위·키워드·노출측정 전무(offscreen 미사용)
         snap = run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
                         get_password=self._account_pw, resume=resume, carry_forward=carry,
                         grow_keywords=False, skip_ranks=True, redo_today=redo_today,
                         sales_semi=True, date_label=dlabel, keywords_off=True, on_log=self.log,
-                        gsheet_output_url=gs_out, registry_url=reg_url)
+                        gsheet_output_url=gs_out, registry_url=reg_url, stock_url=stock_url)
         if keywords_off:                        # ① 단독 실행 → 판매데이터만 채우고 종료
             return snap
         write_run_stage("sales")                # ① 완료 표시(재부팅 복구: 여기부턴 ②③만)
@@ -1176,7 +1177,8 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
             return snap
         # ② 키워드 선정 — 공개검색(노출측정) 없이 AI 선정만(로그인 불필요·동결분 유지)
         self.log("[전체실행] ② 키워드 선정 — 노출측정 없이 AI 선정(동결분 유지)")
-        select_keywords_stage(naver, key, grow=grow, on_log=self.log, gsheet_output_url=gs_out)
+        select_keywords_stage(naver, key, grow=grow, on_log=self.log, gsheet_output_url=gs_out,
+                              stock_url=stock_url)
         write_run_stage("ranks")                # ② 완료 표시(재부팅 복구: 여기부턴 ③만)
         if stop is not None and stop.is_set():
             return snap
@@ -1184,7 +1186,7 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         self.log("[전체실행] ③ 반자동 순위 — 보이는 창 자동 타이핑(중지: '반자동 중지')")
         result = track_ranks_stage(semi=True,
                                    should_stop=(stop.is_set if stop is not None else (lambda: False)),
-                                   on_log=self.log, gsheet_output_url=gs_out)
+                                   on_log=self.log, gsheet_output_url=gs_out, stock_url=stock_url)
         # 입력 관리대장의 '그로스 재고'(AD) 컬럼을 수집 재고로 역기록(SA 편집권한 필요·없으면 로그 후 비치명)
         push_ledger_inventory(gs_in, self.log)   # gs_in = 위에서 정의(백업·역기록 공용)
         push_company_stock(self._stock_url(), gs_in, self.log)   # 회사보유재고(판매자배송) 역기록(비치명)
@@ -1237,6 +1239,7 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
                 backup_sources(input_url=gs_in, output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
                 run_il, reg_url = self._registry_presync(il, gs_in)   # 원장 자동 반영(비치명·2-1)
                 naver = NaverAdApi(naver_creds)
+                stock_url = self._stock_url()      # 회사보유재고 재고현황 링크(계정목록 표기 + 대장 역기록 공용)
                 # ① 반자동 판매수집(무인이어도 **처리 방식은 반자동** — 보이는 신뢰 창·실제 타이핑으로 Akamai 통과율↑).
                 #    2차인증은 사무실(신뢰 IP)이면 없이 통과; 낯선 환경서 뜨면 사람이 없어 그 계정만 건너뜀(멈춤 없음).
                 #    판매만(키워드·순위·노출측정 없음) → 이어서 ②③. 전체실행과 동일 조합(offscreen 전무).
@@ -1244,7 +1247,7 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
                          get_password=self._account_pw, resume=resume, carry_forward=carry,
                          grow_keywords=False, skip_ranks=True, sales_semi=True, date_label=dlabel,
                          keywords_off=True, on_log=self.log, gsheet_output_url=gs_out,
-                         registry_url=reg_url)
+                         registry_url=reg_url, stock_url=stock_url)
                 # 야간 1회 쿨다운-재개: 차단 등으로 미완료 계정이 남았으면(진행중 파일 잔존) 30분 쉬고
                 # **남은 계정만 1회 더** 시도(제출 총량 억제 = 위탁계정 잠금 방지, 무한 재시도 금지). 역시 반자동.
                 if (not stop.is_set() and config.LOGIN_NIGHT_RESUME and resumable_progress()):
@@ -1258,17 +1261,18 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
                                  get_password=self._account_pw, resume=True, carry_forward=carry,
                                  grow_keywords=False, skip_ranks=True, sales_semi=True, date_label=dlabel,
                                  keywords_off=True, on_log=self.log, gsheet_output_url=gs_out,
-                                 registry_url=reg_url)
+                                 registry_url=reg_url, stock_url=stock_url)
                 if not stop.is_set():
                     write_run_stage("sales")       # ① 완료 표시(재부팅 복구용)
                 # ② 키워드 선정(노출측정 없음·로그인 불필요·부족분 4개까지 보충)
                 if not stop.is_set():
-                    select_keywords_stage(naver, key, grow=False, on_log=self.log, gsheet_output_url=gs_out)
+                    select_keywords_stage(naver, key, grow=False, on_log=self.log, gsheet_output_url=gs_out,
+                                          stock_url=stock_url)
                     write_run_stage("ranks")       # ② 완료 표시(재부팅 복구: 여기부턴 ③만)
                 # ③ 반자동 순위(autosubmit, 차단 시 쿨다운-재개)
                 if not stop.is_set():
                     track_ranks_stage(semi=True, should_stop=stop.is_set, on_log=self.log,
-                                      gsheet_output_url=gs_out)
+                                      gsheet_output_url=gs_out, stock_url=stock_url)
                 # 입력 관리대장의 '그로스 재고'(AD) 컬럼을 수집 재고로 역기록(SA 편집권한 필요·없으면 비치명)
                 if not stop.is_set():
                     push_ledger_inventory(gs_in, self.log)   # gs_in = 위에서 정의(백업·역기록 공용)
@@ -1334,21 +1338,23 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
                 backup_sources(input_url=gs_in, output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
                 run_il, reg_url = self._registry_presync(il, gs_in)   # 원장 자동 반영(비치명·2-1)
                 naver = NaverAdApi(naver_creds)
+                stock_url = self._stock_url()      # 회사보유재고 재고현황 링크(계정목록 표기 + 대장 역기록 공용)
                 if do_sales:                       # ① 판매수집 이어서(반자동·완료계정 건너뜀)
                     run_full(run_il, naver, ai_key=key, date_from=df, date_to=dt,
                              get_password=self._account_pw, resume=True, carry_forward=carry,
                              grow_keywords=False, skip_ranks=True, sales_semi=True, date_label=dlabel,
                              keywords_off=True, on_log=self.log, gsheet_output_url=gs_out,
-                             registry_url=reg_url)
+                             registry_url=reg_url, stock_url=stock_url)
                     if not stop.is_set():
                         write_run_stage("sales")
                 if not stop.is_set() and do_keywords:   # ② 키워드 선정(동결분 유지·부족분만)
-                    select_keywords_stage(naver, key, grow=False, on_log=self.log, gsheet_output_url=gs_out)
+                    select_keywords_stage(naver, key, grow=False, on_log=self.log, gsheet_output_url=gs_out,
+                                          stock_url=stock_url)
                     if not stop.is_set():
                         write_run_stage("ranks")
                 if not stop.is_set():              # ③ 반자동 순위(이미 채워진 순위는 건너뜀)
                     track_ranks_stage(semi=True, should_stop=stop.is_set, on_log=self.log,
-                                      gsheet_output_url=gs_out)
+                                      gsheet_output_url=gs_out, stock_url=stock_url)
                 if not stop.is_set():              # 마무리: 그로스 재고 역기록 + 완료 표시
                     push_ledger_inventory(gs_in, self.log)
                     push_company_stock(self._stock_url(), gs_in, self.log)   # 회사보유재고 역기록(비치명)
@@ -1375,10 +1381,11 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
         self.log("[키워드 선정] 시작 — 순위 조회 없이 키워드만 선정(로그인 불필요)")
 
+        stock_url = self._stock_url()
         def task():
             backup_sources(output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
             return select_keywords_stage(NaverAdApi(naver_creds), key, grow=grow, on_log=self.log,
-                                         gsheet_output_url=gs_out)
+                                         gsheet_output_url=gs_out, stock_url=stock_url)
         self.run_bg(task, on_done=self._pipeline_done, btn=self.kw_btn, exclusive=True)
 
     def do_track_ranks(self, semi: bool = True):
@@ -1397,10 +1404,11 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         should_stop = self._semi_stop.is_set
         gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
 
+        stock_url = self._stock_url()
         def task_semi():
             backup_sources(output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
             return track_ranks_stage(semi=True, should_stop=should_stop, on_log=self.log,
-                                     gsheet_output_url=gs_out)
+                                     gsheet_output_url=gs_out, stock_url=stock_url)
         self.run_bg(task_semi, on_done=self._pipeline_done, btn=self.track_semi_btn, exclusive=True)
 
     def _stop_semi(self):

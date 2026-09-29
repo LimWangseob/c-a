@@ -500,7 +500,7 @@ def t6_roster_from_workbook() -> None:
         for j, cell in enumerate(uc["rows"][0]["values"]):
             if cell.get("userEnteredFormat", {}).get("backgroundColor"):
                 bg_cols.add(start + j)
-    assert bg_cols == {0, 1, 2, 3, 7, 8}, bg_cols    # A·B·C·D·H + I(체험단효과) 담당(E~G 미접촉)
+    assert bg_cols == {0, 1, 2, 3, 4, 5, 9, 10}, bg_cols   # A~F(대표자·사업자·계정ID·상품·회사재고·그로스) + J·K(상태·체험단효과) 담당(G~I 마케팅 미접촉)
     # I열 체험단효과 색: 개선=연초록·악화=연적색·그외=밴드색(값도 기록)
     def _promo_cell(verdict):
         rq = gi._auto_cells_request(1, DATA_START0,

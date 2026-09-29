@@ -19,7 +19,7 @@ from .browser import WingBrowser
 from .kw_recommend import rank_label
 from .rank import (RankBlocked, human_type_query, make_matcher, organic_ranks,
                    organic_ranks_batch, warmup)
-from .pipeline_gsheet import push_gsheet   # track_ranks_stage 종료 시 결과 반영(한 방향·순환 없음)
+from .pipeline_gsheet import push_gsheet, inject_company_stock   # track_ranks_stage 종료 시 결과 반영·회사재고 주입(한 방향·순환 없음)
 from .pipeline_paths import _PROFILE, _load_latest_wb
 
 
@@ -190,7 +190,8 @@ def _log_quality_summary(wb, log) -> None:
 
 
 def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
-                      should_stop=None, gsheet_output_url: str | None = None) -> Path | None:
+                      should_stop=None, gsheet_output_url: str | None = None,
+                      stock_url: str | None = None) -> Path | None:
     """③ 노출순위 조회 전용 — 최신 워크북 로드, 상품(고유ID)+키워드로 순위 측정·기록. 로그인 불필요.
 
     ①(상품ID)·②(키워드)가 이미 워크북에 있어야 한다. 상품마다 저장된 vendorItemId 로 검색결과에서 내
@@ -205,6 +206,7 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
     if wb is None:
         log("== 순위 조회: 결과 워크북이 없습니다 — 먼저 ①②를 실행하세요 ==")
         return None
+    inject_company_stock(wb, stock_url, log)   # 회사보유재고 → 워크북(계정목록 5열) · apply_style 전(semi/자동 공통)
     if semi:
         result = _track_ranks_semi(wb, path, log, should_stop or (lambda: False))
         push_gsheet(wb, gsheet_output_url, log)   # ③ 반자동 순위 채운 뒤 결과 구글시트에도 반영
