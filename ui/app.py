@@ -22,6 +22,7 @@ import tkinter as tk
 from tkinter import filedialog, font as tkfont, messagebox, scrolledtext, simpledialog, ttk
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # ui/ 형제 모듈(registry_ui)
 
 from coupang_analytics import config, keyword_store  # noqa: E402
 from coupang_analytics.apppaths import set_workdir  # noqa: E402
@@ -36,6 +37,7 @@ from coupang_analytics.pipeline import (backup_sources, master_exists, plan_run_
 from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_credentials_file  # noqa: E402
 from coupang_analytics.rank import make_matcher, organic_rank, warmup  # noqa: E402
+import registry_ui  # noqa: E402
 
 _PROFILE = "data/chrome-ui"
 
@@ -507,13 +509,16 @@ class App(tk.Tk):
         인자는 do_run_full 시점의 스냅샷(실행 중 self.* 변경에 영향받지 않음 — 행동 불변).
         (app_qt 와 달리 재부팅 단계마커·그로스 재고 역기록은 없음 — 폴백 UI 기존 동작 그대로.)"""
         backup_sources(input_url=gs_in, output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
+        # 원장 자동 반영(비치명·2-1) — 원장 링크는 app_qt 설정 공유값. 폴백 UI는 입력소스 '원장' 미지원.
+        reg_url = _shared_setting("registry", "url") or None
+        registry_ui.presync(reg_url or "", gs_in, self.creds_store, self.log)
         naver = NaverAdApi(naver_creds)
         # ① 반자동 판매수집 — 순위·키워드·노출측정 전무(offscreen 미사용)
         snap = run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
                         get_password=self._account_pw, resume=resume, carry_forward=carry,
                         grow_keywords=False, skip_ranks=True, redo_today=redo_today,
                         sales_semi=True, date_label=dlabel, keywords_off=True, on_log=self.log,
-                        gsheet_output_url=gs_out)
+                        gsheet_output_url=gs_out, registry_url=reg_url)
         if keywords_off:                        # ① 단독 실행 → 판매데이터만 채우고 종료
             return snap
         if stop is not None and stop.is_set():

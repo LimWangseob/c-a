@@ -18,6 +18,7 @@ from pathlib import Path
 from PySide6 import QtCore, QtGui, QtWidgets
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # ui/ 형제 모듈(registry_ui 등)
 
 from coupang_analytics import appconfig, config, keyword_store  # noqa: E402
 from coupang_analytics.apppaths import output_dir as app_output_dir, set_workdir  # noqa: E402
@@ -38,6 +39,8 @@ from coupang_analytics.pipeline import (_interruptible_sleep, backup_sources,  #
                                         select_keywords_stage,
                                         track_ranks_stage, write_run_stage)
 from coupang_analytics.rank import make_matcher, organic_rank, warmup  # noqa: E402
+import registry_ui  # noqa: E402
+from registry_panel_qt import RegistryPanelMixin  # noqa: E402
 
 _PROFILE = "data/chrome-ui"
 _IMG_PROFILE = "data/chrome-images"   # 상세이미지 전용 Chrome 프로필(사용자가 여기 코팡 로그인 → warm 영속)
@@ -163,7 +166,7 @@ def _prevent_sleep(on: bool) -> None:
         pass
 
 
-class App(QtWidgets.QMainWindow):
+class App(RegistryPanelMixin, QtWidgets.QMainWindow):
     log_signal = QtCore.Signal(str)
     finish_signal = QtCore.Signal(object, object, object, object)   # (btn, on_done, result, err)
 
@@ -259,6 +262,7 @@ class App(QtWidgets.QMainWindow):
         grid.setColumnStretch(1, 1)
         v.addWidget(fk)
         v.addWidget(self._gsheet_card())   # 구글 시트 연동(입력 관리대장 · 출력 결과시트 · 서비스계정)
+        v.addWidget(self._registry_card())  # 셀독등록원장(원장 링크·미리보기/반영·비밀번호 불일치)
         # 키워드/순위 등 세부 설정값 입력란은 제거(사용자 미사용 · 영속 저장도 안 됨). 값은 config.py 에서 관리.
         v.addStretch(1)
         return scroll
@@ -300,17 +304,19 @@ class App(QtWidgets.QMainWindow):
 
         # 2.5) 기본 입력 소스 — 시작(무인 자동로드)이 어느 쪽을 쓸지. 구글시트=기본, PC 엑셀=선택.
         cur_src = st.value("input/source", "", type=str)
-        if cur_src not in ("gsheet", "file"):
+        if cur_src not in ("gsheet", "file", registry_ui.SOURCE_REGISTRY):
             cur_src = "gsheet"                        # 미설정 = 구글시트 기본(사용자 지정)
             _cfg_save_shared("input/source", cur_src)
         self.src_gsheet_radio = QtWidgets.QRadioButton("구글시트 관리대장(기본)")
         self.src_file_radio = QtWidgets.QRadioButton("PC 엑셀(선택)")
+        self.src_registry_radio = QtWidgets.QRadioButton("원장(관리중만)")
         self.src_gsheet_radio.setChecked(cur_src == "gsheet")
         self.src_file_radio.setChecked(cur_src == "file")
-        self.src_gsheet_radio.toggled.connect(self._on_input_source_changed)
+        self.src_registry_radio.setChecked(cur_src == registry_ui.SOURCE_REGISTRY)
         src_box = QtWidgets.QHBoxLayout()
-        src_box.addWidget(self.src_gsheet_radio)
-        src_box.addWidget(self.src_file_radio)
+        for rb in (self.src_gsheet_radio, self.src_file_radio, self.src_registry_radio):
+            rb.toggled.connect(self._on_input_source_changed)
+            src_box.addWidget(rb)
         src_box.addStretch(1)
         g.addWidget(QtWidgets.QLabel("기본 입력 소스"), 2, 0)
         g.addLayout(src_box, 2, 1, 1, 2)
@@ -591,6 +597,9 @@ class App(QtWidgets.QMainWindow):
             return "warn"
         return ""
 
+    def _save_shared(self, key: str, value: str) -> None:
+        _cfg_save_shared(key, value)
+
     def log(self, msg: str):
         self.log_signal.emit(msg)   # 어느 스레드에서 불려도 GUI 스레드로 전달
 
@@ -749,11 +758,18 @@ class App(QtWidgets.QMainWindow):
         self._store_passwords_from(path, quiet=True)
         return True
 
-    def _on_input_source_changed(self, _checked=None) -> None:
+    def _on_input_source_changed(self, checked=True) -> None:
         """기본 입력 소스 라디오 변경 → input/source 영속(다음 시작 자동로드가 이 값을 따른다)."""
-        src = "gsheet" if self.src_gsheet_radio.isChecked() else "file"
+        if not checked:                 # 라디오 전환 시 꺼지는 쪽 신호는 무시(켜진 쪽만 1회 처리)
+            return
+        if self.src_registry_radio.isChecked():
+            src, name = registry_ui.SOURCE_REGISTRY, "원장(관리중만)"
+        elif self.src_gsheet_radio.isChecked():
+            src, name = "gsheet", "구글시트 관리대장"
+        else:
+            src, name = "file", "PC 엑셀"
         _cfg_save_shared("input/source", src)
-        self.log(f"[입력] 기본 입력 소스 = {'구글시트 관리대장' if src == 'gsheet' else 'PC 엑셀'}"
+        self.log(f"[입력] 기본 입력 소스 = {name}"
                  + ("" if src == "gsheet" else " — 구글시트는 여전히 '관리대장에서 불러오기'로 수동 사용 가능"))
 
     def load_input_from_gsheet(self):
@@ -772,12 +788,16 @@ class App(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.warning(self, "관리대장 읽기 실패", str(exc))
             self.log(f"[입력] 구글시트 읽기 실패({exc.__class__.__name__}): {exc}")
 
-    def _apply_input_gsheet(self, url: str) -> bool:
-        """관리대장 구글시트 → InputList 적용 + 비번 DPAPI 저장(수동/무인 공용). 실패는 예외로 올림."""
+    def _apply_input_gsheet(self, url: str, persist: bool = True) -> bool:
+        """관리대장 구글시트 → InputList 적용 + 비번 DPAPI 저장(수동/무인 공용). 실패는 예외로 올림.
+
+        persist=False = 원장 로드 실패로 대신 읽는 경우 — 사용자가 고른 입력소스(원장)를 바꾸지 않는다."""
         title, rows, strike_grid = read_ledger_rows(url, store=self.creds_store)
         il = parse_input_rows(rows, strike_grid)
         self._set_input_list(il, f"[구글시트] {title}")
         self._store_passwords_map(parse_password_rows(rows), quiet=True)
+        if not persist:
+            return True
         _cfg_save_shared("gsheet/input_url", url)
         _cfg_save_shared("input/source", "gsheet")   # 무인 자동로드가 구글시트를 우선하도록 표시
         if getattr(self, "src_gsheet_radio", None) is not None:
@@ -785,12 +805,22 @@ class App(QtWidgets.QMainWindow):
         return True
 
     def _auto_load_input(self) -> bool:
-        """입력 자동 로드(무인 실행·재시작 후): 소스=gsheet면 등록 링크에서, 아니면 마지막 PC 엑셀에서."""
+        """입력 자동 로드(무인 실행·재시작 후): 소스=원장이면 원장에서(실패 시 로그 후 구글 관리대장),
+        gsheet면 등록 링크에서, 아니면 마지막 PC 엑셀에서."""
         st = QtCore.QSettings("coupang-analytics", "ui")
         url = st.value("gsheet/input_url", "", type=str)
-        if st.value("input/source", "", type=str) == "gsheet" and url:
+        src = st.value("input/source", "", type=str)
+        if src == registry_ui.SOURCE_REGISTRY:
+            reg_url = st.value(registry_ui.KEY_URL, "", type=str).strip()
             try:
-                return self._apply_input_gsheet(url)
+                if not reg_url:
+                    raise ValueError("원장 링크 미등록")
+                return self._apply_input_registry(reg_url)
+            except Exception as exc:
+                self.log(f"[입력] 원장 자동 로드 실패({exc.__class__.__name__}): {exc} — 구글 관리대장으로 넘어감")
+        if src in ("gsheet", registry_ui.SOURCE_REGISTRY) and url:
+            try:
+                return self._apply_input_gsheet(url, persist=(src == "gsheet"))
             except Exception as exc:
                 self.log(f"[입력] 구글시트 자동 로드 실패({exc.__class__.__name__}): {exc} — PC 엑셀로 폴백 시도")
         path = st.value("file/input", "", type=str)
@@ -1128,13 +1158,14 @@ class App(QtWidgets.QMainWindow):
         재부팅 복구용 단계마커(write_run_stage)와 그로스 재고 역기록(push_ledger_inventory)까지 포함.
         인자는 do_run_full 시점의 스냅샷(실행 중 self.* 변경에 영향받지 않음 — 행동 불변)."""
         backup_sources(input_url=gs_in, output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
+        input_list, reg_url = self._registry_presync(input_list, gs_in)   # 원장 자동 반영(비치명·2-1)
         naver = NaverAdApi(naver_creds)
         # ① 반자동 판매수집 — 순위·키워드·노출측정 전무(offscreen 미사용)
         snap = run_full(input_list, naver, ai_key=key, date_from=df, date_to=dt,
                         get_password=self._account_pw, resume=resume, carry_forward=carry,
                         grow_keywords=False, skip_ranks=True, redo_today=redo_today,
                         sales_semi=True, date_label=dlabel, keywords_off=True, on_log=self.log,
-                        gsheet_output_url=gs_out)
+                        gsheet_output_url=gs_out, registry_url=reg_url)
         if keywords_off:                        # ① 단독 실행 → 판매데이터만 채우고 종료
             return snap
         write_run_stage("sales")                # ① 완료 표시(재부팅 복구: 여기부턴 ②③만)
@@ -1200,14 +1231,16 @@ class App(QtWidgets.QMainWindow):
         def task():
             try:
                 backup_sources(input_url=gs_in, output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
+                run_il, reg_url = self._registry_presync(il, gs_in)   # 원장 자동 반영(비치명·2-1)
                 naver = NaverAdApi(naver_creds)
                 # ① 반자동 판매수집(무인이어도 **처리 방식은 반자동** — 보이는 신뢰 창·실제 타이핑으로 Akamai 통과율↑).
                 #    2차인증은 사무실(신뢰 IP)이면 없이 통과; 낯선 환경서 뜨면 사람이 없어 그 계정만 건너뜀(멈춤 없음).
                 #    판매만(키워드·순위·노출측정 없음) → 이어서 ②③. 전체실행과 동일 조합(offscreen 전무).
-                run_full(il, naver, ai_key=key, date_from=df, date_to=dt,
+                run_full(run_il, naver, ai_key=key, date_from=df, date_to=dt,
                          get_password=self._account_pw, resume=resume, carry_forward=carry,
                          grow_keywords=False, skip_ranks=True, sales_semi=True, date_label=dlabel,
-                         keywords_off=True, on_log=self.log, gsheet_output_url=gs_out)
+                         keywords_off=True, on_log=self.log, gsheet_output_url=gs_out,
+                         registry_url=reg_url)
                 # 야간 1회 쿨다운-재개: 차단 등으로 미완료 계정이 남았으면(진행중 파일 잔존) 30분 쉬고
                 # **남은 계정만 1회 더** 시도(제출 총량 억제 = 위탁계정 잠금 방지, 무한 재시도 금지). 역시 반자동.
                 if (not stop.is_set() and config.LOGIN_NIGHT_RESUME and resumable_progress()):
@@ -1217,10 +1250,11 @@ class App(QtWidgets.QMainWindow):
                                          self.log, resume_label=" — 로그인 재개")
                     if not stop.is_set():
                         self.log("[무인] 쿨다운 종료 — 미완료 계정 로그인 재개(1회)")
-                        run_full(il, naver, ai_key=key, date_from=df, date_to=dt,
+                        run_full(run_il, naver, ai_key=key, date_from=df, date_to=dt,
                                  get_password=self._account_pw, resume=True, carry_forward=carry,
                                  grow_keywords=False, skip_ranks=True, sales_semi=True, date_label=dlabel,
-                                 keywords_off=True, on_log=self.log, gsheet_output_url=gs_out)
+                                 keywords_off=True, on_log=self.log, gsheet_output_url=gs_out,
+                                 registry_url=reg_url)
                 if not stop.is_set():
                     write_run_stage("sales")       # ① 완료 표시(재부팅 복구용)
                 # ② 키워드 선정(노출측정 없음·로그인 불필요·부족분 4개까지 보충)
@@ -1293,12 +1327,14 @@ class App(QtWidgets.QMainWindow):
         def task():
             try:
                 backup_sources(input_url=gs_in, output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
+                run_il, reg_url = self._registry_presync(il, gs_in)   # 원장 자동 반영(비치명·2-1)
                 naver = NaverAdApi(naver_creds)
                 if do_sales:                       # ① 판매수집 이어서(반자동·완료계정 건너뜀)
-                    run_full(il, naver, ai_key=key, date_from=df, date_to=dt,
+                    run_full(run_il, naver, ai_key=key, date_from=df, date_to=dt,
                              get_password=self._account_pw, resume=True, carry_forward=carry,
                              grow_keywords=False, skip_ranks=True, sales_semi=True, date_label=dlabel,
-                             keywords_off=True, on_log=self.log, gsheet_output_url=gs_out)
+                             keywords_off=True, on_log=self.log, gsheet_output_url=gs_out,
+                             registry_url=reg_url)
                     if not stop.is_set():
                         write_run_stage("sales")
                 if not stop.is_set() and do_keywords:   # ② 키워드 선정(동결분 유지·부족분만)
@@ -1495,11 +1531,11 @@ def _check_icon_path() -> str:
 # 담는 값: QSettings(구글시트 링크·입력소스) + credstore 키 3개(네이버·OpenAI·구글SA).
 # ⚠ 내보낸 파일은 **평문**(API/SA 키 포함) → 배포 zip 안에서만·설치 시 즉시 이 PC용 암호화(DPAPI) 후 삭제.
 # 계정 비밀번호는 담지 않는다(관리대장 '비밀번호' 컬럼에서 매 실행 자동 로드).
-_EXPORT_QKEYS = ("gsheet/input_url", "gsheet/output_url", "input/source")
+_EXPORT_QKEYS = ("gsheet/input_url", "gsheet/output_url", "input/source", "registry/url")
 _EXPORT_CREDS = ("__naver__", "__openai__", "__gsheet_sa__")
 # config.json(보존 폴더)에 두는 **공유 설정** 키 — 무인/양쪽 UI 공통(구글시트 링크·입력소스·마지막 입력파일).
 # dir/*(마지막 폴더)는 per-PC UI 편의라 레지스트리에만 둔다.
-_CONFIG_SHARED_KEYS = ("gsheet/input_url", "gsheet/output_url", "input/source", "file/input")
+_CONFIG_SHARED_KEYS = ("gsheet/input_url", "gsheet/output_url", "input/source", "file/input", "registry/url")
 
 
 def _cfg_save_shared(key: str, value: str) -> None:
