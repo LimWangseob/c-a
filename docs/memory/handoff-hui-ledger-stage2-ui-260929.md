@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: ca66c120-700c-4053-a270-0aad80debf5e
-  modified: 2026-09-29T00:30:50.414Z
+  modified: 2026-09-29T00:33:38.177Z
 ---
 
 **정산 2단계 UI 전부 구현·master 병합 완료(2026-09-29·H_ui 레인·통합 병합).** 편집=`ui/` 만. master HEAD=`c5d5036`(origin push·게이트 9종 초록). 남은 것=**사무실 라이브**(원장 실제 쓰기·이전 비번 1회 로그인)뿐.
@@ -30,4 +30,6 @@ metadata:
 
 ## 남음
 - ⏳ **사무실 라이브**: 원장 실제 쓰기(쿠팡확인 실채움)·이전 비번 1회 로그인 확인.
+- 오프라인 점검 스크립트는 세션 임시폴더라 소멸 — 다시 만들 땐 `registry_panel_qt.QtCore` 를 IniFormat 임시 QSettings 로 바꿔치기(실제 앱 설정 미접촉)·폴백 시 `_apply_input_gsheet(persist=False)` 가 입력소스(원장) 유지하는지 확인.
+- H_ui 다음 후보: `ui/app_qt.py`(약 1690줄·MI C) 탭별 모듈 분리(행동 불변·이번 믹스인 방식 재사용).
 - 관련=[[handoff-ledger-stage2-260928]]·[[feature-ledger-registry]]·[[handoff-session-260929]]·[[no-silent-fallback-principle]].

@@ -7,6 +7,10 @@
 - **정밀 우선 매칭(2026-09-18)**: 괄호 노출제목 정확일치 = 최우선. 아니면 **대장 핵심어(IDF 최고 토큰)를
   발견제목이 포함** + **핵심어 IDF 재현율·2등 마진** 통과 시에만 매칭. 미달이면 **미매칭**으로 둔다 —
   흔한 단어 하나로 **비관리 상품에 잘못 붙는(오매칭)** 것보다 통계 공란이 안전(소유자 지시).
+- **동점 타이브레이커(2026-09-29)**: 한글접두가 중복(예 '차량용청소기 ST6645' vs 'Q808')이라 핵심어만으론
+  마진 미달(애매)일 때, 동률권 후보를 **규격토큰(`_spec_tokens`·숫자시작)** 또는 **모델코드(`_code_tokens`·
+  `_CODE_TAIL`이 떼는 ST6645·BG001 등)** 로 가른다 — 그 보조키를 담은 후보가 **정확히 1개**면 확정, 아니면
+  미매칭. 코드가 동일한 **중복 리스팅**(같은 코드 2 vid)은 못 가르므로 미매칭 유지(오매칭 방지).
 - 한 발견상품은 한 대장상품에만 배정(유일 배정)해 1:다 오매칭을 막는다.
 
 매칭되면 발견 상품의 **노출제목·vid·구분(계약/개인)** 을 부여(시트 표시=노출제목).
@@ -72,6 +76,21 @@ def _spec_tokens(name: str) -> set:
     return out
 
 
+def _code_tokens(name: str) -> set:
+    """관리 모델코드 토큰(ST6645·YG0204·BG001·CL01 등) — `_CODE_TAIL` 이 정체성에서 **떼는** 코드.
+
+    한글접두가 중복이라 애매할 때(마진 미달)만 **타이브레이커**로 쓴다 — 발견제목에 그 코드가 실제로
+    있고 담은 후보가 정확히 1개면 확정. 규격(_SPEC=숫자시작)이 못 잡는 **문자시작 코드**(ST6645·BG001)를
+    가른다. 괄호(노출제목/메모) 안은 무시하고 본문 토큰만·소문자 정규화."""
+    s = re.sub(r"[（(][^)）]*[)）]", " ", str(name).replace("\n", " "))
+    out = set()
+    for t in re.split(r"[\s/+,]+", s):
+        m = _CODE_TAIL.search(t.strip())
+        if m:
+            out.add(m.group(0).lower())
+    return out
+
+
 def _assign(ledger: list[Product], discovered: list[Product]) -> dict[int, Product]:
     """{대장 index: 발견 Product}. **정밀 우선 매칭**(2026-09-18) — 확신 있는 쌍만, 대장·발견 각 1회 유일 배정.
 
@@ -122,16 +141,22 @@ def _assign(ledger: list[Product], discovered: list[Product]) -> dict[int, Produ
         if best >= _RECALL_MIN and (best - second) >= _MARGIN:
             qualified.append((0, best, li, best_di))
         elif best >= _RECALL_MIN:
-            # 애매(핵심어 재현율은 충분한데 **마진 미달** = 변형 상품 동점). 규격 타이브레이커로 확정 시도:
-            # 최고재현율 동률권(best 근방) 후보 중 **대장 규격토큰과 겹치는 후보가 정확히 1개**면 그것으로 확정.
-            # 규격은 정체성이 아니라 동점을 가르는 보조키로만 쓴다(핵심 정밀도 불변). 여전히 애매하면 미매칭.
+            # 애매(핵심어 재현율은 충분한데 **마진 미달** = 변형 상품 동점). 보조키 타이브레이커로 확정 시도:
+            # 최고재현율 동률권(best 근방) 후보 중 **대장 규격토큰 또는 모델코드와 겹치는 후보가 정확히 1개**면 확정.
+            # 규격·코드는 정체성이 아니라 동점을 가르는 보조키로만 쓴다(핵심 정밀도 불변). 여전히 애매하면 미매칭.
+            tied = [di for rc, di in scored if (best - rc) < _MARGIN]            # 동률권(마진 이내) 후보들
             lspec = _spec_tokens(core_text)
-            if lspec:
-                tied = [di for rc, di in scored if (best - rc) < _MARGIN]        # 동률권(마진 이내) 후보들
-                hit = [di for di in tied if lspec & _spec_tokens(_title(discovered[di]))]
-                if len(hit) == 1:
-                    qualified.append((0, best, li, hit[0]))                       # 규격으로 유일 확정
-        # else: 재현율 미달/규격도 애매 → 미매칭(공란, 오매칭 방지)
+            thit = [di for di in tied if lspec & _spec_tokens(_title(discovered[di]))] if lspec else []
+            if len(thit) != 1:
+                # 규격이 못 가르면 모델코드로(ST6645·BG001 등 문자시작 코드는 _SPEC=숫자시작이 못 잡음)
+                lcode = _code_tokens(core_text)
+                if lcode:
+                    chit = [di for di in tied if lcode & _code_tokens(_title(discovered[di]))]
+                    if len(chit) == 1:
+                        thit = chit
+            if len(thit) == 1:
+                qualified.append((0, best, li, thit[0]))                         # 규격/코드로 유일 확정
+        # else: 재현율 미달/보조키도 애매 → 미매칭(공란, 오매칭 방지)
 
     qualified.sort(reverse=True)                          # 괄호정확 우선, 그 다음 재현율 높은 순
     used_l: set[int] = set()

@@ -529,6 +529,36 @@ def t1_product_match_precision():
     t3, _ = scope_to_ledger([Product(name="웰빙곳간 진세노사이드 홍삼 120정")], disc3)
     assert not any(o.vendor_item_ids for o in t3[0].options), "규격 동일 애매쌍이 매칭됨(오매칭)"
     _ok("규격 타이브레이커: 변형(120정/30포) vid 정확 확정·규격 동일 애매쌍은 미매칭 유지")
+    # 모델코드 타이브레이커(원인①·2026-09-29): 한글접두가 중복이라 애매(마진 0)한데 구분 코드가
+    # 문자로 시작(ST6645·BG001)해 규격 타이브레이커(_SPEC=숫자시작)로 못 가르던 미매칭 버그.
+    # 발견제목에 대장 모델코드가 실제로 있고 그 코드를 담은 후보가 정확히 1개면 그것으로 확정.
+    disc4 = [
+        disc("차량용청소기 ST6645", "v_st"),      # 대장과 같은 코드
+        disc("차량용청소기 Q808", "v_q8"),        # 같은 한글접두·다른 코드
+        disc("보냉백 BG001", "v_bg1"),
+        disc("보냉백 BG002", "v_bg2"),
+        disc("보냉백 YG0209", "v_yg"),
+        disc("무드등 CT0229", "v_ct"),
+        disc("디프 휴대용 무선 LED 캠핑랜턴 무드등 보조배터리 3in1", "v_long"),  # '무드등' 접두 공유·코드 없음
+    ]
+    led4 = [
+        Product(name="차량용청소기 ST6645"),   # → v_st (Q808 아님)
+        Product(name="보냉백 BG001"),          # → v_bg1
+        Product(name="보냉백 BG002"),          # → v_bg2
+        Product(name="무드등 CT0229"),         # → v_ct (긴 무드등 아님)
+    ]
+    t4, n4 = scope_to_ledger(led4, disc4)
+    v4 = [sorted(v for o in tp.options for v in o.vendor_item_ids) for tp in t4]
+    assert v4[0] == ["v_st"], f"차량용청소기 모델코드 타이브레이커 실패: {v4[0]}"
+    assert v4[1] == ["v_bg1"], f"보냉백 BG001 실패: {v4[1]}"
+    assert v4[2] == ["v_bg2"], f"보냉백 BG002 실패: {v4[2]}"
+    assert v4[3] == ["v_ct"], f"무드등 CT0229 실패: {v4[3]}"
+    assert n4 == 4, f"모델코드 매칭 수 {n4} (기대 4)"
+    # 동일 코드 중복 리스팅(같은 코드 2개)은 코드로도 못 가름 → 미매칭 유지(오매칭 방지)
+    disc5 = [disc("트렁크정리함 YG0204", "v_t1"), disc("트렁크정리함 YG0204", "v_t2")]
+    t5, _ = scope_to_ledger([Product(name="트렁크정리함 YG0204")], disc5)
+    assert not any(o.vendor_item_ids for o in t5[0].options), "동일코드 중복리스팅이 매칭됨(오매칭)"
+    _ok("모델코드 타이브레이커: 문자시작 코드(ST6645·BG001)로 애매쌍 정확 확정·동일코드 중복은 미매칭 유지")
 
 
 def t1_vid_source_option_split():
