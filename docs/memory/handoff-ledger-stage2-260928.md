@@ -31,3 +31,5 @@ metadata:
 
 ## 착수 방법
 D8_ledger 세션(D:\ca-worktree\D8_ledger)에서 `designs/LEDGER_REGISTRY.md §10`부터 읽고 2-1 착수. 핀 먼저(registry 게이트 verify_registry_offline). 관련=[[feature-ledger-registry]]·[[handoff-domain-design-260928]]·[[no-silent-fallback-principle]]·[[login-policy-real-browser-only]].
+
+**진행(2026-09-29)**: D8 함수4+잠금·통합 2-2 배선·try_login_once·**H_ui UI(2-1·2-3·2-4) 모두 완료·master 병합** → 남은 것=사무실 라이브. 상세=[[handoff-hui-ledger-stage2-ui-260929]].
