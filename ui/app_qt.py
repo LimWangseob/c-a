@@ -212,6 +212,7 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         self.tabs.setMaximumHeight(360)   # 탭 영역은 컴팩트 → 아래 로그창이 화면 대부분 차지(2배↑)
         root.addWidget(self.tabs, 0)
         self.tabs.addTab(self._settings_tab(), "설정")
+        self.tabs.addTab(self._sales_tab(), "판매 분석")   # 결과 엑셀에서 판매지표 조회(수집 아님)
         self.tabs.addTab(self._kw_tab(), "키워드 추천")
         self.tabs.addTab(self._rank_tab(), "순위 조회")
         self.tabs.addTab(self._images_tab(), "상세 이미지")
@@ -291,6 +292,105 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         v.addWidget(self._registry_card())  # 셀독등록원장(원장 링크·미리보기/반영·비밀번호 불일치)
         v.addStretch(1)
         return scroll
+
+    # ── 판매 분석 탭(조회 전용) ──────────────────────────────
+    _SALES_COLS = ("사업자", "상품", "최신 수집일", "판매량", "방문자", "노출량", "재고")
+
+    def _sales_tab(self):
+        """판매 분석 — **수집된 결과 엑셀(통계 마스터)에서** 사업자·상품·최신 일자 판매지표를 표로 조회.
+
+        실행·수집이 아니라 **조회 전용**(소유자 2026-09-29: 데이터 출처=엑셀 파일). '새로고침'으로 최신 결과
+        엑셀을 읽어 표를 채우고, '결과 엑셀/폴더 열기'로 원본을 직접 연다."""
+        w = QtWidgets.QWidget()
+        v = QtWidgets.QVBoxLayout(w)
+        v.setContentsMargins(12, 10, 12, 10)
+        card = self._card("판매 분석 — 결과 엑셀(통계 마스터)에서 최신 판매지표 조회")
+        cv = QtWidgets.QVBoxLayout(card)
+        bar = QtWidgets.QHBoxLayout()
+        self.sales_refresh_btn = QtWidgets.QPushButton("새로고침")
+        self.sales_refresh_btn.setToolTip("결과 엑셀(통계 마스터)을 다시 읽어 아래 표를 갱신합니다(수집 아님).")
+        self.sales_refresh_btn.clicked.connect(self._load_sales_analysis)
+        self.sales_open_btn = QtWidgets.QPushButton("결과 엑셀 열기")
+        self.sales_open_btn.clicked.connect(self._open_master_excel)
+        self.sales_folder_btn = QtWidgets.QPushButton("결과 폴더 열기")
+        self.sales_folder_btn.clicked.connect(self._open_output_folder)
+        for b in (self.sales_refresh_btn, self.sales_open_btn, self.sales_folder_btn):
+            bar.addWidget(b)
+        bar.addStretch(1)
+        cv.addLayout(bar)
+        self.sales_summary_lbl = QtWidgets.QLabel("‘새로고침’을 눌러 결과 엑셀에서 판매지표를 불러오세요.")
+        self.sales_summary_lbl.setObjectName("muted")
+        cv.addWidget(self.sales_summary_lbl)
+        self.sales_table = QtWidgets.QTableWidget(0, len(self._SALES_COLS))
+        self.sales_table.setHorizontalHeaderLabels(list(self._SALES_COLS))
+        self.sales_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.sales_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.sales_table.horizontalHeader().setStretchLastSection(True)
+        self.sales_table.verticalHeader().setVisible(False)
+        cv.addWidget(self.sales_table, 1)
+        v.addWidget(card, 1)
+        return w
+
+    def _master_xlsx_path(self) -> Path:
+        """결과 통계 마스터 엑셀 경로(output/쿠팡데이타분석_통계.xlsx)."""
+        return app_output_dir() / f"{config.OUTPUT_FILE_PREFIX}_통계.xlsx"
+
+    @staticmethod
+    def _metric_at_latest(wb, biz: str, prod: str, metric: str):
+        """워크북에서 그 상품의 **최신 일자** 지표 값(없으면 ''). product_inventory 와 같은 방식(읽기 전용)."""
+        row = wb._metric_row.get((biz, prod, metric))
+        d = wb.latest_date(biz)
+        col = wb._date_col.get(biz, {}).get(d) if d else None
+        if row is None or col is None:
+            return ""
+        val = wb.wb[biz].cell(row, col).value
+        return "" if val is None else val
+
+    def _load_sales_analysis(self):
+        """결과 엑셀(통계 마스터)을 읽어 판매 분석 표를 채운다(조회 전용·비치명)."""
+        from coupang_analytics.workbook import OutputWorkbook
+        master = self._master_xlsx_path()
+        if not master.exists():
+            self.sales_table.setRowCount(0)
+            self.sales_summary_lbl.setText(
+                "결과 엑셀(통계 마스터)이 아직 없습니다 — ①판매수집 또는 전체 실행으로 데이터를 먼저 수집하세요.")
+            return
+        try:
+            wb = OutputWorkbook.load(master)
+        except Exception as exc:
+            self.sales_summary_lbl.setText(f"결과 엑셀을 읽지 못했습니다: {exc.__class__.__name__}: {exc}")
+            return
+        rows = []
+        for biz in wb.account_sheets():
+            d = wb.latest_date(biz) or ""
+            for prod in wb.products_of(biz):
+                rows.append((
+                    biz, prod, d,
+                    self._metric_at_latest(wb, biz, prod, config.M_SALES),
+                    self._metric_at_latest(wb, biz, prod, config.M_VISITORS),
+                    self._metric_at_latest(wb, biz, prod, config.M_VIEWS),
+                    self._metric_at_latest(wb, biz, prod, config.M_INVENTORY)))
+        self.sales_table.setRowCount(len(rows))
+        for r, vals in enumerate(rows):
+            for c, val in enumerate(vals):
+                it = QtWidgets.QTableWidgetItem("" if val == "" else str(val))
+                if c >= 3:                       # 지표(판매량~재고)는 우측 정렬
+                    it.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+                self.sales_table.setItem(r, c, it)
+        self.sales_table.resizeColumnsToContents()
+        self.sales_summary_lbl.setText(
+            f"사업자 {len(wb.account_sheets())} · 상품 {len(rows)} · 결과: {master.name} "
+            "(판매량·방문자·노출량=최신 일자 값)")
+
+    def _open_master_excel(self):
+        master = self._master_xlsx_path()
+        if master.exists():
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(master)))
+        else:
+            QtWidgets.QMessageBox.information(self, "결과 없음", "통계 마스터 엑셀이 아직 없습니다(먼저 수집).")
+
+    def _open_output_folder(self):
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(app_output_dir())))
 
     def _gsheet_card(self):
         """구글 시트 연동 카드 — 서비스계정 키 + 입력(관리대장)·출력(결과) 구글시트 링크 등록.
