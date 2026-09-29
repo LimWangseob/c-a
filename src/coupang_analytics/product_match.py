@@ -94,6 +94,35 @@ def _code_tokens(name: str) -> set:
     return out
 
 
+def _tiebreak(core_text: str, scored: list, discovered: list[Product], ndisc: list[str],
+              best: float) -> tuple[str, int, list[int]]:
+    """애매(마진 미달) 동률권 해소 → ('match', di, []) | ('merge', -1, [di,...]) | ('none', -1, []).
+
+    ⓐ **판매중지 제외**(소유자 2026-09-29): 같은 이름·코드 중복 리스팅은 담당자가 상품 오입력→수정 불가라 죽은 걸
+       판매중지시킨 재등록이 흔함 → 동률권에서 판매중지 빼 **live 유일이면 확정**. 다 판매중지면 원본 유지.
+    ⓑ 규격토큰(_SPEC=숫자시작)·모델코드(_CODE_TAIL: ST6645·BG001 등 문자시작)로 정확히 1개면 확정(보조키·정체성 아님).
+    ⓒ 그래도 여럿이고 **모두 같은 이름**이면 = 같은 등록상품명의 별도 상품(다른 vid/가격) → 병합 신호(별도 블록).
+    """
+    tied = [di for rc, di in scored if (best - rc) < _MARGIN]                # 동률권(마진 이내) 후보들
+    live = [di for di in tied if getattr(discovered[di], "sale_status", "") != "판매중지"]
+    if len(live) == 1:
+        return ("match", live[0], [])                                        # 판매중지 제외 후 live 유일 → 확정
+    sub = live or tied                                                       # 다 live → 보조키 / 다 판매중지 → 원본
+    lspec = _spec_tokens(core_text)
+    thit = [di for di in sub if lspec & _spec_tokens(_title(discovered[di]))] if lspec else []
+    if len(thit) != 1:
+        lcode = _code_tokens(core_text)
+        if lcode:
+            chit = [di for di in sub if lcode & _code_tokens(_title(discovered[di]))]
+            if len(chit) == 1:
+                thit = chit
+    if len(thit) == 1:
+        return ("match", thit[0], [])                                       # 규격/코드로 유일 확정
+    if len(live) > 1 and len({ndisc[di] for di in live}) == 1:
+        return ("merge", -1, live)                                          # 같은 이름 별도 상품 → 별도 블록
+    return ("none", -1, [])                                                  # 여전히 애매 → 미매칭(오매칭 방지)
+
+
 def _assign(ledger: list[Product], discovered: list[Product]) -> dict[int, Product]:
     """{대장 index: 발견 Product}. **정밀 우선 매칭**(2026-09-18) — 확신 있는 쌍만, 대장·발견 각 1회 유일 배정.
 
@@ -117,6 +146,7 @@ def _assign(ledger: list[Product], discovered: list[Product]) -> dict[int, Produ
     ndisc = [_norm(_title(d)) for d in discovered]   # 공백 제거 발견제목 — 정체성 매칭은 띄어쓰기 무관(부분일치)
 
     qualified: list[tuple[int, float, int, int]] = []   # (괄호정확?, 재현율, 대장i, 발견i)
+    merge_groups: dict[int, list[int]] = {}             # 대장i → 같은 이름 다중 live 발견i들(별도 상품·병합 대상)
     for li, lp in enumerate(ledger):
         par = _norm(_paren(lp.name))
         # ① 괄호 노출제목 정확일치(대장 형식 '코드 (노출제목)')
@@ -150,28 +180,12 @@ def _assign(ledger: list[Product], discovered: list[Product]) -> dict[int, Produ
         if best >= _RECALL_MIN and (best - second) >= _MARGIN:
             qualified.append((0, best, li, best_di))
         elif best >= _RECALL_MIN:
-            # 애매(핵심어 재현율은 충분한데 **마진 미달** = 변형/중복 상품 동점).
-            # ⓐ 먼저 **판매중지 제외**(소유자 2026-09-29): 같은 이름·코드 중복 리스팅은 담당자가 상품 오입력→수정
-            #    불가라 죽은 걸 판매중지시킨 재등록이 흔하다 → 동률권에서 판매중지를 빼 **live 가 정확히 1개면 확정**.
-            #    여전히 여럿이면(다 live=별도 상품·가격/옵션 다름) 규격/코드 보조키로 가른다. 다 판매중지면 원본 유지.
-            # ⓑ 규격토큰(_SPEC=숫자시작) 또는 모델코드(_CODE_TAIL: ST6645·BG001 등 문자시작)로 정확히 1개면 확정.
-            #    규격·코드는 정체성이 아니라 동점을 가르는 보조키로만 쓴다(핵심 정밀도 불변). 여전히 애매하면 미매칭.
-            tied = [di for rc, di in scored if (best - rc) < _MARGIN]            # 동률권(마진 이내) 후보들
-            live = [di for di in tied if getattr(discovered[di], "sale_status", "") != "판매중지"]
-            if len(live) == 1:
-                thit = live                                 # 판매중지 제외 후 live 유일 → 확정(죽은 재등록 배제)
-            else:
-                sub = live or tied                          # 다 live=별도상품 → 보조키로 / 다 판매중지 → 원본
-                lspec = _spec_tokens(core_text)
-                thit = [di for di in sub if lspec & _spec_tokens(_title(discovered[di]))] if lspec else []
-                if len(thit) != 1:
-                    lcode = _code_tokens(core_text)
-                    if lcode:
-                        chit = [di for di in sub if lcode & _code_tokens(_title(discovered[di]))]
-                        if len(chit) == 1:
-                            thit = chit
-            if len(thit) == 1:
-                qualified.append((0, best, li, thit[0]))                         # 규격/코드로 유일 확정
+            # 애매(마진 미달=변형/중복 동점) → 보조키 해소(판매중지 제외·규격·모델코드) 또는 같은 이름 병합(_tiebreak).
+            kind, di, dis = _tiebreak(core_text, scored, discovered, ndisc, best)
+            if kind == "match":
+                qualified.append((0, best, li, di))
+            elif kind == "merge":
+                merge_groups[li] = dis
         # else: 재현율 미달/보조키도 애매 → 미매칭(공란, 오매칭 방지)
 
     qualified.sort(reverse=True)                          # 괄호정확 우선, 그 다음 재현율 높은 순
@@ -184,7 +198,40 @@ def _assign(ledger: list[Product], discovered: list[Product]) -> dict[int, Produ
         res[li] = discovered[di]
         used_l.add(li)
         used_d.add(di)
+    # 같은 이름 별도 상품(다중 live) 병합 — 1:1 매칭에서 안 쓰인 것만. 여럿이면 옵션 여러 개인 한 Product 로
+    # 병합해 호출부의 옵션 분리가 별도 블록을 만들게 한다(라벨=itemName). 하나만 남으면 그것으로 매칭.
+    for li, dis in merge_groups.items():
+        if li in used_l:
+            continue
+        avail = [di for di in dis if di not in used_d]
+        if not avail:
+            continue
+        res[li] = discovered[avail[0]] if len(avail) == 1 else _merge_same_name(discovered, avail)
+        used_l.add(li)
+        used_d.update(avail)
     return res
+
+
+def _merge_same_name(discovered: list[Product], dis: list[int]) -> Product:
+    """같은 이름 별도 상품(다른 vid) 여러 개 → **옵션 여러 개인 한 Product** 로 병합(호출부 옵션 분리로 별도 블록).
+
+    블록 구분 라벨 = 옵션 itemName(products_from_vendor_inventory 가 보존). 라벨이 비거나 겹치면 vid 꼬리로 유니크화.
+    이름/구분/판매상태는 첫 상품 기준(같은 이름이라 동일)."""
+    d0 = discovered[dis[0]]
+    opts: list[Option] = []
+    seen: set[str] = set()
+    for di in dis:
+        for o in discovered[di].options:
+            lbl = (o.label or "").strip() or (o.vendor_item_ids[0][-4:] if o.vendor_item_ids else "")
+            base_lbl, k = lbl, 2
+            while lbl in seen:
+                lbl = f"{base_lbl} #{k}"
+                k += 1
+            seen.add(lbl)
+            opts.append(Option(label=lbl, vendor_item_ids=list(o.vendor_item_ids),
+                               product_ids=list(o.product_ids)))
+    return Product(name=_title(d0), title=_title(d0), kind=d0.kind, options=opts,
+                   sale_status=d0.sale_status)
 
 
 def scope_to_ledger(ledger: list[Product], discovered: list[Product]) -> tuple[list[Product], int]:

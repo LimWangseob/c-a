@@ -866,8 +866,9 @@ def products_from_vendor_inventory(listings: list[VendorInventoryListing],
         if not opts:
             skipped += 1
             continue
-        labels = [""] if len(opts) == 1 else _uniquify_labels(
-            [_option_label(o.item_name, o.vendor_item_id) for o in opts])
+        # 옵션 라벨(itemName)은 항상 보존한다. 단일옵션 블록명은 그대로(_process_option 이 다중옵션일 때만 라벨을
+        # 씀) — 다만 **같은 이름 별도 상품(다른 vid/가격)을 병합해 별도 블록으로 낼 때** 라벨이 필요하다(2026-09-29).
+        labels = _uniquify_labels([_option_label(o.item_name, o.vendor_item_id) for o in opts])
         options = [Option(label=lbl, vendor_item_ids=[o.vendor_item_id])
                    for lbl, o in zip(labels, opts)]
         name = listing.product_name

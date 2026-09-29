@@ -561,12 +561,15 @@ def t1_product_match_precision():
              disc("트렁크정리함 YG0204", "v_dead", sale_status="판매중지")]
     t5, _ = scope_to_ledger([Product(name="트렁크정리함 YG0204")], disc5)
     assert [v for o in t5[0].options for v in o.vendor_item_ids] == ["v_live"], "판매중지 제외 후 live 매칭 실패"
-    # 둘 다 live(같은 이름·다른 vid/가격=별도 상품)면 담당자 구분 필요 → 미매칭 유지(오매칭 방지)
+    # 같은 이름 별도 상품(둘 다 live·다른 vid/가격): 대장 한 줄 → 둘 다 별도 블록으로(옵션 분리) 병합(소유자 2026-09-29)
     disc5b = [disc("기저귀가방 CL01", "v_a", sale_status="판매중"),
               disc("기저귀가방 CL01", "v_b", sale_status="부분판매중")]
-    t5b, _ = scope_to_ledger([Product(name="기저귀가방 CL01")], disc5b)
-    assert not any(o.vendor_item_ids for o in t5b[0].options), "둘 다 live 동일이름이 매칭됨(오매칭)"
-    _ok("모델코드 타이브레이커+판매중지 제외: 문자시작 코드로 확정·중복 중 live 유일→매칭·둘 다 live는 미매칭")
+    t5b, n5b = scope_to_ledger([Product(name="기저귀가방 CL01")], disc5b)
+    v5b = sorted(v for o in t5b[0].options for v in o.vendor_item_ids)
+    assert v5b == ["v_a", "v_b"], f"같은 이름 별도 상품 둘 다 추적 실패: {v5b}"
+    assert len(t5b[0].options) == 2, "옵션 2개(별도 블록용)로 병합 안 됨"
+    assert len({o.label for o in t5b[0].options}) == 2, "병합 옵션 라벨이 안 갈림(블록명 충돌)"
+    _ok("모델코드+판매중지제외+같은이름별도상품: 코드로 확정·live 유일→매칭·둘 다 live=별도 블록 병합")
     # 원인②(2026-09-29): 대장 본문에 정체성 토큰이 있으면 본문 우선(괄호=색상/옵션/메모는 무시),
     # 본문이 코드뿐이면 괄호(노출제목)로 폴백 — 담당자 대장 본문명을 최대한 존중.
     disc6 = [
