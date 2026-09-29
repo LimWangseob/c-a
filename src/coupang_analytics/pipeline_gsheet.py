@@ -155,6 +155,25 @@ def push_ledger_inventory(input_url: str | None, log, out_dir: str = "output") -
             f"{exc.__class__.__name__}: {str(exc)[:120]} ==")
 
 
+def push_company_stock(stock_url: str | None, input_url: str | None, log) -> None:
+    """재고현황(stock_url) → 관리대장(input_url) '회사보유재고' 열 역기록(전체실행·무인 종료 시, **그로스 재고 다음**).
+
+    판매자배송용 회사 자체 재고(로켓그로스 '그로스 재고'와 별개·소유자 2026-09-29). stock_url/input_url 없거나
+    SA 미등록이면 조용히 생략(정상). run_company_stock 은 폴백 없이 예외를 올리므로 여기서 try/로그로 감싼다
+    (비치명 — 수집·결과시트·그로스 재고 역기록은 이미 완료). 무인(--auto)에서도 호출(대장 한 열만 갱신 = 그로스
+    재고 역기록과 동급). 미리보기/반영은 UI 가 run_company_stock 을 직접(dry_run) 호출."""
+    if not stock_url or not input_url:
+        return
+    try:
+        from . import company_stock, gsheet_api
+        if not gsheet_api.load_sa_info():
+            return
+        company_stock.run_company_stock(stock_url, input_url, on_log=log)
+    except Exception as exc:
+        log(f"== [회사재고] 실패(진행 — SA 권한·링크 확인): "
+            f"{exc.__class__.__name__}: {str(exc)[:120]} ==")
+
+
 def push_coupang_checks(registry_url: str | None, checks: dict, log) -> None:
     """2-2(§10-1): ①판매수집에서 산출한 쿠팡확인을 셀독등록원장에 **1회** 기록(비치명).
 

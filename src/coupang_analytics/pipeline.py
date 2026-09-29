@@ -34,7 +34,7 @@ from .pipeline_paths import master_exists, read_run_stage, write_run_stage  # no
 # 구글시트 연동·백업·복원은 pipeline_gsheet 로 분리(대형 파일 정비). pipeline.X 로 다시 노출.
 from .pipeline_gsheet import (  # noqa: E402,F401
     pull_gsheet_keywords, push_gsheet, push_coupang_checks, backup_sources,
-    push_ledger_inventory, restore_master_from_gsheet)
+    push_ledger_inventory, push_company_stock, restore_master_from_gsheet)
 # ③ 순위(측정·서킷브레이커·자동/반자동 검색·스테이지)는 pipeline_ranks 로 분리. pipeline.X 로 다시 노출
 # (핀/시뮬 monkeypatch 대상은 pipeline_ranks). core(_fill_product_metrics·_finalize_run)가 _best/
 # _measure_safe/_reset_rank_state/_RANK_HALT 를 호출하므로 재수출 필요.

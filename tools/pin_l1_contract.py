@@ -28,7 +28,7 @@ except AttributeError:
     pass
 
 from coupang_analytics import (  # noqa: E402
-    collector, gsheet_index, gsheet_stats, input_list, pipeline_gsheet,
+    collector, company_stock, gsheet_index, gsheet_stats, input_list, pipeline_gsheet,
     pipeline_sales, rank, registry, registry_gsheet, registry_model)
 from coupang_analytics.workbook import OutputWorkbook  # noqa: E402
 
@@ -102,6 +102,12 @@ FUNC_CONTRACTS: dict = {
         ("backup_sources", "P:out_dir:1 K:input_url:1 K:output_url:1 K:on_log:1"),
         ("restore_master_from_gsheet", "P:out_dir:0 P:url:0 P:on_log:1"),
         ("push_ledger_inventory", "P:input_url:0 P:log:0 P:out_dir:1"),
+        ("push_company_stock", "P:stock_url:0 P:input_url:0 P:log:0"),
+    ],
+    # 회사보유재고(2026-09-29·소유자): 재고현황 시트→대장 '회사보유재고' 역기록. UI 버튼·야간 배치 공용 진입점.
+    company_stock: [
+        ("run_company_stock",
+         "P:stock_url:0 P:input_url:0 K:dry_run:1 K:on_log:1 K:stock_client:1 K:ledger_client:1"),
     ],
     registry: [
         ("sync", "P:reg:0 P:snap:0 K:now:0"),

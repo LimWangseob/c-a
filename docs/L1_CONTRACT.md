@@ -75,7 +75,14 @@
 | `backup_sources(out_dir='output', *, input_url=None, output_url=None, on_log=None)` | P:out_dir:1 K:input_url:1 K:output_url:1 K:on_log:1 |
 | `restore_master_from_gsheet(out_dir, url, on_log=None)` | P:out_dir:0 P:url:0 P:on_log:1 |
 | `push_ledger_inventory(input_url, log, out_dir='output')` | P:input_url:0 P:log:0 P:out_dir:1 |
-- `pipeline.py` 가 `push_gsheet`·`pull_gsheet_keywords`·`backup_sources`·`restore_master_from_gsheet`·`push_ledger_inventory` 를 **재수출**(ui·스케줄러·도구는 `coupang_analytics.pipeline.X` 로 씀).
+| `push_company_stock(stock_url, input_url, log)` | P:stock_url:0 P:input_url:0 P:log:0 |
+- `pipeline.py` 가 `push_gsheet`·`pull_gsheet_keywords`·`backup_sources`·`restore_master_from_gsheet`·`push_ledger_inventory`·`push_company_stock` 를 **재수출**(ui·스케줄러·도구는 `coupang_analytics.pipeline.X` 로 씀).
+
+## 6-b. company_stock (회사보유재고 역기록·판매자배송) — 호출처: ui(H_ui 카드/야간)·pipeline_gsheet
+| 공개 진입점 | 파라미터 구조 |
+|---|---|
+| `run_company_stock(stock_url, input_url, *, dry_run=False, on_log=None, stock_client=None, ledger_client=None)` | P:stock_url:0 P:input_url:0 K:dry_run:1 K:on_log:1 K:stock_client:1 K:ledger_client:1 |
+- 재고현황 시트→관리대장 '회사보유재고' 열('창고 , 수량개') 역기록. UI [미리보기](dry_run)/[반영] 직접 호출·야간은 `pipeline_gsheet.push_company_stock`(비치명 래퍼) 경유. 실패=예외(폴백 없음)·호출부가 비치명 처리. 설정키 `stock/url`(입력 URL은 기존 `gsheet/input_url`).
 
 ## 7. registry 계열 (셀독등록원장) — 호출처: tools 전용(live 미연동·2단계 앱 연계 대비 선고정)
 | 모듈.진입점 | 파라미터 구조 |
