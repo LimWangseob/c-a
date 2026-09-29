@@ -174,3 +174,48 @@
 - 상위: `docs/DOMAIN_DESIGN.md §D8`·`docs/ARCHITECTURE.md`. 운영: `docs/PARALLEL_DEV.md`. 계약: `docs/L1_CONTRACT.md`.
 - 형제: `designs/LEDGER_REGISTRY.md`(원장). 정책: `docs/DECISIONS.md`(2026-09-29 정산 도메인 아카이브)·메모리 `settlement-domain-knowledge`.
 - 규율: `no-silent-fallback-principle`(폴백 금지·실패 raise)·`code-health-regression-gate`(게이트·실 API 금지·CC/파일 상한)·`fix-from-real-evidence`.
+
+---
+
+## 12. D8_ledger 레인 인계 브리핑 (2026-09-29 · 통합 세션 → D8 레인)
+
+> D8_ledger worktree(`D:\ca-worktree\D8_ledger`·브랜치 `domain/d8-ledger`)에서 새 세션을 열어 **1단계**를 구현한다.
+> 이 문서가 구현 SSOT. 아래 순서대로 하면 된다. **설계 변경 아님 — 설계대로 코드만 작성.**
+
+### 시작 절차
+1. **설계 확보(로컬)**: worktree는 로컬 `.git`을 공유하므로 push 없이 master의 설계를 가져온다:
+   ```
+   cd D:\ca-worktree\D8_ledger
+   git merge master          # SETTLEMENT_MODULE.md·COUPANG_SETTLEMENT_DOMAIN.md·golden json 확보(비겹침=클린)
+   python tools/install_hooks.py   # 새 클론/worktree면 1회
+   ```
+2. **읽기**: `designs/SETTLEMENT_MODULE.md`(이 문서 전체)·`designs/COUPANG_SETTLEMENT_DOMAIN.md`(도메인 지식)·`designs/coupang_golden_cases.json`(완료 조건)·`docs/PARALLEL_DEV.md`(레인 규칙)·`docs/L1_CONTRACT.md`(계약).
+3. **베이스라인 초록 확인**: `python tools/run_checks.py`.
+
+### 구현 순서 (1단계 = 오프라인·골든 100%)
+각 모듈 완성마다 **게이트 초록 유지·작게 자주 커밋**. 순서:
+1. `holiday_kr.py` — §2. 함수 `holidays/is_business_day/add_business_days/next_business_day`. **테스트는 골든 `_meta.holidays_used` 주입**(실 API 금지). 대체공휴일 규칙(설·추석 토요일 겹침 대체 없음) 주의.
+2. `payout.py` — §3. `payout_date(policy, *, week_end, revenue_month, holidays)`. 골든 payout_date 12케이스가 정답(마감일+15/20영업일·MP FINAL 익익월 1일 무보정). `is_estimate` 표기.
+3. `settlement_amount.py` — §4. 윙 E=A−B−C−D·final=E−F / RG 실지급 / RG 홈이익·마진%. 골든 amount_formula 2케이스.
+4. `settlement_parse.py` — §5. 헤더 기반 매핑·전 셀 str·숫자변환 실패 ERROR·ID 문자열 유지·불변식 검증(§5.1 실측: 19열 `vendor item metrics`·불변식 16/16). 메타(period/account) 강제.
+5. `tools/verify_settlement_offline.py` — §6. golden json 로드 → payout/amount/invariant 3영역 대조. **결정적·실 API 미호출.**
+6. **완료 판정 = 골든 전 케이스 통과.** 이후 통합에 §아래 "통합 요청" 전달.
+
+### ⛔ 레인 경계 (직접 편집 금지 — 통합 세션에 요청)
+공유 파일이라 D8 레인이 **직접 못 고친다**. 아래는 **통합 세션에 요청**(작고 빠름):
+- `tools/run_checks.py` `CHECKS`에 `verify_settlement_offline.py` **1줄 등록**(9→10종).
+- `config.py`/`appconfig` **설정키**(§8: `settlement/source_dir` 등).
+- `docs/L1_CONTRACT.md` + `tools/pin_l1_contract.py` **계약 등록**(settlement.py 퍼사드를 pipeline/ui가 부르게 될 때만·1단계엔 불필요).
+- `pipeline.py`·`collector.py` 배선(2단계 라이브 수집 때).
+
+### 규율 (게이트가 강제)
+- 새 함수 **CC ≤ 15**·파일 **≤ ~600줄**·`check_complexity.py` 초록.
+- **테스트에 실 API 금지**(공휴일·정산 API 미호출·골든 주입만).
+- **silent 폴백 금지**(변환 실패·소스 실패 = ERROR raise, `no-silent-fallback-principle`).
+- 응급 우회(`--no-verify`) 금지.
+
+### 병합
+- 1단계 완료 후 `run_checks`(가능하면 10종)+`check_complexity` 초록 → `domain/d8-ledger` push → **통합이 직렬 병합**(master merge → 게이트 재실행). 신규 모듈이라 충돌 없음.
+
+### 범위 밖 (D8 레인 하지 말 것)
+- 2단계 라이브 수집·3단계 계약 정산(별도)·UI(H_ui 레인)·공유 파일 직접 편집.
