@@ -216,6 +216,7 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         self.tabs.addTab(self._rank_tab(), "순위 조회")
         self.tabs.addTab(self._images_tab(), "상세 이미지")
         self.tabs.addTab(self._collect_tab(), "전체 실행")
+        self.tabs.addTab(self._settlement_tab(), "정산")   # 회사재고 + 셀독등록원장(설정에서 이동)
         self.log_panel = self._log_panel()
         root.addWidget(self.log_panel, 1)   # 로그가 남는 공간 전부
         # 진행 로그창 = **실행 버튼을 누른 뒤부터** 표시(소유자 2026-09-29). 처음(설정 화면)엔 숨김.
@@ -271,9 +272,23 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         grid.setColumnStretch(1, 1)
         v.addWidget(fk)
         v.addWidget(self._gsheet_card())   # 구글 시트 연동(입력 관리대장 · 출력 결과시트 · 서비스계정)
+        # 회사재고·원장(정산) 카드는 '정산' 탭으로 이동(2026-09-29 소유자). 키워드/순위 세부값은 config.py.
+        v.addStretch(1)
+        return scroll
+
+    def _settlement_tab(self):
+        """정산 탭 — 회사보유재고(재고현황→관리대장) + 셀독등록원장(원장 미리보기/반영·비밀번호 불일치).
+
+        설정 탭에 있던 두 카드를 정산 성격으로 묶어 별도 탭으로(2026-09-29 소유자). 카드 자체는 mixin 이 만든다."""
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        inner = QtWidgets.QWidget()
+        scroll.setWidget(inner)
+        v = QtWidgets.QVBoxLayout(inner)
+        v.setContentsMargins(14, 12, 14, 12)
         v.addWidget(self._stock_card())     # 회사 재고(판매자배송) — 재고현황 → 관리대장 '회사보유재고'
         v.addWidget(self._registry_card())  # 셀독등록원장(원장 링크·미리보기/반영·비밀번호 불일치)
-        # 키워드/순위 등 세부 설정값 입력란은 제거(사용자 미사용 · 영속 저장도 안 됨). 값은 config.py 에서 관리.
         v.addStretch(1)
         return scroll
 
