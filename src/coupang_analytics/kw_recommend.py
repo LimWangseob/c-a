@@ -158,6 +158,76 @@ def _timed(_logf, label, fn, *args, **kwargs):
     return r
 
 
+def _anchor_pool(naver: NaverAdApi, anchors, core, identities, log) -> dict[str, KeywordVolume]:
+    """① 앵커 네이버 연관확장(≥KW_MIN_VOLUME) + **상품 자기 정체성(core+identities+anchors) 강제포함**.
+
+    니치 상품(레몬버베나 등)은 자기 이름조차 하한에 걸려 후보가 비는 문제 방지 — 자기 키워드는 검색량 낮아도
+    노출순위 추적 대상(네이버가 값 준 것만). 반환=pool{키워드:KeywordVolume}."""
+    pool: dict[str, KeywordVolume] = {}
+    anchor_rel: dict[str, KeywordVolume] = {}
+    for c in _timed(log, "네이버 앵커연관", naver.related_keywords_multi, anchors):   # ① 넓은 연관(≥500)
+        anchor_rel.setdefault(c.keyword, c)
+        if c.total >= config.KW_MIN_VOLUME:
+            pool.setdefault(c.keyword, c)
+    for term in dict.fromkeys(t for t in ([core] + identities + anchors) if t):
+        if term in anchor_rel:
+            pool.setdefault(term, anchor_rel[term])
+    return pool
+
+
+def _generate_pool(pool: dict, naver: NaverAdApi, title, use, core, identities, attributes,
+                   ai_key, browser, log) -> None:
+    """② 쿠팡 자동완성(실수요) + ③ AI 조합생성 + ④ 네이버 2단계 확장으로 pool 확장(제자리·≥KW_TRACK_MIN_VOLUME)."""
+    if browser is not None:                                     # ② 쿠팡 자동완성(실수요)
+        seeds = list(dict.fromkeys(s for s in ([core] + identities) if s))   # 순서보존 중복제거
+        try:
+            suggests = _timed(log, "쿠팡 자동완성", collect_suggestions, browser, seeds, log=log)
+        except SuggestError as exc:
+            suggests = []
+            if log:
+                log(f"  [자동완성] 실패 — {exc} (이 소스만 건너뜀, 다른 소스로 계속)")
+        sug_norm = {_norm(s) for s in suggests}
+        if suggests:
+            for c in _timed(log, "네이버 자동완성연관", naver.related_keywords_multi, suggests):
+                if _norm(c.keyword) in sug_norm and c.total >= config.KW_TRACK_MIN_VOLUME:
+                    pool.setdefault(c.keyword, c)
+    gen = _timed(log, "AI 조합생성", generate_keywords, title, use, identities, attributes,
+                 api_key=ai_key)  # ③
+    gen_norm = {_norm(g) for g in gen}
+    for c in _timed(log, "네이버 조합연관", naver.related_keywords_multi, gen):   # 생성어 실검색량 측정
+        if _norm(c.keyword) in gen_norm and c.total >= config.KW_TRACK_MIN_VOLUME:
+            pool.setdefault(c.keyword, c)
+    top = sorted(pool.values(), key=lambda c: c.total, reverse=True)[:config.KW_EXPAND2_N]
+    exp_seeds = [c.keyword for c in top]                       # ④ 네이버 2단계 확장(상위 재시드)
+    if exp_seeds:
+        for c in _timed(log, "네이버 2단계연관", naver.related_keywords_multi, exp_seeds):
+            if c.total >= config.KW_TRACK_MIN_VOLUME:
+                pool.setdefault(c.keyword, c)
+
+
+def _reduce_for_judge(pool: dict, core, identities, anchors, log) -> list:
+    """judge 전 후보 축소(토큰 절감) — 상품 **인접어(정체성 토큰 포함) 우선 → 검색량** 순 상위 KW_JUDGE_POOL_N개.
+
+    순수 검색량 컷은 거대 broad 어(judge가 어차피 DROP)가 상위를 차지해 중검색 상품어를 밀어내므로 금지.
+    상품 자기 정체성(core+identities+anchors)은 인접+강제포함(니치 저검색 자기 이름 보호). 띄어쓰기 변형은
+    별개 키워드로 각각 보존(2026-09-17·쿠팡 노출순위 실제 다름)."""
+    id_tokens = {_norm(t) for t in ([core] + identities + anchors) if t}
+
+    def _adjacent(kw: str) -> bool:      # 정체성 토큰을 포함/피포함하면 상품 인접어(판정 우선)
+        nk = _norm(kw)
+        return any(tok and (tok in nk or nk in tok) for tok in id_tokens)
+
+    identity_set = {t for t in ([core] + identities + anchors) if t}
+    ranked_for_judge = sorted(pool.values(), key=lambda c: (_adjacent(c.keyword), c.total), reverse=True)
+    judge_pool = [c for c in ranked_for_judge if c.keyword in identity_set]   # 정체성 먼저(항상)
+    for c in ranked_for_judge:
+        if c.keyword not in identity_set and len(judge_pool) < config.KW_JUDGE_POOL_N:
+            judge_pool.append(c)
+    if log and len(judge_pool) < len(pool):
+        log(f"  [판정축소] 후보 {len(pool)}개 → 판정 {len(judge_pool)}개(인접어 우선 상위{config.KW_JUDGE_POOL_N}+정체성)")
+    return judge_pool
+
+
 def _assemble_candidates(title: str, naver: NaverAdApi, ai_key: str | None, generate: bool,
                          browser=None, log=None
                          ) -> tuple[str, str, list[str], list[str], list[str],
@@ -176,64 +246,10 @@ def _assemble_candidates(title: str, naver: NaverAdApi, ai_key: str | None, gene
     """
     use, core, identities, attributes, anchors = _timed(log, "AI 제목분석", analyze_product,
                                                         title, api_key=ai_key)
-    pool: dict[str, KeywordVolume] = {}
-    anchor_rel = {}
-    for c in _timed(log, "네이버 앵커연관", naver.related_keywords_multi, anchors):   # ① 넓은 연관(≥500)
-        anchor_rel.setdefault(c.keyword, c)
-        if c.total >= config.KW_MIN_VOLUME:
-            pool.setdefault(c.keyword, c)
-    # 상품 자기 정체성(core+identities+anchors)은 **검색량 하한과 무관하게 항상 후보에 포함**한다.
-    # 니치 상품(예 레몬버베나·초저검색 성분)은 자기 이름조차 하한(≥500/≥30)에 걸려 후보가 비는 문제 방지 —
-    # 상품 자신의 키워드는 검색량이 낮아도 그 상품의 노출순위를 추적할 대상이다(네이버가 값을 준 것만).
-    for term in dict.fromkeys(t for t in ([core] + identities + anchors) if t):
-        if term in anchor_rel:
-            pool.setdefault(term, anchor_rel[term])
+    pool = _anchor_pool(naver, anchors, core, identities, log)          # ① 앵커연관 + 자기 정체성 강제포함
     if generate:
-        if browser is not None:                                     # ② 쿠팡 자동완성(실수요)
-            seeds = list(dict.fromkeys(s for s in ([core] + identities) if s))   # 순서보존 중복제거
-            try:
-                suggests = _timed(log, "쿠팡 자동완성", collect_suggestions, browser, seeds, log=log)
-            except SuggestError as exc:
-                suggests = []
-                if log:
-                    log(f"  [자동완성] 실패 — {exc} (이 소스만 건너뜀, 다른 소스로 계속)")
-            sug_norm = {_norm(s) for s in suggests}
-            if suggests:
-                for c in _timed(log, "네이버 자동완성연관", naver.related_keywords_multi, suggests):
-                    if _norm(c.keyword) in sug_norm and c.total >= config.KW_TRACK_MIN_VOLUME:
-                        pool.setdefault(c.keyword, c)
-        gen = _timed(log, "AI 조합생성", generate_keywords, title, use, identities, attributes,
-                     api_key=ai_key)  # ③
-        gen_norm = {_norm(g) for g in gen}
-        for c in _timed(log, "네이버 조합연관", naver.related_keywords_multi, gen):   # 생성어 실검색량 측정
-            if _norm(c.keyword) in gen_norm and c.total >= config.KW_TRACK_MIN_VOLUME:
-                pool.setdefault(c.keyword, c)
-        top = sorted(pool.values(), key=lambda c: c.total, reverse=True)[:config.KW_EXPAND2_N]
-        exp_seeds = [c.keyword for c in top]                       # ④ 네이버 2단계 확장(상위 재시드)
-        if exp_seeds:
-            for c in _timed(log, "네이버 2단계연관", naver.related_keywords_multi, exp_seeds):
-                if c.total >= config.KW_TRACK_MIN_VOLUME:
-                    pool.setdefault(c.keyword, c)
-    # 띄어쓰기 변형은 **합치지 않는다**(2026-09-17 정책 되돌림). 쿠팡에서 '캠핑타프'와 '캠핑 타프'의
-    # 노출순위가 실제로 다름이 확인됨 → 띄어쓰기(및 대소문자)가 유의미한 **별개 키워드**로 취급한다.
-    # pool 은 이미 정확 표기(c.keyword)로 키잉돼 **완전 동일한 중복만** 제거되고, 변형은 각각 보존된다.
-    # judge 전 후보 축소(토큰 절감) — **상품 인접어(정체성 토큰 포함) 우선 → 검색량** 순으로 상위 KW_JUDGE_POOL_N개.
-    # 순수 검색량 컷은 거대 broad 어(고검색이나 어차피 judge가 DROP)가 상위를 차지해 정작 중검색 상품어를
-    # 밀어내므로 금지. 상품 자기 정체성(core+identities+anchors)은 인접+강제포함(니치 저검색 자기 이름 보호).
-    id_tokens = {_norm(t) for t in ([core] + identities + anchors) if t}
-
-    def _adjacent(kw: str) -> bool:      # 정체성 토큰을 포함/피포함하면 상품 인접어(판정 우선)
-        nk = _norm(kw)
-        return any(tok and (tok in nk or nk in tok) for tok in id_tokens)
-
-    identity_set = {t for t in ([core] + identities + anchors) if t}
-    ranked_for_judge = sorted(pool.values(), key=lambda c: (_adjacent(c.keyword), c.total), reverse=True)
-    judge_pool = [c for c in ranked_for_judge if c.keyword in identity_set]   # 정체성 먼저(항상)
-    for c in ranked_for_judge:
-        if c.keyword not in identity_set and len(judge_pool) < config.KW_JUDGE_POOL_N:
-            judge_pool.append(c)
-    if log and len(judge_pool) < len(pool):
-        log(f"  [판정축소] 후보 {len(pool)}개 → 판정 {len(judge_pool)}개(인접어 우선 상위{config.KW_JUDGE_POOL_N}+정체성)")
+        _generate_pool(pool, naver, title, use, core, identities, attributes, ai_key, browser, log)  # ②③④
+    judge_pool = _reduce_for_judge(pool, core, identities, anchors, log)
     judged = _timed(log, "AI 핵심연관판정", judge_keywords, title, [c.keyword for c in judge_pool],
                     api_key=ai_key, use=use, core=core, identities=identities)  # {키워드:(티어,match)}
     tiers = {k: t for k, (t, _m) in judged.items()}
