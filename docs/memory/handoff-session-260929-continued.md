@@ -5,16 +5,21 @@ metadata:
   node_type: memory
   type: project
   originSessionId: ca66c120-700c-4053-a270-0aad80debf5e
-  modified: 2026-09-29T08:14:46.405Z
+  modified: 2026-09-29T09:01:55.882Z
 ---
 
-**통합(플랫폼) 세션 2026-09-29 이어감. 전부 origin push 완료(master HEAD=`ec550ac`·레인 10개 동기화·미커밋 0).** 새 세션은 이 메모 + `designs/DESIGN.md §0-000000000` + `docs/DECISIONS.md`(2026-09-29 줄들) 읽고 이어가기. (이 메모가 **현재 상태 SSOT** — 9/20~9/28 날짜별 핸드오프는 통합 완료로 은퇴, 내용은 git/DECISIONS/DESIGN에 있음.)
+**통합(플랫폼) 세션 2026-09-29 이어감. 전부 origin push 완료(master HEAD=`3dc1cf0`·레인 10개 동기화·미커밋 0).** 새 세션은 이 메모 + `designs/DESIGN.md §0-000000000` + `docs/DECISIONS.md`(2026-09-29 줄들) 읽고 이어가기. (이 메모가 **현재 상태 SSOT** — 9/20~9/28 날짜별 핸드오프는 통합 완료로 은퇴, 내용은 git/DECISIONS/DESIGN에 있음.)
 
 ## 추가 완료 (2026-09-29 후반)
 4. **원장 이름 규칙 A 병합**(D8 137c065→a011aee): 괄호(색상)만 다른 줄=이름변경 아님→옛 통합 줄 관리중단+색상 줄 신규·띄어쓰기/대소문자만=자동 이름변경. `registry_apply`가 `name_key`(자동승인)·`_base_name`(후보 제외)로 매칭 규칙 1·4와 일치. 문서=LEDGER_REGISTRY §4·§4-2·§6·L1_CONTRACT §9 누수·DECISIONS.
 5. **괴물함수 전멸**(d9d1393·9d70368): `browser.wait_for_login`(D27)·`rank.organic_ranks_batch`(D25) 행동 불변 분해→**전체 코드베이스 D+ 0**(check_complexity 경고 0). [[monster-functions-extinct-260929]]
 6. **회사보유재고 계정목록 표기**(feature): 결과 계정목록(엑셀+구글) 상품명 오른쪽 E 회사보유재고·F 그로스재고(헤더 자동갱신일). gsheet N_COLS 9→11·`_ensure_stock_columns` 마이그레이션. ⚠라이브 남음.
-7. **[최종검증]** 게이트 9종+복잡도(경고 0)·simulate_pipeline 14·4모듈 import OK. ⚠`tools/simulate_stages.py`는 이전 kw 분해 이후 기존 고장(browser/rank 무관·게이트 미포함)—별도 정리.
+7. **메모리 통합 압축**: 토픽 81→51개(완료 날짜별 핸드오프 30건 은퇴)·MEMORY.md 68줄로. docs/memory 미러 동기화.
+8. **⭐배포 빌드 버그수정**(3dc1cf0): 배포 exe 실행 즉시 `ModuleNotFoundError: No module named 'registry_ui'`(app_qt.py:43). 원인=PyInstaller `coupang_analytics.spec`의 app Analysis가 `pathex=["src"]`만 지정→H_ui가 `ui/`에 넣은 형제 모듈(`registry_ui`·`registry_panel_qt`·`stock_panel_qt`) 번들 누락. 수정=`pathex=["src","ui"]`+3모듈 hiddenimports. 재빌드 exe `--export-settings` EXIT=0(실측)·크래시 없음. **교훈=UI 형제 모듈 추가 시 spec 동반 갱신**. ⚠앱 실행 크래시라 재배포 전엔 옛 zip으로 계속 발생.
+9. **[최종검증]** 게이트 9종+복잡도(경고 0)·simulate_pipeline 14·재빌드 exe 실행 OK. ⚠`tools/simulate_stages.py`는 이전 kw 분해 이후 기존 고장(kw 검색량 단언 IndexError·browser/rank 무관·게이트 미포함)—별도 정리 필요.
+
+## 배포본 (재빌드 완료·재배포 대기)
+- `dist\쿠팡애널리틱스_배포.zip`(2026-09-29 17:53·155MB·spec 수정 반영·보안제외 bat 동봉). **운용 PC 재배포 순서**: ①압축 풀기 전 `0_먼저실행_보안제외.bat` 관리자 실행(Defender 오탐 방지) ②새 zip의 `coupang-analytics\` 폴더를 기존 폴더에 덮어쓰기(output·data·config.json 보존) ③18:00 배치 전 완료. 재배포 후 registry_ui 크래시 사라짐 확인.
 
 ## 이번 세션 완료 (커밋 순·전부 게이트 9종+복잡도 초록)
 1. **정산 2단계 UI 병합**(H_ui): 2-1 원장카드/[미리보기·반영]/실행시작 run_sync 트리거·2-3 [이전 비번 1회]=`try_login_once`·2-4 입력소스 '원장'+실패 시 대장 폴백. `ui/registry_ui.py`·`ui/registry_panel_qt.py`. 커밋 5a1b827·DECISIONS 49c86ff·15fd143. → 정산 2단계=백엔드(D8)+UI(H_ui) 전부 master. [[handoff-hui-ledger-stage2-ui-260929]]·[[feature-ledger-registry]]
@@ -28,8 +33,8 @@ metadata:
 3. **회사보유재고**(판매자배송 자체 재고·소유자 신규 기능·D8 백엔드+통합 배선+H_ui UI): 재고현황 구글시트→대장 AB '창고 , 수량개' 역기록. `company_stock.run_company_stock`(UI/야간 공용)·`pipeline_gsheet.push_company_stock`(야간 그로스 다음·비치명)·설정키 `stock/url`·핀 R21·L1 §6-b. 커밋 acbf8ca(D8)·c7cc6c5(배선)·dc64f0d(UI). 원장 열 추가 보류.
 
 ## 남은 것 (⚠전부 사무실/운용PC 필요)
-- **라이브 검증(사무실)**: ①로그인·판매수집·매칭 5원인 실렌더 ②AI 의미 매칭이 목견인기류 실제로 잡는지(프롬프트 보수적→과소매칭도 관찰) ③정산 원장 실제 쓰기·이전 비번 1회 ④회사재고 실제 시트 쓰기.
-- **운용 PC 재배포**(현 실행=옛 코드·배포 zip 재빌드 필요).
+- **⭐최우선: 운용 PC 재배포**(배포 zip 준비됨=위 "배포본"·spec 버그수정 포함). 재배포 안 하면 registry_ui 크래시로 앱 실행 자체 불가. 18:00 배치 전.
+- **라이브 검증(사무실·재배포 후)**: ①로그인·판매수집·매칭 5원인 실렌더 ②AI 의미 매칭이 목견인기류 실제로 잡는지(프롬프트 보수적→과소매칭도 관찰) ③정산 원장 실제 쓰기·이전 비번 1회 ④회사재고 실제 시트 쓰기 ⑤계정목록 회사재고·그로스재고 E·F열 실제 렌더.
 - **담당자 데이터 정정**: 상품조회에 아예 없는 것(접이식 정리함 JK0026=발견0)은 AI로도 불가→대장명 정정. 기저귀가방류 같은 이름 별도 상품은 자동 2블록 처리됨.
 - (선택) `_assign` 46(F)→주 루프 추가 추출로 더 낮추기(별도 정리 사이클).
 - 보류 R1(쓰기범위)·R2(거래저장소 시트vsSQLite)·R3(도메인 착수순서)·신규 도메인(D2소싱·D3등록·D5주문·D6배송) 스캐폴딩.
