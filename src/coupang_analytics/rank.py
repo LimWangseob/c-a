@@ -406,6 +406,46 @@ def _prime_search(browser: WingBrowser, keyword: str) -> bool:
         return False
 
 
+def _batch_urls(keywords: list[str], pages: int):
+    """키워드×페이지 → 검색 URL 목록과 (키워드,페이지)→URL 매핑."""
+    url_of: dict[tuple[str, int], str] = {}
+    urls: list[str] = []
+    for kw in keywords:
+        for p in range(1, pages + 1):
+            u = SEARCH_URL.format(q=quote(kw), page=p)
+            url_of[(kw, p)] = u
+            urls.append(u)
+    return url_of, urls
+
+
+def _score_batch(res, keywords: list[str],
+                 matchers: dict[str, Callable[[SearchItem], bool]],
+                 pages: int, url_of: dict[tuple[str, int], str],
+                 max_rank: int) -> dict[str, dict[str, int | None]]:
+    """fetch 결과(res)에서 키워드별 옵션 순위를 센다(광고 제외 오가닉만)."""
+    out: dict[str, dict[str, int | None]] = {}
+    for kw in keywords:
+        result: dict[str, int | None] = {label: None for label in matchers}
+        remaining = dict(matchers)
+        rank = 0
+        for p in range(1, pages + 1):
+            for it in (res.get(url_of[(kw, p)]) or {}).get("items", []):
+                if it.get("is_ad"):
+                    continue
+                rank += 1
+                item = SearchItem(False, it.get("product_id", ""), it.get("vendor_item_id", ""),
+                                  it.get("name", ""), it.get("is_rocket", False))
+                for label in [lbl for lbl, m in remaining.items() if m(item)]:
+                    result[label] = rank
+                    del remaining[label]
+                if rank >= max_rank or not remaining:
+                    break
+            if rank >= max_rank or not remaining:
+                break
+        out[kw] = result
+    return out
+
+
 def organic_ranks_batch(browser: WingBrowser, keywords: list[str],
                         matchers: dict[str, Callable[[SearchItem], bool]],
                         max_rank: int | None = None, mobile: bool = False,
@@ -418,13 +458,7 @@ def organic_ranks_batch(browser: WingBrowser, keywords: list[str],
     """
     max_rank = config.RANK_SCAN_MAX if max_rank is None else max_rank
     pages = _pages_for(max_rank)
-    url_of: dict[tuple[str, int], str] = {}
-    urls: list[str] = []
-    for kw in keywords:
-        for p in range(1, pages + 1):
-            u = SEARCH_URL.format(q=quote(kw), page=p)
-            url_of[(kw, p)] = u
-            urls.append(u)
+    url_of, urls = _batch_urls(keywords, pages)
 
     serial = config.RANK_HUMAN_SERIAL   # 직렬(동시성1·간격)이면 버스트 신호 제거 → 차단 회피. fetch라 여전히 빠름
 
@@ -468,27 +502,7 @@ def organic_ranks_batch(browser: WingBrowser, keywords: list[str],
     if res is None or _count(res) == 0:             # 백오프 후에도 0 → 순차 폴백 유도
         raise RankBlocked("프라임·백오프 후에도 검색결과 fetch 0건")
 
-    out: dict[str, dict[str, int | None]] = {}
-    for kw in keywords:
-        result: dict[str, int | None] = {label: None for label in matchers}
-        remaining = dict(matchers)
-        rank = 0
-        for p in range(1, pages + 1):
-            for it in (res.get(url_of[(kw, p)]) or {}).get("items", []):
-                if it.get("is_ad"):
-                    continue
-                rank += 1
-                item = SearchItem(False, it.get("product_id", ""), it.get("vendor_item_id", ""),
-                                  it.get("name", ""), it.get("is_rocket", False))
-                for label in [lbl for lbl, m in remaining.items() if m(item)]:
-                    result[label] = rank
-                    del remaining[label]
-                if rank >= max_rank or not remaining:
-                    break
-            if rank >= max_rank or not remaining:
-                break
-        out[kw] = result
-    return out
+    return _score_batch(res, keywords, matchers, pages, url_of, max_rank)
 
 
 def organic_rank(browser: WingBrowser, keyword: str, matches: Callable[[SearchItem], bool],
