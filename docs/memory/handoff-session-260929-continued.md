@@ -5,10 +5,16 @@ metadata:
   node_type: memory
   type: project
   originSessionId: ca66c120-700c-4053-a270-0aad80debf5e
-  modified: 2026-09-29T02:41:04.996Z
+  modified: 2026-09-29T08:14:46.405Z
 ---
 
-**통합(플랫폼) 세션 2026-09-29 이어감. 전부 origin push 완료(master HEAD=`35d76f8`·동기화 0/0·미커밋 0).** 새 세션은 이 메모 + `designs/DESIGN.md §0-000000000` + `docs/DECISIONS.md`(2026-09-29 줄들) 읽고 이어가기.
+**통합(플랫폼) 세션 2026-09-29 이어감. 전부 origin push 완료(master HEAD=`ec550ac`·레인 10개 동기화·미커밋 0).** 새 세션은 이 메모 + `designs/DESIGN.md §0-000000000` + `docs/DECISIONS.md`(2026-09-29 줄들) 읽고 이어가기. (이 메모가 **현재 상태 SSOT** — 9/20~9/28 날짜별 핸드오프는 통합 완료로 은퇴, 내용은 git/DECISIONS/DESIGN에 있음.)
+
+## 추가 완료 (2026-09-29 후반)
+4. **원장 이름 규칙 A 병합**(D8 137c065→a011aee): 괄호(색상)만 다른 줄=이름변경 아님→옛 통합 줄 관리중단+색상 줄 신규·띄어쓰기/대소문자만=자동 이름변경. `registry_apply`가 `name_key`(자동승인)·`_base_name`(후보 제외)로 매칭 규칙 1·4와 일치. 문서=LEDGER_REGISTRY §4·§4-2·§6·L1_CONTRACT §9 누수·DECISIONS.
+5. **괴물함수 전멸**(d9d1393·9d70368): `browser.wait_for_login`(D27)·`rank.organic_ranks_batch`(D25) 행동 불변 분해→**전체 코드베이스 D+ 0**(check_complexity 경고 0). [[monster-functions-extinct-260929]]
+6. **회사보유재고 계정목록 표기**(feature): 결과 계정목록(엑셀+구글) 상품명 오른쪽 E 회사보유재고·F 그로스재고(헤더 자동갱신일). gsheet N_COLS 9→11·`_ensure_stock_columns` 마이그레이션. ⚠라이브 남음.
+7. **[최종검증]** 게이트 9종+복잡도(경고 0)·simulate_pipeline 14·4모듈 import OK. ⚠`tools/simulate_stages.py`는 이전 kw 분해 이후 기존 고장(browser/rank 무관·게이트 미포함)—별도 정리.
 
 ## 이번 세션 완료 (커밋 순·전부 게이트 9종+복잡도 초록)
 1. **정산 2단계 UI 병합**(H_ui): 2-1 원장카드/[미리보기·반영]/실행시작 run_sync 트리거·2-3 [이전 비번 1회]=`try_login_once`·2-4 입력소스 '원장'+실패 시 대장 폴백. `ui/registry_ui.py`·`ui/registry_panel_qt.py`. 커밋 5a1b827·DECISIONS 49c86ff·15fd143. → 정산 2단계=백엔드(D8)+UI(H_ui) 전부 master. [[handoff-hui-ledger-stage2-ui-260929]]·[[feature-ledger-registry]]
