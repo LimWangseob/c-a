@@ -267,25 +267,15 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
         raise ValueError(f"입력 상단 {_HEADER_SCAN_ROWS}행에서 헤더를 찾지 못했습니다. "
                          f"누락 필수 컬럼: {', '.join(missing) or '(부분 일치)'}")
     idx = _column_index(header)
+    st = _ParseState()
     i_rep = idx.get(config.IN_COL_REPRESENTATIVE)   # 선택(없으면 None → 라벨 폴백에서만 무시)
     i_biz = idx[config.IN_COL_BUSINESS]
     i_acct, i_prod = idx[config.IN_COL_ACCOUNT_ID], idx[config.IN_COL_PRODUCT]
     # 옵션/vid/pid 는 이 관리대장에 없고 미사용(vid 는 라이브 판매수집에서 확보) → 파싱하지 않음.
-    i_ms, i_me, i_mm = idx.get("mkt_start"), idx.get("mkt_end"), idx.get("mkt_mon")   # 마케팅(선택)
     i_status = idx.get("status")                     # 상태 컬럼(선택) — 판매중지/삭제 감지
 
     def _struck_cell(row_no: int, col0) -> bool:
         return bool(strike_fn(row_no, col0)) if strike_fn is not None else False
-
-    accounts: list[Account] = []
-    by_id: dict[str, Account] = {}          # 같은 계정ID 재등장 시 상품을 이어 붙이기 위한 색인
-    errors: list[str] = []
-    struck: list[str] = []                   # 제외(취소선/상태/판매중지)된 계정·상품
-    ledger_ids: set = set()                   # 관리대장에 줄이 존재하는 모든 계정ID(판매중지/취소선 포함)
-    current_rep = ""
-    current_acct: Account | None = None
-    current_prod: Product | None = None
-    acct_cancelled = False                    # 현재 계정이 해지/삭제 → 아래 상품 전부 제외
 
     for row_no, row in enumerate(rows[hrow + 1:], start=hrow + 2):
         rep, biz = _norm(_cell(row, i_rep)), _norm(_cell(row, i_biz))
@@ -295,65 +285,94 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
         if "\n" in prod:
             prod = prod.split("\n")[0].strip()
         status_disc = _status_discontinued(_cell(row, i_status)) if i_status is not None else False
-
         if rep:
-            current_rep = rep
+            st.current_rep = rep
         if acct:
-            ledger_ids.add(acct)   # 판매중지/취소선이어도 '줄은 존재' → 완전삭제 대상 아님
-            # 계정 제외 = 상태 컬럼(판매중지/삭제) 또는 취소선(파일). → 계정 전체 제외.
-            if status_disc or _struck_cell(row_no, i_acct):
-                _finalize(current_prod)
-                acct_cancelled = True
-                current_acct = current_prod = None
-                reason = "상태=판매중지/삭제" if status_disc else "취소선(해지)"
-                struck.append(f"계정 '{acct}'({biz or current_rep}) — {reason}")
-            else:
-                acct_cancelled = False
-                if acct in by_id:               # 같은 계정ID 재등장 → 기존 계정에 상품 이어붙임(분리·누락 방지)
-                    current_acct = by_id[acct]
-                    if not current_acct.business_name and biz:   # 뒤 행에 사업자명 있으면 채움
-                        current_acct.business_name = biz
-                else:
-                    # 정체성=계정ID(필수). 사업자명이 비어도 라벨은 계정ID로 폴백되므로 치명오류 아님
-                    # (빈 사업자명은 validate_input_list 가 경고로만 알림).
-                    current_acct = Account(acct, current_rep, biz)
-                    by_id[acct] = current_acct
-                    accounts.append(current_acct)
-        if acct_cancelled:                      # 제외된 계정 아래 행은 전부 건너뜀
+            _handle_account_row(st, acct, biz, status_disc, _struck_cell(row_no, i_acct))
+        if st.acct_cancelled:                   # 제외된 계정 아래 행은 전부 건너뜀
             continue
         if prod:
-            _finalize(current_prod)             # 이전 상품 마감(옵션 없으면 기본옵션)
-            # 상품명이 아닌 자리표시('--' 등)는 추적 상품으로 만들지 않는다(소유자 2026-09-26):
-            # 블록·시트·계정목록 생성 제외 + ledger_products 미포함 → 기존 잔재 블록도 reconcile 삭제.
-            if not _is_real_product_name(prod):
-                struck.append(f"상품명 아님 '{prod}' (계정 {acct or (current_acct.account_id if current_acct else '?')}) — 제외")
-                current_prod = None
-                continue
-            # 상품 제외 = 상태 컬럼 / 상품명 마커 / 취소선 중 하나라도 → 추적 제외
-            if current_acct is not None:
-                current_acct.ledger_products.add(prod)   # ⑥: 줄 존재(활성+판매중지/취소선) 전체 — 완전삭제 판정용
-            # #8(2026-09-27): 판매중지/취소선도 **수집 대상에 포함**(discontinued=True)하고 ③순위만 제외한다.
-            # (옛 정책: 완전 제외 → 판매가/판매상태 공란·상품링크 검색폴백의 원인이었음). 옵션행도 처리(vid 매칭).
-            disc = bool(status_disc or _is_discontinued(prod) or _struck_cell(row_no, i_prod))
-            current_prod = Product(prod, mkt_start=_norm_date(_cell(row, i_ms)),
-                                   mkt_end=_norm_date(_cell(row, i_me)),
-                                   mkt_mon=_norm_date(_cell(row, i_mm)),
-                                   inbound_summary=_inbound_summary(row, idx), discontinued=disc)
-            if current_acct is None:
-                errors.append(f"{row_no}행: 소속 계정 없이 상품 '{prod}'")
-            else:
-                current_acct.products.append(current_prod)
-            if disc:
-                reason = ("상태=판매중지/삭제" if status_disc else
-                          "판매중지" if _is_discontinued(prod) else "취소선(품절/중지)")
-                struck.append(f"상품 '{prod}' — {reason} (수집·순위만 제외)")
-    _finalize(current_prod)
+            _handle_product_row(st, prod, acct, row, row_no, idx, status_disc, _struck_cell(row_no, i_prod))
+    _finalize(st.current_prod)
 
     if emit_strike_warning:   # 파일인데 취소선을 못 읽었음을 알림(수동 확인 유도). 값 파싱은 정상.
-        struck.append("⚠ 취소선 자동감지 불가(엑셀 스타일 비호환) — 해지/품절은 '상태' 컬럼 또는 수동 확인 필요")
-    # 대장 중복 정책(2026-09-20 소유자): 한 계정에 **같은 상품명이 2줄 이상**이면 담당자 오입력 →
-    # **첫 줄만 추적**하고 나머지 중복 줄은 제거한다(공란 통계·중복 블록 방지). 정체성 키=공백정리 상품명
-    # (앞뒤 공백·중간 연속공백 무시, 대소문자는 유지 — 서로 다른 상품을 과합치지 않게 보수적으로).
+        st.struck.append("⚠ 취소선 자동감지 불가(엑셀 스타일 비호환) — 해지/품절은 '상태' 컬럼 또는 수동 확인 필요")
+    _dedupe_ledger_products(st.accounts, st.struck)
+    # 리포트 기준 시드: 상품/옵션/ID는 판매분석 리포트가 제공하므로 계정만 있으면 유효.
+    valid = [a for a in st.accounts if a.account_id]
+    return InputList(accounts=valid, errors=st.errors, struck=st.struck, ledger_account_ids=st.ledger_ids)
+
+
+class _ParseState:
+    """_parse_grid 한 번의 파싱 상태(계정/상품 누적·현재 위치). 계정행/상품행 헬퍼가 공유·변경한다."""
+    def __init__(self):
+        self.accounts: list[Account] = []
+        self.by_id: dict[str, Account] = {}   # 같은 계정ID 재등장 시 상품 이어붙이기 색인
+        self.errors: list[str] = []
+        self.struck: list[str] = []           # 제외(취소선/상태/판매중지)된 계정·상품
+        self.ledger_ids: set = set()          # 관리대장에 줄이 존재하는 모든 계정ID(판매중지/취소선 포함)
+        self.current_rep = ""
+        self.current_acct: Account | None = None
+        self.current_prod: Product | None = None
+        self.acct_cancelled = False           # 현재 계정 해지/삭제 → 아래 상품 전부 제외
+
+
+def _handle_account_row(st: "_ParseState", acct: str, biz: str, status_disc: bool, acct_struck: bool) -> None:
+    """계정ID 셀이 있는 행 처리 — 제외(상태/취소선)면 계정 취소, 아니면 신규/재등장 계정 지정."""
+    st.ledger_ids.add(acct)   # 판매중지/취소선이어도 '줄은 존재' → 완전삭제 대상 아님
+    if status_disc or acct_struck:              # 계정 제외(상태 판매중지/삭제 또는 취소선) → 계정 전체 제외
+        _finalize(st.current_prod)
+        st.acct_cancelled = True
+        st.current_acct = st.current_prod = None
+        reason = "상태=판매중지/삭제" if status_disc else "취소선(해지)"
+        st.struck.append(f"계정 '{acct}'({biz or st.current_rep}) — {reason}")
+        return
+    st.acct_cancelled = False
+    if acct in st.by_id:                        # 같은 계정ID 재등장 → 기존 계정에 상품 이어붙임(분리·누락 방지)
+        st.current_acct = st.by_id[acct]
+        if not st.current_acct.business_name and biz:   # 뒤 행에 사업자명 있으면 채움
+            st.current_acct.business_name = biz
+    else:
+        # 정체성=계정ID(필수). 사업자명이 비어도 라벨은 계정ID로 폴백되므로 치명오류 아님
+        # (빈 사업자명은 validate_input_list 가 경고로만 알림).
+        st.current_acct = Account(acct, st.current_rep, biz)
+        st.by_id[acct] = st.current_acct
+        st.accounts.append(st.current_acct)
+
+
+def _handle_product_row(st: "_ParseState", prod: str, acct: str, row, row_no: int, idx: dict,
+                        status_disc: bool, prod_struck: bool) -> None:
+    """상품명 셀이 있는 행 처리 — 비상품 자리표시 제외·판매중지(#8)는 수집 포함(순위만 제외)·마케팅/입고 파싱."""
+    _finalize(st.current_prod)                  # 이전 상품 마감(옵션 없으면 기본옵션)
+    # 상품명이 아닌 자리표시('--' 등)는 추적 상품으로 만들지 않는다(소유자 2026-09-26):
+    # 블록·시트·계정목록 생성 제외 + ledger_products 미포함 → 기존 잔재 블록도 reconcile 삭제.
+    if not _is_real_product_name(prod):
+        who = acct or (st.current_acct.account_id if st.current_acct else "?")
+        st.struck.append(f"상품명 아님 '{prod}' (계정 {who}) — 제외")
+        st.current_prod = None
+        return
+    if st.current_acct is not None:
+        st.current_acct.ledger_products.add(prod)   # ⑥: 줄 존재(활성+판매중지/취소선) 전체 — 완전삭제 판정용
+    # #8(2026-09-27): 판매중지/취소선도 **수집 대상에 포함**(discontinued=True)하고 ③순위만 제외한다.
+    disc = bool(status_disc or _is_discontinued(prod) or prod_struck)
+    st.current_prod = Product(prod, mkt_start=_norm_date(_cell(row, idx.get("mkt_start"))),
+                              mkt_end=_norm_date(_cell(row, idx.get("mkt_end"))),
+                              mkt_mon=_norm_date(_cell(row, idx.get("mkt_mon"))),
+                              inbound_summary=_inbound_summary(row, idx), discontinued=disc)
+    if st.current_acct is None:
+        st.errors.append(f"{row_no}행: 소속 계정 없이 상품 '{prod}'")
+    else:
+        st.current_acct.products.append(st.current_prod)
+    if disc:
+        reason = ("상태=판매중지/삭제" if status_disc else
+                  "판매중지" if _is_discontinued(prod) else "취소선(품절/중지)")
+        st.struck.append(f"상품 '{prod}' — {reason} (수집·순위만 제외)")
+
+
+def _dedupe_ledger_products(accounts: list, struck: list) -> None:
+    """대장 중복 정책(2026-09-20 소유자): 한 계정에 **같은 상품명 2줄 이상**이면 담당자 오입력 → 첫 줄만 추적.
+
+    정체성 키=공백정리 상품명(앞뒤·중간 연속공백 무시·대소문자 유지 — 서로 다른 상품을 과합치지 않게 보수적)."""
     for a in accounts:
         seen: set[str] = set()
         kept: list = []
@@ -369,9 +388,6 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
             a.products = kept
             struck.append(f"[대장 중복] 계정 {a.account_id or a.business_name}: 같은 상품명 중복 {removed}줄 제거"
                           f"(첫 줄만 추적) — 담당자 오입력")
-    # 리포트 기준 시드: 상품/옵션/ID는 판매분석 리포트가 제공하므로 계정만 있으면 유효.
-    valid = [a for a in accounts if a.account_id]
-    return InputList(accounts=valid, errors=errors, struck=struck, ledger_account_ids=ledger_ids)
 
 
 def _tok(s: str) -> list:
