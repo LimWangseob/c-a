@@ -196,7 +196,7 @@
 - **키 단위 근거(§4-1)**: 미등록·판매중(불일치)·확인됨·판매중지=**상품 단위**, 로그인실패·비밀번호불일치=**계정 단위** → 2-2 배선은 계정키(실패류)+ (계정,상품)키(성공류)를 섞어 넘긴다.
 - **reg 출처**: `registry_gsheet.load_registry(client)`(기존)로 얻어 인자로 넘김(전역상태·숨은 client 없음).
 
-**2-1 원장 자동 반영**: 실행 시작(백업 직후)에 `run_sync` 1회. 트리거는 `backup_sources` 와 같은 자리(현재 UI 핸들러 `app_qt` 1130·1202·1295·1337·1359 → H_ui). 실패 비치명(로그 남기고 진행). 입력 URL=`gsheet/input_url`·원장 URL=`registry/url`. ⚠ 원장 쓰기 동시 실행 잠금은 D8가 `run_sync` 안에.
+**2-1 원장 자동 반영**: 실행 시작(백업 직후)에 `run_sync` 1회. 트리거는 `backup_sources` 와 같은 자리(UI 핸들러 app_qt `_full_pipeline_task`·`start_auto`·`start_resume` 의 `backup_sources` 직후 — ②만·③만 버튼 제외). 실패 비치명(로그 남기고 진행). 입력 URL=`gsheet/input_url`·원장 URL=`registry/url`. ⚠ 원장 쓰기 동시 실행 잠금은 D8가 `run_sync` 안에.
 
 **2-2 쿠팡확인 채우기 (통합 배선 핵심)** — 데이터 산출 지점(실측 `pipeline.py`):
 - `_finish` 도달(성공, line 440·476): `report_acc` 매칭 → 확인됨/미등록, `inv_status`(productStatus) → 판매중(불일치)/판매중지.
@@ -213,7 +213,8 @@
 **무인(--auto) 쓰기 = 쿠팡확인만 허용(소유자 2026-09-28)**: `write_coupang_check`는 **이력 없는 상태 열** 갱신이라 그로스 재고 역기록(이미 무인)과 **동급** → 무인 허용(§5.4 '실운영 사고 위험' 범주 아님). `dry_run=False` 인자로 미리보기 지원. 등록·주문처리·배송·가격변경 같은 실운영 쓰기는 무인 금지 유지.
 **통합이 실제 넣는 코드**=2-2 산출·수집·호출(pipeline.py)뿐이며 **D8 인터페이스 확정 후** 연결(그 전엔 스텁). 2-1 트리거·2-3/2-4 UI=H_ui, 원장 함수(write_coupang_check·previous_password·to_input_list·password_map)=D8.
 - **✅원장 동시 쓰기 잠금 완료(2026-09-29·D8)**: `registry_lock.registry_lock`(OS 파일 잠금·크래시 자동해제·wait_sec 120)로 run_sync·run_backfill·write_coupang_check 가 읽기→비교→쓰기 전체를 잠금(dry_run 제외·lock_path keyword 하위호환). 겹치면 대기 로그 후 최대 120초, 초과 시 RegistryLockError·쓰기 0건. 같은 PC 한정(PC간=운용 원칙). 핀 R20(자식 kill→부모 즉시 획득 실증 포함)·게이트 9종+복잡도 초록. push_coupang_checks 는 수정 불필요(함수 안 잠금).
-- **✅2-2 배선 통합 구현 완료(2026-09-29)**: `pipeline._RunCtx.coupang_checks` 누적 · `compute_coupang_checks`/`_product_coupang_check`(§4-1 값 산출·값=`COUPANG_CHECK_VALUES` 언팩) · 산출 3지점(`_finish` 성공→확인됨/미등록/판매중(불일치)/판매중지, `except LoginBlocked`→로그인실패, `except LoginCredentialError`→비밀번호불일치) · `_finalize_run`에서 `push_coupang_checks`(pipeline_gsheet·비치명·무인 허용) 1회 · `run_full(registry_url=)` 인자(없으면 no-op). 핀 verify_offline[28]. 게이트 9종+복잡도 초록. ⚠**남음**: 2-1 트리거·2-3/2-4 UI(H_ui)에서 `registry_url` 전달·라이브(사무실 로그인 후 실채움)·동시 쓰기 잠금(D8 다음).
+- **✅2-2 배선 통합 구현 완료(2026-09-29)**: `pipeline._RunCtx.coupang_checks` 누적 · `compute_coupang_checks`/`_product_coupang_check`(§4-1 값 산출·값=`COUPANG_CHECK_VALUES` 언팩) · 산출 3지점(`_finish` 성공→확인됨/미등록/판매중(불일치)/판매중지, `except LoginBlocked`→로그인실패, `except LoginCredentialError`→비밀번호불일치) · `_finalize_run`에서 `push_coupang_checks`(pipeline_gsheet·비치명·무인 허용) 1회 · `run_full(registry_url=)` 인자(없으면 no-op). 핀 verify_offline[28]. 게이트 9종+복잡도 초록. ⚠**남음**: 라이브(사무실 로그인 후 실채움).
+- **✅2-1·2-3·2-4 UI 구현 완료(2026-09-29·H_ui, c385b8c·5a1b827)**: `ui/registry_ui.py`(Qt 없는 도우미)·`ui/registry_panel_qt.py`(설정 탭 '셀독등록원장' 카드 믹스인). 2-1=원장 링크(`registry/url`·config.json 공유·설치 이식)·[원장 미리보기](dry_run)·[원장 반영](확인창)·실행 시작 3곳 자동 반영(원장+대장 링크 둘 다 있을 때·비치명)+`run_full(registry_url=)`. 2-4=입력소스 '원장(관리중만)'·실패 시 '== [입력] 원장 로드 실패 → 관리대장으로 전환 ==' 로그 후 대장(선택은 원장 유지)·반영 성공 시 원장으로 입력 재구성. 2-3=불일치 목록→계정 선택→previous_password→확인창→`try_login_once` 1회→성공 시 write_coupang_check('확인됨')+안내. app.py(예비)는 반영+registry_url 전달만. 검증=게이트9·복잡도·오프라인 19건. ⚠**남음=사무실 라이브**.
 
 ## 11. 구현 구성 (1단계 구현 2026-09-28)
 

@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 36f26e1a-466b-4e04-9814-a4e46aceddf1
-  modified: 2026-09-29T00:10:12.457Z
+  modified: 2026-09-29T00:29:27.983Z
 ---
 
 **통합(플랫폼) 세션(2026-09-28~29). 전부 origin push 완료(HEAD=b70f6ab).**
@@ -26,9 +26,9 @@ metadata:
 - ✅ registry 4함수(write_coupang_check·previous_password·to_input_list·password_map)+동시쓰기잠금(registry_lock)·계약핀·2-2 pipeline 배선(쿠팡확인 산출→원장 기록).
 - ✅ 2-4 (a)관리중만 입력·ledger엔 관리중단 포함 (b)마케팅=결과시트 유지·그로스 요청일자 공란+로그.
 - ✅ **try_login_once 공개 진입점**(통합·98693a3): `pipeline.try_login_once(account_id, password, *, on_log)` — 2-3용 한 계정 반자동 1회 로그인(A안). pin·L1_CONTRACT §7-c.
-- 🔄 **H_ui UI 진행 중**(착수 지시·계획 승인 회신 완료): 2-1 원장카드·[미리보기/반영]·실행시작 run_sync 트리거(전체실행·①·무인·재개, ②③ 제외)·registry_url=run_full에만 / 2-3 [이전 비번 1회]=try_login_once / 2-4 입력소스 '원장' 라디오. **ui/registry_ui.py 얇은 도우미**로(app_qt 비대 방지). ui/ 만 편집. 착수순서 2-1→2-4→2-3.
+- ✅ **H_ui UI 병합 완료(2026-09-29·통합)**: 2-1 원장카드·[미리보기/반영]·실행시작 run_sync 트리거·registry_url / 2-3 [이전 비번 1회]=try_login_once 연결 / 2-4 입력소스 '원장' 라디오+폴백. 새 파일 ui/registry_ui.py(Qt없는 도우미 MI A)·ui/registry_panel_qt.py(카드 믹스인 MI A). 병합=c385b8c(2-1/2-4/2-3목록)+5a1b827(2-3버튼)·DECISIONS 2줄(49c86ff·15fd143). **master HEAD=c5d5036·origin push·게이트 9종 초록.** 남은=사무실 라이브(원장 실제 쓰기·이전 비번 1회 로그인)만.
 - **2-4 원장 로드 실패 = 대장 폴백(소유자 2026-09-29)** + 명확 로그(no-silent-fallback: 불가피 폴백은 로그 명시). registry/url = 결과·입력과 별도 칸(QSettings·config 이식).
-- H_ui 회신(UI 완료/단계 커밋) 오면 통합이 병합·(필요시)핀·문서. HEAD=98693a3(origin push 완료).
+- ✅ H_ui UI 병합 완료(위). HEAD=c5d5036(origin push 완료).
 - ⏳ **라이브(사무실)**: 로그인 후 쿠팡확인 실채움·원장 실제 쓰기 확인 남음.
 - ⏳ PC간 잠금(범위 밖·운용 원칙으로 충분)·다음 D8 작업 없음.
 
@@ -37,5 +37,5 @@ metadata:
 - 다음 통합 세션: ARCHITECTURE/PARALLEL_DEV/DOMAIN_DESIGN/L1_CONTRACT 읽고 이어받기. H_ui 회신 오면 병합·핀(필요시)·문서.
 
 ## 미착수(다음)
-- H_ui UI 완료·병합 · 라이브(사무실) · 운용PC 재배포 · 보류 R1(쓰기범위)·R2(거래저장소 시트vsSQLite)·R3(도메인 착수순서) · 신규 도메인(D2소싱·D3등록·D5주문·D6배송) 스캐폴딩.
+- ✅H_ui UI 병합 완료. 남음=라이브(사무실·원장 실제 쓰기·이전 비번 로그인) · 운용PC 재배포 · 보류 R1(쓰기범위)·R2(거래저장소 시트vsSQLite)·R3(도메인 착수순서) · 신규 도메인(D2소싱·D3등록·D5주문·D6배송) 스캐폴딩.
 관련=[[handoff-ledger-stage2-260928]]·[[handoff-domain-design-260928]]·[[code-health-regression-gate]]·[[no-silent-fallback-principle]].
