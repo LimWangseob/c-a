@@ -127,6 +127,17 @@ def is_logged_in(url: str) -> bool:
     return ("wing.coupang.com" in url) and ("xauth" not in url) and ("/sso/" not in url)
 
 
+class _LoginWait:
+    """wait_for_login 폴링 루프가 반복 사이에 유지하는 상태(행동 불변 분해용)."""
+    __slots__ = ("err_streak", "guided", "form_since", "blocked_since")
+
+    def __init__(self) -> None:
+        self.err_streak = 0
+        self.guided: set[str] = set()
+        self.form_since: float | None = None
+        self.blocked_since: float | None = None
+
+
 class WingBrowser:
     """실제 Chrome 세션 하나를 감싸는 컨텍스트 매니저."""
 
@@ -442,71 +453,16 @@ class WingBrowser:
         log = on_log or (lambda m: None)
         end = time.time() + timeout
         last_log = 0.0
-        err_streak = 0
-        guided: set[str] = set()
-        form_since: float | None = None
-        blocked_since: float | None = None
+        st = _LoginWait()
         while time.time() < end:
             try:
                 if self._browser and not self._browser.is_connected():
                     log("  [로그인감지] 브라우저 창이 닫힘 — 미완료")
                     return False
-                code, detail = self.classify_login()
-                if code == "success":     # 윙 대시보드 도달 + 인증쿠키 = 로그인 완료(견고)
-                    return True
-
-                if code == "error":       # 확정 실패 — 2회 연속 확인 후 즉시 중단
-                    err_streak += 1
-                    if err_streak == 1:
-                        log(f"  [로그인감지] ⚠ 로그인 거부: {detail}")
-                    if err_streak >= 2:
-                        snap = self.snapshot_login(tag)
-                        where = f" (증거: {snap}.html/.png)" if snap else ""
-                        log("  [로그인감지] 확정 실패 — 자동 재시도 중단(계정잠금 방지)."
-                            f" 원인=위 오류 메시지{where}")
-                        return False
-                else:
-                    err_streak = 0
-
-                if code == "form":
-                    form_since = form_since or time.time()
-                    if (time.time() - form_since > form_warn_after) and "form" not in guided:
-                        guided.add("form")
-                        self.snapshot_login(tag)
-                        if on_need_user:
-                            on_need_user()
-                        log("  [로그인감지] 폼이 계속 남아있음 — 제출이 거부돼 폼으로 되돌아왔을 "
-                            "가능성(오류 메시지 없는 봇 차단 의심). 열린 창에서 직접 로그인해 보세요")
-                else:
-                    form_since = None
-                    if code == "blocked":
-                        # Akamai 접근차단은 IP 플래그라 사람 재로그인도 대부분 못 뚫는다(실측 2026-09-08).
-                        # 창 1회 표시로 기회를 주되, 300초 무한대기(→사람이 창 수동종료→다음 계정 전환 중
-                        # Playwright 드라이버 EPIPE 크래시) 대신 grace 후 스스로 건너뛴다.
-                        if blocked_since is None:
-                            blocked_since = time.time()
-                            self.snapshot_login(tag)
-                            if on_need_user:
-                                on_need_user()
-                            log(f"  [로그인감지] {detail}")
-                        elif time.time() - blocked_since > blocked_grace:
-                            log("  [로그인감지] Akamai 접근 차단 지속 — 이 계정 건너뜀"
-                                " (무한대기·창 수동종료 방지, 잠시 후/내일 재시도)")
-                            return False
-                    elif code == "otp" and skip_on_otp:
-                        # 2차 인증(인증번호) 화면 = 사람이 휴대폰 번호를 입력해야 함. 배치(전체실행)에서는
-                        # 대기하지 않고 **즉시 이 계정을 건너뛴다**(다음 계정 진행·이 계정은 미완료로 다음에 재시도).
-                        self.snapshot_login(tag)
-                        log("  [로그인감지] 2차 인증(인증번호) 필요 — 대기하지 않고 이 계정 건너뜀"
-                            " (다음 계정 진행, 이 계정은 나중에 재시도)")
-                        return False
-                    elif code in ("akamai", "otp") and code not in guided:
-                        guided.add(code)
-                        self.snapshot_login(tag)
-                        if on_need_user:
-                            on_need_user()
-                        log(f"  [로그인감지] {detail}")
-
+                verdict = self._react_login(st, tag, form_warn_after, blocked_grace,
+                                            skip_on_otp, on_need_user, log)
+                if verdict is not None:
+                    return verdict
                 if time.time() - last_log > 12:
                     log(f"  [로그인감지] 대기 중… {self.login_state()}")
                     last_log = time.time()
@@ -518,3 +474,72 @@ class WingBrowser:
         self.snapshot_login(tag)
         log("  [로그인감지] 5분 초과 — 미완료 (증거 스냅샷 저장)")
         return False
+
+    def _react_login(self, st: "_LoginWait", tag, form_warn_after, blocked_grace,
+                     skip_on_otp, on_need_user, log):
+        """폴링 1회: 화면 분류 후 반응. True=완료·False=중단·None=계속 대기."""
+        code, detail = self.classify_login()
+        if code == "success":     # 윙 대시보드 도달 + 인증쿠키 = 로그인 완료(견고)
+            return True
+        if code == "error":       # 확정 실패 — 2회 연속 확인 후 즉시 중단
+            st.err_streak += 1
+            if st.err_streak == 1:
+                log(f"  [로그인감지] ⚠ 로그인 거부: {detail}")
+            if st.err_streak >= 2:
+                snap = self.snapshot_login(tag)
+                where = f" (증거: {snap}.html/.png)" if snap else ""
+                log("  [로그인감지] 확정 실패 — 자동 재시도 중단(계정잠금 방지)."
+                    f" 원인=위 오류 메시지{where}")
+                return False
+        else:
+            st.err_streak = 0
+
+        if code == "form":
+            self._react_form(st, tag, form_warn_after, on_need_user, log)
+            return None
+        st.form_since = None
+        return self._react_blocked_otp(st, code, detail, tag, blocked_grace,
+                                       skip_on_otp, on_need_user, log)
+
+    def _react_form(self, st: "_LoginWait", tag, form_warn_after, on_need_user, log):
+        """폼이 계속 남아있으면(제출 거부·봇차단 의심) 1회 안내."""
+        st.form_since = st.form_since or time.time()
+        if (time.time() - st.form_since > form_warn_after) and "form" not in st.guided:
+            st.guided.add("form")
+            self.snapshot_login(tag)
+            if on_need_user:
+                on_need_user()
+            log("  [로그인감지] 폼이 계속 남아있음 — 제출이 거부돼 폼으로 되돌아왔을 "
+                "가능성(오류 메시지 없는 봇 차단 의심). 열린 창에서 직접 로그인해 보세요")
+
+    def _react_blocked_otp(self, st: "_LoginWait", code, detail, tag, blocked_grace,
+                           skip_on_otp, on_need_user, log):
+        """차단(Akamai)·2차인증 화면 반응. False=중단·None=계속 대기."""
+        if code == "blocked":
+            # Akamai 접근차단은 IP 플래그라 사람 재로그인도 대부분 못 뚫는다(실측 2026-09-08).
+            # 창 1회 표시로 기회를 주되, 300초 무한대기(→사람이 창 수동종료→다음 계정 전환 중
+            # Playwright 드라이버 EPIPE 크래시) 대신 grace 후 스스로 건너뛴다.
+            if st.blocked_since is None:
+                st.blocked_since = time.time()
+                self.snapshot_login(tag)
+                if on_need_user:
+                    on_need_user()
+                log(f"  [로그인감지] {detail}")
+            elif time.time() - st.blocked_since > blocked_grace:
+                log("  [로그인감지] Akamai 접근 차단 지속 — 이 계정 건너뜀"
+                    " (무한대기·창 수동종료 방지, 잠시 후/내일 재시도)")
+                return False
+        elif code == "otp" and skip_on_otp:
+            # 2차 인증(인증번호) 화면 = 사람이 휴대폰 번호를 입력해야 함. 배치(전체실행)에서는
+            # 대기하지 않고 **즉시 이 계정을 건너뛴다**(다음 계정 진행·이 계정은 미완료로 다음에 재시도).
+            self.snapshot_login(tag)
+            log("  [로그인감지] 2차 인증(인증번호) 필요 — 대기하지 않고 이 계정 건너뜀"
+                " (다음 계정 진행, 이 계정은 나중에 재시도)")
+            return False
+        elif code in ("akamai", "otp") and code not in st.guided:
+            st.guided.add(code)
+            self.snapshot_login(tag)
+            if on_need_user:
+                on_need_user()
+            log(f"  [로그인감지] {detail}")
+        return None
