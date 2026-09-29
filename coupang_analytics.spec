@@ -32,13 +32,18 @@ _EXCLUDES = [
     "matplotlib", "botocore", "boto3", "IPython", "notebook", "sympy",
 ]
 
+# app_qt.py 는 ui/ 의 형제 모듈을 맨이름으로 import(registry_ui·registry_panel_qt·stock_panel_qt).
+# → pathex 에 'ui' 를 넣어 PyInstaller 가 이 모듈들을 찾게 하고, hiddenimports 로도 명시(누락=런타임
+#   ModuleNotFoundError). H_ui 가 정산/회사재고 UI 를 추가한 뒤 spec 미갱신으로 빠졌던 것(2026-09-29).
+_ui_hidden = hiddenimports + ["registry_ui", "registry_panel_qt", "stock_panel_qt"]
+
 # 메인 GUI 앱(콘솔 없음).
 a = Analysis(
     ["ui/app_qt.py"],
-    pathex=["src"],
+    pathex=["src", "ui"],
     binaries=binaries,
     datas=datas,
-    hiddenimports=hiddenimports,
+    hiddenimports=_ui_hidden,
     # 기본 UI=PySide6 → tkinter 폴백 제외. 나머지는 이 앱이 안 쓰는데 환경에 깔려 딸려오던 거대
     # 패키지들(torch 370MB·scipy·pandas·botocore 등) — 제외해 배포 용량을 크게 줄인다.
     excludes=_EXCLUDES,
