@@ -216,7 +216,14 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         self.tabs.addTab(self._rank_tab(), "순위 조회")
         self.tabs.addTab(self._images_tab(), "상세 이미지")
         self.tabs.addTab(self._collect_tab(), "전체 실행")
-        root.addWidget(self._log_panel(), 1)   # 로그가 남는 공간 전부
+        self.log_panel = self._log_panel()
+        root.addWidget(self.log_panel, 1)   # 로그가 남는 공간 전부
+        # 진행 로그창 = **실행 버튼을 누른 뒤부터** 표시(소유자 2026-09-29). 처음(설정 화면)엔 숨김.
+        # 설정 탭에서 유휴면 숨기되, 설정 탭의 실행(원장 반영·연결확인 등)이 도는 동안은 예외로 보인다.
+        self._log_activated = False        # 첫 실행이 일어났는가(그 전엔 항상 숨김)
+        self._bg_active = 0                # 현재 도는 백그라운드 작업 수(설정 탭 유휴 판정용)
+        self.log_panel.setVisible(False)
+        self.tabs.currentChanged.connect(lambda *_: self._update_log_visibility())
 
     def _header(self):
         head = QtWidgets.QFrame()
@@ -667,10 +674,23 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
             return True
         return False
 
+    def _update_log_visibility(self):
+        """진행 로그창 표시 규칙 — 첫 실행 전엔 숨김. 이후엔 표시하되, **설정 탭에서 유휴 상태면 숨김**
+        (설정 탭의 실행이 도는 동안은 예외로 표시해 원장 반영·연결확인 결과를 볼 수 있게)."""
+        panel = getattr(self, "log_panel", None)
+        if panel is None:
+            return
+        on_settings = self.tabs.currentIndex() == 0
+        visible = self._log_activated and (self._bg_active > 0 or not on_settings)
+        panel.setVisible(visible)
+
     def run_bg(self, task, on_done=None, btn=None, exclusive=False):
         if exclusive:   # 브라우저/파이프라인 실행 = 한 번에 하나(배타). btn 은 그 실행의 소유 표식.
             self._run_active = True
             self._active_btn = btn
+        self._bg_active += 1              # 진행 로그창 표시(실행 버튼 클릭 후부터)
+        self._log_activated = True
+        self._update_log_visibility()
         if btn:
             btn.setEnabled(False)
 
@@ -686,6 +706,7 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
     def _on_finish(self, btn, on_done, result, err):
         if btn:
             btn.setEnabled(True)
+        self._bg_active = max(0, self._bg_active - 1)   # 진행 로그창 표시 갱신(설정 탭 유휴면 숨김)
         # 배타 실행(그 btn 이 소유)만 종료 처리 — 다른 빠른 작업이 파이프라인 도중 끝나도 중지 버튼을
         # 끄지 않는다(예전엔 무조건 껐음 → 파이프라인을 멈출 수 없던 버그).
         if btn is not None and btn is getattr(self, "_active_btn", None):
@@ -697,6 +718,7 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
             self.log(f"[오류] {err.__class__.__name__}: {err}")
         elif on_done is not None:
             on_done(result)
+        self._update_log_visibility()   # 실행 종료 후 표시 갱신(설정 탭 유휴면 숨김)
 
     # ── 파일·키 로드 ──────────────────────────────────────────
     def _last_dir(self, key: str) -> str:

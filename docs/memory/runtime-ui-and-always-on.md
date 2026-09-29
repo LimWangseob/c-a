@@ -5,10 +5,10 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 4c9cd574-1676-4798-ba82-659441c10186
-  modified: 2026-09-22T20:23:33.542Z
+  modified: 2026-09-29T04:16:58.712Z
 ---
 
-**실제 실행 UI = `ui/app_qt.py`(PySide6)**. 탭 4개(설정·키워드 추천·순위 조회·전체 실행) + 하단 로그 패널. 실행 로그 미러 `output/run_log_*.log`는 app_qt 만 생성(app.py엔 없음)이라 사용자는 app_qt 를 쓴다. **Tkinter `ui/app.py`(폴백)도 `80b062e`에서 app_qt 와 동작 일치**(설정탭 정리·당일=D-1·로그 상한). app.py는 `--auto` 무인모드·로그파일 미러 없음(콘솔만), gsheet는 `output_url`만 winreg로 공유.
+**실제 실행 UI = `ui/app_qt.py`(PySide6)**. 탭 5개(설정·키워드 추천·순위 조회·상세 이미지·전체 실행) + 하단 로그 패널. 실행 로그 미러 `output/run_log_*.log`는 app_qt 만 생성(app.py엔 없음)이라 사용자는 app_qt 를 쓴다. **진행 로그창=실행 버튼 누른 뒤부터 표시(2026-09-29)**: 처음(설정 화면)엔 숨김·`_log_activated`(첫 run_bg 후) AND (`_bg_active>0`(실행 중) OR 현재 탭≠설정)일 때만 보임 → 설정 탭 유휴면 숨김·설정 탭 실행(원장 반영·연결확인) 중엔 예외로 표시. 배선=`_update_log_visibility`(run_bg±·tabs.currentChanged). app.py 폴백 미적용. **Tkinter `ui/app.py`(폴백)도 `80b062e`에서 app_qt 와 동작 일치**(설정탭 정리·당일=D-1·로그 상한). app.py는 `--auto` 무인모드·로그파일 미러 없음(콘솔만), gsheet는 `output_url`만 winreg로 공유.
 
 **전체실행 UX(app_qt)**: 전체실행 탭에서 **실행 모드 3택** + **수집 기간(당일=어제/기간)** 선택 후 실행. ⚠ 실제 위젯은 `QRadioButton`이 아니라 **배타 `QButtonGroup`에 묶인 `QCheckBox`**(모드=`cb_resume`/`cb_redo`/`cb_newall`, 기간=`cb_today`/`cb_range`) — 시각은 체크박스, 동작은 라디오. `cb_grow`=새 키워드 발굴 추가. 진짜 QRadioButton은 설정탭 입력소스 쌍뿐(app.py Tkinter는 진짜 Radiobutton, `run_mode`=resume/redo/newall).
 - **실행 모드 3택(2026-09-14 소유자 재정의)**: ①**이어서 하기**(기본·`resume`): 오늘 하다 만 것 이어서(완료계정 건너뜀)·없으면 오늘 컬럼 추가. ②**오늘 처음(다시) 하기**(`redo_today`): 어제까지·키워드 동결 **유지**하되 **오늘 컬럼·완료스탬프 초기화** 후 전 계정 오늘분 재수집. ③**전체 새로 시작**(carry_forward=False): 마스터 백업 후 빈 통계(시계열 끊김·확인창 경고). ⚠ 옛 "처음부터(새 통계)"가 ②로 오해되던 걸 분리. 구현=`run_full(redo_today=)`·`workbook.reset_date_column(라벨)`/`clear_sales_stamps`.
