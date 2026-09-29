@@ -99,7 +99,8 @@ WING API 호출 패턴, 세션/크리덴셜 기반. "전체 분석"이 아니라
 - **모듈**: `registry_*`(model·core·apply·history·rename·registry·gsheet)·`input_list` 역기록.
 - **역할**: 관리·계정·상품·거래 이력을 **지우지 않고 쌓고, 이력 replay로 현재 상태 계산**(등록원장 1단계·SSOT=`designs/LEDGER_REGISTRY.md`).
 - **핵심 가치**: 이 "append 원장" 패턴이 신규 거래 도메인(주문 D5·배송 D6·등록 변경 D3)의 **데이터 백본 표준**이 된다(§5.2). 정산은 이 원장을 소비.
-- **갭**: 앱 연계(2단계) 미완·live 미연동.
+- **정산 계산 명세(입력 지식·미구현)**: 지급일 규칙 6종(POLICY 태그)·공휴일/영업일·금액 식 3종·파싱 규칙·판매분석 불변식·운영위탁 계약 모듈 요구 = SSOT `designs/COUPANG_SETTLEMENT_DOMAIN.md`. 검증 벡터 `designs/coupang_golden_cases.json`(100% 통과=완료 조건). 정산 계산 모듈 착수 시 이 문서 근거로 설계서 작성 → 골든 케이스를 `tools/run_checks.py` 게이트에 연결.
+- **갭**: 앱 연계(2단계) 미완·live 미연동·**정산 지급일/금액 계산 미구현**(위 명세=입력만).
 
 ### D9 통계/출력 ✅
 - **모듈**: `workbook*`·`gsheet_index/stats`·`pipeline_gsheet`.

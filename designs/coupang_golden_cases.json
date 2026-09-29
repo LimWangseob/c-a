@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "purpose": "COUPANG_SETTLEMENT_DOMAIN.md 규칙 검증용 골든 케이스. 전 케이스 통과가 구현 완료 조건.",
+    "source": "실계정 화면 2026-09, 쿠팡 다운로드 파일",
+    "holidays_used": ["2025-01-01", "2025-01-27", "2025-01-28", "2025-01-29", "2025-01-30", "2026-08-17", "2026-09-24", "2026-09-25", "2026-09-26"],
+    "note": "holidays_used는 테스트 입력용. 앱은 공휴일 소스에서 조회해야 함."
+  },
+  "payout_date": [
+    {"policy": "PAYOUT_MP_WEEKLY_1ST", "confirm_week": ["2025-01-06", "2025-01-12"], "expected": "2025-02-06", "why": "설 연휴 1/27~30 제외"},
+    {"policy": "PAYOUT_MP_WEEKLY_1ST", "confirm_week": ["2026-08-03", "2026-08-09"], "expected": "2026-08-31", "amount": 63657, "why": "8/17 광복절 대체공휴일 제외"},
+    {"policy": "PAYOUT_MP_WEEKLY_1ST", "confirm_week": ["2026-08-10", "2026-08-16"], "expected": "2026-09-07", "amount": 29343},
+    {"policy": "PAYOUT_MP_WEEKLY_1ST", "confirm_week": ["2026-08-17", "2026-08-23"], "expected": "2026-09-11", "amount": 29343},
+    {"policy": "PAYOUT_MP_WEEKLY_1ST", "confirm_week": ["2026-08-24", "2026-08-30"], "expected": "2026-09-18", "amount": 358481},
+    {"policy": "PAYOUT_MP_WEEKLY_1ST", "confirm_week": ["2026-08-31", "2026-08-31"], "expected": "2026-09-29", "amount": 8896, "why": "월 경계 분할 행, 주 마감일 9/6 기준"},
+    {"policy": "PAYOUT_MP_WEEKLY_1ST", "confirm_week": ["2026-09-01", "2026-09-06"], "expected": "2026-09-29", "amount": 1104130, "why": "추석 토요일 겹침 대체 없음 → 9/28 영업일"},
+    {"policy": "PAYOUT_MP_WEEKLY_FINAL", "revenue_month": "2025-01", "expected": "2025-03-01", "why": "익익월 1일, 토요일이어도 보정 없음"},
+    {"policy": "PAYOUT_MP_WEEKLY_FINAL", "revenue_month": "2026-07", "expected": "2026-09-01", "amount": 341946},
+    {"policy": "PAYOUT_MP_WEEKLY_FINAL", "revenue_month": "2026-08", "expected": "2026-10-01", "amount_estimate": 190079},
+    {"policy": "PAYOUT_RG_WEEKLY_1ST", "sales_week": ["2026-08-17", "2026-08-23"], "expected": "2026-09-18", "amount": 6981},
+    {"policy": "PAYOUT_RG_WEEKLY_1ST", "sales_week": ["2026-08-24", "2026-08-30"], "expected": "2026-09-29", "amount": 371921, "label": "8월 5주차 판매 70%"}
+  ],
+  "amount_formula": [
+    {"policy": "MP_REVENUE_REPORT", "A_sales": 6601500, "B_seller_coupon": 2422100, "C_fee": 414947, "D_myshop_fee": 0, "F_deduction": 0, "expected_E": 3764453, "expected_final": 3764453},
+    {"policy": "RG_HOME_PROFIT", "sales": 3591960, "seller_coupon": 1583840, "fee": 185391, "fulfillment": 132844, "ads": 89732, "review_event": 2220, "inventory_compensation": 0, "expected_cost": 1994027, "expected_profit": 1597933, "expected_margin_pct": 44.5}
+  ],
+  "insights_row_invariants": [
+    {"option_id": "94632081597", "channel": "로켓그로스", "sales": 285900, "orders": 12, "units": 13, "visitors": 105, "views": 159, "cvr_pct": 7.55, "total_sales": 285900, "total_units": 13, "cancel_amount": 0, "cancel_units": 0},
+    {"option_id": "95222903297", "channel": "로켓그로스", "sales": 275820, "orders": 13, "units": 13, "views": 216, "cvr_pct": 6.02, "total_sales": 297860, "total_units": 14, "cancel_amount": -22040, "cancel_units": -1},
+    {"option_id": "95907416319", "channel": "로켓그로스", "sales": 1394400, "orders": 53, "units": 56, "views": 407, "cvr_pct": 13.02, "total_sales": 1568700, "total_units": 63, "cancel_amount": -174300, "cancel_units": -7, "why": "주문≠판매량"},
+    {"option_id": "95907346795", "channel": "판매자배송", "sales": -35000, "orders": -1, "units": -1, "views": 13, "cvr_pct": -7.69, "total_sales": 0, "total_units": 0, "cancel_amount": -35000, "cancel_units": -1, "why": "이전 기간분 취소 → 음수 정상"}
+  ],
+  "invariant_rules": [
+    "sales == total_sales + cancel_amount",
+    "units == total_units + cancel_units",
+    "round(orders / views * 100, 2) == cvr_pct  (views > 0)"
+  ]
+}
