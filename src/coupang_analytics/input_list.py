@@ -436,6 +436,49 @@ def _best_inventory_match(prod: str, cands: list, w) -> tuple:
     return None, None, None
 
 
+def _find_growth_column(header: list) -> int | None:
+    """AD '그로스 재고 (…기준/자동갱신…)' 컬럼 — 괄호 딸린 것만(BW '그로스재고'·BV '그로스재고최소수량'과 구분).
+    첫 갱신 후 헤더가 '(자동갱신 MM.DD)'로 바뀌므로 '기준' 또는 '갱신' 하나만 있으면 그 컬럼으로 인식."""
+    def _nz(s: str) -> str:
+        return str(s or "").replace("\n", "").replace(" ", "")
+    return next((i for i, c in enumerate(header)
+                 if "그로스" in _nz(c) and "재고" in _nz(c)
+                 and ("기준" in _nz(c) or "갱신" in _nz(c))), None)
+
+
+def _growth_idf(values: list, first: int, i_prod: int, inv_by_biz: dict):
+    """IDF corpus = 모든 대장 상품명 + 워크북 후보명 → 규격·브랜드어(120정·프리미엄·MAX)를 눌러 상품 핵심어 부각
+    (작은 재고후보 집합만으로 계산하면 df 동률로 오매칭)."""
+    corpus = [_norm(_cell(values[r], i_prod)) for r in range(first, len(values))
+              if _norm(_cell(values[r], i_prod))]
+    for items in inv_by_biz.values():
+        corpus += [nm for nm, _ in items]
+    return build_idf(corpus)
+
+
+def _growth_col_values(values, first, i_biz, i_acct, i_prod, ad, inv_by_biz, w):
+    """AD 열 새 값 열 생성 — 계정(사업자) 내 상품명 유사도 매칭으로 최신 재고, **미매칭·개인상품·비상품은 기존값
+    보존**(공란으로 안 덮음). 반환 (col_out, 갱신 수, 매칭 로그)."""
+    col_out: list[list] = []
+    cur_biz = ""
+    updated = 0
+    matches: list[str] = []                              # 로그용(대장상품 → 매칭 → 재고·방식)
+    for r in range(first, len(values)):
+        row = values[r]
+        biz, acct, prod = _norm(_cell(row, i_biz)), _norm(_cell(row, i_acct)), _norm(_cell(row, i_prod))
+        if acct and biz:                                 # 계정 행 → 이후 상품의 소속 사업자
+            cur_biz = biz
+        new = _cell(row, ad)
+        if prod:                                         # 계정(사업자) 내 등록/노출 상품명 유사도 매칭
+            inv, mname, how = _best_inventory_match(prod, inv_by_biz.get(_norm(cur_biz), []), w)
+            if inv is not None:
+                new = inv
+                updated += 1
+                matches.append(f"{prod[:22]} → {str(mname)[:22]} = {inv} ({how})")
+        col_out.append([new if new not in (None,) else ""])
+    return col_out, updated, matches
+
+
 def write_ledger_inventory(client, wb, on_log=None, *, sheet: str = "셀독리스트") -> int:
     """관리대장(입력 구글시트)의 **'그로스 재고 (…기준)' 컬럼(AD)** 을 워크북 최신 재고로 역기록. 갱신 상품 수 반환.
 
@@ -460,44 +503,15 @@ def write_ledger_inventory(client, wb, on_log=None, *, sheet: str = "셀독리�
     idx = _column_index(header)
     i_biz, i_acct, i_prod = idx[config.IN_COL_BUSINESS], idx[config.IN_COL_ACCOUNT_ID], idx[config.IN_COL_PRODUCT]
 
-    def _nz(s: str) -> str:
-        return str(s or "").replace("\n", "").replace(" ", "")
-    # AD '그로스 재고 (…기준/자동갱신…)' — 괄호 딸린 컬럼(BW '그로스재고'·BV '그로스재고최소수량'과 구분).
-    # 첫 갱신 후 헤더가 '(자동갱신 MM.DD)'로 바뀌므로 '기준' 또는 '갱신' 중 하나만 있으면 그 컬럼으로 인식.
-    ad = next((i for i, c in enumerate(header)
-               if "그로스" in _nz(c) and "재고" in _nz(c)
-               and ("기준" in _nz(c) or "갱신" in _nz(c))), None)
+    ad = _find_growth_column(header)
     if ad is None:
         log("  [관리대장] '그로스 재고 (…기준/자동갱신)' 컬럼을 못 찾아 역기록 생략")
         return 0
 
     inv_by_biz = wb.inventory_by_biz()                   # {사업자: [(상품명, 재고)]} — 사업자 내 유사도 매칭
     first = hrow + 1                                      # 0-based 첫 데이터행
-    # IDF corpus = 모든 대장 상품명 + 모든 워크북 후보명 → 규격·브랜드어(120정·프리미엄·MAX)를 제대로 눌러
-    # 상품 핵심어(베타글루칸·알부민 등)를 부각(작은 재고후보 집합만으로 계산하면 df 동률로 오매칭).
-    corpus = [_norm(_cell(values[r], i_prod)) for r in range(first, len(values))
-              if _norm(_cell(values[r], i_prod))]
-    for items in inv_by_biz.values():
-        corpus += [nm for nm, _ in items]
-    w = build_idf(corpus)
-    col_out: list[list] = []
-    cur_biz = ""
-    updated = 0
-    matches: list[str] = []                              # 로그용(대장상품 → 매칭 → 재고·방식)
-    for r in range(first, len(values)):
-        row = values[r]
-        biz, acct, prod = _norm(_cell(row, i_biz)), _norm(_cell(row, i_acct)), _norm(_cell(row, i_prod))
-        if acct and biz:                                 # 계정 행 → 이후 상품의 소속 사업자
-            cur_biz = biz
-        existing = _cell(row, ad)
-        new = existing
-        if prod:                                         # 계정(사업자) 내 등록/노출 상품명 유사도 매칭
-            inv, mname, how = _best_inventory_match(prod, inv_by_biz.get(_norm(cur_biz), []), w)
-            if inv is not None:
-                new = inv
-                updated += 1
-                matches.append(f"{prod[:22]} → {str(mname)[:22]} = {inv} ({how})")
-        col_out.append([new if new not in (None,) else ""])
+    w = _growth_idf(values, first, i_prod, inv_by_biz)
+    col_out, updated, matches = _growth_col_values(values, first, i_biz, i_acct, i_prod, ad, inv_by_biz, w)
     letter = get_column_letter(ad + 1)                   # 0-based → 열문자
     client.write_values(sheet, col_out, start=f"{letter}{first + 1}")     # 첫 데이터행(1-based)
     client.write_values(sheet, [[f"그로스 재고 (자동갱신 {datetime.now():%m.%d})"]],
