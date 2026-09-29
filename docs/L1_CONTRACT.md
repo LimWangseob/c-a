@@ -137,6 +137,7 @@
 - `gsheet_stats.py` 가 `workbook`(=workbook_common) 내부 상수/함수 `_COL_KW`·`_COL_METRIC`·`_COL_NAME`·`_LABEL_DATE`·`_LABEL_KEYWORD`·`_SPECIAL_SHEETS`·`_key` import.
 - `registry_model.py` 가 `input_list` 내부 심볼(`_alias_index`·`_find_header_row`·`_is_discontinued` 등) import — registry 패밀리 내부지만 밑줄 의존.
 - `kw_metrics.py` 가 `rank._load_results`(밑줄) 직접 import — rank 를 L1 프리미티브로 올린 뒤 남은 누수(공개화 후보).
+- `registry_apply.py` 가 `product_match._base_name`(밑줄)·`company_stock.name_key` import — 매칭 규칙 1(색상별)·4(이름 정규화)를 원장 이름변경 감지에 **같은 규칙으로 한 곳에서** 재사용(2026-09-29). `_base_name` 공개화(또는 공용 규칙 모듈로 승격)가 정리 후보.
 - 도구: `collector._raw_add`·`OutputWorkbook._FILL_*`/`_key`/`_date_col`·`gsheet_index._auto_cells_request` 등을 pin/verify 도구가 직접 참조.
 
 SSOT = 이 문서 + `tools/pin_l1_contract.py`(골든값·자동 검증).
