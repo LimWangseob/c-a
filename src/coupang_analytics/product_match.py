@@ -123,71 +123,73 @@ def _tiebreak(core_text: str, scored: list, discovered: list[Product], ndisc: li
     return ("none", -1, [])                                                  # 여전히 애매 → 미매칭(오매칭 방지)
 
 
-def _assign(ledger: list[Product], discovered: list[Product]) -> dict[int, Product]:
-    """{대장 index: 발견 Product}. **정밀 우선 매칭**(2026-09-18) — 확신 있는 쌍만, 대장·발견 각 1회 유일 배정.
+def _match_context(ledger: list[Product], discovered: list[Product]):
+    """_assign 준비 — (브랜드 토큰, IDF 가중 w, 공백제거 발견제목 ndisc).
 
-    쿠팡 상품조회로는 위탁/직접이 구분 안 되므로 대장이 유일 기준인데, 대장명이 쿠팡명과 100% 일치하지
-    않을 수 있다. 흔한 단어 하나로 **비관리 상품에 잘못 붙는(오매칭)** 것을 막기 위해:
-      ① 괄호 노출제목 정확일치 = 최우선(신뢰 최고),
-      ② 아니면 **대장 상품의 핵심어(IDF 최고 토큰)를 발견제목이 반드시 포함**(핵심 게이트) +
-         **핵심어 IDF 재현율 ≥ RECALL_MIN** + **최고-차선 마진 ≥ MARGIN**일 때만 매칭,
-      ③ 미달 = 미매칭(호출부가 대장명으로 추적·통계 공란) — 엉뚱한 데이터보다 공란이 안전.
-    """
-    if not discovered:
-        return {}
-    # 브랜드 = 발견 제목의 60%+(또는 3건+)에 등장하는 토큰(계정 브랜드: YULIFE·디프·HB153 등) → 핵심어에서 제외
+    브랜드 = 발견 제목의 60%+(또는 3건+)에 등장하는 토큰(계정 브랜드: YULIFE·디프·HB153 등) → 핵심어에서 제외.
+    IDF 가중 = 계정 코퍼스(발견 제목 + 대장명) 기반 → 규격·브랜드어(정·30포 등) 눌러 상품 핵심어 부각.
+    ndisc = 공백 제거 발견제목(정체성 매칭은 띄어쓰기 무관·부분일치)."""
     dc: Counter = Counter()
     for d in discovered:
         dc.update(set(_tokens(_title(d))))
     thr = max(3, int(len(discovered) * 0.6))
     brand = {t for t, c in dc.items() if c >= thr}
-    # IDF 가중 = 계정 코퍼스(발견 제목 + 대장명) 기반 → 규격·브랜드어(정·30포 등) 눌러 상품 핵심어 부각
     w = build_idf([_title(d) for d in discovered] + [lp.name for lp in ledger])
-    ndisc = [_norm(_title(d)) for d in discovered]   # 공백 제거 발견제목 — 정체성 매칭은 띄어쓰기 무관(부분일치)
+    ndisc = [_norm(_title(d)) for d in discovered]
+    return brand, w, ndisc
 
-    qualified: list[tuple[int, float, int, int]] = []   # (괄호정확?, 재현율, 대장i, 발견i)
-    merge_groups: dict[int, list[int]] = {}             # 대장i → 같은 이름 다중 live 발견i들(별도 상품·병합 대상)
-    for li, lp in enumerate(ledger):
-        par = _norm(_paren(lp.name))
-        # ① 괄호 노출제목 정확일치(대장 형식 '코드 (노출제목)')
-        if par:
-            hit = next((di for di in range(len(discovered))
-                        if par == ndisc[di] or par in ndisc[di] or ndisc[di] in par), None)
-            if hit is not None:
-                qualified.append((1, 1.0, li, hit))
-                continue
-        # ② 핵심어 게이트 + IDF 재현율 + 마진. 대장 **본문**(코드·상품명)에 정체성 토큰이 있으면 본문 우선으로
-        # 매칭하고 괄호(색상/옵션/메모)는 무시 — 담당자 대장 본문명을 최대한 존중(원인②). 본문이 코드뿐이면
-        # 괄호(노출제목)로 폴백. ⚠괄호 정확일치는 위 ①에서 이미 처리(여기 도달=①실패).
-        base_toks = {t for t in _tokens(lp.name) if t not in brand} or set(_tokens(lp.name))
-        if base_toks:
-            core_text, ptoks = lp.name, base_toks       # 본문 우선(괄호=색상/옵션/메모 무시)
-        else:
-            core_text = _paren(lp.name) or lp.name       # 본문이 코드뿐 → 괄호(노출제목) 폴백
-            ptoks = {t for t in _tokens(core_text) if t not in brand} or set(_tokens(core_text))
-        if not ptoks:
-            continue                                    # 순수 코드명·괄호도 없음 → 미매칭(공란)
-        pden = sum(w(t) for t in ptoks) or 1.0
-        top = max(ptoks, key=lambda t: (w(t), len(t)))   # 최고가중(희소=핵심) 토큰, IDF 동점이면 긴 토큰
-        # 핵심 게이트=핵심어가 발견제목(공백 제거)에 부분일치 + IDF 재현율(대장 토큰이 발견제목에 부분일치).
-        # 공백 제거 부분일치라 쿠팡 붙여쓰기 제목('루바브치커리뿌리추출물')도 대장 띄어쓰기와 매칭된다.
-        scored = sorted(((sum(w(t) for t in ptoks if t in ndisc[di]) / pden, di)
-                         for di in range(len(discovered)) if top in ndisc[di]), reverse=True)
-        if not scored:
-            continue                                    # 핵심어를 담은 발견상품 없음 → 미매칭
-        best, best_di = scored[0]
-        second = scored[1][0] if len(scored) > 1 else 0.0
-        if best >= _RECALL_MIN and (best - second) >= _MARGIN:
-            qualified.append((0, best, li, best_di))
-        elif best >= _RECALL_MIN:
-            # 애매(마진 미달=변형/중복 동점) → 보조키 해소(판매중지 제외·규격·모델코드) 또는 같은 이름 병합(_tiebreak).
-            kind, di, dis = _tiebreak(core_text, scored, discovered, ndisc, best)
-            if kind == "match":
-                qualified.append((0, best, li, di))
-            elif kind == "merge":
-                merge_groups[li] = dis
-        # else: 재현율 미달/보조키도 애매 → 미매칭(공란, 오매칭 방지)
 
+def _core_tokens(lp: Product, brand: set) -> tuple[str, set]:
+    """대장 핵심 토큰 — **본문 우선**(괄호=색상/옵션/메모 무시), 본문이 코드뿐이면 괄호(노출제목) 폴백. (core_text, ptoks)."""
+    base_toks = {t for t in _tokens(lp.name) if t not in brand} or set(_tokens(lp.name))
+    if base_toks:
+        return lp.name, base_toks                       # 본문 우선(괄호=색상/옵션/메모 무시)
+    core_text = _paren(lp.name) or lp.name               # 본문이 코드뿐 → 괄호(노출제목) 폴백
+    return core_text, ({t for t in _tokens(core_text) if t not in brand} or set(_tokens(core_text)))
+
+
+def _score_candidates(ptoks: set, ndisc: list[str], w) -> tuple[list, float, float]:
+    """핵심 게이트+IDF 재현율 — 핵심어(top)를 담은 발견제목만, 재현율 내림차순 [(score, di)]. (scored, best, second).
+
+    핵심어=최고가중(희소) 토큰. 공백 제거 부분일치라 쿠팡 붙여쓰기 제목도 대장 띄어쓰기와 매칭된다."""
+    pden = sum(w(t) for t in ptoks) or 1.0
+    top = max(ptoks, key=lambda t: (w(t), len(t)))
+    scored = sorted(((sum(w(t) for t in ptoks if t in ndisc[di]) / pden, di)
+                     for di in range(len(ndisc)) if top in ndisc[di]), reverse=True)
+    best = scored[0][0] if scored else 0.0
+    second = scored[1][0] if len(scored) > 1 else 0.0
+    return scored, best, second
+
+
+def _qualify_line(lp: Product, discovered: list[Product], ndisc: list[str], brand: set, w):
+    """대장 한 줄의 매칭 판정 → ('paren', di) | ('match', (best, di)) | ('merge', dis) | (None, None).
+
+    ① 괄호 노출제목 정확일치(최우선) → ② 핵심어 게이트+재현율≥RECALL_MIN+마진≥MARGIN → 애매면 보조키(_tiebreak)."""
+    par = _norm(_paren(lp.name))
+    if par:                                              # ① 괄호 노출제목 정확일치(대장 '코드 (노출제목)')
+        hit = next((di for di in range(len(discovered))
+                    if par == ndisc[di] or par in ndisc[di] or ndisc[di] in par), None)
+        if hit is not None:
+            return "paren", hit
+    core_text, ptoks = _core_tokens(lp, brand)           # ② 본문 우선(원인②)
+    if not ptoks:
+        return None, None                                # 순수 코드명·괄호도 없음 → 미매칭
+    scored, best, second = _score_candidates(ptoks, ndisc, w)
+    if not scored:
+        return None, None                                # 핵심어 담은 발견상품 없음 → 미매칭
+    if best >= _RECALL_MIN and (best - second) >= _MARGIN:
+        return "match", (best, scored[0][1])
+    if best >= _RECALL_MIN:                               # 애매(마진 미달) → 보조키(판매중지 제외·규격·모델코드) 또는 병합
+        kind, di, dis = _tiebreak(core_text, scored, discovered, ndisc, best)
+        if kind == "match":
+            return "match", (best, di)
+        if kind == "merge":
+            return "merge", dis
+    return None, None                                    # 재현율 미달/보조키도 애매 → 미매칭(오매칭 방지)
+
+
+def _resolve_assignment(qualified: list, merge_groups: dict, discovered: list[Product]) -> dict[int, Product]:
+    """정렬(괄호정확 우선)→**유일 배정**(대장·발견 각 1회)→같은 이름 별도 상품 병합 → {대장i: 발견 Product}."""
     qualified.sort(reverse=True)                          # 괄호정확 우선, 그 다음 재현율 높은 순
     used_l: set[int] = set()
     used_d: set[int] = set()
@@ -210,6 +212,34 @@ def _assign(ledger: list[Product], discovered: list[Product]) -> dict[int, Produ
         used_l.add(li)
         used_d.update(avail)
     return res
+
+
+def _assign(ledger: list[Product], discovered: list[Product]) -> dict[int, Product]:
+    """{대장 index: 발견 Product}. **정밀 우선 매칭**(2026-09-18) — 확신 있는 쌍만, 대장·발견 각 1회 유일 배정.
+
+    쿠팡 상품조회로는 위탁/직접이 구분 안 되므로 대장이 유일 기준인데, 대장명이 쿠팡명과 100% 일치하지
+    않을 수 있다. 흔한 단어 하나로 **비관리 상품에 잘못 붙는(오매칭)** 것을 막기 위해:
+      ① 괄호 노출제목 정확일치 = 최우선(신뢰 최고),
+      ② 아니면 **대장 상품의 핵심어(IDF 최고 토큰)를 발견제목이 반드시 포함**(핵심 게이트) +
+         **핵심어 IDF 재현율 ≥ RECALL_MIN** + **최고-차선 마진 ≥ MARGIN**일 때만 매칭,
+      ③ 미달 = 미매칭(호출부가 대장명으로 추적·통계 공란) — 엉뚱한 데이터보다 공란이 안전.
+    로직은 헬퍼로 분해(_match_context·_qualify_line·_resolve_assignment)하되 **행동 불변**(2026-09-29 정리).
+    """
+    if not discovered:
+        return {}
+    brand, w, ndisc = _match_context(ledger, discovered)
+    qualified: list[tuple[int, float, int, int]] = []   # (괄호정확?, 재현율, 대장i, 발견i)
+    merge_groups: dict[int, list[int]] = {}             # 대장i → 같은 이름 다중 live 발견i들(별도 상품·병합 대상)
+    for li, lp in enumerate(ledger):
+        kind, payload = _qualify_line(lp, discovered, ndisc, brand, w)
+        if kind == "paren":
+            qualified.append((1, 1.0, li, payload))     # type: ignore[arg-type]
+        elif kind == "match":
+            best, di = payload                          # type: ignore[misc]
+            qualified.append((0, best, li, di))
+        elif kind == "merge":
+            merge_groups[li] = payload                  # type: ignore[assignment]
+    return _resolve_assignment(qualified, merge_groups, discovered)
 
 
 def _merge_same_name(discovered: list[Product], dis: list[int]) -> Product:
