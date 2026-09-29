@@ -77,6 +77,22 @@ def _dump_raw(account_id: str, log, out_dir: str = "output") -> None:
         log(f"  [원본저장] ⚠ {account_id} 응답 원문 저장 실패(비치명) — {exc.__class__.__name__}: {str(exc)[:80]}")
 
 
+def try_login_once(account_id: str, password: str, *, on_log=None) -> bool:
+    """2-3(§10-1): 한 계정을 지정 비밀번호로 **반자동 1회** 로그인(A안·자동 재시도 없음).
+
+    UI([이전 비밀번호로 1회 시도])가 밑줄 함수(_login_and_discover/_ensure_login)를 직접 부르지 않게 하는
+    공개 진입점. 발견·수집은 하지 않고 로그인 성공 여부만 반환한다(쿠팡확인='확인됨' 기록은 호출부 UI 몫).
+    반환 True=로그인 성공 · False=비번오류(LoginCredentialError)·차단(LoginBlocked)·미완료. 비밀번호는 로그에
+    남기지 않으며(_ensure_login 규약), 브라우저는 with 종료 시 정리된다. semi=True(보이는 창·사람이 2차인증)."""
+    log = on_log or (lambda m: None)
+    a = Account(account_id, "", "")
+    with WingBrowser(profile_dir=account_profile(account_id), offscreen=False) as b:
+        try:
+            return _ensure_login(b, a, password, log, login=True, semi=True)
+        except (LoginBlocked, LoginCredentialError):
+            return False
+
+
 def _login_and_discover(a: Account, date_from, date_to, get_password, log, login: bool = True,
                         semi: bool = False):
     """계정 하나: (필요시) 로그인 → **같은 신선한 세션**에서 즉시 판매분석 발견 + 지표.

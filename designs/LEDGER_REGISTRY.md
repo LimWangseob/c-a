@@ -203,7 +203,7 @@
 - `except LoginBlocked`(478) → 로그인실패 · `except LoginCredentialError`(481) → 비밀번호불일치.
 - 통합이 계정별 `{account_id: (값, 확인일)}` 를 `_RunCtx` 에 누적 → **①판매수집 종료 시 1회** `write_coupang_check` 호출. 값 매핑(§4-1 표)은 판정 근거가 이미 pipeline 에 있어(classify_login·productStatus·매칭) 통합이 산출, **쓰기만 D8**.
 
-**2-3 이전 비밀번호 1회(A안·사람 클릭 시 1회·자동 재시도 없음)**: H_ui 가 비번불일치 목록+버튼. 누르면 `previous_password`(D8)로 직전 비번을 얻어 `pipeline_sales._login_and_discover(get_password=…, login=True)` 얇은 단일계정 진입점(통합)으로 1회 로그인. 성공 → 쿠팡확인=확인됨(원장 값은 대장 기준 유지·안내).
+**2-3 이전 비밀번호 1회(A안·사람 클릭 시 1회·자동 재시도 없음)**: H_ui 가 비번불일치 목록+버튼. 누르면 `previous_password(reg,·)`(D8)로 직전 비번을 얻어 **`pipeline.try_login_once(account_id, password, *, on_log)`(통합 신규 공개 진입점·2026-09-29)** 로 1회 로그인. 성공 → 쿠팡확인=확인됨(UI가 write_coupang_check로 기록·원장 값은 대장 기준 유지·안내). 발견/수집 안 함·비번 로그 금지·성공 후 브라우저 정리. 핀 pin_l1_contract(pipeline_sales.try_login_once).
 
 **2-4 입력소스 원장(소유자 2026-09-28: 지금 같이 착수)**: 설정 입력소스(구글대장/PC엑셀/원장). '원장' 선택 시 `to_input_list`+`password_map`(D8)로 **관리중만** 로드. UI 스위치·`_auto_load_input` 분기=H_ui.
 - **(a) 관리중 계정 안 관리중단 상품 = 입력에서 제외**(§10 '관리중만' 충실). 단 `InputList.ledger_products`·`ledger_account_ids` 에는 **원장 전체 줄(관리중단 포함)** 을 넣어 pipeline ⑥ 완전삭제가 결과 이력을 지우지 않게 한다(원장 원칙=지우지 않음). 기존 대장 #8(취소선=수집·순위만 제외)과 달리 원장 전환에선 관리중단=수집 제외.

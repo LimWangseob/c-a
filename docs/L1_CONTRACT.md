@@ -111,6 +111,12 @@
 - 데이터/예외 타입: `SearchItem`·`RankBlocked`.
 - **규율**: rank 는 순수 조회만(순위 도메인 고유 로직은 `pipeline_ranks`=조립).
 
+## 7-c. pipeline_sales (로그인 진입점) — 호출처: UI(H_ui)
+| 공개 진입점 | 파라미터 구조 |
+|---|---|
+| `try_login_once(account_id, password, *, on_log=None)` **(2단계)** | P:account_id:0 P:password:0 K:on_log:1 |
+- 2-3 [이전 비밀번호로 1회 시도]용 — 한 계정 반자동 1회 로그인(A안·재시도 없음·발견 안 함·비번 로그 금지). `pipeline.try_login_once` 로 재수출. 나머지 로그인 심볼(_login_and_discover 등)은 내부 전용·계약 아님.
+
 ## 8. 정리 완료 기록 — 밑줄 진입점의 공개화 (2026-09-28)
 소유자 결정으로 "내부용(밑줄) 문패인데 프로덕션이 부르던" 3건을 정식 공개 이름으로 정리:
 - `pipeline_gsheet._push_gsheet` → **`push_gsheet`** (호출처 pipeline.py·pipeline_ranks.py + pipeline 재수출)

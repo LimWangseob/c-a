@@ -29,7 +29,7 @@ except AttributeError:
 
 from coupang_analytics import (  # noqa: E402
     collector, gsheet_index, gsheet_stats, input_list, pipeline_gsheet,
-    rank, registry, registry_gsheet, registry_model)
+    pipeline_sales, rank, registry, registry_gsheet, registry_model)
 from coupang_analytics.workbook import OutputWorkbook  # noqa: E402
 
 _KIND = {
@@ -120,6 +120,10 @@ FUNC_CONTRACTS: dict = {
     ],
     registry_model: [
         ("parse_ledger", "P:rows:0 P:strike_grid:1 P:sheet:1"),
+    ],
+    # 2-3(§10-1): 한 계정 반자동 1회 로그인 공개 진입점(UI [이전 비번 1회]용·pipeline 재수출)
+    pipeline_sales: [
+        ("try_login_once", "P:account_id:0 P:password:0 K:on_log:1"),
     ],
     # rank = L1 조회 프리미티브(2026-09-28 재분류·R4 확정). collector 와 동급 순위 조회 수단.
     # 도메인(kw_recommend·kw_metrics)+조립(pipeline_sales/process/ranks)이 공유 → "도메인→L1" 합법.
