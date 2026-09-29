@@ -477,8 +477,9 @@ def t1_product_match_precision():
     from coupang_analytics.input_list import Option, Product
     from coupang_analytics.product_match import scope_to_ledger
 
-    def disc(title, vid, kind=config.KIND_CONTRACT):
-        return Product(name=title, title=title, kind=kind, options=[Option("", [vid], [])])
+    def disc(title, vid, kind=config.KIND_CONTRACT, sale_status=""):
+        return Product(name=title, title=title, kind=kind, sale_status=sale_status,
+                       options=[Option("", [vid], [])])
 
     # 발견(쿠팡) = 관리 상품 + 비관리(직접판매) 상품 섞임
     discovered = [
@@ -555,10 +556,17 @@ def t1_product_match_precision():
     assert v4[3] == ["v_ct"], f"무드등 CT0229 실패: {v4[3]}"
     assert n4 == 4, f"모델코드 매칭 수 {n4} (기대 4)"
     # 동일 코드 중복 리스팅(같은 코드 2개)은 코드로도 못 가름 → 미매칭 유지(오매칭 방지)
-    disc5 = [disc("트렁크정리함 YG0204", "v_t1"), disc("트렁크정리함 YG0204", "v_t2")]
+    # 판매중지 제외(소유자 2026-09-29): 같은 이름·코드 중복 리스팅 중 판매중지(재등록 죽은 것)를 빼고 live 유일→매칭.
+    disc5 = [disc("트렁크정리함 YG0204", "v_live", sale_status="부분판매중"),
+             disc("트렁크정리함 YG0204", "v_dead", sale_status="판매중지")]
     t5, _ = scope_to_ledger([Product(name="트렁크정리함 YG0204")], disc5)
-    assert not any(o.vendor_item_ids for o in t5[0].options), "동일코드 중복리스팅이 매칭됨(오매칭)"
-    _ok("모델코드 타이브레이커: 문자시작 코드(ST6645·BG001)로 애매쌍 정확 확정·동일코드 중복은 미매칭 유지")
+    assert [v for o in t5[0].options for v in o.vendor_item_ids] == ["v_live"], "판매중지 제외 후 live 매칭 실패"
+    # 둘 다 live(같은 이름·다른 vid/가격=별도 상품)면 담당자 구분 필요 → 미매칭 유지(오매칭 방지)
+    disc5b = [disc("기저귀가방 CL01", "v_a", sale_status="판매중"),
+              disc("기저귀가방 CL01", "v_b", sale_status="부분판매중")]
+    t5b, _ = scope_to_ledger([Product(name="기저귀가방 CL01")], disc5b)
+    assert not any(o.vendor_item_ids for o in t5b[0].options), "둘 다 live 동일이름이 매칭됨(오매칭)"
+    _ok("모델코드 타이브레이커+판매중지 제외: 문자시작 코드로 확정·중복 중 live 유일→매칭·둘 다 live는 미매칭")
     # 원인②(2026-09-29): 대장 본문에 정체성 토큰이 있으면 본문 우선(괄호=색상/옵션/메모는 무시),
     # 본문이 코드뿐이면 괄호(노출제목)로 폴백 — 담당자 대장 본문명을 최대한 존중.
     disc6 = [

@@ -150,19 +150,26 @@ def _assign(ledger: list[Product], discovered: list[Product]) -> dict[int, Produ
         if best >= _RECALL_MIN and (best - second) >= _MARGIN:
             qualified.append((0, best, li, best_di))
         elif best >= _RECALL_MIN:
-            # 애매(핵심어 재현율은 충분한데 **마진 미달** = 변형 상품 동점). 보조키 타이브레이커로 확정 시도:
-            # 최고재현율 동률권(best 근방) 후보 중 **대장 규격토큰 또는 모델코드와 겹치는 후보가 정확히 1개**면 확정.
-            # 규격·코드는 정체성이 아니라 동점을 가르는 보조키로만 쓴다(핵심 정밀도 불변). 여전히 애매하면 미매칭.
+            # 애매(핵심어 재현율은 충분한데 **마진 미달** = 변형/중복 상품 동점).
+            # ⓐ 먼저 **판매중지 제외**(소유자 2026-09-29): 같은 이름·코드 중복 리스팅은 담당자가 상품 오입력→수정
+            #    불가라 죽은 걸 판매중지시킨 재등록이 흔하다 → 동률권에서 판매중지를 빼 **live 가 정확히 1개면 확정**.
+            #    여전히 여럿이면(다 live=별도 상품·가격/옵션 다름) 규격/코드 보조키로 가른다. 다 판매중지면 원본 유지.
+            # ⓑ 규격토큰(_SPEC=숫자시작) 또는 모델코드(_CODE_TAIL: ST6645·BG001 등 문자시작)로 정확히 1개면 확정.
+            #    규격·코드는 정체성이 아니라 동점을 가르는 보조키로만 쓴다(핵심 정밀도 불변). 여전히 애매하면 미매칭.
             tied = [di for rc, di in scored if (best - rc) < _MARGIN]            # 동률권(마진 이내) 후보들
-            lspec = _spec_tokens(core_text)
-            thit = [di for di in tied if lspec & _spec_tokens(_title(discovered[di]))] if lspec else []
-            if len(thit) != 1:
-                # 규격이 못 가르면 모델코드로(ST6645·BG001 등 문자시작 코드는 _SPEC=숫자시작이 못 잡음)
-                lcode = _code_tokens(core_text)
-                if lcode:
-                    chit = [di for di in tied if lcode & _code_tokens(_title(discovered[di]))]
-                    if len(chit) == 1:
-                        thit = chit
+            live = [di for di in tied if getattr(discovered[di], "sale_status", "") != "판매중지"]
+            if len(live) == 1:
+                thit = live                                 # 판매중지 제외 후 live 유일 → 확정(죽은 재등록 배제)
+            else:
+                sub = live or tied                          # 다 live=별도상품 → 보조키로 / 다 판매중지 → 원본
+                lspec = _spec_tokens(core_text)
+                thit = [di for di in sub if lspec & _spec_tokens(_title(discovered[di]))] if lspec else []
+                if len(thit) != 1:
+                    lcode = _code_tokens(core_text)
+                    if lcode:
+                        chit = [di for di in sub if lcode & _code_tokens(_title(discovered[di]))]
+                        if len(chit) == 1:
+                            thit = chit
             if len(thit) == 1:
                 qualified.append((0, best, li, thit[0]))                         # 규격/코드로 유일 확정
         # else: 재현율 미달/보조키도 애매 → 미매칭(공란, 오매칭 방지)

@@ -871,7 +871,8 @@ def products_from_vendor_inventory(listings: list[VendorInventoryListing],
         options = [Option(label=lbl, vendor_item_ids=[o.vendor_item_id])
                    for lbl, o in zip(labels, opts)]
         name = listing.product_name
-        out.append(Product(name=name, options=options, title=name, kind=kind))
+        out.append(Product(name=name, options=options, title=name, kind=kind,
+                           sale_status=sale_status_of(listing.product_status)))
     if dropped_upbundle:
         log(f"  [상품조회] 업번들(자동번들) 옵션 {dropped_upbundle}개 제외(실입고 원상품만 추적)")
     if dropped_norm:

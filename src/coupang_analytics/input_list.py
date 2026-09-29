@@ -35,6 +35,7 @@ class Product:
     mkt_mon: str = ""               # 모니터링 종료일(이후 수집 중단)
     inbound_summary: str = ""       # 로켓그로스 최근입고 요약(관리대장) — 헤더 '최근입고 : …'(소유자 2026-09-24)
     discontinued: bool = False      # 대장 판매중지/취소선(#8 2026-09-27): 수집은 하되 ③순위만 제외
+    sale_status: str = ""           # 발견 상품의 쿠팡 판매상태(판매중/부분판매중/판매중지 등) — 중복 리스팅 중 판매중지 제외용(2026-09-29)
 
     @property
     def display_title(self) -> str:
