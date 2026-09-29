@@ -267,6 +267,62 @@ def _ai_candidates(title: str, naver: NaverAdApi,
     return _assemble_candidates(title, naver, ai_key, generate=False)
 
 
+def _compress_pool(relevant: list, tiers: dict, matches: dict, core: str, exclude, log) -> list:
+    """(2) 부분점수(관련성·구매의도·검색량)로 상위 KW_SCORE_POOL_N개 압축 — 요청량·IP차단 제어.
+
+    핵심(core)은 이미 추적중(exclude)이 아니면 항상 포함(니치 저검색 자기 이름 보호)."""
+    ranked = sorted(relevant, key=lambda c: _partial_score(c, tiers.get(c.keyword, ""),
+                                                           matches.get(c.keyword, 1.0)), reverse=True)
+    pool = ranked[:config.KW_SCORE_POOL_N]
+    core_tracked = bool(exclude) and core in exclude   # 발굴 추가에서 core가 이미 추적중이면 강제포함 불필요
+    if core and not core_tracked and core in {c.keyword for c in relevant} \
+            and core not in {c.keyword for c in pool}:
+        pool = pool[:config.KW_SCORE_POOL_N - 1] + [next(c for c in relevant if c.keyword == core)]
+    if log:
+        log(f"  [점수] 후보 {len(relevant)}개 → 압축 {len(pool)}개 노출측정: {[c.keyword for c in pool]}")
+    return pool
+
+
+def _measure_exposure(pool: list, tiers: dict, matches: dict, measure_ranks, log) -> dict:
+    """(3) 압축분 쿠팡 실노출 **일괄 측정**(measure_ranks=여러 키워드 병렬 fetch) → 노출점수·등급.
+
+    반환 {키워드: (점수, 등급, 최고순위, ranks_pc, ranks_mobile)}. measure_ranks None이면 노출 없이 부분점수만."""
+    batch: dict[str, tuple[dict, dict]] = {}
+    if measure_ranks is not None:
+        batch = measure_ranks([c.keyword for c in pool])   # {키워드: (ranks_pc, ranks_mobile)}
+    meta: dict[str, tuple[float, str, int | None, dict, dict]] = {}
+    for c in pool:
+        ranks_pc, ranks_mobile = batch.get(c.keyword, ({}, {}))
+        best = min([v for v in (*ranks_pc.values(), *ranks_mobile.values()) if v], default=None)
+        if measure_ranks is not None and log:
+            log(f"  [노출측정] '{c.keyword}' 쿠팡 오가닉 노출순위: {rank_label(best)}")
+        s = _keyword_score(c, tiers.get(c.keyword, ""), matches.get(c.keyword, 1.0), best)
+        meta[c.keyword] = (round(s, 1), _grade(s), best, ranks_pc, ranks_mobile)
+    return meta
+
+
+def _final_select(pool: list, meta: dict, tiers: dict, matches: dict, title: str, use: str,
+                  core: str, identities, n, ai_key, log) -> list[TrackKeyword]:
+    """(4) AI 최종선정 — 점수·등급·노출·클릭·경쟁도·관련도 종합해 n개 우선순위 확정 → TrackKeyword 목록."""
+    items = [{"keyword": c.keyword, "volume": c.total, "mobile": _mobile_share(c),
+              "clicks": round(c.total_clicks, 1), "comp": c.comp_idx,
+              "relevance": tiers.get(c.keyword, ""), "score": meta[c.keyword][0],
+              "grade": meta[c.keyword][1],
+              "exposure": meta[c.keyword][2] if meta[c.keyword][2] else "미노출"} for c in pool]
+    picked = _timed(log, "AI 최종선정", select_keywords, title, items, use=use, core=core,
+                    identities=identities, n=n, api_key=ai_key)   # [(키워드, 역할)]
+    kv = {c.keyword: c for c in pool}
+    out: list[TrackKeyword] = []
+    for kw, role in picked:
+        c = kv[kw]
+        s, g, best, rpc, rmo = meta[kw]
+        out.append(TrackKeyword(kw, c.total, _mobile_share(c), relevance=tiers.get(kw, ""),
+                                clicks=round(c.total_clicks, 1), comp_idx=c.comp_idx,
+                                score=s, grade=g, exposure_best=best, role=role,
+                                ranks_pc=rpc, ranks_mobile=rmo))
+    return out
+
+
 def select_keywords_light(title: str, naver: NaverAdApi, ai_key: str | None,
                           n: int | None = None, browser=None, log=None,
                           measure_ranks=None, exclude: set[str] | None = None) -> list[TrackKeyword]:
@@ -292,46 +348,9 @@ def select_keywords_light(title: str, naver: NaverAdApi, ai_key: str | None,
         matches = {k: v for k, v in matches.items() if k.strip() not in ex}
     if not relevant:
         return []
-    # (2) 부분점수로 압축 — 요청량·IP차단 제어 위해 상위 소수만 쿠팡 노출 측정
-    ranked = sorted(relevant, key=lambda c: _partial_score(c, tiers.get(c.keyword, ""),
-                                                           matches.get(c.keyword, 1.0)), reverse=True)
-    pool = ranked[:config.KW_SCORE_POOL_N]
-    core_tracked = bool(exclude) and core in exclude   # 발굴 추가에서 core가 이미 추적중이면 강제포함 불필요
-    if core and not core_tracked and core in {c.keyword for c in relevant} \
-            and core not in {c.keyword for c in pool}:
-        pool = pool[:config.KW_SCORE_POOL_N - 1] + [next(c for c in relevant if c.keyword == core)]
-    if log:
-        log(f"  [점수] 후보 {len(relevant)}개 → 압축 {len(pool)}개 노출측정: {[c.keyword for c in pool]}")
-    # (3) 압축분 쿠팡 실노출 **일괄 측정**(measure_ranks가 여러 키워드를 병렬 fetch로 한 번에) → 노출점수·등급
-    batch: dict[str, tuple[dict, dict]] = {}
-    if measure_ranks is not None:
-        batch = measure_ranks([c.keyword for c in pool])   # {키워드: (ranks_pc, ranks_mobile)}
-    meta: dict[str, tuple[float, str, int | None, dict, dict]] = {}
-    for c in pool:
-        ranks_pc, ranks_mobile = batch.get(c.keyword, ({}, {}))
-        best = min([v for v in (*ranks_pc.values(), *ranks_mobile.values()) if v], default=None)
-        if measure_ranks is not None and log:
-            log(f"  [노출측정] '{c.keyword}' 쿠팡 오가닉 노출순위: {rank_label(best)}")
-        s = _keyword_score(c, tiers.get(c.keyword, ""), matches.get(c.keyword, 1.0), best)
-        meta[c.keyword] = (round(s, 1), _grade(s), best, ranks_pc, ranks_mobile)
-    # (4) AI 최종선정 — 점수·등급·노출까지 종합해 우선순위 확정
-    items = [{"keyword": c.keyword, "volume": c.total, "mobile": _mobile_share(c),
-              "clicks": round(c.total_clicks, 1), "comp": c.comp_idx,
-              "relevance": tiers.get(c.keyword, ""), "score": meta[c.keyword][0],
-              "grade": meta[c.keyword][1],
-              "exposure": meta[c.keyword][2] if meta[c.keyword][2] else "미노출"} for c in pool]
-    picked = _timed(log, "AI 최종선정", select_keywords, title, items, use=use, core=core,
-                    identities=identities, n=n, api_key=ai_key)   # [(키워드, 역할)]
-    kv = {c.keyword: c for c in pool}
-    out: list[TrackKeyword] = []
-    for kw, role in picked:
-        c = kv[kw]
-        s, g, best, rpc, rmo = meta[kw]
-        out.append(TrackKeyword(kw, c.total, _mobile_share(c), relevance=tiers.get(kw, ""),
-                                clicks=round(c.total_clicks, 1), comp_idx=c.comp_idx,
-                                score=s, grade=g, exposure_best=best, role=role,
-                                ranks_pc=rpc, ranks_mobile=rmo))
-    return out
+    pool = _compress_pool(relevant, tiers, matches, core, exclude, log)     # (2) 부분점수 압축
+    meta = _measure_exposure(pool, tiers, matches, measure_ranks, log)      # (3) 쿠팡 실노출 측정
+    return _final_select(pool, meta, tiers, matches, title, use, core, identities, n, ai_key, log)  # (4) AI 최종선정
 
 
 def recommend(seed_keyword: str, naver: NaverAdApi, browser: WingBrowser,
