@@ -388,6 +388,10 @@ class FakeClient:
                 cur[c0:c0 + len(vals)] = vals
                 g[r0 + i] = cur
 
+    def read_grid(self, sheet, *, notes=False):
+        vals = self.read_values(sheet)
+        return vals, [[None] * len(r) for r in vals]
+
     def batch_update(self, requests):
         self.batches.append(requests)
         titles = list(self.grids)
@@ -694,6 +698,63 @@ def t20_write_lock():
     ok("run_sync·쿠팡확인·소급 잠금 중단+쓰기 0·대기 로그·미리보기 통과·예외 해제·강제종료 후 즉시 획득")
 
 
+def t21_company_stock():
+    print("[R21] 회사보유재고 — 링크 탭·'창고 , 수량개' 표기·'-'=0·음수 경고·동일상품명(공백/대소문자 무시)·그 열만·미매칭 보존")
+    from coupang_analytics import company_stock as CS
+    assert [CS.parse_qty(v) for v in ("  5,670 ", "-", "- 1", " ", "abc", 12)] == [5670, 0, -1, None, None, 12]
+    stock_cli = FakeClient()
+    stock_cli.grids["Sheet1"] = [["재고현황 26.08.20 기준"], ["창고", "구분", "바코드", "상품명", " 현재고", "셀독"],
+                                 ["김포1", "공산품", "1", "햄스트링기구 R010", "  2,360 ", "셀독"],
+                                 ["검단", "공산품", "2", "햄스트링기구  R010", "  24 "],        # 다른 창고 → 이어 씀
+                                 ["김포1", "공산품", "9", "햄스트링기구 R010", "  40 "],        # 같은 창고 → 그 창고 합산
+                                 ["검단", "건기식", "3", "파미젠 NMN 정 60정", "  -  "],       # '-' = 0
+                                 ["김포2", "공산품", "", "코스프레 w205", "- 3 "],             # 음수 → 경고
+                                 ["김포2", "공산품", "", "재고미상", "확인중"],               # 숫자 아님 → 제외
+                                 ["", "공산품", "", "창고미상", "5"]]                        # 창고 없음 → 제외
+    stock_cli.grids["건기식_260929"] = [[], [], ["", "", "창고", "상품명", "현재고"],
+                                        ["", "", "검단", "웰빙곳간 알부민 120정", "1203"]]
+    assert CS.resolve_tab(stock_cli, "https://x/edit?gid=1#gid=1") == "Sheet1"
+    assert CS.resolve_tab(stock_cli, "https://x/edit?gid=2") == "건기식_260929"
+    assert CS.resolve_tab(stock_cli, "https://x/edit") == "Sheet1"                  # gid 없음 = 첫 탭
+    _expect(ValueError, lambda: CS.resolve_tab(stock_cli, "https://x/edit#gid=99"), "없는 gid")
+    stock, warns = CS.read_stock(stock_cli.grids["Sheet1"])
+    assert stock[CS.name_key("햄스트링기구 R010")] == ("햄스트링기구 R010", {"김포1": 2400, "검단": 24}), stock
+    assert CS.stock_text(stock[CS.name_key("햄스트링기구 R010")][1]) == "김포1 , 2,400개 / 검단 , 24개"
+    assert CS.stock_text(stock[CS.name_key("파미젠 NMN 정 60정")][1]) == "검단 , 0개"
+    assert CS.stock_text(stock[CS.name_key("코스프레 w205")][1]) == "김포2 , -3개" and any("음수" in w for w in warns)
+    assert CS.name_key("재고미상") not in stock and CS.name_key("창고미상") not in stock
+    assert sum("확인 필요 — 제외" in w for w in warns) == 2, warns
+    assert CS.stock_text({"김포2": 150}) == "김포2 , 150개"                                  # 소유자 예시 표기
+    gun = CS.read_stock(stock_cli.grids["건기식_260929"])[0]
+    assert CS.stock_text(gun[CS.name_key("웰빙곳간 알부민 120정")][1]) == "검단 , 1,203개"
+    # 관리대장: 회사보유재고 열(상품명 오른쪽)·다른 열은 절대 불변
+    hdr = ["구분", "대표자명", "사업자명", "계정아이디", "비밀번호", "상품명", "회사보유재고", "그로스 재고 (자동갱신 09.29)"]
+    led = FakeClient()
+    led.grids["셀독리스트"] = [["예시"], hdr,
+                               ["", "홍길동", "(주)예시", "ex01", "pw!1", "햄스트링기구R010", "", "11"],   # 공백 무시
+                               ["", "", "", "", "", "파미젠 nmn 정 60정\n(노출명 전체)", "5", "12"],       # 대소문자·첫 줄
+                               ["", "", "", "", "", "없는상품", "7", "13"],                              # 미매칭 → 7 유지
+                               ["", "", "", "", "", "--", "9", ""],                                     # 상품명 아님
+                               ["", "김예시", "예시마켓", "sm22", "0012", "햄스트링기구 R010", "", "14"]]  # 다른 계정 같은 값
+    before = copy.deepcopy(led.grids["셀독리스트"])
+    res = CS.run_company_stock("https://x/edit?gid=1", "L", dry_run=True, stock_client=stock_cli, ledger_client=led)
+    assert (res.matched, res.changed, res.stock_sheet) == (3, 3, "Sheet1") and not led.writes     # 미리보기 = 쓰기 0
+    assert res.unmatched == [("(주)예시", "없는상품")], res.unmatched
+    res = CS.run_company_stock("https://x/edit?gid=1", "L", stock_client=stock_cli, ledger_client=led)
+    assert led.writes == [("셀독리스트", "G3", False)], led.writes                                # 그 열 데이터 구간 1회
+    g = led.grids["셀독리스트"]
+    ham = "김포1 , 2,400개 / 검단 , 24개"
+    assert [r[6] for r in g[2:]] == [ham, "검단 , 0개", "7", "9", ham], [r[6] for r in g[2:]]
+    for new, old in zip(g, before):
+        assert new[:6] + new[7:] == old[:6] + old[7:], (new, old)                                # 다른 열 불변
+    assert CS.run_company_stock("https://x/edit?gid=1", "L", stock_client=stock_cli,
+                                ledger_client=led).changed == 0 and len(led.writes) == 1          # 같은 값 = 쓰기 없음
+    bad = FakeClient()
+    bad.grids["셀독리스트"] = [hdr[:6]]
+    _expect(ValueError, lambda: CS.write_company_stock(bad, stock), "회사보유재고 열 없음")
+    ok("탭 선택·창고별 표기(같은 창고 합산)·'-'=0·음수/비숫자 경고·공백/대소문자/첫 줄 매칭·계정 공통값·미매칭 보존·그 열만·미리보기 0")
+
+
 def main():
     t16_backfill()
     t15_format_equivalence()
@@ -715,6 +776,7 @@ def main():
     t18_previous_password()
     t19_to_input_list()
     t20_write_lock()
+    t21_company_stock()
     print("셀독등록원장 오프라인 검증 통과")
 
 
