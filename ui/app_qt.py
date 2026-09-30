@@ -25,6 +25,7 @@ from coupang_analytics.apppaths import output_dir as app_output_dir, set_workdir
 from coupang_analytics.browser import WingBrowser, find_chrome, reap_orphan_chrome  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics import detail_images  # noqa: E402
+from coupang_analytics import holiday_source  # noqa: E402
 from coupang_analytics import gsheet_api, gsheet_index  # noqa: E402
 from coupang_analytics.input_list import (parse_input_list, parse_input_rows,  # noqa: E402
                                            parse_password_file, parse_password_rows,
@@ -268,10 +269,12 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         self.input_lbl = QtWidgets.QLabel("(입력 분석용 엑셀 미선택)")
         self.naver_lbl = QtWidgets.QLabel("(네이버 API 키 미선택)")
         self.openai_lbl = QtWidgets.QLabel("(OpenAI 키 미설정 — 키워드 추출 불가)")
+        self.holiday_lbl = QtWidgets.QLabel("(공휴일 API 키 미설정 — 정산 지급일 계산용)")
         rows = [
             ("입력 엑셀 열기", self.load_input, self.input_lbl),
             ("네이버 API 키 열기", self.load_naver, self.naver_lbl),
             ("OpenAI(ChatGPT) API 키 입력", self.load_openai, self.openai_lbl),
+            ("공휴일 API 키 입력", self.load_holiday_key, self.holiday_lbl),
         ]
         for i, (text, cmd, lbl) in enumerate(rows):
             b = QtWidgets.QPushButton(text)
@@ -279,6 +282,10 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
             b.setMinimumWidth(210)
             grid.addWidget(b, i, 0)
             grid.addWidget(lbl, i, 1)
+        self.holiday_chk_btn = QtWidgets.QPushButton("연결 확인")
+        self.holiday_chk_btn.setToolTip("data.go.kr 특일정보로 올해 공휴일을 조회해 키가 동작하는지 확인")
+        self.holiday_chk_btn.clicked.connect(self.check_holiday_key)
+        grid.addWidget(self.holiday_chk_btn, len(rows) - 1, 2)
         grid.setColumnStretch(1, 1)
         v.addWidget(fk)
         v.addWidget(self._gsheet_card())   # 구글 시트 연동(입력 관리대장 · 출력 결과시트 · 서비스계정)
@@ -1075,6 +1082,32 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         except Exception as exc:
             self.log(f"[OpenAI] 입력됨(저장 실패: {exc.__class__.__name__})")
 
+    def load_holiday_key(self):
+        """공휴일 API 키(data.go.kr 특일정보 서비스키) 입력 → DPAPI 저장(정산 지급일 계산용)."""
+        key, ok = QtWidgets.QInputDialog.getText(
+            self, "공휴일 API 키", "data.go.kr '한국천문연구원 특일정보' 서비스키(일반 인증키)를 입력하세요",
+            QtWidgets.QLineEdit.Password)
+        if not (ok and key.strip()):
+            return
+        try:
+            self.creds_store.set_password(holiday_source.CRED_KEY, key.strip())
+        except Exception as exc:
+            self.log(f"[공휴일] 키 저장 실패({exc.__class__.__name__}): {exc}")
+            return
+        self.holiday_lbl.setText("(공휴일 API 키: 입력됨 — 저장됨)")
+        self.log("[공휴일] API 키 입력·저장됨 — [연결 확인]으로 동작을 확인하세요")
+
+    def check_holiday_key(self):
+        """저장된 공휴일 키로 올해 공휴일 조회(네트워크) — 실패는 로그·라벨에 이유를 남긴다."""
+        year = date.today().year
+        self.log(f"[공휴일] {year}년 공휴일 조회로 키 확인 중…")
+
+        def done(n):
+            self.holiday_lbl.setText(f"(공휴일 API 키: 연결됨 — {year}년 공휴일 {n}일)")
+            self.log(f"[공휴일] 연결 확인 OK — {year}년 공휴일 {n}일")
+        self.run_bg(lambda: len(holiday_source.fetch_from_store(self.creds_store)(year)),
+                    on_done=done, btn=self.holiday_chk_btn)
+
     def load_service_account(self):
         """서비스계정 JSON 키 파일을 선택 → 검증 후 DPAPI 저장(이 PC 전용). 이메일 표시.
 
@@ -1142,6 +1175,12 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
             self.ai_key = ak
             self.openai_lbl.setText("(OpenAI 키: 저장됨 — 자동 로드)")
             self.log("[OpenAI] 저장된 키 자동 로드됨")
+        try:
+            hk = self.creds_store.get_password(holiday_source.CRED_KEY)
+        except Exception:
+            hk = None
+        if hk:
+            self.holiday_lbl.setText("(공휴일 API 키: 저장됨 — 자동 로드)")
 
     # ── 키워드 추천 ───────────────────────────────────────────
     def do_recommend(self):
@@ -1721,11 +1760,11 @@ def _check_icon_path() -> str:
 
 
 # ── 설정 이식(배포 패키지 무설정용) — 이 PC 설정을 내보내고, 새 PC에서 가져와 자동 적용 ──────
-# 담는 값: QSettings(구글시트 링크·입력소스) + credstore 키 3개(네이버·OpenAI·구글SA).
+# 담는 값: QSettings(구글시트 링크·입력소스) + credstore 키 4개(네이버·OpenAI·구글SA·공휴일).
 # ⚠ 내보낸 파일은 **평문**(API/SA 키 포함) → 배포 zip 안에서만·설치 시 즉시 이 PC용 암호화(DPAPI) 후 삭제.
 # 계정 비밀번호는 담지 않는다(관리대장 '비밀번호' 컬럼에서 매 실행 자동 로드).
 _EXPORT_QKEYS = ("gsheet/input_url", "gsheet/output_url", "input/source", "registry/url", "stock/url")
-_EXPORT_CREDS = ("__naver__", "__openai__", "__gsheet_sa__")
+_EXPORT_CREDS = ("__naver__", "__openai__", "__gsheet_sa__", holiday_source.CRED_KEY)
 # config.json(보존 폴더)에 두는 **공유 설정** 키 — 무인/양쪽 UI 공통(구글시트 링크·입력소스·마지막 입력파일).
 # dir/*(마지막 폴더)는 per-PC UI 편의라 레지스트리에만 둔다.
 _CONFIG_SHARED_KEYS = ("gsheet/input_url", "gsheet/output_url", "input/source", "file/input", "registry/url",
