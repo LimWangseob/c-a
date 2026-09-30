@@ -162,11 +162,15 @@ def push_company_stock(stock_url: str | None, input_url: str | None, log) -> Non
     SA 미등록이면 조용히 생략(정상). run_company_stock 은 폴백 없이 예외를 올리므로 여기서 try/로그로 감싼다
     (비치명 — 수집·결과시트·그로스 재고 역기록은 이미 완료). 무인(--auto)에서도 호출(대장 한 열만 갱신 = 그로스
     재고 역기록과 동급). 미리보기/반영은 UI 가 run_company_stock 을 직접(dry_run) 호출."""
-    if not stock_url or not input_url:
+    if not stock_url or not input_url:              # 미설정 = 오류 아닌 '생략' — 단, 조용히 넘기지 않고 알린다
+        missing = [n for n, v in (("재고현황 링크(stock/url)", stock_url), ("관리대장 링크(gsheet/input_url)", input_url))
+                   if not v]
+        log(f"== [회사재고] {'·'.join(missing)} 미설정 — 회사보유재고 반영 생략 ==")
         return
     try:
         from . import company_stock, gsheet_api
         if not gsheet_api.load_sa_info():
+            log("== [회사재고] 구글 서비스계정 키 미등록 — 회사보유재고 반영 생략 ==")
             return
         company_stock.run_company_stock(stock_url, input_url, on_log=log)
     except Exception as exc:
@@ -180,11 +184,13 @@ def inject_company_stock(wb, stock_url: str | None, log) -> None:
     관리대장 역기록(push_company_stock)과 **별개**로, 계정목록에 보여주려 매 실행 재고현황을 읽어 워크북 인메모리에
     넣는다(마스터 미저장·다음 실행 재주입). stock_url 없거나 SA 미등록이면 no-op(정상 — 계정목록 공란). 실패는
     로그·비치명(계정목록·통계는 그대로 렌더). 읽기 전용(재고현황 시트를 쓰지 않음)."""
-    if not stock_url:
+    if not stock_url:                                # 미설정 = '생략' 안내(오류 아님) — 계정목록 회사보유재고 공란
+        log("== [회사재고] 재고현황 링크(stock/url) 미설정 — 계정목록 회사보유재고 표기 생략(공란) ==")
         return
     try:
         from . import company_stock, gsheet_api
         if not gsheet_api.load_sa_info():
+            log("== [회사재고] 구글 서비스계정 키 미등록 — 계정목록 회사보유재고 표기 생략(공란) ==")
             return
         client = gsheet_api.GSheetClient(stock_url, on_log=log)
         tab = company_stock.resolve_tab(client, stock_url)

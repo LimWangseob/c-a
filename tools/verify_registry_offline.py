@@ -798,6 +798,36 @@ def t22_name_rules():
     ok("자동 이름변경(자동반영·이력/그로스 이어짐·과거 복원)·색상 분리=중단+신규·진짜 변경 보류·1:1 아닐 때 제외")
 
 
+def t23_company_stock_skip_logged():
+    print("[R23] 회사재고 미설정·SA 미등록 = 조용히 넘기지 않고 '생략' 안내 로그(오류 아님·쓰기 없음)")
+    from coupang_analytics import company_stock as CS
+    from coupang_analytics import gsheet_api
+    from coupang_analytics import pipeline_gsheet as PG
+    calls: list = []
+    orig_run, orig_sa, orig_apply = CS.run_company_stock, gsheet_api.load_sa_info, CS.apply_to_workbook
+    CS.run_company_stock = lambda *a, **k: calls.append("run")
+    CS.apply_to_workbook = lambda *a, **k: calls.append("apply") or 0
+    try:
+        for stock, inp, want in (("", "L", "재고현황 링크(stock/url) 미설정"), ("S", "", "관리대장 링크(gsheet/input_url) 미설정"),
+                                 (None, None, "재고현황 링크(stock/url)·관리대장 링크(gsheet/input_url) 미설정")):
+            logs: list = []
+            PG.push_company_stock(stock, inp, logs.append)
+            assert len(logs) == 1 and want in logs[0] and "생략" in logs[0], logs
+        logs = []
+        PG.inject_company_stock(object(), "", logs.append)
+        assert len(logs) == 1 and "stock/url" in logs[0] and "생략" in logs[0], logs
+        gsheet_api.load_sa_info = lambda *a, **k: None                      # SA 키 미등록
+        logs = []
+        PG.push_company_stock("S", "L", logs.append)
+        PG.inject_company_stock(object(), "S", logs.append)
+        assert len(logs) == 2 and all("서비스계정 키 미등록" in m and "생략" in m for m in logs), logs
+        assert calls == [], calls                                               # 생략 경로 = 반영·주입 호출 없음
+        assert not any("실패" in m or "⚠" in m for m in logs)                  # 오류가 아니라 안내
+    finally:
+        CS.run_company_stock, gsheet_api.load_sa_info, CS.apply_to_workbook = orig_run, orig_sa, orig_apply
+    ok("링크 미설정 3경우·계정목록 주입 미설정·SA 미등록 각 1줄 안내·반영 호출 없음·오류 표기 아님")
+
+
 def main():
     t16_backfill()
     t15_format_equivalence()
@@ -821,6 +851,7 @@ def main():
     t20_write_lock()
     t21_company_stock()
     t22_name_rules()
+    t23_company_stock_skip_logged()
     print("셀독등록원장 오프라인 검증 통과")
 
 
