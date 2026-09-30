@@ -35,8 +35,7 @@ class StockPanelMixin:
         g.setColumnStretch(1, 1)
         self.stock_url_edit = QtWidgets.QLineEdit(st.value(KEY_STOCK_URL, "", type=str))
         self.stock_url_edit.setPlaceholderText("재고현황 구글시트 링크 또는 ID — 비우면 회사 재고 반영 안 함(서비스계정 공유)")
-        self.stock_url_edit.editingFinished.connect(
-            lambda: self._save_shared(KEY_STOCK_URL, self.stock_url_edit.text().strip()))
+        self.stock_url_edit.editingFinished.connect(self._on_stock_url_edited)
         btns = QtWidgets.QHBoxLayout()
         self.stock_preview_btn = QtWidgets.QPushButton("미리보기")
         self.stock_preview_btn.clicked.connect(lambda: self.do_company_stock(dry_run=True))
@@ -47,10 +46,34 @@ class StockPanelMixin:
         g.addWidget(QtWidgets.QLabel("재고현황 링크"), 0, 0)
         g.addWidget(self.stock_url_edit, 0, 1)
         g.addLayout(btns, 0, 2)
-        note = QtWidgets.QLabel("매일 밤 무인 실행 끝에 자동 반영(그로스 재고 역기록 다음). 관리대장 링크는 위 '관리대장(입력) 링크'를 씁니다.")
+        self.stock_state_lbl = QtWidgets.QLabel()          # 링크 설정 상태(미설정=경고)
+        self.stock_state_lbl.setWordWrap(True)
+        g.addWidget(self.stock_state_lbl, 1, 0, 1, 3)
+        note = QtWidgets.QLabel("매일 밤 무인 실행 끝에 자동 반영(그로스 재고 역기록 다음). "
+                                "관리대장 링크는 '설정' 탭의 '관리대장(입력) 링크'를 씁니다.")
+        note.setObjectName("muted")
         note.setWordWrap(True)
-        g.addWidget(note, 1, 0, 1, 3)
+        g.addWidget(note, 2, 0, 1, 3)
+        self._refresh_stock_state()
         return card
+
+    def _on_stock_url_edited(self):
+        self._save_shared(KEY_STOCK_URL, self.stock_url_edit.text().strip())
+        self._refresh_stock_state()
+
+    def _refresh_stock_state(self):
+        """재고현황 링크 상태를 한눈에 — 비었으면 경고(야간 회사재고 반영이 조용히 빠지는 것 방지).
+        정산 탭 카드와 설정 탭 안내줄(settings_stock_lbl) 둘 다 갱신."""
+        url = self.stock_url_edit.text().strip()
+        if url:
+            text, style = "✅ 재고현황 링크 설정됨 — 무인 실행 끝에 회사 재고 반영", "color: #047857;"
+        else:
+            text, style = ("⚠ 재고현황 링크 미설정 — 회사 재고가 관리대장에 반영되지 않습니다",
+                           "color: #b91c1c; font-weight: 700;")
+        for lbl in (getattr(self, "stock_state_lbl", None), getattr(self, "settings_stock_lbl", None)):
+            if lbl is not None:
+                lbl.setText(text)
+                lbl.setStyleSheet(style)
 
     def do_company_stock(self, dry_run: bool):
         stock_url, in_url = self.stock_url_edit.text().strip(), self.gs_input_edit.text().strip()
@@ -58,6 +81,7 @@ class StockPanelMixin:
             QtWidgets.QMessageBox.information(self, "링크 필요", "재고현황 링크와 관리대장(입력) 링크를 먼저 등록하세요.")
             return
         self._save_shared(KEY_STOCK_URL, stock_url)
+        self._refresh_stock_state()
         if not dry_run and QtWidgets.QMessageBox.question(
                 self, "관리대장 반영 확인",
                 "재고현황의 회사 재고를 관리대장 '회사보유재고' 열에 씁니다.\n"

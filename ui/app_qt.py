@@ -25,6 +25,7 @@ from coupang_analytics.apppaths import output_dir as app_output_dir, set_workdir
 from coupang_analytics.browser import WingBrowser, find_chrome, reap_orphan_chrome  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics import detail_images  # noqa: E402
+from coupang_analytics import holiday_source  # noqa: E402
 from coupang_analytics import gsheet_api, gsheet_index  # noqa: E402
 from coupang_analytics.input_list import (parse_input_list, parse_input_rows,  # noqa: E402
                                            parse_password_file, parse_password_rows,
@@ -171,6 +172,7 @@ def _prevent_sleep(on: bool) -> None:
 class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
     log_signal = QtCore.Signal(str)
     finish_signal = QtCore.Signal(object, object, object, object)   # (btn, on_done, result, err)
+    gs_status_signal = QtCore.Signal(str, object, str)   # (input|output, 연결됨 True/False/None=미확인, 설명)
 
     def __init__(self, auto: bool = False):
         super().__init__()
@@ -188,10 +190,13 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
 
         self.log_signal.connect(self._append_log)
         self.finish_signal.connect(self._on_finish)
+        self.gs_status_signal.connect(self._set_gs_status)
 
         self._build_ui()
         self._load_saved_secrets()
         self._auto_load_input()     # 마지막 사용 입력 엑셀 자동 로드(무인 실행·재시작 후 즉시 실행 가능)
+        if not auto:
+            self._probe_gsheet_links()  # 입력·결과 링크 연결 상태를 뒤에서 확인해 라벨로(무인 실행은 생략)
         scr = self.screen().availableGeometry()
         # 최대 크기 = 화면(작업영역)으로 제한 — 창이 화면보다 커지지 않게.
         self.setMaximumSize(scr.width(), scr.height())
@@ -209,8 +214,12 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         root.setSpacing(0)
         root.addWidget(self._header())
         self.tabs = QtWidgets.QTabWidget()
-        self.tabs.setMaximumHeight(360)   # 탭 영역은 컴팩트 → 아래 로그창이 화면 대부분 차지(2배↑)
-        root.addWidget(self.tabs, 0)
+        # 탭 ↔ 진행 로그를 위아래 나눔막대(splitter)로 — 고정 높이(예전 360px)는 설정·정산 탭 하단을 잘랐다.
+        # 로그가 숨으면 탭이 전체 높이를 쓰고, 로그가 보이면 처음 한 번 탭 ~400px·로그 나머지(사용자가 끌어 조절).
+        self._splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        self._splitter.setChildrenCollapsible(False)
+        self._splitter.addWidget(self.tabs)
+        root.addWidget(self._splitter, 1)
         self.tabs.addTab(self._settings_tab(), "설정")
         self.tabs.addTab(self._sales_tab(), "판매 분석")   # 결과 엑셀에서 판매지표 조회(수집 아님)
         self.tabs.addTab(self._kw_tab(), "키워드 추천")
@@ -218,14 +227,19 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         self.tabs.addTab(self._images_tab(), "상세 이미지")
         self.tabs.addTab(self._collect_tab(), "전체 실행")
         self.tabs.addTab(self._settlement_tab(), "정산")   # 회사재고 + 셀독등록원장(설정에서 이동)
+        self._refresh_stock_state()   # 설정 탭 안내줄은 정산 탭보다 먼저 만들어져 여기서 채움
         self.log_panel = self._log_panel()
-        root.addWidget(self.log_panel, 1)   # 로그가 남는 공간 전부
+        self._splitter.addWidget(self.log_panel)
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)   # 창을 키우면 로그가 늘어남
+        self._log_sized = False                 # 로그 첫 표시 때 한 번만 나눔 크기 지정
         # 진행 로그창 = **실행 버튼을 누른 뒤부터** 표시(소유자 2026-09-29). 처음(설정 화면)엔 숨김.
         # 설정 탭에서 유휴면 숨기되, 설정 탭의 실행(원장 반영·연결확인 등)이 도는 동안은 예외로 보인다.
         self._log_activated = False        # 첫 실행이 일어났는가(그 전엔 항상 숨김)
         self._bg_active = 0                # 현재 도는 백그라운드 작업 수(설정 탭 유휴 판정용)
+        self._settings_hold = False        # 설정 탭에서 시작한 작업의 결과 로그를 탭을 떠날 때까지 유지
         self.log_panel.setVisible(False)
-        self.tabs.currentChanged.connect(lambda *_: self._update_log_visibility())
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
     def _header(self):
         head = QtWidgets.QFrame()
@@ -259,10 +273,12 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         self.input_lbl = QtWidgets.QLabel("(입력 분석용 엑셀 미선택)")
         self.naver_lbl = QtWidgets.QLabel("(네이버 API 키 미선택)")
         self.openai_lbl = QtWidgets.QLabel("(OpenAI 키 미설정 — 키워드 추출 불가)")
+        self.holiday_lbl = QtWidgets.QLabel("(공휴일 API 키 미설정 — 정산 지급일 계산용)")
         rows = [
             ("입력 엑셀 열기", self.load_input, self.input_lbl),
             ("네이버 API 키 열기", self.load_naver, self.naver_lbl),
             ("OpenAI(ChatGPT) API 키 입력", self.load_openai, self.openai_lbl),
+            ("공휴일 API 키 입력", self.load_holiday_key, self.holiday_lbl),
         ]
         for i, (text, cmd, lbl) in enumerate(rows):
             b = QtWidgets.QPushButton(text)
@@ -270,12 +286,70 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
             b.setMinimumWidth(210)
             grid.addWidget(b, i, 0)
             grid.addWidget(lbl, i, 1)
+        self.holiday_chk_btn = QtWidgets.QPushButton("연결 확인")
+        self.holiday_chk_btn.setToolTip("data.go.kr 특일정보로 올해 공휴일을 조회해 키가 동작하는지 확인")
+        self.holiday_chk_btn.clicked.connect(self.check_holiday_key)
+        grid.addWidget(self.holiday_chk_btn, len(rows) - 1, 2)
         grid.setColumnStretch(1, 1)
         v.addWidget(fk)
         v.addWidget(self._gsheet_card())   # 구글 시트 연동(입력 관리대장 · 출력 결과시트 · 서비스계정)
-        # 회사재고·원장(정산) 카드는 '정산' 탭으로 이동(2026-09-29 소유자). 키워드/순위 세부값은 config.py.
+        # 회사재고·원장(정산) 카드는 '정산' 탭으로 이동(2026-09-29 소유자) — 여기선 안내+상태+이동 버튼만.
+        v.addWidget(self._settlement_pointer_card())
+        v.addWidget(self._rank_delay_card())   # 순위 검색 간격(운영값) — 저장만, 파이프라인 배선은 통합(config)
         v.addStretch(1)
         return scroll
+
+    def _rank_delay_card(self):
+        """③ 순위 검색 간격(초) — 운영자가 화면에서 조정. QSettings/config.json `rank/nav_delay_min|max`
+        에 저장하고, 실제 적용(파이프라인이 이 값을 읽기)은 config.py 배선(통합 소관). 비어 있으면 config 기본값."""
+        st = QtCore.QSettings("coupang-analytics", "ui")
+        card = self._card("순위 검색 간격 (③ 순위 조회)")
+        row = QtWidgets.QHBoxLayout(card)
+        self.rank_delay_min = QtWidgets.QSpinBox()
+        self.rank_delay_max = QtWidgets.QSpinBox()
+        defaults = (config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC)
+        for sb, key, dv in ((self.rank_delay_min, _KEY_RANK_MIN, defaults[0]),
+                            (self.rank_delay_max, _KEY_RANK_MAX, defaults[1])):
+            sb.setRange(10, 600)
+            sb.setSuffix(" 초")
+            sb.setValue(st.value(key, dv, type=int))
+        self.rank_delay_min.valueChanged.connect(lambda _v: self._on_rank_delay_changed("min"))
+        self.rank_delay_max.valueChanged.connect(lambda _v: self._on_rank_delay_changed("max"))
+        row.addWidget(QtWidgets.QLabel("검색 사이 대기"))
+        row.addWidget(self.rank_delay_min)
+        row.addWidget(QtWidgets.QLabel("~"))
+        row.addWidget(self.rank_delay_max)
+        hint = QtWidgets.QLabel(f"기본 {defaults[0]}~{defaults[1]}초. 너무 낮추면 쿠팡 차단 — "
+                                "차단 없이 며칠 지난 뒤 조금씩만 낮추세요.")
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        row.addWidget(hint, 1)
+        return card
+
+    def _on_rank_delay_changed(self, which: str):
+        """최소 ≤ 최대 유지(방금 바꾼 쪽을 기준으로 다른 쪽을 맞춤) 후 둘 다 저장."""
+        lo, hi = self.rank_delay_min.value(), self.rank_delay_max.value()
+        if lo > hi:
+            (self.rank_delay_max if which == "min" else self.rank_delay_min).setValue(lo if which == "min" else hi)
+            return                              # 맞춘 쪽의 valueChanged 가 다시 들어와 저장
+        _cfg_save_shared(_KEY_RANK_MIN, str(lo))
+        _cfg_save_shared(_KEY_RANK_MAX, str(hi))
+
+    def _settlement_pointer_card(self):
+        """설정 탭 안내 — 회사 재고·원장 설정은 '정산' 탭에 있다(설정 탭에서 못 찾아 회사재고가 빠지던 문제)."""
+        card = self._card("회사 재고 · 셀독등록원장 설정")
+        g = QtWidgets.QGridLayout(card)
+        g.setColumnStretch(0, 1)
+        note = QtWidgets.QLabel("재고현황 링크(회사 재고)와 원장 링크는 '정산' 탭에서 설정합니다.")
+        note.setWordWrap(True)
+        self.settings_stock_lbl = QtWidgets.QLabel()     # 재고현황 링크 상태(정산 탭 카드와 같은 문구)
+        self.settings_stock_lbl.setWordWrap(True)
+        go = QtWidgets.QPushButton("정산 탭 열기")
+        go.clicked.connect(lambda: self.tabs.setCurrentWidget(self._settlement_page))
+        g.addWidget(note, 0, 0)
+        g.addWidget(go, 0, 1)
+        g.addWidget(self.settings_stock_lbl, 1, 0, 1, 2)
+        return card
 
     def _settlement_tab(self):
         """정산 탭 — 회사보유재고(재고현황→관리대장) + 셀독등록원장(원장 미리보기/반영·비밀번호 불일치).
@@ -288,13 +362,19 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         scroll.setWidget(inner)
         v = QtWidgets.QVBoxLayout(inner)
         v.setContentsMargins(14, 12, 14, 12)
+        sub = QtWidgets.QLabel("회사 재고(판매자배송) 반영과 셀독등록원장 관리를 여기서 합니다. "
+                               "정산 금액·지급일 계산 기능은 준비 중입니다.")
+        sub.setObjectName("muted")
+        sub.setWordWrap(True)
+        v.addWidget(sub)
         v.addWidget(self._stock_card())     # 회사 재고(판매자배송) — 재고현황 → 관리대장 '회사보유재고'
         v.addWidget(self._registry_card())  # 셀독등록원장(원장 링크·미리보기/반영·비밀번호 불일치)
         v.addStretch(1)
+        self._settlement_page = scroll       # 설정 탭 [정산 탭 열기] 이동 대상
         return scroll
 
     # ── 판매 분석 탭(조회 전용) ──────────────────────────────
-    _SALES_COLS = ("사업자", "상품", "최신 수집일", "판매량", "방문자", "노출량", "재고")
+    _SALES_COLS = ("사업자", "상품", "최신 수집일", "판매량", "방문자", "노출량", "재고", "최고 순위")
 
     def _sales_tab(self):
         """판매 분석 — **수집된 결과 엑셀(통계 마스터)에서** 사업자·상품·최신 일자 판매지표를 표로 조회.
@@ -346,6 +426,22 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         val = wb.wb[biz].cell(row, col).value
         return "" if val is None else val
 
+    @staticmethod
+    def _best_rank_at_latest(wb, biz: str, prod: str) -> str:
+        """최신 일자 기준 그 상품 키워드들 중 **가장 좋은 순위**('12위 · 키워드'). 정확 순위 없으면 ''
+        ('N위밖'·공란·차단은 제외 — 계정목록 체험단효과와 같은 판정 wb._rank_num)."""
+        d = wb.latest_date(biz)
+        col = wb._date_col.get(biz, {}).get(d) if d else None
+        if col is None:
+            return ""
+        best = None
+        for kw in wb.product_keywords(biz, prod):
+            row = wb._kw_row.get((biz, prod, kw))
+            n = wb._rank_num(wb.wb[biz].cell(row, col).value) if row else None
+            if n is not None and (best is None or n < best[0]):
+                best = (n, kw)
+        return f"{best[0]}위 · {best[1]}" if best else ""
+
     def _load_sales_analysis(self):
         """결과 엑셀(통계 마스터)을 읽어 판매 분석 표를 채운다(조회 전용·비치명)."""
         from coupang_analytics.workbook import OutputWorkbook
@@ -369,18 +465,19 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
                     self._metric_at_latest(wb, biz, prod, config.M_SALES),
                     self._metric_at_latest(wb, biz, prod, config.M_VISITORS),
                     self._metric_at_latest(wb, biz, prod, config.M_VIEWS),
-                    self._metric_at_latest(wb, biz, prod, config.M_INVENTORY)))
+                    self._metric_at_latest(wb, biz, prod, config.M_INVENTORY),
+                    self._best_rank_at_latest(wb, biz, prod)))
         self.sales_table.setRowCount(len(rows))
         for r, vals in enumerate(rows):
             for c, val in enumerate(vals):
                 it = QtWidgets.QTableWidgetItem("" if val == "" else str(val))
-                if c >= 3:                       # 지표(판매량~재고)는 우측 정렬
+                if 3 <= c <= 6:                  # 지표(판매량~재고)는 우측 정렬
                     it.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
                 self.sales_table.setItem(r, c, it)
         self.sales_table.resizeColumnsToContents()
         self.sales_summary_lbl.setText(
             f"사업자 {len(wb.account_sheets())} · 상품 {len(rows)} · 결과: {master.name} "
-            "(판매량·방문자·노출량=최신 일자 값)")
+            "(판매량·방문자·노출량·최고 순위=최신 일자 값)")
 
     def _open_master_excel(self):
         master = self._master_xlsx_path()
@@ -414,8 +511,7 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         # 2) 관리대장(입력) 링크
         self.gs_input_edit = QtWidgets.QLineEdit(st.value("gsheet/input_url", "", type=str))
         self.gs_input_edit.setPlaceholderText("「토탈셀러_셀독 관리 대장」 구글시트 링크 또는 ID — 비우면 PC 엑셀 사용")
-        self.gs_input_edit.editingFinished.connect(
-            lambda: _cfg_save_shared("gsheet/input_url", self.gs_input_edit.text().strip()))
+        self.gs_input_edit.editingFinished.connect(lambda: self._on_gs_link_edited("input"))
         in_btns = QtWidgets.QHBoxLayout()
         in_chk = QtWidgets.QPushButton("연결 확인")
         in_chk.clicked.connect(lambda: self._check_gsheet("input"))
@@ -424,7 +520,7 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         in_btns.addWidget(in_chk)
         in_btns.addWidget(in_load)
         g.addWidget(QtWidgets.QLabel("관리대장(입력) 링크"), 1, 0)
-        g.addWidget(self.gs_input_edit, 1, 1)
+        g.addLayout(self._gs_link_box("input", self.gs_input_edit), 1, 1)
         g.addLayout(in_btns, 1, 2)
 
         # 2.5) 기본 입력 소스 — 시작(무인 자동로드)이 어느 쪽을 쓸지. 구글시트=기본, PC 엑셀=선택.
@@ -449,14 +545,63 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         # 3) 결과(출력) 링크
         self.gs_output_edit = QtWidgets.QLineEdit(st.value("gsheet/output_url", "", type=str))
         self.gs_output_edit.setPlaceholderText("결과 구글시트 링크 또는 ID (계정목록·통계를 여기에 씀 — 서비스계정 '편집자' 공유)")
-        self.gs_output_edit.editingFinished.connect(
-            lambda: _cfg_save_shared("gsheet/output_url", self.gs_output_edit.text().strip()))
+        self.gs_output_edit.editingFinished.connect(lambda: self._on_gs_link_edited("output"))
         out_chk = QtWidgets.QPushButton("연결 확인")
         out_chk.clicked.connect(lambda: self._check_gsheet("output"))
         g.addWidget(QtWidgets.QLabel("결과(출력) 링크"), 3, 0)
-        g.addWidget(self.gs_output_edit, 3, 1)
+        g.addLayout(self._gs_link_box("output", self.gs_output_edit), 3, 1)
         g.addWidget(out_chk, 3, 2)
         return card
+
+    # ── 구글시트 링크 연결 상태 라벨(입력·결과) ─────────────────────
+    def _gs_link_box(self, kind: str, edit):
+        """링크 입력칸 + 그 아래 연결 상태 줄(서비스계정 라벨처럼 한눈에)."""
+        box = QtWidgets.QVBoxLayout()
+        box.setSpacing(2)
+        lbl = QtWidgets.QLabel()
+        lbl.setWordWrap(True)
+        self.gs_status_lbl = getattr(self, "gs_status_lbl", {})
+        self.gs_status_lbl[kind] = lbl
+        box.addWidget(edit)
+        box.addWidget(lbl)
+        self._set_gs_status(kind, None, "링크 없음" if not edit.text().strip() else "확인 전")
+        return box
+
+    def _set_gs_status(self, kind: str, ok, detail: str):
+        lbl = self.gs_status_lbl.get(kind)
+        if lbl is None:
+            return
+        if ok is True:
+            lbl.setText(f"✅ 연결됨 — {detail}")
+            lbl.setStyleSheet("color: #047857;")
+        elif ok is False:
+            lbl.setText(f"⚠ 연결 안 됨 — {detail}")
+            lbl.setStyleSheet("color: #b91c1c; font-weight: 700;")
+        else:
+            lbl.setText(f"({detail})")
+            lbl.setStyleSheet("color: #64748b;")
+
+    def _on_gs_link_edited(self, kind: str):
+        edit = self.gs_input_edit if kind == "input" else self.gs_output_edit
+        _cfg_save_shared(f"gsheet/{kind}_url", edit.text().strip())
+        self._probe_gsheet_links((kind,))
+
+    def _probe_gsheet_links(self, kinds=("input", "output")):
+        """등록된 링크를 뒤에서 열어 보고 상태 줄 갱신(진행 로그창은 건드리지 않음 — 첫 실행 전 숨김 유지)."""
+        urls = {"input": self.gs_input_edit.text().strip(), "output": self.gs_output_edit.text().strip()}
+        todo = [(k, urls[k]) for k in kinds if urls[k]]
+        for k in kinds:
+            self._set_gs_status(k, None, "확인 중…" if urls[k] else "링크 없음")
+
+        def work():
+            for k, url in todo:
+                try:
+                    title, sheets = gsheet_api.check_access(url, store=self.creds_store)
+                    self.gs_status_signal.emit(k, True, f"'{title}' (시트 {len(sheets)}개)")
+                except Exception as exc:          # 원인을 그대로 보여 준다(권한·링크·키 미등록 등)
+                    self.gs_status_signal.emit(k, False, f"{exc.__class__.__name__}: {exc}")
+        if todo:
+            threading.Thread(target=work, daemon=True).start()
 
     def _kw_tab(self):
         w = QtWidgets.QWidget()
@@ -623,18 +768,18 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         # 실행 모드 — 화면에서 3택(하나만 선택). 실행 시 예/아니오만 확인.
         moderow = QtWidgets.QHBoxLayout()
         moderow.addWidget(QtWidgets.QLabel("실행 모드:"))
-        # 체크박스지만 배타 그룹으로 하나만 선택.
-        self.cb_resume = QtWidgets.QCheckBox("이어서 하기")
+        # 라디오버튼 = 하나만 선택(배타 그룹).
+        self.cb_resume = QtWidgets.QRadioButton("이어서 하기")
         self.cb_resume.setChecked(True)
         self.cb_resume.setToolTip("오전에 하다 만 작업을 이어서 완료합니다(이미 끝낸 계정·상품은 건너뜀).\n"
                                   "어제까지 통계는 그대로 유지, 오늘 컬럼만 마저 채웁니다. [기본]")
-        self.cb_redo = QtWidgets.QCheckBox("오늘 것만 다시 수집")
+        self.cb_redo = QtWidgets.QRadioButton("오늘 것만 다시 수집")
         self.cb_redo.setToolTip("오늘 수집한 것을 지우고 오늘 것만 처음부터 다시 수집합니다(완료분 포함 전부).\n"
                                 "어제까지 통계·키워드는 그대로 유지됩니다.")
-        self.cb_newall = QtWidgets.QCheckBox("통계 전체 초기화(백업 후)")
+        self.cb_newall = QtWidgets.QRadioButton("통계 전체 초기화(백업 후)")
         self.cb_newall.setToolTip("⚠ 지금까지 전체 통계를 백업파일로 보관하고 완전히 빈 통계로 새로 시작합니다.\n"
                                   "누적 시계열이 끊깁니다 — 첫 수집이나 키워드 전면 재선정 때만 사용하세요.")
-        self._mode_group = QtWidgets.QButtonGroup(self)   # 체크박스지만 하나만 선택(상호배타)
+        self._mode_group = QtWidgets.QButtonGroup(self)   # 하나만 선택(상호배타)
         self._mode_group.setExclusive(True)
         for cb in (self.cb_resume, self.cb_redo, self.cb_newall):
             self._mode_group.addButton(cb)
@@ -654,12 +799,12 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
 
         pbar = QtWidgets.QHBoxLayout()
         pbar.addWidget(QtWidgets.QLabel("수집 기간:"))
-        self.cb_today = QtWidgets.QCheckBox("당일(=어제, 최신 확정일)")
+        self.cb_today = QtWidgets.QRadioButton("당일(=어제, 최신 확정일)")
         self.cb_today.setToolTip("쿠팡 판매분석은 당일 데이터를 익일 이후 생성합니다.\n"
                                  "따라서 '당일'은 데이터가 확정된 어제(D-1) 날짜로 수집합니다.")
         self.cb_today.setChecked(True)
-        self.cb_range = QtWidgets.QCheckBox("기간")
-        self._period_group = QtWidgets.QButtonGroup(self)   # 체크박스지만 하나만 선택(상호배타)
+        self.cb_range = QtWidgets.QRadioButton("기간")
+        self._period_group = QtWidgets.QButtonGroup(self)   # 하나만 선택(상호배타)
         self._period_group.setExclusive(True)
         self._period_group.addButton(self.cb_today)
         self._period_group.addButton(self.cb_range)
@@ -796,8 +941,16 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         if panel is None:
             return
         on_settings = self.tabs.currentIndex() == 0
-        visible = self._log_activated and (self._bg_active > 0 or not on_settings)
+        visible = self._log_activated and (self._bg_active > 0 or not on_settings or self._settings_hold)
         panel.setVisible(visible)
+        if visible and not self._log_sized:     # 첫 표시: 탭 ~400px, 나머지 로그
+            self._log_sized = True
+            total = max(self._splitter.height(), 600)
+            self._splitter.setSizes([min(400, total // 2), total - min(400, total // 2)])
+
+    def _on_tab_changed(self, *_):
+        self._settings_hold = False             # 설정 탭을 떠나면 '결과 보이기' 유지 해제
+        self._update_log_visibility()
 
     def run_bg(self, task, on_done=None, btn=None, exclusive=False):
         if exclusive:   # 브라우저/파이프라인 실행 = 한 번에 하나(배타). btn 은 그 실행의 소유 표식.
@@ -805,6 +958,8 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
             self._active_btn = btn
         self._bg_active += 1              # 진행 로그창 표시(실행 버튼 클릭 후부터)
         self._log_activated = True
+        if self.tabs.currentIndex() == 0:  # 설정 탭 작업은 끝난 뒤에도 결과 로그를 보이게(탭 이동 시 해제)
+            self._settings_hold = True
         self._update_log_visibility()
         if btn:
             btn.setEnabled(False)
@@ -1033,6 +1188,32 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         except Exception as exc:
             self.log(f"[OpenAI] 입력됨(저장 실패: {exc.__class__.__name__})")
 
+    def load_holiday_key(self):
+        """공휴일 API 키(data.go.kr 특일정보 서비스키) 입력 → DPAPI 저장(정산 지급일 계산용)."""
+        key, ok = QtWidgets.QInputDialog.getText(
+            self, "공휴일 API 키", "data.go.kr '한국천문연구원 특일정보' 서비스키(일반 인증키)를 입력하세요",
+            QtWidgets.QLineEdit.Password)
+        if not (ok and key.strip()):
+            return
+        try:
+            self.creds_store.set_password(holiday_source.CRED_KEY, key.strip())
+        except Exception as exc:
+            self.log(f"[공휴일] 키 저장 실패({exc.__class__.__name__}): {exc}")
+            return
+        self.holiday_lbl.setText("(공휴일 API 키: 입력됨 — 저장됨)")
+        self.log("[공휴일] API 키 입력·저장됨 — [연결 확인]으로 동작을 확인하세요")
+
+    def check_holiday_key(self):
+        """저장된 공휴일 키로 올해 공휴일 조회(네트워크) — 실패는 로그·라벨에 이유를 남긴다."""
+        year = date.today().year
+        self.log(f"[공휴일] {year}년 공휴일 조회로 키 확인 중…")
+
+        def done(n):
+            self.holiday_lbl.setText(f"(공휴일 API 키: 연결됨 — {year}년 공휴일 {n}일)")
+            self.log(f"[공휴일] 연결 확인 OK — {year}년 공휴일 {n}일")
+        self.run_bg(lambda: len(holiday_source.fetch_from_store(self.creds_store)(year)),
+                    on_done=done, btn=self.holiday_chk_btn)
+
     def load_service_account(self):
         """서비스계정 JSON 키 파일을 선택 → 검증 후 DPAPI 저장(이 PC 전용). 이메일 표시.
 
@@ -1066,9 +1247,11 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         try:
             title, sheets = gsheet_api.check_access(url, store=self.creds_store)
         except gsheet_api.GSheetError as exc:
+            self._set_gs_status(kind, False, str(exc))
             QtWidgets.QMessageBox.warning(self, "연결 실패", str(exc))
             self.log(f"[구글] {who} 연결 실패: {exc}")
             return
+        self._set_gs_status(kind, True, f"'{title}' (시트 {len(sheets)}개)")
         preview = ", ".join(sheets[:8]) + (" …" if len(sheets) > 8 else "")
         QtWidgets.QMessageBox.information(
             self, "연결 성공", f"'{title}'\n시트 {len(sheets)}개: {preview}")
@@ -1100,6 +1283,12 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
             self.ai_key = ak
             self.openai_lbl.setText("(OpenAI 키: 저장됨 — 자동 로드)")
             self.log("[OpenAI] 저장된 키 자동 로드됨")
+        try:
+            hk = self.creds_store.get_password(holiday_source.CRED_KEY)
+        except Exception:
+            hk = None
+        if hk:
+            self.holiday_lbl.setText("(공휴일 API 키: 저장됨 — 자동 로드)")
 
     # ── 키워드 추천 ───────────────────────────────────────────
     def do_recommend(self):
@@ -1679,15 +1868,17 @@ def _check_icon_path() -> str:
 
 
 # ── 설정 이식(배포 패키지 무설정용) — 이 PC 설정을 내보내고, 새 PC에서 가져와 자동 적용 ──────
-# 담는 값: QSettings(구글시트 링크·입력소스) + credstore 키 3개(네이버·OpenAI·구글SA).
+# 담는 값: QSettings(구글시트 링크·입력소스) + credstore 키 4개(네이버·OpenAI·구글SA·공휴일).
 # ⚠ 내보낸 파일은 **평문**(API/SA 키 포함) → 배포 zip 안에서만·설치 시 즉시 이 PC용 암호화(DPAPI) 후 삭제.
 # 계정 비밀번호는 담지 않는다(관리대장 '비밀번호' 컬럼에서 매 실행 자동 로드).
-_EXPORT_QKEYS = ("gsheet/input_url", "gsheet/output_url", "input/source", "registry/url", "stock/url")
-_EXPORT_CREDS = ("__naver__", "__openai__", "__gsheet_sa__")
+_KEY_RANK_MIN, _KEY_RANK_MAX = "rank/nav_delay_min", "rank/nav_delay_max"   # 순위 검색 간격(초·정수)
+_EXPORT_QKEYS = ("gsheet/input_url", "gsheet/output_url", "input/source", "registry/url", "stock/url",
+                 _KEY_RANK_MIN, _KEY_RANK_MAX)
+_EXPORT_CREDS = ("__naver__", "__openai__", "__gsheet_sa__", holiday_source.CRED_KEY)
 # config.json(보존 폴더)에 두는 **공유 설정** 키 — 무인/양쪽 UI 공통(구글시트 링크·입력소스·마지막 입력파일).
 # dir/*(마지막 폴더)는 per-PC UI 편의라 레지스트리에만 둔다.
 _CONFIG_SHARED_KEYS = ("gsheet/input_url", "gsheet/output_url", "input/source", "file/input", "registry/url",
-                       "stock/url")
+                       "stock/url", _KEY_RANK_MIN, _KEY_RANK_MAX)
 
 
 def _cfg_save_shared(key: str, value: str) -> None:
