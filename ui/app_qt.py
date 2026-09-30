@@ -209,8 +209,12 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         root.setSpacing(0)
         root.addWidget(self._header())
         self.tabs = QtWidgets.QTabWidget()
-        self.tabs.setMaximumHeight(360)   # 탭 영역은 컴팩트 → 아래 로그창이 화면 대부분 차지(2배↑)
-        root.addWidget(self.tabs, 0)
+        # 탭 ↔ 진행 로그를 위아래 나눔막대(splitter)로 — 고정 높이(예전 360px)는 설정·정산 탭 하단을 잘랐다.
+        # 로그가 숨으면 탭이 전체 높이를 쓰고, 로그가 보이면 처음 한 번 탭 ~400px·로그 나머지(사용자가 끌어 조절).
+        self._splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        self._splitter.setChildrenCollapsible(False)
+        self._splitter.addWidget(self.tabs)
+        root.addWidget(self._splitter, 1)
         self.tabs.addTab(self._settings_tab(), "설정")
         self.tabs.addTab(self._sales_tab(), "판매 분석")   # 결과 엑셀에서 판매지표 조회(수집 아님)
         self.tabs.addTab(self._kw_tab(), "키워드 추천")
@@ -219,13 +223,17 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         self.tabs.addTab(self._collect_tab(), "전체 실행")
         self.tabs.addTab(self._settlement_tab(), "정산")   # 회사재고 + 셀독등록원장(설정에서 이동)
         self.log_panel = self._log_panel()
-        root.addWidget(self.log_panel, 1)   # 로그가 남는 공간 전부
+        self._splitter.addWidget(self.log_panel)
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)   # 창을 키우면 로그가 늘어남
+        self._log_sized = False                 # 로그 첫 표시 때 한 번만 나눔 크기 지정
         # 진행 로그창 = **실행 버튼을 누른 뒤부터** 표시(소유자 2026-09-29). 처음(설정 화면)엔 숨김.
         # 설정 탭에서 유휴면 숨기되, 설정 탭의 실행(원장 반영·연결확인 등)이 도는 동안은 예외로 보인다.
         self._log_activated = False        # 첫 실행이 일어났는가(그 전엔 항상 숨김)
         self._bg_active = 0                # 현재 도는 백그라운드 작업 수(설정 탭 유휴 판정용)
+        self._settings_hold = False        # 설정 탭에서 시작한 작업의 결과 로그를 탭을 떠날 때까지 유지
         self.log_panel.setVisible(False)
-        self.tabs.currentChanged.connect(lambda *_: self._update_log_visibility())
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
     def _header(self):
         head = QtWidgets.QFrame()
@@ -796,8 +804,16 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         if panel is None:
             return
         on_settings = self.tabs.currentIndex() == 0
-        visible = self._log_activated and (self._bg_active > 0 or not on_settings)
+        visible = self._log_activated and (self._bg_active > 0 or not on_settings or self._settings_hold)
         panel.setVisible(visible)
+        if visible and not self._log_sized:     # 첫 표시: 탭 ~400px, 나머지 로그
+            self._log_sized = True
+            total = max(self._splitter.height(), 600)
+            self._splitter.setSizes([min(400, total // 2), total - min(400, total // 2)])
+
+    def _on_tab_changed(self, *_):
+        self._settings_hold = False             # 설정 탭을 떠나면 '결과 보이기' 유지 해제
+        self._update_log_visibility()
 
     def run_bg(self, task, on_done=None, btn=None, exclusive=False):
         if exclusive:   # 브라우저/파이프라인 실행 = 한 번에 하나(배타). btn 은 그 실행의 소유 표식.
@@ -805,6 +821,8 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
             self._active_btn = btn
         self._bg_active += 1              # 진행 로그창 표시(실행 버튼 클릭 후부터)
         self._log_activated = True
+        if self.tabs.currentIndex() == 0:  # 설정 탭 작업은 끝난 뒤에도 결과 로그를 보이게(탭 이동 시 해제)
+            self._settings_hold = True
         self._update_log_visibility()
         if btn:
             btn.setEnabled(False)
