@@ -295,8 +295,45 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         v.addWidget(self._gsheet_card())   # 구글 시트 연동(입력 관리대장 · 출력 결과시트 · 서비스계정)
         # 회사재고·원장(정산) 카드는 '정산' 탭으로 이동(2026-09-29 소유자) — 여기선 안내+상태+이동 버튼만.
         v.addWidget(self._settlement_pointer_card())
+        v.addWidget(self._rank_delay_card())   # 순위 검색 간격(운영값) — 저장만, 파이프라인 배선은 통합(config)
         v.addStretch(1)
         return scroll
+
+    def _rank_delay_card(self):
+        """③ 순위 검색 간격(초) — 운영자가 화면에서 조정. QSettings/config.json `rank/nav_delay_min|max`
+        에 저장하고, 실제 적용(파이프라인이 이 값을 읽기)은 config.py 배선(통합 소관). 비어 있으면 config 기본값."""
+        st = QtCore.QSettings("coupang-analytics", "ui")
+        card = self._card("순위 검색 간격 (③ 순위 조회)")
+        row = QtWidgets.QHBoxLayout(card)
+        self.rank_delay_min = QtWidgets.QSpinBox()
+        self.rank_delay_max = QtWidgets.QSpinBox()
+        defaults = (config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC)
+        for sb, key, dv in ((self.rank_delay_min, _KEY_RANK_MIN, defaults[0]),
+                            (self.rank_delay_max, _KEY_RANK_MAX, defaults[1])):
+            sb.setRange(10, 600)
+            sb.setSuffix(" 초")
+            sb.setValue(st.value(key, dv, type=int))
+        self.rank_delay_min.valueChanged.connect(lambda _v: self._on_rank_delay_changed("min"))
+        self.rank_delay_max.valueChanged.connect(lambda _v: self._on_rank_delay_changed("max"))
+        row.addWidget(QtWidgets.QLabel("검색 사이 대기"))
+        row.addWidget(self.rank_delay_min)
+        row.addWidget(QtWidgets.QLabel("~"))
+        row.addWidget(self.rank_delay_max)
+        hint = QtWidgets.QLabel(f"기본 {defaults[0]}~{defaults[1]}초. 너무 낮추면 쿠팡 차단 — "
+                                "차단 없이 며칠 지난 뒤 조금씩만 낮추세요.")
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        row.addWidget(hint, 1)
+        return card
+
+    def _on_rank_delay_changed(self, which: str):
+        """최소 ≤ 최대 유지(방금 바꾼 쪽을 기준으로 다른 쪽을 맞춤) 후 둘 다 저장."""
+        lo, hi = self.rank_delay_min.value(), self.rank_delay_max.value()
+        if lo > hi:
+            (self.rank_delay_max if which == "min" else self.rank_delay_min).setValue(lo if which == "min" else hi)
+            return                              # 맞춘 쪽의 valueChanged 가 다시 들어와 저장
+        _cfg_save_shared(_KEY_RANK_MIN, str(lo))
+        _cfg_save_shared(_KEY_RANK_MAX, str(hi))
 
     def _settlement_pointer_card(self):
         """설정 탭 안내 — 회사 재고·원장 설정은 '정산' 탭에 있다(설정 탭에서 못 찾아 회사재고가 빠지던 문제)."""
@@ -1817,12 +1854,14 @@ def _check_icon_path() -> str:
 # 담는 값: QSettings(구글시트 링크·입력소스) + credstore 키 4개(네이버·OpenAI·구글SA·공휴일).
 # ⚠ 내보낸 파일은 **평문**(API/SA 키 포함) → 배포 zip 안에서만·설치 시 즉시 이 PC용 암호화(DPAPI) 후 삭제.
 # 계정 비밀번호는 담지 않는다(관리대장 '비밀번호' 컬럼에서 매 실행 자동 로드).
-_EXPORT_QKEYS = ("gsheet/input_url", "gsheet/output_url", "input/source", "registry/url", "stock/url")
+_KEY_RANK_MIN, _KEY_RANK_MAX = "rank/nav_delay_min", "rank/nav_delay_max"   # 순위 검색 간격(초·정수)
+_EXPORT_QKEYS = ("gsheet/input_url", "gsheet/output_url", "input/source", "registry/url", "stock/url",
+                 _KEY_RANK_MIN, _KEY_RANK_MAX)
 _EXPORT_CREDS = ("__naver__", "__openai__", "__gsheet_sa__", holiday_source.CRED_KEY)
 # config.json(보존 폴더)에 두는 **공유 설정** 키 — 무인/양쪽 UI 공통(구글시트 링크·입력소스·마지막 입력파일).
 # dir/*(마지막 폴더)는 per-PC UI 편의라 레지스트리에만 둔다.
 _CONFIG_SHARED_KEYS = ("gsheet/input_url", "gsheet/output_url", "input/source", "file/input", "registry/url",
-                       "stock/url")
+                       "stock/url", _KEY_RANK_MIN, _KEY_RANK_MAX)
 
 
 def _cfg_save_shared(key: str, value: str) -> None:
