@@ -201,6 +201,7 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
     (자동 네비게이션 없음 → 차단 회피). should_stop() 이 참이면 중도 중단.
     """
     log = on_log or (lambda m: None)
+    config.apply_rank_nav_delay_override(log)   # 설정 탭 순위 간격(config.json)으로 덮어씀 — 없으면 기본 유지(semi·auto 공통)
     out = Path(out_dir)
     wb, path = _load_latest_wb(out)
     if wb is None:

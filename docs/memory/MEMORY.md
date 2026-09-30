@@ -1,5 +1,6 @@
 ## 현재 상태 · 프로젝트 방향
 - [⭐새 세션 진입점: 현재 상태 SSOT(2026-09-29)](handoff-session-260929-continued.md) — 매칭 5원인·AI 의미매칭·회사보유재고·정산 2단계·원장 이름규칙·괴물함수 전멸·배포 spec 버그수정. master HEAD=3dc1cf0·게이트9 초록. **최우선=운용PC 재배포**(zip 준비됨)·라이브(사무실).
+- [H_ui 화면 수정 10건+점검 규칙(2026-09-30)](handoff-hui-ui-fixes-260930.md) — 7커밋 병합요청·순위간격 입력은 통합 배선 필요·실제 App 점검 시 QSettings 교체 필수(레지스트리 오염 사고 교훈).
 - [괴물함수 전멸(2026-09-29)](monster-functions-extinct-260929.md) — browser.wait_for_login·rank.organic_ranks_batch 분해→전체 D+ 0. 핀=FakeBrowser 대체라 위치만 이동. 라이브 실측 남음.
 - [커머스 전과정 앱 아키텍처+세션분리](handoff-architecture-parallel-260928.md) — L0플랫폼/L1데이터백본/L2도메인/L3조립·UI 4계층. SSOT=docs/ARCHITECTURE.md·PARALLEL_DEV.md. 통합=병합·도메인=worktree 레인.
 - [도메인 분리·연계·통제 설계](handoff-domain-design-260928.md) — 도메인9(D1분석~D9통계). SSOT=docs/DOMAIN_DESIGN.md. 백본 이원화(분석/통계 + 원장). 신규도메인 구현은 별도 세션.

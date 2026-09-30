@@ -522,6 +522,39 @@ def pin_rank_manual_mode():
            "반자동은 미감지 공란(서킷브레이커·중단 없음)")
 
 
+def pin_rank_delay_override():
+    """설정 탭 순위 간격(config.json rank/nav_delay_min|max) → config.apply_rank_nav_delay_override 가
+    파이프라인 간격을 덮어씀. 미설정=기본 유지·무효값=기본 유지+로그(silent 아님). appconfig.get 만 모킹."""
+    from coupang_analytics import appconfig
+    saved = (config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC)
+    orig_get = appconfig.get
+    logs: list = []
+    try:
+        store = {}
+        appconfig.get = lambda k, d="": store.get(k, d)
+        # 미설정 = 기본 유지·no-op
+        config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC = 45, 75
+        _check(config.apply_rank_nav_delay_override(logs.append) is False, "미설정 → False(기본 유지)")
+        _check((config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC) == (45, 75), "미설정 시 간격 불변")
+        # 유효값 적용
+        store = {"rank/nav_delay_min": "90", "rank/nav_delay_max": "120"}
+        _check(config.apply_rank_nav_delay_override(logs.append) is True, "유효 설정 → True")
+        _check((config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC) == (90, 120), "간격 90~120 적용")
+        # 무효값(정수 아님) = 기본 유지 + 로그(silent 아님)
+        config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC = 45, 75
+        store = {"rank/nav_delay_min": "abc", "rank/nav_delay_max": "x"}
+        _check(config.apply_rank_nav_delay_override(logs.append) is False, "무효(정수 아님) → False")
+        _check((config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC) == (45, 75), "무효 시 간격 불변")
+        # 범위 밖(min>max)
+        store = {"rank/nav_delay_min": "100", "rank/nav_delay_max": "50"}
+        _check(config.apply_rank_nav_delay_override(logs.append) is False, "min>max → False")
+        _check(any("순위간격" in m for m in logs), "무효/미설정 아닌 문제는 로그로 알림(조용히 넘기지 않음)")
+    finally:
+        appconfig.get = orig_get
+        config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC = saved
+    print("  ✅ pin_rank_delay_override — 설정 순위 간격 오버라이드(적용·미설정·무효·범위밖)")
+
+
 def main() -> int:
     config.SESSION_STATE_DB = os.path.join(tempfile.gettempdir(), "pin_session_state.db")
     config.LOGIN_PACE_MIN_SEC = 0
@@ -558,6 +591,7 @@ def main() -> int:
         pin_rank_auto_success()
         pin_rank_auto_halt()
         pin_rank_skip_suspended()
+        pin_rank_delay_override()
     finally:
         for k, v in saved.items():   # 순위 config 원복(다른 검증 오염 방지 — 별 프로세스지만 방어적)
             setattr(config, k, v)

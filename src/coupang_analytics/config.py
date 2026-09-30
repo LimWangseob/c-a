@@ -274,3 +274,30 @@ def log_ts() -> str:
 def format_log(msg: str) -> str:
     """표준 로그 한 줄 = '[타임스탬프] 메시지'. 모든 로그 싱크가 이 함수로 한 줄을 만든다."""
     return f"[{log_ts()}] {msg}"
+
+
+def apply_rank_nav_delay_override(log=None) -> bool:
+    """설정(config.json `rank/nav_delay_min|max`)이 있으면 순위 검색 간격을 그 값으로 덮어쓴다.
+
+    운영자가 설정 탭(H_ui)에서 조정 → 파이프라인(③ track_ranks_stage 진입 시)이 여기서 읽어 적용.
+    미설정이면 기본값(RANK_NAV_DELAY_MIN/MAX_SEC=45~75) 유지(no-op·정상). 무효값(정수 아님·범위 밖·min>max)도
+    기본 유지하되 **조용히 넘기지 않고 로그로 알린다**([[no-silent-fallback-principle]]). 유효범위 5~600초.
+    반환=덮어썼으면 True. 게이트/시뮬 환경엔 이 키가 없어 항상 no-op(테스트 불변)."""
+    global RANK_NAV_DELAY_MIN_SEC, RANK_NAV_DELAY_MAX_SEC
+    from . import appconfig
+    lo_s = appconfig.get("rank/nav_delay_min", "").strip()
+    hi_s = appconfig.get("rank/nav_delay_max", "").strip()
+    if not lo_s and not hi_s:
+        return False                                  # 미설정 = 기본 유지(정상)
+    _emit = log or (lambda m: None)
+    try:
+        lo, hi = int(lo_s), int(hi_s)
+    except ValueError:
+        _emit(f"  [순위간격] 설정값 무효(정수 아님: {lo_s!r}~{hi_s!r}) — 기본 {RANK_NAV_DELAY_MIN_SEC}~{RANK_NAV_DELAY_MAX_SEC}s 유지")
+        return False
+    if not (5 <= lo <= hi <= 600):
+        _emit(f"  [순위간격] 설정값 범위 밖({lo}~{hi}, 허용 5~600·최소≤최대) — 기본 {RANK_NAV_DELAY_MIN_SEC}~{RANK_NAV_DELAY_MAX_SEC}s 유지")
+        return False
+    RANK_NAV_DELAY_MIN_SEC, RANK_NAV_DELAY_MAX_SEC = lo, hi
+    _emit(f"  [순위간격] 설정 탭 값 적용 — 검색 간격 {lo}~{hi}s")
+    return True
