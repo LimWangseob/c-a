@@ -222,6 +222,7 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         self.tabs.addTab(self._images_tab(), "상세 이미지")
         self.tabs.addTab(self._collect_tab(), "전체 실행")
         self.tabs.addTab(self._settlement_tab(), "정산")   # 회사재고 + 셀독등록원장(설정에서 이동)
+        self._refresh_stock_state()   # 설정 탭 안내줄은 정산 탭보다 먼저 만들어져 여기서 채움
         self.log_panel = self._log_panel()
         self._splitter.addWidget(self.log_panel)
         self._splitter.setStretchFactor(0, 0)
@@ -281,9 +282,26 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         grid.setColumnStretch(1, 1)
         v.addWidget(fk)
         v.addWidget(self._gsheet_card())   # 구글 시트 연동(입력 관리대장 · 출력 결과시트 · 서비스계정)
-        # 회사재고·원장(정산) 카드는 '정산' 탭으로 이동(2026-09-29 소유자). 키워드/순위 세부값은 config.py.
+        # 회사재고·원장(정산) 카드는 '정산' 탭으로 이동(2026-09-29 소유자) — 여기선 안내+상태+이동 버튼만.
+        v.addWidget(self._settlement_pointer_card())
         v.addStretch(1)
         return scroll
+
+    def _settlement_pointer_card(self):
+        """설정 탭 안내 — 회사 재고·원장 설정은 '정산' 탭에 있다(설정 탭에서 못 찾아 회사재고가 빠지던 문제)."""
+        card = self._card("회사 재고 · 셀독등록원장 설정")
+        g = QtWidgets.QGridLayout(card)
+        g.setColumnStretch(0, 1)
+        note = QtWidgets.QLabel("재고현황 링크(회사 재고)와 원장 링크는 '정산' 탭에서 설정합니다.")
+        note.setWordWrap(True)
+        self.settings_stock_lbl = QtWidgets.QLabel()     # 재고현황 링크 상태(정산 탭 카드와 같은 문구)
+        self.settings_stock_lbl.setWordWrap(True)
+        go = QtWidgets.QPushButton("정산 탭 열기")
+        go.clicked.connect(lambda: self.tabs.setCurrentWidget(self._settlement_page))
+        g.addWidget(note, 0, 0)
+        g.addWidget(go, 0, 1)
+        g.addWidget(self.settings_stock_lbl, 1, 0, 1, 2)
+        return card
 
     def _settlement_tab(self):
         """정산 탭 — 회사보유재고(재고현황→관리대장) + 셀독등록원장(원장 미리보기/반영·비밀번호 불일치).
@@ -296,9 +314,15 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         scroll.setWidget(inner)
         v = QtWidgets.QVBoxLayout(inner)
         v.setContentsMargins(14, 12, 14, 12)
+        sub = QtWidgets.QLabel("회사 재고(판매자배송) 반영과 셀독등록원장 관리를 여기서 합니다. "
+                               "정산 금액·지급일 계산 기능은 준비 중입니다.")
+        sub.setObjectName("muted")
+        sub.setWordWrap(True)
+        v.addWidget(sub)
         v.addWidget(self._stock_card())     # 회사 재고(판매자배송) — 재고현황 → 관리대장 '회사보유재고'
         v.addWidget(self._registry_card())  # 셀독등록원장(원장 링크·미리보기/반영·비밀번호 불일치)
         v.addStretch(1)
+        self._settlement_page = scroll       # 설정 탭 [정산 탭 열기] 이동 대상
         return scroll
 
     # ── 판매 분석 탭(조회 전용) ──────────────────────────────
