@@ -623,18 +623,18 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         # 실행 모드 — 화면에서 3택(하나만 선택). 실행 시 예/아니오만 확인.
         moderow = QtWidgets.QHBoxLayout()
         moderow.addWidget(QtWidgets.QLabel("실행 모드:"))
-        # 체크박스지만 배타 그룹으로 하나만 선택.
-        self.cb_resume = QtWidgets.QCheckBox("이어서 하기")
+        # 라디오버튼 = 하나만 선택(배타 그룹).
+        self.cb_resume = QtWidgets.QRadioButton("이어서 하기")
         self.cb_resume.setChecked(True)
         self.cb_resume.setToolTip("오전에 하다 만 작업을 이어서 완료합니다(이미 끝낸 계정·상품은 건너뜀).\n"
                                   "어제까지 통계는 그대로 유지, 오늘 컬럼만 마저 채웁니다. [기본]")
-        self.cb_redo = QtWidgets.QCheckBox("오늘 것만 다시 수집")
+        self.cb_redo = QtWidgets.QRadioButton("오늘 것만 다시 수집")
         self.cb_redo.setToolTip("오늘 수집한 것을 지우고 오늘 것만 처음부터 다시 수집합니다(완료분 포함 전부).\n"
                                 "어제까지 통계·키워드는 그대로 유지됩니다.")
-        self.cb_newall = QtWidgets.QCheckBox("통계 전체 초기화(백업 후)")
+        self.cb_newall = QtWidgets.QRadioButton("통계 전체 초기화(백업 후)")
         self.cb_newall.setToolTip("⚠ 지금까지 전체 통계를 백업파일로 보관하고 완전히 빈 통계로 새로 시작합니다.\n"
                                   "누적 시계열이 끊깁니다 — 첫 수집이나 키워드 전면 재선정 때만 사용하세요.")
-        self._mode_group = QtWidgets.QButtonGroup(self)   # 체크박스지만 하나만 선택(상호배타)
+        self._mode_group = QtWidgets.QButtonGroup(self)   # 하나만 선택(상호배타)
         self._mode_group.setExclusive(True)
         for cb in (self.cb_resume, self.cb_redo, self.cb_newall):
             self._mode_group.addButton(cb)
@@ -654,12 +654,12 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
 
         pbar = QtWidgets.QHBoxLayout()
         pbar.addWidget(QtWidgets.QLabel("수집 기간:"))
-        self.cb_today = QtWidgets.QCheckBox("당일(=어제, 최신 확정일)")
+        self.cb_today = QtWidgets.QRadioButton("당일(=어제, 최신 확정일)")
         self.cb_today.setToolTip("쿠팡 판매분석은 당일 데이터를 익일 이후 생성합니다.\n"
                                  "따라서 '당일'은 데이터가 확정된 어제(D-1) 날짜로 수집합니다.")
         self.cb_today.setChecked(True)
-        self.cb_range = QtWidgets.QCheckBox("기간")
-        self._period_group = QtWidgets.QButtonGroup(self)   # 체크박스지만 하나만 선택(상호배타)
+        self.cb_range = QtWidgets.QRadioButton("기간")
+        self._period_group = QtWidgets.QButtonGroup(self)   # 하나만 선택(상호배타)
         self._period_group.setExclusive(True)
         self._period_group.addButton(self.cb_today)
         self._period_group.addButton(self.cb_range)
