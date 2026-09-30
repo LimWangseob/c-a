@@ -374,7 +374,7 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         return scroll
 
     # ── 판매 분석 탭(조회 전용) ──────────────────────────────
-    _SALES_COLS = ("사업자", "상품", "최신 수집일", "판매량", "방문자", "노출량", "재고")
+    _SALES_COLS = ("사업자", "상품", "최신 수집일", "판매량", "방문자", "노출량", "재고", "최고 순위")
 
     def _sales_tab(self):
         """판매 분석 — **수집된 결과 엑셀(통계 마스터)에서** 사업자·상품·최신 일자 판매지표를 표로 조회.
@@ -426,6 +426,22 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         val = wb.wb[biz].cell(row, col).value
         return "" if val is None else val
 
+    @staticmethod
+    def _best_rank_at_latest(wb, biz: str, prod: str) -> str:
+        """최신 일자 기준 그 상품 키워드들 중 **가장 좋은 순위**('12위 · 키워드'). 정확 순위 없으면 ''
+        ('N위밖'·공란·차단은 제외 — 계정목록 체험단효과와 같은 판정 wb._rank_num)."""
+        d = wb.latest_date(biz)
+        col = wb._date_col.get(biz, {}).get(d) if d else None
+        if col is None:
+            return ""
+        best = None
+        for kw in wb.product_keywords(biz, prod):
+            row = wb._kw_row.get((biz, prod, kw))
+            n = wb._rank_num(wb.wb[biz].cell(row, col).value) if row else None
+            if n is not None and (best is None or n < best[0]):
+                best = (n, kw)
+        return f"{best[0]}위 · {best[1]}" if best else ""
+
     def _load_sales_analysis(self):
         """결과 엑셀(통계 마스터)을 읽어 판매 분석 표를 채운다(조회 전용·비치명)."""
         from coupang_analytics.workbook import OutputWorkbook
@@ -449,18 +465,19 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
                     self._metric_at_latest(wb, biz, prod, config.M_SALES),
                     self._metric_at_latest(wb, biz, prod, config.M_VISITORS),
                     self._metric_at_latest(wb, biz, prod, config.M_VIEWS),
-                    self._metric_at_latest(wb, biz, prod, config.M_INVENTORY)))
+                    self._metric_at_latest(wb, biz, prod, config.M_INVENTORY),
+                    self._best_rank_at_latest(wb, biz, prod)))
         self.sales_table.setRowCount(len(rows))
         for r, vals in enumerate(rows):
             for c, val in enumerate(vals):
                 it = QtWidgets.QTableWidgetItem("" if val == "" else str(val))
-                if c >= 3:                       # 지표(판매량~재고)는 우측 정렬
+                if 3 <= c <= 6:                  # 지표(판매량~재고)는 우측 정렬
                     it.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
                 self.sales_table.setItem(r, c, it)
         self.sales_table.resizeColumnsToContents()
         self.sales_summary_lbl.setText(
             f"사업자 {len(wb.account_sheets())} · 상품 {len(rows)} · 결과: {master.name} "
-            "(판매량·방문자·노출량=최신 일자 값)")
+            "(판매량·방문자·노출량·최고 순위=최신 일자 값)")
 
     def _open_master_excel(self):
         master = self._master_xlsx_path()
