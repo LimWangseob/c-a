@@ -172,6 +172,7 @@ def _prevent_sleep(on: bool) -> None:
 class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
     log_signal = QtCore.Signal(str)
     finish_signal = QtCore.Signal(object, object, object, object)   # (btn, on_done, result, err)
+    gs_status_signal = QtCore.Signal(str, object, str)   # (input|output, 연결됨 True/False/None=미확인, 설명)
 
     def __init__(self, auto: bool = False):
         super().__init__()
@@ -189,10 +190,13 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
 
         self.log_signal.connect(self._append_log)
         self.finish_signal.connect(self._on_finish)
+        self.gs_status_signal.connect(self._set_gs_status)
 
         self._build_ui()
         self._load_saved_secrets()
         self._auto_load_input()     # 마지막 사용 입력 엑셀 자동 로드(무인 실행·재시작 후 즉시 실행 가능)
+        if not auto:
+            self._probe_gsheet_links()  # 입력·결과 링크 연결 상태를 뒤에서 확인해 라벨로(무인 실행은 생략)
         scr = self.screen().availableGeometry()
         # 최대 크기 = 화면(작업영역)으로 제한 — 창이 화면보다 커지지 않게.
         self.setMaximumSize(scr.width(), scr.height())
@@ -453,8 +457,7 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         # 2) 관리대장(입력) 링크
         self.gs_input_edit = QtWidgets.QLineEdit(st.value("gsheet/input_url", "", type=str))
         self.gs_input_edit.setPlaceholderText("「토탈셀러_셀독 관리 대장」 구글시트 링크 또는 ID — 비우면 PC 엑셀 사용")
-        self.gs_input_edit.editingFinished.connect(
-            lambda: _cfg_save_shared("gsheet/input_url", self.gs_input_edit.text().strip()))
+        self.gs_input_edit.editingFinished.connect(lambda: self._on_gs_link_edited("input"))
         in_btns = QtWidgets.QHBoxLayout()
         in_chk = QtWidgets.QPushButton("연결 확인")
         in_chk.clicked.connect(lambda: self._check_gsheet("input"))
@@ -463,7 +466,7 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         in_btns.addWidget(in_chk)
         in_btns.addWidget(in_load)
         g.addWidget(QtWidgets.QLabel("관리대장(입력) 링크"), 1, 0)
-        g.addWidget(self.gs_input_edit, 1, 1)
+        g.addLayout(self._gs_link_box("input", self.gs_input_edit), 1, 1)
         g.addLayout(in_btns, 1, 2)
 
         # 2.5) 기본 입력 소스 — 시작(무인 자동로드)이 어느 쪽을 쓸지. 구글시트=기본, PC 엑셀=선택.
@@ -488,14 +491,63 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         # 3) 결과(출력) 링크
         self.gs_output_edit = QtWidgets.QLineEdit(st.value("gsheet/output_url", "", type=str))
         self.gs_output_edit.setPlaceholderText("결과 구글시트 링크 또는 ID (계정목록·통계를 여기에 씀 — 서비스계정 '편집자' 공유)")
-        self.gs_output_edit.editingFinished.connect(
-            lambda: _cfg_save_shared("gsheet/output_url", self.gs_output_edit.text().strip()))
+        self.gs_output_edit.editingFinished.connect(lambda: self._on_gs_link_edited("output"))
         out_chk = QtWidgets.QPushButton("연결 확인")
         out_chk.clicked.connect(lambda: self._check_gsheet("output"))
         g.addWidget(QtWidgets.QLabel("결과(출력) 링크"), 3, 0)
-        g.addWidget(self.gs_output_edit, 3, 1)
+        g.addLayout(self._gs_link_box("output", self.gs_output_edit), 3, 1)
         g.addWidget(out_chk, 3, 2)
         return card
+
+    # ── 구글시트 링크 연결 상태 라벨(입력·결과) ─────────────────────
+    def _gs_link_box(self, kind: str, edit):
+        """링크 입력칸 + 그 아래 연결 상태 줄(서비스계정 라벨처럼 한눈에)."""
+        box = QtWidgets.QVBoxLayout()
+        box.setSpacing(2)
+        lbl = QtWidgets.QLabel()
+        lbl.setWordWrap(True)
+        self.gs_status_lbl = getattr(self, "gs_status_lbl", {})
+        self.gs_status_lbl[kind] = lbl
+        box.addWidget(edit)
+        box.addWidget(lbl)
+        self._set_gs_status(kind, None, "링크 없음" if not edit.text().strip() else "확인 전")
+        return box
+
+    def _set_gs_status(self, kind: str, ok, detail: str):
+        lbl = self.gs_status_lbl.get(kind)
+        if lbl is None:
+            return
+        if ok is True:
+            lbl.setText(f"✅ 연결됨 — {detail}")
+            lbl.setStyleSheet("color: #047857;")
+        elif ok is False:
+            lbl.setText(f"⚠ 연결 안 됨 — {detail}")
+            lbl.setStyleSheet("color: #b91c1c; font-weight: 700;")
+        else:
+            lbl.setText(f"({detail})")
+            lbl.setStyleSheet("color: #64748b;")
+
+    def _on_gs_link_edited(self, kind: str):
+        edit = self.gs_input_edit if kind == "input" else self.gs_output_edit
+        _cfg_save_shared(f"gsheet/{kind}_url", edit.text().strip())
+        self._probe_gsheet_links((kind,))
+
+    def _probe_gsheet_links(self, kinds=("input", "output")):
+        """등록된 링크를 뒤에서 열어 보고 상태 줄 갱신(진행 로그창은 건드리지 않음 — 첫 실행 전 숨김 유지)."""
+        urls = {"input": self.gs_input_edit.text().strip(), "output": self.gs_output_edit.text().strip()}
+        todo = [(k, urls[k]) for k in kinds if urls[k]]
+        for k in kinds:
+            self._set_gs_status(k, None, "확인 중…" if urls[k] else "링크 없음")
+
+        def work():
+            for k, url in todo:
+                try:
+                    title, sheets = gsheet_api.check_access(url, store=self.creds_store)
+                    self.gs_status_signal.emit(k, True, f"'{title}' (시트 {len(sheets)}개)")
+                except Exception as exc:          # 원인을 그대로 보여 준다(권한·링크·키 미등록 등)
+                    self.gs_status_signal.emit(k, False, f"{exc.__class__.__name__}: {exc}")
+        if todo:
+            threading.Thread(target=work, daemon=True).start()
 
     def _kw_tab(self):
         w = QtWidgets.QWidget()
@@ -1141,9 +1193,11 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         try:
             title, sheets = gsheet_api.check_access(url, store=self.creds_store)
         except gsheet_api.GSheetError as exc:
+            self._set_gs_status(kind, False, str(exc))
             QtWidgets.QMessageBox.warning(self, "연결 실패", str(exc))
             self.log(f"[구글] {who} 연결 실패: {exc}")
             return
+        self._set_gs_status(kind, True, f"'{title}' (시트 {len(sheets)}개)")
         preview = ", ".join(sheets[:8]) + (" …" if len(sheets) > 8 else "")
         QtWidgets.QMessageBox.information(
             self, "연결 성공", f"'{title}'\n시트 {len(sheets)}개: {preview}")
