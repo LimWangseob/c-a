@@ -70,6 +70,24 @@ def read_stock(path: Path):
     return idx, ym
 
 
+def read_stock_rows(path: Path):
+    """재고현황 Sheet1 전체 행 → [dict] (운영대장 '재고' 시트 미러용). 갱신일=A1 기준일."""
+    wb = openpyxl.load_workbook(path, data_only=True)
+    ws = wb["Sheet1"]
+    m = re.search(r"(?:20)?(\d{2})[.\-/](\d{1,2})[.\-/](\d{1,2})", _s(ws.cell(1, 1).value))
+    upd = f"20{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}" if m else ""
+    rows = []
+    for r in range(3, (ws.max_row or 0) + 1):
+        nm = _s(ws.cell(r, 4).value)
+        if not nm:
+            continue
+        rows.append({"물류명": nm, "창고": _s(ws.cell(r, 1).value), "구분": _s(ws.cell(r, 2).value),
+                     "바코드": _s(ws.cell(r, 3).value), "현재고": _s(ws.cell(r, 5).value),
+                     "셀독": _s(ws.cell(r, 6).value), "당근": _s(ws.cell(r, 7).value),
+                     "자사": _s(ws.cell(r, 8).value), "갱신일": upd})
+    return rows
+
+
 def read_ledger(path: Path):
     """셀독리스트 → [account dict]. 계정아이디(23) 채워진 행=새 계정, 그 외 상품명(27) 행=그 계정 상품."""
     wb = openpyxl.load_workbook(path, data_only=True)
@@ -161,7 +179,8 @@ def _hmap(ws) -> dict:
 # 원 단위 정수 콤마로 표기할 금액/수량 헤더(바코드·코드·날짜·URL 제외).
 _NUM_HEADERS = {"계약금", "계약단가", "판매가", "회사보유재고", "그로스재고", "요청수량", "작업수량",
                 "박스", "파레트", "광고비", "노출", "클릭", "전환", "매출", "건수", "견적서판매가"}
-_BAND = ("FFFFFF", "EAF1FB")          # 계정 교대 배경(흰 / 연파랑)
+# 계정별 배경 — 더 진하고 다양한 8색 순환(명확한 구분).
+_BAND = ("F8CBAD", "FFE699", "C6E0B4", "BDD7EE", "D9C2E9", "F4B6C2", "B7DEE8", "D9D9D9")
 _RIGHT = Alignment(horizontal="right")
 
 
@@ -186,7 +205,7 @@ def _style_sheet(ws) -> None:
             k = _s(ws.cell(r, keycol).value)
             if k and k != prev:
                 group, prev = group + 1, k
-        color = _BAND[group % 2] if group >= 0 else "FFFFFF"
+        color = _BAND[group % len(_BAND)] if group >= 0 else "FFFFFF"
         if color != "FFFFFF":
             for c in range(1, mc + 1):
                 ws.cell(r, c).fill = PatternFill("solid", fgColor=color)
@@ -210,11 +229,12 @@ def _style(wb) -> None:
 
 def migrate(ledger: Path, stock: Path, out: Path) -> dict:
     stock_idx, stock_ym = read_stock(stock)
+    stock_rows = read_stock_rows(stock)
     accts = read_ledger(ledger)
     promos = read_promo(ledger)
     T.build(out)                                   # 빈 틀 생성
     wb = openpyxl.load_workbook(out)
-    hm = {sn: _hmap(wb[sn]) for sn in ("계정", "관리상품", "그로스입고", "체험단", "업무일지")}
+    hm = {sn: _hmap(wb[sn]) for sn in ("계정", "관리상품", "재고", "그로스입고", "체험단", "업무일지")}
     review = wb.create_sheet("매핑검토")
     review.sheet_properties.tabColor = "FF0000"
     for c, h in enumerate(["상품코드", "사업자명", "상품명", "사유"], 1):
@@ -222,8 +242,9 @@ def migrate(ledger: Path, stock: Path, out: Path) -> dict:
     review.freeze_panes = "A2"
 
     seq: dict = {}
-    stats = {"계정": 0, "상품": 0, "그로스입고": 0, "체험단": 0, "업무일지": 0, "매핑검토": 0}
+    stats = {"계정": 0, "상품": 0, "재고": 0, "그로스입고": 0, "체험단": 0, "업무일지": 0, "매핑검토": 0}
     name2code: dict[tuple, str] = {}
+    stockname2code: dict[str, str] = {}             # norm(물류명) → 상품코드(재고 시트 역매핑)
 
     for a in accts:
         _row(wb["계정"], hm["계정"], {"대표자명": a["대표자명"], "사업자명": a["사업자명"],
@@ -242,6 +263,8 @@ def migrate(ledger: Path, stock: Path, out: Path) -> dict:
             ym = _ym(g["출고일자"]) or _ym(g["완료일자"]) or stock_ym or "2610"
             code = assign_code(classc, ym, seq)
             name2code[(a["사업자명"], p["상품명"])] = code
+            if st:
+                stockname2code[_norm(st["물류명"])] = code
             kind = "그로스판매" if p["그로스재고"] not in ("", "0", "0.0") else ""
             _row(wb["관리상품"], hm["관리상품"], {
                 "사업자명": a["사업자명"], "상품명": p["상품명"], "노출상품명": p["노출상품명"],
@@ -267,6 +290,13 @@ def migrate(ledger: Path, stock: Path, out: Path) -> dict:
                                           "재고 매칭 실패(분류 E·입고월 기본) — 수동 매핑 필요"), 1):
                     review.cell(rr, cc, val)
                 stats["매핑검토"] += 1
+
+    for sr in stock_rows:                           # 재고현황 → 운영대장 '재고' 시트(미러)
+        _row(wb["재고"], hm["재고"], {"물류명": sr["물류명"], "창고": sr["창고"], "구분": sr["구분"],
+             "현재고": sr["현재고"], "셀독": sr["셀독"], "당근": sr["당근"], "자사": sr["자사"],
+             "갱신일": sr["갱신일"], "바코드": sr["바코드"],
+             "상품코드": stockname2code.get(_norm(sr["물류명"]), "")})
+        stats["재고"] += 1
 
     for pr in promos:
         code = name2code.get((pr["사업자명"], pr["상품명"]), "")
