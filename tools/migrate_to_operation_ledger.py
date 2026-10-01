@@ -16,6 +16,8 @@ from datetime import datetime
 from pathlib import Path
 
 import openpyxl
+from openpyxl.styles import Alignment, PatternFill
+from openpyxl.utils import get_column_letter
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import build_operation_template as T  # noqa: E402  (빈 틀·헤더 정의 재사용)
@@ -130,6 +132,15 @@ def read_promo(path: Path):
     return out
 
 
+def _logdate(label: str) -> tuple[str, str]:
+    """관리내용 헤더 라벨 → (일자 YYYY-MM-DD, 접두). '08-12'→('2026-08-12','') · '기존/최근'→('','[기존] ')."""
+    s = label.replace("관리내용", "").strip()
+    m = re.fullmatch(r"(\d{1,2})-(\d{1,2})", s)
+    if m:
+        return f"2026-{int(m.group(1)):02d}-{int(m.group(2)):02d}", ""
+    return "", f"[{s}] " if s else ""
+
+
 def assign_code(classc: str, ym: str, seq: dict) -> str:
     key = (classc, ym)
     seq[key] = seq.get(key, 0) + 1
@@ -145,6 +156,56 @@ def _row(ws, hmap: dict, values: dict) -> None:
 
 def _hmap(ws) -> dict:
     return {_s(ws.cell(1, c).value): c for c in range(1, (ws.max_column or 0) + 1) if _s(ws.cell(1, c).value)}
+
+
+# 원 단위 정수 콤마로 표기할 금액/수량 헤더(바코드·코드·날짜·URL 제외).
+_NUM_HEADERS = {"계약금", "계약단가", "판매가", "회사보유재고", "그로스재고", "요청수량", "작업수량",
+                "박스", "파레트", "광고비", "노출", "클릭", "전환", "매출", "건수", "견적서판매가"}
+_BAND = ("FFFFFF", "EAF1FB")          # 계정 교대 배경(흰 / 연파랑)
+_RIGHT = Alignment(horizontal="right")
+
+
+def _to_int(v):
+    try:
+        return int(round(float(str(v).replace(",", "").strip())))
+    except (ValueError, TypeError):
+        return None
+
+
+def _style_sheet(ws) -> None:
+    """계정 밴드 배경 + 숫자 원단위 정수 콤마(우측) + 컬럼 폭 내용 자동맞춤."""
+    mc, mr = ws.max_column or 0, ws.max_row or 0
+    if mr < 2 or mc == 0:
+        return
+    hdr = {_s(ws.cell(1, c).value): c for c in range(1, mc + 1)}
+    keycol = hdr.get("계정아이디") or hdr.get("사업자명")
+    numcols = [c for h, c in hdr.items() if h in _NUM_HEADERS]
+    group, prev = -1, None
+    for r in range(2, mr + 1):
+        if keycol:
+            k = _s(ws.cell(r, keycol).value)
+            if k and k != prev:
+                group, prev = group + 1, k
+        color = _BAND[group % 2] if group >= 0 else "FFFFFF"
+        if color != "FFFFFF":
+            for c in range(1, mc + 1):
+                ws.cell(r, c).fill = PatternFill("solid", fgColor=color)
+        for c in numcols:
+            iv = _to_int(ws.cell(r, c).value)
+            if iv is not None:
+                cell = ws.cell(r, c)
+                cell.value = iv
+                cell.number_format = "#,##0"
+                cell.alignment = _RIGHT
+    for c in range(1, mc + 1):
+        maxlen = max(len(_s(ws.cell(r, c).value)) for r in range(1, mr + 1))
+        ws.column_dimensions[get_column_letter(c)].width = min(50, max(10, int(maxlen * 1.6) + 2))
+
+
+def _style(wb) -> None:
+    for sn in wb.sheetnames:
+        if sn not in ("대시보드", "정의", "안내"):
+            _style_sheet(wb[sn])
 
 
 def migrate(ledger: Path, stock: Path, out: Path) -> dict:
@@ -170,8 +231,9 @@ def migrate(ledger: Path, stock: Path, out: Path) -> dict:
              "계정아이디": a["계정아이디"]})
         stats["계정"] += 1
         for h, txt in a["memos"]:
-            _row(wb["업무일지"], hm["업무일지"], {"일자": h.replace("관리내용", ""), "대상": "계정",
-                 "사업자명": a["사업자명"], "작성자": a["담당자"], "내용": txt, "계정아이디": a["계정아이디"]})
+            ldate, prefix = _logdate(h)
+            _row(wb["업무일지"], hm["업무일지"], {"일자": ldate, "구분": "계정", "사업자명": a["사업자명"],
+                 "작성자": a["담당자"], "내용": prefix + txt, "상태": "완료", "계정아이디": a["계정아이디"]})
             stats["업무일지"] += 1
         for p in a["products"]:
             st = stock_idx.get(_norm(p["상품명"]))
@@ -195,8 +257,8 @@ def migrate(ledger: Path, stock: Path, out: Path) -> dict:
                      "출고일자": g["출고일자"], "상품코드": code})
                 stats["그로스입고"] += 1
             if p["히스토리"]:
-                _row(wb["업무일지"], hm["업무일지"], {"일자": "", "대상": "상품", "사업자명": a["사업자명"],
-                     "상품명": p["상품명"], "작성자": a["담당자"], "내용": p["히스토리"],
+                _row(wb["업무일지"], hm["업무일지"], {"일자": "", "구분": "상품", "사업자명": a["사업자명"],
+                     "상품명": p["상품명"], "작성자": a["담당자"], "내용": p["히스토리"], "상태": "완료",
                      "계정아이디": a["계정아이디"], "상품코드": code})
                 stats["업무일지"] += 1
             if not st:
@@ -215,6 +277,7 @@ def migrate(ledger: Path, stock: Path, out: Path) -> dict:
              "진행여부": pr["진행여부"], "비고": pr["비고"], "상품코드": code})
         stats["체험단"] += 1
 
+    _style(wb)                          # 계정 밴드·숫자 원단위 콤마·컬럼 폭 자동맞춤
     wb.save(out)
     return stats
 

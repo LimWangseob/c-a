@@ -122,13 +122,14 @@ SHEETS: dict[str, list[tuple[str, str, str]]] = {
         ("상품코드", "code", "대상 상품(키)"),
     ],
     "업무일지": [
-        ("일자", "id", "업무 일자"),
-        ("대상", "id", "계정 / 상품"),
+        ("일자", "id", "업무 일자(YYYY-MM-DD)"),
+        ("구분", "id", "계정 / 상품"),
         ("사업자명", "id", "(표시) 사업자 상호"),
         ("상품명", "id", "(표시) 상품 대상일 때 상품명"),
         ("작성자", "content", "셀독 담당자"),
         ("내용", "content", "관리내용(기존 '관리내용')"),
         ("후속조치", "content", "후속 조치사항"),
+        ("상태", "content", "진행 / 완료 / 보류"),
         ("계정아이디", "code", "대상 계정(키)"),
         ("상품코드", "code", "상품 대상일 때(키)"),
     ],
@@ -161,7 +162,8 @@ TAB_COLORS = {
     "분류코드": "808080",   # 회색
     "정의": "BFBFBF", "안내": "BFBFBF",  # 연회색(참조/안내)
 }
-_FILL = {"id": "E2EFDA", "content": "DDEBF7", "code": "F2F2F2"}  # 헤더 색(신원/내용/관리코드)
+_FILL = {"id": "548235", "content": "2E75B6", "code": "808080"}  # 헤더 진한 바탕(신원 초록·내용 파랑·코드 회색)
+_DASH_LBL = "DDEBF7"  # 대시보드 요약 라벨(연파랑·가독)
 
 # 대시보드 요약/알림 라벨(값은 앱이 자동 갱신 — 빈 틀은 라벨만).
 _DASH_SUMMARY = ["총 계정", "관리중", "관리중단", "총 상품", "판매중", "판매중지", "대체", "삭제",
@@ -169,7 +171,8 @@ _DASH_SUMMARY = ["총 계정", "관리중", "관리중단", "총 상품", "판�
 _DASH_ALERT = ["재고 미매핑 상품", "판매중지 전환 필요", "재고 부족", "계약 만료 임박", "정산 미확정 구간"]
 _DASH_NAV = ["계정", "계약", "관리상품", "그로스입고", "체험단", "광고", "업무일지", "분류코드"]
 
-_HDR_FONT = Font(bold=True)
+_HDR_FONT = Font(bold=True)                       # 섹션 제목(흰 배경)
+_HDR_FONT_W = Font(bold=True, color="FFFFFF")     # 표 헤더(진한 배경 → 흰 글씨)
 _TITLE_FONT = Font(bold=True, size=13)
 _CENTER = Alignment(horizontal="center", vertical="center")
 
@@ -183,7 +186,7 @@ def _write_sheet(ws, cols: list[tuple[str, str, str]], seed=None) -> None:
     for c, (name, group, _d) in enumerate(cols, 1):
         cell = ws.cell(1, c, name)
         cell.fill = PatternFill("solid", fgColor=_FILL[group])
-        cell.font = _HDR_FONT
+        cell.font = _HDR_FONT_W
         cell.alignment = _CENTER
         ws.column_dimensions[get_column_letter(c)].width = _col_width(name)
     ws.freeze_panes = f"{get_column_letter(idcount + 1)}2"  # 헤더행 + 좌측 신원 고정
@@ -235,7 +238,7 @@ def _write_defs(ws) -> None:
     for c, h in enumerate(["시트", "항목", "정의"], 1):
         cell = ws.cell(1, c, h)
         cell.fill = PatternFill("solid", fgColor=_FILL["content"])
-        cell.font = _HDR_FONT
+        cell.font = _HDR_FONT_W
         cell.alignment = _CENTER
     ws.freeze_panes = "A2"
     for c, wd in enumerate([14, 16, 82], 1):
@@ -265,7 +268,7 @@ def _write_dashboard(ws) -> None:
     ws.cell(r, 1, "■ 운영 요약").font = _HDR_FONT
     for lab in _DASH_SUMMARY:
         r += 1
-        ws.cell(r, 1, lab).fill = PatternFill("solid", fgColor=_FILL["content"])
+        ws.cell(r, 1, lab).fill = PatternFill("solid", fgColor=_DASH_LBL)
     r += 2
     ws.cell(r, 1, "■ 확인 필요").font = _HDR_FONT
     for lab in _DASH_ALERT:
