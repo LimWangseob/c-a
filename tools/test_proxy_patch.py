@@ -25,49 +25,48 @@ def expect_error(fn, message: str) -> None:
 
 
 def test_fail_closed() -> None:
-    old_en = config.PROXY_ENABLED
-    old_file = config.PROXY_FILE
-    old_map = dict(config.PROXY_ACCOUNT_MAP)
+    old_en, old_file, old_rank = config.PROXY_ENABLED, config.PROXY_FILE, config.PROXY_RANK_URL
+    proxy_pool.reset_cache()
     try:
         config.PROXY_ENABLED = True
         config.PROXY_FILE = "__definitely_missing_proxy_file__.txt"
-        config.PROXY_ACCOUNT_MAP = {}
+        config.PROXY_RANK_URL = ""
         expect_error(proxy_pool.load_manager, "빈 프록시 설정이 fail-open 됨")
         expect_error(
-            lambda: proxy_pool.proxy_for_account(None, "acct"),
+            lambda: proxy_pool.rank_proxy(None),
             "ON + manager=None이 직접연결로 우회됨",
         )
     finally:
-        config.PROXY_ENABLED = old_en
-        config.PROXY_FILE = old_file
-        config.PROXY_ACCOUNT_MAP = old_map
+        config.PROXY_ENABLED, config.PROXY_FILE, config.PROXY_RANK_URL = old_en, old_file, old_rank
+        proxy_pool.reset_cache()
 
 
-def test_pool_allocation() -> None:
-    old_en = config.PROXY_ENABLED
-    old_map = dict(config.PROXY_ACCOUNT_MAP)
+def test_rank_allocation() -> None:
+    """노출순위 프록시 선택 — PROXY_RANK_URL 명시 우선·없으면 풀 결정적(활성만)."""
+    old_en, old_rank = config.PROXY_ENABLED, config.PROXY_RANK_URL
+    proxy_pool.reset_cache()
     try:
         config.PROXY_ENABLED = True
-        config.PROXY_ACCOUNT_MAP = {"fixed": "http://10.0.0.9:8080"}
         mgr = ProxyManager()
         mgr.load_proxies([
             "http://10.0.0.1:8080",
             "http://10.0.0.2:8080",
             "http://10.0.0.9:8080",
         ])
-
-        assert proxy_pool.proxy_for_account(mgr, "fixed") == "http://10.0.0.9:8080"
-        normal = proxy_pool.proxy_for_account(mgr, "normal")
-        assert normal != "http://10.0.0.9:8080", "전용 프록시가 일반 계정에 배정됨"
-        assert normal == proxy_pool.proxy_for_account(mgr, "normal"), "배정이 결정적이지 않음"
-
-        selected = next(n for n in mgr.proxies if n.raw_url == normal)
+        # 명시 URL = 그 프록시 고정
+        config.PROXY_RANK_URL = "http://10.0.0.9:8080"
+        assert proxy_pool.rank_proxy(mgr) == "http://10.0.0.9:8080"
+        # 명시 없음 = 풀에서 결정적 선택
+        config.PROXY_RANK_URL = ""
+        pick = proxy_pool.rank_proxy(mgr)
+        assert pick and pick == proxy_pool.rank_proxy(mgr), "rank 배정이 결정적이지 않음"
+        # 선택 노드 비활성화 → 다른 활성 노드로
+        selected = next(n for n in mgr.proxies if n.raw_url == pick)
         selected.is_active = False
-        changed = proxy_pool.proxy_for_account(mgr, "normal")
-        assert changed != normal, "비활성 프록시가 계속 배정됨"
+        assert proxy_pool.rank_proxy(mgr) != pick, "비활성 프록시가 계속 배정됨"
     finally:
-        config.PROXY_ENABLED = old_en
-        config.PROXY_ACCOUNT_MAP = old_map
+        config.PROXY_ENABLED, config.PROXY_RANK_URL = old_en, old_rank
+        proxy_pool.reset_cache()
 
 
 def test_socks_rules() -> None:
@@ -150,34 +149,35 @@ def test_http_auth_and_challenge_source() -> None:
         config.PROXY_ALLOW_AUTH = old_auth
 
 
-def test_resolve_proxy_skips_per_account() -> None:
-    """pipeline_sales._resolve_proxy: 프록시 설정 오류는 전체중단이 아니라 그 계정만 스킵(직접연결 안 함)."""
-    from coupang_analytics import pipeline_sales as ps
-    saved_en, saved_map = config.PROXY_ENABLED, dict(config.PROXY_ACCOUNT_MAP)
+def test_rank_proxy_or_skip() -> None:
+    """proxy_pool.rank_proxy_or_skip: 노출순위 프록시 오류는 전체중단이 아니라 순위 스킵(직접연결 안 함)."""
+    saved_en, saved_file, saved_rank = config.PROXY_ENABLED, config.PROXY_FILE, config.PROXY_RANK_URL
+    proxy_pool.reset_cache()
     try:
         logs: list[str] = []
-        # OFF = 무프록시 정상(True, None)
+        # OFF = 무프록시 정상(None, True)
         config.PROXY_ENABLED = False
-        ps._PROXY_MGR_LOADED = False
-        assert ps._resolve_proxy("acct1", logs.append) == (True, None)
-        # ON + 빈 설정(유효 프록시 없음) = fail-closed 로 (False, None) 스킵 · 예외 전파 안 함
+        proxy_pool.reset_cache()
+        assert proxy_pool.rank_proxy_or_skip(logs.append) == (None, True)
+        # ON + 유효 프록시 없음 = fail-closed 로 (None, False) 순위 스킵 · 예외 전파 안 함
         config.PROXY_ENABLED = True
-        config.PROXY_ACCOUNT_MAP = {}
-        ps._PROXY_MGR_LOADED = False
-        assert ps._resolve_proxy("acct2", logs.append) == (False, None)
+        config.PROXY_FILE = "__definitely_missing_proxy_file__.txt"
+        config.PROXY_RANK_URL = ""
+        proxy_pool.reset_cache()
+        assert proxy_pool.rank_proxy_or_skip(logs.append) == (None, False)
         assert any("프록시" in m for m in logs)
     finally:
-        config.PROXY_ENABLED, config.PROXY_ACCOUNT_MAP = saved_en, saved_map
-        ps._PROXY_MGR_LOADED = False
+        config.PROXY_ENABLED, config.PROXY_FILE, config.PROXY_RANK_URL = saved_en, saved_file, saved_rank
+        proxy_pool.reset_cache()
 
 
 def main() -> None:
     tests = [
         test_fail_closed,
-        test_pool_allocation,
+        test_rank_allocation,
         test_socks_rules,
         test_http_auth_and_challenge_source,
-        test_resolve_proxy_skips_per_account,
+        test_rank_proxy_or_skip,
     ]
     for test in tests:
         test()

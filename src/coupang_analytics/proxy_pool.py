@@ -1,14 +1,14 @@
-"""계정별 고정 프록시 배정.
+"""노출순위(rank) 검색 전용 프록시 — 비로그인 공개검색을 고정 IP 뒤에서 수행(2026-10-01 소유자 결정).
 
-운영 원칙
+핵심 원칙
 ---------
-* ``PROXY_ENABLED=False`` 이면 기존처럼 직접 연결한다.
-* ``PROXY_ENABLED=True`` 인데 사용할 수 있는 프록시가 없거나 설정이 잘못되면
-  **직접 연결로 우회하지 않고 예외를 발생**시킨다(fail-closed).
-* ``PROXY_ACCOUNT_MAP`` 에 지정한 프록시는 해당 계정의 전용 프록시로 취급하여
-  일반 풀 자동 배정 대상에서 제외한다.
-* 일반 풀은 활성(``is_active``) 노드만 사용하고, rendezvous hashing으로 계정별
-  배정을 결정한다. 풀 구성 변경 시 단순 ``hash % N`` 보다 재배정 범위를 줄인다.
+* 프록시는 **노출순위(③) 검색에만** 적용한다. 로그인·판매수집(위탁계정)에는 적용하지 않는다
+  — 비로그인 공개검색이라 계정 밴 위험이 없고, Akamai 차단·쿨다운 완화에 도움.
+* ``PROXY_ENABLED=False`` 이면 기존처럼 직접 연결(None 반환).
+* ``PROXY_ENABLED=True`` 인데 유효 프록시가 없으면 **직접 연결로 우회하지 않고** 예외를 발생
+  시킨다(fail-closed). 호출부(rank)는 이 예외를 잡아 '순위 조회 건너뜀'으로 처리한다.
+* rank 는 계정별이 아니라 **프록시 1개를 전역 egress** 로 쓴다(PROXY_RANK_URL 명시, 없으면 풀에서
+  결정적 선택). 런타임에서 외부 호출(헬스체크)은 하지 않는다 — 로드·선택만.
 """
 from __future__ import annotations
 
@@ -18,6 +18,9 @@ from typing import Optional
 
 from . import config
 from .proxy_manager import ProxyConfigurationError, ProxyManager, ProxyNode
+
+_RANK_MGR: Optional[ProxyManager] = None
+_RANK_LOADED = False
 
 
 def _enabled() -> bool:
@@ -42,24 +45,11 @@ def _normalize_required(url: str, *, label: str = "proxy") -> str:
         raise ProxyConfigurationError(f"{label} 설정이 유효하지 않습니다: {exc}") from exc
 
 
-def _normalized_account_map() -> dict[str, str]:
-    result: dict[str, str] = {}
-    raw_map = getattr(config, "PROXY_ACCOUNT_MAP", {}) or {}
-    for account_id, url in raw_map.items():
-        if not account_id:
-            raise ProxyConfigurationError("PROXY_ACCOUNT_MAP에 빈 계정 ID가 있습니다.")
-        result[str(account_id)] = _normalize_required(
-            url, label=f"PROXY_ACCOUNT_MAP[{account_id!r}]"
-        )
-    return result
-
-
 def load_manager() -> Optional[ProxyManager]:
-    """설정을 읽어 ProxyManager를 생성한다.
+    """설정을 읽어 ProxyManager를 생성한다(rank 전용).
 
-    프록시가 꺼져 있으면 ``None``을 반환한다. 프록시가 켜져 있으면 최소 1개의
-    유효한 프록시가 반드시 존재해야 하며, 그렇지 않으면 ``ProxyConfigurationError``를
-    발생시킨다. 따라서 설정 실수 때문에 원래 회선으로 조용히 연결되는 일이 없다.
+    OFF면 None. ON이면 최소 1개 유효 프록시가 있어야 하며, 없으면 ProxyConfigurationError
+    (설정 실수로 원래 회선에 조용히 붙는 일 방지).
     """
     if not _enabled():
         return None
@@ -69,77 +59,74 @@ def load_manager() -> Optional[ProxyManager]:
     if path and os.path.isfile(path):
         mgr.load_from_file(path, strict=False)
 
-    # 명시 매핑도 Manager에 등록해 health 상태를 한 곳에서 관리한다. 단, 아래 자동
-    # 풀 배정 시에는 전용 프록시를 제외한다.
-    explicit_map = _normalized_account_map()
-    for url in explicit_map.values():
-        mgr.load_proxies([url], strict=True)
+    rank_url = (getattr(config, "PROXY_RANK_URL", "") or "").strip()
+    if rank_url:
+        mgr.load_proxies([_normalize_required(rank_url, label="PROXY_RANK_URL")], strict=True)
 
     if len(mgr) == 0:
         location = path or getattr(config, "PROXY_FILE", "proxies.txt")
         raise ProxyConfigurationError(
             "PROXY_ENABLED=True 이지만 사용할 수 있는 프록시가 없습니다. "
-            f"프록시 파일({location}) 또는 PROXY_ACCOUNT_MAP을 확인하세요."
+            f"프록시 파일({location}) 또는 PROXY_RANK_URL 을 확인하세요."
         )
     return mgr
 
 
-def _find_node(mgr: ProxyManager, normalized_url: str) -> Optional[ProxyNode]:
-    for node in mgr.proxies:
-        if node.raw_url == normalized_url:
-            return node
-    return None
-
-
-def _rendezvous_pick(account_id: str, pool: list[ProxyNode]) -> ProxyNode:
-    """활성 일반 풀에서 계정별 결정적(rendezvous) 프록시 하나를 선택."""
-    if not pool:
-        raise ProxyConfigurationError("활성 상태인 일반 프록시가 없습니다.")
-
+def _pick(pool: list[ProxyNode], key: str) -> ProxyNode:
+    """풀에서 결정적(rendezvous) 1개 선택 — 풀 구성이 바뀌어도 재선택 범위 최소."""
     def score(node: ProxyNode) -> bytes:
-        material = f"{account_id}\0{node.raw_url}".encode("utf-8")
-        return hashlib.sha256(material).digest()
+        return hashlib.sha256(f"{key}\0{node.raw_url}".encode("utf-8")).digest()
 
     return max(pool, key=score)
 
 
-def proxy_for_account(mgr: Optional[ProxyManager], account_id: str) -> Optional[str]:
-    """계정에 사용할 고정 프록시 URL을 반환한다.
-
-    OFF일 때만 ``None``(직접 연결)을 반환한다. ON 상태에서는 설정/풀 오류를 예외로
-    처리하여 fail-closed를 보장한다.
-    """
+def rank_proxy(mgr: Optional[ProxyManager]) -> Optional[str]:
+    """노출순위 검색용 고정 프록시 URL. OFF면 None. ON인데 활성 프록시 없으면 fail-closed 예외."""
     if not _enabled():
         return None
-    if not account_id:
-        raise ProxyConfigurationError("프록시를 배정하려면 account_id가 필요합니다.")
     if mgr is None:
-        raise ProxyConfigurationError(
-            "PROXY_ENABLED=True 이지만 ProxyManager가 초기화되지 않았습니다."
-        )
+        raise ProxyConfigurationError("PROXY_ENABLED=True 이지만 ProxyManager가 초기화되지 않았습니다.")
 
-    explicit_map = _normalized_account_map()
-    explicit = explicit_map.get(account_id)
+    explicit = (getattr(config, "PROXY_RANK_URL", "") or "").strip()
     if explicit:
-        node = _find_node(mgr, explicit)
+        norm = _normalize_required(explicit, label="PROXY_RANK_URL")
+        node = next((n for n in mgr.proxies if n.raw_url == norm), None)
         if node is not None and not node.is_active:
-            raise ProxyConfigurationError(
-                f"계정 {account_id!r}에 지정된 프록시가 비활성 상태입니다: {node.redacted_url}"
-            )
-        return explicit
+            raise ProxyConfigurationError(f"PROXY_RANK_URL 프록시가 비활성 상태입니다: {node.redacted_url}")
+        return norm
 
-    reserved = set(explicit_map.values())
-    pool = [
-        node
-        for node in mgr.proxies
-        if node.is_active and node.raw_url not in reserved
-    ]
+    pool = [n for n in mgr.proxies if n.is_active]
     if not pool:
         raise ProxyConfigurationError(
-            f"계정 {account_id!r}에 배정할 활성 일반 프록시가 없습니다. "
-            "PROXY_ACCOUNT_MAP 또는 proxies.txt를 확인하세요."
+            "노출순위 프록시 풀에 활성 노드가 없습니다. proxies.txt 또는 PROXY_RANK_URL 을 확인하세요."
         )
-    return _rendezvous_pick(account_id, pool).raw_url
+    return _pick(pool, "__rank__").raw_url
+
+
+def rank_proxy_url(*, reload: bool = False) -> Optional[str]:
+    """캐시된 매니저로 rank 프록시 해석(매 실행 1회 로드). OFF=None. 오류는 fail-closed 예외."""
+    global _RANK_MGR, _RANK_LOADED
+    if reload or not _RANK_LOADED:
+        _RANK_MGR = load_manager()
+        _RANK_LOADED = True
+    return rank_proxy(_RANK_MGR)
+
+
+def rank_proxy_or_skip(log=None) -> tuple[Optional[str], bool]:
+    """(프록시URL|None, ok). OFF=(None, True) 무프록시 정상. ON+설정오류=(None, False) **순위 스킵**
+    (직접연결로 우회하지 않음). rank 호출부에서 ok=False면 순위 브라우저를 열지 않는다."""
+    try:
+        return rank_proxy_url(), True
+    except ProxyConfigurationError as exc:
+        if log:
+            log(f"  [프록시] 노출순위 프록시 오류 → 순위 조회 건너뜀(직접연결 안 함): {exc}")
+        return None, False
+
+
+def reset_cache() -> None:
+    """프록시 설정/파일 변경 후 캐시를 비운다(다음 rank 조회부터 재로드)."""
+    global _RANK_MGR, _RANK_LOADED
+    _RANK_MGR, _RANK_LOADED = None, False
 
 
 def redacted(url: Optional[str]) -> str:
@@ -152,4 +139,7 @@ def redacted(url: Optional[str]) -> str:
         return "유효하지 않은 프록시"
 
 
-__all__ = ["load_manager", "proxy_for_account", "proxy_file_path", "redacted"]
+__all__ = [
+    "load_manager", "rank_proxy", "rank_proxy_url", "rank_proxy_or_skip",
+    "reset_cache", "proxy_file_path", "redacted",
+]

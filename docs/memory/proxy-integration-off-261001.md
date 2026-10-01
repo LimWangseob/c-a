@@ -1,11 +1,11 @@
 ---
 name: proxy-integration-off-261001
-description: 계정별 고정 프록시(a-모델) 통합 — 소유자 보안하드닝본 적용·기본 OFF·게이트 초록·미커밋
+description: 프록시 통합 — 2026-10-01 노출순위(rank) 검색 전용으로 전환(로그인·수집 제거)·기본 OFF·게이트 초록
 metadata:
   node_type: memory
   type: project
   originSessionId: b9af6ec6-eafc-49f0-94ea-0dd7e7402bbb
-  modified: 2026-10-01T13:17:53.625Z
+  modified: 2026-10-01T13:48:36.096Z
 ---
 
 **프록시(계정별 고정·a-모델) 통합 — 기본 OFF·미커밋 (2026-10-01)**
@@ -33,4 +33,12 @@ metadata:
 - **pytest 호환 수정(Stop 훅 실패 해소)**: `tools/test_proxy_patch.py`가 `test_*` 패턴이라 pytest가 자동수집하는데 PYTHONPATH=src 없이 import 실패했음 → 상단에 `sys.path.insert(0, <repo>/src)` 부트스트랩 추가(verify_offline:18 동일 패턴). 전체 pytest **6 passed**(기존 test_regression_gate 1 + proxy 5)·수집에러 0. ⚠`test_*.py` 네이밍 도구는 pytest가 수집하니 src 경로 부트스트랩 필수.
 - ⚠여전히 **미커밋**·라이브 미검증·밴 위험 상존(소유자 판단). 커밋 시 코드+DECISIONS(기록됨)+메모리 동시.
 
-[[login-policy-real-browser-only]]·[[login-block-session-first-circuit-breaker]]·[[fingerprint-consistency]]·[[no-silent-fallback-principle]]
+## 2026-10-01 노출순위 전용 전환(소유자 결정·적용범위 변경)
+"프록시는 노출순위 검색에만, config flag로" 요청 → **로그인·수집에서 프록시 완전 제거**(위탁계정 밴 위험 회피), **rank 3곳만** 적용:
+- rank 브라우저 3곳=`pipeline_ranks.track_ranks`(자동·offscreen)·`_track_ranks_semi`(반자동)·`pipeline.py` _process_account `rank_browser`. 전부 `_PROFILE`(비로그인 공개검색). 로그인·수집(`account_profile`)은 무프록시 복귀.
+- **config**: `PROXY_ENABLED`=노출순위 프록시 on/off 플래그 · `PROXY_RANK_URL`=rank 전용 프록시(명시, 없으면 풀 결정적) · **PROXY_ACCOUNT_MAP 폐지**(계정별 모델 폐기·rank는 전역 1 IP).
+- **proxy_pool rank 모델**: `rank_proxy(mgr)`·`rank_proxy_url(캐시)`·`rank_proxy_or_skip(log)`→(url|None, ok). fail-closed=ON+유효프록시없음이면 **순위 조회만 스킵**(직접연결 안 함·다른 처리 진행). per-account 함수(proxy_for_account 등) 제거.
+- browser.py 무변경(proxy= 파라미터·SOCKS/인증 그대로). 기본 OFF=기존 동작 불변(rank_proxy_or_skip=(None,True)).
+- **검증**: run_checks 10종+복잡도+pytest 6 초록 · test_proxy_patch 5/5(rank 버전) · t1_proxy_pool 핀 rank 모델로 갱신. ⚠라이브 미검증. **미커밋**.
+
+[[login-policy-real-browser-only]]·[[login-block-session-first-circuit-breaker]]·[[fingerprint-consistency]]·[[no-silent-fallback-principle]]·[[rank-antiblock-circuit-breaker]]

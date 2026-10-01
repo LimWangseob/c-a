@@ -14,6 +14,7 @@ from pathlib import Path
 
 from . import config
 from . import human_mouse
+from . import proxy_pool
 from . import session_state
 from .browser import WingBrowser
 from .kw_recommend import rank_label
@@ -220,7 +221,10 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
             f"~{config.RANK_NAV_DELAY_MAX_SEC}s) — 버스트 없이 차단 회피. 차단 감지 시 즉시 중단(이어서 재개)")
     halted = False
     noname_products = 0   # vid·상품명 모두 없어(이례) 측정 못 한 상품 수(집계 → 종료 시 안내)
-    with WingBrowser(profile_dir=_PROFILE, offscreen=True) as browser:
+    rank_px, px_ok = proxy_pool.rank_proxy_or_skip(log)   # 노출순위 전용 프록시(OFF=None·오류=스킵)
+    if not px_ok:
+        return path       # 프록시 설정 오류 → 순위 조회 건너뜀(직접연결로 우회하지 않음)
+    with WingBrowser(profile_dir=_PROFILE, offscreen=True, proxy=rank_px) as browser:
         warmup(browser)
         for biz in wb.account_sheets():
             if halted:
@@ -560,7 +564,10 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
     """
     st = _SemiState(autosubmit=config.RANK_SEMI_AUTOSUBMIT)
     _semi_start_log(st.autosubmit, log)
-    with WingBrowser(profile_dir=_PROFILE, offscreen=False) as browser:
+    rank_px, px_ok = proxy_pool.rank_proxy_or_skip(log)   # 노출순위 전용 프록시(OFF=None·오류=스킵)
+    if not px_ok:
+        return path       # 프록시 설정 오류 → 순위 조회 건너뜀(직접연결로 우회하지 않음)
+    with WingBrowser(profile_dir=_PROFILE, offscreen=False, proxy=rank_px) as browser:
         _semi_browser_prep(browser, st.autosubmit, log)
         for biz in wb.account_sheets():
             if should_stop() or st.halted:

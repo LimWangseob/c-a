@@ -303,13 +303,16 @@ def apply_rank_nav_delay_override(log=None) -> bool:
     return True
 
 
-# ── 프록시: 계정별 고정 연결 ──────────────────────────────────────────────
-# 기본 OFF. ON이면 계정별 Chrome 실행에 고정 프록시를 적용한다.
-# 중요: PROXY_ENABLED=True인데 유효한 프록시가 없으면 직접 연결로 우회하지 않고 실행을 중단한다(fail-closed).
-# 지원: HTTP/HTTPS, SOCKS5. ``socks5h`` 입력은 Chrome에서 ``socks5``로 정규화된다.
-# Chrome SOCKS5는 user:password 인증을 사용하지 않으므로 SOCKS 인증 URL은 거부한다.
-# HTTP(S) user:password 프록시는 PROXY_ALLOW_AUTH=True일 때만 허용하며, Proxy 인증 challenge에만 응답한다.
-PROXY_ENABLED = False
-PROXY_FILE = "proxies.txt"               # data_root 기준·한 줄에 프록시 URL 하나
-PROXY_ACCOUNT_MAP: dict[str, str] = {}   # {계정ID: 프록시URL}; 명시값은 해당 계정 전용으로 일반 풀에서 제외
-PROXY_ALLOW_AUTH = False                 # HTTP(S) user:pass 프록시 인증을 명시적으로 허용할 때만 True(기본 금지=IP 화이트리스트만)
+# ── 프록시: 노출순위(rank) 검색 전용 (2026-10-01 소유자 결정) ──────────────────
+# 기본 OFF. PROXY_ENABLED=True 면 **노출순위(③) 검색 브라우저만** 프록시 IP 뒤에서 연다
+#   (자동·반자동 rank 조회 + _process_account 의 rank_browser, 전부 비로그인 공개검색 _PROFILE).
+#   ⛔ 로그인·판매수집(위탁계정)에는 적용하지 않는다 — 비로그인 공개검색이라 계정 밴 위험이 없고,
+#   Akamai 차단·쿨다운 완화에 도움(소유자 판단). 프록시 1개를 rank 전역 egress 로 쓴다(계정별 아님).
+# fail-closed: PROXY_ENABLED=True 인데 유효 프록시가 없으면 **직접연결로 우회하지 않고** 순위 조회를 건너뛴다.
+# 지원: HTTP/HTTPS, SOCKS5. ``socks5h`` 입력은 Chrome 에서 ``socks5`` 로 정규화된다.
+# Chrome SOCKS5 는 user:password 인증을 쓰지 않으므로 SOCKS 인증 URL 은 거부한다.
+# HTTP(S) user:password 프록시는 PROXY_ALLOW_AUTH=True 일 때만 허용하며 Proxy 인증 challenge 에만 응답한다.
+PROXY_ENABLED = False       # True=노출순위 검색에 프록시 적용(기본 OFF)
+PROXY_FILE = "proxies.txt"  # data_root 기준·한 줄에 프록시 URL 하나(scheme://[user:pass@]host:port)
+PROXY_RANK_URL = ""         # 노출순위용 프록시 URL 명시(비면 proxies.txt 풀에서 결정적 선택)
+PROXY_ALLOW_AUTH = False    # HTTP(S) user:pass 프록시 인증을 명시적으로 허용할 때만 True(기본 금지=IP 화이트리스트만)

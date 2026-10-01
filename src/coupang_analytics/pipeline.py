@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import config
+from . import proxy_pool
 from .browser import WingBrowser
 from .input_list import Account, InputList, InputValidationError, validate_input_list
 from .kw_ai import KeywordAIError
@@ -423,12 +424,20 @@ def _finish(ctx: _RunCtx, a: Account, report_acc, metrics, inv_by_vid, inv_statu
                              upbundle_vids=upbundle_vids, live_vids=live_vids, vid_meta=vid_meta,
                              pid_by_vid=pid_by_vid)
         else:
-            with WingBrowser(profile_dir=_PROFILE, offscreen=True) as rank_browser:
-                warmup(rank_browser)
-                _process_account(report_acc, wb, ctx.naver, ctx.ai_key, rank_browser, metrics,
-                                 inv_by_vid, ctx.col_label, ctx.grow, log, ctx.partial,
-                                 sale_status=inv_status, upbundle_vids=upbundle_vids, live_vids=live_vids,
-                                 vid_meta=vid_meta, pid_by_vid=pid_by_vid)
+            rank_px, px_ok = proxy_pool.rank_proxy_or_skip(log)   # 노출순위 전용 프록시(OFF=None·오류=스킵)
+            if not px_ok:   # 프록시 설정 오류 → 순위 없이 처리(직접연결 안 함·키워드/데이터는 진행)
+                _process_account(report_acc, wb, ctx.naver, ctx.ai_key, None, metrics, inv_by_vid,
+                                 ctx.col_label, ctx.grow, log, ctx.partial, skip_ranks=True,
+                                 keywords_off=ctx.keywords_off, sale_status=inv_status,
+                                 upbundle_vids=upbundle_vids, live_vids=live_vids, vid_meta=vid_meta,
+                                 pid_by_vid=pid_by_vid)
+            else:
+                with WingBrowser(profile_dir=_PROFILE, offscreen=True, proxy=rank_px) as rank_browser:
+                    warmup(rank_browser)
+                    _process_account(report_acc, wb, ctx.naver, ctx.ai_key, rank_browser, metrics,
+                                     inv_by_vid, ctx.col_label, ctx.grow, log, ctx.partial,
+                                     sale_status=inv_status, upbundle_vids=upbundle_vids, live_vids=live_vids,
+                                     vid_meta=vid_meta, pid_by_vid=pid_by_vid)
         # 판매상태 불일치 경고: 쿠팡 재고 판매상태맵을 마스터 전체 상품에 vid로 대조해 저장(멱등).
         # 대장에서 빠진(판매중지 표기) 상품도 쿠팡 재고에 살아있으면 vid로 잡혀 "판매중"으로 채워진다.
         # 상태맵은 ①판매수집 로그인 세션에서만 확보되므로(②③엔 없음) 여기서 1회 반영, 렌더는 apply_style이 담당.

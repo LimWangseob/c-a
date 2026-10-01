@@ -14,8 +14,6 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from . import config
-from . import proxy_pool
-from .proxy_manager import ProxyConfigurationError
 from . import session_state
 from . import wing_session
 from .browser import WING_URL, WingBrowser
@@ -79,45 +77,6 @@ def _dump_raw(account_id: str, log, out_dir: str = "output") -> None:
         log(f"  [원본저장] ⚠ {account_id} 응답 원문 저장 실패(비치명) — {exc.__class__.__name__}: {str(exc)[:80]}")
 
 
-_PROXY_MGR = None
-_PROXY_MGR_LOADED = False
-
-
-def reload_proxy_manager():
-    """프록시 설정/파일을 다시 읽고 캐시를 교체한다.
-
-    UI나 운영 중 ``proxies.txt``/``PROXY_ACCOUNT_MAP``을 변경한 뒤 호출하면
-    프로세스를 재시작하지 않고 다음 브라우저 생성부터 새 설정을 사용한다.
-    프록시가 ON인데 설정이 유효하지 않으면 예외를 발생시켜 직접 연결로 우회하지 않는다.
-    """
-    global _PROXY_MGR, _PROXY_MGR_LOADED
-    _PROXY_MGR = proxy_pool.load_manager()
-    _PROXY_MGR_LOADED = True
-    return _PROXY_MGR
-
-
-def _account_proxy(account_id: str) -> str | None:
-    """계정 → 고정 프록시 URL. OFF일 때만 None이며, ON 상태 오류는 fail-closed."""
-    global _PROXY_MGR, _PROXY_MGR_LOADED
-    if not _PROXY_MGR_LOADED:
-        reload_proxy_manager()
-    return proxy_pool.proxy_for_account(_PROXY_MGR, account_id)
-
-
-def _resolve_proxy(account_id: str, log) -> tuple[bool, str | None]:
-    """계정 고정 프록시 해석(fail-closed 유지·입도만 계정 단위).
-
-    프록시 OFF면 (True, None)=무프록시 정상. ON 상태에서 설정/풀 오류면 **직접 연결로
-    우회하지 않고** 그 계정만 건너뛰도록 (False, None)을 반환(다른 계정은 계속). 예외 메시지는
-    proxy_pool 이 자격증명을 가린 표기만 담으므로 로그에 평문 비번이 남지 않는다.
-    """
-    try:
-        return True, _account_proxy(account_id)
-    except ProxyConfigurationError as exc:
-        log(f"  [프록시] 계정 {account_id} 건너뜀(직접연결 안 함) — 프록시 설정 오류: {exc}")
-        return False, None
-
-
 def try_login_once(account_id: str, password: str, *, on_log=None) -> bool:
     """2-3(§10-1): 한 계정을 지정 비밀번호로 **반자동 1회** 로그인(A안·자동 재시도 없음).
 
@@ -127,11 +86,7 @@ def try_login_once(account_id: str, password: str, *, on_log=None) -> bool:
     남기지 않으며(_ensure_login 규약), 브라우저는 with 종료 시 정리된다. semi=True(보이는 창·사람이 2차인증)."""
     log = on_log or (lambda m: None)
     a = Account(account_id, "", "")
-    ok, proxy = _resolve_proxy(account_id, log)
-    if not ok:
-        return False                        # 프록시 설정 오류 = 그 계정만 스킵(직접연결 안 함)
-    with WingBrowser(profile_dir=account_profile(account_id), offscreen=False,
-                     proxy=proxy) as b:
+    with WingBrowser(profile_dir=account_profile(account_id), offscreen=False) as b:
         try:
             return _ensure_login(b, a, password, log, login=True, semi=True)
         except (LoginBlocked, LoginCredentialError):
@@ -154,12 +109,8 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
     from . import collector
     from .collector import save_discovered   # 지연 import
     pw = get_password(a.account_id) if get_password else None
-    ok, proxy = _resolve_proxy(a.account_id, log)
-    if not ok:                              # 프록시 설정 오류 = 그 계정만 스킵(직접연결 안 함)
-        return None, {}, {}, {}, set(), set(), {}, {}
     # 기본은 **창 숨김**(offscreen). 반자동(semi)이면 처음부터 보이게 띄운다(사람이 2차인증 처리).
-    with WingBrowser(profile_dir=account_profile(a.account_id), offscreen=not semi,
-                     proxy=proxy) as b:
+    with WingBrowser(profile_dir=account_profile(a.account_id), offscreen=not semi) as b:
         if not _ensure_login(b, a, pw, log, login=login, semi=semi):
             return None, {}, {}, {}, set(), set(), {}, {}   # 이 계정 건너뜀(무인 비번없음·otp·로그인 미완료)
         collector.reset_raw()                # 계정별 응답 원문 버퍼 초기화(파일 분리)
