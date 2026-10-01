@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: b9af6ec6-eafc-49f0-94ea-0dd7e7402bbb
-  modified: 2026-10-01T13:48:36.096Z
+  modified: 2026-10-01T14:45:12.363Z
 ---
 
 **프록시(계정별 고정·a-모델) 통합 — 기본 OFF·미커밋 (2026-10-01)**
@@ -40,5 +40,13 @@ metadata:
 - **proxy_pool rank 모델**: `rank_proxy(mgr)`·`rank_proxy_url(캐시)`·`rank_proxy_or_skip(log)`→(url|None, ok). fail-closed=ON+유효프록시없음이면 **순위 조회만 스킵**(직접연결 안 함·다른 처리 진행). per-account 함수(proxy_for_account 등) 제거.
 - browser.py 무변경(proxy= 파라미터·SOCKS/인증 그대로). 기본 OFF=기존 동작 불변(rank_proxy_or_skip=(None,True)).
 - **검증**: run_checks 10종+복잡도+pytest 6 초록 · test_proxy_patch 5/5(rank 버전) · t1_proxy_pool 핀 rank 모델로 갱신. ⚠라이브 미검증. **미커밋**.
+
+## 2026-10-01 config.json 런타임 토글 + 기본 ON(소유자 '2번')
+exe 재빌드 없이 운용 PC에서 프록시 토글하도록 배선:
+- `config.apply_proxy_override(log)`: ③순위 진입(track_ranks·run_full 인라인) 시 appconfig(`config.json`) `proxy/enabled|rank_url|allow_auth` 읽어 config 전역 적용. **키 없으면 기본 ON**(노출순위에 프록시). config.json 키 형식=납작(`"proxy/enabled":"true"`).
+- **⚠기본 ON** = 프록시(proxies.txt/PROXY_RANK_URL) 미설정 시 fail-closed로 **순위 스킵**. 운용 PC는 반드시 프록시 설정해야 순위 돎.
+- 프록시 URL(자격증명)은 **proxies.txt**(gitignore·--export-settings 미포함) 권장. config.json엔 proxy/enabled만.
+- 게이트 호환: simulate_pipeline·pin_login_ranks에서 `config.apply_proxy_override=no-op` 스텁(프록시 인프라 없어 default-ON이면 순위 스킵→게이트 깨짐 방지). 프록시 자체는 test_proxy_patch(6종)·verify_offline[P]가 검증.
+- ⚠**배포 zip 재빌드 필요**: 261001 2214 빌드본엔 이 토글 코드 없음. 커밋 9e251d1. 게이트10+복잡도+pytest7 초록.
 
 [[login-policy-real-browser-only]]·[[login-block-session-first-circuit-breaker]]·[[fingerprint-consistency]]·[[no-silent-fallback-principle]]·[[rank-antiblock-circuit-breaker]]

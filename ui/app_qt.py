@@ -268,6 +268,14 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         v = QtWidgets.QVBoxLayout(inner)
         v.setContentsMargins(14, 12, 14, 12)
 
+        note = QtWidgets.QLabel(
+            "ℹ️ 설정은 입력·선택·연결확인 즉시 <b>자동 저장</b>됩니다. 맨 아래 <b>‘설정값 저장’</b> 버튼으로 "
+            "한 번에 확정 저장할 수도 있습니다. 창 모서리를 끌어 크기를 바꿀 수 있고, 내용이 길면 자동 스크롤됩니다.")
+        note.setWordWrap(True)
+        note.setStyleSheet("color:#1B5E20; background:#E8F5E9; border:1px solid #A5D6A7;"
+                           "border-radius:6px; padding:8px 10px;")
+        v.addWidget(note)
+
         fk = self._card("파일 · API 키")
         grid = QtWidgets.QGridLayout(fk)
         self.input_lbl = QtWidgets.QLabel("(입력 분석용 엑셀 미선택)")
@@ -296,8 +304,33 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         # 회사재고·원장(정산) 카드는 '정산' 탭으로 이동(2026-09-29 소유자) — 여기선 안내+상태+이동 버튼만.
         v.addWidget(self._settlement_pointer_card())
         v.addWidget(self._rank_delay_card())   # 순위 검색 간격(운영값) — 저장만, 파이프라인 배선은 통합(config)
+        save_row = QtWidgets.QHBoxLayout()
+        save_row.addStretch(1)
+        self.save_settings_btn = QtWidgets.QPushButton("💾 설정값 저장")
+        self.save_settings_btn.setMinimumWidth(180)
+        self.save_settings_btn.setToolTip("구글시트 링크·입력소스·순위 간격을 config.json(+레지스트리)에 한 번에 확정 저장")
+        self.save_settings_btn.clicked.connect(self._save_all_settings)
+        save_row.addWidget(self.save_settings_btn)
+        v.addLayout(save_row)
         v.addStretch(1)
         return scroll
+
+    def _save_all_settings(self):
+        """설정 탭의 값(구글시트 링크·입력소스·순위 간격)을 config.json(+레지스트리)에 일괄 확정 저장.
+
+        각 항목은 평소 입력·선택 즉시 자동 저장되지만, 이 버튼은 현재 화면값을 **한 번에** 확정 저장한다
+        (링크를 입력하고 Enter/포커스이동을 안 했어도 확실히 저장). 자동저장과 동일한 `_cfg_save_shared` 경로."""
+        _cfg_save_shared("gsheet/input_url", self.gs_input_edit.text().strip())
+        _cfg_save_shared("gsheet/output_url", self.gs_output_edit.text().strip())
+        src = ("gsheet" if self.src_gsheet_radio.isChecked()
+               else "file" if self.src_file_radio.isChecked()
+               else registry_ui.SOURCE_REGISTRY)
+        _cfg_save_shared("input/source", src)
+        _cfg_save_shared(_KEY_RANK_MIN, str(self.rank_delay_min.value()))
+        _cfg_save_shared(_KEY_RANK_MAX, str(self.rank_delay_max.value()))
+        QtWidgets.QMessageBox.information(
+            self, "저장 완료",
+            "✅ 설정값을 저장했습니다.\n(참고: 각 항목은 입력·선택 즉시 자동 저장되며, 이 버튼은 전체를 한 번에 확정 저장합니다.)")
 
     def _rank_delay_card(self):
         """③ 순위 검색 간격(초) — 운영자가 화면에서 조정. QSettings/config.json `rank/nav_delay_min|max`
