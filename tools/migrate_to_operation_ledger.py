@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 import openpyxl
-from openpyxl.styles import Alignment, Font, PatternFill, Protection
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Protection, Side
 from openpyxl.utils import get_column_letter
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
@@ -31,10 +31,11 @@ C_REP, C_BIZ, C_AID, C_PW, C_DEPOSIT, C_PROMO = 21, 22, 23, 24, 25, 26
 C_PNAME, C_COSTOCK, C_GSTOCK, C_URL, C_HIST, C_UNIT, C_PRICE, C_NOTE = 27, 28, 29, 30, 31, 32, 33, 34
 C_GREQDATE, C_GREQQTY, C_GWORKQTY, C_GBOX, C_GPAL, C_GDONE, C_GSHIP = 35, 36, 37, 38, 39, 40, 41
 _CLASS = {"건기식": "G", "공산품": "P"}
-_NUM = {"계약금", "계약단가", "판매가", "계약수량", "계약금액", "현재고", "그로스재고", "요청수량",
+_NUM = {"계약금", "계약단가", "판매가", "계약수량", "계약금액", "재고현황", "그로스재고", "요청수량",
         "작업수량", "박스", "파레트", "광고비", "노출", "클릭", "전환", "매출", "건수", "견적서판매가"}
 _BAND = ("F8CBAD", "FFE699", "C6E0B4", "BDD7EE", "D9C2E9", "F4B6C2", "B7DEE8", "D9D9D9")
 _RIGHT = Alignment(horizontal="right")
+_THIN = Border(*(Side(style="thin", color="BFBFBF"),) * 4)  # 좌/우/상/하 셀 구분선
 
 
 def _s(v) -> str:
@@ -170,17 +171,29 @@ def read_promo(path: Path):
 
 CONTRACTS = [
     {"사업자명": "봉이네농원", "대표자명": "곽재봉", "상품명": "곶감 상품", "계약서종류": "온라인판매 플랫폼 위탁운영 계약서",
+     "적용플랫폼": "쿠팡(로켓/제트)·네이버 스마트스토어·자사몰·기타 오픈마켓",
      "계약일자": "2026-09-08", "계약기간시작": "2026-09-08", "계약기간종료": "2027-09-07",
-     "수탁자": "㈜디프픽 (이원규)", "수익배분": "갑70/을30", "수익기준": "순이익", "광고비부담": "갑",
-     "재고배송부담": "갑(재고·배송·반품/환불)", "정산시점": "플랫폼 정산 후 7일 이내", "귀속기준일": "플랫폼 정산일",
-     "특약": "최근 2개월 평균 대비 매출 10%↑ 시 갑 일방해지 불가 · 비밀유지 2년 · 계약종료 시 데이터 이전",
+     "수탁자": "㈜디프픽", "수탁자대표자": "이원규", "수탁자사업자번호": "717-87-03275",
+     "수익배분": "갑70/을30", "수익기준": "순이익",
+     "수익계산식": "순이익 = 총매출 − (매입원가+수입부대비용+판매수수료+광고비+결제수수료+쿠팡입고비용+사전합의 기타비용)",
+     "광고비부담": "갑", "재고배송부담": "갑(재고·배송·반품/환불)",
+     "정산시점": "플랫폼 정산 후 7일 이내(갑→을 지급)", "정산계좌": "",
+     "결제조건": "플랫폼 정산 후 7일 이내 갑→을 지급", "귀속기준일": "플랫폼 정산일",
+     "해지조건": "종료 30일 전 미해지 시 자동연장 · 최근 2개월 평균 대비 매출 10%↑ 시 갑 일방해지 불가 · 정산 미이행 시 즉시해지",
+     "특약": "비밀유지 2년 · 계약종료 시 데이터 이전 · 계정소유권 갑 · 물류/재고/배송 갑 책임",
      "계약서위치": "별도PC / Modusign d69fc960-ab52-11f1"},
     {"사업자명": "효성", "대표자명": "박원준", "상품명": "파미젠 와사비잎 추출물 plus max 120정", "계약서종류": "상품공급 OEM 계약서",
+     "적용플랫폼": "쿠팡 등 이커머스(운영대행)",
      "계약일자": "2026-09-18", "계약기간시작": "2026-09-18", "계약기간종료": "2027-03-17",
-     "수탁자": "㈜동방이노션 (차윤태)", "수익배분": "갑70/을30", "수익기준": "판매수익", "계약금": "10000000",
-     "계약단가": "5000", "계약수량": "2000", "계약금액": "10000000", "광고비부담": "갑(쿠팡·외부광고 일체, KC인증비=을)",
-     "재고배송부담": "을 창고 납품 · 발주 선결제 후 출고", "정산시점": "판매수익 분배 즉시(월 판매 기준)", "귀속기준일": "월 판매 기준",
-     "특약": "판매 2개월 후 목표수익률 판단 · 미달 시 대체매칭/추가 무상공급, 최종 갑 선택",
+     "수탁자": "㈜동방이노션", "수탁자대표자": "차윤태", "수탁자사업자번호": "754-86-03767",
+     "수익배분": "갑70/을30", "수익기준": "판매수익",
+     "수익계산식": "판매수익 = 당기 총매출 − 생산원가 − 판매수수료 − 배송비(입출고 포함) − 광고비 − 반품/환불처리비용",
+     "계약금": "10000000", "계약단가": "5000", "계약수량": "2000", "계약금액": "10000000",
+     "광고비부담": "갑(쿠팡·외부광고 일체, KC인증비=을)", "재고배송부담": "을 창고 납품",
+     "정산시점": "판매수익 분배 즉시(월 판매 기준)", "정산계좌": "신한 100-038-337826 ㈜동방이노션",
+     "결제조건": "발주 총액 선결제 후 출고(선결제)", "귀속기준일": "월 판매 기준",
+     "해지조건": "종료 30일 전 협의 연장 · 2개월 후 목표수익률 미달 시 대체매칭/추가 무상공급(최종 갑 선택)",
+     "특약": "판매 2개월 후 목표수익률 판단 · 미달 시 대체매칭/추가 무상공급(최종 갑 선택) · KC인증비 을 부담",
      "계약서위치": "별도PC / Modusign ca7ca480-b275-11f1"},
 ]
 
@@ -222,7 +235,7 @@ def _style_protect(wb) -> None:
             continue
         mr = ws.max_row or 0
         hdr = {name: c for c, (name, _g, _o, _d) in enumerate(cols, 1)}
-        keycol = hdr.get("계정아이디") or hdr.get("물류명") or hdr.get("사업자명")
+        keycol = hdr.get("계정아이디") or hdr.get("상품명") or hdr.get("사업자명")
         group, prev = -1, None
         for r in range(2, mr + 1):
             if keycol:
@@ -234,6 +247,7 @@ def _style_protect(wb) -> None:
                 cell = ws.cell(r, c)
                 if band:
                     cell.fill = PatternFill("solid", fgColor=band)
+                cell.border = _THIN                         # 셀 구분 테두리
                 editable = g in ("id", "content") and "derived" not in o
                 cell.protection = Protection(locked=not editable)
                 if name in _NUM:
@@ -243,8 +257,13 @@ def _style_protect(wb) -> None:
                         iv = _to_int(cell.value)
                         cell.value = iv if iv is not None else cell.value
         for c in range(1, (ws.max_column or 0) + 1):
-            maxlen = max((len(_s(ws.cell(r, c).value)) for r in range(1, mr + 1)), default=4)
-            ws.column_dimensions[get_column_letter(c)].width = min(50, max(10, int(maxlen * 1.6) + 2))
+            ws.cell(1, c).border = _THIN                    # 헤더행 테두리
+            # 폭=글자(데이터)에 맞춤. 파생 수식셀(긴 '=IFERROR…')은 제외·개행 전 첫 줄만 계산
+            lens = [len(_s(ws.cell(r, c).value).split("\n")[0]) for r in range(1, mr + 1)
+                    if not str(ws.cell(r, c).value or "").startswith("=")]
+            maxlen = max(lens, default=4)
+            cap = 14 if _s(ws.cell(1, c).value) in _NUM else 44   # 숫자 컬럼은 좁게(값은 보존)
+            ws.column_dimensions[get_column_letter(c)].width = min(cap, max(8, int(maxlen * 1.6) + 2))
         ws.protection.sheet = True          # 파생/키 잠금 발효(원본만 수정)
 
 
@@ -264,14 +283,14 @@ def migrate(ledger: Path, stock: Path, out: Path) -> dict:
     promos = read_promo(ledger)
     T.build(out)
     wb = openpyxl.load_workbook(out)
-    H = {sn: _hmap(wb[sn]) for sn in ("관리상품", "재고", "그로스입고", "체험단", "광고", "업무일지", "계정", "계약")}
+    H = {sn: _hmap(wb[sn]) for sn in ("관리상품", "재고관리", "그로스입고", "체험단", "광고", "업무일지", "계정관리", "계약서")}
     # 마스터 참조 열(수식용)
-    pm, ac, stk = H["관리상품"], H["계정"], H["재고"]
+    pm, ac, stk = H["관리상품"], H["계정관리"], H["재고관리"]
     rv = _review(wb)
     seq: dict = {}
     code_by_biz_name: dict[tuple, str] = {}
     code_by_stockname: dict[str, str] = {}
-    stats = dict.fromkeys(("계정", "관리상품", "재고", "그로스입고", "체험단", "광고", "업무일지", "계약", "매핑검토"), 0)
+    stats = dict.fromkeys(("계정관리", "관리상품", "재고관리", "그로스입고", "체험단", "광고", "업무일지", "계약서", "매핑검토"), 0)
     rows = {sn: 1 for sn in H}                 # 각 시트 마지막 기록 행
 
     def put(sn, values, formulas=None):
@@ -286,20 +305,20 @@ def migrate(ledger: Path, stock: Path, out: Path) -> dict:
         return r
 
     for a in accts:
-        put("계정", {"대표자명": a["대표자명"], "사업자명": a["사업자명"], "계정아이디": a["계정아이디"],
+        put("계정관리", {"대표자명": a["대표자명"], "사업자명": a["사업자명"], "계정아이디": a["계정아이디"],
                     "비밀번호": a["비밀번호"], "위탁상태": "관리중", "판매가주체": a["판매가주체"],
                     "리뷰비주체": a["리뷰비주체"]})
-        stats["계정"] += 1
+        stats["계정관리"] += 1
         # 계약(계정 1행·계약금) — 상세 계약조건은 계약서 수령분만(아래 enrich)
-        put("계약", {"사업자명": a["사업자명"], "대표자명": a["대표자명"], "계약금": a["계약금"],
+        put("계약서", {"사업자명": a["사업자명"], "대표자명": a["대표자명"], "계약금": a["계약금"],
                     "계정아이디": a["계정아이디"]})
-        stats["계약"] += 1
+        stats["계약서"] += 1
         for h, txt in a["memos"]:
             ld, pre = _logdate(h)
             r = put("업무일지", {"일자": ld, "작성자": a["담당자"], "내용": pre + txt, "상태": "완료",
                                "계정아이디": a["계정아이디"]})
             wb["업무일지"].cell(r, H["업무일지"]["사업자명"],
-                              _lk("계정", ac["사업자명"], ac["계정아이디"], f"$%s{r}" % get_column_letter(H["업무일지"]["계정아이디"])))
+                              _lk("계정관리", ac["사업자명"], ac["계정아이디"], f"$%s{r}" % get_column_letter(H["업무일지"]["계정아이디"])))
             stats["업무일지"] += 1
         for p in a["products"]:
             st = stock_idx.get(_norm(p["상품명"]))
@@ -320,8 +339,8 @@ def migrate(ledger: Path, stock: Path, out: Path) -> dict:
             if p["상품url"]:                               # 상품(물류)명에 쿠팡 링크
                 ws.cell(r, pm["상품(물류)명"]).hyperlink = p["상품url"]
                 ws.cell(r, pm["상품(물류)명"]).font = Font(color="0563C1", underline="single")
-            ws.cell(r, pm["사업자명"], _lk("계정", ac["사업자명"], ac["계정아이디"], f"$%s{r}" % get_column_letter(pm["계정아이디"])))
-            ws.cell(r, pm["현재고"], _lk("재고", stk["현재고"], stk["상품코드"], f"$%s{r}" % get_column_letter(pm["상품코드"])))
+            ws.cell(r, pm["사업자명"], _lk("계정관리", ac["사업자명"], ac["계정아이디"], f"$%s{r}" % get_column_letter(pm["계정아이디"])))
+            ws.cell(r, pm["재고현황"], _lk("재고관리", stk["재고현황"], stk["상품코드"], f"$%s{r}" % get_column_letter(pm["상품코드"])))
             stats["관리상품"] += 1
             if any(g.values()):
                 r = put("그로스입고", {"요청일자": _date(g["요청일자"]), "요청수량": g["요청수량"],
@@ -331,14 +350,14 @@ def migrate(ledger: Path, stock: Path, out: Path) -> dict:
                 gi = wb["그로스입고"]
                 gi.cell(r, H["그로스입고"]["사업자명"], _lk("관리상품", pm["사업자명"], pm["상품코드"], kc))
                 gi.cell(r, H["그로스입고"]["상품(물류)명"], _lk("관리상품", pm["상품(물류)명"], pm["상품코드"], kc))
-                gi.cell(r, H["그로스입고"]["현재고"], _lk("재고", stk["현재고"], stk["상품코드"], kc))
+                gi.cell(r, H["그로스입고"]["재고현황"], _lk("재고관리", stk["재고현황"], stk["상품코드"], kc))
                 gi.cell(r, H["그로스입고"]["그로스재고"], _lk("관리상품", pm["그로스재고"], pm["상품코드"], kc))
                 stats["그로스입고"] += 1
             if p["히스토리"]:
                 r = put("업무일지", {"일자": "", "작성자": a["담당자"], "내용": p["히스토리"], "상태": "완료",
                                    "계정아이디": a["계정아이디"], "상품코드": code})
                 uj = wb["업무일지"]
-                uj.cell(r, H["업무일지"]["사업자명"], _lk("계정", ac["사업자명"], ac["계정아이디"], f"$%s{r}" % get_column_letter(H["업무일지"]["계정아이디"])))
+                uj.cell(r, H["업무일지"]["사업자명"], _lk("계정관리", ac["사업자명"], ac["계정아이디"], f"$%s{r}" % get_column_letter(H["업무일지"]["계정아이디"])))
                 uj.cell(r, H["업무일지"]["상품(물류)명"], _lk("관리상품", pm["상품(물류)명"], pm["상품코드"], f"$%s{r}" % get_column_letter(H["업무일지"]["상품코드"])))
                 stats["업무일지"] += 1
             if not st:
@@ -347,26 +366,26 @@ def migrate(ledger: Path, stock: Path, out: Path) -> dict:
                     rv.cell(rr, cc, v)
                 stats["매핑검토"] += 1
 
-    wsk = wb["계약"]                            # 계약서 분석 내용 반영(사업자명 정확일치 보강·없으면 신규행)
+    wsk = wb["계약서"]                            # 계약서 분석 내용 반영(사업자명 정확일치 보강·없으면 신규행)
     biz_row: dict[str, int] = {}
-    for r in range(2, rows["계약"] + 1):
-        b = _norm(_s(wsk.cell(r, H["계약"]["사업자명"]).value))
+    for r in range(2, rows["계약서"] + 1):
+        b = _norm(_s(wsk.cell(r, H["계약서"]["사업자명"]).value))
         if b:
             biz_row.setdefault(b, r)
     for ct in CONTRACTS:
         r = biz_row.get(_norm(ct["사업자명"]))
         if r is None:
-            r = put("계약", {"사업자명": ct["사업자명"]})
-        for name, col in H["계약"].items():       # 계약서는 계약조건의 권위 소스 → 해당 필드 덮어씀
+            r = put("계약서", {"사업자명": ct["사업자명"]})
+        for name, col in H["계약서"].items():       # 계약서는 계약조건의 권위 소스 → 해당 필드 덮어씀
             if name in ct:
                 wsk.cell(r, col, ct[name])
 
     for sr in stock_rows:                       # 재고 시트(물류 미러) + 그로스재고 수식연동
-        r = put("재고", {"물류명": sr["물류명"], "창고": sr["창고"], "구분": sr["구분"], "현재고": sr["현재고"],
+        r = put("재고관리", {"상품명": sr["물류명"], "창고": sr["창고"], "구분": sr["구분"], "재고현황": sr["현재고"],
                         "셀독": sr["셀독"], "당근": sr["당근"], "자사": sr["자사"], "갱신일": sr["갱신일"],
                         "바코드": sr["바코드"], "상품코드": code_by_stockname.get(_norm(sr["물류명"]), "")})
-        wb["재고"].cell(r, stk["그로스재고"], _lk("관리상품", pm["그로스재고"], pm["상품코드"], f"$%s{r}" % get_column_letter(stk["상품코드"])))
-        stats["재고"] += 1
+        wb["재고관리"].cell(r, stk["그로스재고"], _lk("관리상품", pm["그로스재고"], pm["상품코드"], f"$%s{r}" % get_column_letter(stk["상품코드"])))
+        stats["재고관리"] += 1
 
     for pr in promos:
         code = code_by_biz_name.get((pr["사업자명"], pr["상품명"]), "")
@@ -377,7 +396,7 @@ def migrate(ledger: Path, stock: Path, out: Path) -> dict:
                          "밑작업": pr["밑작업"], "포토/텍스트": pr["포토/텍스트"], "진행여부": pr["진행여부"],
                          "비고": pr["비고"], "계정아이디": aid, "상품코드": code})
         ch = wb["체험단"]
-        ch.cell(r, H["체험단"]["사업자명"], _lk("계정", ac["사업자명"], ac["계정아이디"], f"$%s{r}" % get_column_letter(H["체험단"]["계정아이디"])))
+        ch.cell(r, H["체험단"]["사업자명"], _lk("계정관리", ac["사업자명"], ac["계정아이디"], f"$%s{r}" % get_column_letter(H["체험단"]["계정아이디"])))
         ch.cell(r, H["체험단"]["상품(물류)명"], _lk("관리상품", pm["상품(물류)명"], pm["상품코드"], f"$%s{r}" % get_column_letter(H["체험단"]["상품코드"])))
         stats["체험단"] += 1
 
