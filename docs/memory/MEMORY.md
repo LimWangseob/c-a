@@ -1,4 +1,5 @@
 ## 현재 상태 · 프로젝트 방향
+- [⭐운영대장 4파일 데이터모델 2단계 전환도구(2026-10-01)](handoff-operation-data-model-261001.md) — 소유자 9요구 전부 반영·전환도구3종·수식연동/셀잠금/계약서보강. 커밋 70df784 **푸시 대기(분류기 차단)**. 남은=3단계 앱배선(input_list 다중시트). SSOT=designs/OPERATION_DATA_MODEL.md.
 - [⭐새 세션 진입점: 현재 상태 SSOT(2026-09-29)](handoff-session-260929-continued.md) — 매칭 5원인·AI 의미매칭·회사보유재고·정산 2단계·원장 이름규칙·괴물함수 전멸·배포 spec 버그수정. master HEAD=3dc1cf0·게이트9 초록. **최우선=운용PC 재배포**(zip 준비됨)·라이브(사무실).
 - [H_ui 화면 수정 10건+점검 규칙(2026-09-30)](handoff-hui-ui-fixes-260930.md) — 7커밋 병합요청·순위간격 입력은 통합 배선 필요·실제 App 점검 시 QSettings 교체 필수(레지스트리 오염 사고 교훈).
 - [괴물함수 전멸(2026-09-29)](monster-functions-extinct-260929.md) — browser.wait_for_login·rank.organic_ranks_batch 분해→전체 D+ 0. 핀=FakeBrowser 대체라 위치만 이동. 라이브 실측 남음.
