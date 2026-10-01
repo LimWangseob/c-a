@@ -303,6 +303,30 @@ def apply_rank_nav_delay_override(log=None) -> bool:
     return True
 
 
+def apply_proxy_override(log=None) -> None:
+    """config.json(appconfig)의 `proxy/*` 로 노출순위 프록시 설정을 런타임 적용(운용 exe 토글).
+
+    ③ 순위 진입 시 호출. **키가 없으면 기본 ON**(노출순위 검색에 프록시 적용·소유자 2026-10-01 '2번').
+    - `proxy/enabled` : false/0/off/no → OFF, 그 외(빈값 포함) → ON
+    - `proxy/rank_url`: 노출순위용 프록시 URL(scheme://[user:pass@]host:port, 비면 proxies.txt 풀에서 선택)
+    - `proxy/allow_auth`: true/1/on/yes 일 때만 HTTP(S) user:pass 프록시 인증 허용
+    ⚠ 기본 ON이라, 프록시(rank_url/proxies.txt)를 **안 넣어두면** fail-closed 로 순위를 건너뛴다.
+    게이트/시뮬은 ③ rank 를 가짜로 대체해 실제 프록시 경로를 타지 않으므로 영향 없음(apply 만 되고 미사용)."""
+    global PROXY_ENABLED, PROXY_RANK_URL, PROXY_ALLOW_AUTH
+    from . import appconfig, proxy_pool
+    en = appconfig.get("proxy/enabled", "").strip().lower()
+    PROXY_ENABLED = en not in ("false", "0", "off", "no")        # 미설정(빈값)=기본 ON
+    PROXY_RANK_URL = appconfig.get("proxy/rank_url", "").strip()
+    PROXY_ALLOW_AUTH = appconfig.get("proxy/allow_auth", "").strip().lower() in ("true", "1", "on", "yes")
+    proxy_pool.reset_cache()                                     # 설정 바뀌었으니 매니저 캐시 비움
+    _emit = log or (lambda m: None)
+    if PROXY_ENABLED:
+        where = proxy_pool.redacted(PROXY_RANK_URL) if PROXY_RANK_URL else "proxies.txt 풀에서 선택"
+        _emit(f"  [프록시] 노출순위 프록시 ON — {where}")
+    else:
+        _emit("  [프록시] 노출순위 프록시 OFF (config.json proxy/enabled=false) — 순위는 직접 IP")
+
+
 # ── 프록시: 노출순위(rank) 검색 전용 (2026-10-01 소유자 결정) ──────────────────
 # 기본 OFF. PROXY_ENABLED=True 면 **노출순위(③) 검색 브라우저만** 프록시 IP 뒤에서 연다
 #   (자동·반자동 rank 조회 + _process_account 의 rank_browser, 전부 비로그인 공개검색 _PROFILE).

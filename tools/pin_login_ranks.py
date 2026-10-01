@@ -36,6 +36,11 @@ from coupang_analytics.report import OptionMetric  # noqa: E402
 from coupang_analytics.workbook import OutputWorkbook  # noqa: E402
 from playwright.sync_api import TimeoutError as PWTimeout  # noqa: E402
 
+# 프록시(노출순위 egress)는 외부 의존 — 핀 대상 아님. apply_proxy_override 는 미설정 시 '기본 ON'이라,
+# 프록시 인프라가 없는 핀에서 track_ranks 가 순위를 스킵해 버린다 → 무력화해 '프록시 OFF' 기준선으로
+# 돈다(프록시 자체 검증은 test_proxy_patch·verify_offline[P]가 전담).
+config.apply_proxy_override = lambda log=None: None
+
 
 def _check(cond: bool, msg: str) -> None:
     print(f"    {'[통과]' if cond else '[실패]'} {msg}")

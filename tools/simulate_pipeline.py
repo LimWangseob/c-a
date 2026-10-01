@@ -34,6 +34,11 @@ from coupang_analytics.kw_recommend import TrackKeyword  # noqa: E402
 from coupang_analytics.rank import SearchItem  # noqa: E402
 from coupang_analytics.report import OptionMetric  # noqa: E402
 
+# 프록시(노출순위 egress)는 외부 의존 — 시뮬/게이트 대상 아님. config.apply_proxy_override 는 미설정 시
+# '기본 ON'이라, 프록시 인프라가 없는 게이트에서 순위가 스킵돼 버린다 → 무력화해 '프록시 OFF' 기준선으로
+# 돈다(프록시 자체 검증은 test_proxy_patch·verify_offline[P]가 전담).
+config.apply_proxy_override = lambda log=None: None
+
 # 검색결과 매칭 시 반환되는 '정확 노출명'(가짜). run_full 동결 경로에서 계약상품명 갱신을 재현.
 _SERP_NAME = "쿠팡실제노출명"
 

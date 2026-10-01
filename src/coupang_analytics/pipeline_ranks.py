@@ -203,6 +203,7 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
     """
     log = on_log or (lambda m: None)
     config.apply_rank_nav_delay_override(log)   # 설정 탭 순위 간격(config.json)으로 덮어씀 — 없으면 기본 유지(semi·auto 공통)
+    config.apply_proxy_override(log)            # 노출순위 프록시 설정(config.json proxy/*) 런타임 적용 — 미설정=기본 ON
     out = Path(out_dir)
     wb, path = _load_latest_wb(out)
     if wb is None:

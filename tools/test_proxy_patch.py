@@ -171,6 +171,30 @@ def test_rank_proxy_or_skip() -> None:
         proxy_pool.reset_cache()
 
 
+def test_apply_proxy_override_default_on() -> None:
+    """config.apply_proxy_override: config.json proxy/* 런타임 적용 — 미설정=기본 ON, false=OFF."""
+    from coupang_analytics import appconfig
+    saved = (config.PROXY_ENABLED, config.PROXY_RANK_URL, config.PROXY_ALLOW_AUTH)
+    orig_get = appconfig.get
+    try:
+        # 미설정(모든 키 빈값) → 기본 ON
+        appconfig.get = lambda k, d="": d
+        config.apply_proxy_override()
+        assert config.PROXY_ENABLED is True, "미설정 기본값이 ON이 아님(2번 정책)"
+        assert config.PROXY_RANK_URL == "" and config.PROXY_ALLOW_AUTH is False
+        # proxy/enabled=false → OFF, rank_url/allow_auth 반영
+        vals = {"proxy/enabled": "false", "proxy/rank_url": "http://1.2.3.4:8080", "proxy/allow_auth": "true"}
+        appconfig.get = lambda k, d="": vals.get(k, d)
+        config.apply_proxy_override()
+        assert config.PROXY_ENABLED is False
+        assert config.PROXY_RANK_URL == "http://1.2.3.4:8080"
+        assert config.PROXY_ALLOW_AUTH is True
+    finally:
+        appconfig.get = orig_get
+        config.PROXY_ENABLED, config.PROXY_RANK_URL, config.PROXY_ALLOW_AUTH = saved
+        proxy_pool.reset_cache()
+
+
 def main() -> None:
     tests = [
         test_fail_closed,
@@ -178,6 +202,7 @@ def main() -> None:
         test_socks_rules,
         test_http_auth_and_challenge_source,
         test_rank_proxy_or_skip,
+        test_apply_proxy_override_default_on,
     ]
     for test in tests:
         test()

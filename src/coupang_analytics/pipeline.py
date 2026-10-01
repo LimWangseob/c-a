@@ -674,6 +674,8 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     """
     log = on_log or (lambda m: None)
     _reset_rank_state()          # 이번 실행 순위 차단 플래그·서킷브레이커(cooldown) 초기화
+    if not skip_ranks:           # 인라인 순위를 열 때만 프록시 설정 적용(config.json proxy/*·미설정=기본 ON)
+        config.apply_proxy_override(log)
     if not ai_key:
         raise KeywordAIError("OpenAI(ChatGPT) API 키가 없어 키워드 추출을 할 수 없습니다. "
                              "설정 탭에서 OpenAI API 키를 입력한 뒤 다시 실행하세요.")
