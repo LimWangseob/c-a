@@ -301,3 +301,15 @@ def apply_rank_nav_delay_override(log=None) -> bool:
     RANK_NAV_DELAY_MIN_SEC, RANK_NAV_DELAY_MAX_SEC = lo, hi
     _emit(f"  [순위간격] 설정 탭 값 적용 — 검색 간격 {lo}~{hi}s")
     return True
+
+
+# ── 프록시: 계정별 고정 연결 ──────────────────────────────────────────────
+# 기본 OFF. ON이면 계정별 Chrome 실행에 고정 프록시를 적용한다.
+# 중요: PROXY_ENABLED=True인데 유효한 프록시가 없으면 직접 연결로 우회하지 않고 실행을 중단한다(fail-closed).
+# 지원: HTTP/HTTPS, SOCKS5. ``socks5h`` 입력은 Chrome에서 ``socks5``로 정규화된다.
+# Chrome SOCKS5는 user:password 인증을 사용하지 않으므로 SOCKS 인증 URL은 거부한다.
+# HTTP(S) user:password 프록시는 PROXY_ALLOW_AUTH=True일 때만 허용하며, Proxy 인증 challenge에만 응답한다.
+PROXY_ENABLED = False
+PROXY_FILE = "proxies.txt"               # data_root 기준·한 줄에 프록시 URL 하나
+PROXY_ACCOUNT_MAP: dict[str, str] = {}   # {계정ID: 프록시URL}; 명시값은 해당 계정 전용으로 일반 풀에서 제외
+PROXY_ALLOW_AUTH = False                 # HTTP(S) user:pass 프록시 인증을 명시적으로 허용할 때만 True(기본 금지=IP 화이트리스트만)

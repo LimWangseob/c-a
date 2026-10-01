@@ -1602,6 +1602,83 @@ def t1_coupang_check_compute():
     print("    [통과] 5줄 산출(확인됨·판매중(불일치)·판매중지×2·미등록)·값 6종 계약 정합")
 
 
+def t1_proxy_pool():
+    print("[P] 계정별 고정 프록시 — fail-closed·활성노드·인증 구분·로그 가림 (2026-10-01)")
+    from coupang_analytics import config, proxy_pool
+    from coupang_analytics.proxy_manager import (
+        ProxyConfigurationError, ProxyManager, ProxyNode,
+    )
+    from coupang_analytics.browser import WingBrowser
+
+    saved_en = config.PROXY_ENABLED
+    saved_map = dict(config.PROXY_ACCOUNT_MAP)
+    saved_auth = config.PROXY_ALLOW_AUTH
+    try:
+        # OFF 기본 = 무프록시(기존 동작 보존)
+        config.PROXY_ENABLED = False
+        config.PROXY_ACCOUNT_MAP = {}
+        assert proxy_pool.load_manager() is None
+        assert proxy_pool.proxy_for_account(None, "acct") is None
+
+        # SOCKS 기본 포트 1080 + 자격증명 분리
+        n = ProxyNode(raw_url="socks5://10.0.0.9")
+        assert n.endpoint == "socks5://10.0.0.9:1080"
+
+        # ON 상태에서 manager 없음은 직접연결로 우회하지 않고 실패
+        config.PROXY_ENABLED = True
+        try:
+            proxy_pool.proxy_for_account(None, "acct")
+            raise AssertionError("PROXY ON + manager 없음이 fail-open 됨")
+        except ProxyConfigurationError:
+            pass
+
+        # ON + 풀 = 계정별 결정적 배정
+        m = ProxyManager()
+        m.load_proxies([
+            "http://10.0.0.1:8080",
+            "http://10.0.0.2:8080",
+            "http://10.0.0.3:8080",
+        ])
+        p1 = proxy_pool.proxy_for_account(m, "wellbing1107")
+        assert p1 and p1 == proxy_pool.proxy_for_account(m, "wellbing1107")
+
+        # 비활성 노드는 자동 풀에서 제외
+        chosen = next(p for p in m.proxies if p.raw_url == p1)
+        chosen.is_active = False
+        p2 = proxy_pool.proxy_for_account(m, "wellbing1107")
+        assert p2 != p1
+        chosen.is_active = True
+
+        # 명시맵은 우선하며 일반 풀에는 전용 프록시를 배정하지 않음
+        config.PROXY_ACCOUNT_MAP = {"bws247": "socks5://1.1.1.1:1080"}
+        m.load_proxies(["socks5://1.1.1.1:1080"])
+        assert proxy_pool.proxy_for_account(m, "bws247") == "socks5://1.1.1.1:1080"
+        assert proxy_pool.proxy_for_account(m, "other") != "socks5://1.1.1.1:1080"
+
+        # WingBrowser: HTTP 인증은 명시 허용 시 자격증명 분리·로그 마스킹
+        config.PROXY_ALLOW_AUTH = True
+        wb = WingBrowser(profile_dir=".", proxy="http://pu:pw@9.9.9.9:3128")
+        assert wb._proxy_server == "http://9.9.9.9:3128" and wb._proxy_user == "pu"
+        assert "pw" not in wb._redacted_proxy() and "***" in wb._redacted_proxy()
+
+        # socks5h 는 Chrome용 socks5로 변환, SOCKS user/pass는 명시 거부
+        ws = WingBrowser(profile_dir=".", proxy="socks5h://9.9.9.8:1080")
+        assert ws._proxy_server == "socks5://9.9.9.8:1080"
+        try:
+            WingBrowser(profile_dir=".", proxy="socks5://u:pw@9.9.9.8:1080")
+            raise AssertionError("SOCKS5 user/pass가 허용됨")
+        except ProxyConfigurationError:
+            pass
+
+        assert WingBrowser(profile_dir=".", proxy=None)._proxy_server is None
+    finally:
+        config.PROXY_ENABLED = saved_en
+        config.PROXY_ACCOUNT_MAP = saved_map
+        config.PROXY_ALLOW_AUTH = saved_auth
+
+    _ok("fail-closed · 활성노드 배정 · 전용맵 분리 · SOCKS 처리 · 인증정보 로그 가림")
+
+
 def main():
     print("=" * 60)
     print("  로그인 불필요 부분 실증 (실제 실행 — 가짜 아님)")
@@ -1635,6 +1712,7 @@ def main():
     t1_apply_style_migrations()
     t1_invalid_product_name()
     t1_multiline_product_name()
+    t1_proxy_pool()
     t1_coupang_check_compute()
     t2_keywords(store, il)
     print("=" * 60)

@@ -18,6 +18,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 from . import config
+from .proxy_manager import ProxyConfigurationError, ProxyNode
 
 # 콘솔 없는 실행(작업 스케줄러의 무인 --auto = pythonw)에서 보조 명령(파워셸·taskkill·크롬 실행)이
 # 검은 콘솔창을 잠깐 띄웠다 닫는 것을 막는 플래그. 앱을 터미널에서 직접 켜면 이미 창이 있어 원래 안 뜨지만,
@@ -141,7 +142,8 @@ class _LoginWait:
 class WingBrowser:
     """실제 Chrome 세션 하나를 감싸는 컨텍스트 매니저."""
 
-    def __init__(self, profile_dir: str | Path, port: int | None = None, offscreen: bool = True):
+    def __init__(self, profile_dir: str | Path, port: int | None = None, offscreen: bool = True,
+                 proxy: str | None = None):
         self.profile_dir = str(Path(profile_dir).resolve())
         self.port = port                 # None 이면 빈 포트 자동 할당
         self.offscreen = offscreen
@@ -150,6 +152,45 @@ class WingBrowser:
         self._browser = None
         self.context = None
         self.page = None
+        # 계정별 고정 프록시(a-모델). proxy=정규화된 URL 문자열 or None(무프록시).
+        # 서버(scheme://host:port)만 --proxy-server 로 쓰고, 자격증명은 CDP 인증에 쓴다.
+        self._proxy_server: str | None = None
+        self._proxy_user: str | None = None
+        self._proxy_pass: str | None = None
+        self._proxy_protocol: str | None = None
+        self._proxy_cdp = None
+        if proxy:
+            try:
+                node = ProxyNode(raw_url=proxy)
+            except (ProxyConfigurationError, TypeError) as exc:
+                raise ProxyConfigurationError(f"WingBrowser proxy 설정이 유효하지 않습니다: {exc}") from exc
+
+            self._proxy_protocol = node.protocol
+            # Chromium은 socks5h 스킴을 별도로 쓰지 않는다. SOCKS5 자체가 프록시 측
+            # name resolution을 사용하므로 Chrome 인수에는 socks5:// 로 통일한다.
+            if node.protocol in {"socks5", "socks5h"}:
+                if node.username is not None:
+                    raise ProxyConfigurationError(
+                        "WingBrowser/Chrome의 SOCKS5 프록시는 user:password 인증을 지원하지 않습니다. "
+                        "인증 없는 SOCKS5(IP 허용 방식) 또는 HTTP(S) 인증 프록시를 사용하세요."
+                    )
+                host = f"[{node.host}]" if ":" in node.host and not node.host.startswith("[") else node.host
+                self._proxy_server = f"socks5://{host}:{node.port}"
+            elif node.protocol in {"http", "https"}:
+                self._proxy_server = node.endpoint
+            else:
+                raise ProxyConfigurationError(
+                    f"WingBrowser에서 지원하지 않는 프록시 스킴입니다: {node.protocol}"
+                )
+
+            self._proxy_user = node.username
+            self._proxy_pass = node.password
+            if self._proxy_user is not None and not getattr(config, "PROXY_ALLOW_AUTH", False):
+                raise ProxyConfigurationError(
+                    "자격증명 프록시가 설정되었지만 PROXY_ALLOW_AUTH=False 입니다. "
+                    "HTTP(S) 인증 프록시를 사용하려면 PROXY_ALLOW_AUTH=True로 설정하거나, "
+                    "자격증명이 필요 없는 프록시를 사용하세요."
+                )
 
     def __enter__(self) -> "WingBrowser":
         Path(self.profile_dir).mkdir(parents=True, exist_ok=True)
@@ -166,6 +207,9 @@ class WingBrowser:
             "--disable-session-crashed-bubble", "--hide-crash-restore-bubble",  # '복원' 창 억제
             "--disable-features=InfiniteSessionRestore",
         ]
+        if self._proxy_server:                       # 계정별 고정 프록시(a-모델) — IP 고정
+            args.append(f"--proxy-server={self._proxy_server}")
+            print(config.format_log(f"[browser] 프록시 경유: {self._redacted_proxy()}"))
         if self.offscreen:
             args += ["--window-position=-2400,-2400", "--window-size=1280,900"]
         else:
@@ -189,18 +233,99 @@ class WingBrowser:
             self._browser = self._connect_cdp()     # ECONNRESET 등 재시도
             self.context = self._browser.contexts[0]
             self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
+            self._maybe_setup_proxy_auth()
             return self
         except BaseException:
             self.__exit__(None, None, None)          # _pw.stop() + _kill_tree() → 좀비 누수 차단
             raise
 
     def __exit__(self, *exc) -> None:
+        if self._proxy_cdp is not None:
+            try:
+                self._proxy_cdp.detach()
+            except Exception:
+                pass
+            self._proxy_cdp = None
         try:
             if self._pw:
                 self._pw.stop()
         except Exception as e:  # CDP 연결 해제 실패는 사유만 남기고 계속
             print(config.format_log(f"[browser 정리] pw {e.__class__.__name__}"))
         self._kill_tree()
+
+    # ── 계정별 고정 프록시(a-모델) ──────────────────────────────────
+    def _redacted_proxy(self) -> str:
+        """로그용 자격증명 가린 프록시 표기(평문 금지)."""
+        if not self._proxy_server:
+            return "직접연결"
+        if self._proxy_user:
+            # scheme://host:port → scheme://***:***@host:port
+            scheme, rest = self._proxy_server.split("://", 1)
+            return f"{scheme}://***:***@{rest}"
+        return self._proxy_server
+
+    def _maybe_setup_proxy_auth(self) -> None:
+        """HTTP(S) user:pass 프록시 인증에만 응답한다.
+
+        CDP ``Fetch.authRequired`` 는 프록시 인증과 원격 서버의 HTTP 인증을 모두
+        전달할 수 있으므로 ``authChallenge.source == "Proxy"`` 인 경우에만 프록시
+        자격증명을 제공한다. 웹사이트 자체 인증 challenge에는 자격증명을 보내지 않는다.
+        """
+        if self._proxy_user is None:
+            return
+        if self._proxy_protocol not in {"http", "https"}:
+            raise ProxyConfigurationError(
+                "자격증명 기반 프록시 인증은 WingBrowser에서 HTTP(S) 프록시에만 지원됩니다."
+            )
+        if not getattr(config, "PROXY_ALLOW_AUTH", False):
+            # __init__ 에서 이미 차단하지만, 런타임 설정 변경에도 fail-closed 보장.
+            raise ProxyConfigurationError(
+                "자격증명 프록시 사용 중 PROXY_ALLOW_AUTH=False 입니다."
+            )
+
+        user, pw = self._proxy_user, self._proxy_pass or ""
+        cdp = self.context.new_cdp_session(self.page)
+        cdp.send("Fetch.enable", {"handleAuthRequests": True, "patterns": [{"urlPattern": "*"}]})
+
+        def _on_auth(params):
+            request_id = params.get("requestId")
+            if not request_id:
+                return
+            challenge = params.get("authChallenge") or {}
+            source = challenge.get("source")
+            try:
+                if source == "Proxy":
+                    response = {
+                        "response": "ProvideCredentials",
+                        "username": user,
+                        "password": pw,
+                    }
+                else:
+                    # 웹사이트(Server) 인증 challenge에는 프록시 자격증명을 절대 전송하지 않는다.
+                    response = {"response": "Default"}
+                cdp.send("Fetch.continueWithAuth", {
+                    "requestId": request_id,
+                    "authChallengeResponse": response,
+                })
+            except Exception as exc:
+                print(config.format_log(
+                    f"[browser] 프록시 인증 처리 실패({exc.__class__.__name__})"
+                ))
+
+        def _on_paused(params):   # 인증 외 요청은 내용 변경 없이 그대로 통과
+            request_id = params.get("requestId")
+            if not request_id:
+                return
+            try:
+                cdp.send("Fetch.continueRequest", {"requestId": request_id})
+            except Exception as exc:
+                print(config.format_log(
+                    f"[browser] Fetch 요청 재개 실패({exc.__class__.__name__})"
+                ))
+
+        cdp.on("Fetch.authRequired", _on_auth)
+        cdp.on("Fetch.requestPaused", _on_paused)
+        self._proxy_cdp = cdp
 
     # ── 창 숨김/표시 (실행 중 위치 이동 — headless 아님, Akamai 통과 유지) ──
     def _set_bounds(self, bounds: dict) -> None:
