@@ -148,10 +148,26 @@ STOCK_COLS = [  # 재고현황(별도 파일·물류팀) — 정의 시트에 �
     ("자사", "채널 표시(기존)"), ("상품코드", "운영대장 상품과 수동 매핑(추가)"), ("갱신일", "재고 갱신일"),
 ]
 
-# 탭 그룹: 입력 시트 / 참조 / 안내
-_INPUT_SHEETS = ["계정", "계약", "관리상품", "그로스입고", "체험단", "광고", "업무일지"]
-_TAB = {"input": "8EAADB", "ref": "A9D08E", "guide": "BFBFBF"}  # 탭 색(입력/참조/안내)
+# 탭 색상 — 시트별 선명한 색(소유자 이미지 팔레트 참조). 안 지정분은 회색.
+TAB_COLORS = {
+    "대시보드": "203864",   # 진남색(개요 허브)
+    "계정": "C00000",       # 빨강
+    "계약": "ED7D31",       # 주황
+    "관리상품": "FFC000",   # 골드
+    "그로스입고": "70AD47", # 초록
+    "체험단": "4472C4",     # 파랑
+    "광고": "7030A0",       # 보라
+    "업무일지": "00B0F0",   # 하늘
+    "분류코드": "808080",   # 회색
+    "정의": "BFBFBF", "안내": "BFBFBF",  # 연회색(참조/안내)
+}
 _FILL = {"id": "E2EFDA", "content": "DDEBF7", "code": "F2F2F2"}  # 헤더 색(신원/내용/관리코드)
+
+# 대시보드 요약/알림 라벨(값은 앱이 자동 갱신 — 빈 틀은 라벨만).
+_DASH_SUMMARY = ["총 계정", "관리중", "관리중단", "총 상품", "판매중", "판매중지", "대체", "삭제",
+                 "그로스 입고대기", "체험단 진행중", "이번달 광고비", "다가오는 정산일", "예상 지급액"]
+_DASH_ALERT = ["재고 미매핑 상품", "판매중지 전환 필요", "재고 부족", "계약 만료 임박", "정산 미확정 구간"]
+_DASH_NAV = ["계정", "계약", "관리상품", "그로스입고", "체험단", "광고", "업무일지", "분류코드"]
 
 _HDR_FONT = Font(bold=True)
 _TITLE_FONT = Font(bold=True, size=13)
@@ -234,16 +250,47 @@ def _write_defs(ws) -> None:
         r += 1
 
 
+# 시트 순서(소유자 2026-10-01): 대시보드 먼저 · 자주 쓰는 운영 시트 · 계정/계약은 뒤(등록 후 드묾) · 참조/안내 맨 뒤.
+SHEET_ORDER = ["관리상품", "그로스입고", "체험단", "광고", "업무일지", "계정", "계약", "분류코드"]
+
+
+def _write_dashboard(ws) -> None:
+    """운영 개요 허브 — 요약·알림 라벨 + 각 시트 바로가기(값은 앱이 자동 갱신·빈 틀은 라벨)."""
+    for col, w in (("A", 24), ("B", 18), ("D", 20)):
+        ws.column_dimensions[col].width = w
+    t = ws.cell(1, 1, "셀독 운영 대시보드")
+    t.font = _TITLE_FONT
+    ws.cell(2, 1, "요약·알림 값은 앱이 자동 갱신(빈 틀은 라벨만). 우측 바로가기로 각 시트 이동.")
+    r = 4
+    ws.cell(r, 1, "■ 운영 요약").font = _HDR_FONT
+    for lab in _DASH_SUMMARY:
+        r += 1
+        ws.cell(r, 1, lab).fill = PatternFill("solid", fgColor=_FILL["content"])
+    r += 2
+    ws.cell(r, 1, "■ 확인 필요").font = _HDR_FONT
+    for lab in _DASH_ALERT:
+        r += 1
+        ws.cell(r, 1, lab).fill = PatternFill("solid", fgColor="FCE4D6")   # 연주황(알림)
+    ws.cell(4, 4, "■ 바로가기").font = _HDR_FONT
+    for i, sn in enumerate(_DASH_NAV, 5):
+        cell = ws.cell(i, 4, f"=HYPERLINK(\"#'{sn}'!A1\",\"{sn}\")")
+        cell.font = Font(color="0563C1", underline="single")
+    ws.freeze_panes = "A3"
+
+
 def build(path: Path) -> Path:
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
-    for name, cols in SHEETS.items():                      # 입력·참조 시트(앞)
+    dash = wb.create_sheet("대시보드")                      # 개요 허브(맨 앞)
+    dash.sheet_properties.tabColor = TAB_COLORS["대시보드"]
+    _write_dashboard(dash)
+    for name in SHEET_ORDER:                                # 운영 시트(계정·계약은 뒤)
         ws = wb.create_sheet(name)
-        ws.sheet_properties.tabColor = _TAB["input" if name in _INPUT_SHEETS else "ref"]
-        _write_sheet(ws, cols, CATEGORY_SEED if name == "분류코드" else None)
-    for name, writer in (("정의", _write_defs), ("안내", _write_guide)):  # 맨 뒤
+        ws.sheet_properties.tabColor = TAB_COLORS.get(name, "BFBFBF")
+        _write_sheet(ws, SHEETS[name], CATEGORY_SEED if name == "분류코드" else None)
+    for name, writer in (("정의", _write_defs), ("안내", _write_guide)):  # 참조/안내 맨 뒤
         ws = wb.create_sheet(name)
-        ws.sheet_properties.tabColor = _TAB["guide"]
+        ws.sheet_properties.tabColor = TAB_COLORS.get(name, "BFBFBF")
         writer(ws)
     path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(path)
@@ -254,7 +301,7 @@ def main() -> int:
     out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("운영대장_템플릿.xlsx")
     p = build(out)
     print(f"[완료] 운영대장 템플릿: {p}")
-    print(f"  시트(앞): {' · '.join(SHEETS)}  / (뒤) 정의 · 안내")
+    print(f"  시트: 대시보드 · {' · '.join(SHEET_ORDER)} · 정의 · 안내")
     return 0
 
 
