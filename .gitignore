@@ -31,3 +31,11 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# 루트 작업 산출물·메모 — 커밋 금지(빌드 로그·도구 생성 스프레드시트·소유자 드롭 메모/문서)
+/*.log
+/*.xlsx
+~$*.xlsx
+/*.docx
+/*.txt
+!/requirements.txt
