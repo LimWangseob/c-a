@@ -35,7 +35,7 @@ def _best(pair) -> int | None:
 
 
 # 순위 차단(Akamai 챌린지) 감지 시 이번 실행의 순위 조회를 전면 중단(더 두드리지 않음). 실행마다 리셋.
-_RANK_HALT = {"stop": False}
+_RANK_HALT = {"stop": False, "rotate": False}   # stop=당일중단 · rotate=egress 회전 요청(차단이나 회전 가능)
 # 서킷브레이커 — 이번 실행에 쓴 cooldown 횟수(상한 초과 시 당일 중지). 실행마다 리셋.
 _RANK_CB = {"cooldowns": 0}
 _RANK_TELEMETRY_ID = "__rank__"   # 순위 응답 관측용 합성 계정ID(session_events 에 rank_* 이벤트)
@@ -44,6 +44,7 @@ _RANK_TELEMETRY_ID = "__rank__"   # 순위 응답 관측용 합성 계정ID(sess
 def _reset_rank_state() -> None:
     """실행 시작 시 순위 차단 상태 초기화 — halt 플래그 해제 + 서킷브레이커 cooldown 카운터 리셋."""
     _RANK_HALT["stop"] = False
+    _RANK_HALT["rotate"] = False
     _RANK_CB["cooldowns"] = 0
 
 
@@ -167,6 +168,7 @@ def _rank_cooldown(browser, log, reason: str) -> bool:
     """
     if rotation_can_rotate():
         # 차단 egress 를 새 IP 로 바꾸는 게 30분 쿨다운보다 싸다 → 쿨다운 생략하고 회전으로 전환.
+        _RANK_HALT["rotate"] = True   # run_full(site3) 가 읽는 회전 신호(이후 _measure 는 이 egress 더 안 두드림)
         log(f"  [노출측정] ⟳ 이상징후({reason}) — egress 회전 가능 → 쿨다운 생략, 새 IP로 전환")
         return False   # 호출부가 RankHalt → drive_rank 가 egress 기록 후 새 IP로 재개
     _RANK_CB["cooldowns"] += 1
@@ -204,7 +206,7 @@ def _measure_nav_serial(browser, keywords, matchers, log, matched_out=None):
     """
     pc: dict = {}
     for i, kw in enumerate(keywords):
-        if _RANK_HALT["stop"]:
+        if _RANK_HALT["stop"] or _RANK_HALT["rotate"]:   # 당일중단 or egress 회전요청 → 이 IP 더 안 두드림
             break
         if i > 0:   # 검색 사이 사람 간격(버스트 제거 = 차단 회피)
             d = random.uniform(config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC)
@@ -239,7 +241,7 @@ def _measure(browser, keywords, matchers, log, matched_out=None):
     모바일은 RANK_INCLUDE_MOBILE=True 일 때만(기본 제외).
     matched_out(선택)엔 매칭된 검색결과 항목이 담겨 노출명 갱신에 쓰인다(직렬 경로에서만).
     """
-    if not keywords or _RANK_HALT["stop"]:
+    if not keywords or _RANK_HALT["stop"] or _RANK_HALT["rotate"]:
         return {}
     if config.RANK_NAV_SERIAL:
         return _measure_nav_serial(browser, keywords, matchers, log, matched_out)
@@ -342,6 +344,7 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
     halted_box = {"halted": False}
 
     def _run_auto(browser, egress) -> bool:
+        _reset_rank_state()   # 새 egress → 차단 플래그/쿨다운 리셋(회전 시 이전 IP 상태가 새 IP 측정 막지 않게)
         warmup(browser)
         halted = False
         for biz in wb.account_sheets():

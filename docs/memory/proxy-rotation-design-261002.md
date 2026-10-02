@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 202b4f12-0f1f-42a1-a7eb-39526738003d
-  modified: 2026-10-02T07:12:48.793Z
+  modified: 2026-10-02T07:31:23.711Z
 ---
 
 **노출순위(③) egress 재회전 + 차단 egress 목록 — 구현 (2026-10-02)**
@@ -51,8 +51,12 @@ metadata:
 ## ⚠ 남은 일
 1. **proxies.txt 를 sessid 여러 줄로**: `http://<id>__cr.kr;sessid.s01:<pw>@74.81.81.81:10000` …s02,s03(5~10줄). 안 그러면
    풀 1개라 회전이 "egress 소진"으로 바로 끝남(로그로 드러남). SSOT 문법=[[proxy-ip-policy-by-context]] 세션.
-2. **site 3 egress 회전 미배선**: `pipeline.py:435`(전체실행 ranks-on·비semi·비skip)은 이미지 플래그만 적용·회전은 아직
-   `rank_proxy_or_skip`. _process_account 가 차단신호를 안 돌려줘 회전 불가 → 후속(드문 경로). auto/semi stage 는 회전 배선됨.
+2. ✅ **site 3 egress 회전 배선 완료(2026-10-02)**: `pipeline.py` _process_account rank 분기를 drive_rank 로 감쌈
+   (run_once=_run_site3·_reset_rank_state 후 _process_account·반환=`_RANK_HALT["stop"] or ["rotate"]`). 차단신호가
+   회전경로에선 `_RANK_HALT["stop"]` 안 세워지는 문제 → **신규 플래그 `_RANK_HALT["rotate"]`** 도입(_rank_cooldown
+   회전경로서 set·_measure/_measure_nav_serial 가 읽어 그 IP 더 안 두드림·_reset_rank_state 가 리셋). 프록시 전무면
+   skip_ranks=True 폴백(직접연결 안 함). 핀 test_rank_cooldown_rotate_signal·게이트 10종+복잡도+핀 11종 초록.
+   ⚠재실행은 키워드 동결이라 순위만 재측정(멱등). auto/semi stage 도 회전 배선됨(3경로 전부 완료).
 3. **라이브 미검증**: 밤샘 규모검증으로 회전 실효(한 sticky 번아웃 vs 풀 품질) + 이미지OFF 차단관련성 확인.
 4. 커밋=코드+DECISIONS+메모리 동시([[commit-with-design-and-memory]]). pytest 는 이 개발환경 미설치(운용 PC 훅이 수행).
 

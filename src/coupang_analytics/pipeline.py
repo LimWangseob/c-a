@@ -16,7 +16,6 @@ from datetime import datetime
 from pathlib import Path
 
 from . import config
-from . import proxy_pool
 from .browser import WingBrowser
 from .input_list import Account, InputList, InputValidationError, validate_input_list
 from .kw_ai import KeywordAIError
@@ -61,7 +60,7 @@ from .pipeline_ranks import (  # noqa: E402,F401
     _prefill_search, _rank_cooldown, _rank_matcher, _reset_rank_state, _search_q,
     _semi_browser_prep, _semi_on_miss, _semi_prep_product, _semi_record, _semi_search_one,
     _semi_start_log, _semi_summary_log, _semi_track_product, _submit_search, _track_ranks_semi,
-    _wait_results_loaded, _wait_user_search, track_ranks_stage)
+    _wait_results_loaded, _wait_user_search, drive_rank, track_ranks_stage)
 
 
 def resumable_progress(out_dir: str | Path = "output") -> dict | None:
@@ -424,21 +423,27 @@ def _finish(ctx: _RunCtx, a: Account, report_acc, metrics, inv_by_vid, inv_statu
                              upbundle_vids=upbundle_vids, live_vids=live_vids, vid_meta=vid_meta,
                              pid_by_vid=pid_by_vid)
         else:
-            rank_px, px_ok = proxy_pool.rank_proxy_or_skip(log)   # 노출순위 전용 프록시(OFF=None·오류=스킵)
-            if not px_ok:   # 프록시 설정 오류 → 순위 없이 처리(직접연결 안 함·키워드/데이터는 진행)
+            # ③순위 egress 회전 — drive_rank 가 프록시 선택·열기·차단이력 선제 skip·차단 시 새 IP 재회전을
+            # 담당. 차단 시 _process_account 를 새 egress 로 재실행(키워드 동결이라 순위만 재측정·멱등).
+            ran = {"v": False}
+
+            def _run_site3(rank_browser, egress) -> bool:
+                _reset_rank_state()   # 새 egress → 차단 플래그 리셋(이전 IP 차단이 새 IP 측정 막지 않게)
+                warmup(rank_browser)
+                _process_account(report_acc, wb, ctx.naver, ctx.ai_key, rank_browser, metrics,
+                                 inv_by_vid, ctx.col_label, ctx.grow, log, ctx.partial,
+                                 sale_status=inv_status, upbundle_vids=upbundle_vids, live_vids=live_vids,
+                                 vid_meta=vid_meta, pid_by_vid=pid_by_vid)
+                ran["v"] = True
+                return bool(_RANK_HALT["stop"] or _RANK_HALT["rotate"])   # 차단 감지 → drive_rank 가 새 IP로 재개
+
+            drive_rank(offscreen=True, run_once=_run_site3, log=log)
+            if not ran["v"]:   # 프록시 ON인데 유효 egress 전무(설정오류/전부 소진) → 순위 없이 처리(직접연결 안 함)
                 _process_account(report_acc, wb, ctx.naver, ctx.ai_key, None, metrics, inv_by_vid,
                                  ctx.col_label, ctx.grow, log, ctx.partial, skip_ranks=True,
                                  keywords_off=ctx.keywords_off, sale_status=inv_status,
                                  upbundle_vids=upbundle_vids, live_vids=live_vids, vid_meta=vid_meta,
                                  pid_by_vid=pid_by_vid)
-            else:
-                with WingBrowser(profile_dir=_PROFILE, offscreen=True, proxy=rank_px,
-                                 block_images=getattr(config, "RANK_BLOCK_IMAGES", False)) as rank_browser:
-                    warmup(rank_browser)
-                    _process_account(report_acc, wb, ctx.naver, ctx.ai_key, rank_browser, metrics,
-                                     inv_by_vid, ctx.col_label, ctx.grow, log, ctx.partial,
-                                     sale_status=inv_status, upbundle_vids=upbundle_vids, live_vids=live_vids,
-                                     vid_meta=vid_meta, pid_by_vid=pid_by_vid)
         # 판매상태 불일치 경고: 쿠팡 재고 판매상태맵을 마스터 전체 상품에 vid로 대조해 저장(멱등).
         # 대장에서 빠진(판매중지 표기) 상품도 쿠팡 재고에 살아있으면 vid로 잡혀 "판매중"으로 채워진다.
         # 상태맵은 ①판매수집 로그인 세션에서만 확보되므로(②③엔 없음) 여기서 1회 반영, 렌더는 apply_style이 담당.

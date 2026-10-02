@@ -10,7 +10,10 @@
   - **Decodo 전용 ISP(고정 IP) = 탈락(번아웃).** 서울 KR IP가 처음엔 통과(5/5)해도 **≈7검색 뒤 영구 차단**(1시간 뒤에도 Access Denied). 고정 IP는 자동검색 누적 시 플래그됨.
   - **차단 원인 = 순수 IP 평판**(코드 아님). browser.py CDP Fetch 인증 경로를 의심했으나 같은 코드로 DataImpulse 100% 통과 → **코드 무결·수정 불필요**.
 - **운용 세팅**: URL=`proxies.txt`(gitignore·평문 자격증명 금지)·토글=`config.json proxy/enabled=true`·인증=`proxy/allow_auth=true`. fail-closed(ON+유효프록시없음=순위만 스킵·직접연결 우회 금지). **아키텍처=사무실 PC 1대로 ①②(무프록시)+③(프록시)**·집 IP/홈 프록시 불필요.
-- **남은 일**: 첫 밤샘 271개 규모 1회 검증·DataImpulse GB 요금 확인·운용 PC 재배포(proxies.txt+config.json). SSOT=메모 [[proxy-live-test-261002]]·[[proxy-integration-off-261001]]·CLAUDE.md §제약 🔌.
+- **egress 재회전 + 차단 egress IP 목록(2026-10-02 구현)**: 순위 검색 중 차단 감지 시 30분 쿨다운 전에 **새 egress 로 먼저 회전**(`RANK_PROXY_ROTATE_MAX`회), 회전 소진 시에만 기존 쿨다운→당일중단. **차단당한 실제 egress IP**(브라우저 IP에코로 판정)를 `rank_blocked_ips.json`(gitignore·72h TTL)에 기록 → (재)기동마다 egress 가 차단이력이면 **선제 skip 하고 다른 IP 요청**. 3경로(자동·반자동 stage·전체실행 site3) 전부 적용. `drive_rank`(수명·회전)·`proxy_blocklist`(차단목록·에코)·`pick_rank_proxy`(회전선택). proxies.txt 는 **sessid 여러 줄 = 서로 다른 고정 sticky IP 풀**(DataImpulse `;sessid.sNN`). 플래그/프록시 OFF면 기존 단일 open 과 동일. SSOT=메모 [[proxy-rotation-design-261002]].
+- **이미지 OFF 실험(트래픽 절감)**: `config.json rank/block_images`=순위 브라우저 이미지 로드 끔(`--blink-settings=imagesEnabled=false`·기본 OFF=이미지 켬). **라이브 판정 불가**(egress 평판이 수분 단위 변동으로 이미지 변수 분리 불가·깨끗IP가 이미지ON인데도 차단). 이미지≈SERP **60%**=절감 잠재력. **기본 OFF 유지**('이미지끄기=봇신호' 추정 반증 못함)·밤샘 규모 N일 ON vs OFF로만 재검증.
+- **IP 정책은 맥락별 반대**(혼동 금지): 로그인/수집=고정 IP(신뢰·2차인증), 순위(비로그인)=sticky 회전 여러 개(볼륨 번아웃 회피). SSOT=메모 [[proxy-ip-policy-by-context]].
+- **남은 일**: 첫 밤샘 271개 규모 1회 검증(회전 실효+이미지 ON/OFF)·DataImpulse GB 요금 확인·운용 PC 재배포(proxies.txt sessid 여러 줄+config.json). SSOT=메모 [[proxy-live-test-261002]]·[[proxy-integration-off-261001]]·[[proxy-rotation-design-261002]]·CLAUDE.md §제약 🔌.
 
 ## 0-000000000. 최신 반영 요약 (2026-09-29 — 매칭 5원인 해소·AI 의미 매칭·회사보유재고·정산 2단계)
 > 소유자 output(10) 미매칭(상품 일부만 처리=vid없음→판매정보·재고·판매상태·로켓그로스·상품링크 공란) 분석·수정 요청. 게이트 9종+복잡도 초록·⚠라이브·운용PC 재배포 남음. 메모 `analysis-unmatched-blank-products-260929`·`handoff-session-260929`.

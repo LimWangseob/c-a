@@ -360,6 +360,35 @@ def test_rank_block_images() -> None:
         config.RANK_BLOCK_IMAGES = saved
 
 
+def test_rank_cooldown_rotate_signal() -> None:
+    """_rank_cooldown: 회전 가능하면 _RANK_HALT['rotate'] 세우고 쿨다운 생략(site3 전체실행 신호)·
+    회전 불가면 기존 경로로 _RANK_HALT['stop'](rotate 안 세움)."""
+    from coupang_analytics import pipeline_ranks as PR
+    import coupang_analytics.config as C
+    orig_can = PR.rotation_can_rotate
+    saved_max = C.RANK_COOLDOWN_MAX
+    try:
+        PR._reset_rank_state()
+        assert PR._RANK_HALT["rotate"] is False and PR._RANK_HALT["stop"] is False
+        # 회전 가능 → rotate 신호·쿨다운(sleep) 생략
+        PR.rotation_can_rotate = lambda: True
+        assert PR._rank_cooldown(None, lambda m: None, "t") is False
+        assert PR._RANK_HALT["rotate"] is True and PR._RANK_HALT["stop"] is False
+        # 리셋이 rotate 도 지움
+        PR._reset_rank_state()
+        assert PR._RANK_HALT["rotate"] is False
+        # 회전 불가 + 쿨다운 상한 0 → 즉시 당일중단(stop), rotate 는 그대로 False, sleep 안 함
+        PR.rotation_can_rotate = lambda: False
+        C.RANK_COOLDOWN_MAX = 0
+        PR._RANK_CB["cooldowns"] = 0
+        assert PR._rank_cooldown(None, lambda m: None, "t") is False
+        assert PR._RANK_HALT["stop"] is True and PR._RANK_HALT["rotate"] is False
+    finally:
+        PR.rotation_can_rotate = orig_can
+        C.RANK_COOLDOWN_MAX = saved_max
+        PR._reset_rank_state()
+
+
 def main() -> None:
     tests = [
         test_fail_closed,
@@ -372,6 +401,7 @@ def main() -> None:
         test_proxy_blocklist,
         test_drive_rank_rotation,
         test_rank_block_images,
+        test_rank_cooldown_rotate_signal,
     ]
     for test in tests:
         test()
