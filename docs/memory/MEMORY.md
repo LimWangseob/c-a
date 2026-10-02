@@ -1,5 +1,5 @@
 ## 현재 상태 · 프로젝트 방향
-- [⭐새 세션 진입점(2026-10-02): 프록시 라이브 해결·세션 마무리](handoff-session-261002.md) — ③순위 DataImpulse 한국 주거용으로 돌파·CLAUDE.md 압축. 최우선=첫 밤샘 271개 규모 검증·GB요금 확인·운용PC 재배포.
+- [⭐새 세션 진입점(2026-10-02 최신): egress 회전+차단IP목록+이미지OFF실험 구현·커밋·푸시 완료](handoff-session-261002.md) — master HEAD=7d27720·게이트 초록. 순위 3경로 전부 회전 적용. 최우선=밤샘 규모검증(회전 실효+이미지 ON/OFF ~60%절감 판정)·운용PC 재배포.
 - [노출순위 프록시 라이브 실측(2026-10-02)](proxy-live-test-261002.md) — DataImpulse 한국 주거용(회전)=통과 100%·Decodo 고정ISP=번아웃·코드 무결. 세팅=proxies.txt+config.json proxy/enabled.
 - [프록시 통합(계정별 고정·a-모델)·소유자 하드닝본 적용·기본 OFF·미커밋(2026-10-01)](proxy-integration-off-261001.md) — fail-closed·CDP인증 source==Proxy만·SOCKS규칙·rendezvous·_resolve_proxy(계정별 스킵). 게이트 10종+복잡도+test 5종 초록. 라이브 미검증·밴 위험 상존.
 - [⚠IP 정책은 맥락별로 반대(혼동 금지 SSOT)](proxy-ip-policy-by-context.md) — 로그인/수집=고정 IP(신뢰·2차인증), 노출순위(비로그인)=sticky 회전 여러 개(볼륨 번아웃 회피). 10-01 "회전 금지" 추론을 10-02 실측이 반증. "고정=신뢰"는 로그인에만 유효.

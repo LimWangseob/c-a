@@ -331,7 +331,7 @@ def _install_rank_fakes(wait_results, serp=None):
     serp = serp if serp is not None else ({"제품": (3, None)}, 3)
     # ③순위는 pipeline_ranks 로 분리 — rank 내부 호출은 PR 네임스페이스로 resolve 되므로 PR 을 패치한다.
     PR._prefill_search = lambda browser, kw: True
-    PR._submit_search = lambda browser: None
+    PR._submit_search = lambda browser, kw: None
     PR._wait_results_loaded = fake_wait
     PR.human_mouse = SimpleNamespace(browse_serp=lambda pg: None)
     PR.random = SimpleNamespace(uniform=lambda a, b: 0.0)   # 타이핑 후 '짧게 멈춤' pause 를 0으로(시험 단축)
@@ -527,6 +527,67 @@ def pin_rank_manual_mode():
            "반자동은 미감지 공란(서킷브레이커·중단 없음)")
 
 
+class _FakeSubmitPage:
+    """_submit_search 구동용 최소 페이지 — Enter·evaluate 호출 기록(이중 제출 방지 핀 전용).
+
+    nav_on_enter=True 면 Enter 가 검색 네비를 성공시킨 것으로 보고 location.href 를 /np/search?q=kw 로 바꾼다
+    (실제 Enter 통과 재현). evaluate 가 location.href 를 묻는 JS 면 현재 href 를, 그 외(=_SUBMIT_JS 폴백)면
+    submit_fallback 을 센다 — '네비가 됐는데도 폼 재제출' 을 관측한다."""
+    def __init__(self, kw: str, nav_on_enter: bool):
+        from urllib.parse import quote
+        self._kw, self._nav, self._quote = kw, nav_on_enter, quote
+        self._href = "https://www.coupang.com/"
+        self.enter_pressed = 0
+        self.submit_fallback = 0
+        self.keyboard = SimpleNamespace(press=self._press)
+
+    def _press(self, key):
+        if key == "Enter":
+            self.enter_pressed += 1
+            if self._nav:
+                self._href = f"https://www.coupang.com/np/search?q={self._quote(self._kw)}&page=1"
+
+    def evaluate(self, js, *a):
+        if "location.href" in js:
+            return self._href
+        self.submit_fallback += 1   # _SUBMIT_JS = 버튼클릭/폼submit 폴백
+        return True
+
+    @property
+    def url(self):
+        return self._href
+
+
+# 모듈 로드 시점의 **진짜** _submit_search(앞 핀들이 _install_rank_fakes 로 스텁을 덮어쓰므로 캡처해 둔다).
+_REAL_SUBMIT_SEARCH = PR._submit_search
+
+
+def pin_submit_no_double_on_nav():
+    print("[핀 Q] 자동제출 — Enter로 네비 시작되면 JS submit 폴백 안 함(이중 검색요청 방지)")
+    saved = getattr(config, "RANK_SUBMIT_CONFIRM_SEC", 2.0)
+    try:
+        config.RANK_SUBMIT_CONFIRM_SEC = 2.0
+        pg = _FakeSubmitPage("무선 이어폰", nav_on_enter=True)
+        _REAL_SUBMIT_SEARCH(SimpleNamespace(page=pg), "무선 이어폰")
+        _check(pg.enter_pressed == 1, "Enter 1회 입력")
+        _check(pg.submit_fallback == 0, "네비 확인됨 → 폼 submit 폴백 미발생(이중요청 없음)")
+    finally:
+        config.RANK_SUBMIT_CONFIRM_SEC = saved
+
+
+def pin_submit_fallback_on_no_nav():
+    print("[핀 Q2] 자동제출 — Enter가 폼을 못 넘기면 JS submit 폴백 1회(진짜 폴백 유지)")
+    saved = getattr(config, "RANK_SUBMIT_CONFIRM_SEC", 2.0)
+    try:
+        config.RANK_SUBMIT_CONFIRM_SEC = 0.0   # 네비 대기 없이 즉시 폴백 판정(시험 단축)
+        pg = _FakeSubmitPage("무선 이어폰", nav_on_enter=False)
+        _REAL_SUBMIT_SEARCH(SimpleNamespace(page=pg), "무선 이어폰")
+        _check(pg.enter_pressed == 1, "Enter 1회 입력")
+        _check(pg.submit_fallback == 1, "네비 안 됨 → 폼 submit 폴백 1회(검색 보장)")
+    finally:
+        config.RANK_SUBMIT_CONFIRM_SEC = saved
+
+
 def pin_rank_delay_override():
     """설정 탭 순위 간격(config.json rank/nav_delay_min|max) → config.apply_rank_nav_delay_override 가
     파이프라인 간격을 덮어씀. 미설정=기본 유지·무효값=기본 유지+로그(silent 아님). appconfig.get 만 모킹."""
@@ -596,6 +657,8 @@ def main() -> int:
         pin_rank_auto_success()
         pin_rank_auto_halt()
         pin_rank_skip_suspended()
+        pin_submit_no_double_on_nav()
+        pin_submit_fallback_on_no_nav()
         pin_rank_delay_override()
     finally:
         for k, v in saved.items():   # 순위 config 원복(다른 검증 오염 방지 — 별 프로세스지만 방어적)

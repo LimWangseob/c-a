@@ -123,3 +123,4 @@
 2026-10-02 · 노출순위 이미지OFF 실험 플래그(RANK_BLOCK_IMAGES·config.json rank/block_images·기본 OFF=이미지 유지) + egress 재회전/차단IP목록 구현(브랜치 proxy-egress-rotation·게이트 초록·미커밋) · "이미지 끄기=봇신호 금지"는 추정이라 A/B 실측 전까지 기본 유지(플래그로 검증·트래픽/비용 절감 목적).
 2026-10-02 · 이미지 OFF 라이브 A/B = 판정불가(egress IP 평판이 수분 단위 변동 — 깨끗IP s06이 이미지ON인데도 차단). 이미지≈SERP 60%(절감 잠재력 실측)·단발테스트로 분리 불가 → 기본 OFF(이미지 켜둠) 유지, 밤샘 규모 N일 ON vs OFF로만 재검증. "이미지끄기=봇신호" 추정 반증 못함.
 2026-10-02 · site 3(전체실행 인라인 순위) egress 회전 배선 — 회전경로서 _RANK_HALT["stop"] 미설정 문제를 신규 신호 _RANK_HALT["rotate"]로 해소(_rank_cooldown set·_measure가 읽어 그 IP 중단·_reset_rank_state 리셋)·_process_account를 drive_rank로 감쌈(키워드 동결이라 재실행=순위만 재측정·멱등)·프록시 전무면 skip_ranks 폴백. 순위 3경로(자동·반자동·전체실행) 전부 회전 적용 완료.
+2026-10-02 · 반자동 순위 자동제출 이중 검색요청 제거 · _submit_search(browser,kw)가 Enter 후 URL q 일치를 RANK_SUBMIT_CONFIRM_SEC(2.0s) 확인해 네비 시작되었으면 버튼/폼 submit 폴백 생략 · 사유=예전 무조건 재제출로 키워드당 검색 2회(IP 소모·차단 위험) · 외부 리뷰 교차검증서 유일한 실질 결함(나머지는 낡은 ZIP 오판)

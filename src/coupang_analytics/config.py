@@ -70,6 +70,8 @@ def type_dwell(text) -> float:
     return len(str(text or "")) * TYPE_DWELL_PER_CHAR_SEC + TYPE_DWELL_BASE_SEC
 RANK_SEMI_AUTO_MAX_MISS = 3   # 자동제출 후 연속 미감지/차단 이 횟수면 '차단 감지'로 보고 쿨다운(아래) 진입
 RANK_SEMI_AUTO_WAIT_SEC = 40  # 자동제출 1건의 결과 로딩 최대 대기(초). 넘으면 미감지로 카운트
+RANK_SUBMIT_CONFIRM_SEC = 2.0 # 자동제출 Enter 후 검색 네비(URL q 일치)를 이만큼 기다려 확인 — 되면 버튼/폼 submit
+#                               폴백을 **생략**(이중 검색요청 방지). 안 되면(Enter가 폼 못 넘김) 그때만 폴백.
 # 차단 감지 시 **하드 스톱 대신 긴 쿨다운 후 자동 재개**(무인 장시간 운용 — 자리 비운 새 4시간 방치 방지).
 # ⚠️ 짧은 백오프로 두드리면 IP만 탐(메모리 안티차단) → **충분히 긴 쿨다운** + **쿨다운 후에도 진전 0이
 # RANK_SEMI_COOLDOWN_MAX회 연속이면 그때 당일 중단**(IP 하드플래그로 판단, 무한 재시도 금지).

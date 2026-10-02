@@ -504,16 +504,32 @@ _SUBMIT_JS = r"""() => {
 }"""
 
 
-def _submit_search(browser) -> None:
+def _submit_search(browser, kw: str) -> None:
     """자동제출 — 프리필된 검색창에서 Enter(사이트 자체 JS로 검색=사람 조작에 가장 가까움). 실패 시 버튼/폼 폴백.
 
-    성공 여부는 이 함수가 아니라 이후 결과 페이지 로드(_wait_results_loaded)로 판정한다.
+    ⚠ 이중 검색요청 방지(2026-10-02): 예전엔 Enter 직후 **무조건** _SUBMIT_JS(버튼클릭/폼submit)를 또 실행해,
+    Enter 가 이미 네비를 시작한 경우 같은 쿼리가 두 번 제출될 수 있었다(검색결과 페이지엔 같은 검색창·버튼이
+    있어 재제출됨). 이제 Enter 후 URL q 가 kw 로 바뀌는지 RANK_SUBMIT_CONFIRM_SEC 동안 확인해, **네비가
+    시작됐으면 폴백을 생략**한다. Enter 가 폼을 못 넘긴 레이아웃일 때만(확인 실패) 버튼/폼 제출로 폴백한다.
+    (자동 경로 rank._load_results 의 _await_query_navigated 와 같은 '네비 확인' 패턴.)
+    성공 여부(결과 로드)는 이 함수가 아니라 이후 _wait_results_loaded 로 판정한다.
     """
     try:
         browser.page.keyboard.press("Enter")
     except Exception:
         pass
-    # Enter 로 안 넘어가는 레이아웃 대비 — 검색버튼/폼 제출도 시도(무해, 이미 넘어갔으면 no-op에 가까움)
+    want = kw.replace(" ", "")
+    deadline = time.time() + max(0.0, getattr(config, "RANK_SUBMIT_CONFIRM_SEC", 2.0))
+    while True:
+        try:
+            if _search_q(_live_url(browser.page)) == want:
+                return   # Enter 로 검색 네비 시작 확인 → 버튼/폼 폴백 생략(이중 요청 방지)
+        except Exception:
+            pass
+        if time.time() >= deadline:
+            break
+        time.sleep(0.1)
+    # Enter 로 안 넘어가는 레이아웃(네비 미확인) — 그때만 검색버튼/폼 제출 폴백(진짜 폴백)
     try:
         browser.page.evaluate(_SUBMIT_JS)
     except Exception:
@@ -833,7 +849,7 @@ def _semi_search_one(st: _SemiState, browser, kw, should_stop, log):
         _interruptible_sleep(pause, should_stop)   # 다 치고 잠깐 멈춤(중지 반응 유지)
         if should_stop() or st.halted:
             return None, False, True
-        _submit_search(browser)              # 사람 대신 앱이 Enter(제출)
+        _submit_search(browser, kw)          # 사람 대신 앱이 Enter(제출) — 네비 확인 후에만 폼 폴백(이중요청 방지)
         st.measured_any = True               # 실제 검색 발생 → 다음 키워드는 '검색 사이' 간격 적용
         pg, blocked = _wait_results_loaded(browser, kw, should_stop, config.RANK_SEMI_AUTO_WAIT_SEC)
         return pg, blocked, False

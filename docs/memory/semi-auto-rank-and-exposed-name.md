@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: fd9529df-6f22-4998-bfda-be5db28b97c5
-  modified: 2026-09-14T00:00:00.000Z
+  modified: 2026-10-02T08:17:59.492Z
 ---
 
 **반자동 순위조회 = 정확등수 차단 난제의 실질 해법**(2026-09-11 구현). 자동(현행)과 반자동을 UI에서 분리:
@@ -27,6 +27,8 @@ metadata:
 **⭐자동검색(Enter까지 자동) 옵션 도입 — 사용자 명시 요청(2026-09-11)**: 사용자가 "클릭도 앱이 하게, 손 안 대게" 요청 → 반자동 창(사람이 쓰던 신뢰 세션)에서 앱이 키워드 자동입력 후 **Enter(사이트 JS 검색=사람 조작에 가깝게)까지 자동** 실행하고 결과 기록. `config.RANK_SEMI_AUTOSUBMIT=True`(기본). ⚠️ **이는 "사람이 직접 검색" 원칙의 사용자 승인 하 완화**임 — 자동 제출은 Akamai 봇탐지·위탁계정 플래그 위험이 있어 안전장치 필수로 넣음: 키워드 간 사람속도 간격(RANK_NAV_DELAY_MIN/MAX_SEC = **45~75s**, 2026-09-14 실측 하향 — 이전 25~50/90~150 기록은 폐기 [[rank-antiblock-circuit-breaker]]), 결과 완전로드 대기(`_wait_results_loaded`=q일치+readyState complete+상품존재, `RANK_SEMI_AUTO_WAIT_SEC=40`). **차단 대응은 즉시 하드중단이 아니라 쿨다운-재개(2026-09-11 이후 현재)**: 연속 미감지/차단 `RANK_SEMI_AUTO_MAX_MISS`(3)회 → **긴 쿨다운(`RANK_SEMI_COOLDOWN_SEC=1800`=30분) 후 자동 재개**, 재개 후 1개라도 측정되면 카운터 리셋. 진전 없는 쿨다운이 `RANK_SEMI_COOLDOWN_MAX`(4)회 연속이면 그때 당일 중단(IP 회복불가 판단·위탁계정 잠금방지). 확정 접근차단 페이지("사용권한 없음")는 즉시 미스=MAX로 단축. 중단분은 공란→다음 실행이 이어서.
 
 **⚠ 간격 로직(2026-09-14 개선)**: 검색 간 대기는 `time.sleep`(비중단)에서 **`_interruptible_sleep`로 바꾸고 '검색 앞'으로 이동**(`measured_any` 게이트) → 대기 중 '반자동 중지' 즉시 반응 + **첫 검색 전·마지막 검색 뒤 자투리 대기 제거**. `RANK_SEMI_AUTOSUBMIT=False`면 예전처럼 사람이 Enter(자동채움만). 관련: `_submit_search`(Enter+버튼/폼 폴백)·`_prefill_search`(검색창 자동입력, 제출 안 함). [[login-block-session-first-circuit-breaker]] [[rank-antiblock-circuit-breaker]]
+
+**⭐이중 검색요청 제거(2026-10-02, 외부 리뷰 교차검증서 유일한 실질 결함)**: `_submit_search`가 예전엔 Enter 직후 **무조건** `_SUBMIT_JS`(버튼클릭/폼submit)를 또 실행 → Enter가 이미 네비를 시작한 경우(검색결과 페이지에도 같은 검색창·버튼 존재) **같은 쿼리가 2회 제출**될 수 있었다(키워드당 검색요청 2배 = IP 소모·차단 위험). 수정=`_submit_search(browser, kw)`가 Enter 후 URL q==kw 를 `config.RANK_SUBMIT_CONFIRM_SEC`(기본 2.0s) 동안 확인 → **네비 시작됐으면 폴백 생략**, Enter 미통과 레이아웃만 폴백(자동 경로 `rank._await_query_navigated`와 동일 패턴). 재현(스크래치: Enter=1·폼폴백=1 관측)→수정→핀 `pin_submit_no_double_on_nav`(Q)·`pin_submit_fallback_on_no_nav`(Q2) 영구 추가(앞 핀의 스텁 persist 회피 위해 모듈 로드시 진짜 함수 `_REAL_SUBMIT_SEARCH` 캡처). 게이트10+복잡도+핀13 초록. ⚠리뷰어의 다른 "매우 높음"(프록시 1개 고정·차단후 재사용·이미지차단 없음)은 **2026-10-02 egress 회전 이전의 낡은 ZIP 오판** — 최신 코드엔 해당 결함 없음([[proxy-rotation-design-261002]]). 실효(트래픽/차단 감소)는 밤샘 규모검증서 run_log로 확인.
 
 **반자동은 50위 초과도 실제 등수 기록**(2026-09-11): 자동은 `RANK_SCAN_MAX=50` 상한이나, 반자동은 이미 떠 있는 페이지 1장만 읽어 트래픽/차단 부담이 없으므로 `config.RANK_SCAN_MAX_SEMI=300`으로 로드된 페이지 오가닉 전부를 세어 **51위 이상도 그 등수로 기록**(라이브 검증: 51위 상품이 기본 max50→None="50위"로 뭉개짐 vs 반자동 max300→51 정확). `_track_ranks_semi`에서 `parse_serp_rank(pg, matcher, max_rank=config.RANK_SCAN_MAX_SEMI)`.
 
