@@ -66,13 +66,53 @@ def _strip_gsheet_index_tab(master: Path, log) -> None:
         log(f"  [복원] ⚠ 인덱스 탭 정리 건너뜀 — {exc.__class__.__name__}: {str(exc)[:80]}")
 
 
+def _safe_sheet_name(title: str, used: set[str]) -> str:
+    """openpyxl 시트명 제약(31자·금지문자 []:*?/\\)에 맞춰 안전화 + 중복 회피."""
+    import re
+    name = re.sub(r"[\[\]:*?/\\]", "_", (title or "시트").strip()) or "시트"
+    name = name[:31]
+    base, i = name, 1
+    while name in used:
+        suffix = f"_{i}"
+        name = base[:31 - len(suffix)] + suffix
+        i += 1
+    used.add(name)
+    return name
+
+
+def _download_gsheet_via_sa(url: str, dest: Path, *, log) -> None:
+    """결과 구글시트를 **서비스계정(Sheets API)** 으로 읽어 로컬 xlsx(값 스냅샷)로 저장한다.
+
+    공개 export(gsheet.download_xlsx)는 시트를 '링크 공유(공개)'해야 하는데, 결과시트는 SA 공유만(비공개)이라
+    401 로 실패했다(2026-10-02 실측). SA 로 각 시트 값을 읽어 openpyxl 로 쓴다(서식·수식 없는 **값 스냅샷** =
+    작업 전 원본 보존이라는 백업 목적엔 충분). SA 미등록·권한없음(403)·없음(404)은 GSheetClient 가 GSheetError
+    로 올린다(호출부가 로그로 명시). ⚠ 비밀번호 평문이 있는 관리대장에는 쓰지 않는다(결과시트 전용 — 호출부 참조).
+    """
+    import openpyxl
+    from . import gsheet_api
+    client = gsheet_api.GSheetClient(url, on_log=log)
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)                 # 기본 빈 시트 제거(각 구글 시트로 다시 채움)
+    used: set[str] = set()
+    for title in client.sheet_titles():
+        ws = wb.create_sheet(_safe_sheet_name(title, used))
+        for row in client.read_values(title):
+            ws.append(list(row))
+    if not wb.sheetnames:                # 시트가 하나도 없으면(이례) 빈 파일 저장 방지
+        wb.create_sheet("빈")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(dest)
+
+
 def backup_sources(out_dir: str | Path = "output", *, input_url: str | None = None,
                    output_url: str | None = None, on_log=None) -> list[Path]:
-    """작업 시작 전 원본 백업 — **로컬 통계 마스터 + 결과 구글시트 + 관리대장 구글시트**를 타임스탬프
-    로컬 xlsx 로 `output/백업/` 에 저장한다(소유자 2026-09-20: 항상 작업 전 별도 백업 후 진행).
+    """작업 시작 전 원본 백업 — **로컬 통계 마스터 + 결과 구글시트(SA 값 스냅샷)**를 타임스탬프 로컬 xlsx 로
+    `output/백업/` 에 저장한다(소유자 2026-09-20: 항상 작업 전 별도 백업 후 진행).
 
     실패는 **로그로 명시**하되 작업을 막지 않는다(백업 실패 ≠ 작업 중단, 하지만 조용히 넘기지 않음).
-    구글시트 백업은 export(xlsx)라 SA 없이도 공개공유면 됨. 반환=저장된 백업 파일 목록.
+    결과시트 백업은 **서비스계정(Sheets API)** 으로 한다(공개 export 폐기 — 결과시트는 SA 공유만이라 401,
+    2026-10-02 실측). **관리대장(입력)은 평문 비밀번호가 있어 로컬 백업하지 않는다**(출력물 평문 금지,
+    CLAUDE.md 보안규칙 — 복구는 구글 시트 버전기록으로 충분). 반환=저장된 백업 파일 목록.
     """
     log = on_log or (lambda m: None)
     out = Path(out_dir)
@@ -94,18 +134,19 @@ def backup_sources(out_dir: str | Path = "output", *, input_url: str | None = No
             log(f"== [백업] 통계 마스터 → 백업/{dest.name} ==")
         except OSError as exc:
             log(f"== [백업] ⚠ 통계 마스터 백업 실패(진행): {exc} ==")
-    # 2) 결과·관리대장 구글시트(있으면)
-    for label, url in (("결과시트", output_url), ("관리대장", input_url)):
-        if not url:
-            continue
-        dest = bdir / f"{label}_{ts}.xlsx"
+    # 2) 결과 구글시트(있으면) — 서비스계정(Sheets API)으로 값 스냅샷 백업(공개 export 401 폐기)
+    if output_url:
+        dest = bdir / f"결과시트_{ts}.xlsx"
         try:
-            from . import gsheet
-            gsheet.download_xlsx(url, dest)
+            _download_gsheet_via_sa(output_url, dest, log=log)
             saved.append(dest)
-            log(f"== [백업] {label} 구글시트 → 백업/{dest.name} ==")
-        except Exception as exc:   # 공개공유 아님·네트워크 등 → 명시 후 진행(작업은 계속)
-            log(f"== [백업] ⚠ {label} 구글시트 백업 실패(진행): {exc.__class__.__name__}: {str(exc)[:120]} ==")
+            log(f"== [백업] 결과시트 구글시트(SA) → 백업/{dest.name} ==")
+        except Exception as exc:   # SA 미등록·권한없음(403/404)·네트워크 등 → 명시 후 진행(작업은 계속)
+            log(f"== [백업] ⚠ 결과시트 구글시트 백업 실패(진행): {exc.__class__.__name__}: {str(exc)[:120]} ==")
+    # 3) 관리대장(입력)은 **평문 비밀번호**가 있어 로컬 백업 파일로 내려받지 않는다(출력물 평문 금지).
+    #    앱이 수정하는 건 재고 2개 열뿐이라 복구는 구글 시트 버전기록으로 충분하다(보안 > 로컬 백업 편의).
+    if input_url:
+        log("== [백업] 관리대장은 평문 비밀번호가 있어 로컬 백업 생략(보안규칙) — 복구는 구글시트 버전기록 사용 ==")
     if saved:
         log(f"== [백업] 작업 전 원본 {len(saved)}개 백업 완료(output/백업/) ==")
     return saved

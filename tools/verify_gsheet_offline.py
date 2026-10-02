@@ -837,6 +837,44 @@ def t12_delete_ghost_product_rows() -> None:
     _ok("마스터에 없는 유령 상품 행만 삭제 · 현행 상품·미수집 계정 행 보존(원장은 관리중단 이력 보존)")
 
 
+def t13_backup_result_via_sa() -> None:
+    print("[13] 백업 — 결과시트는 SA(Sheets API) 값 스냅샷으로 백업·관리대장은 평문비번이라 로컬백업 생략(보안)")
+    from coupang_analytics import pipeline_gsheet as pg
+    from coupang_analytics import gsheet_api as ga
+
+    class _FakeBackupClient:
+        def __init__(self, url, **kw):
+            self.url = url
+
+        def sheet_titles(self):
+            return ["계정목록", "가게A"]
+
+        def read_values(self, sheet, cell_range=None):
+            return {"계정목록": [["대표", "사업자"], ["대표A", "biz_A"]],
+                    "가게A": [["키워드", "순위"], ["텀블러", "3"]]}.get(sheet, [])
+
+    orig = ga.GSheetClient
+    ga.GSheetClient = _FakeBackupClient   # 백업 헬퍼가 gsheet_api.GSheetClient 를 쓰므로 여기 패치
+    try:
+        d = Path(tempfile.mkdtemp())
+        logs: list[str] = []
+        pg.backup_sources(str(d), input_url="https://x/ledger", output_url="https://x/result",
+                          on_log=logs.append)
+    finally:
+        ga.GSheetClient = orig
+    bdir = d / "백업"
+    result_files = list(bdir.glob("결과시트_*.xlsx"))
+    ledger_files = list(bdir.glob("관리대장_*.xlsx"))
+    joined = "\n".join(logs)
+    assert len(result_files) == 1, f"결과시트 SA 백업 안 됨(공개export 401 경로 잔존?): {list(bdir.glob('*'))}"
+    assert not ledger_files, f"관리대장이 로컬 백업됨(평문 비번 유출 위험): {ledger_files}"
+    assert "관리대장" in joined and "평문" in joined, f"관리대장 생략 사유 로그 없음: {joined}"
+    wb = openpyxl.load_workbook(result_files[0])
+    assert "계정목록" in wb.sheetnames and "가게A" in wb.sheetnames, wb.sheetnames
+    assert wb["가게A"].cell(2, 1).value == "텀블러", "값 스냅샷 보존 실패"
+    _ok("결과시트=SA 값 백업(시트·값 보존)·관리대장=로컬백업 생략(평문비번 보안)·공개export 401 폐기")
+
+
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
     for fn in (t1_ledger_rows, t1b_ledger_strike, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
@@ -844,7 +882,7 @@ def main() -> int:
                t6b_multi_account_roster, t6c_content_col_widths, t7_staff_keywords_merge,
                t8_exec_retry, t9_legacy_format_mismatch, t10_stats_full_replace_mismatch,
                t11_move_across_title_merge, t11b_merge_failure_nonfatal, t11c_stock_migration_frozen_cols,
-               t12_delete_ghost_product_rows):
+               t12_delete_ghost_product_rows, t13_backup_result_via_sa):
         fn()
     print("=== 전부 통과 ===")
     return 0
