@@ -14,6 +14,10 @@
 - [판매상태 불일치 경고(구현완료)](feature-sale-status-mismatch-flag.md) — 대장=판매중지인데 쿠팡=판매중이면 실행날짜칸 적색. 소스=상품조회 productStatus.
 - [VID 출처=상품조회/수정](feature-vid-source-from-product-list.md) — vid를 vendor-inventory/search 상품명매칭. vid=헤더 이름칸. 옵션분리·블록명=등록명+옵션라벨·③=sibling_vids.
 
+- [⭐저장소 결정: 구글시트로 시작 + 규칙 4가지(2026-10-02·구현 보류)](decision-storage-gsheet-4rules.md) — 돈·재고 원장=앱만 추가 · 채권자 파일 분리 · 저장 계층 한 곳 · 쓰기 PC 하나. 창고 동시 입력 시작 시 DB 이전 재판단.
+- [⭐⭐사업 맥락: 위탁관리·회사수익 정산·채권자 370명/300억 상환(2026-10-02)](business-context-consignment-creditors.md) — 기능 대중소 분류의 전제. 상환 배분은 법률 검토 후 소유자 결정·앱은 계산/기록/감사. 고객 CS 범위 미결.
+- [⭐앱 범위: 주문·배송·CS=샵마인, 우리=상품등록+관리·통계(2026-10-02)](app-scope-no-orders-shopmine.md) — 주문/배송/클레임/문의 기능 만들지 않음. DOMAIN_DESIGN D5·D6 범위 밖(문서 갱신=통합). 홈 시안 캔버스 링크 포함.
+
 ## 실행·운영
 - [재부팅 자동복구](reboot-recovery.md) — 야간 재부팅 시 --resume(로그온 트리거)로 판매수집 스킵·순위부터. Windows 자동로그인 필요.
 - [실행 UI=app_qt·상시가동](runtime-ui-and-always-on.md) — app.py 아님. 설정탭=파일/API키+구글시트 카드(순위값 UI 없음·config.py만). 무인 --auto 야간모드.
