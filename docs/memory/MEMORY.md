@@ -1,4 +1,6 @@
 ## 현재 상태 · 프로젝트 방향
+- [⭐새 세션 진입점(2026-10-02): 프록시 라이브 해결·세션 마무리](handoff-session-261002.md) — ③순위 DataImpulse 한국 주거용으로 돌파·CLAUDE.md 압축. 최우선=첫 밤샘 271개 규모 검증·GB요금 확인·운용PC 재배포.
+- [노출순위 프록시 라이브 실측(2026-10-02)](proxy-live-test-261002.md) — DataImpulse 한국 주거용(회전)=통과 100%·Decodo 고정ISP=번아웃·코드 무결. 세팅=proxies.txt+config.json proxy/enabled.
 - [프록시 통합(계정별 고정·a-모델)·소유자 하드닝본 적용·기본 OFF·미커밋(2026-10-01)](proxy-integration-off-261001.md) — fail-closed·CDP인증 source==Proxy만·SOCKS규칙·rendezvous·_resolve_proxy(계정별 스킵). 게이트 10종+복잡도+test 5종 초록. 라이브 미검증·밴 위험 상존.
 - [⭐운영대장 4파일 데이터모델 2단계 전환도구(2026-10-01)](handoff-operation-data-model-261001.md) — 소유자 9요구 전부 반영·전환도구3종·수식연동/셀잠금/계약서보강. 커밋 70df784 **푸시 대기(분류기 차단)**. 남은=3단계 앱배선(input_list 다중시트). SSOT=designs/OPERATION_DATA_MODEL.md.
 - [⭐새 세션 진입점: 현재 상태 SSOT(2026-09-29)](handoff-session-260929-continued.md) — 매칭 5원인·AI 의미매칭·회사보유재고·정산 2단계·원장 이름규칙·괴물함수 전멸·배포 spec 버그수정. master HEAD=3dc1cf0·게이트9 초록. **최우선=운용PC 재배포**(zip 준비됨)·라이브(사무실).
