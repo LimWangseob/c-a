@@ -432,7 +432,8 @@ def _finish(ctx: _RunCtx, a: Account, report_acc, metrics, inv_by_vid, inv_statu
                                  upbundle_vids=upbundle_vids, live_vids=live_vids, vid_meta=vid_meta,
                                  pid_by_vid=pid_by_vid)
             else:
-                with WingBrowser(profile_dir=_PROFILE, offscreen=True, proxy=rank_px) as rank_browser:
+                with WingBrowser(profile_dir=_PROFILE, offscreen=True, proxy=rank_px,
+                                 block_images=getattr(config, "RANK_BLOCK_IMAGES", False)) as rank_browser:
                     warmup(rank_browser)
                     _process_account(report_acc, wb, ctx.naver, ctx.ai_key, rank_browser, metrics,
                                      inv_by_vid, ctx.col_label, ctx.grow, log, ctx.partial,

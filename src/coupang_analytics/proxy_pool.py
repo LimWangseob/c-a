@@ -123,6 +123,63 @@ def rank_proxy_or_skip(log=None) -> tuple[Optional[str], bool]:
         return None, False
 
 
+def _pick_url(urls: list[str], key: str) -> str:
+    """raw_url 목록에서 결정적(rendezvous) 1개 선택 — _pick 과 동일한 점수식."""
+    def score(u: str) -> bytes:
+        return hashlib.sha256(f"{key}\0{u}".encode("utf-8")).digest()
+
+    return max(urls, key=score)
+
+
+def rank_proxy_pool_urls() -> list[str]:
+    """활성 노출순위 프록시 노드 raw_url 목록(결정적 정렬). OFF/매니저없음=[].
+
+    PROXY_RANK_URL 이 명시되면 그 1개만(풀 회전 대상 아님). 캐시된 매니저를 쓴다(매 실행 1회 로드).
+    ON 인데 유효 프록시가 없으면 load_manager 가 ProxyConfigurationError 를 올린다(fail-closed).
+    """
+    global _RANK_MGR, _RANK_LOADED
+    if not _enabled():
+        return []
+    if not _RANK_LOADED:
+        _RANK_MGR = load_manager()
+        _RANK_LOADED = True
+    if _RANK_MGR is None:
+        return []
+    explicit = (getattr(config, "PROXY_RANK_URL", "") or "").strip()
+    if explicit:
+        return [_normalize_required(explicit, label="PROXY_RANK_URL")]
+    return sorted(n.raw_url for n in _RANK_MGR.proxies if n.is_active)
+
+
+def pick_rank_proxy(tried=None, log=None) -> tuple[Optional[str], bool, str]:
+    """egress 회전용 프록시 선택 — 아직 안 쓴 활성 노드 1개.
+
+    tried = 이번 실행에 이미 시도한 raw_url 집합(호출부가 관리). 반환 (url|None, ok, status):
+      * OFF                     → (None, True,  "off")      무프록시 정상(회전 안 함)
+      * 새 노드 있음            → (url,  True,  "ok")
+      * ON+설정오류(풀 없음)    → (None, False, "error")    순위 스킵(직접연결 안 함)
+      * 활성 노드 전부 tried    → (None, False, "exhausted") 더 바꿀 egress 없음 → 쿨다운으로
+
+    ⚠ fail-closed: ON 인데 쓸 egress 가 없으면 절대 직접연결로 우회하지 않는다.
+    tried=set() 로 부르면 rank_proxy_or_skip 의 첫 선택과 동일한 노드를 준다(같은 _pick 점수식).
+    """
+    if not _enabled():
+        return None, True, "off"
+    tried = tried or set()
+    try:
+        urls = rank_proxy_pool_urls()
+    except ProxyConfigurationError as exc:
+        if log:
+            log(f"  [프록시] 노출순위 프록시 오류 → 순위 조회 건너뜀(직접연결 안 함): {exc}")
+        return None, False, "error"
+    if not urls:
+        return None, False, "error"
+    remaining = [u for u in urls if u not in tried]
+    if not remaining:
+        return None, False, "exhausted"
+    return _pick_url(remaining, "__rank__"), True, "ok"
+
+
 def reset_cache() -> None:
     """프록시 설정/파일 변경 후 캐시를 비운다(다음 rank 조회부터 재로드)."""
     global _RANK_MGR, _RANK_LOADED
@@ -141,5 +198,6 @@ def redacted(url: Optional[str]) -> str:
 
 __all__ = [
     "load_manager", "rank_proxy", "rank_proxy_url", "rank_proxy_or_skip",
+    "rank_proxy_pool_urls", "pick_rank_proxy",
     "reset_cache", "proxy_file_path", "redacted",
 ]

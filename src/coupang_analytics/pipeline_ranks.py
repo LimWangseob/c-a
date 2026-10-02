@@ -14,6 +14,7 @@ from pathlib import Path
 
 from . import config
 from . import human_mouse
+from . import proxy_blocklist
 from . import proxy_pool
 from . import session_state
 from .browser import WingBrowser
@@ -46,12 +47,128 @@ def _reset_rank_state() -> None:
     _RANK_CB["cooldowns"] = 0
 
 
+# ── egress 재회전 드라이버 (2026-10-02, SSOT=memory proxy-rotation) ────────────────
+# drive_rank 가 ①프록시 선택 ②브라우저 열기 ③egress IP 에코+차단이력 선제 skip ④run_once 실행
+# ⑤차단(blocked=True)이면 그 egress 를 차단목록에 기록하고 **새 egress 로 남은 키워드 재개**(상한
+# RANK_PROXY_ROTATE_MAX) 를 담당한다. 기존 서킷브레이커(쿨다운·당일중단)는 run_once 안에 그대로 있고,
+# 차단 시 '회전 가능하면 쿨다운 대신 즉시 새 IP' 로만 바꾼다(rotation_can_rotate). RANK_PROXY_ROTATE_ON_BLOCK
+# =False 거나 프록시 OFF 면 기존 단일 open 과 100% 동일(롤백 안전·핀 불변).
+_ROT = {"active": False, "can": (lambda: False)}
+
+
+def rotation_can_rotate() -> bool:
+    """지금 차단되면 쿨다운 대신 새 egress 로 회전할 수 있는가(drive_rank 가동 중 + 다음 egress 존재)."""
+    try:
+        return bool(_ROT["active"] and _ROT["can"]())
+    except Exception:
+        return False
+
+
+def _echo_egress(browser, proxy_url, log) -> str | None:
+    """브라우저(프록시 경유) 자신이 보는 공인 egress IP. 프록시 없거나 선제검사 OFF면 None."""
+    if not proxy_url or not getattr(config, "RANK_PROXY_PRECHECK_EGRESS", True):
+        return None
+    ip = proxy_blocklist.resolve_egress_ip(browser, log)
+    log(f"  [프록시] egress 확인 — {ip or '확인 실패'}")
+    return ip
+
+
+def _rank_single_open(offscreen: bool, run_once, log) -> None:
+    """회전 OFF/프록시 OFF 경로 — 기존처럼 1회 open(선제skip·회전 없음·동작 불변·핀 경로)."""
+    px, ok = proxy_pool.rank_proxy_or_skip(log)
+    if not ok:
+        return
+    with WingBrowser(profile_dir=_PROFILE, offscreen=offscreen, proxy=px,
+                     block_images=getattr(config, "RANK_BLOCK_IMAGES", False)) as browser:
+        run_once(browser, None)
+
+
+def _run_on_egress(offscreen: bool, px, run_once, log):
+    """한 egress 로 브라우저를 열어 실행. 반환 (egress_ip, outcome, blocked).
+
+    outcome="skip" = egress 가 차단이력이라 선제 skip(실행 안 함) · "ran" = run_once 실행(blocked 유효).
+    """
+    with WingBrowser(profile_dir=_PROFILE, offscreen=offscreen, proxy=px,
+                     block_images=getattr(config, "RANK_BLOCK_IMAGES", False)) as browser:
+        egress = _echo_egress(browser, px, log)
+        if px and egress and proxy_blocklist.is_blocked(egress):
+            e = proxy_blocklist.entry(egress) or {}
+            log(f"  [프록시] ⚠ egress {egress} = 차단이력({e.get('last', '?')}, "
+                f"{e.get('count', '?')}회) → skip, 새 IP 요청")
+            return egress, "skip", False
+        if px:
+            log(f"  [프록시] ✅ egress {egress or '(미확인)'} — 순위 진행")
+        return egress, "ran", bool(run_once(browser, egress))
+
+
+def drive_rank(offscreen: bool, run_once, log, should_stop=None) -> None:
+    """순위 브라우저 수명 + egress 회전/차단목록. run_once(browser, egress_ip) -> blocked(bool).
+
+    blocked=True(=IP 차단으로 중단, 회전 대상)면 egress 를 기록하고 새 egress 로 재개한다(run_once 는
+    이미 채운 키워드를 건너뛰고 이어서 측정). 프록시 OFF/플래그 OFF면 기존처럼 1회 open 만 한다.
+    """
+    should_stop = should_stop or (lambda: False)
+    log = log or (lambda m: None)
+    if not getattr(config, "RANK_PROXY_ROTATE_ON_BLOCK", True) or not getattr(config, "PROXY_ENABLED", False):
+        _rank_single_open(offscreen, run_once, log)
+        return
+
+    rotate_max = int(getattr(config, "RANK_PROXY_ROTATE_MAX", 3))
+    launch_max = int(getattr(config, "RANK_PROXY_LAUNCH_MAX_ATTEMPTS", 5))
+    prog = {"rotations": 0, "tried": set()}
+    cur = {"px": None}
+    launch_skips = 0
+
+    def _can() -> bool:
+        if prog["rotations"] >= rotate_max:
+            return False
+        probe = set(prog["tried"])
+        if cur["px"]:
+            probe.add(cur["px"])
+        return proxy_pool.pick_rank_proxy(probe)[1]
+
+    _ROT["active"], _ROT["can"] = True, _can
+    try:
+        while True:
+            px, ok, status = proxy_pool.pick_rank_proxy(prog["tried"], log)
+            if not ok:
+                if status == "exhausted":
+                    log("  [프록시] 사용 가능한 egress 소진(전부 차단이력/시도됨) — 순위 중단(다음 실행·다음날 재시도)")
+                return   # error 는 pick_rank_proxy 가 이미 로그 · 둘 다 순위 스킵(직접연결 안 함)
+            cur["px"] = px
+            egress, outcome, blocked = _run_on_egress(offscreen, px, run_once, log)
+            if outcome == "skip":
+                prog["tried"].add(px)
+                launch_skips += 1
+                if launch_skips >= launch_max:
+                    log("  [프록시] 차단이력 없는 egress 확보 실패 — 순위 중단")
+                    return
+                continue   # 다른 프록시로 재오픈
+            if not blocked or px is None or should_stop():
+                return
+            if egress:
+                proxy_blocklist.record(egress, "Akamai 검색차단")
+                log(f"  [프록시] ⛔ 차단 감지 — egress {egress} 차단목록 등록")
+            if prog["rotations"] >= rotate_max:
+                log(f"  [프록시] egress 회전 소진({prog['rotations']}/{rotate_max}) — 순위 중단(다음날 보완)")
+                return
+            prog["tried"].add(px)
+            prog["rotations"] += 1
+            log(f"  [프록시] 🔄 egress 재회전 {prog['rotations']}/{rotate_max} — 새 IP로 남은 키워드 재개")
+    finally:
+        _ROT["active"], _ROT["can"] = False, (lambda: False)
+
+
 def _rank_cooldown(browser, log, reason: str) -> bool:
     """이상징후 → 신규검색 중지 → 충분한 cooldown → (홈 1회 = 소량 정상요청). 재개 가능하면 True.
 
     cooldown 반복이 상한(RANK_COOLDOWN_MAX) 초과면 당일 중지(False). 우회 재요청은 하지 않는다 —
     호출부가 True면 같은 검색을 1회 재측정(=probe)해 정상 여부를 확인한다.
     """
+    if rotation_can_rotate():
+        # 차단 egress 를 새 IP 로 바꾸는 게 30분 쿨다운보다 싸다 → 쿨다운 생략하고 회전으로 전환.
+        log(f"  [노출측정] ⟳ 이상징후({reason}) — egress 회전 가능 → 쿨다운 생략, 새 IP로 전환")
+        return False   # 호출부가 RankHalt → drive_rank 가 egress 기록 후 새 IP로 재개
     _RANK_CB["cooldowns"] += 1
     if _RANK_CB["cooldowns"] > config.RANK_COOLDOWN_MAX:
         _RANK_HALT["stop"] = True
@@ -204,6 +321,7 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
     log = on_log or (lambda m: None)
     config.apply_rank_nav_delay_override(log)   # 설정 탭 순위 간격(config.json)으로 덮어씀 — 없으면 기본 유지(semi·auto 공통)
     config.apply_proxy_override(log)            # 노출순위 프록시 설정(config.json proxy/*) 런타임 적용 — 미설정=기본 ON
+    config.apply_rank_images_override(log)      # 노출순위 이미지 로드 여부(config.json rank/block_images) — 미설정=기본(이미지 유지)
     out = Path(out_dir)
     wb, path = _load_latest_wb(out)
     if wb is None:
@@ -220,13 +338,12 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
     if config.RANK_NAV_SERIAL:
         log(f"  [모드] 사람속도 직렬 네비게이션(검색 간격 {config.RANK_NAV_DELAY_MIN_SEC}"
             f"~{config.RANK_NAV_DELAY_MAX_SEC}s) — 버스트 없이 차단 회피. 차단 감지 시 즉시 중단(이어서 재개)")
-    halted = False
-    noname_products = 0   # vid·상품명 모두 없어(이례) 측정 못 한 상품 수(집계 → 종료 시 안내)
-    rank_px, px_ok = proxy_pool.rank_proxy_or_skip(log)   # 노출순위 전용 프록시(OFF=None·오류=스킵)
-    if not px_ok:
-        return path       # 프록시 설정 오류 → 순위 조회 건너뜀(직접연결로 우회하지 않음)
-    with WingBrowser(profile_dir=_PROFILE, offscreen=True, proxy=rank_px) as browser:
+    noname_box = {"n": 0}
+    halted_box = {"halted": False}
+
+    def _run_auto(browser, egress) -> bool:
         warmup(browser)
+        halted = False
         for biz in wb.account_sheets():
             if halted:
                 break
@@ -236,9 +353,15 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
             for pname in wb.products_of(biz):
                 halted, noname = _measure_product_auto(browser, wb, path, biz, pname, date, log)
                 if noname:
-                    noname_products += 1
+                    noname_box["n"] += 1
                 if halted:
                     break
+        halted_box["halted"] = halted
+        return halted   # 차단으로 중단 → drive_rank 가 새 egress 로 남은 키워드 재개
+
+    drive_rank(offscreen=True, run_once=_run_auto, log=log)
+    noname_products = noname_box["n"]
+    halted = halted_box["halted"]
     wb.apply_style()   # 저장본 서식 항상 표준으로 고정
     wb.save(path)
     if noname_products:
@@ -565,10 +688,11 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
     """
     st = _SemiState(autosubmit=config.RANK_SEMI_AUTOSUBMIT)
     _semi_start_log(st.autosubmit, log)
-    rank_px, px_ok = proxy_pool.rank_proxy_or_skip(log)   # 노출순위 전용 프록시(OFF=None·오류=스킵)
-    if not px_ok:
-        return path       # 프록시 설정 오류 → 순위 조회 건너뜀(직접연결로 우회하지 않음)
-    with WingBrowser(profile_dir=_PROFILE, offscreen=False, proxy=rank_px) as browser:
+
+    def _run_semi(browser, egress) -> bool:
+        st.halted = False      # 새 egress → halt 해제(차단카운터·측정수 등 누적은 유지)
+        st.cooldowns = 0       # 새 IP → 쿨다운 연속 카운터 리셋(이 IP 기준 다시)
+        st.miss_streak = 0
         _semi_browser_prep(browser, st.autosubmit, log)
         for biz in wb.account_sheets():
             if should_stop() or st.halted:
@@ -580,6 +704,9 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
                 if should_stop() or st.halted:
                     break
                 _semi_track_product(st, browser, wb, biz, pname, date, path, should_stop, log)
+        return st.halted and not should_stop()   # 차단 중단 → drive_rank 가 새 egress 로 재개
+
+    drive_rank(offscreen=False, run_once=_run_semi, log=log, should_stop=should_stop)
     wb.apply_style()
     wb.save(path)
     if st.noname_products:
@@ -731,6 +858,12 @@ def _semi_on_miss(st: _SemiState, kw, blocked: bool, should_stop, log) -> None:
         log(f"  [반자동] 「{kw}」 결과 미로딩(차단 추정) — 공란. "
             f"연속 {st.miss_streak}/{config.RANK_SEMI_AUTO_MAX_MISS}")
     if st.miss_streak < config.RANK_SEMI_AUTO_MAX_MISS:
+        return
+    if rotation_can_rotate():
+        # 차단 egress 를 새 IP 로 바꾸는 게 30분 쿨다운보다 싸다 → 쿨다운 생략하고 회전으로 전환.
+        st.cooldown_total += 1   # 종료 요약용 누적(차단으로 egress 교체한 횟수도 신호)
+        st.halted = True         # drive_rank 가 egress 기록 후 새 IP로 남은 키워드 재개
+        log("  ⟳ 차단 — egress 회전 가능 → 쿨다운 생략하고 새 IP로 전환")
         return
     # 하드 스톱 대신 **긴 쿨다운 후 자동 재개**(무인 장시간). 쿨다운 후에도 진전 0이
     # 반복되면(cooldowns 초과) 그때 당일 중단(IP 회복 불가 판단 — 무한 재시도 금지).

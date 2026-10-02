@@ -143,8 +143,9 @@ class WingBrowser:
     """실제 Chrome 세션 하나를 감싸는 컨텍스트 매니저."""
 
     def __init__(self, profile_dir: str | Path, port: int | None = None, offscreen: bool = True,
-                 proxy: str | None = None):
+                 proxy: str | None = None, block_images: bool = False):
         self.profile_dir = str(Path(profile_dir).resolve())
+        self._block_images = block_images   # True=이미지 로드 안 함(노출순위 트래픽 절감 실험·기본 False)
         self.port = port                 # None 이면 빈 포트 자동 할당
         self.offscreen = offscreen
         self._proc: subprocess.Popen | None = None
@@ -210,6 +211,8 @@ class WingBrowser:
         if self._proxy_server:                       # 계정별 고정 프록시(a-모델) — IP 고정
             args.append(f"--proxy-server={self._proxy_server}")
             print(config.format_log(f"[browser] 프록시 경유: {self._redacted_proxy()}"))
+        if self._block_images:                       # 이미지 로드 안 함(노출순위 트래픽 절감 실험·기본 OFF)
+            args.append("--blink-settings=imagesEnabled=false")
         if self.offscreen:
             args += ["--window-position=-2400,-2400", "--window-size=1280,900"]
         else:

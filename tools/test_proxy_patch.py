@@ -195,6 +195,171 @@ def test_apply_proxy_override_default_on() -> None:
         proxy_pool.reset_cache()
 
 
+def test_pick_rank_proxy_rotation() -> None:
+    """proxy_pool.pick_rank_proxy: egress 회전 — 안 쓴 노드 반환·전부 tried면 exhausted·OFF=off."""
+    saved_en = config.PROXY_ENABLED
+    orig_urls = proxy_pool.rank_proxy_pool_urls
+    proxy_pool.reset_cache()
+    try:
+        # OFF = 회전 안 함
+        config.PROXY_ENABLED = False
+        assert proxy_pool.pick_rank_proxy(set()) == (None, True, "off")
+        # ON + 3노드 풀(주입)
+        config.PROXY_ENABLED = True
+        pool = ["http://a:8080", "http://b:8080", "http://c:8080"]
+        proxy_pool.rank_proxy_pool_urls = lambda: list(pool)
+        u1, ok1, st1 = proxy_pool.pick_rank_proxy(set())
+        assert ok1 and st1 == "ok" and u1 in pool
+        # 결정적: 같은 tried면 같은 선택
+        assert proxy_pool.pick_rank_proxy(set())[0] == u1, "첫 선택이 결정적이지 않음"
+        # u1 제외 → 다른 노드
+        u2, ok2, st2 = proxy_pool.pick_rank_proxy({u1})
+        assert ok2 and st2 == "ok" and u2 != u1 and u2 in pool
+        # 전부 시도 → exhausted(직접연결 안 함)
+        assert proxy_pool.pick_rank_proxy(set(pool)) == (None, False, "exhausted")
+        # ON인데 풀 비었음 → error(fail-closed)
+        proxy_pool.rank_proxy_pool_urls = lambda: []
+        assert proxy_pool.pick_rank_proxy(set()) == (None, False, "error")
+    finally:
+        proxy_pool.rank_proxy_pool_urls = orig_urls
+        config.PROXY_ENABLED = saved_en
+        proxy_pool.reset_cache()
+
+
+def test_proxy_blocklist() -> None:
+    """proxy_blocklist: egress IP 기록·조회·TTL 만료·IP 파싱."""
+    import os
+    import tempfile
+    import time as _time
+
+    from coupang_analytics import proxy_blocklist as bl
+
+    # IP 파싱(에코 응답)
+    assert bl.parse_ip('{"ip":"203.0.113.9"}') == "203.0.113.9"
+    assert bl.parse_ip("198.51.100.7\n") == "198.51.100.7"
+    assert bl.parse_ip("no ip here") is None
+
+    orig_path = bl._path
+    saved_ttl = config.RANK_PROXY_BLOCKLIST_TTL_SEC
+    fd, tmp = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    os.unlink(tmp)   # 아직 없음 상태로 시작
+    try:
+        bl._path = lambda: tmp
+        assert bl.load() == {}, "초기 로드는 빈 목록"
+        assert bl.is_blocked("1.2.3.4") is False
+        # 기록 → 조회
+        bl.record("1.2.3.4", "Akamai Access Denied")
+        assert bl.is_blocked("1.2.3.4") is True
+        assert bl.is_blocked("9.9.9.9") is False
+        assert bl.count() == 1
+        # 재기록 → count 증가
+        bl.record("1.2.3.4", "재차단")
+        assert (bl.entry("1.2.3.4") or {}).get("count") == 2
+        # TTL 만료 → 로드 시 제거
+        config.RANK_PROXY_BLOCKLIST_TTL_SEC = 1
+        data = bl.load()
+        data["1.2.3.4"]["last_ts"] = _time.time() - 10   # 10초 전(>1초 TTL)
+        bl.save(data)
+        assert bl.load() == {}, "TTL 지난 항목이 안 지워짐"
+    finally:
+        bl._path = orig_path
+        config.RANK_PROXY_BLOCKLIST_TTL_SEC = saved_ttl
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+class _FakeCM:
+    """drive_rank 가 여는 WingBrowser 대체(실제 Chrome 안 띄움)."""
+    def __init__(self, *a, **k):
+        pass
+
+    def __enter__(self):
+        return "BROWSER"
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_drive_rank_rotation() -> None:
+    """pipeline_ranks.drive_rank: egress 선제 skip(차단이력) + 차단 시 재회전(상한) + 기록 — 오프라인."""
+    from coupang_analytics import pipeline_ranks as PR
+    from coupang_analytics import proxy_blocklist as bl
+
+    saved = (config.PROXY_ENABLED, config.RANK_PROXY_ROTATE_ON_BLOCK,
+             config.RANK_PROXY_PRECHECK_EGRESS, config.RANK_PROXY_ROTATE_MAX)
+    orig = (PR.WingBrowser, proxy_pool.rank_proxy_pool_urls,
+            bl.resolve_egress_ip, bl.is_blocked, bl.record, bl.entry)
+    proxy_pool.reset_cache()
+    try:
+        config.PROXY_ENABLED = True
+        config.RANK_PROXY_ROTATE_ON_BLOCK = True
+        config.RANK_PROXY_PRECHECK_EGRESS = True
+        PR.WingBrowser = _FakeCM
+        proxy_pool.rank_proxy_pool_urls = lambda: ["http://a:1", "http://b:1", "http://c:1"]
+        bl.entry = lambda ip, data=None: {"last": "T", "count": 1}
+
+        # ── 시나리오 1: 첫 egress 가 차단이력 → skip, 다음 깨끗한 IP 로 진행(run_once 1회) ──
+        egress_seq = ["1.1.1.1", "2.2.2.2"]
+        bl.resolve_egress_ip = lambda browser, log=None: egress_seq.pop(0)
+        bl.is_blocked = lambda ip, data=None: ip == "1.1.1.1"
+        recorded: list = []
+        bl.record = lambda ip, reason="": recorded.append(ip)
+        calls: list = []
+
+        def _ok(b, e) -> bool:
+            calls.append(e)
+            return False
+
+        PR.drive_rank(offscreen=True, run_once=_ok, log=lambda m: None)
+        assert calls == ["2.2.2.2"], f"차단이력 IP skip 실패: {calls}"
+        assert recorded == [], "선제 skip 인데 차단기록이 생김"
+
+        # ── 시나리오 2: 매 실행 차단(True) → 회전 상한까지 재회전 + egress 기록 ──
+        config.RANK_PROXY_ROTATE_MAX = 2
+        ips = iter(["10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4"])
+        bl.resolve_egress_ip = lambda browser, log=None: next(ips)
+        bl.is_blocked = lambda ip, data=None: False
+        recorded2: list = []
+        bl.record = lambda ip, reason="": recorded2.append(ip)
+        runs: list = []
+
+        def _blocked(b, e) -> bool:
+            runs.append(e)   # 항상 차단
+            return True
+
+        PR.drive_rank(offscreen=False, run_once=_blocked, log=lambda m: None)
+        # 첫 실행 + 회전 2회 = run_once 3회, 매번 egress 기록, 그 뒤 회전 소진으로 종료
+        assert len(runs) == 3, f"회전 상한 동작 오류(run_once {len(runs)}회)"
+        assert recorded2 == runs, f"차단 egress 기록 누락: {recorded2} vs {runs}"
+    finally:
+        (config.PROXY_ENABLED, config.RANK_PROXY_ROTATE_ON_BLOCK,
+         config.RANK_PROXY_PRECHECK_EGRESS, config.RANK_PROXY_ROTATE_MAX) = saved
+        (PR.WingBrowser, proxy_pool.rank_proxy_pool_urls,
+         bl.resolve_egress_ip, bl.is_blocked, bl.record, bl.entry) = orig
+        proxy_pool.reset_cache()
+
+
+def test_rank_block_images() -> None:
+    """WingBrowser(block_images) 저장 + config.apply_rank_images_override(config.json 토글)."""
+    from coupang_analytics import appconfig
+    # __init__ 가 이미지 플래그만 저장(Chrome 실행은 __enter__ 라 여기선 안 뜸)
+    assert WingBrowser("x", block_images=True)._block_images is True
+    assert WingBrowser("x")._block_images is False
+    saved = config.RANK_BLOCK_IMAGES
+    orig_get = appconfig.get
+    try:
+        appconfig.get = lambda k, d="": ("on" if k == "rank/block_images" else d)
+        config.apply_rank_images_override()
+        assert config.RANK_BLOCK_IMAGES is True, "rank/block_images=on 인데 적용 안 됨"
+        appconfig.get = lambda k, d="": d   # 미설정 → 기본 OFF(이미지 유지)
+        config.apply_rank_images_override()
+        assert config.RANK_BLOCK_IMAGES is False, "미설정 기본이 OFF가 아님"
+    finally:
+        appconfig.get = orig_get
+        config.RANK_BLOCK_IMAGES = saved
+
+
 def main() -> None:
     tests = [
         test_fail_closed,
@@ -203,6 +368,10 @@ def main() -> None:
         test_http_auth_and_challenge_source,
         test_rank_proxy_or_skip,
         test_apply_proxy_override_default_on,
+        test_pick_rank_proxy_rotation,
+        test_proxy_blocklist,
+        test_drive_rank_rotation,
+        test_rank_block_images,
     ]
     for test in tests:
         test()

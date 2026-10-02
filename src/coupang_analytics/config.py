@@ -303,6 +303,20 @@ def apply_rank_nav_delay_override(log=None) -> bool:
     return True
 
 
+def apply_rank_images_override(log=None) -> None:
+    """config.json `rank/block_images` 로 노출순위 브라우저의 이미지 로드 여부를 런타임 적용.
+
+    true/1/on/yes → 이미지 로드 안 함(트래픽 절감 실험). 미설정/그 외 → 기본(이미지 유지=현행 동일).
+    ⚠ 이미지 끄기가 봇 신호로 차단을 유발하는지 **실측 검증 전까지는 기본 OFF**(메모리 proxy-ip-policy 참조).
+    게이트/시뮬 환경엔 이 키가 없어 항상 기본(테스트 불변)."""
+    global RANK_BLOCK_IMAGES
+    from . import appconfig
+    v = appconfig.get("rank/block_images", "").strip().lower()
+    RANK_BLOCK_IMAGES = v in ("true", "1", "on", "yes")
+    if log and RANK_BLOCK_IMAGES:
+        log("  [순위] 이미지 로드 끔(rank/block_images=on) — 트래픽 절감 실험 모드")
+
+
 def apply_proxy_override(log=None) -> None:
     """config.json(appconfig)의 `proxy/*` 로 노출순위 프록시 설정을 런타임 적용(운용 exe 토글).
 
@@ -340,3 +354,23 @@ PROXY_ENABLED = False       # True=노출순위 검색에 프록시 적용(기�
 PROXY_FILE = "proxies.txt"  # data_root 기준·한 줄에 프록시 URL 하나(scheme://[user:pass@]host:port)
 PROXY_RANK_URL = ""         # 노출순위용 프록시 URL 명시(비면 proxies.txt 풀에서 결정적 선택)
 PROXY_ALLOW_AUTH = False    # HTTP(S) user:pass 프록시 인증을 명시적으로 허용할 때만 True(기본 금지=IP 화이트리스트만)
+
+# ── 노출순위 프록시: 차단 시 egress 재회전 + egress IP 차단목록 (2026-10-02) ──
+# 순위검색 중 차단(RankBlocked) 감지 시 30분 쿨다운에 바로 들지 말고 **새 egress IP 로 먼저 교체**해 재시도.
+# 회전 소진/무효일 때만 기존 쿨다운→당일중단으로 떨어진다(기존 안전망 보존). 로그인·수집에는 무관.
+# 차단당한 **실제 egress IP** 를 파일에 기억(TTL 만료)해, 업체가 그 IP 를 다시 주면 skip 하고 다른 IP 를 받는다.
+RANK_PROXY_ROTATE_ON_BLOCK = True    # 차단 감지 시 쿨다운 전에 새 egress 로 먼저 교체
+RANK_PROXY_ROTATE_MAX = 3            # 차단 1건당 egress 회전 상한(소진 시 기존 쿨다운으로)
+RANK_PROXY_LAUNCH_MAX_ATTEMPTS = 5   # (재)기동 시 차단이력 egress 선제 skip 반복 상한(풀 전부 이력이면 fail-closed)
+RANK_PROXY_PRECHECK_EGRESS = True    # (재)기동마다 egress IP 에코로 확인 + 차단목록 대조(이력이면 다른 IP 재요청)
+RANK_PROXY_BLOCKLIST_FILE = "rank_blocked_ips.json"  # data_root 기준·gitignore(운영 상태·비밀 아님)
+RANK_PROXY_BLOCKLIST_TTL_SEC = 259200   # 차단 egress 기억 유효기간 72h — 지나면 복귀(주거용 IP 회복·영구낙인 금지)
+RANK_PROXY_EGRESS_ECHO_URLS = (          # 브라우저가 자기 공인 egress IP 확인용(coupang 아님·평판 안 태움)
+    "https://api.ipify.org?format=json",
+    "https://ifconfig.me/ip",
+)
+
+# 노출순위 브라우저 이미지 로드 여부 — 기본 False(이미지 유지=현행). True면 트래픽 절감(실험).
+# ⚠ 이미지 끄기가 봇 신호로 Akamai 차단을 유발하는지 **실측 검증 전까지 기본 OFF**(옛 추정 '이미지 끄기=금지'를
+# A/B 로 검증 중). config.json `rank/block_images` 로 런타임 토글(apply_rank_images_override). SSOT=proxy-ip-policy.
+RANK_BLOCK_IMAGES = False
