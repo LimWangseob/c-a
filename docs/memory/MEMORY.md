@@ -14,6 +14,7 @@
 - [판매상태 불일치 경고(구현완료)](feature-sale-status-mismatch-flag.md) — 대장=판매중지인데 쿠팡=판매중이면 실행날짜칸 적색. 소스=상품조회 productStatus.
 - [VID 출처=상품조회/수정](feature-vid-source-from-product-list.md) — vid를 vendor-inventory/search 상품명매칭. vid=헤더 이름칸. 옵션분리·블록명=등록명+옵션라벨·③=sibling_vids.
 
+- [⭐디자인 컨셉 확정: 참고 대시보드 스타일·보라(2026-10-03·앱 적용 보류)](decision-design-concept-261003.md) — 회색 바탕+흰 둥근 카드·보라 단일 강조·아이콘 사이드바·기간 알약·알약 막대 그래프. 시안 "디자인 컨셉 확정" 보드가 기준.
 - [⭐저장소 결정: 구글시트로 시작 + 규칙 4가지(2026-10-02·구현 보류)](decision-storage-gsheet-4rules.md) — 돈·재고 원장=앱만 추가 · 채권자 파일 분리 · 저장 계층 한 곳 · 쓰기 PC 하나. 창고 동시 입력 시작 시 DB 이전 재판단.
 - [⭐⭐사업 맥락: 위탁관리·회사수익 정산·채권자 370명/300억 상환(2026-10-02)](business-context-consignment-creditors.md) — 기능 대중소 분류의 전제. 상환 배분은 법률 검토 후 소유자 결정·앱은 계산/기록/감사. 고객 CS 범위 미결.
 - [⭐앱 범위: 주문·배송·CS=샵마인, 우리=상품등록+관리·통계(2026-10-02)](app-scope-no-orders-shopmine.md) — 주문/배송/클레임/문의 기능 만들지 않음. DOMAIN_DESIGN D5·D6 범위 밖(문서 갱신=통합). 홈 시안 캔버스 링크 포함.
