@@ -875,6 +875,23 @@ def t13_backup_result_via_sa() -> None:
     _ok("결과시트=SA 값 백업(시트·값 보존)·관리대장=로컬백업 생략(평문비번 보안)·공개export 401 폐기")
 
 
+def t14_sheet_id_robust() -> None:
+    print("[14] sheet_id_from_url 보강 — 중복붙여넣기 URL에서도 실제 ID, 깨진 링크는 예외(2026-10-03)")
+    from coupang_analytics.gsheet import sheet_id_from_url as f
+    ID = "1Fb_G1Jz3EmYbu_SnDVPXiMmO7In7vq6d_lfFPriQYq0"
+    base = "https://docs.google.com/spreadsheets/d/"
+    assert f(base + ID + "/edit?gid=123#gid=123") == ID, "정상 URL"
+    assert f(base + "https://docs.google.com/spreadsheets/d/" + ID + "/edit") == ID, "중복 붙여넣기 URL(과거 'https' 404)"
+    assert f(ID) == ID, "순수 ID"
+    # 유효 ID 없음(중복/깨진) → ValueError
+    for bad in (base + "https", base + "http"):
+        try:
+            f(bad); raise AssertionError("깨진 URL인데 예외 안 남: " + bad)
+        except ValueError:
+            pass
+    _ok("중복/깨진 URL 방어 — 유효 ID만 채택(마지막)·없으면 명확한 ValueError")
+
+
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
     for fn in (t1_ledger_rows, t1b_ledger_strike, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
@@ -882,7 +899,7 @@ def main() -> int:
                t6b_multi_account_roster, t6c_content_col_widths, t7_staff_keywords_merge,
                t8_exec_retry, t9_legacy_format_mismatch, t10_stats_full_replace_mismatch,
                t11_move_across_title_merge, t11b_merge_failure_nonfatal, t11c_stock_migration_frozen_cols,
-               t12_delete_ghost_product_rows, t13_backup_result_via_sa):
+               t12_delete_ghost_product_rows, t13_backup_result_via_sa, t14_sheet_id_robust):
         fn()
     print("=== 전부 통과 ===")
     return 0

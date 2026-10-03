@@ -1687,6 +1687,18 @@ def t1_proxy_pool():
     _ok("노출순위 전용 · OFF 보존 · fail-closed · rank 결정적(활성만) · 순위 스킵 · SOCKS 처리 · 인증정보 로그 가림")
 
 
+def t1_power_keep_awake():
+    print("[PW] 절전 억제(power.keep_awake) — 호출이 bool 반환·예외 없음·off/on 토글 (야간 멈춤 차단, 2026-10-03)")
+    from coupang_analytics import power
+    on = power.keep_awake(True)
+    off = power.keep_awake(False)   # 테스트 스레드 상태 복원(디스플레이 요구 해제)
+    assert isinstance(on, bool) and isinstance(off, bool), "keep_awake 반환은 bool"
+    import sys as _sys
+    if _sys.platform == "win32":
+        assert on is True, "Windows 에선 SetThreadExecutionState 성공해야(True)"
+    print("  ✓ keep_awake 정상(윈도우=True·타OS=no-op False)·예외 없음")
+
+
 def main():
     print("=" * 60)
     print("  로그인 불필요 부분 실증 (실제 실행 — 가짜 아님)")
@@ -1721,6 +1733,7 @@ def main():
     t1_invalid_product_name()
     t1_multiline_product_name()
     t1_proxy_pool()
+    t1_power_keep_awake()
     t1_coupang_check_compute()
     t2_keywords(store, il)
     print("=" * 60)

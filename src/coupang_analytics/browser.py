@@ -18,6 +18,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 from . import config
+from . import power
 from .proxy_manager import ProxyConfigurationError, ProxyNode
 
 # 콘솔 없는 실행(작업 스케줄러의 무인 --auto = pythonw)에서 보조 명령(파워셸·taskkill·크롬 실행)이
@@ -237,12 +238,16 @@ class WingBrowser:
             self.context = self._browser.contexts[0]
             self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
             self._maybe_setup_proxy_auth()
+            # 브라우저가 열려 있는 동안(특히 ③ 반자동 순위의 보이는 창) 디스플레이/시스템 절전을 억제한다.
+            # 야간 무인 중 디스플레이가 꺼지면 bring_to_front 가 무한 대기해 ~10h 멈춘 실측(2026-10-02) 차단.
+            power.keep_awake(True)
             return self
         except BaseException:
             self.__exit__(None, None, None)          # _pw.stop() + _kill_tree() → 좀비 누수 차단
             raise
 
     def __exit__(self, *exc) -> None:
+        power.keep_awake(False)   # 브라우저 닫힘 → 절전 억제 해제(기본 전원정책 복원)
         if self._proxy_cdp is not None:
             try:
                 self._proxy_cdp.detach()

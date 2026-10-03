@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 4c9cd574-1676-4798-ba82-659441c10186
-  modified: 2026-10-02T10:24:34.873Z
+  modified: 2026-10-03T01:54:38.340Z
 ---
 
 구글 시트 통합 = **파일 2개**(2026-09-13 확정, 구현·라이브 검증 완료). 상세 SSOT=`designs/GSHEET_UNIFIED.md`, 설정=`docs/GSHEET_SETUP.md`.
@@ -17,6 +17,8 @@ metadata:
 - 배선: `pipeline.run_full(gsheet_output_url=)` 최종저장직후 `_push_gsheet`(push_statistics→sync_index), ①②③ 개별실행도 반영. 실패=로그명시·xlsx 보존·비치명. app_qt=QSettings·app.py=winreg 공유.
 
 **함정(라이브가 잡음)**: ①설정 UI에서 결과 URL은 **'결과(출력) 링크' 칸**에 넣어야 함(입력칸 아님 — 파이프라인은 output_url을 봄). ②mergeType='MERGE_ALL'(MERGE_ROW 무효→400). ③계정목록 틀고정 frozenColumnCount=0(제목 A1:H1 병합을 열고정이 부분절단→400). xlsx 병행 유지(오프라인 백업), rclone 제거. 검증=verify_gsheet_offline(7종)+시뮬(라이브는 사무실).
+
+**⭐링크 중복붙여넣기 방어(`sheet_id_from_url`, 2026-10-03 실측)**: 링크 칸에 URL이 두 번 겹쳐 들어가면(`…/d/https://docs.google.com/spreadsheets/d/<ID>/edit`) 옛 정규식 `/spreadsheets/d/([A-Za-z0-9_-]+)` 이 **첫 `/d/` 뒤의 'https'** 를 ID로 잡아 API **404("ID/URL 확인: https")** — 재고현황·원장에서 실제 발생(사용자 "공유도 삭제도 아닌데 연결은 되는데 반영만 안 됨"의 정체). 수정=`finditer`로 모든 `/d/<id>` 후보를 뽑되 **뒤에 `://` 가 오는(=중첩 URL 스킴) 후보와 스킴단어(https/http) 제외**, 남은 유효후보 **마지막(실제 ID)** 채택·없으면 명확한 ValueError. **길이기준 안 씀**(짧은 테스트 ID "ABC123def456" 보존). 비슷한 깨짐 이력: stock URL `…-https`(끝에 -https 붙음). 검증=verify_gsheet_offline[14].
 
 **작업 전 백업(backup_sources) = SA 다운로드(2026-10-02 수정)**: 예전엔 결과시트·관리대장을 **공개 export**(`gsheet.download_xlsx`)로 백업 → 두 시트 다 **SA 공유(비공개)**라 **401**(실측). 수정: 결과시트는 **서비스계정(Sheets API) 값 스냅샷**(`_download_gsheet_via_sa`=각 시트 read_values→openpyxl)으로 백업, **관리대장은 로컬 백업 생략**(평문 비밀번호 있어 output 평문 금지 — 기존 401이 사실 이 유출을 막고 있었음·복구는 구글 버전기록). 게이트 `verify_gsheet_offline[13]`. ⚠`restore_master_from_gsheet`(마스터 없을 때 복원)도 공개 export라 같은 401 가능 — 복원본은 실제 xlsx 구조가 필요해 값 스냅샷으로 못 바꿈(별도 과제·씨앗 동봉으로 거의 안 탐). ⚠**403/400 라이브 함정**: SA에 시트가 공유 안 됐으면 404/403, 시트가 **엑셀(.xlsx) 업로드본**이면 "must not be an Office file" 400 → 네이티브 구글시트로 변환 필요. 회사재고(stock)·원장(registry) 링크도 동일 규칙.
 

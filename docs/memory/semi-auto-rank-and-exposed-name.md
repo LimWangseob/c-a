@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: fd9529df-6f22-4998-bfda-be5db28b97c5
-  modified: 2026-10-02T08:17:59.492Z
+  modified: 2026-10-03T01:54:26.864Z
 ---
 
 **반자동 순위조회 = 정확등수 차단 난제의 실질 해법**(2026-09-11 구현). 자동(현행)과 반자동을 UI에서 분리:
@@ -29,6 +29,8 @@ metadata:
 **⚠ 간격 로직(2026-09-14 개선)**: 검색 간 대기는 `time.sleep`(비중단)에서 **`_interruptible_sleep`로 바꾸고 '검색 앞'으로 이동**(`measured_any` 게이트) → 대기 중 '반자동 중지' 즉시 반응 + **첫 검색 전·마지막 검색 뒤 자투리 대기 제거**. `RANK_SEMI_AUTOSUBMIT=False`면 예전처럼 사람이 Enter(자동채움만). 관련: `_submit_search`(Enter+버튼/폼 폴백)·`_prefill_search`(검색창 자동입력, 제출 안 함). [[login-block-session-first-circuit-breaker]] [[rank-antiblock-circuit-breaker]]
 
 **⭐이중 검색요청 제거(2026-10-02, 외부 리뷰 교차검증서 유일한 실질 결함)**: `_submit_search`가 예전엔 Enter 직후 **무조건** `_SUBMIT_JS`(버튼클릭/폼submit)를 또 실행 → Enter가 이미 네비를 시작한 경우(검색결과 페이지에도 같은 검색창·버튼 존재) **같은 쿼리가 2회 제출**될 수 있었다(키워드당 검색요청 2배 = IP 소모·차단 위험). 수정=`_submit_search(browser, kw)`가 Enter 후 URL q==kw 를 `config.RANK_SUBMIT_CONFIRM_SEC`(기본 2.0s) 동안 확인 → **네비 시작됐으면 폴백 생략**, Enter 미통과 레이아웃만 폴백(자동 경로 `rank._await_query_navigated`와 동일 패턴). 재현(스크래치: Enter=1·폼폴백=1 관측)→수정→핀 `pin_submit_no_double_on_nav`(Q)·`pin_submit_fallback_on_no_nav`(Q2) 영구 추가(앞 핀의 스텁 persist 회피 위해 모듈 로드시 진짜 함수 `_REAL_SUBMIT_SEARCH` 캡처). 게이트10+복잡도+핀13 초록. ⚠리뷰어의 다른 "매우 높음"(프록시 1개 고정·차단후 재사용·이미지차단 없음)은 **2026-10-02 egress 회전 이전의 낡은 ZIP 오판** — 최신 코드엔 해당 결함 없음([[proxy-rotation-design-261002]]). 실효(트래픽/차단 감소)는 밤샘 규모검증서 run_log로 확인.
+
+**⭐야간 ~10h 멈춤 = 디스플레이 꺼짐 + 보이는 창(2026-10-03 실측·근본차단)**: ③ 반자동은 **보이는 Chrome 창**을 쓰는데, 야간 무인 중 디스플레이가 꺼지면 창 컴포지터가 멈춰 `browser.to_front()`(CDP `bring_to_front`)가 **타임아웃 없이 무한 대기**한다. 실측(output12 로그 분석): 2026-10-02 22:31:52 "kw 2/4 완료" 직후 멈춰 **2026-10-03 08:25:06** 그 다음 키워드부터 재개(약 9h53m). **PC는 밤새 켜져 있었고**(System 로그 222건 연속·02:55 Windows 업데이트까지·절전/부팅/모던스탠바이 이벤트 **0건**) **같은 프로세스**(로그파일 연속·재실행 아님)였다 → '절전'이 아니라 **앱 프로세스만 멈춤**. 검색간격 대기는 벽시계라 깨어있는 PC선 60s면 끝 → 남는 블록 단계는 `to_front` 하나. 재개 즉시 IP 차단(egress 밤샘으로 상함). **근본차단**: Playwright sync라 bring_to_front 타임아웃 불가 → **실행 중 디스플레이/시스템 절전 억제**(`power.keep_awake`=`SetThreadExecutionState ES_DISPLAY_REQUIRED`, `WingBrowser.__enter__/__exit__`에 연결). 운용 전원옵션(디스플레이·절전 "안 함")도 병행. 검증=verify_offline[PW]. SSOT=DESIGN §5.2.
 
 **반자동은 50위 초과도 실제 등수 기록**(2026-09-11): 자동은 `RANK_SCAN_MAX=50` 상한이나, 반자동은 이미 떠 있는 페이지 1장만 읽어 트래픽/차단 부담이 없으므로 `config.RANK_SCAN_MAX_SEMI=300`으로 로드된 페이지 오가닉 전부를 세어 **51위 이상도 그 등수로 기록**(라이브 검증: 51위 상품이 기본 max50→None="50위"로 뭉개짐 vs 반자동 max300→51 정확). `_track_ranks_semi`에서 `parse_serp_rank(pg, matcher, max_rank=config.RANK_SCAN_MAX_SEMI)`.
 
