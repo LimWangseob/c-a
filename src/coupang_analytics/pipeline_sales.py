@@ -174,7 +174,7 @@ def _fresh_login(b, a: Account, pw, log, unattended: bool) -> bool:
     else:
         _need_user()   # 비번 없음/자동입력 실패 → 직접 로그인해야 하니 창 표시
         log(f"  [{a.label}] 직접 로그인이 필요해 창을 띄웠습니다")
-    _wait_to = config.LOGIN_UNATTENDED_WAIT_SEC if unattended else 300
+    _wait_to = config.LOGIN_UNATTENDED_WAIT_SEC if unattended else config.LOGIN_ATTENDED_WAIT_SEC
     _grace = config.LOGIN_BLOCK_GRACE_SEC if unattended else 60.0
     # skip_on_otp=True: 2차 인증(인증번호) 화면이 뜨면 **대기하지 않고 이 계정 건너뜀**(다음 계정 진행).
     ok = b.wait_for_login(timeout=_wait_to, on_log=log, tag=a.account_id,

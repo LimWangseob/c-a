@@ -1565,7 +1565,10 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         self.log("== [무인 자동 실행] 시작 ==")
         _prevent_sleep(True)
         if self.input_list is None:
-            self.log("[무인] 입력 엑셀이 없어 실행 불가 — 앱을 한 번 수동 실행해 '입력 엑셀'을 연 뒤 다시 예약하세요. 종료")
+            # 입력 자동 로드(_auto_load_input)가 구글시트·PC엑셀 모두 실패 → 바로 종료. 위에 이미 사유 로그가 있다
+            # (예: 구글시트 403/404). 구글시트 사용자인데 "입력 엑셀이 없어"만 보여 혼동되던 것을 명확히 한다.
+            self.log("[무인] 입력을 불러오지 못해 실행 불가(구글시트·PC엑셀 모두 실패) — "
+                     "위 로그의 '입력 … 로드 실패' 사유를 확인하세요(구글시트 링크·서비스계정 편집 공유 또는 PC 엑셀). 종료")
             return self._auto_quit()
         if self.naver_creds is None or not self.ai_key:
             self.log("[무인] 네이버/OpenAI 키 미설정 — 설정 후 재시도. 종료")
