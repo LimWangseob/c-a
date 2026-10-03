@@ -1,4 +1,5 @@
-"""셀독등록원장 2단계 — 설정 탭 '원장' 카드와 실행 시작 원장 반영(Qt 믹스인).
+"""셀독등록원장 2단계 — 정산 탭 '원장' 카드와 실행 시작 원장 반영(Qt 믹스인).
+원장 링크 입력칸은 **설정 탭**(구글 시트 연동 카드)에 있다(2026-10-03 소유자: 설정 일원화) — 여기선 상태만.
 
 app_qt.App 이 상속한다. App 쪽에서 쓰는 것: _card·log·run_bg·creds_store·_save_shared·_store_passwords_map·
 _set_input_list·gs_input_edit. 원장 로직은 registry_ui(→ registry/registry_gsheet) 호출만.
@@ -18,24 +19,25 @@ class RegistryPanelMixin:
     # App 이 제공하는 것(정적검사용 선언)
     creds_store: Any
     gs_input_edit: Any
+    reg_url_edit: Any              # 설정 탭 '구글 시트 연동' 카드의 원장 링크칸
     log: Callable[[str], None]
     run_bg: Callable[..., None]
     _card: Callable[[str], Any]
     _save_shared: Callable[[str, str], None]
+    _goto_link_setting: Callable[[str], None]
     _set_input_list: Callable[[Any, str], None]
     _store_passwords_map: Callable[..., int]
     _guard_busy: Callable[[], bool]
     # ── 설정 카드 ────────────────────────────────────────────
     def _registry_card(self):
-        st = QtCore.QSettings("coupang-analytics", "ui")
         card = self._card("셀독등록원장 (지우지 않고 쌓는 원장 — 관리대장과 별도 구글시트)")
         g = QtWidgets.QGridLayout(card)
         g.setColumnStretch(1, 1)
 
-        self.reg_url_edit = QtWidgets.QLineEdit(st.value(registry_ui.KEY_URL, "", type=str))
-        self.reg_url_edit.setPlaceholderText("원장 구글시트 링크 또는 ID — 비우면 원장 미사용(서비스계정 '편집자' 공유)")
-        self.reg_url_edit.editingFinished.connect(
-            lambda: self._save_shared(registry_ui.KEY_URL, self.reg_url_edit.text().strip()))
+        self.reg_state_lbl = QtWidgets.QLabel()           # 원장 링크 등록 상태(링크칸은 설정 탭)
+        self.reg_state_lbl.setWordWrap(True)
+        go = QtWidgets.QPushButton("설정에서 변경")
+        go.clicked.connect(lambda: self._goto_link_setting("registry"))
         btns = QtWidgets.QHBoxLayout()
         self.reg_preview_btn = QtWidgets.QPushButton("원장 미리보기")
         self.reg_preview_btn.clicked.connect(lambda: self.do_registry_sync(dry_run=True))
@@ -43,8 +45,9 @@ class RegistryPanelMixin:
         self.reg_apply_btn.clicked.connect(lambda: self.do_registry_sync(dry_run=False))
         btns.addWidget(self.reg_preview_btn)
         btns.addWidget(self.reg_apply_btn)
+        btns.addWidget(go)
         g.addWidget(QtWidgets.QLabel("원장 링크"), 0, 0)
-        g.addWidget(self.reg_url_edit, 0, 1)
+        g.addWidget(self.reg_state_lbl, 0, 1)
         g.addLayout(btns, 0, 2)
 
         # 2-3 비밀번호 불일치(A안): 목록 → 사람이 고른 계정만 이전 비밀번호로 1회
@@ -65,7 +68,20 @@ class RegistryPanelMixin:
         g.addWidget(QtWidgets.QLabel("비밀번호 불일치"), 1, 0, QtCore.Qt.AlignTop)
         g.addWidget(self.reg_pw_list, 1, 1)
         g.addLayout(pw_btns, 1, 2)
+        self._refresh_registry_state()
         return card
+
+    def _refresh_registry_state(self):
+        """원장 링크 등록 여부를 정산 탭에 표시(비어 있으면 원장 미사용 — 정상 선택지라 경고색 아님)."""
+        lbl = getattr(self, "reg_state_lbl", None)       # 정산 탭이 아직 안 만들어졌으면 건너뜀
+        if lbl is None:
+            return
+        if self.reg_url_edit.text().strip():
+            lbl.setText("✅ 원장 링크 등록됨 — 실행 시작 때 원장 자동 반영")
+            lbl.setStyleSheet("color: #047857;")
+        else:
+            lbl.setText("(원장 링크 미등록 — 원장 미사용. '설정' 탭에서 등록)")
+            lbl.setStyleSheet("color: #64748b;")
 
     def _registry_urls(self) -> tuple[str, str]:
         return self.reg_url_edit.text().strip(), self.gs_input_edit.text().strip()
@@ -74,7 +90,8 @@ class RegistryPanelMixin:
     def do_registry_sync(self, dry_run: bool):
         reg_url, in_url = self._registry_urls()
         if not (reg_url and in_url):
-            QtWidgets.QMessageBox.information(self, "링크 필요", "원장 링크와 관리대장(입력) 링크를 먼저 등록하세요.")
+            QtWidgets.QMessageBox.information(self, "링크 필요",
+                                              "원장 링크와 관리대장(입력) 링크를 '설정' 탭에서 먼저 등록하세요.")
             return
         self._save_shared(registry_ui.KEY_URL, reg_url)
         if not dry_run and QtWidgets.QMessageBox.question(
@@ -92,7 +109,7 @@ class RegistryPanelMixin:
     def do_registry_pw_mismatch(self):
         reg_url, _ = self._registry_urls()
         if not reg_url:
-            QtWidgets.QMessageBox.information(self, "링크 필요", "원장 링크를 먼저 등록하세요.")
+            QtWidgets.QMessageBox.information(self, "링크 필요", "원장 링크를 '설정' 탭에서 먼저 등록하세요.")
             return
         self.run_bg(lambda: registry_ui.password_mismatch_accounts(
             registry_ui.load(reg_url, self.creds_store, self.log)),

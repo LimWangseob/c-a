@@ -42,8 +42,9 @@ from coupang_analytics.pipeline import (_interruptible_sleep, backup_sources,  #
                                         track_ranks_stage, write_run_stage)
 from coupang_analytics.rank import make_matcher, organic_rank, warmup  # noqa: E402
 import registry_ui  # noqa: E402
+from proxy_panel_qt import ProxyPanelMixin  # noqa: E402
 from registry_panel_qt import RegistryPanelMixin  # noqa: E402
-from stock_panel_qt import StockPanelMixin  # noqa: E402
+from stock_panel_qt import KEY_STOCK_URL, StockPanelMixin  # noqa: E402
 
 _PROFILE = "data/chrome-ui"
 _IMG_PROFILE = "data/chrome-images"   # 상세이미지 전용 Chrome 프로필(사용자가 여기 코팡 로그인 → warm 영속)
@@ -169,10 +170,20 @@ def _prevent_sleep(on: bool) -> None:
         pass
 
 
-class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
+# 설정 탭 '구글 시트 연동' 카드의 링크 4개 — 종류 → (설정 키, 화면 이름). 링크 입력은 **설정 탭에서만**
+# (2026-10-03 소유자: 흩어진 설정 일원화 — 9/29 에 정산 탭으로 옮겼던 재고현황·원장 링크칸을 다시 설정으로).
+_GS_LINKS = {
+    "input": ("gsheet/input_url", "관리대장(입력)"),
+    "output": ("gsheet/output_url", "결과(출력)"),
+    "stock": (KEY_STOCK_URL, "재고현황(회사 재고)"),
+    "registry": (registry_ui.KEY_URL, "셀독등록원장"),
+}
+
+
+class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, QtWidgets.QMainWindow):
     log_signal = QtCore.Signal(str)
     finish_signal = QtCore.Signal(object, object, object, object)   # (btn, on_done, result, err)
-    gs_status_signal = QtCore.Signal(str, object, str)   # (input|output, 연결됨 True/False/None=미확인, 설명)
+    gs_status_signal = QtCore.Signal(str, object, str)   # (_GS_LINKS 종류, 연결됨 True/False/None=미확인, 설명)
 
     def __init__(self, auto: bool = False):
         super().__init__()
@@ -196,7 +207,7 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         self._load_saved_secrets()
         self._auto_load_input()     # 마지막 사용 입력 엑셀 자동 로드(무인 실행·재시작 후 즉시 실행 가능)
         if not auto:
-            self._probe_gsheet_links()  # 입력·결과 링크 연결 상태를 뒤에서 확인해 라벨로(무인 실행은 생략)
+            self._probe_gsheet_links()  # 구글시트 링크 4개 연결 상태를 뒤에서 확인해 라벨로(무인 실행은 생략)
         scr = self.screen().availableGeometry()
         # 최대 크기 = 화면(작업영역)으로 제한 — 창이 화면보다 커지지 않게.
         self.setMaximumSize(scr.width(), scr.height())
@@ -226,8 +237,7 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         self.tabs.addTab(self._rank_tab(), "순위 조회")
         self.tabs.addTab(self._images_tab(), "상세 이미지")
         self.tabs.addTab(self._collect_tab(), "전체 실행")
-        self.tabs.addTab(self._settlement_tab(), "정산")   # 회사재고 + 셀독등록원장(설정에서 이동)
-        self._refresh_stock_state()   # 설정 탭 안내줄은 정산 탭보다 먼저 만들어져 여기서 채움
+        self.tabs.addTab(self._settlement_tab(), "정산")   # 회사재고 + 셀독등록원장 실행(링크는 설정 탭)
         self.log_panel = self._log_panel()
         self._splitter.addWidget(self.log_panel)
         self._splitter.setStretchFactor(0, 0)
@@ -300,34 +310,38 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         grid.addWidget(self.holiday_chk_btn, len(rows) - 1, 2)
         grid.setColumnStretch(1, 1)
         v.addWidget(fk)
-        v.addWidget(self._gsheet_card())   # 구글 시트 연동(입력 관리대장 · 출력 결과시트 · 서비스계정)
-        # 회사재고·원장(정산) 카드는 '정산' 탭으로 이동(2026-09-29 소유자) — 여기선 안내+상태+이동 버튼만.
-        v.addWidget(self._settlement_pointer_card())
+        v.addWidget(self._gsheet_card())   # 구글 시트 연동(서비스계정 · 관리대장 · 결과 · 재고현황 · 원장 링크)
         v.addWidget(self._rank_delay_card())   # 순위 검색 간격(운영값) — 저장만, 파이프라인 배선은 통합(config)
+        v.addWidget(self._proxy_card())        # 노출순위 프록시·이미지 끄기(config.json 토글)
+        v.addWidget(self._img_dir_card())      # 상세 이미지 저장 폴더
         save_row = QtWidgets.QHBoxLayout()
         save_row.addStretch(1)
         self.save_settings_btn = QtWidgets.QPushButton("💾 설정값 저장")
         self.save_settings_btn.setMinimumWidth(180)
-        self.save_settings_btn.setToolTip("구글시트 링크·입력소스·순위 간격을 config.json(+레지스트리)에 한 번에 확정 저장")
+        self.save_settings_btn.setToolTip("구글시트 링크 4개·입력소스·순위 간격·프록시를 config.json(+레지스트리)에 한 번에 확정 저장")
         self.save_settings_btn.clicked.connect(self._save_all_settings)
         save_row.addWidget(self.save_settings_btn)
         v.addLayout(save_row)
         v.addStretch(1)
+        self._settings_page = scroll         # 정산 탭 [설정에서 변경] 이동 대상
         return scroll
 
     def _save_all_settings(self):
-        """설정 탭의 값(구글시트 링크·입력소스·순위 간격)을 config.json(+레지스트리)에 일괄 확정 저장.
+        """설정 탭의 값(구글시트 링크 4개·입력소스·순위 간격·프록시)을 config.json(+레지스트리)에 일괄 확정 저장.
 
         각 항목은 평소 입력·선택 즉시 자동 저장되지만, 이 버튼은 현재 화면값을 **한 번에** 확정 저장한다
         (링크를 입력하고 Enter/포커스이동을 안 했어도 확실히 저장). 자동저장과 동일한 `_cfg_save_shared` 경로."""
-        _cfg_save_shared("gsheet/input_url", self.gs_input_edit.text().strip())
-        _cfg_save_shared("gsheet/output_url", self.gs_output_edit.text().strip())
+        for kind, (key, _who) in _GS_LINKS.items():
+            _cfg_save_shared(key, self._gs_edits[kind].text().strip())
+            self._refresh_link_state(kind)
         src = ("gsheet" if self.src_gsheet_radio.isChecked()
                else "file" if self.src_file_radio.isChecked()
                else registry_ui.SOURCE_REGISTRY)
         _cfg_save_shared("input/source", src)
         _cfg_save_shared(_KEY_RANK_MIN, str(self.rank_delay_min.value()))
         _cfg_save_shared(_KEY_RANK_MAX, str(self.rank_delay_max.value()))
+        for key, val in self._proxy_values().items():
+            _cfg_save_shared(key, val)
         QtWidgets.QMessageBox.information(
             self, "저장 완료",
             "✅ 설정값을 저장했습니다.\n(참고: 각 항목은 입력·선택 즉시 자동 저장되며, 이 버튼은 전체를 한 번에 확정 저장합니다.)")
@@ -368,21 +382,25 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         _cfg_save_shared(_KEY_RANK_MIN, str(lo))
         _cfg_save_shared(_KEY_RANK_MAX, str(hi))
 
-    def _settlement_pointer_card(self):
-        """설정 탭 안내 — 회사 재고·원장 설정은 '정산' 탭에 있다(설정 탭에서 못 찾아 회사재고가 빠지던 문제)."""
-        card = self._card("회사 재고 · 셀독등록원장 설정")
-        g = QtWidgets.QGridLayout(card)
-        g.setColumnStretch(0, 1)
-        note = QtWidgets.QLabel("재고현황 링크(회사 재고)와 원장 링크는 '정산' 탭에서 설정합니다.")
-        note.setWordWrap(True)
-        self.settings_stock_lbl = QtWidgets.QLabel()     # 재고현황 링크 상태(정산 탭 카드와 같은 문구)
-        self.settings_stock_lbl.setWordWrap(True)
-        go = QtWidgets.QPushButton("정산 탭 열기")
-        go.clicked.connect(lambda: self.tabs.setCurrentWidget(self._settlement_page))
-        g.addWidget(note, 0, 0)
-        g.addWidget(go, 0, 1)
-        g.addWidget(self.settings_stock_lbl, 1, 0, 1, 2)
+    def _img_dir_card(self):
+        """상세 이미지 저장 폴더(QSettings `dir/detail_images`) — 변경은 여기서만, 상세 이미지 탭은 표시·열기만."""
+        card = self._card("상세 이미지 저장 폴더")
+        row = QtWidgets.QHBoxLayout(card)
+        self.img_dir_set_lbl = QtWidgets.QLabel(self._img_out_root())
+        self.img_dir_set_lbl.setWordWrap(True)
+        self.img_dir_set_lbl.setMinimumWidth(0)
+        row.addWidget(self.img_dir_set_lbl, 1)
+        chg = QtWidgets.QPushButton("폴더 변경")
+        chg.clicked.connect(self._img_change_dir)
+        row.addWidget(chg)
         return card
+
+    def _goto_link_setting(self, kind: str):
+        """다른 탭의 [설정에서 변경] → 설정 탭으로 이동해 그 링크칸에 커서."""
+        self.tabs.setCurrentWidget(self._settings_page)
+        edit = self._gs_edits[kind]
+        self._settings_page.ensureWidgetVisible(edit)
+        edit.setFocus()
 
     def _settlement_tab(self):
         """정산 탭 — 회사보유재고(재고현황→관리대장) + 셀독등록원장(원장 미리보기/반영·비밀번호 불일치).
@@ -396,14 +414,13 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         v = QtWidgets.QVBoxLayout(inner)
         v.setContentsMargins(14, 12, 14, 12)
         sub = QtWidgets.QLabel("회사 재고(판매자배송) 반영과 셀독등록원장 관리를 여기서 합니다. "
-                               "정산 금액·지급일 계산 기능은 준비 중입니다.")
+                               "링크 등록·변경은 '설정' 탭에서 합니다. 정산 금액·지급일 계산 기능은 준비 중입니다.")
         sub.setObjectName("muted")
         sub.setWordWrap(True)
         v.addWidget(sub)
         v.addWidget(self._stock_card())     # 회사 재고(판매자배송) — 재고현황 → 관리대장 '회사보유재고'
         v.addWidget(self._registry_card())  # 셀독등록원장(원장 링크·미리보기/반영·비밀번호 불일치)
         v.addStretch(1)
-        self._settlement_page = scroll       # 설정 탭 [정산 탭 열기] 이동 대상
         return scroll
 
     # ── 판매 분석 탭(조회 전용) ──────────────────────────────
@@ -523,13 +540,13 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(app_output_dir())))
 
     def _gsheet_card(self):
-        """구글 시트 연동 카드 — 서비스계정 키 + 입력(관리대장)·출력(결과) 구글시트 링크 등록.
+        """구글 시트 연동 카드 — 서비스계정 키 + 구글시트 링크 4개(관리대장·결과·재고현황·원장) 등록.
 
         입력은 PC 엑셀('입력 엑셀 열기')과 **병존**한다. 여기서 링크를 등록하면 서비스계정으로 직접 읽는다.
         결과 시트는 프로그램이 계정목록/통계를 쓴다(서비스계정을 '편집자'로 공유 필요). 설정 상세=docs/GSHEET_SETUP.md.
         """
         st = QtCore.QSettings("coupang-analytics", "ui")
-        card = self._card("구글 시트 연동 (입력=관리대장 · 출력=결과시트)")
+        card = self._card("구글 시트 연동 (관리대장 · 결과 · 재고현황 · 원장 — 링크는 모두 여기서 등록)")
         g = QtWidgets.QGridLayout(card)
         g.setColumnStretch(1, 1)
 
@@ -584,9 +601,25 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         g.addWidget(QtWidgets.QLabel("결과(출력) 링크"), 3, 0)
         g.addLayout(self._gs_link_box("output", self.gs_output_edit), 3, 1)
         g.addWidget(out_chk, 3, 2)
+
+        # 4) 재고현황(회사 재고)·셀독등록원장 링크 — 실행 버튼은 '정산' 탭(여기선 등록·연결확인만)
+        self.stock_url_edit = QtWidgets.QLineEdit(st.value(KEY_STOCK_URL, "", type=str))
+        self.stock_url_edit.setPlaceholderText("재고현황 구글시트 링크 또는 ID — 비우면 회사 재고 반영 안 함(서비스계정 공유)")
+        self.reg_url_edit = QtWidgets.QLineEdit(st.value(registry_ui.KEY_URL, "", type=str))
+        self.reg_url_edit.setPlaceholderText("원장 구글시트 링크 또는 ID — 비우면 원장 미사용(서비스계정 '편집자' 공유)")
+        self._gs_edits = {"input": self.gs_input_edit, "output": self.gs_output_edit,
+                          "stock": self.stock_url_edit, "registry": self.reg_url_edit}
+        for row, kind in ((4, "stock"), (5, "registry")):
+            edit = self._gs_edits[kind]
+            edit.editingFinished.connect(lambda k=kind: self._on_gs_link_edited(k))
+            chk = QtWidgets.QPushButton("연결 확인")
+            chk.clicked.connect(lambda _c=False, k=kind: self._check_gsheet(k))
+            g.addWidget(QtWidgets.QLabel(f"{_GS_LINKS[kind][1]} 링크"), row, 0)
+            g.addLayout(self._gs_link_box(kind, edit), row, 1)
+            g.addWidget(chk, row, 2)
         return card
 
-    # ── 구글시트 링크 연결 상태 라벨(입력·결과) ─────────────────────
+    # ── 구글시트 링크 연결 상태 라벨(_GS_LINKS 4종) ─────────────────────
     def _gs_link_box(self, kind: str, edit):
         """링크 입력칸 + 그 아래 연결 상태 줄(서비스계정 라벨처럼 한눈에)."""
         box = QtWidgets.QVBoxLayout()
@@ -615,13 +648,20 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
             lbl.setStyleSheet("color: #64748b;")
 
     def _on_gs_link_edited(self, kind: str):
-        edit = self.gs_input_edit if kind == "input" else self.gs_output_edit
-        _cfg_save_shared(f"gsheet/{kind}_url", edit.text().strip())
+        _cfg_save_shared(_GS_LINKS[kind][0], self._gs_edits[kind].text().strip())
+        self._refresh_link_state(kind)
         self._probe_gsheet_links((kind,))
 
-    def _probe_gsheet_links(self, kinds=("input", "output")):
+    def _refresh_link_state(self, kind: str):
+        """링크가 바뀌면 그 링크를 쓰는 정산 탭 상태줄도 맞춘다(회사재고·원장)."""
+        if kind == "stock":
+            self._refresh_stock_state()
+        elif kind == "registry":
+            self._refresh_registry_state()
+
+    def _probe_gsheet_links(self, kinds=tuple(_GS_LINKS)):
         """등록된 링크를 뒤에서 열어 보고 상태 줄 갱신(진행 로그창은 건드리지 않음 — 첫 실행 전 숨김 유지)."""
-        urls = {"input": self.gs_input_edit.text().strip(), "output": self.gs_output_edit.text().strip()}
+        urls = {k: self._gs_edits[k].text().strip() for k in kinds}
         todo = [(k, urls[k]) for k in kinds if urls[k]]
         for k in kinds:
             self._set_gs_status(k, None, "확인 중…" if urls[k] else "링크 없음")
@@ -743,13 +783,13 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         self.img_dir_lbl.setWordWrap(True)          # 긴 경로가 창 폭을 강제하지 않게
         self.img_dir_lbl.setMinimumWidth(0)
         fold.addWidget(self.img_dir_lbl, 1)
-        chg = QtWidgets.QPushButton("폴더 변경")
-        chg.clicked.connect(self._img_change_dir)
-        fold.addWidget(chg)
         opn = QtWidgets.QPushButton("폴더 열기")
         opn.clicked.connect(lambda: self._open_folder(self._img_out_root()))
         fold.addWidget(opn)
         cv.addLayout(fold)
+        where = QtWidgets.QLabel("저장 폴더 변경은 '설정' 탭에서 합니다.")
+        where.setObjectName("muted")
+        cv.addWidget(where)
 
         v.addWidget(card)
         v.addStretch(1)
@@ -1269,14 +1309,14 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
 
     def _check_gsheet(self, kind: str):
         """등록한 구글시트 링크로 실제 접속해 제목·시트목록을 확인(권한/공유 상태 즉시 진단)."""
-        edit = self.gs_input_edit if kind == "input" else self.gs_output_edit
-        who = "관리대장(입력)" if kind == "input" else "결과(출력)"
-        url = edit.text().strip()
+        key, who = _GS_LINKS[kind]
+        url = self._gs_edits[kind].text().strip()
         if not url:
             QtWidgets.QMessageBox.information(self, "링크 필요", f"{who} 구글시트 링크를 먼저 입력하세요.")
             return
         # 편집 중 값도 즉시 저장(editingFinished 미발생 상태 대비)
-        _cfg_save_shared(f"gsheet/{kind}_url", url)
+        _cfg_save_shared(key, url)
+        self._refresh_link_state(kind)
         try:
             title, sheets = gsheet_api.check_access(url, store=self.creds_store)
         except gsheet_api.GSheetError as exc:
@@ -1793,7 +1833,8 @@ class App(RegistryPanelMixin, StockPanelMixin, QtWidgets.QMainWindow):
         d = QtWidgets.QFileDialog.getExistingDirectory(self, "상세이미지 저장 폴더 선택", start)
         if d:
             QtCore.QSettings("coupang-analytics", "ui").setValue("dir/detail_images", d)
-            self.img_dir_lbl.setText(d)
+            for lbl in (self.img_dir_lbl, self.img_dir_set_lbl):   # 상세 이미지 탭 표시 + 설정 탭
+                lbl.setText(d)
 
     def _open_folder(self, path: str):
         """폴더를 탐색기로 연다(없으면 생성). 파일 다운로드가 아니라 로컬 폴더 열기라 안전."""
