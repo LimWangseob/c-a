@@ -1964,7 +1964,9 @@ def _cfg_save_shared(key: str, value: str) -> None:
         appconfig.set(key, value)
     except Exception:
         pass
-    QtCore.QSettings("coupang-analytics", "ui").setValue(key, value)
+    st = QtCore.QSettings("coupang-analytics", "ui")
+    st.setValue(key, value)
+    st.sync()   # 즉시 디스크 flush — config.json 이 지워져도(재빌드 등) QSettings 가 최신값 보존(2026-10-05)
 
 
 def _sync_config_and_registry() -> None:

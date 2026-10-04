@@ -1,5 +1,6 @@
 ## 현재 상태 · 프로젝트 방향
-- [⭐새 세션 진입점(2026-10-02 최신): egress 회전+차단IP목록+이미지OFF실험 구현·커밋·푸시 완료](handoff-session-261002.md) — master HEAD=7d27720·게이트 초록. 순위 3경로 전부 회전 적용. 최우선=밤샘 규모검증(회전 실효+이미지 ON/OFF ~60%절감 판정)·운용PC 재배포.
+- [⭐새 세션 진입점(2026-10-04 최신): 안정성 6종 수정+설정일원화 병합+배포본 생성](handoff-session-261004.md) — master HEAD=6d6937d·게이트 초록. 이중제출·백업401·전원억제(야간 멈춤 차단·라이브 확인됨)·sheet_id방어·로그인대기90초·18시원인. **⭐최우선 미해결=설정 URL 저장소 분열**(18:00 무인이 옛 URL 써서 결과시트 반영 404/400·올바른 URL4개는 메모에). dist 직접운용 금지.
+- [새 세션 진입점(2026-10-02): egress 회전+차단IP목록+이미지OFF실험](handoff-session-261002.md) — master 7d27720. 순위 3경로 회전. 밤샘 규모검증 남음.
 - [노출순위 프록시 라이브 실측(2026-10-02)](proxy-live-test-261002.md) — DataImpulse 한국 주거용(회전)=통과 100%·Decodo 고정ISP=번아웃·코드 무결. 세팅=proxies.txt+config.json proxy/enabled.
 - [프록시 통합(계정별 고정·a-모델)·소유자 하드닝본 적용·기본 OFF·미커밋(2026-10-01)](proxy-integration-off-261001.md) — fail-closed·CDP인증 source==Proxy만·SOCKS규칙·rendezvous·_resolve_proxy(계정별 스킵). 게이트 10종+복잡도+test 5종 초록. 라이브 미검증·밴 위험 상존.
 - [⚠IP 정책은 맥락별로 반대(혼동 금지 SSOT)](proxy-ip-policy-by-context.md) — 로그인/수집=고정 IP(신뢰·2차인증), 노출순위(비로그인)=sticky 회전 여러 개(볼륨 번아웃 회피). 10-01 "회전 금지" 추론을 10-02 실측이 반증. "고정=신뢰"는 로그인에만 유효.
