@@ -78,6 +78,7 @@
 - [날짜컬럼=실행날짜 규칙](date-column-run-date-rule.md) — 라벨=작업실행일, 순위=실행일·판매=전일(D-1) 같은컬럼, 미실행일=날짜만+공란.
 
 ## 참조
+- [입출력 정의서 v1(파일 칸↔화면 칸 1:1)](io-definition-spec.md) — 앱이 읽고/쓰는 128칸을 화면·필수·형식·검사·민감과 1:1. 구현 시 SSOT=designs/IO_DEFINITION.md. 현재 정의/시안만(구현 보류). 미배정 5영역=DOMAIN_DESIGN §9 R5.
 - [정산 도메인 지식(D8 구현 입력)](settlement-domain-knowledge.md) — 지급일 규칙6·공휴일/영업일·금액식3·파싱·불변식·운영위탁 계약. SSOT=designs/COUPANG_SETTLEMENT_DOMAIN.md + coupang_golden_cases.json(100%통과=완료). 미구현.
 - [쿠팡 공식 운영지식](coupang-official-reference.md) — 상품등록·주문·배송·수수료·SEO/ID(productId 가변/vendorItemId 불변).
 - [상품명 규약: 대장=담당자명·결과=노출명](product-name-convention-ledger-vs-result.md) — 결과파일 긴 이름=쿠팡 노출명(정상). "낡았다" 오판 금지.

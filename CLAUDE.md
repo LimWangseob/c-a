@@ -9,7 +9,7 @@ cd D:\coupang-analytics
 python ui/app_qt.py     # 기본 UI = PySide6(Qt) + Windows 11 Fluent 스타일
 # python ui/app.py      # 폴백(Tkinter 버전, 동일 기능)
 ```
-설계 SSOT: `designs/DESIGN.md`, `designs/KEYWORD_SELECTION.md`, `designs/GSHEET_UNIFIED.md`.
+설계 SSOT: `designs/DESIGN.md`, `designs/KEYWORD_SELECTION.md`, `designs/GSHEET_UNIFIED.md`, `designs/IO_DEFINITION.md`(입출력 정의서 v1 — 파일 칸↔화면 칸 1:1·128칸·구현 시 기준·2026-10-05).
 
 ## 아키텍처 (핵심 모듈)
 - `src/coupang_analytics/browser.py` — **실제 Chrome + CDP** 제어(`WingBrowser`). Akamai 봇탐지 통과 핵심.
