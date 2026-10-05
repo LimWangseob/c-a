@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: a80d140c-c122-4f9a-8be2-cc678f6e0aa9
-  modified: 2026-10-05T13:07:38.112Z
+  modified: 2026-10-05T13:16:40.309Z
 ---
 
 **새 세션 진입점 — 현재 상태 SSOT (2026-10-05)**. master HEAD=`3b7a0ae`·게이트 10종(L1 핀 포함)+복잡도 초록·origin 동기화.
@@ -23,6 +23,7 @@ metadata:
 6. **범위 확장**: 상품·판매·정산·문의(CS)=통합앱 / **샵마인=주문·배송만**([[app-scope-no-orders-shopmine]]). v1 플랫폼=**쿠팡 우선·스마트스토어 API 위탁접근 보류**(어댑터 자리만·U1).
 7. **설계서 10건**: PLATFORM_INTEGRATION(어댑터 L1 파사드·배치 수집·쓰기 §5.4)·SETTLEMENT_MODEL(정산 3층 ①플랫폼→②계약→③채권자)·PROCESS_OVERVIEW(E2E·기능목록·미결 U1~U20)·DOMAIN_D2_SOURCING·D3_REGISTER·D4_PRODUCT_MANAGE·D8_SETTLEMENT_PHASE23·D10_CS·UI_SCREENS. 전부 기존 코드/계층 재사용 우선·신규 모듈 제안만.
 8. **✅U2=kw 조회 프리미티브 L1 재분류**: kw_volume·kw_suggest·kw_metrics를 rank R4 동형으로 L1화(코드 이동 없음·핀 pin_l1_contract §7-d/L1-5·L1_CONTRACT·ARCHITECTURE·DOMAIN_DESIGN §5.3-b). kw_ai·kw_recommend는 L2 유지. D2 선행 M1 해소.
+9. **🎨시안(디자인) 반영 = H_ui 레인 위임**: 소유자 "디자인에도 모두 반영". 시안 '커머스 판로 화면 시안'(claude.ai Design 캔버스·114파일·H_ui 소유·현재 오프라인)은 통합 세션이 직접 편집 안 함(블라인드 대규모 편집=충돌·일관성 위험). **반영 명세를 designs/UI_SCREENS.md '시안 반영 지시' 절에 작성**(멀티플랫폼·스마트스토어 보류 배지·샵마인 범위밖 유지·D3/D4/D10 화면·정산 3층·사이드바 네비·민감도 UI·디자인 컨셉) → **H_ui 재가동 시 적용 대기**. 전달 메시지는 H_ui 오프라인이라 미도달(재가동 시 UI_SCREENS에서 픽업).
 
 ## ⭐ 다음 — 구현 착수 전 선행(소유자/라이브)
 - **U3 WING 정산 API 세션 호출 가능 여부**(diag 사무실 라이브) — 정산 ②단계 수집 전제.
