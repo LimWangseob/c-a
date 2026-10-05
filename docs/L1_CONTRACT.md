@@ -118,6 +118,20 @@
 - 데이터/예외 타입: `SearchItem`·`RankBlocked`.
 - **규율**: rank 는 순수 조회만(순위 도메인 고유 로직은 `pipeline_ranks`=조립).
 
+## 7-d. kw 조회 프리미티브 (검색량·자동완성·경쟁신호) — 호출처: 도메인(kw_recommend·D1 분석·D2 소싱)+조립
+> U2 확정(2026-10-05·DOMAIN_DESIGN §5.3·R4 동형): `kw_volume`·`kw_suggest`·`kw_metrics` 를 **L1 조회 프리미티브**로 규정.
+> 외부 데이터를 가져오는 순수 조회 수단(네이버 검색량·쿠팡 자동완성·1페이지 경쟁 신호)이라 여러 도메인(D1 분석·D2 소싱)이 공유 → "도메인→L1" 합법. **선정/추천 비즈니스 로직(`kw_ai`·`kw_recommend`)은 L2(D1)에 남긴다.**
+
+| 모듈·진입점 | 파라미터 구조 |
+|---|---|
+| `kw_volume.parse_credentials_file(path)` | P:path:0 |
+| `kw_volume.NaverAdApi.related_keywords(self, hint)` | P:self:0 P:hint:0 |
+| `kw_volume.NaverAdApi.related_keywords_multi(self, hints)` | P:self:0 P:hints:0 |
+| `kw_suggest.fetch_suggestions(browser, prefix)` · `collect_suggestions(browser, seeds, log=None)` | 쿠팡 자동완성 |
+| `kw_metrics.page1_competition(browser, keyword)` | P:browser:0 P:keyword:0 |
+- 데이터/예외 타입: `kw_volume.NaverAdApi`·`NaverCredentials`·`KeywordVolume` · `kw_suggest.SuggestError` · `kw_metrics.KeywordCompetition`.
+- **규율**: kw 조회 프리미티브는 순수 조회만(키워드 선정·점수화·추천 로직은 D1 `kw_ai`/`kw_recommend`). `kw_metrics`→`rank`(L1→L1·§9 밑줄 누수는 별도 정리).
+
 ## 7-c. pipeline_sales (로그인 진입점) — 호출처: UI(H_ui)
 | 공개 진입점 | 파라미터 구조 |
 |---|---|
@@ -136,7 +150,7 @@
 아래는 **테스트/도구**가 L1 내부 심볼(밑줄)에 의존하는 경우다. 프로덕션 계약은 아니나 정리 대상:
 - `gsheet_stats.py` 가 `workbook`(=workbook_common) 내부 상수/함수 `_COL_KW`·`_COL_METRIC`·`_COL_NAME`·`_LABEL_DATE`·`_LABEL_KEYWORD`·`_SPECIAL_SHEETS`·`_key` import.
 - `registry_model.py` 가 `input_list` 내부 심볼(`_alias_index`·`_find_header_row`·`_is_discontinued` 등) import — registry 패밀리 내부지만 밑줄 의존.
-- `kw_metrics.py` 가 `rank._load_results`(밑줄) 직접 import — rank 를 L1 프리미티브로 올린 뒤 남은 누수(공개화 후보).
+- `kw_metrics.py` 가 `rank._load_results`(밑줄) 직접 import — rank·kw_metrics 둘 다 L1 조회 프리미티브(2026-10-05·U2)라 이제 **L1 내부 의존**(계약 위반 아님)이나 밑줄 심볼이라 `load_results` 공개화는 여전히 정리 후보.
 - `registry_apply.py` 가 `product_match._base_name`(밑줄)·`company_stock.name_key` import — 매칭 규칙 1(색상별)·4(이름 정규화)를 원장 이름변경 감지에 **같은 규칙으로 한 곳에서** 재사용(2026-09-29). `_base_name` 공개화(또는 공용 규칙 모듈로 승격)가 정리 후보.
 - 도구: `collector._raw_add`·`OutputWorkbook._FILL_*`/`_key`/`_date_col`·`gsheet_index._auto_cells_request` 등을 pin/verify 도구가 직접 참조.
 

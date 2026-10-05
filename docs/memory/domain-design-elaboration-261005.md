@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: a80d140c-c122-4f9a-8be2-cc678f6e0aa9
-  modified: 2026-10-05T12:48:16.035Z
+  modified: 2026-10-05T12:56:06.265Z
 ---
 
 **커머스 판로(이커머스 통합 관리 앱) 도메인 설계 심화 — 1차(2026-10-05)**. 소유자 지시: 설계 심화(구현 보류 유지)·병렬 도메인 에이전트. 통합 세션이 4개 에이전트를 worktree 없이 각자 설계서 1개씩 쓰게 띄우고 교차연결·커밋(코드 변경 0).
@@ -33,7 +33,7 @@ metadata:
 
 ## ⭐ 최우선 선행 미결 (소유자/라이브 — 착수 전 필수)
 - ~~U1 스마트스토어 커머스 API 위탁계정 접근성~~ 🔒**보류(소유자 2026-10-05)** — 지금 추진 안 함. v1 실질 타깃=쿠팡, 스마트스토어 어댑터는 자리만. 재개 시 위탁주 협의·라이브로 접근성 확인부터.
-- **U2(=M1) kw_volume·kw_suggest·kw_metrics → L1 재분류** — D2 소싱 착수 선행(통합 세션·rank R4 동형).
+- ~~U2(=M1) kw→L1 재분류~~ ✅**완료(2026-10-05)**: kw_volume·kw_suggest·kw_metrics를 L1 조회 프리미티브로(rank R4 동형·코드 이동 없음·핀 pin_l1_contract §7-d/L1-5 등재·L1_CONTRACT §7-d·ARCHITECTURE §2·DOMAIN_DESIGN §5.3-b). 선정/추천(kw_ai·kw_recommend)은 L2 유지. D2 소싱 선행 해소.
 - **U3 WING 정산 API 세션 호출 가능 여부** — 정산 ②단계 라이브 수집 전제·사무실 diag 라이브.
 - **U4 샵마인 CS 경계** — 샵마인이 이미 CS 관리하면 D10 범위 갈림([[app-scope-no-orders-shopmine]]).
 - **쿠팡 쓰기 엔드포인트(등록·변경·삭제·CS답변) 라이브 캡처** — D3·D4·D10 쓰기 착수 전제(현 코드 전부 읽기전용).

@@ -28,8 +28,8 @@ except AttributeError:
     pass
 
 from coupang_analytics import (  # noqa: E402
-    collector, company_stock, gsheet_index, gsheet_stats, input_list, pipeline_gsheet,
-    pipeline_sales, rank, registry, registry_gsheet, registry_model)
+    collector, company_stock, gsheet_index, gsheet_stats, input_list, kw_metrics, kw_suggest,
+    kw_volume, pipeline_gsheet, pipeline_sales, rank, registry, registry_gsheet, registry_model)
 from coupang_analytics.workbook import OutputWorkbook  # noqa: E402
 
 _KIND = {
@@ -143,7 +143,28 @@ FUNC_CONTRACTS: dict = {
         ("extract_items", "P:page:0"),
         ("parse_serp_rank", "P:page:0 P:matchers:0 P:max_rank:1"),
     ],
+    # kw 조회 프리미티브 = L1 재분류(2026-10-05·U2·R4 동형·DOMAIN_DESIGN §5.3). 외부 데이터 조회 수단
+    # (검색량·자동완성·1페이지 경쟁 신호)이라 여러 도메인(D1 분석·D2 소싱)이 공유 → "도메인→L1" 합법.
+    # 선정/추천 비즈니스 로직(kw_ai·kw_recommend)은 L2(D1)에 남김.
+    kw_volume: [
+        ("parse_credentials_file", "P:path:0"),
+    ],
+    kw_suggest: [
+        ("fetch_suggestions", "P:browser:0 P:prefix:0"),
+        ("collect_suggestions", "P:browser:0 P:seeds:0 P:log:1"),
+    ],
+    kw_metrics: [
+        ("page1_competition", "P:browser:0 P:keyword:0"),
+    ],
 }
+
+# kw 조회 프리미티브 클래스 메서드 — NaverAdApi(네이버 검색광고 검색량 조회 클라이언트·L1).
+CLASS_CONTRACTS = [
+    (kw_volume.NaverAdApi, [
+        ("related_keywords", "P:self:0 P:hint:0"),
+        ("related_keywords_multi", "P:self:0 P:hints:0"),
+    ]),
+]
 
 # OutputWorkbook 핵심 기록/조회 메서드(파라미터 구조까지 고정)
 WB_CONTRACTS = [
@@ -193,6 +214,10 @@ TYPE_CONTRACTS = [
     (registry, ["Registry"]),
     (registry_model, ["COUPANG_CHECK_VALUES"]),   # 2-2 쿠팡확인 값 6종(오타 방지 상수)
     (rank, ["SearchItem", "RankBlocked"]),
+    # kw 조회 프리미티브 데이터/예외 타입(2026-10-05·U2 재분류)
+    (kw_volume, ["NaverAdApi", "NaverCredentials", "KeywordVolume"]),
+    (kw_suggest, ["SuggestError"]),
+    (kw_metrics, ["KeywordCompetition"]),
 ]
 
 
@@ -237,6 +262,17 @@ def pin_types() -> None:
             _check(hasattr(mod, name), f"{modname}.{name} 존재")
 
 
+def pin_class_contracts() -> None:
+    print("[핀 L1-5] kw 조회 프리미티브 클래스 메서드(NaverAdApi) 파라미터 구조")
+    for cls, items in CLASS_CONTRACTS:
+        cname = cls.__name__
+        for name, golden in items:
+            _check(hasattr(cls, name), f"{cname}.{name} 존재")
+            got = _struct(cls, name)
+            _check(got == golden, f"{cname}.{name} 파라미터 구조 = {golden!r}"
+                   + ("" if got == golden else f"  (현재: {got!r})"))
+
+
 def main() -> int:
     print("=" * 64)
     print("  핀 테스트 — L1 데이터 백본 공개 API 계약")
@@ -245,6 +281,7 @@ def main() -> int:
     pin_workbook_contracts()
     pin_workbook_present()
     pin_types()
+    pin_class_contracts()
     print("=" * 64)
     print("  [완료] L1 계약 핀 모두 통과")
     print("=" * 64)

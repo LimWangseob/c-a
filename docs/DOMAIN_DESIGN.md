@@ -22,9 +22,8 @@ WING API 호출 패턴, 세션/크리덴셜 기반. "전체 분석"이 아니라
 **계층은 이미 잠재**(config/browser/세션=밑, collector/workbook/input_list/registry=백본, kw/rank/이미지=도메인, pipeline=조립).
 
 **경계 위반 실측 2건** (도메인끼리 직접 import — ARCHITECTURE 규칙 위반):
-- `kw_recommend` → `rank` (순위 진단에 순위 조회 직접 호출)
-- `kw_metrics` → `rank`
-→ 해소책은 §5.3(rank 를 "조회 프리미티브"로 재분류).
+- `kw_recommend` → `rank` · `kw_metrics` → `rank`
+→ ✅해소: rank(§5.3 R4·2026-09-28) + kw_volume/suggest/metrics(§5.3-b U2·2026-10-05)를 **L1 조회 프리미티브**로 재분류 → "도메인→L1" 합법(코드 이동 없음·문서+핀).
 
 **신규 도메인(소싱·등록·상품관리 일부·주문·배송) = 코드 전무.** 재사용 기반은 완비(§4).
 
@@ -63,7 +62,7 @@ WING API 호출 패턴, 세션/크리덴셜 기반. "전체 분석"이 아니라
 - **갭**: 세션 blob 복원 소비(load→주입 재로그인 생략)는 미구현(현재 `profile_dir` 재사용 의존). 신규 도메인 확장 전 사무실 라이브 1회 검증 필요(wing_session 자체 명시).
 
 ### D1 상품 분석 ✅
-- **모듈(소유)**: `kw_*`(ai·recommend·volume·suggest·metrics)·`product_match`·`report`. **호출만(L1 공유)**: `rank`(순위 조회 프리미티브·§5.3)·`collector`(수집).
+- **모듈(소유)**: `kw_ai`·`kw_recommend`(선정·추천 비즈니스 로직)·`keyword_store`·`product_match`·`report`. **호출만(L1 공유)**: `rank`·`collector`·`kw_volume`·`kw_suggest`·`kw_metrics`(조회 프리미티브·§5.3·§5.3-b).
 - **역할**: AI 앵커 키워드 선정 + 네이버 검색량 + 쿠팡 자동완성 → 순위 진단·권고제목 / 오가닉 순위(최대 300위) / 판매지표·재고 수집.
 - **갭 없음**(핵심 완성). 단 경계위반(kw→rank) §5.3.
 - **마케팅 흡수(2026-10-05)**: 체험단(06-4)·광고(06-2) 집행·성과 기록이 여기로. 근거=체험단효과·광고 성과는 순위/판매 지표(D1) 측정과 직결(결과 계정목록 체험단효과·통계 시트가 소비). 신규 모듈(제안·구현 보류)=`marketing_store.py`(체험단·광고 원장). ⚠집행 자체(쿠팡/네이버 광고 API 쓰기)는 쓰기 도메인 성격 — 도입 시 §5.4.
@@ -72,7 +71,7 @@ WING API 호출 패턴, 세션/크리덴셜 기반. "전체 분석"이 아니라
 - **역할**: 신규 판매 상품 발굴·시장/경쟁 분석·후보 스코어링·의사결정 지원.
 - **재사용**: D1(키워드·순위·검색량)·쿠팡 자동완성(`kw_suggest`)·네이버 API(`kw_volume`). 신규=경쟁강도(쿠팡 검색결과 총 상품수·CLAUDE.md HANDOFF §4-1 보류 항목)·마진/원가 입력.
 - **신규 모듈(제안)**: `sourcing.py`(후보 수집·스코어)·`sourcing_store.py`(후보 원장). L1 재사용, D1과는 백본 경유(직접 import 금지).
-- **상세 설계(2026-10-05)**: `designs/DOMAIN_D2_SOURCING.md`. ⚠착수 선행조건 **M1**=`kw_volume·kw_suggest·kw_metrics`를 L1 조회 프리미티브로 재분류(rank R4 선례 동형·공유 자원이라 통합 세션/소유자 결정). 경쟁강도=네이버쇼핑 종료→기존 `kw_metrics.page1_competition`(1페이지 신호) 채택 제안.
+- **상세 설계(2026-10-05)**: `designs/DOMAIN_D2_SOURCING.md`. ✅착수 선행조건 **M1 해소(U2·2026-10-05·§5.3-b)**=`kw_volume·kw_suggest·kw_metrics`를 L1 조회 프리미티브로 재분류 완료(핀 L1 계약 등재) → D2는 이들을 L1으로 합법 호출. 경쟁강도=네이버쇼핑 종료→기존 `kw_metrics.page1_competition`(1페이지 신호) 채택 제안.
 
 ### D3 상품 등록 🆕 (쓰기 도메인 — 고위험)
 - **역할**: WING 상품 등록/수정(제목·옵션·가격·이미지·배송정보) 자동화.
@@ -184,8 +183,13 @@ L3 조립·표현: pipeline(+_sales/_ranks/_process/_paths/_gsheet)·ui/app_qt·
 ### 5.3 경계 위반 해소 — `rank` 를 L1 "조회 프리미티브"로 재분류 ✅확정 (a안, 2026-09-28)
 - 실측: `rank` 공개 API(`organic_ranks`·`organic_ranks_batch`·`warmup`·`make_matcher`·`human_type_query`·`extract_items`·`parse_serp_rank`+`SearchItem`·`RankBlocked`)는 **순위를 가져오는 조회 수단**(비즈니스 로직 아님). 사용처 6곳=도메인(`kw_recommend`·`kw_metrics`)+조립(`pipeline_sales`·`pipeline_process`·`pipeline_ranks`·`pipeline`) → 여러 계층 공유.
 - **결정(a)**: `rank`·`collector` 를 **L1 조회 프리미티브**로 규정 → `kw_*`→`rank` 가 "도메인→L1" 이 되어 규칙 합치. **코드 이동 없음**(rank.py 그대로)·문서+계약핀만. 검토했던 (b)D1 내부 유지(조립도 rank 직접 사용이라 우회 인위적)·(c)현행 유지(규칙 무력화)는 기각.
-- **규율**: rank 는 **순수 조회만** 유지(순위 도메인 고유 로직은 `pipeline_ranks`=조립에). L1 계약=`docs/L1_CONTRACT.md §10`·핀=`pin_l1_contract`(rank 섹션).
-- ⚠남은 누수: `kw_metrics` 가 `rank._load_results`(밑줄) 직접 import → 정리 후보(§ L1_CONTRACT §9).
+- **규율**: rank 는 **순수 조회만** 유지(순위 도메인 고유 로직은 `pipeline_ranks`=조립에). L1 계약=`docs/L1_CONTRACT.md §7-b`·핀=`pin_l1_contract`(rank 섹션).
+- ⚠남은 누수: `kw_metrics` 가 `rank._load_results`(밑줄) 직접 import → 이제 L1 내부 의존(아래 U2)·`load_results` 공개화는 정리 후보(§ L1_CONTRACT §9).
+
+### 5.3-b kw 조회 프리미티브 L1 재분류 ✅확정 (U2, 2026-10-05·rank R4 동형)
+- **결정**: `kw_volume`(네이버 검색량)·`kw_suggest`(쿠팡 자동완성)·`kw_metrics`(1페이지 경쟁 신호)를 **L1 조회 프리미티브**로 규정 → D2 소싱이 이들을 "도메인→L1"으로 합법 호출(D2 착수 선행조건 M1 해소). **선정·추천 비즈니스 로직(`kw_ai`·`kw_recommend`)은 L2(D1)에 유지.**
+- **코드 이동 없음**(문서+계약핀만). 실측: 세 모듈은 L2 도메인을 import하지 않음(`kw_volume`=순수·`kw_suggest`→config[L0]·`kw_metrics`→browser[L0]·rank[L1]) → 재분류 후 L1→L2 위반 없음.
+- L1 계약=`docs/L1_CONTRACT.md §7-d`·핀=`pin_l1_contract`(kw 섹션 L1-1/L1-4/L1-5). 규율: 순수 조회만.
 
 ### 5.4 쓰기 도메인 안전 규약 (D3 등록·D4 변경·D5 주문처리·D6 배송)
 현재 전 코드가 **읽기 전용**. 쓰기 도입 시 강제:
