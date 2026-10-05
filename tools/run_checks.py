@@ -33,6 +33,7 @@ CHECKS = [
     ("구글시트 오프라인 검증", "tools/verify_gsheet_offline.py", True),
     ("정밀 렌더 검증(시트·항목·값 end-to-end)", "tools/verify_render_precision.py", True),
     ("셀독등록원장(대장→원장·이력·복원)", "tools/verify_registry_offline.py", True),
+    ("업무일지 원장(append·상태·지연)", "tools/verify_worklog_offline.py", True),
     ("정산 계산(지급일·금액·파싱 골든)", "tools/verify_settlement_offline.py", True),
     ("오프라인 실증(워크북·매칭·키워드선정)", "tools/verify_offline.py", False),
 ]
