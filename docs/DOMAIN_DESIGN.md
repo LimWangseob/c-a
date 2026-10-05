@@ -217,7 +217,7 @@ L3 조립·표현: pipeline(+_sales/_ranks/_process/_paths/_gsheet)·ui/app_qt·
 
 - **도메인 상세 설계서(2026-10-05·설계만·구현 보류)**: D2=`designs/DOMAIN_D2_SOURCING.md` · D3=`designs/DOMAIN_D3_REGISTER.md` · D4=`designs/DOMAIN_D4_PRODUCT_MANAGE.md` · D8(2·3단계+흡수)=`designs/DOMAIN_D8_SETTLEMENT_PHASE23.md` · D10=`designs/DOMAIN_D10_CS.md` · 화면 조립=`designs/UI_SCREENS.md`(IO_DEFINITION 메뉴 ID→사이드바+QStackedWidget 셸, 현 app_qt 7탭 점진 승격).
 - **멀티플랫폼·배치수집·정산·프로세스(2026-10-05·소유자 2차 확장)**: 플랫폼 어댑터+배치 수집=`designs/PLATFORM_INTEGRATION.md`(L1 공유 파사드·쿠팡 WING 재사용/스마트스토어 커머스 API·쓰기 §5.4·레인 P 어댑터·J 수집 제안) · 정산 3층=`designs/SETTLEMENT_MODEL.md`(①플랫폼 ②계약 ③채권자 단방향·기구현 1단계=①소속) · 전체 프로세스·기능목록·미결 총괄(U1~U20)=`designs/PROCESS_OVERVIEW.md`. 소싱 레인 I·어댑터 레인 P·수집 레인 J 신설 제안(§7 확장).
-- ⚠**범위 확장(소유자 2026-10-05)**: 커머스 판로 = **멀티플랫폼 통합 관리 앱**(v1 쿠팡+스마트스토어). **샵마인=주문·배송만**으로 축소, 상품·판매·정산·문의(CS)는 통합앱 직접([[app-scope-no-orders-shopmine]] 갱신). 전부 설계만·구현 보류.
+- ⚠**범위 확장(소유자 2026-10-05)**: 커머스 판로 = **멀티플랫폼 통합 관리 앱**. **샵마인=주문·배송만**으로 축소, 상품·판매·정산·문의(CS)는 통합앱 직접([[app-scope-no-orders-shopmine]] 갱신). 전부 설계만·구현 보류. 🔒**v1 실질 타깃=쿠팡 우선 — 스마트스토어 API 위탁접근은 보류(소유자 2026-10-05)**: 멀티플랫폼 추상화(어댑터·DTO)는 유지하되 스마트스토어 접근 방식 조사·구현은 추후(위탁주 협의·라이브 선필요). U1 보류.
 - **런타임은 병렬화 금지**(단일 브라우저·위탁계정·Akamai·단일 시트) → 실행은 야간 단일 순차·라이브 한 번에 한 세션. **개발만 병렬**(2~3레인 권장).
 - 신규 도메인 착수 시 그 도메인 모듈 파일집합을 소유한 레인 추가 → 자연 확장.
 
