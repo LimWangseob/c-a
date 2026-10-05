@@ -27,6 +27,7 @@
 ## 작업 원칙(피드백)
 - [폴백 최소화 원칙(중요)](no-silent-fallback-principle.md) — 폴백 신중히·최대한 금지·불가피할 때만 조건부(로그 명시). 근본 해결/실측 우선.
 - [분석 요청=코드 수정 금지](analysis-request-no-code-change.md) — "분석해줘"면 분석만, 명시 수정요청 전까지 편집·커밋 금지.
+- [시안 "적용"=기존 위에 끼워 넣기(다시 짜기 금지)](feedback-design-extend-not-redo.md) — 홈 시안 통째 교체를 소유자가 정정(2026-10-05). 공간 부족은 줄 수·여백으로.
 - [진단명령=사용자PC 콘솔창 뜸](diagnostic-commands-pop-consoles.md) — 확인 명령 최소화, PowerShell은 bash 감싸지 말고 직접.
 - [쉬운 말·전문용어 금지](plain-language-no-jargon.md) — 군사·조어 싫어함, 평범한 한국어.
 - [한글 일원화](respond-in-korean.md) — 모든 응답·산출물 한글.
