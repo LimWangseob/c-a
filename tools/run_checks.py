@@ -35,6 +35,7 @@ CHECKS = [
     ("셀독등록원장(대장→원장·이력·복원)", "tools/verify_registry_offline.py", True),
     ("업무일지 원장(append·상태·지연)", "tools/verify_worklog_offline.py", True),
     ("계약 원장(버전·as_of·유효/만료/해지·가림)", "tools/verify_contract_offline.py", True),
+    ("채권자 원장(잔액 replay·가림·열람 로그)", "tools/verify_creditor_offline.py", True),
     ("정산 계산(지급일·금액·파싱 골든)", "tools/verify_settlement_offline.py", True),
     ("오프라인 실증(워크북·매칭·키워드선정)", "tools/verify_offline.py", False),
 ]
