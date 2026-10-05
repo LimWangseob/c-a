@@ -40,22 +40,27 @@ Write-Host '[0/4] 보존 폴더(설정·결과·프로필) 준비...'
 foreach ($d in @((Join-Path $root 'output'), (Join-Path $root 'data'))) {
     if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
 }
-# config.json(설정): 이미 있으면 이 PC 설정 보존(업데이트), 없으면 패키지 _설정값.json 의 링크로 생성
+# config.json(설정): 이미 있으면 이 PC 설정 보존(업데이트) > 없으면 씨앗(_씨앗\config.json=노트북에서 검증한
+# 값 그대로) 복사 > 씨앗도 없으면 패키지 _설정값.json 의 링크로 생성(폴백) > 그것도 없으면 빈 설정.
 $cfgRoot = Join-Path $root 'config.json'
+$seedCfg = Join-Path $root '_씨앗\config.json'
 $pkgCfg  = Join-Path $root '_설정값.json'
-if ((-not (Test-Path $cfgRoot)) -and (Test-Path $pkgCfg)) {
+if (Test-Path $cfgRoot) {
+    Write-Host "  [확인] 기존 config.json 보존(이 PC 설정 유지·업데이트는 덮지 않음) → $cfgRoot"
+} elseif (Test-Path $seedCfg) {
+    Copy-Item $seedCfg $cfgRoot -Force
+    Write-Host "  [확인] config.json 씨앗 복사(첫 설치 — 노트북에서 검증한 설정 전부: 링크4·입력소스·순위간격·프록시) → $cfgRoot"
+} elseif (Test-Path $pkgCfg) {
     try {
         $j = Get-Content $pkgCfg -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($j.qsettings) {
             ($j.qsettings | ConvertTo-Json) | Set-Content -Path $cfgRoot -Encoding UTF8
-            Write-Host "  [확인] config.json 생성(설정 링크 이식) → $cfgRoot"
+            Write-Host "  [확인] config.json 생성(설정 링크 이식·씨앗 없음 폴백) → $cfgRoot"
         } else { '{}' | Set-Content -Path $cfgRoot -Encoding UTF8 }
     } catch {
         '{}' | Set-Content -Path $cfgRoot -Encoding UTF8
         Write-Host "  [경고] config.json 기본 생성(설정은 앱에서 입력): $($_.Exception.Message)"
     }
-} elseif (Test-Path $cfgRoot) {
-    Write-Host "  [확인] 기존 config.json 보존(이 PC 설정 유지) → $cfgRoot"
 } else {
     '{}' | Set-Content -Path $cfgRoot -Encoding UTF8
     Write-Host "  [확인] config.json 생성(빈 설정) → $cfgRoot"
@@ -77,6 +82,15 @@ if (Test-Path $seed) {
     if ((Test-Path $seedProf) -and (-not (Test-Path $dstProf))) {
         Copy-Item $seedProf $dstProf -Recurse -Force
         Write-Host "  [확인] 순위 크롬 프로필(신뢰쿠키) 씨앗 복사(첫 설치) → data\  (차단 완화 머리시작)"
+    }
+    # proxies.txt(노출순위 프록시 자격증명) — 첫 설치 때만 복사(업데이트는 운용 PC 것 보존). 없으면 proxy ON 이어도 fail-closed.
+    $seedProxy = Join-Path $seed 'proxies.txt'
+    $dstProxy  = Join-Path $root 'proxies.txt'
+    if ((Test-Path $seedProxy) -and (-not (Test-Path $dstProxy))) {
+        Copy-Item $seedProxy $dstProxy -Force
+        Write-Host "  [확인] proxies.txt 씨앗 복사(첫 설치·노출순위 프록시 자격증명) → $root  (프록시 바로 동작)"
+    } elseif (Test-Path $dstProxy) {
+        Write-Host "  [확인] 기존 proxies.txt 보존(업데이트 — 씨앗 미복사)"
     }
 }
 Write-Host ''

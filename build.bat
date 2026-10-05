@@ -42,6 +42,22 @@ if exist "%~dp0output\쿠팡데이타분석_통계.xlsx" (
 rem ⚠ 순위 크롬 프로필(data\chrome-pipeline)은 캐시 포함 수백MB라 zip 동봉 안 함(신뢰쿠키 교차이전도 제한적).
 rem    운용 PC는 자기 data 폴더(휴지통 복원 등)를 쓰거나, 야간 실행으로 프로필이 스스로 warm 된다.
 echo.
+echo [4.6/5] 이 노트북에서 검증한 config.json·proxies.txt 를 씨앗으로 동봉(새 PC **첫 설치 시에만** 복사·업데이트는 보존)...
+if not exist "dist\coupang-analytics\_씨앗" mkdir "dist\coupang-analytics\_씨앗"
+if exist "%~dp0config.json" (
+  copy /Y "%~dp0config.json" "dist\coupang-analytics\_씨앗\config.json" >nul
+  echo   [확인] config.json 씨앗 동봉^(검증된 구글시트 링크4·입력소스·순위간격·프록시 토글 전부^) — 운용 PC는 복사만
+) else (
+  echo   [건너뜀] 노트북에 config.json 없음 — 운용 PC는 _설정값.json 에서 링크만 복원^(프록시 토글 누락 가능^)
+)
+if exist "%~dp0proxies.txt" (
+  copy /Y "%~dp0proxies.txt" "dist\coupang-analytics\_씨앗\proxies.txt" >nul
+  echo   [확인] proxies.txt 씨앗 동봉^(노출순위 프록시 자격증명^) — 첫 설치 때 복사되어 프록시가 바로 동작
+  echo   ⚠ proxies.txt 는 자격증명이라 zip 은 외부 공유·업로드 금지^(API/SA 키와 동일 취급·설치 후 안전 보관^)
+) else (
+  echo   [건너뜀] 노트북에 proxies.txt 없음 — 프록시 ON 이어도 운용 PC에 파일 없으면 순위 스킵^(fail-closed^)
+)
+echo.
 echo [5/5] 배포용 zip 압축(폴더째 — 개발·운용 폴더명 동일: coupang-analytics)...
 del /Q "dist\쿠팡애널리틱스_배포.zip" 2>nul
 rem zip 루트에 '0_먼저실행_보안제외.bat' 을 함께 넣는다(압축 풀기 전 관리자로 실행 → Defender 오탐 삭제 방지).
@@ -53,7 +69,8 @@ echo   결과 폴더: dist\coupang-analytics\  (쿠팡애널리틱스.exe·쿠�
 echo   배포 zip:  dist\쿠팡애널리틱스_배포.zip   ← 이 파일 하나만 새 PC로 보내세요(폴더명=coupang-analytics, 노트북과 동일).
 echo.
 echo   [새 PC · 처음] zip 풀기 → coupang-analytics\ 안의 "설치.bat" 더블클릭(관리자 권장) → 끝.
-echo     설치가 같은 폴더에 output·data·config.json(**삭제 금지·보존**) 생성 + 바로가기·야간무인 + 설정 자동적용.
+echo     설치가 _씨앗\의 검증된 config.json·proxies.txt·통계마스터를 같은 폴더로 복사(첫 설치만) + 키 암호화이식
+echo     + 바로가기·야간무인 등록. 설정 탭에 다시 입력할 것 없음(노트북 설정 그대로 복사됨).
 echo   [새 PC · 업데이트] 새 zip 의 coupang-analytics\ 를 **같은 폴더에 덮어쓰기**만.
 echo     output·data·config.json 은 zip 에 없으니 덮어써도 그대로 보존됩니다(마스터·크롬 프로필·설정 유지).
 echo   (실행 PC 에 Google Chrome 설치 필수)
