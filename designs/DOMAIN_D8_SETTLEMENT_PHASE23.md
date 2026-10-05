@@ -290,6 +290,8 @@ creditor_store.record_repayment(client, entry, *, actor, dry_run, lock_path) -> 
 3. **2단계-c (라이브 수집)**: diag 확정 후 `collector.fetch_settlement_*` 추가(통합 세션·L1 계약+핀) → 야간 직렬 슬롯 배선(pipeline). 라이브 실측(사무실).
 4. **3단계 (계약 대비)**: 실 계약서 수령 → §3.1 스키마 확정 → `contract_store.py` + `settlement.py` 달성률 → `coupang_golden_cases.json`에 `contract_achievement[]` 추가 → `verify_settlement_offline` 대조 블록 append. H_ui 04-6 표시.
 5. **흡수 원장 (병행 가능·오프라인)**: `contract_store`→`worklog_store`→`creditor_store` 순(독립성 높은 것부터). 각각 **신규 오프라인 검증 스크립트** 신설·게이트 등록.
+   - ✅ **1단계 구현 완료(2026-10-05·E 레인 worktree `d8-ledger-absorb`)**: `worklog_store`(append·상태·'7일 지연' 렌더)·`contract_store`(버전 이력·`as_of`·유효/만료/해지 replay·만료예정·민감 가림)·`creditor_store`(돈 원장 append·정정=반대기록·잔액 replay·2단계 가림·열람 로그·**로컬 백업 없음**·배분 계산은 R1 보류로 미구현). 전부 **greenfield**(기존 파일 미수정)·`registry_lock` 재사용·**config.py 미접촉**(클라이언트·인자 주입식). 게이트 `verify_{worklog,contract,creditor}_offline.py` 신규·`run_checks` 13종 초록·복잡도/건강 초록(신규 3파일 A/B).
+   - 남은(2·3단계·배선): 계약 수익식 스키마 확정 후 `settlement.py` 3단계 달성률·`contract_achievement[]` 골든 · 채권자 배분 규칙(법률→소유자) 확정 후 `creditor_settlement` · **UI(H_ui) 배선**·`config` 설정키(`contract/url`·`creditor/url`·§8)·L1/핀 등재는 **통합 세션**.
 
 **게이트/핀 계획(제안)**:
 - `tools/verify_settlement_offline.py` **확장**(신규 블록 append·실 API 금지·골든 주입): 리포트 파서 불변식·계약 달성률 `contract_achievement`.
