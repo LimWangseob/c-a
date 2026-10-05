@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: a80d140c-c122-4f9a-8be2-cc678f6e0aa9
-  modified: 2026-10-05T13:16:40.309Z
+  modified: 2026-10-05T13:46:59.631Z
 ---
 
 **새 세션 진입점 — 현재 상태 SSOT (2026-10-05)**. master HEAD=`3b7a0ae`·게이트 10종(L1 핀 포함)+복잡도 초록·origin 동기화.
@@ -31,6 +31,15 @@ metadata:
 - **쿠팡 쓰기 엔드포인트(등록·변경·삭제·CS답변) 라이브 캡처** — D3·D4·D10 쓰기 전제(현 코드 전부 읽기전용).
 - (선행) 계약 수익식 스키마(실 계약서)·채권자 배분 기준(법률 후 소유자)·분류코드→플랫폼 카테고리 매핑.
 - U1(스마트스토어 API)·U2(kw→L1)는 각각 보류·완료.
+
+## ⭐⭐ 구현 착수 준비 (2026-10-05 말·소유자 "설계서 기준 실제 구현")
+**설계 단계 종료 → 구현 착수.** 단 소유자 지시로 **그리기(구현) 전 세션 정리→새 세션/병렬 도메인 세션에서 진행**. 구현 SSOT=**`docs/IMPL_PLAN.md`**(도메인별 모듈·순서·게이트·블로커·레인). 레인=`docs/PARALLEL_DEV.md`(신규 I 소싱·J 수집·P 어댑터·K CS·D3·D4 추가).
+- **오프라인·읽기 우선**. 각 도메인 `tools/verify_*_offline.py` 게이트 먼저/동시(실 API 금지). 기존 L0/L1 재사용·최소 diff·CC≤15·파일≤600·건강파일 미접촉.
+- **추천 1차 착수(오프라인·비겹침·저위험)**: ①D8 흡수 원장(E·contract/worklog/creditor_store·registry 패턴) ②D10 CS 수동 트래커(K·cs_model/store/gsheet) ③D2 소싱(I·kw L1 재사용·U2 완료). 셋 병렬 가능(worktree·게이트 초록 후 push·master 병합 직렬).
+- **플랫폼 어댑터(P)·수집(J)** = browser/collector 공유 접점 → **통제 세션 동반**으로 그다음.
+- **쓰기(D3 등록·D4 변경/삭제·D10 응대)·라이브 수집(D8 2단계)** = Wave 2·**선행 미결 해소 후**(U3 WING 정산 API·쿠팡 쓰기 엔드포인트 라이브 캡처·U4 샵마인 CS 경계). 🔒U1 스마트스토어 보류.
+- **UI(H_ui)**: v3.3 네비 셸·theme_qt·화면(현 7탭 보존 승격). 시안=H_ui 소유.
+- ⚠worktree 세션은 메모리 자동주입 안 됨 → 착수 시 `docs/IMPL_PLAN.md`·`designs/DOMAIN_*`·`docs/PARALLEL_DEV.md` **읽기**가 출발점(PARALLEL_DEV 체크리스트). 새 worktree=`python tools/install_hooks.py` 1회.
 
 ## 게이트/규칙
 커밋 전 `python tools/run_checks.py`(10종) 초록. 공유파일(CLAUDE.md·DECISIONS·designs)·master 병합=통합 세션 직렬. 설계만·구현 보류 유지.

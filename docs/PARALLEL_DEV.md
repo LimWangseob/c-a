@@ -36,7 +36,15 @@ git 추적 파일(프로젝트 `CLAUDE.md`·`designs/`·`docs/`·`docs/memory/`)
 | **E 원장/정산** | `registry_*.py`(registry·_apply·_core·_gsheet·_history·_model·_rename)·`input_list.py` | |
 | **F 구글시트** | `gsheet.py`·`gsheet_api.py`·`gsheet_index.py`·`gsheet_stats.py`·`pipeline_gsheet.py` | |
 | **G 출력/워크북** | `workbook.py`·`workbook_common.py`·`workbook_render.py`·`workbook_index.py` | 전 모듈이 **import(읽기)**하나 **편집은 G만** |
-| **H UI** | `ui/app_qt.py`·`ui/app.py` | |
+| **H UI** | `ui/app_qt.py`·`ui/app.py`(+`ui/theme_qt.py`·`ui/*_panel_qt.py`) | 시안(Design 캔버스)=H_ui 소유 |
+| **I 소싱** 🆕 | `sourcing.py`·`sourcing_store.py`·`sourcing_score.py` | D2·읽기·kw L1 재사용(구현계획=IMPL_PLAN) |
+| **J 수집(ingest)** 🆕 | `ingest/*.py`(runner·store·freshness) | 배치 수집·어댑터 호출 |
+| **P 어댑터** 🆕 | `platform/*.py`(base·coupang·smartstore) | ⚠browser/collector/rank 공유 접점=**통제 세션 동반** |
+| **K CS** 🆕 | `cs_model.py`·`cs_store.py`·`cs_gsheet.py`·`ui/cs_panel_qt.py` | D10·1단계 수동 트래커 |
+| **D3 등록** 🆕 | `register.py`·`register_validate.py`·`register_store.py` | 쓰기·§5.4·선행=쿠팡 등록 엔드포인트 캡처 |
+| **D4 변경** 🆕 | `product_manage.py`·`product_change_store.py` | 쓰기·§5.4·선행=변경/삭제 엔드포인트 |
+
+> 🆕 레인(2026-10-05·구현 착수)=`docs/IMPL_PLAN.md` 기준. E 레인은 D8 흡수 원장(`contract_store`·`worklog_store`·`creditor_store`)까지 포함(registry 패밀리 확장). 신규 모듈은 전부 **설계서(designs/DOMAIN_*·PLATFORM_INTEGRATION·SETTLEMENT_MODEL) 제안**을 따른다.
 
 ## 공유 자원 = 직렬화 (한 번에 한 세션 · 또는 통제/통합 세션)
 - 코드: `config.py` · `pipeline.py`(오케스트레이션) · `browser.py` · `credstore.py` · `apppaths.py` · `appconfig.py` ·
