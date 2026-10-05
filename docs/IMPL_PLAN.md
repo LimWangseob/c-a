@@ -32,6 +32,7 @@
 
 ### UI (H_ui 레인·병행)
 - `ui/theme_qt.py`(QSS 토큰·디자인 컨셉)·네비 셸(사이드바+QStackedWidget·현 app_qt 7탭 **내용 보존 승격**)·v3.3 메뉴(대13·중84·`designs/UI_SCREENS.md`). ⚠입력 화면(08-1·11-x·01-x·03-x·06-x·05-1 등)은 `input_list` 다중시트 확장(OPERATION_DATA_MODEL 3단계)에 의존 → 통제 세션 동반. **시안(Design 캔버스)=H_ui 소유**.
+- ✅ **실행 셸 1차 구현(2026-10-05·worktree `integrated-app-shell`)**: `ui/app_integrated.py`(별도 진입점·**기존 app_qt 미접촉**) = v3.3 사이드바 대13 + QStackedWidget. 신규 도메인 **실제 작동 패널** — `ui/cs_panel_qt`(05 문의/CS)·`ui/contract_panel_qt`+`ui/worklog_panel_qt`(11 계약·업무일지)·`ui/creditor_panel_qt`(12 채권자, 2단계 가림)·공용 `ui/panel_kit.py`. 저장=`ui/local_sheet_client.py`(로컬 JSON·구글 자격증명 불필요·store 덕타이핑·나중에 GSheetClient 로 인자 교체). 나머지 9 대분류=기존 앱 안내 placeholder. 실행 `python ui/app_integrated.py`. offscreen 스모크(창 14페이지+4도메인 데이터 경로) 통과·게이트/복잡도 초록. 남은=theme_qt 토큰화·기존 7탭 승격·실 GSheet 배선·중84·시안 반영.
 
 ## 2. 도메인별 구현 카드 (설계 SSOT)
 - **D2 소싱**: `designs/DOMAIN_D2_SOURCING.md` · 읽기 전용·저위험. kw 조회 프리미티브(L1·U2 완료) 호출. 경쟁강도=`kw_metrics.page1_competition`.
