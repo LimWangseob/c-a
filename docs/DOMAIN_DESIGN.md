@@ -72,6 +72,7 @@ WING API 호출 패턴, 세션/크리덴셜 기반. "전체 분석"이 아니라
 - **역할**: 신규 판매 상품 발굴·시장/경쟁 분석·후보 스코어링·의사결정 지원.
 - **재사용**: D1(키워드·순위·검색량)·쿠팡 자동완성(`kw_suggest`)·네이버 API(`kw_volume`). 신규=경쟁강도(쿠팡 검색결과 총 상품수·CLAUDE.md HANDOFF §4-1 보류 항목)·마진/원가 입력.
 - **신규 모듈(제안)**: `sourcing.py`(후보 수집·스코어)·`sourcing_store.py`(후보 원장). L1 재사용, D1과는 백본 경유(직접 import 금지).
+- **상세 설계(2026-10-05)**: `designs/DOMAIN_D2_SOURCING.md`. ⚠착수 선행조건 **M1**=`kw_volume·kw_suggest·kw_metrics`를 L1 조회 프리미티브로 재분류(rank R4 선례 동형·공유 자원이라 통합 세션/소유자 결정). 경쟁강도=네이버쇼핑 종료→기존 `kw_metrics.page1_competition`(1페이지 신호) 채택 제안.
 
 ### D3 상품 등록 🆕 (쓰기 도메인 — 고위험)
 - **역할**: WING 상품 등록/수정(제목·옵션·가격·이미지·배송정보) 자동화.
@@ -108,6 +109,7 @@ WING API 호출 패턴, 세션/크리덴셜 기반. "전체 분석"이 아니라
 - **정산 계산(1단계 구현 완료·2·3단계 남음)**: 도메인 지식 SSOT=`designs/COUPANG_SETTLEMENT_DOMAIN.md`·검증 벡터=`designs/coupang_golden_cases.json`(100% 통과=완료). 모듈 설계서=`designs/SETTLEMENT_MODULE.md`. **1단계(오프라인) 구현 완료(2026-09-29·D8 레인·골든 100%)**: `holiday_kr`·`payout`·`settlement_amount`·`settlement_parse`+`tools/verify_settlement_offline.py`(게이트 10종째)·E 레인 소유·전부 신규 파일. → 2단계 라이브 수집(정산·매출현황 주1회·collector 확장·API 미확인) → 3단계 계약 대비 정산(계약서 수령 후·`settlement.py`·H_ui).
 - **갭**: 앱 연계(2단계) 미완·live 미연동·**정산 지급일/금액 계산 미구현**(위 명세=입력만).
 - **계약·사업·채권자 흡수(2026-10-05)**: ①**계약**(계약서 11-3·수익 계산식)=정산의 직접 입력 ②**사업**(사업자·수탁 메타·업무일지 11-4=위탁 운영 기록) ③**채권자**(12-x 상환 원장)=append 원장 패턴 그대로. ⚠채권자는 R2②규칙 적용(**파일 분리·대표/정산담당만 원문·화면 가림·열람 기록**)·상환 **배분 기준은 법률 검토 후 소유자 결정**(앱은 계산/기록/감사만·[[business-context-consignment-creditors]]). 신규 모듈(제안·구현 보류)=`creditor_store.py`(채권자·채권확정·상환 원장, registry 패턴).
+- **상세 설계(2026-10-05)**: `designs/DOMAIN_D8_SETTLEMENT_PHASE23.md`(2단계 라이브 수집=collector 확장·안a / 3단계 계약 정산 / 흡수 3영역=contract_store·worklog_store·creditor_store 독립 모듈·공용 프레임 추출은 중복 측정 후). ⚠선행=WING 정산 API 세션 호출 가능 여부 사무실 라이브 실측(위탁계정 OpenAPI 키 불가). 게이트=verify_settlement_offline 확장 + verify_creditor/contract_offline 신규 제안(10→12종).
 
 ### D9 통계/출력 ✅
 - **모듈**: `workbook*`·`gsheet_index/stats`·`pipeline_gsheet`.
@@ -118,6 +120,7 @@ WING API 호출 패턴, 세션/크리덴셜 기반. "전체 분석"이 아니라
 - **역할**: 위탁 판매처·고객 문의 접수·응대·상태(진행/완료/보류)·이력. 내부 운영 기록(업무일지 11-4)과 별개(그건 D8).
 - **재사용**: D8 원장 패턴(append+상태 replay)·세션(필요 시). 쿠팡 문의 수집(API/경로 미확인)은 쓰기/조회 도입 시 L1·§5.4 검토.
 - **신규 모듈(제안·구현 보류)**: `cs_store.py`(문의 원장). ⚠범위 경계=주문/배송 처리는 넘보지 않음(샵마인). 구현 착수는 소유자 지시 시.
+- **상세 설계(2026-10-05)**: `designs/DOMAIN_D10_CS.md`(문의 건 append 원장+상태 replay·`cs_model/cs_store/cs_gsheet` 3분할·화면 09-x 제안·1단계=수동 트래커 저위험→2단계 수집). ⚠**최우선 미결=샵마인이 이미 CS 관리하는지**(중복 방지 2026-10-02와 충돌 가능·범위가 통계추적/수동트래커/수집 중 어디인지 소유자 확인).
 
 ---
 
@@ -209,6 +212,7 @@ L3 조립·표현: pipeline(+_sales/_ranks/_process/_paths/_gsheet)·ui/app_qt·
 | **D9 통계/출력** | `workbook*`·`gsheet_*` | 전 모듈이 읽되 편집은 여기만 |
 | **H UI** | `ui/*` | 〃 |
 
+- **도메인 상세 설계서(2026-10-05·설계만·구현 보류)**: D2=`designs/DOMAIN_D2_SOURCING.md` · D8(2·3단계+흡수)=`designs/DOMAIN_D8_SETTLEMENT_PHASE23.md` · D10=`designs/DOMAIN_D10_CS.md` · 화면 조립=`designs/UI_SCREENS.md`(IO_DEFINITION 메뉴 ID→사이드바+QStackedWidget 셸, 현 app_qt 7탭 점진 승격). 소싱 레인 I 신설 제안(§7 확장).
 - **런타임은 병렬화 금지**(단일 브라우저·위탁계정·Akamai·단일 시트) → 실행은 야간 단일 순차·라이브 한 번에 한 세션. **개발만 병렬**(2~3레인 권장).
 - 신규 도메인 착수 시 그 도메인 모듈 파일집합을 소유한 레인 추가 → 자연 확장.
 
