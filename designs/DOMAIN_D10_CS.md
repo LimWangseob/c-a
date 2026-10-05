@@ -171,6 +171,8 @@ cs_gsheet.append_events(client, events, *, dry_run=False)        -> int      # �
 **점진·측정 기반**(DOMAIN_DESIGN §8). big-bang 금지.
 
 1. **1단계 — 수동 트래커(저위험·수집 0)**: `cs_model`+`cs_store`+`cs_gsheet`로 수동 입력(05-x) 기반 문의 원장·상태·통계. 쿠팡 수집·응대 쓰기 없음. **R2(구글시트 시작)·R1(조회/저위험 먼저)와 정합.** → 가치 검증.
+   - ✅ **구현 완료(2026-10-05·K 레인 worktree `d10-cs-tracker`)**: 3모듈 greenfield — `cs_model`(상수·Inquiry/Event/CSLog·검증·가림·상태맵)·`cs_store`(파싱·상태 replay·`open_inquiries`·`stats`·무결성·ID 할당·순수)·`cs_gsheet`(시트 3개[문의·문의이력·열람기록] IO·`open_inquiry`/`add_event`/`record_access`·잠금·서식·로컬 백업 없음). 상태=이벤트 replay('접수' 기본·응대는 불변)·개인정보(고객이름·연락처) 가림(`CS_RAW_ROLES`=대표·CS담당·**제안**)·열람 로그(항목명만). `registry_lock` 재사용·**config.py 미접촉**. 게이트 `verify_cs_offline.py` 신규(10시나리오)·`run_checks` 14종 초록·복잡도/건강 초록.
+   - 구현 시 확정/정정: **상품·고객이름·연락처=선택**(D10 §1.1·§3.1 "상품 비우면 계정 전체"·IO 05-1 필수 표기와 상충 → 도메인 설계 우선 채택·IO reconcile 필요) · 필수=판매처·위탁계정·문의유형·문의내용 · `접수`는 이벤트 아닌 문의 존재로 기본 상태(§3.2 접수 이벤트 생략). 남은=UI(05-x·H_ui)·config 설정키·CS_RAW_ROLES 소유자 확정(Q4)·수집(2단계·Q1/Q2).
 2. **2단계 — 수집(경로 확인·소유자 승인 후)**: Q1/Q2 답에 따라 4-A(세션 재사용 조회) 또는 4-B(반자동 읽기). `cs_collect.py` 신설. **읽기만**.
 3. **3단계 — (도입 시) 응대 연계**: Q3 승인 시에만. 쓰기 안전규약(§5.4). 초기엔 반자동·사람 확인.
 
