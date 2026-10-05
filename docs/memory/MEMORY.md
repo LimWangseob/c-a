@@ -18,7 +18,7 @@
 - [⭐디자인 컨셉 확정: 참고 대시보드 스타일·보라(2026-10-03·앱 적용 보류)](decision-design-concept-261003.md) — 회색 바탕+흰 둥근 카드·보라 단일 강조·아이콘 사이드바·기간 알약·알약 막대 그래프. 시안 "디자인 컨셉 확정" 보드가 기준.
 - [⭐저장소 결정: 구글시트로 시작 + 규칙 4가지(2026-10-02·구현 보류)](decision-storage-gsheet-4rules.md) — 돈·재고 원장=앱만 추가 · 채권자 파일 분리 · 저장 계층 한 곳 · 쓰기 PC 하나. 창고 동시 입력 시작 시 DB 이전 재판단.
 - [⭐⭐사업 맥락: 위탁관리·회사수익 정산·채권자 370명/300억 상환(2026-10-02)](business-context-consignment-creditors.md) — 기능 대중소 분류의 전제. 상환 배분은 법률 검토 후 소유자 결정·앱은 계산/기록/감사. 고객 CS 범위 미결.
-- [⭐앱 범위: 주문·배송·CS=샵마인, 우리=상품등록+관리·통계(2026-10-02)](app-scope-no-orders-shopmine.md) — 주문/배송/클레임/문의 기능 만들지 않음. DOMAIN_DESIGN D5·D6 범위 밖(문서 갱신=통합). 홈 시안 캔버스 링크 포함.
+- [⭐앱 범위: 주문·배송=샵마인, 우리=상품등록+관리·통계+문의CS(2026-10-02·CS는 10-05 수정)](app-scope-no-orders-shopmine.md) — 주문/배송/클레임 안 만듦(D5·D6 범위밖). **문의(CS)는 10-05부로 범위 안=신규 D10**. 상품등록은 우리 앱. 홈 시안 캔버스 링크 포함.
 
 ## 실행·운영
 - [재부팅 자동복구](reboot-recovery.md) — 야간 재부팅 시 --resume(로그온 트리거)로 판매수집 스킵·순위부터. Windows 자동로그인 필요.
@@ -78,7 +78,7 @@
 - [날짜컬럼=실행날짜 규칙](date-column-run-date-rule.md) — 라벨=작업실행일, 순위=실행일·판매=전일(D-1) 같은컬럼, 미실행일=날짜만+공란.
 
 ## 참조
-- [입출력 정의서 v1(파일 칸↔화면 칸 1:1)](io-definition-spec.md) — 앱이 읽고/쓰는 128칸을 화면·필수·형식·검사·민감과 1:1. 구현 시 SSOT=designs/IO_DEFINITION.md. 현재 정의/시안만(구현 보류). 미배정 5영역=DOMAIN_DESIGN §9 R5.
+- [입출력 정의서 v1(파일 칸↔화면 칸 1:1)](io-definition-spec.md) — 앱이 읽고/쓰는 128칸을 화면·필수·형식·검사·민감과 1:1. 구현 시 SSOT=designs/IO_DEFINITION.md. 현재 정의/시안만(구현 보류). 5영역 배정 ✅(계약·사업·채권자→D8·마케팅→D1·문의CS→신규 D10·소유자 2026-10-05).
 - [정산 도메인 지식(D8 구현 입력)](settlement-domain-knowledge.md) — 지급일 규칙6·공휴일/영업일·금액식3·파싱·불변식·운영위탁 계약. SSOT=designs/COUPANG_SETTLEMENT_DOMAIN.md + coupang_golden_cases.json(100%통과=완료). 미구현.
 - [쿠팡 공식 운영지식](coupang-official-reference.md) — 상품등록·주문·배송·수수료·SEO/ID(productId 가변/vendorItemId 불변).
 - [상품명 규약: 대장=담당자명·결과=노출명](product-name-convention-ledger-vs-result.md) — 결과파일 긴 이름=쿠팡 노출명(정상). "낡았다" 오판 금지.
