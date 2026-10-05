@@ -79,11 +79,13 @@ WING API 호출 패턴, 세션/크리덴셜 기반. "전체 분석"이 아니라
 - **재사용**: `WingBrowser` 세션 + collector의 `_POST_JSON_JS`(x-xsrf-token) 패턴. 신규 엔드포인트(상품등록 API)·이미지(D7 연계).
 - **⚠쓰기 안전 필수**(§5.4): dry-run 미리보기 → 사람 승인 → 실행 → 원장 기록. 위탁계정이라 오작동=실운영 사고.
 - **신규 모듈(제안)**: `register.py`(등록/수정 요청 빌더·검증)·`register_store.py`(변경 이력).
+- **상세 설계(2026-10-05)**: `designs/DOMAIN_D3_REGISTER.md`. 어댑터 `register_product(session, spec)` 위에만 올라탐(DTO `RegisterSpec/Result`)·§5.4 7단계(빌드→검증→dry-run→승인→실행→원장 PENDING/COMMITTED→vid 재확보)·멱등. 멀티플랫폼(쿠팡 WING/스마트스토어). ⚠착수 선행=쿠팡 등록 쓰기 엔드포인트 라이브 캡처(G1)·01-2 입력이 대장기록만 vs 플랫폼 자동등록까지(G-R1·저위험 (a)부터 권장)·분류코드→플랫폼 카테고리 매핑(G-R3).
 
 ### D4 상품 관리 🟡
 - **역할**: 재고·가격·판매상태 조회(있음) + 변경(신규). 재고 역기록(관리대장 AD열)은 D8/입력 연계로 존재.
 - **재사용**: collector(`fetch_inventory`·`fetch_vendor_inventory`·`sale_status_by_vid`)·workbook(지표행). 신규=가격/재고 변경(쓰기).
 - **갭**: 변경은 쓰기 도메인(§5.4 규약). 조회는 D1 수집과 공유(collector 프리미티브).
+- **상세 설계(2026-10-05)**: `designs/DOMAIN_D4_PRODUCT_MANAGE.md`. ①일반 조회=수집본 소비(어댑터 직접호출 안 함·밴↓)·쓰기 미리보기 때만 즉시 재조회 ②변경/삭제=§5.4(미리보기 현재값 재조회→승인→실행→원장)·삭제=소프트(판매중지) 우선·하드삭제는 2중확인+스냅샷 ③역기록(그로스/회사재고=우리 대장에 쓰기·안전)과 **플랫폼 실제 변경(신규·고위험)** 명확 구분 ④쓰기 DTO `ProductChangeDTO`·무인 자동 쓰기 코드로 차단(approved=False→예외). ⚠선행=변경/삭제 엔드포인트 라이브 캡처(G1)·로켓그로스 입고요청 소속(D4 재고 vs D6 샵마인·M5).
 
 ### D5 주문 ⛔범위밖 (샵마인 담당 — 소유자 2026-10-02)
 > **우리 앱은 주문을 만들지 않는다.** 주문·배송·구매고객 응대는 **샵마인(상용)**이 담당. 아래는 참고용 보존(구현 안 함).
@@ -110,6 +112,7 @@ WING API 호출 패턴, 세션/크리덴셜 기반. "전체 분석"이 아니라
 - **갭**: 앱 연계(2단계) 미완·live 미연동·**정산 지급일/금액 계산 미구현**(위 명세=입력만).
 - **계약·사업·채권자 흡수(2026-10-05)**: ①**계약**(계약서 11-3·수익 계산식)=정산의 직접 입력 ②**사업**(사업자·수탁 메타·업무일지 11-4=위탁 운영 기록) ③**채권자**(12-x 상환 원장)=append 원장 패턴 그대로. ⚠채권자는 R2②규칙 적용(**파일 분리·대표/정산담당만 원문·화면 가림·열람 기록**)·상환 **배분 기준은 법률 검토 후 소유자 결정**(앱은 계산/기록/감사만·[[business-context-consignment-creditors]]). 신규 모듈(제안·구현 보류)=`creditor_store.py`(채권자·채권확정·상환 원장, registry 패턴).
 - **상세 설계(2026-10-05)**: `designs/DOMAIN_D8_SETTLEMENT_PHASE23.md`(2단계 라이브 수집=collector 확장·안a / 3단계 계약 정산 / 흡수 3영역=contract_store·worklog_store·creditor_store 독립 모듈·공용 프레임 추출은 중복 측정 후). ⚠선행=WING 정산 API 세션 호출 가능 여부 사무실 라이브 실측(위탁계정 OpenAPI 키 불가). 게이트=verify_settlement_offline 확장 + verify_creditor/contract_offline 신규 제안(10→12종).
+- **정산 3층 상위 모델(2026-10-05)**: `designs/SETTLEMENT_MODEL.md` — ①플랫폼 정산(위탁계정↔쿠팡/스마트스토어·기구현 1단계 payout/settlement_amount가 여기 소속) → ②계약 정산(커머스 판로↔위탁자) → ③채권자 정산(단방향·역방향 금지). 멀티플랫폼 정규화는 ①에만 가둠(②③ 플랫폼 불변). ③채권자는 배분 규칙 미정 중엔 기록만.
 
 ### D9 통계/출력 ✅
 - **모듈**: `workbook*`·`gsheet_index/stats`·`pipeline_gsheet`.
@@ -212,7 +215,9 @@ L3 조립·표현: pipeline(+_sales/_ranks/_process/_paths/_gsheet)·ui/app_qt·
 | **D9 통계/출력** | `workbook*`·`gsheet_*` | 전 모듈이 읽되 편집은 여기만 |
 | **H UI** | `ui/*` | 〃 |
 
-- **도메인 상세 설계서(2026-10-05·설계만·구현 보류)**: D2=`designs/DOMAIN_D2_SOURCING.md` · D8(2·3단계+흡수)=`designs/DOMAIN_D8_SETTLEMENT_PHASE23.md` · D10=`designs/DOMAIN_D10_CS.md` · 화면 조립=`designs/UI_SCREENS.md`(IO_DEFINITION 메뉴 ID→사이드바+QStackedWidget 셸, 현 app_qt 7탭 점진 승격). 소싱 레인 I 신설 제안(§7 확장).
+- **도메인 상세 설계서(2026-10-05·설계만·구현 보류)**: D2=`designs/DOMAIN_D2_SOURCING.md` · D3=`designs/DOMAIN_D3_REGISTER.md` · D4=`designs/DOMAIN_D4_PRODUCT_MANAGE.md` · D8(2·3단계+흡수)=`designs/DOMAIN_D8_SETTLEMENT_PHASE23.md` · D10=`designs/DOMAIN_D10_CS.md` · 화면 조립=`designs/UI_SCREENS.md`(IO_DEFINITION 메뉴 ID→사이드바+QStackedWidget 셸, 현 app_qt 7탭 점진 승격).
+- **멀티플랫폼·배치수집·정산·프로세스(2026-10-05·소유자 2차 확장)**: 플랫폼 어댑터+배치 수집=`designs/PLATFORM_INTEGRATION.md`(L1 공유 파사드·쿠팡 WING 재사용/스마트스토어 커머스 API·쓰기 §5.4·레인 P 어댑터·J 수집 제안) · 정산 3층=`designs/SETTLEMENT_MODEL.md`(①플랫폼 ②계약 ③채권자 단방향·기구현 1단계=①소속) · 전체 프로세스·기능목록·미결 총괄(U1~U20)=`designs/PROCESS_OVERVIEW.md`. 소싱 레인 I·어댑터 레인 P·수집 레인 J 신설 제안(§7 확장).
+- ⚠**범위 확장(소유자 2026-10-05)**: 커머스 판로 = **멀티플랫폼 통합 관리 앱**(v1 쿠팡+스마트스토어). **샵마인=주문·배송만**으로 축소, 상품·판매·정산·문의(CS)는 통합앱 직접([[app-scope-no-orders-shopmine]] 갱신). 전부 설계만·구현 보류.
 - **런타임은 병렬화 금지**(단일 브라우저·위탁계정·Akamai·단일 시트) → 실행은 야간 단일 순차·라이브 한 번에 한 세션. **개발만 병렬**(2~3레인 권장).
 - 신규 도메인 착수 시 그 도메인 모듈 파일집합을 소유한 레인 추가 → 자연 확장.
 

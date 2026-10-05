@@ -1,5 +1,5 @@
 ## 현재 상태 · 프로젝트 방향
-- [⭐도메인 상세 설계 4건(2026-10-05): D2 소싱·D8 정산2·3+흡수·D10 문의CS·H UI 화면](domain-design-elaboration-261005.md) — 설계 심화(구현 보류)·병렬 에이전트 4. SSOT=designs/DOMAIN_D2_SOURCING·DOMAIN_D8_SETTLEMENT_PHASE23·DOMAIN_D10_CS·UI_SCREENS. ⭐착수 선행 미결 5: M1(kw→L1 재분류)·샵마인 CS 경계·UI 권한모델·디자인 전면적용 시점·WING 정산 API 실측.
+- [⭐도메인 설계 10건 + 멀티플랫폼 대확장(2026-10-05)](domain-design-elaboration-261005.md) — 설계 심화(구현 보류)·병렬 에이전트. 1차=D2·D8 2·3+흡수·D10 CS·H UI 화면 / 2차=멀티플랫폼(쿠팡+스마트스토어·샵마인=주문배송만)+배치수집+정산3층+D3 등록·D4 변경+프로세스개요. SSOT=designs/PLATFORM_INTEGRATION·SETTLEMENT_MODEL·PROCESS_OVERVIEW·DOMAIN_D2/D3/D4/D8/D10·UI_SCREENS. ⭐최우선 선행: U1 스마트스토어 API 위탁접근성·U2 kw→L1(M1)·U3 WING정산API·U4 샵마인 CS경계·쿠팡 쓰기 엔드포인트 라이브캡처.
 - [⭐새 세션 진입점(2026-10-04 최신): 안정성 6종 수정+설정일원화 병합+배포본 생성](handoff-session-261004.md) — master HEAD=6d6937d·게이트 초록. 이중제출·백업401·전원억제(야간 멈춤 차단·라이브 확인됨)·sheet_id방어·로그인대기90초·18시원인. **⭐최우선 미해결=설정 URL 저장소 분열**(18:00 무인이 옛 URL 써서 결과시트 반영 404/400·올바른 URL4개는 메모에). dist 직접운용 금지.
 - [새 세션 진입점(2026-10-02): egress 회전+차단IP목록+이미지OFF실험](handoff-session-261002.md) — master 7d27720. 순위 3경로 회전. 밤샘 규모검증 남음.
 - [노출순위 프록시 라이브 실측(2026-10-02)](proxy-live-test-261002.md) — DataImpulse 한국 주거용(회전)=통과 100%·Decodo 고정ISP=번아웃·코드 무결. 세팅=proxies.txt+config.json proxy/enabled.

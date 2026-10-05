@@ -30,6 +30,8 @@ L3 조립·표현: pipeline(+_sales/_ranks/_process/_paths/_gsheet) · ui/app_qt
 **의존 방향 규칙(재사용·융합의 핵심)**: L2 도메인은 **아래(L0/L1)로만** 의존. **도메인끼리 직접 import 금지** —
 융합은 **데이터 백본(workbook/registry/gsheet) 또는 정의된 인터페이스** 경유. 이래야 도메인 추가·교체가 서로를 안 깬다.
 
+> **멀티플랫폼 확장(소유자 2026-10-05·설계만·구현 보류)**: 커머스 판로 = 멀티플랫폼 통합앱(v1 쿠팡+스마트스토어). **플랫폼 어댑터**(공통 인터페이스·플랫폼 중립 DTO·capabilities)를 **L1 공유 파사드**로 둔다(도메인 아님 — 여러 도메인이 공유). 쿠팡 어댑터=기존 browser(L0)+collector/rank(L1) 얇은 파사드, 스마트스토어 어댑터=네이버 커머스 API(접근성 미확인). **배치 수집 레이어**(ingest)가 판매·정산·문의를 당겨 백본에 저장→도메인은 수집본 조회. 쓰기(상품 CRUD·CS 답변)는 §DOMAIN_DESIGN 5.4 규약. SSOT=`designs/PLATFORM_INTEGRATION.md`·`designs/PROCESS_OVERVIEW.md`·`designs/SETTLEMENT_MODEL.md`.
+
 ## 3. 세션 분리 & 상호 통제
 
 | 세션 | 담당 계층/도메인 | 권한 |
