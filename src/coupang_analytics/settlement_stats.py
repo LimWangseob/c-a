@@ -134,25 +134,35 @@ def aggregate(files: list[SettleFile]) -> StatsResult:
 
 def payout_lines(files: list[SettleFile], warns: list | None = None) -> list[tuple]:
     """파일별 계산 지급액(예상) — 쿠팡 화면 금액과 대조용. (파일, 구분, 금액) 목록. 실측 규칙은 payout.payout_amount.
-    윙 주정산=70% · 윙 최종액=30%(정산예정일별 주 합계로 계산) · 로켓그로스=같은 파일이 70%·30% 두 지급에 쓰임."""
+    윙 주정산=70% · 윙 최종액=30%(정산예정일별 주 합계로 계산) + 주정산 파일이 없는 주의 70%(월별 파일에서 계산,
+    과거 달은 월별 파일만 받으므로) · 로켓그로스=같은 파일이 70%·30% 두 지급에 쓰임."""
     warns = warns if warns is not None else []
+    covered = {(f.account, f.settle_date) for f in files if f.channel == CH_WING and f.kind != "최종액"}
     out = []
     for f in files:
         amounts = [r.settle for r in f.rows]
         if f.channel == CH_WING and f.kind == "최종액":
-            weeks: dict = {}
-            for r in f.rows:
-                weeks[r.due] = weeks.get(r.due, 0) + r.settle
-            if None in weeks:
-                warns.append(f"{f.account} 윙 최종액 {f.period_start}~{f.period_end}: 정산예정일 없는 금액 줄 — "
-                             "30% 계산이 화면과 다를 수 있음")
-            out.append((f, "최종액 30%", P.payout_amount(P.PAYOUT_MP_WEEKLY_FINAL, list(weeks.values()))))
+            out += _final_lines(f, covered, warns)
         elif f.channel == CH_WING:
             out.append((f, "주정산 70%", P.payout_amount(P.PAYOUT_MP_WEEKLY_1ST, [sum(amounts)])))
         else:
             out.append((f, "주정산 70%", P.payout_amount(P.PAYOUT_RG_WEEKLY_1ST, amounts)))
             out.append((f, "2차 30%", P.payout_amount(P.PAYOUT_RG_WEEKLY_FINAL, amounts)))
     return out
+
+
+def _final_lines(f: SettleFile, covered: set, warns: list) -> list[tuple]:
+    weeks: dict = {}
+    for r in f.rows:
+        weeks[r.due] = weeks.get(r.due, 0) + r.settle
+    if None in weeks:
+        warns.append(f"{f.account} 윙 최종액 {f.period_start}~{f.period_end}: 정산예정일 없는 금액 줄 — "
+                     "30% 계산이 화면과 다를 수 있음")
+    lines = [(f, f"주정산 70%(정산예정 {due}·월별 파일에서 계산)", P.payout_amount(P.PAYOUT_MP_WEEKLY_1ST, [amt]))
+             for due, amt in sorted(weeks.items(), key=lambda kv: str(kv[0]))
+             if due is not None and (f.account, due) not in covered]
+    lines.append((f, "최종액 30%", P.payout_amount(P.PAYOUT_MP_WEEKLY_FINAL, list(weeks.values()))))
+    return lines
 
 
 def contractor_amount(contract_amount: int | None, coupang_settled: int) -> int:

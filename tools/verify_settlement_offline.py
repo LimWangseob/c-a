@@ -421,15 +421,30 @@ def p8_settle_jobs():
     pick = SJ.plan_requests(ev, jobs, today=D("2026-10-06"), now=now, per_account_cap=3)
     keys = sorted((j.account, j.channel, j.kind, j.report) for j in jobs)
     assert keys == [("A", "로켓그로스", "주정산", "보관비"), ("A", "로켓그로스", "주정산", "판매수수료"),
-                    ("A", "윙", "주정산", "주문상세"), ("A", "윙", "최종액", "주문상세"),
-                    ("B", "윙", "주정산", "주문상세")], keys                       # 70/30 같은 기간 1번·미래 제외
-    assert sum(j.account == "A" for j in pick) == 3 and sum(j.account == "B" for j in pick) == 1   # 상한 3
+                    ("A", "윙", "최종액", "주문상세"),
+                    ("B", "윙", "주정산", "주문상세")], keys                       # 70/30 1번·미래 제외·A 윙 주정산=월별로 대체
+    assert sum(j.account == "A" for j in pick) == 3 and sum(j.account == "B" for j in pick) == 1
     assert pick[0].settle_date == "2026-09-07"                                     # 오래된 것부터
     for j in pick:
         SJ.mark_requested(j, now)
-    assert len(SJ.plan_requests(ev, jobs, today=D("2026-10-07"), now=datetime(2026, 10, 7, 19), per_account_cap=3)) == 1
+    assert SJ.plan_requests(ev, jobs, today=D("2026-10-07"), now=datetime(2026, 10, 7, 19), per_account_cap=3) == []
     later = SJ.plan_requests(ev, jobs, today=D("2026-10-10"), now=datetime(2026, 10, 10, 19), per_account_cap=9)
-    assert len(later) == 5                                                         # 3일 지나도 미완료 → 재요청 대상
+    assert len(later) == 4                                                         # 3일 지나도 미완료 → 재요청 대상
+    capped = SJ.plan_requests(ev, [], today=D("2026-10-06"), now=now, per_account_cap=2)
+    assert sum(j.account == "A" for j in capped) == 2                               # 계정당 하루 상한
+    # 월별 파일이 나오기 전엔 주정산을 계획 → 나온 뒤엔 아직 요청 안 한 주정산은 '생략(월별로 대체)'
+    evc = [SJ.SettleEvent("C", "윙", "주정산", D("2026-09-18"), D("2026-08-24"), D("2026-08-30")),
+           SJ.SettleEvent("C", "윙", "주정산", D("2026-09-29"), D("2026-08-31"), D("2026-08-31")),   # 월 경계 분할 행
+           SJ.SettleEvent("C", "윙", "최종액", D("2026-10-01"), D("2026-08-03"), D("2026-08-30"))]
+    jc: list = []
+    early = SJ.plan_requests(evc, jc, today=D("2026-09-20"), now=datetime(2026, 9, 20, 19), per_account_cap=5)
+    assert [(j.kind, j.period_start) for j in early] == [("주정산", "2026-08-24")]         # 최종액은 아직 미도래
+    after = SJ.plan_requests(evc, jc, today=D("2026-10-06"), now=now, per_account_cap=5)
+    assert jc[0].status == SJ.ST_SKIPPED and "월별" in jc[0].note
+    assert sorted((j.kind, j.period_start) for j in after) == [("주정산", "2026-08-31"), ("최종액", "2026-08-03")]
+    done = SJ.Job("C", "윙", "주정산", "주문상세", "2026-08-24", "2026-08-30", "2026-09-18", status=SJ.ST_DONE)
+    SJ.plan_requests(evc, [done], today=D("2026-10-06"), now=now, per_account_cap=5)
+    assert done.status == SJ.ST_DONE                                               # 이미 받은 건 그대로
     j0 = next(j for j in jobs if j.kind == "최종액")
     j0.attempts = SJ.MAX_ATTEMPTS
     SJ.plan_requests(ev, jobs, today=D("2026-10-10"), now=datetime(2026, 10, 10, 19), per_account_cap=9)
@@ -442,20 +457,30 @@ def p8_settle_jobs():
     rows = [SJ.DownloadRow("윙", t_b, "WAIT", period_start=D("2026-08-24"), period_end=D("2026-08-30")),
             SJ.DownloadRow("윙", t_b + timedelta(minutes=1), "FINISHED", period_start=D("2026-08-24"),
                            period_end=D("2026-08-30")),
-            SJ.DownloadRow("로켓그로스", t_rg + timedelta(minutes=2), "완료", report="판매수수료")]
+            SJ.DownloadRow("로켓그로스", t_rg + timedelta(seconds=4), "완료", report="판매수수료")]
     pairs, notes = SJ.match_downloads(rows, [wing_b, rg_fee])
     assert [(j.account, j.report, r.status) for j, r in pairs] == [("B", "주문상세", "FINISHED"),
                                                                    ("A", "판매수수료", "완료")], pairs
-    rows.append(SJ.DownloadRow("로켓그로스", t_rg + timedelta(minutes=3), "완료", report="판매수수료"))
+    rows.append(SJ.DownloadRow("로켓그로스", t_rg + timedelta(seconds=9), "완료", report="판매수수료"))
     pairs, notes = SJ.match_downloads(rows, [rg_fee])
     assert pairs == [] and "구분 불가" in notes[0]                                    # 애매하면 받지 않음
     pairs, notes = SJ.match_downloads([rows[0]], [wing_b])
     assert pairs == [] and "아직 WAIT" in notes[0]
+    # 실제 운영 모양: 로켓그로스 판매수수료를 여러 주 40초 간격으로 요청 → 각자 자기 목록 줄과 짝(겹치지 않음)
+    t0 = datetime(2026, 10, 6, 20, 0, 0)
+    w1 = SJ.Job("A", "로켓그로스", "주정산", "판매수수료", "2026-08-03", "2026-08-09", "2026-10-01",
+                status=SJ.ST_REQUESTED, requested_at=t0.isoformat())
+    w2 = SJ.Job("A", "로켓그로스", "주정산", "판매수수료", "2026-08-10", "2026-08-16", "2026-10-01",
+                status=SJ.ST_REQUESTED, requested_at=(t0 + timedelta(seconds=40)).isoformat())
+    lst = [SJ.DownloadRow("로켓그로스", t0 + timedelta(seconds=2), "완료", report="판매수수료", handle=1),
+           SJ.DownloadRow("로켓그로스", t0 + timedelta(seconds=43), "완료", report="판매수수료", handle=0)]
+    pairs, notes = SJ.match_downloads(lst, [w1, w2])
+    assert [(j.period_start, r.handle) for j, r in pairs] == [("2026-08-03", 1), ("2026-08-10", 0)], (pairs, notes)
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "기록.json"
         SJ.save_jobs(p, jobs)
         assert [j.key for j in SJ.load_jobs(p)] == [j.key for j in jobs] and not (Path(tmp) / "기록.json.tmp").exists()
-    ok("70/30 한 번·보관비만 추가·미래 제외·상한·오래된 순·만료 재요청·3회 실패·윙 기간/로켓그로스 시각 대조·애매=보류·기록 왕복")
+    ok("70/30 한 번·보관비만 추가·미래 제외·상한·오래된 순·만료 재요청·3회 실패·월별 나온 달 주정산 생략·윙 기간/RG 시각 대조·애매=보류·기록 왕복")
 
 
 def p9_settle_stats():
@@ -480,6 +505,8 @@ def p9_settle_stats():
     assert any("두 번" in x for x in res.warnings) and any("날짜 없는" in x for x in res.warnings)
     assert not any("겹친 같은 줄" in x for x in res.warnings)                        # 주정산 있는 주는 최종액서 제외
     lines = {(f.kind, f.channel, label): amt for f, label, amt in ST.payout_lines([w, wfinal, g])}
+    assert lines[("최종액", "윙", "주정산 70%(정산예정 2026-08-31·월별 파일에서 계산)")] == 7930   # 주정산 없는 주만
+    assert not any("2026-09-18·월별" in k[2] for k in lines)                           # 주정산 있는 주는 중복 계산 안 함
     assert lines[("주정산", "윙", "주정산 70%")] == 93306                               # 133,294×0.7
     assert lines[("최종액", "윙", "최종액 30%")] == 144622 - (93306 + 7930)            # 주별(09-18·08-31) 70% 뺀 나머지
     assert lines[("주정산", "로켓그로스", "주정산 70%")] == 0 and ("주정산", "로켓그로스", "2차 30%") in lines
@@ -492,10 +519,95 @@ def p9_settle_stats():
         wb = openpyxl.load_workbook(out)
         assert wb.sheetnames == ["상품별 월별", "계정별 월별", "계약자 정산", "지급액 검산", "경고"]
         assert [c.value for c in wb["계약자 정산"][2]] == ["A", 144622, 200000, 55378]
-        assert wb["지급액 검산"].max_row == 1 + 4                                       # 윙 2 + 로켓그로스 70%·30%
+        assert wb["지급액 검산"].max_row == 1 + 5                 # 윙 주정산·최종액 30%·월별서 계산한 08-31 주 70% + RG 2
         out2 = ST.write_stats(Path(tmp) / "집계2.xlsx", res)
         assert [c.value for c in openpyxl.load_workbook(out2)["계약자 정산"][2]][2:] == [None, None]   # 미입력=빈칸
     ok("최종액=주정산 없는 주만·중복 파일 1회·배송비 묶음·월 귀속·지급액 검산(윙 최종액 30% 주별)·계약자 정산금액·엑셀 5시트")
+
+
+def p10_wing_ui_parse():
+    print("[P10] 정산 화면 글자 → 정산 일정·다운로드 목록(스크린샷 모양 가상 화면·라이브 미호출)")
+    from datetime import datetime
+    from coupang_analytics import settlement_wing_ui as UI
+    K = UI.ROW_KEY
+    wing = [{"정산일": "2026-10-01", "정산유형": "최종액정산", "지급비율": "30%", "구매확정기간": "2026-08-03 ~ 2026-08-30",
+             "정산상태": "정산확정", "최종지급액": "124,513", K: 0},
+            {"정산일": "2026-09-18", "정산유형": "주정산", "지급비율": "70%", "구매확정기간": "2026-08-24 ~ 2026-08-30",
+             "정산상태": "정산확정", "최종지급액": "236,439", K: 1},
+            {"정산일": "2026-10-07", "정산유형": "주정산", "지급비율": "70%", "구매확정기간": "2026-09-07 ~ 2026-09-13",
+             "정산상태": "정산예정", "최종지급액": "7,217", K: 3}]                      # 예정 = 아직 받지 않음
+    ev = UI.parse_wing_rows(wing, "계정A")
+    assert [(e.kind, e.settle_date, e.period_start, e.period_end, ri) for e, ri in ev] == [
+        ("최종액", D("2026-10-01"), D("2026-08-03"), D("2026-08-30"), 0),
+        ("주정산", D("2026-09-18"), D("2026-08-24"), D("2026-08-30"), 1)], ev
+    rg = [{"정산일": "2026-09-07", "정산유형": "주별", "지급비율": "30", "매출인식일": "2026-07-27~2026-07-31", K: 0},
+          {"정산일": "2026-10-01", "정산유형": "주별", "지급비율": "30", "매출인식일": "2026-08-03~2026-08-09", K: 2}]
+    rev = UI.parse_rg_rows(rg, "계정A")
+    assert [(e.channel, e.kind, e.period_start, ri) for e, ri in rev] == [
+        ("로켓그로스", "주정산", D("2026-07-27"), 0), ("로켓그로스", "주정산", D("2026-08-03"), 2)]
+    expect(UI.UiChangedError, lambda: UI.parse_wing_rows([{**wing[0], "정산유형": "특별정산"}], "a"), "모르는 유형")
+    expect(UI.UiChangedError, lambda: UI.parse_rg_rows([{**rg[0], "매출인식일": "7월 4주"}], "a"), "기간 글자")
+    assert UI.report_key("리포트 : 판매수수료 리포트") == "판매수수료" and UI.report_key("입출고/배송비 리포트") == "입출고/배송비"
+    expect(UI.UiChangedError, lambda: UI.report_key("리포트 : 새 리포트"), "모르는 리포트")
+    wl = UI.parse_list_rows([{"요청일시": "2026-10-06 11:43:41", "메뉴명": "[중개] 정산현황 주문 상세 내역",
+                              "검색조건": "구매확정일:2026-08-24 - 2026-08-30", "상태": "WAIT", K: 0},
+                             {"요청일시": "2025-02-19 05:07:42", "메뉴명": "[중개] 부가세 신고 내역 상세",
+                              "검색조건": "구매확정일:2025-01-01 - 2025-01-31", "상태": "FINISHED", K: 2}], "윙")
+    assert [(r.requested_at, r.status, r.period_start, r.period_end, r.handle) for r in wl] == [
+        (datetime(2026, 10, 6, 11, 43, 41), "WAIT", D("2026-08-24"), D("2026-08-30"), 0)]   # 부가세 메뉴 무시
+    rl = UI.parse_list_rows([{"요청일시": "2026-10-06 11:55:15", "상태": "진행중", "리포트": "리포트 : 판매수수료 리포트",
+                              K: 4}], "로켓그로스")
+    assert (rl[0].report, rl[0].status, rl[0].handle) == ("판매수수료", "진행중", 4)
+    assert UI.month_windows(D("2026-01-15"), D("2026-03-02")) == [
+        (D("2026-01-15"), D("2026-01-31")), (D("2026-02-01"), D("2026-02-28")), (D("2026-03-01"), D("2026-03-02"))]
+
+    class FakePage:
+        def __init__(self, tables):
+            self.tables = tables
+
+        def evaluate(self, js, arg=None):
+            if arg is None:
+                return [" ".join(t["ths"]) for t in self.tables]
+            return [t for t in self.tables if all(m in t["ths"] for m in arg)]
+    tbl = {"ti": 3, "ths": list(UI.WING_HEADERS) + ["주문상세내역"],
+           "rows": [["2026-09-18", "주정산", "70%", "2026-08-24 ~ 2026-08-30", "정산확정", "236,439", "미리보기"],
+                    ["총 최종지급액", "236,439"]]}                                         # 합계 줄 = 제외
+    ti, rows = UI.read_table(FakePage([tbl]), UI.WING_HEADERS)
+    assert ti == 3 and len(rows) == 1 and rows[0]["구매확정기간"].startswith("2026-08-24") and rows[0][K] == 0
+    expect(UI.UiChangedError, lambda: UI.read_table(FakePage([]), UI.WING_HEADERS), "표 없음")
+    expect(UI.UiChangedError, lambda: UI.read_table(FakePage([tbl, tbl]), UI.WING_HEADERS), "표 둘")
+    ok("정산확정만·유형/기간 변환·화면 줄 번호 유지·리포트 이름·목록(부가세 메뉴 무시)·달 구간·표 0/2개=오류·합계 줄 제외")
+
+
+def p11_runlog():
+    print("[P11] 실행 기록 — 처리기록 CSV(실행·누적)·로그인/차단/실패 기록·오류 전체 추적·요약")
+    import csv as _csv
+    from datetime import datetime
+    from coupang_analytics import settlement_runlog as RLG
+    with tempfile.TemporaryDirectory() as tmp:
+        out: list = []
+        lg = RLG.RunLog(tmp, now=datetime(2026, 10, 6, 21, 0, 0), echo=out.append)
+        lg.record("A-1", "로그인", RLG.OK, "success: 로그인 완료")
+        lg.record("A-1", "요청", RLG.OK, "다운로드 요청함", channel="윙", kind="주정산·주문상세", settle_date="2026-01-12",
+                  period="2025-12-29~2026-01-04")
+        lg.record("B-2", "차단감지", RLG.BLOCK, "차단 화면 — https://wing.coupang.com/x")
+        try:
+            raise ValueError("표 머리글 없음")
+        except ValueError as exc:
+            lg.error("B-2", "조회", exc)
+        lg2 = RLG.RunLog(tmp, now=datetime(2026, 10, 7, 21, 0, 0), echo=out.append)
+        lg2.record("A-1", "받기", RLG.WAIT, "아직 WAIT", channel="윙")
+        rows = list(_csv.DictReader(open(lg.csv, encoding="utf-8-sig")))
+        assert [r["결과"] for r in rows] == ["정상", "정상", "차단", "실패"] and rows[1]["정산일"] == "2026-01-12"
+        total = list(_csv.DictReader(open(lg.total, encoding="utf-8-sig")))
+        assert len(total) == 5 and {r["실행ID"] for r in total} == {"261006_210000", "261007_210000"}   # 누적
+        tb = lg.errors.read_text(encoding="utf-8")
+        assert "Traceback" in tb and "ValueError: 표 머리글 없음" in tb and "B-2 · 조회" in tb
+        assert "⛔ [차단감지] B-2" in lg.text.read_text(encoding="utf-8")
+        summ = lg.summary()
+        assert "[요약] A-1: 정상 2" in summ and "[요약] B-2: 실패 1 · 차단 1" in summ, summ
+        assert "[비정상] 조회 실패: 1건" in summ and "[비정상] 차단감지 차단: 1건" in summ
+    ok("실행·누적 CSV(엑셀용)·정산일 칸·차단/로그인 기록·오류 전체 추적·계정별/단계별 요약")
 
 
 def main():
@@ -511,6 +623,8 @@ def main():
     p7_settle_files()
     p8_settle_jobs()
     p9_settle_stats()
+    p10_wing_ui_parse()
+    p11_runlog()
     print("정산 계산 모듈 오프라인 검증 통과(골든 payout 12·amount 2·불변식 4행/3식 100%)")
 
 
