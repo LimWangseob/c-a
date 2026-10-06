@@ -39,6 +39,7 @@ except AttributeError:
     pass
 
 from coupang_analytics import apppaths  # noqa: E402
+from coupang_analytics import settlement_accounts as SA  # noqa: E402
 from coupang_analytics import settlement_files as SF  # noqa: E402
 from coupang_analytics import settlement_jobs as SJ  # noqa: E402
 from coupang_analytics import settlement_runlog as RL  # noqa: E402
@@ -72,21 +73,53 @@ class BlockDetected(Exception):
 
 # ── 계정·세션 ─────────────────────────────────────────────────────
 def load_accounts(only: set) -> list:
+    """정산 계정 파일(계정ID·비번·대표자-사업자) — 위치=config.json settlement/accounts_file(기본 data/정산_계정목록.txt).
+    읽을 때마다 예전 이름으로 된 요청 기록·파일·금액 기록을 지금 이름으로 맞춘다(계정ID 기준)."""
     from coupang_analytics import appconfig
-    from coupang_analytics.credstore import CredStore
-    from coupang_analytics.input_list import parse_input_rows, read_ledger_rows
-    url = appconfig.get("gsheet/input_url", "")
-    if not url:
-        raise SystemExit("관리대장 링크(gsheet/input_url)가 설정에 없음 — 앱 설정 탭에서 저장 후 다시 실행")
-    _t, rows, strike = read_ledger_rows(url, store=CredStore())
-    accts = [a for a in parse_input_rows(rows, strike).accounts if not only or a.account_id in only]
-    if only and len(accts) != len(only):
-        raise SystemExit(f"관리대장에 없는 계정: {sorted(only - {a.account_id for a in accts})}")
-    return accts
+    path = appconfig.get(SA.CONFIG_KEY, "") or SA.DEFAULT_PATH
+    try:
+        accts, warns = SA.read_accounts_file(path)
+    except SA.AccountsFileError as exc:
+        raise SystemExit(f"정산 계정 파일 오류: {exc}") from exc
+    for w in warns:
+        log(f"  [계정 파일] {w}")
+    log(f"  [계정 파일] {path} · 계정 {len(accts)}개")
+    _migrate_names(accts)
+    picked = [a for a in accts if not only or a.account_id in only]
+    if only and len(picked) != len(only):
+        raise SystemExit(f"계정 파일에 없는 계정: {sorted(only - {a.account_id for a in picked})}")
+    return picked
 
 
 def name_of(a) -> str:
-    return f"{a.business_name or a.representative or '계정'}-{a.account_id}"
+    return SA.display_name(a)
+
+
+def _migrate_names(accts) -> None:
+    """요청 기록(_요청기록.json)·받은 파일·쿠팡 지급 내역 파일의 예전 계정명 → 지금 계정명(멱등)."""
+    jobs = SJ.load_jobs(JOBS)
+    m = SA.renames([j.account for j in jobs], accts)
+    mt = SA.renames([SF.parse_file_name(p.name)["account"] for d in (FILES, COSTS) for p in d.glob("*.xlsx")]
+                    + [j.file.split("/")[-1].split("_")[0] for j in jobs if j.file], accts, tok=lambda x: SF._token(x, "계정명"))
+    for j in jobs:
+        j.account = m.get(j.account, j.account)
+        if j.file:
+            head, _, rest = j.file.rpartition("/")
+            acct, _, tail = rest.partition("_")
+            j.file = (head + "/" if head else "") + mt.get(acct, acct) + "_" + tail
+    if m or mt:
+        SJ.save_jobs(JOBS, jobs)
+    for d in (FILES, COSTS):
+        for p in list(d.glob("*.xlsx")):
+            acct, _, tail = p.name.partition("_")
+            if acct in mt:
+                os.replace(p, p.with_name(mt[acct] + "_" + tail))
+    for p in list(AMOUNTS.glob("*.json")):
+        acct, _, ch = p.stem.rpartition("_")
+        if acct in mt:
+            os.replace(p, p.with_name(f"{mt[acct]}_{ch}.json"))
+    if m or mt:
+        log(f"  [계정명 맞춤] 요청 기록 {len(m)}개·파일 계정명 {len(mt)}개를 지금 계정 파일 이름으로 바꿈")
 
 
 def _profile_in_use(profile: str) -> bool:
@@ -134,15 +167,14 @@ def _login(b, a, pw, hidden: bool) -> None:
 def session(a, hidden: bool):
     """그 계정 로그인 세션(잠금·사용중 확인·로그인 판정 기록)."""
     from coupang_analytics.browser import WingBrowser
-    from coupang_analytics.credstore import CredStore
     from coupang_analytics.pipeline_sales import account_profile
     from coupang_analytics.registry_lock import RegistryLockError, registry_lock
     prof = account_profile(a.account_id)
     if _profile_busy(prof):
         raise SessionSkip("이 계정 Chrome 이 60초 넘게 실행 중(①판매수집 등)")
-    pw = CredStore().get_password(a.account_id)
+    pw = a.password                                       # 정산 계정 파일 값(메모리에서만 씀·앱 암호 저장소 미변경)
     if not pw:
-        raise SessionSkip("저장된 비밀번호 없음 — 앱에서 관리대장을 한 번 불러오세요")
+        raise SessionSkip("계정 파일에 비밀번호 없음")
     try:
         with registry_lock(BASE / "_잠금" / f"{a.account_id}.lock", wait_sec=5, on_log=log):
             with WingBrowser(profile_dir=prof, offscreen=hidden) as b:

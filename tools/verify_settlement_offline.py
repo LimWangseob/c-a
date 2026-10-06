@@ -729,6 +729,39 @@ def p12_watch_decide():
     ok("멈춤 시각 경계·①완료 후 재개·어제 기록 무시·자정 넘김·새벽 2시 대체 재개·하루 1바퀴·기록 파일 왕복")
 
 
+def p13_accounts_file():
+    print("[P13] 정산 계정 파일 — 탭/공백 섞임·뒤 공백·3열=비번 줄은 이름 없음(비번 비노출)·중복/칸 없음=오류·계정명 맞춤")
+    from coupang_analytics import settlement_accounts as SA
+    from coupang_analytics import settlement_files as SF
+    text = ("acc1\tpw1!!\t홍길동-주식회사 가나\n"           # 이름에 공백
+            "acc2 \tsecret#9\tsecret#9\n"                  # 3열 = 비번(실제 파일에 있는 모양)
+            "acc3  pw3\t\n"                                 # 이름 없음·공백 구분
+            "plan_it \tpw4* \t 김다라_플랜\n"               # 뒤 공백·밑줄 ID
+            "\n\t\n")
+    accts, warns = SA.parse_accounts_text(text)
+    assert [(a.account_id, a.label, a.password) for a in accts] == [
+        ("acc1", "홍길동-주식회사 가나", "pw1!!"), ("acc2", "acc2", "secret#9"), ("acc3", "acc3", "pw3"),
+        ("plan_it", "김다라_플랜", "pw4*")]
+    assert len(warns) == 2 and "비밀번호와 같아" in warns[0] and not any("secret" in w for w in warns)   # 비번 비노출
+    assert "secret" not in repr(accts) and "pw1" not in repr(accts)                                       # repr 에도 없음
+    expect(SA.AccountsFileError, lambda: SA.parse_accounts_text("acc1 a 이름\nacc1 b 이름"), "중복 계정ID")
+    expect(SA.AccountsFileError, lambda: SA.parse_accounts_text("acc1\n"), "비번 칸 없음")
+    expect(SA.AccountsFileError, lambda: SA.parse_accounts_text("\n\n"), "빈 파일")
+    with tempfile.TemporaryDirectory() as tmp:
+        expect(SA.AccountsFileError, lambda: SA.read_accounts_file(Path(tmp) / "없음.txt"), "파일 없음")
+        (Path(tmp) / "a.txt").write_bytes("acc1\tpw\t이름".encode("cp949"))
+        expect(SA.AccountsFileError, lambda: SA.read_accounts_file(Path(tmp) / "a.txt"), "UTF-8 아님")
+        (Path(tmp) / "b.txt").write_text("﻿acc1\tpw\t이름", encoding="utf-8")
+        assert SA.read_accounts_file(Path(tmp) / "b.txt")[0][0].account_id == "acc1"                  # BOM 허용
+    assert SA.display_name(accts[0]) == "홍길동-주식회사 가나-acc1"
+    olds = ["(주)가나-acc1", "홍길동-주식회사 가나-acc1", "옛이름-plan_it", "남의-xacc3", "모름-zzz"]
+    assert SA.renames(olds, accts) == {"(주)가나-acc1": "홍길동-주식회사 가나-acc1", "옛이름-plan_it": "김다라_플랜-plan_it"}
+    tok = lambda x: SF._token(x, "계정명")
+    assert SA.renames(["(주)가나-acc1", "옛이름-plan-it"], accts, tok=tok) == {
+        "(주)가나-acc1": "홍길동-주식회사-가나-acc1", "옛이름-plan-it": "김다라-플랜-plan-it"}
+    ok("공백/탭 혼합·3열=비번→이름 없음(경고·repr 비노출)·중복/칸 없음/빈 파일/UTF-8 아님=오류·BOM·계정ID 끝 기준 이름 맞춤")
+
+
 def main():
     g1_payout_dates()
     g2_amounts()
@@ -745,6 +778,7 @@ def main():
     p10_wing_api_parse()
     p11_runlog()
     p12_watch_decide()
+    p13_accounts_file()
     print("정산 계산 모듈 오프라인 검증 통과(골든 payout 12·amount 2·불변식 4행/3식 100%)")
 
 
