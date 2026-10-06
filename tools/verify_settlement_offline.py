@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -133,8 +133,13 @@ def p2_payout_rules():
     expect(ValueError, lambda: P.payout_date(P.PAYOUT_MP_WEEKLY_1ST, holidays=HOL), "week_end 누락")
     expect(ValueError, lambda: P.payout_date(P.PAYOUT_MP_MONTHLY, holidays=HOL), "revenue_month 누락")
     expect(ValueError, lambda: P.payout_date(P.PAYOUT_MP_MONTHLY, revenue_month="2026/08", holidays=HOL), "월 형식")
-    assert P.payout_amount(P.PAYOUT_MP_WEEKLY_1ST, [15, 25]) == 11 + 18        # 10.5→11·17.5→18(사사오입·행 단위)
-    assert P.payout_amount(P.PAYOUT_MP_WEEKLY_FINAL, [15, 25]) == 5 + 8        # 4.5→5·7.5→8
+    # 실측 규칙(2026-10-06): 윙 70%=전체×70% · 로켓그로스 70%=줄별 70% 사사오입 합 · 30%=전체−70%
+    assert P.payout_amount(P.PAYOUT_MP_WEEKLY_1ST, [15, 25]) == 28             # 40×0.7 (줄별이면 29)
+    assert P.payout_amount(P.PAYOUT_MP_WEEKLY_FINAL, [15, 25]) == 12           # 40−28
+    assert P.payout_amount(P.PAYOUT_RG_WEEKLY_1ST, [15, 25]) == 11 + 18        # 10.5→11·17.5→18(줄별)
+    assert P.payout_amount(P.PAYOUT_RG_WEEKLY_FINAL, [15, 25]) == 40 - 29      # 나머지(줄별 30% 합 5+8=13 아님)
+    assert P.payout_amount(P.PAYOUT_RG_MONTHLY, [15, 25]) == 40
+    assert P.payout_amount(P.PAYOUT_MP_WEEKLY_1ST, [337770]) == 236439          # 실측 윙 8/24~30 주 화면값
     expect(TypeError, lambda: P.payout_amount(P.PAYOUT_MP_WEEKLY_1ST, [1.5]), "정수 아닌 금액")
     e = P.estimate(P.PAYOUT_RG_WEEKLY_1ST, week_end=D("2026-08-30"), holidays=HOL, row_amounts=[100])
     assert (e.date, e.amount, e.is_estimate) == (D("2026-09-29"), 70, True)
@@ -302,6 +307,188 @@ def p6_diag_no_values():
     ok("값 7종 비노출·질의 이름만·요청/응답 구조·폼/텍스트 본문·정산 주소 우선 요약·중복 제거")
 
 
+# ── 정산 파일·요청 기록·집계 (실측 머리글 그대로의 가상 데이터 — 실파일은 개인정보라 저장소에 넣지 않음) ──
+WING_HDR = ["주문번호", "과세유형", "상품 ID", "상품명", "옵션 ID", "옵션명", "판매가", "판매수량", "환불수량", "판매액",
+            "판매자 할인쿠폰(A+B)", "판매자 할인쿠폰(A.즉시할인)", "판매자 할인쿠폰(B.다운로드)", "판매수수료",
+            "서비스이용율(%,VAT별도)", "서비스이용료소급분", "마이샵수수료할인", "정산금액", "구매자명", "결제완료일",
+            "배송완료일", "구매확정일", "취소완료일", "구매확정(출고)유형", "정산예정일"]
+RG_HDR = ["정산유형", "정산주기(종료일)", "세금계산서 발행월", "발생일(결제완료일)", "매출인식일", "주문ID", "거래유형",
+          "카테고리ID", "카테고리명", "과세유형", "등록상품 ID", "옵션ID", "SKU ID", "등록상품명", "옵션명", "판매가(A)",
+          "판매수량(B)", "판매액(A*B)", "쿠팡지원할인(C)", "매출금액(A*B-C)", "즉시할인쿠폰(D)", "다운로드쿠폰(E)",
+          "판매자할인쿠폰(D+E)", "정산대상액", "판매수수료율(%,VAT별도)", "할인적용 판매수수료율(%,VAT별도)", "판매수수료",
+          "판매수수료 VAT"]
+
+
+def _wing_row(order, pid, name, oid, price, qty, coupon, fee, settle, buyer="홍길동", conf="2026-08-27"):
+    v = dict.fromkeys(WING_HDR, "")
+    v.update({"주문번호": order, "상품 ID": pid, "상품명": name, "옵션 ID": oid, "옵션명": name and "옵션",
+              "판매가": float(price), "판매수량": float(qty), "환불수량": 0.0, "판매액": float(price * qty),
+              "판매자 할인쿠폰(A+B)": float(coupon), "판매자 할인쿠폰(A.즉시할인)": float(coupon),
+              "판매자 할인쿠폰(B.다운로드)": 0.0, "판매수수료": float(fee), "서비스이용율(%,VAT별도)": "10.8",
+              "마이샵수수료할인": 0.0, "정산금액": float(settle), "구매자명": buyer if name else "",
+              "구매확정일": conf if name else "", "정산예정일": "2026-09-18" if name else ""})
+    return [v[h] for h in WING_HDR]
+
+
+def _wing_grid():
+    return [WING_HDR,
+            _wing_row("1001", "77", "보냉백", "95467404277", 12700, 1, 0, 1372, 11328),
+            _wing_row("1001", "", "", "<기본배송료>", 0, 0, 0, 0, 0),
+            _wing_row("1001", "", "", "<추가배송료>", 0, 0, 0, 0, 0),
+            _wing_row("1002", "88", "압축포장기", "95425233537", 37900, 1, 20000, 1933, 15967),
+            _wing_row("1003", "", "", "<기본배송료>", 6000, 1, 0, 0, 6000),               # 금액 있는 배송비 줄 = 남김
+            _wing_row("1004", "77", "보냉백", "95467404277", 12700, 2, 0, 2744, 99999)]   # 검산 위반 = 경고
+
+
+def _rg_row(order, kind, pid, oid, name, price, qty, settle_target, fee, vat, rec="2026-08-05", cycle="2026-08-09"):
+    v = dict.fromkeys(RG_HDR, "")
+    v.update({"정산유형": "주정산", "정산주기(종료일)": cycle, "세금계산서 발행월": "2026-08", "매출인식일": rec,
+              "주문ID": order, "거래유형": kind, "등록상품 ID": pid, "옵션ID": oid, "SKU ID": "5" + oid[-4:],
+              "등록상품명": name, "옵션명": name, "판매가(A)": float(price), "판매수량(B)": float(qty),
+              "판매액(A*B)": float(price * qty), "쿠팡지원할인(C)": 0.0, "매출금액(A*B-C)": float(price * qty),
+              "즉시할인쿠폰(D)": 0.0, "다운로드쿠폰(E)": 0.0, "판매자할인쿠폰(D+E)": 0.0, "정산대상액": float(settle_target),
+              "판매수수료율(%,VAT별도)": 10.8, "할인적용 판매수수료율(%,VAT별도)": 10.8, "판매수수료": float(fee),
+              "판매수수료 VAT": float(vat)})
+    return [v[h] for h in RG_HDR]
+
+
+def _rg_grid(cycle="2026-08-09"):
+    return [[None] * len(RG_HDR), RG_HDR,
+            _rg_row("2001", "주문 정산", "77", "95222903297", "보냉백", 9310, 1, 8205, 1005, 100, cycle=cycle),
+            _rg_row("2002", "주문 정산취소", "77", "95222903297", "보냉백", 9310, -1, -8205, -1005, -100, cycle=cycle)]
+
+
+def p7_settle_files():
+    print("[P7] 정산 파일 읽기 — 실측 머리글·0원 배송비 줄 제외·검산 경고·기간 대조·구매자명 삭제·파일 이름 규칙")
+    from coupang_analytics import settlement_files as SF
+    w = SF.parse_wing_detail(_wing_grid(), account="계정A", period_start=D("2026-08-24"), period_end=D("2026-08-30"))
+    assert (len(w.rows), w.dropped_zero) == (4, 2), (len(w.rows), w.dropped_zero)
+    assert [r.option_id for r in w.rows][2] == "<기본배송료>" and w.rows[2].settle == 6000          # 금액 있는 배송비 줄
+    assert len(w.warnings) == 1 and "정산금액" in w.warnings[0], w.warnings                          # 1004 검산 위반
+    assert not any(hasattr(r, "buyer") for r in w.rows) and "홍길동" not in str([vars(r) for r in w.rows])
+    assert w.rows[0].option_id == "95467404277" and w.rows[1].coupon == 20000
+    g = SF.parse_rg_fee(_rg_grid(), account="계정A", period_start=D("2026-08-03"), period_end=D("2026-08-09"))
+    assert (len(g.rows), g.settle_total, g.rows[0].fee, g.warnings) == (2, 0, 1105, []), g
+    expect(SF.SettlementParseError, lambda: SF.parse_rg_fee(_rg_grid("2026-08-16"), account="계정A",
+                                                             period_start=D("2026-08-03"), period_end=D("2026-08-09")),
+           "다른 기간 파일")
+    bad = _wing_grid()
+    bad[1][WING_HDR.index("판매액")] = "12,7OO"
+    expect(SF.SettlementParseError, lambda: SF.parse_wing_detail(bad, account="a", period_start=D("2026-08-24"),
+                                                                  period_end=D("2026-08-30")), "숫자 변환 실패")
+    expect(SF.SettlementParseError, lambda: SF.parse_wing_detail([WING_HDR[:-3]], account="a",
+                                                                  period_start=D("2026-08-24"),
+                                                                  period_end=D("2026-08-30")), "머리글 누락")
+    n = SF.settle_file_name("셀독 계정_A", D("2026-09-18"), SF.CH_WING, "주정산", "주문상세", D("2026-08-24"), D("2026-08-30"))
+    assert n == "셀독-계정-A_20260918_윙_주정산_주문상세_20260824-20260830.xlsx", n
+    meta = SF.parse_file_name(n)
+    assert (meta["account"], meta["settle_date"], meta["channel"], meta["period_end"]) == (
+        "셀독-계정-A", D("2026-09-18"), "윙", D("2026-08-30"))
+    expect(ValueError, lambda: SF.parse_file_name("MSF_PAYMENT_REVENUE_DETAIL-2026-10-06.xlsx"), "규칙 밖 이름")
+    import openpyxl
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "raw.xlsx"
+        wb = openpyxl.Workbook()
+        for row in _wing_grid():
+            wb.active.append(row)
+        wb.save(src)
+        dst = Path(tmp) / n
+        assert SF.scrub_pii(src, dst) == 1
+        assert "구매자명" not in SF.read_grid(dst)[0] and "홍길동" not in str(SF.read_grid(dst))
+        f = SF.load_settle_file(dst)
+        assert (f.account, f.kind, f.report, len(f.rows)) == ("셀독-계정-A", "주정산", "주문상세", 4)
+        empty = Path(tmp) / "empty.xlsx"
+        openpyxl.Workbook().save(empty)
+        expect(SF.SettlementParseError, lambda: SF.scrub_pii(empty, Path(tmp) / "x.xlsx"), "머리글 없는 파일 저장")
+    ok("윙 0원 배송비 2줄 제외·금액 배송비 유지·검산 경고·구매자명 미보관/삭제·로켓그로스 취소·기간 대조·이름 왕복")
+
+
+def p8_settle_jobs():
+    print("[P8] 요청 기록 — 같은 기간 한 번·비용 리포트는 금액 있는 것만·하루 상한·미래 제외·재요청·목록 대조")
+    from datetime import datetime
+    from coupang_analytics import settlement_jobs as SJ
+    ev = [SJ.SettleEvent("A", "로켓그로스", "주정산", D("2026-09-07"), D("2026-08-03"), D("2026-08-09")),
+          SJ.SettleEvent("A", "로켓그로스", "주정산", D("2026-10-01"), D("2026-08-03"), D("2026-08-09"), ("보관비",)),
+          SJ.SettleEvent("A", "윙", "주정산", D("2026-09-18"), D("2026-08-24"), D("2026-08-30")),
+          SJ.SettleEvent("A", "윙", "최종액", D("2026-10-01"), D("2026-08-03"), D("2026-08-30")),
+          SJ.SettleEvent("A", "윙", "주정산", D("2026-10-30"), D("2026-10-05"), D("2026-10-11")),   # 미래
+          SJ.SettleEvent("B", "윙", "주정산", D("2026-09-18"), D("2026-08-24"), D("2026-08-30"))]
+    jobs: list = []
+    now = datetime(2026, 10, 6, 19, 0)
+    pick = SJ.plan_requests(ev, jobs, today=D("2026-10-06"), now=now, per_account_cap=3)
+    keys = sorted((j.account, j.channel, j.kind, j.report) for j in jobs)
+    assert keys == [("A", "로켓그로스", "주정산", "보관비"), ("A", "로켓그로스", "주정산", "판매수수료"),
+                    ("A", "윙", "주정산", "주문상세"), ("A", "윙", "최종액", "주문상세"),
+                    ("B", "윙", "주정산", "주문상세")], keys                       # 70/30 같은 기간 1번·미래 제외
+    assert sum(j.account == "A" for j in pick) == 3 and sum(j.account == "B" for j in pick) == 1   # 상한 3
+    assert pick[0].settle_date == "2026-09-07"                                     # 오래된 것부터
+    for j in pick:
+        SJ.mark_requested(j, now)
+    assert len(SJ.plan_requests(ev, jobs, today=D("2026-10-07"), now=datetime(2026, 10, 7, 19), per_account_cap=3)) == 1
+    later = SJ.plan_requests(ev, jobs, today=D("2026-10-10"), now=datetime(2026, 10, 10, 19), per_account_cap=9)
+    assert len(later) == 5                                                         # 3일 지나도 미완료 → 재요청 대상
+    j0 = next(j for j in jobs if j.kind == "최종액")
+    j0.attempts = SJ.MAX_ATTEMPTS
+    SJ.plan_requests(ev, jobs, today=D("2026-10-10"), now=datetime(2026, 10, 10, 19), per_account_cap=9)
+    assert j0.status == SJ.ST_FAILED                                               # 무한 재시도 금지
+    assert SJ.parse_condition("구매확정일:2026-08-24 - 2026-08-30") == (D("2026-08-24"), D("2026-08-30"))
+    expect(ValueError, lambda: SJ.parse_condition("구매확정일:"), "기간 없는 조건")
+    wing_b = next(j for j in jobs if j.account == "B")
+    rg_fee = next(j for j in jobs if j.report == "판매수수료")
+    t_b, t_rg = datetime.fromisoformat(wing_b.requested_at), datetime.fromisoformat(rg_fee.requested_at)
+    rows = [SJ.DownloadRow("윙", t_b, "WAIT", period_start=D("2026-08-24"), period_end=D("2026-08-30")),
+            SJ.DownloadRow("윙", t_b + timedelta(minutes=1), "FINISHED", period_start=D("2026-08-24"),
+                           period_end=D("2026-08-30")),
+            SJ.DownloadRow("로켓그로스", t_rg + timedelta(minutes=2), "완료", report="판매수수료")]
+    pairs, notes = SJ.match_downloads(rows, [wing_b, rg_fee])
+    assert [(j.account, j.report, r.status) for j, r in pairs] == [("B", "주문상세", "FINISHED"),
+                                                                   ("A", "판매수수료", "완료")], pairs
+    rows.append(SJ.DownloadRow("로켓그로스", t_rg + timedelta(minutes=3), "완료", report="판매수수료"))
+    pairs, notes = SJ.match_downloads(rows, [rg_fee])
+    assert pairs == [] and "구분 불가" in notes[0]                                    # 애매하면 받지 않음
+    pairs, notes = SJ.match_downloads([rows[0]], [wing_b])
+    assert pairs == [] and "아직 WAIT" in notes[0]
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "기록.json"
+        SJ.save_jobs(p, jobs)
+        assert [j.key for j in SJ.load_jobs(p)] == [j.key for j in jobs] and not (Path(tmp) / "기록.json.tmp").exists()
+    ok("70/30 한 번·보관비만 추가·미래 제외·상한·오래된 순·만료 재요청·3회 실패·윙 기간/로켓그로스 시각 대조·애매=보류·기록 왕복")
+
+
+def p9_settle_stats():
+    print("[P9] 병합·집계 — 최종액 파일 제외·중복 파일/줄 1회·배송비 묶음·월=매출인식일·계약자 정산금액")
+    from coupang_analytics import settlement_files as SF
+    from coupang_analytics import settlement_stats as ST
+    w = SF.parse_wing_detail(_wing_grid(), account="A", period_start=D("2026-08-24"), period_end=D("2026-08-30"))
+    w.kind = "주정산"
+    wfinal = SF.parse_wing_detail([*_wing_grid(), _wing_row("1009", "77", "보냉백", "95467404277", 12700, 1, 0, 1372,
+                                                            11328, conf="2026-08-12")],
+                                  account="A", period_start=D("2026-08-03"), period_end=D("2026-08-30"))
+    wfinal.kind = "최종액"
+    g = SF.parse_rg_fee(_rg_grid(), account="A", period_start=D("2026-08-03"), period_end=D("2026-08-09"))
+    g.kind, g.report = "주정산", "판매수수료"
+    res = ST.aggregate([w, wfinal, g, g])
+    by = {(p.month, p.product_id): p for p in res.products}
+    assert by[("2026-08", "77")].wing_settle == 11328 + 99999 and by[("2026-08", "77")].rg_settle == 0
+    assert by[("2026-08", "77")].rg_qty == 0 and by[("2026-08", "77")].product_name == "보냉백"
+    assert by[("2026-08", ST.SHIPPING_KEY)].wing_settle == 6000                      # 날짜 없는 배송비 = 기간 끝 달
+    assert res.account_totals() == {"A": 11328 + 15967 + 6000 + 99999}               # 최종액 파일 제외(이중 집계 X)
+    assert any("두 번" in x for x in res.warnings) and any("날짜 없는" in x for x in res.warnings)
+    assert not any("겹친 같은 줄" in x for x in res.warnings)                        # 최종액은 파일 단위로 제외됨
+    assert ST.contractor_amount(10_000_000, 3_764_453) == 6_235_547
+    expect(ValueError, lambda: ST.contractor_amount(None, 1), "계약금액 미입력")
+    expect(TypeError, lambda: ST.contractor_amount(1.5, 1), "정수 아닌 계약금액")
+    import openpyxl
+    with tempfile.TemporaryDirectory() as tmp:
+        out = ST.write_stats(Path(tmp) / "집계.xlsx", res, {"A": 200_000})
+        wb = openpyxl.load_workbook(out)
+        assert wb.sheetnames == ["상품별 월별", "계정별 월별", "계약자 정산", "경고"]
+        assert [c.value for c in wb["계약자 정산"][2]] == ["A", 133294, 200000, 66706]
+        out2 = ST.write_stats(Path(tmp) / "집계2.xlsx", res)
+        assert [c.value for c in openpyxl.load_workbook(out2)["계약자 정산"][2]][2:] == [None, None]   # 미입력=빈칸
+    ok("최종액 제외·중복 파일 1회·배송비 묶음·월 귀속·계약자 정산금액(미입력=빈칸·0 가정 없음)·엑셀 4시트")
+
+
 def main():
     g1_payout_dates()
     g2_amounts()
@@ -312,6 +499,9 @@ def main():
     p4_parse()
     p5_holiday_source()
     p6_diag_no_values()
+    p7_settle_files()
+    p8_settle_jobs()
+    p9_settle_stats()
     print("정산 계산 모듈 오프라인 검증 통과(골든 payout 12·amount 2·불변식 4행/3식 100%)")
 
 

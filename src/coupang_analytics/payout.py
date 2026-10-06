@@ -80,17 +80,35 @@ def payout_date(policy: str, *, week_end: date | None = None, revenue_month: str
     return first if basis == "month_final_calendar" else next_business_day(first, holidays)
 
 
+def _half_up(x: Decimal) -> int:
+    return int(x.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def first_payout_70(policy: str, rows: list[int]) -> int:
+    """정산 기간 70% 금액(실측 2026-10-06 화면 원 단위 일치):
+    윙 = 전체 합계 × 70% 사사오입(8/24~30 주: 337,770 → 236,439) /
+    로켓그로스 = **줄마다** 70% 사사오입 합(8/3~9 주: 줄별 합 551,901 → 30% 236,467 일치)."""
+    if policy.startswith("PAYOUT_MP"):
+        return _half_up(Decimal(sum(rows)) * Decimal("0.7"))
+    return sum(_half_up(Decimal(a) * Decimal("0.7")) for a in rows)
+
+
 def payout_amount(policy: str, row_amounts) -> int:
-    """지급 비율 금액 = **행 단위 반올림(사사오입) 후 합산**(xlsb 동작). 예측값 — 실지급과 원 단위 차이 가능."""
-    ratio = _RULES[policy][2] if policy in _RULES else None
-    if ratio is None:
+    """지급 비율 금액(예측값 — 실지급은 쿠팡 화면·파일이 정본). 70% = first_payout_70, **30% = 전체 − 70%**
+    (로켓그로스 실측 확인·윙 30% 는 같은 나머지 방식으로 추정 — 실측 대기), 월정산 100% = 전체.
+    ⚠ 옛 규칙 '모든 비율 행 단위 반올림 후 합산'은 실측과 불일치해 폐기(2026-10-06)."""
+    if policy not in _RULES:
         raise ValueError(f"알 수 없는 지급 정책: {policy!r}")
-    total = 0
+    rows = []
     for a in row_amounts:
         if isinstance(a, bool) or not isinstance(a, int):
             raise TypeError(f"행 금액은 정수(원)여야 함: {a!r}")
-        total += int((Decimal(a) * ratio).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-    return total
+        rows.append(a)
+    ratio = _RULES[policy][2]
+    if ratio == 1:
+        return sum(rows)
+    first = first_payout_70(policy, rows)
+    return first if ratio == Decimal("0.7") else sum(rows) - first
 
 
 def estimate(policy: str, *, holidays, week_end: date | None = None, revenue_month: str | None = None,
