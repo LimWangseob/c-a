@@ -24,6 +24,7 @@ from ui.contract_panel_qt import ContractPanel  # noqa: E402
 from ui.creditor_panel_qt import CreditorPanel  # noqa: E402
 from ui.cs_panel_qt import CSPanel  # noqa: E402
 from ui.local_sheet_client import LocalSheetClient  # noqa: E402
+from ui.theme_qt import QSS as _QSS  # noqa: E402
 from ui.worklog_panel_qt import WorklogPanel  # noqa: E402
 
 APP_NAME = "커머스 판로 통합 관리"
@@ -32,39 +33,7 @@ APP_NAME = "커머스 판로 통합 관리"
 MENU = ["01 상품", "02 가격", "03 재고", "04 정산", "05 문의·리뷰", "06 마케팅", "07 통계",
         "08 판매처", "09 셀독", "10 당근", "11 사업·계약", "12 채권자·상환", "13 설정"]
 
-_QSS = """
-* { font-family:'Segoe UI'; font-size:13px; color:#0f172a; }
-QMainWindow, QWidget { background:#e3e9f1; }
-QLabel, QRadioButton, QCheckBox { background:transparent; }
-#header { background:qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #0f766e, stop:1 #14b8a6); }
-#headerTitle { color:#ffffff; font-size:19px; font-weight:700; }
-#headerSub { color:#d1f2ec; font-size:12px; }
-QListWidget#nav { background:#0f766e; border:none; outline:none; padding:6px 0; }
-QListWidget#nav::item { color:#d1f2ec; padding:11px 18px; border-radius:8px; margin:2px 8px; }
-QListWidget#nav::item:hover { background:#115e59; }
-QListWidget#nav::item:selected { background:#ffffff; color:#0f172a; font-weight:700; }
-QGroupBox { background:#ffffff; border:1px solid #e5e9f0; border-radius:10px; margin-top:14px; padding:12px; }
-QGroupBox::title { subcontrol-origin:margin; left:14px; padding:3px 12px; background:#ccfbf1;
-    color:#0f766e; border-radius:7px; font-weight:700; }
-QPushButton { background:#f1f5f9; border:1px solid #e2e8f0; border-radius:8px; padding:8px 14px; }
-QPushButton:hover { background:#e7edf4; }
-QPushButton#accent { background:#0d9488; border:1px solid #0d9488; color:#ffffff; font-weight:700; padding:9px 18px; }
-QPushButton#accent:hover { background:#0f766e; }
-QLineEdit, QComboBox { background:#ffffff; border:1px solid #cbd5e1; border-radius:8px; padding:6px 10px;
-    selection-background-color:#0d9488; selection-color:#ffffff; }
-QLineEdit:focus, QComboBox:focus { border:1px solid #0d9488; }
-QComboBox QAbstractItemView { background:#ffffff; border:1px solid #e2e8f0;
-    selection-background-color:#ccfbf1; selection-color:#0f172a; outline:none; }
-QTableWidget { background:#ffffff; border:1px solid #e5e9f0; border-radius:10px; gridline-color:#eef2f7;
-    selection-background-color:#ccfbf1; selection-color:#0f172a; outline:none; }
-QHeaderView::section { background:#dbe3ee; color:#3f5069; border:none; border-right:1px solid #eef2f7;
-    padding:8px 6px; font-weight:700; }
-QTabBar::tab { background:transparent; color:#44546a; padding:9px 18px; margin:6px 3px 0 3px;
-    border-top-left-radius:10px; border-top-right-radius:10px; }
-QTabBar::tab:selected { background:#ffffff; color:#0f172a; font-weight:600; }
-QTabWidget::pane { border:none; background:#e3e9f1; }
-#card { background:#ffffff; border:1px solid #e5e9f0; border-radius:10px; }
-"""
+# 스타일(QSS) = ui/theme_qt.py (2026-10-03 확정 보라 디자인 컨셉). 기존 app_qt(청록)와 별개.
 
 
 def _placeholder(title: str) -> QtWidgets.QWidget:
@@ -72,7 +41,7 @@ def _placeholder(title: str) -> QtWidgets.QWidget:
     lay = QtWidgets.QVBoxLayout(w)
     lay.addStretch(1)
     t = QtWidgets.QLabel(f"{title}")
-    t.setStyleSheet("font-size:18px; font-weight:700; color:#0f766e;")
+    t.setStyleSheet("font-size:18px; font-weight:700; color:#7c3aed;")
     msg = QtWidgets.QLabel("이 영역은 현재 기존 운영 앱(쿠팡 애널리틱스)에서 동작합니다.\n"
                            "통합 앱으로는 순차 이관 예정입니다 — 운영은 기존 앱에서 계속하세요.")
     msg.setStyleSheet("color:#64748b; font-size:14px;")
@@ -169,6 +138,7 @@ class IntegratedApp(QtWidgets.QMainWindow):
         title = QtWidgets.QLabel(APP_NAME)
         title.setObjectName("headerTitle")
         home_btn = QtWidgets.QPushButton("🏠 홈")
+        home_btn.setObjectName("accent")
         home_btn.clicked.connect(lambda: (self.nav.clearSelection(), self.stack.setCurrentIndex(0)))
         lay.addWidget(title)
         lay.addStretch(1)
