@@ -56,9 +56,9 @@ class RunLog:
         what = " ".join(x for x in (channel, kind, settle_date and f"정산일 {settle_date}", period) if x)
         self.line(f"  {mark} [{step}] {account} {what} → {result}" + (f" ({reason})" if reason else ""))
 
-    def error(self, account: str, step: str, exc: BaseException, result: str = FAIL) -> None:
-        """예외를 처리기록(사유=종류: 메시지)과 오류 로그(전체 추적) 양쪽에 남긴다."""
-        self.record(account, step, result, f"{exc.__class__.__name__}: {exc}")
+    def error(self, account: str, step: str, exc: BaseException, result: str = FAIL, **fields) -> None:
+        """예외를 처리기록(사유=종류: 메시지·채널/정산일 등 fields)과 오류 로그(전체 추적) 양쪽에 남긴다."""
+        self.record(account, step, result, f"{exc.__class__.__name__}: {exc}", **fields)
         with self.errors.open("a", encoding="utf-8") as f:
             f.write(f"===== {datetime.now():%Y-%m-%d %H:%M:%S} · {account} · {step} =====\n")
             f.write("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))

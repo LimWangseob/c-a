@@ -5,7 +5,8 @@
   3줄(상품 정보 1줄 + 옵션ID만 다르고 수량·금액이 0인 줄 2개 → 집계 제외). `구매자명` = 개인정보(저장 시 제거).
   정산금액 = 판매액 − 판매자할인쿠폰(A+B) − 판매수수료 + 마이샵수수료할인 (57/57줄). 파일 안에 계정·정산 주 없음.
 - **로켓그로스 판매수수료 리포트**(`{vendorId}-CATEGORY_TR-*.xlsx`): 시트 '주문내역, 판매수수료'·2행 머리글·28칸.
-  정산대상액 = 매출금액 − 판매자할인쿠폰 − 판매수수료 − 판매수수료 VAT (118/118줄). `정산주기(종료일)` 있음·계정명 없음.
+  정산대상액 = 판매액(A*B) − 판매자할인쿠폰 − 판매수수료 − 판매수수료 VAT (118/118줄·2025-11~12 파일 4,700여 줄 —
+  쿠팡지원할인(C)은 쿠팡 부담이라 정산대상액에서 빼지 않음·매출금액(A*B−C) 기준이면 C 있는 줄만 어긋남, 실측 2026-10-06). `정산주기(종료일)` 있음·계정명 없음.
 → 계정·기간은 **요청 기록(파일 이름)** 이 붙인다. 숫자·ID 변환 실패 = SettlementParseError(조용히 0 금지),
   검산 위반 줄 = 경고(쿠팡 형식 변경 감지용·중단 아님). 이름을 붙일 수 없는 금액 줄은 버리지 않고 경고와 함께 남긴다.
 """
@@ -94,9 +95,13 @@ def _header(rows: list, must: tuple, where: str) -> tuple[int, dict]:
 
 def _values(raw: list, cols: dict, idx: dict, r: int, where: str) -> dict:
     out: dict = {}
+    oid = cols.get("option_id")
+    ship = bool(oid and idx[oid] < len(raw) and _SHIP_MARK.fullmatch(str(raw[idx[oid]] or "").strip()))
     for f, h in cols.items():
         v = raw[idx[h]] if idx[h] < len(raw) else None
-        if f in _MONEY:
+        if f in _MONEY and ship and not str(v or "").strip():
+            out[f] = 0                              # 배송비 줄의 빈 금액칸 = 0(실측 2025-11~2026-01 파일: 쿠폰·마이샵 빈칸)
+        elif f in _MONEY:
             out[f] = parse_int(v, f"{where} {r}행 '{h}'")
         elif f == "option_id" and _SHIP_MARK.fullmatch(str(v or "").strip()):
             out[f] = str(v).strip()                 # 윙 배송비 줄 표시값(<기본배송료>·<추가배송료>) — ID 아님
@@ -155,8 +160,8 @@ def parse_rg_fee(rows: list, *, account: str, period_start: date, period_end: da
         if v["cycle_end"] != period_end:
             raise SettlementParseError(f"로켓그로스 {r}행 정산주기(종료일) {v['cycle_end']} ≠ 요청 기간 끝 {period_end} "
                                        "— 다른 기간 파일로 보임(이름 붙이기 중단)")
-        if v["settle"] != v["sales"] - v["coupon"] - v["fee"] - v["fee_vat"]:
-            out.warnings.append(f"로켓그로스 {r}행 정산대상액 {v['settle']} ≠ 매출금액−쿠폰−수수료−VAT")
+        if v["settle"] != v["gross"] - v["coupon"] - v["fee"] - v["fee_vat"]:
+            out.warnings.append(f"로켓그로스 {r}행 정산대상액 {v['settle']} ≠ 판매액−쿠폰−수수료−VAT")
         out.rows.append(SettleRow(CH_RG, account, period_start, period_end, v["order_id"], v["product_id"],
                                   v["option_id"], v["product_name"], v["option_name"], v["qty"], v["sales"],
                                   v["coupon"], v["fee"] + v["fee_vat"], v["settle"], v["recognized"], v["kind"]))
