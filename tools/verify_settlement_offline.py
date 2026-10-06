@@ -515,6 +515,60 @@ def p9_settle_stats():
     ok("최종액=주정산 없는 주만·중복 파일 1회·배송비 묶음·월 귀속·지급액 검산(윙 최종액 30% 주별)·계약자 정산금액·엑셀 5시트")
 
 
+def p10_wing_ui_parse():
+    print("[P10] 정산 화면 글자 → 정산 일정·다운로드 목록(스크린샷 모양 가상 화면·라이브 미호출)")
+    from datetime import datetime
+    from coupang_analytics import settlement_wing_ui as UI
+    K = UI.ROW_KEY
+    wing = [{"정산일": "2026-10-01", "정산유형": "최종액정산", "지급비율": "30%", "구매확정기간": "2026-08-03 ~ 2026-08-30",
+             "정산상태": "정산확정", "최종지급액": "124,513", K: 0},
+            {"정산일": "2026-09-18", "정산유형": "주정산", "지급비율": "70%", "구매확정기간": "2026-08-24 ~ 2026-08-30",
+             "정산상태": "정산확정", "최종지급액": "236,439", K: 1},
+            {"정산일": "2026-10-07", "정산유형": "주정산", "지급비율": "70%", "구매확정기간": "2026-09-07 ~ 2026-09-13",
+             "정산상태": "정산예정", "최종지급액": "7,217", K: 3}]                      # 예정 = 아직 받지 않음
+    ev = UI.parse_wing_rows(wing, "계정A")
+    assert [(e.kind, e.settle_date, e.period_start, e.period_end, ri) for e, ri in ev] == [
+        ("최종액", D("2026-10-01"), D("2026-08-03"), D("2026-08-30"), 0),
+        ("주정산", D("2026-09-18"), D("2026-08-24"), D("2026-08-30"), 1)], ev
+    rg = [{"정산일": "2026-09-07", "정산유형": "주별", "지급비율": "30", "매출인식일": "2026-07-27~2026-07-31", K: 0},
+          {"정산일": "2026-10-01", "정산유형": "주별", "지급비율": "30", "매출인식일": "2026-08-03~2026-08-09", K: 2}]
+    rev = UI.parse_rg_rows(rg, "계정A")
+    assert [(e.channel, e.kind, e.period_start, ri) for e, ri in rev] == [
+        ("로켓그로스", "주정산", D("2026-07-27"), 0), ("로켓그로스", "주정산", D("2026-08-03"), 2)]
+    expect(UI.UiChangedError, lambda: UI.parse_wing_rows([{**wing[0], "정산유형": "특별정산"}], "a"), "모르는 유형")
+    expect(UI.UiChangedError, lambda: UI.parse_rg_rows([{**rg[0], "매출인식일": "7월 4주"}], "a"), "기간 글자")
+    assert UI.report_key("리포트 : 판매수수료 리포트") == "판매수수료" and UI.report_key("입출고/배송비 리포트") == "입출고/배송비"
+    expect(UI.UiChangedError, lambda: UI.report_key("리포트 : 새 리포트"), "모르는 리포트")
+    wl = UI.parse_list_rows([{"요청일시": "2026-10-06 11:43:41", "메뉴명": "[중개] 정산현황 주문 상세 내역",
+                              "검색조건": "구매확정일:2026-08-24 - 2026-08-30", "상태": "WAIT", K: 0},
+                             {"요청일시": "2025-02-19 05:07:42", "메뉴명": "[중개] 부가세 신고 내역 상세",
+                              "검색조건": "구매확정일:2025-01-01 - 2025-01-31", "상태": "FINISHED", K: 2}], "윙")
+    assert [(r.requested_at, r.status, r.period_start, r.period_end, r.handle) for r in wl] == [
+        (datetime(2026, 10, 6, 11, 43, 41), "WAIT", D("2026-08-24"), D("2026-08-30"), 0)]   # 부가세 메뉴 무시
+    rl = UI.parse_list_rows([{"요청일시": "2026-10-06 11:55:15", "상태": "진행중", "리포트": "리포트 : 판매수수료 리포트",
+                              K: 4}], "로켓그로스")
+    assert (rl[0].report, rl[0].status, rl[0].handle) == ("판매수수료", "진행중", 4)
+    assert UI.month_windows(D("2026-01-15"), D("2026-03-02")) == [
+        (D("2026-01-15"), D("2026-01-31")), (D("2026-02-01"), D("2026-02-28")), (D("2026-03-01"), D("2026-03-02"))]
+
+    class FakePage:
+        def __init__(self, tables):
+            self.tables = tables
+
+        def evaluate(self, js, arg=None):
+            if arg is None:
+                return [" ".join(t["ths"]) for t in self.tables]
+            return [t for t in self.tables if all(m in t["ths"] for m in arg)]
+    tbl = {"ti": 3, "ths": list(UI.WING_HEADERS) + ["주문상세내역"],
+           "rows": [["2026-09-18", "주정산", "70%", "2026-08-24 ~ 2026-08-30", "정산확정", "236,439", "미리보기"],
+                    ["총 최종지급액", "236,439"]]}                                         # 합계 줄 = 제외
+    ti, rows = UI.read_table(FakePage([tbl]), UI.WING_HEADERS)
+    assert ti == 3 and len(rows) == 1 and rows[0]["구매확정기간"].startswith("2026-08-24") and rows[0][K] == 0
+    expect(UI.UiChangedError, lambda: UI.read_table(FakePage([]), UI.WING_HEADERS), "표 없음")
+    expect(UI.UiChangedError, lambda: UI.read_table(FakePage([tbl, tbl]), UI.WING_HEADERS), "표 둘")
+    ok("정산확정만·유형/기간 변환·화면 줄 번호 유지·리포트 이름·목록(부가세 메뉴 무시)·달 구간·표 0/2개=오류·합계 줄 제외")
+
+
 def main():
     g1_payout_dates()
     g2_amounts()
@@ -528,6 +582,7 @@ def main():
     p7_settle_files()
     p8_settle_jobs()
     p9_settle_stats()
+    p10_wing_ui_parse()
     print("정산 계산 모듈 오프라인 검증 통과(골든 payout 12·amount 2·불변식 4행/3식 100%)")
 
 
