@@ -25,6 +25,8 @@ copy /Y "%~dp0deploy\remove_autorun.ps1" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0deploy\첫실행_설정안내.txt" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0deploy\라이브검증_안내.txt" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0INSTALL.md" "dist\coupang-analytics\" >nul
+copy /Y "%~dp0tools\settlement_watch_register.ps1" "dist\coupang-analytics\" >nul
+rem 정산 다운로드 watch 는 install.ps1 이 자동 등록(정산다운로드.exe). 이 스크립트는 수동 재등록/-Exe 지정용 보조.
 echo.
 echo [4/5] 이 PC 설정(구글시트 링크·입력소스 + 네이버/OpenAI/구글SA 키) 패키지에 포함...
 echo   * 새 PC에서 추가 입력 없이 쓰도록 담습니다. _설정값.json 은 평문이라 설치 시 자동 삭제됩니다.
@@ -65,7 +67,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path '
 if errorlevel 1 goto :err
 echo.
 echo 완료!
-echo   결과 폴더: dist\coupang-analytics\  (쿠팡애널리틱스.exe·쿠팡진단.exe·설치.bat·_설정값.json)
+echo   결과 폴더: dist\coupang-analytics\  (쿠팡애널리틱스.exe·쿠팡진단.exe·정산다운로드.exe·설치.bat·_설정값.json)
+echo   ※ 정산 자동 다운로드는 설치 PC 의 data\정산_계정목록.txt 가 있어야 동작(비번 평문·zip 미동봉·소유자가 직접 둠).
 echo   배포 zip:  dist\쿠팡애널리틱스_배포.zip   ← 이 파일 하나만 새 PC로 보내세요(폴더명=coupang-analytics, 노트북과 동일).
 echo.
 echo   [새 PC · 처음] zip 풀기 → coupang-analytics\ 안의 "설치.bat" 더블클릭(관리자 권장) → 끝.

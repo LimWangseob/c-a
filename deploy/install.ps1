@@ -207,12 +207,24 @@ function Register-AutoTasks {
     $triggerR.Delay = 'PT2M'      # 로그온 2분 뒤(세션·네트워크 안정 대기)
     Register-ScheduledTask -TaskName '쿠팡애널리틱스_재부팅복구' -Action $actionR -Trigger $triggerR `
         -Settings $settings -Description '재부팅/로그온 시 오늘 중단분 이어서(--resume)' -Force | Out-Null
+    # 3) 정산 파일 자동 다운로드(watch): 로그온 2분 뒤 + 매일 08:00 (①판매수집 완료 후 재개·17:40 멈춤·중복은 IgnoreNew)
+    #    정산 입력=data\정산_계정목록.txt(비번 평문·운용 PC 에 소유자가 직접 둠). 파일 없으면 watch 가 기록 남기고 종료.
+    $settleExe = Join-Path $root '정산다운로드.exe'
+    if (Test-Path $settleExe) {
+        $actionS = New-ScheduledTaskAction -Execute $settleExe -Argument 'watch' -WorkingDirectory $root
+        $logonS = New-ScheduledTaskTrigger -AtLogOn; $logonS.Delay = 'PT2M'
+        $dailyS = New-ScheduledTaskTrigger -Daily -At ([datetime]'08:00')
+        $setS = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
+            -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew   # 시간제한 없음(상시)
+        Register-ScheduledTask -TaskName '쿠팡애널리틱스_정산다운로드' -Action $actionS -Trigger @($logonS, $dailyS) `
+            -Settings $setS -Description '정산 파일 자동 다운로드(①판매수집 완료 후 재개·17:40 멈춤)' -Force | Out-Null
+    }
 }
 function Unregister-AutoTasks {
     # 우리 작업만 실행 인자(--auto/--resume)로 찾아 제거(한글 작업명 인코딩 문제 회피)
     $tasks = Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
         $a = (($_.Actions | ForEach-Object { [string]$_.Arguments }) -join ' ')
-        ($a -match '(^|\s)--auto(\s|$)') -or ($a -match '(^|\s)--resume(\s|$)')
+        ($a -match '(^|\s)--auto(\s|$)') -or ($a -match '(^|\s)--resume(\s|$)') -or ($a -match '(^|\s)watch(\s|$)')
     }
     foreach ($t in $tasks) {
         Unregister-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -Confirm:$false -ErrorAction SilentlyContinue
@@ -227,7 +239,8 @@ $ans = Read-Host '      등록=Y / 해제=R / 건너뛰기=N'
 if ($ans -match '^[Yy]') {
     try {
         Register-AutoTasks
-        Write-Host '  [확인] 자동실행 2개 등록: 쿠팡애널리틱스_야간무인(18:00) · 쿠팡애널리틱스_재부팅복구(로그온)'
+        Write-Host '  [확인] 자동실행 등록: 쿠팡애널리틱스_야간무인(18:00) · 쿠팡애널리틱스_재부팅복구(로그온) · 쿠팡애널리틱스_정산다운로드(watch·로그온+매일08:00)'
+        Write-Host '         ※ 정산 자동 다운로드는 data\정산_계정목록.txt 가 있어야 돕니다(비번 평문·소유자가 이 PC data 에 직접 둠·없으면 기록 남기고 종료).'
         Write-Host '  ※ 재부팅 자동복구가 무인으로 동작하려면 Windows 설정>계정>로그인 옵션에서'
         Write-Host '     "업데이트/다시 시작 후 로그인 정보로 자동 로그인 완료"를 켜 두세요.'
         Write-Host '  ※ PC 가 완전히 꺼져 있으면 못 깨웁니다(절전/대기 상태여야 WakeToRun 동작).'

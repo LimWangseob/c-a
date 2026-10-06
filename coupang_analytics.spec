@@ -60,8 +60,20 @@ a_diag = Analysis(
     excludes=_EXCLUDES,
     noarchive=False,
 )
-# 공유 의존성(playwright·google·PySide6 등) 중복 제거 — 진단 exe 는 앱 폴더의 사본을 참조한다.
-MERGE((a, "쿠팡애널리틱스", "쿠팡애널리틱스"), (a_diag, "쿠팡진단", "쿠팡진단"))
+# 정산 파일 배치 다운로드(읽기·콘솔 없음): 운용 PC 에서 watch 무인 실행(정산다운로드.exe watch).
+# 로그인 세션 same-origin fetch 로 WING 정산 파일을 받는다(정책=실제 Chrome). 앱(①판매수집)과 같은 계정 프로필
+# 동시 사용은 계정 잠금으로 방지. 정산 입력=data\정산_계정목록.txt(비번 평문·zip 미동봉·운용 PC 에 소유자가 직접).
+a_settle = Analysis(
+    ["tools/settlement_download.py"],
+    pathex=["src"],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
+    excludes=_EXCLUDES,
+    noarchive=False,
+)
+# 공유 의존성(playwright·google·PySide6 등) 중복 제거 — 진단·정산 exe 는 앱 폴더의 사본을 참조한다.
+MERGE((a, "쿠팡애널리틱스", "쿠팡애널리틱스"), (a_diag, "쿠팡진단", "쿠팡진단"), (a_settle, "정산다운로드", "정산다운로드"))
 
 pyz = PYZ(a.pure)
 pyz_diag = PYZ(a_diag.pure)
@@ -83,6 +95,17 @@ exe_diag = EXE(
     console=True,                  # 진단 로그를 콘솔에 출력(읽기전용 점검용)
     disable_windowed_traceback=False,
 )
+pyz_settle = PYZ(a_settle.pure)
+exe_settle = EXE(
+    pyz_settle,
+    a_settle.scripts,
+    [],
+    exclude_binaries=True,
+    name="정산다운로드",
+    console=False,                 # 무인 실행 — 콘솔창 없음(로그는 output\정산\로그\ 파일로). 깜빡임 함정 #8 회피.
+    disable_windowed_traceback=False,
+)
 coll = COLLECT(exe, a.binaries, a.datas,
                exe_diag, a_diag.binaries, a_diag.datas,
+               exe_settle, a_settle.binaries, a_settle.datas,
                name="coupang-analytics")   # onedir 폴더명 = 개발(노트북 repo)과 동일(소유자 2026-09-21). exe 이름은 '쿠팡애널리틱스.exe' 유지.

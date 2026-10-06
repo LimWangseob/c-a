@@ -1,5 +1,5 @@
-﻿# 쿠팡 애널리틱스 - 야간 무인 자동실행(18:00) + 재부팅 복구(로그온) 스케줄 작업 삭제(이 PC).
-# 우리 작업만 실행 인자(--auto/--resume)로 찾아 지운다(한글 작업명 인코딩 문제 회피·소스/exe 둘 다 매칭).
+﻿# 쿠팡 애널리틱스 - 야간 무인(18:00) + 재부팅 복구(로그온) + 정산 다운로드(watch) 스케줄 작업 삭제(이 PC).
+# 우리 작업만 실행 인자(--auto/--resume/watch)로 찾아 지운다(한글 작업명 인코딩 문제 회피·소스/exe 둘 다 매칭).
 $ErrorActionPreference = 'Stop'
 Write-Host '=============================================='
 Write-Host '   쿠팡 애널리틱스 - 자동 실행 삭제'
@@ -7,7 +7,7 @@ Write-Host '=============================================='
 Write-Host ''
 $tasks = Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
     $a = (($_.Actions | ForEach-Object { [string]$_.Arguments }) -join ' ')
-    ($a -match '(^|\s)--auto(\s|$)') -or ($a -match '(^|\s)--resume(\s|$)')
+    ($a -match '(^|\s)--auto(\s|$)') -or ($a -match '(^|\s)--resume(\s|$)') -or ($a -match '(^|\s)watch(\s|$)')
 }
 if (-not $tasks) {
     Write-Host '  등록된 자동 실행 작업이 없습니다(이미 삭제됨).'

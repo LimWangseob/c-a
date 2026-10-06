@@ -1,6 +1,7 @@
 ## 진입점 (최신 먼저)
 - [⭐⭐새 세션 진입점 2026-10-06: 구현 Wave1 통합(D8흡수·D10CS·D2소싱·통합앱+보라테마·정산 배치다운로드·윙30%)](handoff-session-261006.md) — 도메인 전용 세션 정책 가동·master 통합·게이트15종. 다음=L1핀·사무실 라이브(정산 probe·쿠팡 쓰기 캡처)·소유자결정(정산 지급일·계약금액)
 - [⭐화면 시안 진입점 2026-10-06: 메뉴 v3.3 대13·중84 전 화면·정의서 137칸·시안 v32](handoff-design-mockup-261006.md) — 시안 주소·보관사본+생성스크립트·메뉴 SSOT=시안 A 보드
+- [시안 세부 승격 1차: 공용 위젯+홈 변동 추이(실데이터)](impl-home-trend-widgets-261006.md) — widgets_qt 재사용·verify 미등록·1페이지=60 확인 대상
 - [구현 Wave1: D2 소싱 1단계](impl-d2-sourcing-261006.md) — 도메인 전용 세션 첫 배정·master 병합. 남은=L1핀·라이브·UI 02-x
 - [구현 Wave1: D10 CS 수동 트래커 1단계](impl-d10-cs-tracker-261005.md) — K 레인·master 병합. 남은=UI·config키·2단계 수집
 - [구현 Wave1: D8 흡수 원장 3종(업무일지·계약·채권자)](impl-d8-absorb-ledger-261005.md) — E 레인·master 병합. 남은=UI·config키·2·3단계
