@@ -1,8 +1,8 @@
 """정산 파일 '요청 → 다음날 받기' 작업 기록·계획·목록 대조(순수 로직·오프라인). SSOT=designs/SETTLEMENT_MODULE.md.
 
-쿠팡 정산 엑셀은 바로 받아지지 않고 **요청 후 생성 대기**(실측 2026-10-06: 윙 목록 WAIT→FINISHED, 로켓그로스 목록
-'진행중'). 그래서 N일 = 정산 일정(정산캘린더·정산현황 목록) 중 아직 없는 것을 **요청**, N+1일 = 다운로드 목록에서
-완료분만 **받기**(파일 이름=계정명·정산일 포함). 차단 위험 완화 규칙(소유자 검토):
+쿠팡 정산 엑셀은 바로 받아지지 않고 **요청 후 생성 대기**(실측 2026-10-06: 윙 WAIT→FINISHED·로켓그로스
+PENDING→COMPLETED, 둘 다 약 1분·화면 안내 '최대 1시간'). 그래서 먼저 정산 일정 중 아직 없는 것을 **요청**, 나중에
+(같은 날 몇 분 뒤 또는 다음날) 다운로드 목록에서 완료분만 **받기**(파일 이름=계정명·정산일 포함). 차단 위험 완화 규칙(소유자 검토):
 - **같은 기간은 한 번만**: 로켓그로스는 같은 매출 주가 70%·30% 두 지급 줄에 나오지만 파일 내용이 같다(실측) →
   키 = (계정, 채널, 리포트, 기간). 윙 최종액(30%)은 기간이 달라(주 묶음) 별도 키.
 - **로켓그로스 비용 리포트는 금액이 있는 것만**(판매수수료는 늘): 상세보기에서 0원인 항목은 요청하지 않음.
@@ -29,8 +29,7 @@ RG_ALWAYS = ("판매수수료",)
 REQUEST_EXPIRE_DAYS = 3          # 요청 후 이만큼 지나도 완료 안 되면 재요청
 MAX_ATTEMPTS = 3
 WING_REQ_SLACK = timedelta(minutes=10)    # 윙: 같은 기간 목록 줄 중 우리 요청 이후 것(시계 차 여유)
-RG_MATCH_WINDOW = timedelta(seconds=15)   # 로켓그로스: 목록에 기간이 없어 '요청시각'으로 짝 — 요청 간격(≥30초)보다 좁게
-_FINISHED = ("FINISHED", "완료", "다운로드가능")
+_FINISHED = ("FINISHED", "COMPLETED")      # 윙·로켓그로스 목록 완료 상태(실측)
 
 
 @dataclass(frozen=True)
@@ -43,6 +42,7 @@ class SettleEvent:
     period_start: date
     period_end: date
     reports: tuple = ()
+    ref: str = ""                 # 요청에 쓰는 쿠팡 키(로켓그로스 settlementGroupKey)
 
 
 @dataclass
@@ -59,6 +59,8 @@ class Job:
     attempts: int = 0
     file: str = ""
     note: str = ""
+    ref: str = ""                 # SettleEvent.ref
+    req_id: str = ""              # 요청 응답의 요청 번호(로켓그로스 requestId — 목록 줄과 정확히 짝)
 
     @property
     def key(self) -> tuple:
@@ -74,7 +76,8 @@ class DownloadRow:
     report: str = ""
     period_start: date | None = None
     period_end: date | None = None
-    handle: object = field(default=None, compare=False)   # 라이브 단계에서 받기 버튼/주소를 들고 다님
+    handle: object = field(default=None, compare=False)   # 받기에 쓰는 값(윙 downloadUrl·로켓그로스 requestTime)
+    req_id: str = ""
 
 
 def reports_for(ev: SettleEvent) -> list[str]:
@@ -103,7 +106,7 @@ def plan_requests(events, jobs: list[Job], *, today: date, now: datetime, per_ac
             continue                                   # 월별 파일로 대체
         for rep in reports_for(ev):
             j = Job(ev.account, ev.channel, ev.kind, rep, ev.period_start.isoformat(), ev.period_end.isoformat(),
-                    ev.settle_date.isoformat())
+                    ev.settle_date.isoformat(), ref=ev.ref)
             if j.key not in known:
                 known[j.key] = j
                 jobs.append(j)
@@ -139,8 +142,9 @@ def _covered_by_final(account: str, channel: str, kind: str, ps: date, pe: date,
         a == account and fs <= ps and pe <= fe for a, fs, fe in finals)
 
 
-def mark_requested(j: Job, now: datetime) -> None:
+def mark_requested(j: Job, now: datetime, req_id: str = "") -> None:
     j.status, j.requested_at, j.attempts = ST_REQUESTED, now.isoformat(timespec="seconds"), j.attempts + 1
+    j.req_id = req_id
 
 
 _COND = re.compile(r"(\d{4}-\d{2}-\d{2})\s*-\s*(\d{4}-\d{2}-\d{2})")
@@ -161,20 +165,19 @@ def _match_one(j: Job, rows: list[DownloadRow]) -> tuple[DownloadRow | None, str
         cands = [r for r in rows if r.channel == "윙" and (r.period_start, r.period_end) == want
                  and r.requested_at >= req - WING_REQ_SLACK]
     else:
-        cands = [r for r in rows if r.channel != "윙" and r.report == j.report
-                 and req - RG_MATCH_WINDOW <= r.requested_at <= req + RG_MATCH_WINDOW]
+        if not j.req_id:
+            return None, "요청 번호(requestId) 기록 없음 — 목록과 짝지을 수 없어 재요청 대상"
+        cands = [r for r in rows if r.channel != "윙" and r.req_id == j.req_id]
     if not cands:
         return None, "목록에 없음"
-    if j.channel != "윙" and len(cands) > 1:
-        return None, f"요청시각 ±{RG_MATCH_WINDOW.seconds}초 안에 같은 리포트가 {len(cands)}건이라 구분 불가 — 건너뜀"
     best = max(cands, key=lambda r: r.requested_at)                   # 같은 기간 여러 번 요청했으면 가장 최근
     return (best, "") if best.status.strip().upper() in _FINISHED else (None, f"아직 {best.status}")
 
 
 def match_downloads(rows: list[DownloadRow], jobs: list[Job]) -> tuple[list[tuple[Job, DownloadRow]], list[str]]:
-    """요청됨 작업 ↔ 다운로드 목록 완료 줄. 반환 (받을 쌍, 사유 로그). 로켓그로스는 목록에 기간이 없어 **우리가 기록한
-    요청시각 ±15초** 안의 같은 리포트 1건과만 짝(요청 간격 30~90초라 여러 주를 연달아 요청해도 겹치지 않음). 받은 뒤
-    파일 안 정산주기로 한 번 더 확인(settlement_files.parse_rg_fee)."""
+    """요청됨 작업 ↔ 다운로드 목록 완료 줄. 반환 (받을 쌍, 사유 로그). 윙=같은 기간·우리 요청 이후 줄 중 최근,
+    로켓그로스=목록에 기간이 없어 **요청 응답의 requestId** 로 정확히 짝(실측 2026-10-06). 받은 뒤 파일 안
+    정산주기로 한 번 더 확인(settlement_files.parse_rg_fee)."""
     out, notes = [], []
     for j in jobs:
         if j.status != ST_REQUESTED:

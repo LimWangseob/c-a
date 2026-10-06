@@ -425,8 +425,8 @@ def p8_settle_jobs():
                     ("B", "윙", "주정산", "주문상세")], keys                       # 70/30 1번·미래 제외·A 윙 주정산=월별로 대체
     assert sum(j.account == "A" for j in pick) == 3 and sum(j.account == "B" for j in pick) == 1
     assert pick[0].settle_date == "2026-09-07"                                     # 오래된 것부터
-    for j in pick:
-        SJ.mark_requested(j, now)
+    for k, j in enumerate(pick):
+        SJ.mark_requested(j, now, f"req-{k}")
     assert SJ.plan_requests(ev, jobs, today=D("2026-10-07"), now=datetime(2026, 10, 7, 19), per_account_cap=3) == []
     later = SJ.plan_requests(ev, jobs, today=D("2026-10-10"), now=datetime(2026, 10, 10, 19), per_account_cap=9)
     assert len(later) == 4                                                         # 3일 지나도 미완료 → 재요청 대상
@@ -457,30 +457,32 @@ def p8_settle_jobs():
     rows = [SJ.DownloadRow("윙", t_b, "WAIT", period_start=D("2026-08-24"), period_end=D("2026-08-30")),
             SJ.DownloadRow("윙", t_b + timedelta(minutes=1), "FINISHED", period_start=D("2026-08-24"),
                            period_end=D("2026-08-30")),
-            SJ.DownloadRow("로켓그로스", t_rg + timedelta(seconds=4), "완료", report="판매수수료")]
+            SJ.DownloadRow("로켓그로스", t_rg + timedelta(seconds=4), "COMPLETED", report="판매수수료",
+                           req_id=rg_fee.req_id)]
     pairs, notes = SJ.match_downloads(rows, [wing_b, rg_fee])
     assert [(j.account, j.report, r.status) for j, r in pairs] == [("B", "주문상세", "FINISHED"),
-                                                                   ("A", "판매수수료", "완료")], pairs
-    rows.append(SJ.DownloadRow("로켓그로스", t_rg + timedelta(seconds=9), "완료", report="판매수수료"))
-    pairs, notes = SJ.match_downloads(rows, [rg_fee])
-    assert pairs == [] and "구분 불가" in notes[0]                                    # 애매하면 받지 않음
+                                                                   ("A", "판매수수료", "COMPLETED")], pairs
     pairs, notes = SJ.match_downloads([rows[0]], [wing_b])
     assert pairs == [] and "아직 WAIT" in notes[0]
-    # 실제 운영 모양: 로켓그로스 판매수수료를 여러 주 40초 간격으로 요청 → 각자 자기 목록 줄과 짝(겹치지 않음)
+    # 로켓그로스 = 요청번호로만 짝: 같은 시각·같은 리포트라도 번호가 다르면 남의 줄(시각으로 짐작하지 않음)
     t0 = datetime(2026, 10, 6, 20, 0, 0)
     w1 = SJ.Job("A", "로켓그로스", "주정산", "판매수수료", "2026-08-03", "2026-08-09", "2026-10-01",
-                status=SJ.ST_REQUESTED, requested_at=t0.isoformat())
+                status=SJ.ST_REQUESTED, requested_at=t0.isoformat(), req_id="r1")
     w2 = SJ.Job("A", "로켓그로스", "주정산", "판매수수료", "2026-08-10", "2026-08-16", "2026-10-01",
-                status=SJ.ST_REQUESTED, requested_at=(t0 + timedelta(seconds=40)).isoformat())
-    lst = [SJ.DownloadRow("로켓그로스", t0 + timedelta(seconds=2), "완료", report="판매수수료", handle=1),
-           SJ.DownloadRow("로켓그로스", t0 + timedelta(seconds=43), "완료", report="판매수수료", handle=0)]
+                status=SJ.ST_REQUESTED, requested_at=t0.isoformat(), req_id="r2")
+    lst = [SJ.DownloadRow("로켓그로스", t0, "COMPLETED", report="판매수수료", handle="t2", req_id="r2"),
+           SJ.DownloadRow("로켓그로스", t0, "PENDING", report="판매수수료", handle="t1", req_id="r1")]
     pairs, notes = SJ.match_downloads(lst, [w1, w2])
-    assert [(j.period_start, r.handle) for j, r in pairs] == [("2026-08-03", 1), ("2026-08-10", 0)], (pairs, notes)
+    assert [(j.period_start, r.handle) for j, r in pairs] == [("2026-08-10", "t2")] and "아직 PENDING" in notes[0]
+    w3 = SJ.Job("A", "로켓그로스", "주정산", "판매수수료", "2026-08-17", "2026-08-23", "2026-10-01",
+                status=SJ.ST_REQUESTED, requested_at=t0.isoformat())
+    pairs, notes = SJ.match_downloads(lst, [w3])
+    assert pairs == [] and "요청 번호" in notes[0]                                   # 번호 없으면 받지 않음
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "기록.json"
         SJ.save_jobs(p, jobs)
         assert [j.key for j in SJ.load_jobs(p)] == [j.key for j in jobs] and not (Path(tmp) / "기록.json.tmp").exists()
-    ok("70/30 한 번·보관비만 추가·미래 제외·상한·오래된 순·만료 재요청·3회 실패·월별 나온 달 주정산 생략·윙 기간/RG 시각 대조·애매=보류·기록 왕복")
+    ok("70/30 한 번·보관비만 추가·미래 제외·상한·오래된 순·만료 재요청·3회 실패·월별 나온 달 주정산 생략·윙 기간/RG 요청번호 대조·번호 없음=보류·기록 왕복")
 
 
 def p9_settle_stats():
@@ -525,58 +527,80 @@ def p9_settle_stats():
     ok("최종액=주정산 없는 주만·중복 파일 1회·배송비 묶음·월 귀속·지급액 검산(윙 최종액 30% 주별)·계약자 정산금액·엑셀 5시트")
 
 
-def p10_wing_ui_parse():
-    print("[P10] 정산 화면 글자 → 정산 일정·다운로드 목록(스크린샷 모양 가상 화면·라이브 미호출)")
+def p10_wing_api_parse():
+    print("[P10] 정산 주소 응답 → 정산 일정·요청 본문·다운로드 목록(실측 응답 모양·값은 가상·라이브 미호출)")
     from datetime import datetime
-    from coupang_analytics import settlement_wing_ui as UI
-    K = UI.ROW_KEY
-    wing = [{"정산일": "2026-10-01", "정산유형": "최종액정산", "지급비율": "30%", "구매확정기간": "2026-08-03 ~ 2026-08-30",
-             "정산상태": "정산확정", "최종지급액": "124,513", K: 0},
-            {"정산일": "2026-09-18", "정산유형": "주정산", "지급비율": "70%", "구매확정기간": "2026-08-24 ~ 2026-08-30",
-             "정산상태": "정산확정", "최종지급액": "236,439", K: 1},
-            {"정산일": "2026-10-07", "정산유형": "주정산", "지급비율": "70%", "구매확정기간": "2026-09-07 ~ 2026-09-13",
-             "정산상태": "정산예정", "최종지급액": "7,217", K: 3}]                      # 예정 = 아직 받지 않음
-    ev = UI.parse_wing_rows(wing, "계정A")
-    assert [(e.kind, e.settle_date, e.period_start, e.period_end, ri) for e, ri in ev] == [
-        ("최종액", D("2026-10-01"), D("2026-08-03"), D("2026-08-30"), 0),
-        ("주정산", D("2026-09-18"), D("2026-08-24"), D("2026-08-30"), 1)], ev
-    rg = [{"정산일": "2026-09-07", "정산유형": "주별", "지급비율": "30", "매출인식일": "2026-07-27~2026-07-31", K: 0},
-          {"정산일": "2026-10-01", "정산유형": "주별", "지급비율": "30", "매출인식일": "2026-08-03~2026-08-09", K: 2}]
-    rev = UI.parse_rg_rows(rg, "계정A")
-    assert [(e.channel, e.kind, e.period_start, ri) for e, ri in rev] == [
-        ("로켓그로스", "주정산", D("2026-07-27"), 0), ("로켓그로스", "주정산", D("2026-08-03"), 2)]
-    expect(UI.UiChangedError, lambda: UI.parse_wing_rows([{**wing[0], "정산유형": "특별정산"}], "a"), "모르는 유형")
-    expect(UI.UiChangedError, lambda: UI.parse_rg_rows([{**rg[0], "매출인식일": "7월 4주"}], "a"), "기간 글자")
-    assert UI.report_key("리포트 : 판매수수료 리포트") == "판매수수료" and UI.report_key("입출고/배송비 리포트") == "입출고/배송비"
-    expect(UI.UiChangedError, lambda: UI.report_key("리포트 : 새 리포트"), "모르는 리포트")
-    wl = UI.parse_list_rows([{"요청일시": "2026-10-06 11:43:41", "메뉴명": "[중개] 정산현황 주문 상세 내역",
-                              "검색조건": "구매확정일:2026-08-24 - 2026-08-30", "상태": "WAIT", K: 0},
-                             {"요청일시": "2025-02-19 05:07:42", "메뉴명": "[중개] 부가세 신고 내역 상세",
-                              "검색조건": "구매확정일:2025-01-01 - 2025-01-31", "상태": "FINISHED", K: 2}], "윙")
+    from coupang_analytics import settlement_jobs as SJ
+    from coupang_analytics import settlement_wing_api as API
+    wresp = {"paymentReports": [
+        {"payDate": "2026-01-02", "transactionCycleCode": "R", "recognitionFrom": "2025-11-03",
+         "recognitionTo": "2025-11-30", "paymentStatus": "DONE", "ratio": 30},
+        {"payDate": "2026-01-23", "transactionCycleCode": "W", "recognitionFrom": "2026-01-01",
+         "recognitionTo": "2026-01-04", "paymentStatus": "DONE", "ratio": 70}], "totalAmount": 0}
+    ev = API.wing_events(wresp, "계정A")
+    assert [(e.kind, e.settle_date, e.period_start, e.period_end) for e in ev] == [
+        ("최종액", D("2026-01-02"), D("2025-11-03"), D("2025-11-30")),
+        ("주정산", D("2026-01-23"), D("2026-01-01"), D("2026-01-04"))], ev
+    expect(API.SiteChangedError, lambda: API.wing_events(
+        {"paymentReports": [{**wresp["paymentReports"][0], "transactionCycleCode": "X"}]}, "a"), "모르는 주기 코드")
+    expect(API.SiteChangedError, lambda: API.wing_events({"reports": []}, "a"), "응답 칸 없음")
+    rresp = {"settlementStatusReports": [
+        {"settlementDate": "2026-09-06T15:00:00.000Z", "settlementPeriodStartDate": "2026-07-26T15:00:00.000Z",
+         "settlementPeriodEndDate": "2026-07-30T15:00:00.000Z", "settlementRatio": 30, "settlementCycle": "WEEKLY",
+         "settlementGroupKey": "V1-2026-07-27-2026-07-31", "finalSettlementAmount": 1}]}
+    rev = API.rg_events(rresp, "계정A")
+    assert [(e.kind, e.settle_date, e.period_start, e.period_end, e.ref) for e in rev] == [
+        ("최종액", D("2026-09-07"), D("2026-07-27"), D("2026-07-31"), "V1-2026-07-27-2026-07-31")], rev   # UTC→한국 날짜
+    expect(API.SiteChangedError, lambda: API.rg_events({"settlementStatusReports": [
+        {**rresp["settlementStatusReports"][0], "settlementCycle": "DAILY"}]}, "a"), "모르는 RG 주기")
+    assert API.rg_events_body(D("2026-01-01"), D("2026-01-31")) == {
+        "startDate": "2025-12-31T15:00:00.000Z", "endDate": "2026-01-31T15:00:00.000Z", "searchDateType": "PAYMENT"}
+    assert API.wing_events_body(D("2026-01-01"), D("2026-01-31"))["fromDate"] == "2026-01-01"
+    jobs: list = []
+    picked = SJ.plan_requests(ev + rev, jobs, today=D("2026-10-06"), now=datetime(2026, 10, 6, 15), per_account_cap=9)
+    rj = next(j for j in picked if j.channel == "로켓그로스")
+    assert rj.ref == "V1-2026-07-27-2026-07-31"                                     # 일정의 키가 요청까지 전달
+    assert API.rg_request_body(rj, 1791000000000) == {"sellerReportType": "CATEGORY_TR", "requestTime": "1791000000000",
+                                                      "settlementGroupKeys": [rj.ref], "locale": "ko"}
+    wj = next(j for j in picked if j.channel == "윙" and j.kind == "주정산")
+    assert API.wing_request_body(wj) == {"excelType": "MSF_PAYMENT_REVENUE_DETAIL",
+                                         "recognitionDateRange": {"start": "2026-01-01", "end": "2026-01-04"},
+                                         "searchDateType": "CONFIRM_DATE",
+                                         "searchDateRange": {"start": "2026-01-01", "end": "2026-01-04"}}
+    expect(API.SiteChangedError, lambda: API.rg_request_body(SJ.Job("a", "로켓그로스", "주정산", "판매수수료", "x", "y", "z"),
+                                                              1), "묶음 키 없음")
+    expect(API.SiteChangedError, lambda: API.rg_request_body(SJ.Job("a", "로켓그로스", "주정산", "보관비", "x", "y", "z",
+                                                                     ref="k"), 1), "코드 미확인 리포트")
+    assert API.wing_request_id({"success": True, "reason": "OK", "data": 134}) == "134"
+    expect(API.SiteChangedError, lambda: API.wing_request_id({"success": False, "reason": "LIMIT", "data": None}), "거절")
+    assert API.rg_request_id({"requestId": "abc", "duplicateRequest": False, "remainingTime": 0}) == "abc"
+    wl = API.wing_list_rows([
+        {"id": 1, "excelType": "MSF_PAYMENT_REVENUE_DETAIL", "status": "FINISHED", "startedAt": "2026-10-06 14:49:59",
+         "downloadUrl": "https://x/dl?id=1", "jsonItems": '[{"key":"구매확정일", "value":"2026-09-01 - 2026-09-06", "view":true}]'},
+        {"id": 2, "excelType": "MSF_VAT_DETAIL", "status": "FINISHED", "startedAt": "2025-02-19 05:07:42",
+         "downloadUrl": "https://x/dl?id=2", "jsonItems": '[{"key":"구매확정일", "value":"2025-01-01 - 2025-01-31"}]'}])
     assert [(r.requested_at, r.status, r.period_start, r.period_end, r.handle) for r in wl] == [
-        (datetime(2026, 10, 6, 11, 43, 41), "WAIT", D("2026-08-24"), D("2026-08-30"), 0)]   # 부가세 메뉴 무시
-    rl = UI.parse_list_rows([{"요청일시": "2026-10-06 11:55:15", "상태": "진행중", "리포트": "리포트 : 판매수수료 리포트",
-                              K: 4}], "로켓그로스")
-    assert (rl[0].report, rl[0].status, rl[0].handle) == ("판매수수료", "진행중", 4)
-    assert UI.month_windows(D("2026-01-15"), D("2026-03-02")) == [
+        (datetime(2026, 10, 6, 14, 49, 59), "FINISHED", D("2026-09-01"), D("2026-09-06"), "https://x/dl?id=1")]
+    rl = API.rg_list_rows([{"requestId": "abc", "requestTime": "1791000000000", "downloadStatus": "COMPLETED",
+                            "sellerReportType": "CATEGORY_TR", "recognitionDateFrom": None}])
+    assert (rl[0].report, rl[0].status, rl[0].req_id, rl[0].handle) == ("판매수수료", "COMPLETED", "abc", "1791000000000")
+    assert API.rg_list_body(datetime(2026, 10, 6, 0, 0), datetime(2026, 10, 6, 0, 0, 1)) == {
+        "requestTimeFrom": str(int(datetime(2026, 10, 6).timestamp() * 1000)),
+        "requestTimeTo": str(int(datetime(2026, 10, 6).timestamp() * 1000) + 1000)}
+    assert API.month_windows(D("2026-01-15"), D("2026-03-02")) == [
         (D("2026-01-15"), D("2026-01-31")), (D("2026-02-01"), D("2026-02-28")), (D("2026-03-01"), D("2026-03-02"))]
 
     class FakePage:
-        def __init__(self, tables):
-            self.tables = tables
+        def __init__(self, status, text):
+            self.r = {"status": status, "ctype": "x", "text": text}
 
         def evaluate(self, js, arg=None):
-            if arg is None:
-                return [" ".join(t["ths"]) for t in self.tables]
-            return [t for t in self.tables if all(m in t["ths"] for m in arg)]
-    tbl = {"ti": 3, "ths": list(UI.WING_HEADERS) + ["주문상세내역"],
-           "rows": [["2026-09-18", "주정산", "70%", "2026-08-24 ~ 2026-08-30", "정산확정", "236,439", "미리보기"],
-                    ["총 최종지급액", "236,439"]]}                                         # 합계 줄 = 제외
-    ti, rows = UI.read_table(FakePage([tbl]), UI.WING_HEADERS)
-    assert ti == 3 and len(rows) == 1 and rows[0]["구매확정기간"].startswith("2026-08-24") and rows[0][K] == 0
-    expect(UI.UiChangedError, lambda: UI.read_table(FakePage([]), UI.WING_HEADERS), "표 없음")
-    expect(UI.UiChangedError, lambda: UI.read_table(FakePage([tbl, tbl]), UI.WING_HEADERS), "표 둘")
-    ok("정산확정만·유형/기간 변환·화면 줄 번호 유지·리포트 이름·목록(부가세 메뉴 무시)·달 구간·표 0/2개=오류·합계 줄 제외")
+            return self.r
+    assert API.call(FakePage(200, '{"a":1}'), "GET", "/p") == {"a": 1}
+    expect(API.ApiBlocked, lambda: API.call(FakePage(403, "x"), "GET", "/p"), "403=차단")
+    expect(API.ApiBlocked, lambda: API.call(FakePage(200, "<html>Access Denied"), "GET", "/p"), "HTML=차단")
+    expect(API.SiteChangedError, lambda: API.call(FakePage(500, "{}"), "GET", "/p"), "500=중단")
+    ok("윙/RG 일정(UTC→한국 날짜·묶음키)·요청 본문·요청번호·목록(부가세 메뉴 무시)·달 구간·403/HTML=차단·500=중단")
 
 
 def p11_runlog():
@@ -623,7 +647,7 @@ def main():
     p7_settle_files()
     p8_settle_jobs()
     p9_settle_stats()
-    p10_wing_ui_parse()
+    p10_wing_api_parse()
     p11_runlog()
     print("정산 계산 모듈 오프라인 검증 통과(골든 payout 12·amount 2·불변식 4행/3식 100%)")
 
