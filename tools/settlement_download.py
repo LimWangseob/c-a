@@ -6,6 +6,7 @@
   python tools/settlement_download.py request  [--from 2026-01-01] [--to 2026-01-31] [--cap 5] [--dry-run] [--accounts ID,ID]
   python tools/settlement_download.py download [--accounts ID,ID]       # 다음날: 완료분 받기
   python tools/settlement_download.py run      [--from …] [--to …] [--accounts …]   # 요청+받기 한 세션(전체 확대용)
+  python tools/settlement_download.py watch                             # 운용 PC 상시: 앱 ①판매수집 완료 후 재개·17:40 멈춤
   python tools/settlement_download.py stats                             # 받은 파일 집계 엑셀
 
 규칙(차단 위험 완화·소유자 2026-10-06): 정산현황 '정산확정' 줄만 · 윙은 월별(최종액) 파일이 나온 달이면 주정산 생략 ·
@@ -210,7 +211,10 @@ def _save_amounts(name: str, ch: str, resp: dict) -> None:
 
 
 def past_until(args) -> bool:
-    """--until HH:MM 이 지났으면 True(오늘 그 시각). 앱 18:00 무인 실행과 같은 계정 프로필이 겹치지 않게."""
+    """멈춤 시각이 지났으면 True. watch=주기 끝 시각(until_at), 직접 실행=--until HH:MM(오늘 그 시각).
+    앱 18:00 무인 실행과 같은 계정 프로필이 겹치지 않게."""
+    if getattr(args, "until_at", None):
+        return datetime.now() >= args.until_at
     if not getattr(args, "until", ""):
         return False
     hh, mm = (int(x) for x in args.until.split(":"))
@@ -406,10 +410,50 @@ def _run_accounts(accts, run, args) -> int:
     return 0
 
 
+WATCH_STATE = BASE / "_자동실행.json"
+WATCH_POLL_SEC = 300
+
+
+def cmd_watch(args) -> int:
+    """운용 PC 상시 실행: 앱 ①판매수집 완료 → 정산 재개(숨김 창) → 다음날 17:40 멈춤 → 반복(settlement_watch).
+    같은 PC에 watch 가 둘 뜨지 않게 잠금. 대기 중엔 5분마다 확인하고, 판단이 바뀔 때만 기록한다."""
+    from coupang_analytics import settlement_watch as W
+    from coupang_analytics.pipeline_paths import _run_stage_path
+    from coupang_analytics.registry_lock import RegistryLockError, registry_lock
+    global LOG
+    try:
+        with registry_lock(BASE / "_잠금" / "_watch.lock", wait_sec=0, on_log=log):
+            last = ""
+            while True:
+                marker, why = W.read_marker(_run_stage_path("output"))
+                action, reason, cycle = W.decide(datetime.now(), marker, W.load_last_cycle(WATCH_STATE))
+                if reason != last:
+                    log(f"[자동] {reason}" + (f" ({why})" if why and action == "wait" else ""))
+                    last = reason
+                if action == "wait":
+                    time.sleep(WATCH_POLL_SEC)
+                    continue
+                LOG = RL.RunLog(BASE)
+                args.until_at, args.end, args.hidden = cycle + timedelta(days=1), date.today(), True
+                log(f"실행 {LOG.run_id} · 자동 · {reason} · 기간 {args.start}~{args.end} · 멈춤 {args.until_at:%m-%d %H:%M}")
+                try:
+                    _run_accounts(load_accounts(set()), cmd_run, args)
+                    if not past_until(args):             # 멈춤 전에 한 바퀴 다 돌았음(연속 차단 중단 포함) = 이번 주기 완료
+                        W.save_last_cycle(WATCH_STATE, cycle)
+                    cmd_stats()
+                except Exception as exc:                 # 그 바퀴만 실패 기록 후 5분 뒤 다시 판단(watch 는 계속)
+                    LOG.error("(전체)", "자동실행", exc)
+                    time.sleep(WATCH_POLL_SEC)
+                LOG.summary()
+    except RegistryLockError:
+        log("[자동] 정산 자동 실행이 이미 떠 있음 — 이 실행은 종료")
+        return 0
+
+
 def main() -> int:
     global LOG
     ap = argparse.ArgumentParser(description="쿠팡 정산 파일 배치 다운로드")
-    ap.add_argument("command", choices=("probe", "request", "download", "run", "stats"))
+    ap.add_argument("command", choices=("probe", "request", "download", "run", "watch", "stats"))
     ap.add_argument("--accounts", default="", help="계정ID 쉼표 구분(비우면 관리대장 전체)")
     ap.add_argument("--from", dest="start", type=date.fromisoformat, default=date(2026, 1, 1))
     ap.add_argument("--to", dest="end", type=date.fromisoformat, default=date.today())
@@ -427,6 +471,8 @@ def main() -> int:
     if args.command == "stats":
         cmd_stats()
         return 0
+    if args.command == "watch":
+        return cmd_watch(args)
     accts = load_accounts({x.strip() for x in args.accounts.split(",") if x.strip()})
     if args.command == "probe":
         accts = accts[:1]

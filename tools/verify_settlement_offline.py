@@ -691,6 +691,44 @@ def p11_runlog():
     ok("실행·누적 CSV(엑셀용)·정산일 칸·차단/로그인 기록·오류 전체 추적·계정별/단계별 요약")
 
 
+def p12_watch_decide():
+    print("[P12] 자동 대기·재개 — 앱 ①판매수집 완료 후 재개·다음날 17:40 멈춤·기록 없으면 새벽 2시 재개·하루 1바퀴")
+    from datetime import datetime
+    from coupang_analytics import settlement_watch as W
+    T = datetime
+    assert W.cycle_start(T(2026, 10, 6, 17, 39)) == T(2026, 10, 5, 17, 40)
+    assert W.cycle_start(T(2026, 10, 6, 17, 40)) == T(2026, 10, 6, 17, 40)
+    sales = {"stage": "sales", "at": T(2026, 10, 6, 19, 30)}
+    a, why, p = W.decide(T(2026, 10, 6, 18, 5), None, None)                         # 앱 시작 직후 = 대기
+    assert a == "wait" and p == T(2026, 10, 6, 17, 40)
+    a, _, _ = W.decide(T(2026, 10, 6, 18, 5), {"stage": "done", "at": T(2026, 10, 6, 5, 0)}, None)
+    assert a == "wait"                                                              # 어제 주기 기록 = 이번 것 아님
+    a, why, p = W.decide(T(2026, 10, 6, 19, 31), sales, None)
+    assert a == "run" and "①판매수집 완료" in why                                     # ① 끝나면 바로 재개
+    a, _, _ = W.decide(T(2026, 10, 7, 11, 0), {"stage": "ranks", "at": T(2026, 10, 7, 0, 30)}, None)
+    assert a == "run"                                                               # 자정 넘겨 기록돼도 이번 주기
+    a, _, _ = W.decide(T(2026, 10, 7, 1, 59), None, None)
+    assert a == "wait"
+    a, why, _ = W.decide(T(2026, 10, 7, 2, 0), None, None)
+    assert a == "run" and "기록 없음" in why                                          # 앱이 안 돈 날
+    a, why, _ = W.decide(T(2026, 10, 7, 11, 0), sales, T(2026, 10, 6, 17, 40))
+    assert a == "wait" and "완료" in why                                              # 이번 주기 이미 다 돌았음
+    a, _, _ = W.decide(T(2026, 10, 7, 20, 0), {"stage": "sales", "at": T(2026, 10, 7, 19, 50)}, T(2026, 10, 6, 17, 40))
+    assert a == "run"                                                               # 다음 주기는 다시
+    with tempfile.TemporaryDirectory() as tmp:
+        mp = Path(tmp) / "단계.json"
+        assert W.read_marker(mp)[0] is None and "없음" in W.read_marker(mp)[1]
+        mp.write_text('{"date": "2026-10-06", "stage": "sales", "at": "2026-10-06T19:30:00"}', encoding="utf-8")
+        assert W.read_marker(mp)[0] == sales
+        mp.write_text("{깨짐", encoding="utf-8")
+        assert W.read_marker(mp)[0] is None and "읽기 실패" in W.read_marker(mp)[1]
+        sp = Path(tmp) / "상태.json"
+        assert W.load_last_cycle(sp) is None
+        W.save_last_cycle(sp, T(2026, 10, 6, 17, 40))
+        assert W.load_last_cycle(sp) == T(2026, 10, 6, 17, 40)
+    ok("멈춤 시각 경계·①완료 후 재개·어제 기록 무시·자정 넘김·새벽 2시 대체 재개·하루 1바퀴·기록 파일 왕복")
+
+
 def main():
     g1_payout_dates()
     g2_amounts()
@@ -706,6 +744,7 @@ def main():
     p9_settle_stats()
     p10_wing_api_parse()
     p11_runlog()
+    p12_watch_decide()
     print("정산 계산 모듈 오프라인 검증 통과(골든 payout 12·amount 2·불변식 4행/3식 100%)")
 
 
