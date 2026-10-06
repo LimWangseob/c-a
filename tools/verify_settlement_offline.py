@@ -579,6 +579,37 @@ def p10_wing_ui_parse():
     ok("정산확정만·유형/기간 변환·화면 줄 번호 유지·리포트 이름·목록(부가세 메뉴 무시)·달 구간·표 0/2개=오류·합계 줄 제외")
 
 
+def p11_runlog():
+    print("[P11] 실행 기록 — 처리기록 CSV(실행·누적)·로그인/차단/실패 기록·오류 전체 추적·요약")
+    import csv as _csv
+    from datetime import datetime
+    from coupang_analytics import settlement_runlog as RLG
+    with tempfile.TemporaryDirectory() as tmp:
+        out: list = []
+        lg = RLG.RunLog(tmp, now=datetime(2026, 10, 6, 21, 0, 0), echo=out.append)
+        lg.record("A-1", "로그인", RLG.OK, "success: 로그인 완료")
+        lg.record("A-1", "요청", RLG.OK, "다운로드 요청함", channel="윙", kind="주정산·주문상세", settle_date="2026-01-12",
+                  period="2025-12-29~2026-01-04")
+        lg.record("B-2", "차단감지", RLG.BLOCK, "차단 화면 — https://wing.coupang.com/x")
+        try:
+            raise ValueError("표 머리글 없음")
+        except ValueError as exc:
+            lg.error("B-2", "조회", exc)
+        lg2 = RLG.RunLog(tmp, now=datetime(2026, 10, 7, 21, 0, 0), echo=out.append)
+        lg2.record("A-1", "받기", RLG.WAIT, "아직 WAIT", channel="윙")
+        rows = list(_csv.DictReader(open(lg.csv, encoding="utf-8-sig")))
+        assert [r["결과"] for r in rows] == ["정상", "정상", "차단", "실패"] and rows[1]["정산일"] == "2026-01-12"
+        total = list(_csv.DictReader(open(lg.total, encoding="utf-8-sig")))
+        assert len(total) == 5 and {r["실행ID"] for r in total} == {"261006_210000", "261007_210000"}   # 누적
+        tb = lg.errors.read_text(encoding="utf-8")
+        assert "Traceback" in tb and "ValueError: 표 머리글 없음" in tb and "B-2 · 조회" in tb
+        assert "⛔ [차단감지] B-2" in lg.text.read_text(encoding="utf-8")
+        summ = lg.summary()
+        assert "[요약] A-1: 정상 2" in summ and "[요약] B-2: 실패 1 · 차단 1" in summ, summ
+        assert "[비정상] 조회 실패: 1건" in summ and "[비정상] 차단감지 차단: 1건" in summ
+    ok("실행·누적 CSV(엑셀용)·정산일 칸·차단/로그인 기록·오류 전체 추적·계정별/단계별 요약")
+
+
 def main():
     g1_payout_dates()
     g2_amounts()
@@ -593,6 +624,7 @@ def main():
     p8_settle_jobs()
     p9_settle_stats()
     p10_wing_ui_parse()
+    p11_runlog()
     print("정산 계산 모듈 오프라인 검증 통과(골든 payout 12·amount 2·불변식 4행/3식 100%)")
 
 
