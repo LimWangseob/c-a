@@ -1,6 +1,6 @@
 ---
 name: runtime-ui-and-always-on
-description: "실제 실행 UI=app_qt.py(app.py 아님), 24/365 상시가동 전제, 설정탭은 파일/API키만"
+description: "실제 실행 UI=app_qt.py(app.py 아님), 24/365 상시가동 전제, 설정탭=모든 설정 일원화(링크4·순위간격·프록시·이미지폴더, 2026-10-03)"
 metadata: 
   node_type: memory
   type: project

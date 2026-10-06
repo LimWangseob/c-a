@@ -30,3 +30,9 @@ metadata:
 - **70/30 금액 규칙 실측 확정(2026-10-06·화면 원 단위 일치, 커밋 ef45dc2·0545211)**: 윙 주정산 70%=주 합계×70% 사사오입(4건 일치) · **윙 최종액 30%=월 합계−(정산예정일별 주 합계마다 70%의 합)**(8월 415,046→124,513, '전체×30%'=124,514로 1원 틀림) · 로켓그로스 70%=줄별 70% 합·30%=전체−그것(788,368→236,467). 옛 '줄별 반올림 후 합산' 폐기.
 - 윙 주문상세 파일: 주문마다 상품 1줄 + `<기본배송료>`·`<추가배송료>` 줄(대개 0원·가끔 판매가0·수량0·판매액 6,000). 집계는 주정산 파일 기준, 최종액 파일은 주정산 없는 주만 채움.
 - Claude in Chrome 연결 Chrome은 WING 미로그인(소유자 로그인 창과 다른 창/프로필) — 2026-10-06 두 번 확인.
+
+**정산 주소(API) 실측 확정(2026-10-06 사무실·wellbing1107, 화면에서 1회씩 눌러 확인 후 직접 호출로 같은 결과)**:
+- 화면 기간 입력은 반영 안 됨(1월 조회해도 9~10월 표) → 다운로더는 **화면 클릭 대신 화면 뒤 주소 직접 호출**(`settlement_wing_api.py`, 요청 수는 화면과 동일).
+- 윙: 일정 `POST msf/wing/api/payment-report/list`(PAY_DATE, transactionCycleCode W=주정산·R=월별 최종액) · 요청 `POST msf/wing/api/common/excel/revenue-detail/request`(excelType MSF_PAYMENT_REVENUE_DETAIL·CONFIRM_DATE 기간) · 목록 `GET msf/wing/api/common/excel/list`(status FINISHED·downloadUrl·jsonItems 구매확정일) · 받기=downloadUrl GET. 요청 시 화면은 확인창 2단계.
+- 로켓그로스: 일정 `POST rfm/v2/settlements/status/api`(UTC 날짜→+9h) · 요청 `POST …/request-download/api`(sellerReportType CATEGORY_TR=판매수수료·settlementGroupKeys·requestTime ms) → **requestId 반환(목록과 정확히 짝)** · 목록 `POST …/download-list/api`(PENDING→COMPLETED) · 받기 `POST …/download/api/v2 {requestTime}` → S3 url.
+- 생성 대기 실측 **약 1분**(화면 안내 '최대 1시간') → 같은 날 받기 가능.
