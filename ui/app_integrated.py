@@ -18,11 +18,13 @@ sys.path.insert(0, str(_ROOT / "src"))      # coupang_analytics 패키지
 
 from PySide6 import QtCore, QtWidgets  # noqa: E402
 
+from coupang_analytics import config  # noqa: E402
 from coupang_analytics.apppaths import output_dir, set_workdir  # noqa: E402
 
 from ui.contract_panel_qt import ContractPanel  # noqa: E402
 from ui.creditor_panel_qt import CreditorPanel  # noqa: E402
 from ui.cs_panel_qt import CSPanel  # noqa: E402
+from ui.home_page_qt import HomePage  # noqa: E402
 from ui.local_sheet_client import LocalSheetClient  # noqa: E402
 from ui.theme_qt import QSS as _QSS  # noqa: E402
 from ui.worklog_panel_qt import WorklogPanel  # noqa: E402
@@ -49,28 +51,6 @@ def _placeholder(title: str) -> QtWidgets.QWidget:
         lbl.setAlignment(QtCore.Qt.AlignHCenter)
         lay.addWidget(lbl)
     lay.addStretch(2)
-    return w
-
-
-def _home() -> QtWidgets.QWidget:
-    w = QtWidgets.QWidget()
-    lay = QtWidgets.QVBoxLayout(w)
-    lay.setContentsMargins(24, 24, 24, 24)
-    title = QtWidgets.QLabel("커머스 판로 통합 관리 — 미리보기")
-    title.setStyleSheet("font-size:20px; font-weight:800; color:#0f172a;")
-    body = QtWidgets.QLabel(
-        "지금 작동하는 영역(왼쪽 메뉴):\n"
-        "  • 05 문의·리뷰 — 고객 문의 접수·상태·응대·통계\n"
-        "  • 11 사업·계약 — 계약(버전 이력·만료)·업무일지\n"
-        "  • 12 채권자·상환 — 채권 확정·상환·잔액(민감정보 가림)\n\n"
-        "나머지 메뉴(상품·가격·재고·정산·마케팅·통계·판매처·셀독·당근·설정)는\n"
-        "아직 기존 운영 앱에서 동작합니다. 통합은 순차 진행합니다.\n\n"
-        "※ 저장소: 로컬 파일(구글 연동 없이 실험용). 데이터는 output/통합앱_data/ 아래에 쌓입니다.")
-    body.setStyleSheet("color:#334155; font-size:14px;")
-    lay.addWidget(title)
-    lay.addSpacing(10)
-    lay.addWidget(body)
-    lay.addStretch(1)
     return w
 
 
@@ -117,7 +97,8 @@ class IntegratedApp(QtWidgets.QMainWindow):
         body.addWidget(self.nav)
 
         self.stack = QtWidgets.QStackedWidget()
-        self.stack.addWidget(_home())                       # index 0 = 홈
+        master = output_dir() / f"{config.OUTPUT_FILE_PREFIX}_통계.xlsx"   # 결과 통계 마스터(조회 전용)
+        self.stack.addWidget(HomePage(master))              # index 0 = 홈(변동 추이)
         for label in MENU:
             w = self._page(label)
             self._pages[label] = w

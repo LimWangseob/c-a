@@ -4,7 +4,8 @@
 (선택·주 버튼·그래프, 경고만 빨강/주황) · **왼쪽 흰 사이드바**(회색 섹션 제목·아이콘·메뉴·숫자 배지) ·
 상단 흰 바 + 큰 제목. 기존 app_qt(청록 Fluent)는 미접촉 — 이 테마는 통합 앱(app_integrated) 전용.
 
-색은 토큰 상수로 두고 QSS 를 조립한다(유지보수·일관성). objectName 계약: header·headerTitle·headerSub·nav·accent.
+색은 토큰 상수로 두고 QSS 를 조립한다(유지보수·일관성). objectName 계약: header·headerTitle·headerSub·nav·accent
++ 시안 부품(ui/widgets_qt.py): crumb·pageTitle·card·cardTitle·kpiValue·pill·pillDim·badge[tone=up|down|flat].
 """
 from __future__ import annotations
 
@@ -19,6 +20,10 @@ BORDER = "#e5e7eb"          # 얇은 테두리
 TEXT = "#111827"            # 본문 글자
 MUTED = "#6b7280"           # 보조 글자(섹션 제목·비활성)
 HEAD_BG = "#f9fafb"         # 표 헤더(연회색)
+PURPLE_LIGHT = "#c4b5fd"    # 막대 그래프 비선택 막대(연보라)
+TRACK = "#f0f1f5"           # 막대 그래프 바탕 트랙
+GOOD, GOOD_BG = "#0f6b45", "#e3f4ea"   # 비교 배지 ▲(초록) — 시안 ⑤
+BAD, BAD_BG = "#b42318", "#fdecea"     # 비교 배지 ▼(빨강)
 
 QSS = f"""
 * {{ font-family:'Segoe UI','Malgun Gothic'; font-size:13px; color:{TEXT}; }}
@@ -50,6 +55,23 @@ QPushButton:hover {{ background:{PURPLE_TINT}; border-color:{PURPLE}; }}
 QPushButton#accent {{ background:{PURPLE}; border:1px solid {PURPLE}; color:#ffffff; font-weight:700; padding:9px 18px; }}
 QPushButton#accent:hover {{ background:{PURPLE_DARK}; border-color:{PURPLE_DARK}; }}
 QPushButton#accent:disabled {{ background:#c4b5fd; border-color:#c4b5fd; }}
+
+/* 시안 ④⑤ — 화면 머리·기간 알약·큰 숫자·비교 배지(ui/widgets_qt.py) */
+QLabel#crumb {{ color:{MUTED}; font-size:11px; }}
+QLabel#pageTitle {{ font-size:18px; font-weight:800; }}
+QFrame#card {{ background:{CARD}; border:1px solid {BORDER}; border-radius:14px; }}
+QFrame#card QLabel {{ background:transparent; }}
+QLabel#cardTitle {{ font-size:14px; font-weight:700; }}
+QLabel#kpiValue {{ font-size:28px; font-weight:800; }}
+QPushButton#pill {{ background:{CARD}; border:1px solid {BORDER}; border-radius:14px; padding:4px 12px; font-size:12px; }}
+QPushButton#pill:hover {{ border-color:{PURPLE}; }}
+QPushButton#pill:checked {{ background:{PURPLE}; border-color:{PURPLE}; color:#ffffff; font-weight:700; }}
+QPushButton#pillDim {{ background:#f5f6f8; border:1px dashed #c9ccd6; border-radius:14px; padding:4px 12px;
+    font-size:12px; color:{MUTED}; }}
+QLabel#badge {{ border-radius:9px; padding:1px 7px; font-size:11px; font-weight:700; }}
+QLabel#badge[tone="up"] {{ background:{GOOD_BG}; color:{GOOD}; }}
+QLabel#badge[tone="down"] {{ background:{BAD_BG}; color:{BAD}; }}
+QLabel#badge[tone="flat"] {{ background:{HEAD_BG}; color:{MUTED}; }}
 
 /* 입력 — 포커스/선택 보라 */
 QLineEdit, QComboBox {{ background:{CARD}; border:1px solid #d1d5db; border-radius:8px; padding:6px 10px;
