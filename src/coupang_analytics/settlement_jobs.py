@@ -28,7 +28,8 @@ ST_SKIPPED = "생략(월별로 대체)"
 RG_ALWAYS = ("판매수수료",)
 REQUEST_EXPIRE_DAYS = 3          # 요청 후 이만큼 지나도 완료 안 되면 재요청
 MAX_ATTEMPTS = 3
-RG_MATCH_WINDOW = timedelta(minutes=10)
+WING_REQ_SLACK = timedelta(minutes=10)    # 윙: 같은 기간 목록 줄 중 우리 요청 이후 것(시계 차 여유)
+RG_MATCH_WINDOW = timedelta(seconds=15)   # 로켓그로스: 목록에 기간이 없어 '요청시각'으로 짝 — 요청 간격(≥30초)보다 좁게
 _FINISHED = ("FINISHED", "완료", "다운로드가능")
 
 
@@ -158,21 +159,22 @@ def _match_one(j: Job, rows: list[DownloadRow]) -> tuple[DownloadRow | None, str
     if j.channel == "윙":
         want = (date.fromisoformat(j.period_start), date.fromisoformat(j.period_end))
         cands = [r for r in rows if r.channel == "윙" and (r.period_start, r.period_end) == want
-                 and r.requested_at >= req - RG_MATCH_WINDOW]
+                 and r.requested_at >= req - WING_REQ_SLACK]
     else:
         cands = [r for r in rows if r.channel != "윙" and r.report == j.report
                  and req - RG_MATCH_WINDOW <= r.requested_at <= req + RG_MATCH_WINDOW]
     if not cands:
         return None, "목록에 없음"
     if j.channel != "윙" and len(cands) > 1:
-        return None, f"같은 리포트 요청이 {len(cands)}건이라 구분 불가 — 건너뜀"
+        return None, f"요청시각 ±{RG_MATCH_WINDOW.seconds}초 안에 같은 리포트가 {len(cands)}건이라 구분 불가 — 건너뜀"
     best = max(cands, key=lambda r: r.requested_at)                   # 같은 기간 여러 번 요청했으면 가장 최근
     return (best, "") if best.status.strip().upper() in _FINISHED else (None, f"아직 {best.status}")
 
 
 def match_downloads(rows: list[DownloadRow], jobs: list[Job]) -> tuple[list[tuple[Job, DownloadRow]], list[str]]:
-    """요청됨 작업 ↔ 다운로드 목록 완료 줄. 반환 (받을 쌍, 사유 로그). 로켓그로스는 목록에 기간이 없어 같은 리포트를
-    요청시각 근처에 1건만 요청한 경우에만 짝을 짓는다(받은 뒤 파일 안 정산주기로 한 번 더 확인)."""
+    """요청됨 작업 ↔ 다운로드 목록 완료 줄. 반환 (받을 쌍, 사유 로그). 로켓그로스는 목록에 기간이 없어 **우리가 기록한
+    요청시각 ±15초** 안의 같은 리포트 1건과만 짝(요청 간격 30~90초라 여러 주를 연달아 요청해도 겹치지 않음). 받은 뒤
+    파일 안 정산주기로 한 번 더 확인(settlement_files.parse_rg_fee)."""
     out, notes = [], []
     for j in jobs:
         if j.status != ST_REQUESTED:

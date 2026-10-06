@@ -457,15 +457,25 @@ def p8_settle_jobs():
     rows = [SJ.DownloadRow("윙", t_b, "WAIT", period_start=D("2026-08-24"), period_end=D("2026-08-30")),
             SJ.DownloadRow("윙", t_b + timedelta(minutes=1), "FINISHED", period_start=D("2026-08-24"),
                            period_end=D("2026-08-30")),
-            SJ.DownloadRow("로켓그로스", t_rg + timedelta(minutes=2), "완료", report="판매수수료")]
+            SJ.DownloadRow("로켓그로스", t_rg + timedelta(seconds=4), "완료", report="판매수수료")]
     pairs, notes = SJ.match_downloads(rows, [wing_b, rg_fee])
     assert [(j.account, j.report, r.status) for j, r in pairs] == [("B", "주문상세", "FINISHED"),
                                                                    ("A", "판매수수료", "완료")], pairs
-    rows.append(SJ.DownloadRow("로켓그로스", t_rg + timedelta(minutes=3), "완료", report="판매수수료"))
+    rows.append(SJ.DownloadRow("로켓그로스", t_rg + timedelta(seconds=9), "완료", report="판매수수료"))
     pairs, notes = SJ.match_downloads(rows, [rg_fee])
     assert pairs == [] and "구분 불가" in notes[0]                                    # 애매하면 받지 않음
     pairs, notes = SJ.match_downloads([rows[0]], [wing_b])
     assert pairs == [] and "아직 WAIT" in notes[0]
+    # 실제 운영 모양: 로켓그로스 판매수수료를 여러 주 40초 간격으로 요청 → 각자 자기 목록 줄과 짝(겹치지 않음)
+    t0 = datetime(2026, 10, 6, 20, 0, 0)
+    w1 = SJ.Job("A", "로켓그로스", "주정산", "판매수수료", "2026-08-03", "2026-08-09", "2026-10-01",
+                status=SJ.ST_REQUESTED, requested_at=t0.isoformat())
+    w2 = SJ.Job("A", "로켓그로스", "주정산", "판매수수료", "2026-08-10", "2026-08-16", "2026-10-01",
+                status=SJ.ST_REQUESTED, requested_at=(t0 + timedelta(seconds=40)).isoformat())
+    lst = [SJ.DownloadRow("로켓그로스", t0 + timedelta(seconds=2), "완료", report="판매수수료", handle=1),
+           SJ.DownloadRow("로켓그로스", t0 + timedelta(seconds=43), "완료", report="판매수수료", handle=0)]
+    pairs, notes = SJ.match_downloads(lst, [w1, w2])
+    assert [(j.period_start, r.handle) for j, r in pairs] == [("2026-08-03", 1), ("2026-08-10", 0)], (pairs, notes)
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "기록.json"
         SJ.save_jobs(p, jobs)
