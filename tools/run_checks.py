@@ -37,6 +37,7 @@ CHECKS = [
     ("계약 원장(버전·as_of·유효/만료/해지·가림)", "tools/verify_contract_offline.py", True),
     ("채권자 원장(잔액 replay·가림·열람 로그)", "tools/verify_creditor_offline.py", True),
     ("문의/CS 원장(상태 replay·가림·통계)", "tools/verify_cs_offline.py", True),
+    ("소싱 후보(발굴·검색량·경쟁·점수 랭킹)", "tools/verify_sourcing_offline.py", True),
     ("정산 계산(지급일·금액·파싱 골든)", "tools/verify_settlement_offline.py", True),
     ("오프라인 실증(워크북·매칭·키워드선정)", "tools/verify_offline.py", False),
 ]
