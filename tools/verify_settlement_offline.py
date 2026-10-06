@@ -421,15 +421,30 @@ def p8_settle_jobs():
     pick = SJ.plan_requests(ev, jobs, today=D("2026-10-06"), now=now, per_account_cap=3)
     keys = sorted((j.account, j.channel, j.kind, j.report) for j in jobs)
     assert keys == [("A", "로켓그로스", "주정산", "보관비"), ("A", "로켓그로스", "주정산", "판매수수료"),
-                    ("A", "윙", "주정산", "주문상세"), ("A", "윙", "최종액", "주문상세"),
-                    ("B", "윙", "주정산", "주문상세")], keys                       # 70/30 같은 기간 1번·미래 제외
-    assert sum(j.account == "A" for j in pick) == 3 and sum(j.account == "B" for j in pick) == 1   # 상한 3
+                    ("A", "윙", "최종액", "주문상세"),
+                    ("B", "윙", "주정산", "주문상세")], keys                       # 70/30 1번·미래 제외·A 윙 주정산=월별로 대체
+    assert sum(j.account == "A" for j in pick) == 3 and sum(j.account == "B" for j in pick) == 1
     assert pick[0].settle_date == "2026-09-07"                                     # 오래된 것부터
     for j in pick:
         SJ.mark_requested(j, now)
-    assert len(SJ.plan_requests(ev, jobs, today=D("2026-10-07"), now=datetime(2026, 10, 7, 19), per_account_cap=3)) == 1
+    assert SJ.plan_requests(ev, jobs, today=D("2026-10-07"), now=datetime(2026, 10, 7, 19), per_account_cap=3) == []
     later = SJ.plan_requests(ev, jobs, today=D("2026-10-10"), now=datetime(2026, 10, 10, 19), per_account_cap=9)
-    assert len(later) == 5                                                         # 3일 지나도 미완료 → 재요청 대상
+    assert len(later) == 4                                                         # 3일 지나도 미완료 → 재요청 대상
+    capped = SJ.plan_requests(ev, [], today=D("2026-10-06"), now=now, per_account_cap=2)
+    assert sum(j.account == "A" for j in capped) == 2                               # 계정당 하루 상한
+    # 월별 파일이 나오기 전엔 주정산을 계획 → 나온 뒤엔 아직 요청 안 한 주정산은 '생략(월별로 대체)'
+    evc = [SJ.SettleEvent("C", "윙", "주정산", D("2026-09-18"), D("2026-08-24"), D("2026-08-30")),
+           SJ.SettleEvent("C", "윙", "주정산", D("2026-09-29"), D("2026-08-31"), D("2026-08-31")),   # 월 경계 분할 행
+           SJ.SettleEvent("C", "윙", "최종액", D("2026-10-01"), D("2026-08-03"), D("2026-08-30"))]
+    jc: list = []
+    early = SJ.plan_requests(evc, jc, today=D("2026-09-20"), now=datetime(2026, 9, 20, 19), per_account_cap=5)
+    assert [(j.kind, j.period_start) for j in early] == [("주정산", "2026-08-24")]         # 최종액은 아직 미도래
+    after = SJ.plan_requests(evc, jc, today=D("2026-10-06"), now=now, per_account_cap=5)
+    assert jc[0].status == SJ.ST_SKIPPED and "월별" in jc[0].note
+    assert sorted((j.kind, j.period_start) for j in after) == [("주정산", "2026-08-31"), ("최종액", "2026-08-03")]
+    done = SJ.Job("C", "윙", "주정산", "주문상세", "2026-08-24", "2026-08-30", "2026-09-18", status=SJ.ST_DONE)
+    SJ.plan_requests(evc, [done], today=D("2026-10-06"), now=now, per_account_cap=5)
+    assert done.status == SJ.ST_DONE                                               # 이미 받은 건 그대로
     j0 = next(j for j in jobs if j.kind == "최종액")
     j0.attempts = SJ.MAX_ATTEMPTS
     SJ.plan_requests(ev, jobs, today=D("2026-10-10"), now=datetime(2026, 10, 10, 19), per_account_cap=9)
@@ -455,7 +470,7 @@ def p8_settle_jobs():
         p = Path(tmp) / "기록.json"
         SJ.save_jobs(p, jobs)
         assert [j.key for j in SJ.load_jobs(p)] == [j.key for j in jobs] and not (Path(tmp) / "기록.json.tmp").exists()
-    ok("70/30 한 번·보관비만 추가·미래 제외·상한·오래된 순·만료 재요청·3회 실패·윙 기간/로켓그로스 시각 대조·애매=보류·기록 왕복")
+    ok("70/30 한 번·보관비만 추가·미래 제외·상한·오래된 순·만료 재요청·3회 실패·월별 나온 달 주정산 생략·윙 기간/RG 시각 대조·애매=보류·기록 왕복")
 
 
 def p9_settle_stats():
@@ -480,6 +495,8 @@ def p9_settle_stats():
     assert any("두 번" in x for x in res.warnings) and any("날짜 없는" in x for x in res.warnings)
     assert not any("겹친 같은 줄" in x for x in res.warnings)                        # 주정산 있는 주는 최종액서 제외
     lines = {(f.kind, f.channel, label): amt for f, label, amt in ST.payout_lines([w, wfinal, g])}
+    assert lines[("최종액", "윙", "주정산 70%(정산예정 2026-08-31·월별 파일에서 계산)")] == 7930   # 주정산 없는 주만
+    assert not any("2026-09-18·월별" in k[2] for k in lines)                           # 주정산 있는 주는 중복 계산 안 함
     assert lines[("주정산", "윙", "주정산 70%")] == 93306                               # 133,294×0.7
     assert lines[("최종액", "윙", "최종액 30%")] == 144622 - (93306 + 7930)            # 주별(09-18·08-31) 70% 뺀 나머지
     assert lines[("주정산", "로켓그로스", "주정산 70%")] == 0 and ("주정산", "로켓그로스", "2차 30%") in lines
@@ -492,7 +509,7 @@ def p9_settle_stats():
         wb = openpyxl.load_workbook(out)
         assert wb.sheetnames == ["상품별 월별", "계정별 월별", "계약자 정산", "지급액 검산", "경고"]
         assert [c.value for c in wb["계약자 정산"][2]] == ["A", 144622, 200000, 55378]
-        assert wb["지급액 검산"].max_row == 1 + 4                                       # 윙 2 + 로켓그로스 70%·30%
+        assert wb["지급액 검산"].max_row == 1 + 5                 # 윙 주정산·최종액 30%·월별서 계산한 08-31 주 70% + RG 2
         out2 = ST.write_stats(Path(tmp) / "집계2.xlsx", res)
         assert [c.value for c in openpyxl.load_workbook(out2)["계약자 정산"][2]][2:] == [None, None]   # 미입력=빈칸
     ok("최종액=주정산 없는 주만·중복 파일 1회·배송비 묶음·월 귀속·지급액 검산(윙 최종액 30% 주별)·계약자 정산금액·엑셀 5시트")

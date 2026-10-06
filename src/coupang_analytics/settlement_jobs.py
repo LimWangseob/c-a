@@ -7,6 +7,9 @@
   키 = (계정, 채널, 리포트, 기간). 윙 최종액(30%)은 기간이 달라(주 묶음) 별도 키.
 - **로켓그로스 비용 리포트는 금액이 있는 것만**(판매수수료는 늘): 상세보기에서 0원인 항목은 요청하지 않음.
 - **계정당 하루 요청 상한**·오래된 것부터·대기 너무 길면 재요청(최대 횟수 넘으면 실패 — 무한 재시도 금지).
+- **윙 월별(최종액) 파일이 나온 달은 그 기간의 주정산 파일을 요청하지 않음**(소유자 2026-10-06). 실측: 8월 주정산 4개를
+  이어 붙인 것 = 8월 월별 파일(74줄·25칸·순서까지 동일). 월별 파일만으로 주문 집계·주별 70% 계산이 된다(집계는
+  최종액 파일의 '주정산 없는 주' 채움). 과거분 요청 수 약 1/5. 월별이 아직 안 나온 달(정산일 미도래)만 주정산을 받는다.
 """
 from __future__ import annotations
 
@@ -21,6 +24,7 @@ ST_PLANNED = "요청예정"
 ST_REQUESTED = "요청됨"
 ST_DONE = "받음"
 ST_FAILED = "실패"
+ST_SKIPPED = "생략(월별로 대체)"
 RG_ALWAYS = ("판매수수료",)
 REQUEST_EXPIRE_DAYS = 3          # 요청 후 이만큼 지나도 완료 안 되면 재요청
 MAX_ATTEMPTS = 3
@@ -90,9 +94,12 @@ def plan_requests(events, jobs: list[Job], *, today: date, now: datetime, per_ac
     if per_account_cap < 1:
         raise ValueError("계정당 하루 요청 상한은 1 이상")
     known = {j.key: j for j in jobs}
+    finals = _wing_finals(events, today)
     for ev in sorted(events, key=lambda e: (e.settle_date, e.account)):
         if ev.settle_date > today:
             continue                                   # 아직 정산 전 — 파일 없음
+        if _covered_by_final(ev.account, ev.channel, ev.kind, ev.period_start, ev.period_end, finals):
+            continue                                   # 월별 파일로 대체
         for rep in reports_for(ev):
             j = Job(ev.account, ev.channel, ev.kind, rep, ev.period_start.isoformat(), ev.period_end.isoformat(),
                     ev.settle_date.isoformat())
@@ -102,6 +109,11 @@ def plan_requests(events, jobs: list[Job], *, today: date, now: datetime, per_ac
     picked: list[Job] = []
     used: dict[str, int] = {}
     for j in sorted(jobs, key=lambda j: (j.settle_date, j.account, j.channel, j.report)):
+        if j.status == ST_PLANNED and _covered_by_final(
+                j.account, j.channel, j.kind, date.fromisoformat(j.period_start), date.fromisoformat(j.period_end),
+                finals):
+            j.status, j.note = ST_SKIPPED, "그 달 윙 월별(최종액) 파일로 대체 — 요청 안 함"
+            continue
         if not _due(j, now):
             continue
         if j.attempts >= MAX_ATTEMPTS:
@@ -112,6 +124,18 @@ def plan_requests(events, jobs: list[Job], *, today: date, now: datetime, per_ac
         used[j.account] = used.get(j.account, 0) + 1
         picked.append(j)
     return picked
+
+
+def _wing_finals(events, today: date) -> list[tuple]:
+    """받을 수 있는(정산일이 지난) 윙 최종액 일정의 (계정, 기간 시작, 기간 끝)."""
+    return [(e.account, e.period_start, e.period_end) for e in events
+            if e.channel == "윙" and e.kind == "최종액" and e.settle_date <= today]
+
+
+def _covered_by_final(account: str, channel: str, kind: str, ps: date, pe: date, finals: list) -> bool:
+    """윙 주정산 기간이 같은 계정의 받을 수 있는 월별(최종액) 기간 안에 완전히 들어가면 True."""
+    return channel == "윙" and kind != "최종액" and any(
+        a == account and fs <= ps and pe <= fe for a, fs, fe in finals)
 
 
 def mark_requested(j: Job, now: datetime) -> None:
