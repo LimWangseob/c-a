@@ -5,10 +5,12 @@
   python tools/settlement_download.py probe    [--accounts ID]        # 읽기만 확인(최근 30일 일정·목록, 요청 안 함)
   python tools/settlement_download.py request  [--from 2026-01-01] [--to 2026-01-31] [--cap 5] [--dry-run] [--accounts ID,ID]
   python tools/settlement_download.py download [--accounts ID,ID]       # 다음날: 완료분 받기
+  python tools/settlement_download.py run      [--from …] [--to …] [--accounts …]   # 요청+받기 한 세션(전체 확대용)
   python tools/settlement_download.py stats                             # 받은 파일 집계 엑셀
 
 규칙(차단 위험 완화·소유자 2026-10-06): 정산현황 '정산확정' 줄만 · 윙은 월별(최종액) 파일이 나온 달이면 주정산 생략 ·
-로켓그로스는 같은 매출 주 1회 · 계정당 하루 요청 상한(--cap) · 요청 사이 30~90초 · **화면 이동·호출마다 차단 검사 →
+로켓그로스는 같은 매출 주 1회·비용 리포트는 그 주 금액이 있는 종류만 · 계정당 실행 상한(--cap) · 요청 사이 45~75초
+(앱 반자동 순위 간격) · 쿠팡이 대기시간 응답(remainingTime)하면 그 계정 요청 중단 · **화면 이동·호출마다 차단 검사 →
 감지 시 그 계정 즉시 중단** · 연속 2계정 실패/차단이면 전체 중단. 호출 방식=화면 뒤 주소 직접(settlement_wing_api —
 화면 기간 입력이 안 먹어 엉뚱한 줄 요청 위험 제거·요청 수는 화면과 같음). 요청 후 약 1분이면 완료(실측)라 같은 날
 download 도 됨. 같은 PC 동시 실행: 그 계정 프로필 Chrome 이 떠 있으면 건너뜀·
@@ -18,6 +20,7 @@ reap_orphan_chrome 미호출. 기록: output/정산/로그/(실행·처리기록
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import random
 import subprocess
@@ -43,7 +46,9 @@ from coupang_analytics import settlement_wing_api as API  # noqa: E402
 BASE = Path("output") / "정산"
 JOBS = BASE / "_요청기록.json"
 FILES = BASE / "파일"
-GAP_SEC = (30, 90)                                      # 요청 사이
+COSTS = FILES / "비용"                                   # 로켓그로스 비용 리포트(집계 파일 목록과 분리)
+AMOUNTS = BASE / "쿠팡지급내역"                           # 정산현황 금액(계정별 JSON) — 집계 대조용
+GAP_SEC = (45, 75)                                      # 요청 사이 = 앱 반자동 순위 간격과 같게(소유자 2026-10-06)
 LOOKUP_GAP_SEC = (3, 8)                                 # 조회·받기 사이(화면에서 넘겨 보는 정도)
 LOG: RL.RunLog = None  # type: ignore[assignment]   # main() 에서 실행 시작 시 생성
 CHANNELS: tuple = ()                                    # --channel 로 제한(비우면 윙·로켓그로스 둘 다)
@@ -179,11 +184,37 @@ def read_events(b, name: str, start: date, end: date) -> list:
         for k, (ws, we) in enumerate(API.month_windows(start, end)):
             if k:
                 time.sleep(random.uniform(*LOOKUP_GAP_SEC))
-            evs = parse(api(b, name, "POST", path, body(ws, we)), name)
-            evs = [e for e in evs if ws <= e.settle_date <= we]          # 로켓그로스 끝 경계 하루 여유분 제외
-            LOG.record(name, "조회", RL.OK, f"정산 일정 {len(evs)}건", channel=ch, period=f"{ws}~{we}")
+            resp = api(b, name, "POST", path, body(ws, we))
+            evs = [e for e in parse(resp, name) if ws <= e.settle_date <= we]   # 로켓그로스 끝 경계 하루 여유분 제외
+            _save_amounts(name, ch, resp)
+            costs = sum(len(e.reports) for e in evs)
+            LOG.record(name, "조회", RL.OK, f"정산 일정 {len(evs)}건" + (f"·비용 리포트 {costs}건" if costs else ""),
+                       channel=ch, period=f"{ws}~{we}")
+            for n in API.unmapped_costs(resp):
+                LOG.record(name, "조회", RL.WAIT, f"받을 리포트 미확인 비용 — {n}", channel=ch)
             found += evs
     return found
+
+
+def _save_amounts(name: str, ch: str, resp: dict) -> None:
+    """쿠팡 정산현황 금액을 계정·채널별 JSON 에 (정산일·기간·비율) 키로 덮어 모아 둔다(원자적 저장)."""
+    path = AMOUNTS / f"{SF._token(name, '계정명')}_{ch}.json"
+    old = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+    merged = {(r["정산일"], r["기간 시작"], r["기간 끝"], r["지급비율"]): r for r in old}
+    merged.update({(r["정산일"], r["기간 시작"], r["기간 끝"], r["지급비율"]): r for r in API.amount_rows(resp, ch)})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(sorted(merged.values(), key=lambda r: (r["정산일"], r["기간 시작"])), ensure_ascii=False,
+                              indent=1), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def past_until(args) -> bool:
+    """--until HH:MM 이 지났으면 True(오늘 그 시각). 앱 18:00 무인 실행과 같은 계정 프로필이 겹치지 않게."""
+    if not getattr(args, "until", ""):
+        return False
+    hh, mm = (int(x) for x in args.until.split(":"))
+    return datetime.now() >= datetime.now().replace(hour=hh, minute=mm, second=0, microsecond=0)
 
 
 def _job_fields(j) -> dict:
@@ -215,8 +246,15 @@ def cmd_request(a, b, args, jobs: list) -> None:
             continue
         if k:
             time.sleep(random.uniform(*GAP_SEC))
+        if past_until(args):
+            LOG.record(name, "요청", RL.WAIT, f"멈춤 시각 {args.until} 지남 — 남은 요청은 다음 실행에서 이어감",
+                       **_job_fields(j))
+            break
         try:
             rid = _request_one(b, j, name)
+        except API.RequestThrottled as exc:
+            LOG.record(name, "요청", RL.WAIT, f"{exc} — 이 계정 요청은 다음 실행에서 이어감", **_job_fields(j))
+            break
         except API.SiteChangedError as exc:
             LOG.error(name, "요청", exc, **_job_fields(j))
             raise
@@ -246,12 +284,27 @@ def _fetch_one(b, j, row, name: str) -> None:
     raw = BASE / "_받는중" / fname
     raw.parent.mkdir(parents=True, exist_ok=True)
     raw.write_bytes(data)
+    if j.channel == "로켓그로스" and j.report != "판매수수료":
+        _keep_cost(raw, j, name, fname)
+        return
     SF.scrub_pii(raw, FILES / fname)                       # 구매자명 지운 사본만 보관
     raw.unlink()
     f = SF.load_settle_file(FILES / fname)                 # 내용 확인(로켓그로스 기간 대조 포함)
     j.status, j.file = SJ.ST_DONE, fname
     LOG.record(name, "받기", RL.OK, f"{fname} · 줄 {len(f.rows)} · 정산합 {f.settle_total:,} · 검산경고 "
                f"{len(f.warnings)}", **_job_fields(j))
+
+
+def _keep_cost(raw: Path, j, name: str, fname: str) -> None:
+    """비용 리포트: 개인정보 칸 없음 확인 → 시트별 최종비용 읽기(기간 대조) → 비용 폴더로 옮김."""
+    sheets = SF.read_sheets(raw)
+    SF.assert_no_pii(sheets)
+    totals = SF.rg_cost_totals(sheets, date.fromisoformat(j.period_end))
+    COSTS.mkdir(parents=True, exist_ok=True)
+    os.replace(raw, COSTS / fname)
+    j.status, j.file = SJ.ST_DONE, f"비용/{fname}"
+    LOG.record(name, "받기", RL.OK, f"{fname} · " + " · ".join(f"{k} {v:,}" for k, v in totals.items()),
+               **_job_fields(j))
 
 
 def _list_rows(b, ch: str, want: list, name: str) -> list:
@@ -285,6 +338,14 @@ def cmd_download(a, b, args, jobs: list) -> None:
             SJ.save_jobs(JOBS, jobs)
 
 
+def cmd_run(a, b, args, jobs: list) -> None:
+    """한 세션에서 요청 → (생성 약 1분) → 받기. 요청이 길면 그 사이 앞선 파일은 이미 완료돼 있음."""
+    cmd_request(a, b, args, jobs)
+    if not args.dry_run:
+        time.sleep(90)
+        cmd_download(a, b, args, jobs)
+
+
 def cmd_probe(a, b, args, jobs: list) -> None:
     """읽기만 확인 — 최근 30일 정산 일정·다운로드 목록 모양. 요청·받기는 하지 않음."""
     name = name_of(a)
@@ -302,9 +363,20 @@ def cmd_probe(a, b, args, jobs: list) -> None:
 def cmd_stats() -> None:
     from coupang_analytics import settlement_stats as ST
     files = [SF.load_settle_file(p) for p in sorted(FILES.glob("*.xlsx"))]
+    amounts = []
+    for p in sorted(AMOUNTS.glob("*.json")):
+        acct, ch = p.stem.rsplit("_", 1)
+        amounts += [{"계정": acct, "채널": ch, **r} for r in json.loads(p.read_text(encoding="utf-8"))]
+    costs = []
+    for p in sorted(COSTS.glob("*.xlsx")):
+        m = SF.parse_file_name(p.name)
+        for sheet, v in SF.rg_cost_totals(SF.read_sheets(p), m["period_end"]).items():
+            costs.append((m["account"], m["settle_date"], m["period_start"], m["period_end"], m["report"], sheet, v))
     res = ST.aggregate(files)
-    out = ST.write_stats(BASE / f"정산집계_{datetime.now():%y%m%d_%H%M%S}.xlsx", res, files=files)
-    log(f"집계 {len(files)}개 파일 → {out} (경고 {len(res.warnings)}건)")
+    out = ST.write_stats(BASE / f"정산집계_{datetime.now():%y%m%d_%H%M%S}.xlsx", res, files=files, amounts=amounts,
+                         costs=costs)
+    log(f"집계 정산 파일 {len(files)}개·비용 리포트 {len(costs)}시트·쿠팡 지급 내역 {len(amounts)}줄 → {out} "
+        f"(경고 {len(res.warnings)}건)")
 
 
 def _run_accounts(accts, run, args) -> int:
@@ -312,6 +384,9 @@ def _run_accounts(accts, run, args) -> int:
     bad = 0
     for a in accts:
         name = name_of(a)
+        if past_until(args):
+            LOG.record("(전체)", "중단", RL.WAIT, f"멈춤 시각 {args.until} 지남 — 남은 계정은 다음 실행에서 이어감")
+            return 0
         log(f"== {name} {args.command} ==")
         try:
             with session(a, args.hidden) as b:
@@ -334,14 +409,15 @@ def _run_accounts(accts, run, args) -> int:
 def main() -> int:
     global LOG
     ap = argparse.ArgumentParser(description="쿠팡 정산 파일 배치 다운로드")
-    ap.add_argument("command", choices=("probe", "request", "download", "stats"))
+    ap.add_argument("command", choices=("probe", "request", "download", "run", "stats"))
     ap.add_argument("--accounts", default="", help="계정ID 쉼표 구분(비우면 관리대장 전체)")
     ap.add_argument("--from", dest="start", type=date.fromisoformat, default=date(2026, 1, 1))
     ap.add_argument("--to", dest="end", type=date.fromisoformat, default=date.today())
-    ap.add_argument("--cap", type=int, default=5, help="계정당 하루 요청 상한")
+    ap.add_argument("--cap", type=int, default=500, help="계정당 한 번 실행 요청 상한")
     ap.add_argument("--dry-run", action="store_true", help="요청 대상만 보여 주고 누르지 않음")
     ap.add_argument("--hidden", action="store_true", help="창 숨김(2차인증 필요하면 실패)")
     ap.add_argument("--channel", choices=("윙", "로켓그로스"), default="", help="한 채널만")
+    ap.add_argument("--until", default="", help="HH:MM 이후엔 새 요청·새 계정 시작 안 함(앱 18:00 무인 실행 전 멈춤)")
     args = ap.parse_args()
     global CHANNELS
     CHANNELS = (args.channel,) if args.channel else ()
@@ -354,7 +430,7 @@ def main() -> int:
     accts = load_accounts({x.strip() for x in args.accounts.split(",") if x.strip()})
     if args.command == "probe":
         accts = accts[:1]
-    run = {"probe": cmd_probe, "request": cmd_request, "download": cmd_download}[args.command]
+    run = {"probe": cmd_probe, "request": cmd_request, "download": cmd_download, "run": cmd_run}[args.command]
     rc = _run_accounts(accts, run, args)
     LOG.summary()
     log(f"기록: {LOG.csv} · 오류 추적: {LOG.errors if LOG.errors.exists() else '없음'}")

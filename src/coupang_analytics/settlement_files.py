@@ -94,24 +94,23 @@ def _header(rows: list, must: tuple, where: str) -> tuple[int, dict]:
 
 
 def _values(raw: list, cols: dict, idx: dict, r: int, where: str) -> dict:
-    out: dict = {}
     oid = cols.get("option_id")
     ship = bool(oid and idx[oid] < len(raw) and _SHIP_MARK.fullmatch(str(raw[idx[oid]] or "").strip()))
-    for f, h in cols.items():
-        v = raw[idx[h]] if idx[h] < len(raw) else None
-        if f in _MONEY and ship and not str(v or "").strip():
-            out[f] = 0                              # 배송비 줄의 빈 금액칸 = 0(실측 2025-11~2026-01 파일: 쿠폰·마이샵 빈칸)
-        elif f in _MONEY:
-            out[f] = parse_int(v, f"{where} {r}행 '{h}'")
-        elif f == "option_id" and _SHIP_MARK.fullmatch(str(v or "").strip()):
-            out[f] = str(v).strip()                 # 윙 배송비 줄 표시값(<기본배송료>·<추가배송료>) — ID 아님
-        elif f in ("option_id", "product_id", "order_id"):
-            out[f] = parse_id(v, f"{where} {r}행 '{h}'") if str(v or "").strip() else ""
-        elif f in ("recognized", "cycle_end", "due"):
-            out[f] = parse_date(v, f"{where} {r}행 '{h}'") if str(v or "").strip() else None
-        else:
-            out[f] = str(v or "").strip()
-    return out
+    return {f: _cell(f, raw[idx[h]] if idx[h] < len(raw) else None, ship, f"{where} {r}행 '{h}'")
+            for f, h in cols.items()}
+
+
+def _cell(f: str, v, ship: bool, where: str):
+    blank = not str(v or "").strip()
+    if f in _MONEY:
+        return 0 if ship and blank else parse_int(v, where)   # 배송비 줄의 빈 금액칸 = 0(실측 2025-11~2026-01 파일)
+    if f == "option_id" and _SHIP_MARK.fullmatch(str(v or "").strip()):
+        return str(v).strip()                       # 윙 배송비 줄 표시값(<기본배송료>·<추가배송료>) — ID 아님
+    if f in ("option_id", "product_id", "order_id"):
+        return "" if blank else parse_id(v, where)
+    if f in ("recognized", "cycle_end", "due"):
+        return None if blank else parse_date(v, where)
+    return str(v or "").strip()
 
 
 # ── 윙 정산현황 주문 상세 ─────────────────────────────────────────
@@ -195,6 +194,58 @@ def scrub_pii(src, dst, columns=PII_COLUMNS) -> int:
             wb.save(Path(dst))
             return len(cols)
     raise SettlementParseError(f"{Path(src).name}: 머리글을 찾지 못해 개인정보 제거 불가 — 저장 중단")
+
+
+# ── 로켓그로스 비용 리포트(보관비·입출고/배송비 등) ────────────────
+def read_sheets(path) -> dict:
+    """모든 시트 → {시트명: 격자}. 비용 리포트는 시트가 여럿(입출고비·배송비 등)."""
+    import openpyxl
+    wb = openpyxl.load_workbook(Path(path), read_only=True, data_only=True)
+    try:
+        return {ws.title: [list(r) for r in ws.iter_rows(values_only=True)] for ws in wb.worksheets}
+    finally:
+        wb.close()
+
+
+def assert_no_pii(sheets: dict, columns=PII_COLUMNS) -> None:
+    """상단 10행 어디에도 개인정보 머리글이 없어야 함 — 있으면 저장 중단(비용 리포트는 지우는 규칙이 없음)."""
+    targets = {_norm(c) for c in columns}
+    for name, rows in sheets.items():
+        for row in rows[:10]:
+            hit = targets & {_norm(c) for c in row}
+            if hit:
+                raise SettlementParseError(f"비용 리포트 '{name}' 시트에 개인정보 칸 {sorted(hit)} — 저장 중단")
+
+
+def rg_cost_totals(sheets: dict, period_end: date) -> dict:
+    """비용 리포트 → {시트명: 최종비용(VAT 포함)}. 실측 모양 2가지(2026-10-06):
+    ① 4행 요약 [정산주기(종료일), 합계, 세액, 최종비용] — 보관비·입출고비·배송비·바코드·반품회수·재입고
+    ② 건별 목록(머리글에 '보상 금액') — 재고 손실 보상: 그 열 합.
+    정산주기(종료일)가 요청 기간 끝과 다르면 오류(엉뚱한 주 파일)."""
+    out = {}
+    for name, rows in sheets.items():
+        head = next((i for i, r in enumerate(rows[:5]) if "보상금액" in {_norm(c) for c in r}), None)
+        out[name] = (_summary_cost(name, rows, period_end) if head is None
+                     else _listed_cost(name, rows, head, period_end))
+    return out
+
+
+def _listed_cost(name: str, rows: list, head: int, period_end: date) -> int:
+    cells = [_norm(c) for c in rows[head]]
+    ci, ce = cells.index("보상금액"), cells.index("정산주기(종료일)")
+    data = [r for r in rows[head + 1:] if ci < len(r) and str(r[ci] or "").strip()]
+    if any(parse_date(r[ce], f"{name} 정산주기") != period_end for r in data):
+        raise SettlementParseError(f"비용 리포트 '{name}': 정산주기(종료일)가 {period_end} 아닌 줄 있음")
+    return sum(parse_int(r[ci], f"{name} 보상 금액") for r in data)
+
+
+def _summary_cost(name: str, rows: list, period_end: date) -> int:
+    if len(rows) < 4 or _norm(rows[2][0] if rows[2] else "") != "정산주기(종료일)":
+        raise SettlementParseError(f"비용 리포트 '{name}' 시트 모양이 다름(3행 '정산주기(종료일)' 요약 머리글 없음)")
+    end = parse_date(rows[3][0], f"{name} 요약 정산주기")
+    if end != period_end:
+        raise SettlementParseError(f"비용 리포트 '{name}' 정산주기(종료일) {end} ≠ 요청 기간 끝 {period_end}")
+    return parse_int(rows[3][3], f"{name} 최종비용")
 
 
 # ── 파일 이름 규칙 ────────────────────────────────────────────────

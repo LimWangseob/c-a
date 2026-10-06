@@ -375,6 +375,19 @@ def p7_settle_files():
     assert SF.parse_rg_fee(cg, account="A", period_start=D("2026-08-03"), period_end=D("2026-08-09")).warnings == []
     cg[2][RG_HDR.index("정산대상액")] = 6205.0                                         # 매출금액 기준 값 = 어긋남 경고
     assert len(SF.parse_rg_fee(cg, account="A", period_start=D("2026-08-03"), period_end=D("2026-08-09")).warnings) == 1
+    end = D("2025-12-21")
+    summ = [[None] * 5, ["쿠팡풀필먼트서비스(CFS) 보관비 정산 내역"], ["정산주기(종료일)", "보관비 합계", "세액", "최종비용"],
+            ["2025-12-21", 182986.0, 18301.0, 201287.0], [], [], ["정산유형", "정산주기(종료일)", "옵션ID"]]
+    comp = [[None] * 3, ["발생일", "정산주기(종료일)", "주문ID", "옵션ID", "보상 금액"],
+            [None, None, None, None, None], ["2025-12-01", "2025-12-21", "1", "9", 4775.0],
+            ["2025-12-02", "2025-12-21", "2", "8", 1700.0]]
+    assert SF.rg_cost_totals({"보관비": summ, "재고 손실 보상": comp}, end) == {"보관비": 201287, "재고 손실 보상": 6475}
+    expect(SF.SettlementParseError, lambda: SF.rg_cost_totals({"보관비": summ}, D("2025-12-28")), "다른 주 요약")
+    comp_bad = [*comp, ["2025-12-03", "2025-12-28", "3", "7", 100.0]]
+    expect(SF.SettlementParseError, lambda: SF.rg_cost_totals({"재고 손실 보상": comp_bad}, end), "다른 주 보상 줄")
+    expect(SF.SettlementParseError, lambda: SF.rg_cost_totals({"x": [["a"], ["b"]]}, end), "모르는 모양")
+    SF.assert_no_pii({"보관비": summ})
+    expect(SF.SettlementParseError, lambda: SF.assert_no_pii({"x": [["주문ID", "구매자명"]]}), "개인정보 칸")
     ci = WING_HDR.index("판매자 할인쿠폰(A+B)")
     old = _wing_grid()
     for row in old[2:4]:
@@ -535,6 +548,14 @@ def p9_settle_stats():
         assert wb.sheetnames == ["상품별 월별", "계정별 월별", "계약자 정산", "지급액 검산", "경고"]
         assert [c.value for c in wb["계약자 정산"][2]] == ["A", 144622, 200000, 55378]
         assert wb["지급액 검산"].max_row == 1 + 5                 # 윙 주정산·최종액 30%·월별서 계산한 08-31 주 70% + RG 2
+        out3 = ST.write_stats(Path(tmp) / "집계3.xlsx", res, amounts=[
+            {"계정": "A", "채널": "로켓그로스", "정산일": "2026-01-06", "기간 시작": "2025-12-01", "기간 끝": "2025-12-07",
+             "지급비율": 70, "최종지급액": 3479206, "totalPayableAmount": 5658592}],
+            costs=[("A", D("2026-01-06"), D("2025-12-01"), D("2025-12-07"), "보관비", "보관비", 205791)])
+        wb3 = openpyxl.load_workbook(out3)
+        assert [c.value for c in wb3["쿠팡 지급 내역"][1]][-1] == "totalPayableAmount"
+        assert [c.value for c in wb3["쿠팡 지급 내역"][2]][6:] == [3479206, 5658592]
+        assert wb3["로켓그로스 비용"].cell(2, 7).value == 205791
         out2 = ST.write_stats(Path(tmp) / "집계2.xlsx", res)
         assert [c.value for c in openpyxl.load_workbook(out2)["계약자 정산"][2]][2:] == [None, None]   # 미입력=빈칸
     ok("최종액=주정산 없는 주만·중복 파일 1회·배송비 묶음·월 귀속·지급액 검산(윙 최종액 30% 주별)·계약자 정산금액·엑셀 5시트")
@@ -582,11 +603,33 @@ def p10_wing_api_parse():
                                          "searchDateRange": {"start": "2026-01-01", "end": "2026-01-04"}}
     expect(API.SiteChangedError, lambda: API.rg_request_body(SJ.Job("a", "로켓그로스", "주정산", "판매수수료", "x", "y", "z"),
                                                               1), "묶음 키 없음")
-    expect(API.SiteChangedError, lambda: API.rg_request_body(SJ.Job("a", "로켓그로스", "주정산", "보관비", "x", "y", "z",
+    expect(API.SiteChangedError, lambda: API.rg_request_body(SJ.Job("a", "로켓그로스", "주정산", "새 비용", "x", "y", "z",
                                                                      ref="k"), 1), "코드 미확인 리포트")
     assert API.wing_request_id({"success": True, "reason": "OK", "data": 134}) == "134"
     expect(API.SiteChangedError, lambda: API.wing_request_id({"success": False, "reason": "LIMIT", "data": None}), "거절")
     assert API.rg_request_id({"requestId": "abc", "duplicateRequest": False, "remainingTime": 0}) == "abc"
+    expect(API.RequestThrottled, lambda: API.rg_request_id({"requestId": "", "duplicateRequest": True,
+                                                            "remainingTime": 30}), "대기시간 응답")
+    # 비용 리포트: 그 주 금액 있는 종류만(입출고+배송 → 1종으로 합침)·0원 제외·미확인 비용은 알림
+    det = {"totalStorageFeeDeductionAmount": 201287, "totalFulfillmentFeeDeductionAmount": 843508,
+           "totalWarehousingFeeDeductionAmount": 867526, "totalBarcodeLabelingFeeDeductionAmount": 0,
+           "totalCfsInventoryCompensationAmount": 119770, "totalAdSalesDeductionAmount": 1003081,
+           "totalContainerUnloadingFeeDeductionAmount": 5000}
+    assert API.cost_reports(det) == ("보관비", "입출고/배송비", "재고 손실 보상")
+    r70 = {**rresp["settlementStatusReports"][0], "settlementRatio": 70, "settlementStatusReportDetail": det}
+    ev70 = API.rg_events({"settlementStatusReports": [r70]}, "계정A")[0]
+    assert ev70.reports == ("보관비", "입출고/배송비", "재고 손실 보상") and SJ.reports_for(ev70)[0] == "판매수수료"
+    assert API.unmapped_costs({"settlementStatusReports": [r70]}) == [
+        "V1-2026-07-27-2026-07-31: totalContainerUnloadingFeeDeductionAmount=5000"]
+    cj = SJ.Job("a", "로켓그로스", "주정산", "입출고/배송비", "x", "y", "z", ref="k")
+    assert API.rg_request_body(cj, 1)["sellerReportType"] == "WAREHOUSING_SHIPPING"
+    am = API.amount_rows({"paymentReports": [{**wresp["paymentReports"][1], "finalPaidAmount": 19664,
+                                              "bankAccountInfo": {"bank": "가림"}, "isAdditionalPayment": False,
+                                              "detail": {"paidAmount": 19664, "deductionDetail": [], "isActualPayment": True}}]}, "윙")
+    assert am == [{"정산일": "2026-01-23", "기간 시작": "2026-01-01", "기간 끝": "2026-01-04", "지급비율": 70,
+                   "최종지급액": 19664, "paidAmount": 19664}], am                       # 계좌·참거짓·목록 칸 제외
+    ar = API.amount_rows({"settlementStatusReports": [r70]}, "로켓그로스")[0]
+    assert ar["정산일"] == "2026-09-07" and ar["totalStorageFeeDeductionAmount"] == 201287
     wl = API.wing_list_rows([
         {"id": 1, "excelType": "MSF_PAYMENT_REVENUE_DETAIL", "status": "FINISHED", "startedAt": "2026-10-06 14:49:59",
          "downloadUrl": "https://x/dl?id=1", "jsonItems": '[{"key":"구매확정일", "value":"2026-09-01 - 2026-09-06", "view":true}]'},

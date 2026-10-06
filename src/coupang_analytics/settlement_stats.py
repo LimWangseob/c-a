@@ -9,7 +9,8 @@
 - 월 = 매출인식일 기준(윙=구매확정일, 로켓그로스=매출인식일). 날짜 없는 금액 줄(윙 배송비 등)은 그 파일 정산 기간
   끝의 달로 넣고 **건수를 경고로 남긴다**.
 - 상품 = 계정 + 등록상품ID(윙 '상품 ID'·로켓그로스 '등록상품 ID'). 배송비 줄은 '배송비' 묶음.
-- ⚠ 로켓그로스 부가 비용(밀크런·광고비·입출고/보관 등)은 아직 반영 전 → 열 이름에 '부가비용 차감 전'으로 명시.
+- ⚠ 로켓그로스 부가 비용(밀크런·광고비·입출고/보관 등)은 상품별 집계엔 아직 반영 전 → 열 이름에 '부가비용 차감 전'.
+  실제 지급액·차감 내역은 '쿠팡 지급 내역'(정산현황 금액 그대로) · 비용 리포트 합은 '로켓그로스 비용' 시트.
 """
 from __future__ import annotations
 
@@ -180,9 +181,12 @@ _P_HEAD = ["계정", "월(매출인식)", "등록상품ID", "상품명", "윙 �
 _A_HEAD = ["계정", "쿠팡 정산금액 합계(부가비용 차감 전)", "계약금액", "계약자 정산금액(계약금액−쿠팡 정산금액)"]
 
 
-def write_stats(path, res: StatsResult, contracts: dict | None = None, files: list | None = None) -> Path:
-    """집계 엑셀: '상품별 월별'·'계정별 월별'·'계약자 정산'·'지급액 검산'(files 주면)·'경고' 시트.
-    contracts={계정: 계약금액}(없는 계정은 빈칸)."""
+def write_stats(path, res: StatsResult, contracts: dict | None = None, files: list | None = None,
+                amounts: list | None = None, costs: list | None = None) -> Path:
+    """집계 엑셀: '상품별 월별'·'계정별 월별'·'계약자 정산'·'지급액 검산'(files 주면)·'쿠팡 지급 내역'(amounts)·
+    '로켓그로스 비용'(costs)·'경고' 시트. contracts={계정: 계약금액}(없는 계정은 빈칸).
+    amounts = [{'계정','채널','정산일','기간 시작','기간 끝','지급비율','최종지급액', 쿠팡 금액 칸…}],
+    costs = [(계정, 정산일, 기간 시작, 기간 끝, 리포트, 시트, 최종비용)]."""
     import openpyxl
     contracts = contracts or {}
     wb = openpyxl.Workbook()
@@ -203,6 +207,13 @@ def write_stats(path, res: StatsResult, contracts: dict | None = None, files: li
         cs.append([acct, settled, c if c is not None else "", contractor_amount(c, settled) if c is not None else ""])
     if files is not None:
         _payout_sheet(wb, files, res.warnings)
+    if amounts:
+        _table_sheet(wb, "쿠팡 지급 내역", amounts, _AMOUNT_FIRST)
+    if costs:
+        cs2 = wb.create_sheet("로켓그로스 비용")
+        cs2.append(["계정", "정산일", "기간 시작", "기간 끝", "리포트", "시트", "최종비용(VAT 포함)"])
+        for row in costs:
+            cs2.append(list(row))
     wn = wb.create_sheet("경고")
     wn.append(["경고"])
     for w in res.warnings:
@@ -219,3 +230,17 @@ def _payout_sheet(wb, files: list, warns: list) -> None:
     for f, label, amount in payout_lines(files, warns):
         ws.append([f.account, f.channel, f.kind, f.settle_date.isoformat() if f.settle_date else "",
                    f.period_start.isoformat(), f.period_end.isoformat(), f.settle_total, label, amount])
+
+
+_AMOUNT_FIRST = ["계정", "채널", "정산일", "기간 시작", "기간 끝", "지급비율", "최종지급액"]
+
+
+def _table_sheet(wb, title: str, rows: list, first: list) -> None:
+    """dict 줄 → 시트. 앞 열 고정 + 나머지 칸(쿠팡 응답 이름 그대로)은 처음 나온 순서로 — 칸을 버리지 않음."""
+    cols = list(first)
+    for r in rows:
+        cols += [k for k in r if k not in cols]
+    ws = wb.create_sheet(title)
+    ws.append(cols)
+    for r in rows:
+        ws.append([r.get(c, "") for c in cols])

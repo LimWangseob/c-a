@@ -32,7 +32,19 @@ RG_LIST = "/tenants/rfm/v2/settlements/download-list/api"
 RG_GET = "/tenants/rfm/v2/settlements/download/api/v2"
 WING_EXCEL = "MSF_PAYMENT_REVENUE_DETAIL"
 _WING_KIND = {"W": "주정산", "R": "최종액"}        # transactionCycleCode(실측: 주정산 70%=W·월별 최종액 30%=R)
-_RG_REPORT = {"판매수수료": "CATEGORY_TR"}          # sellerReportType(실측) — 다른 리포트는 확인 후 추가
+_RG_REPORT = {"판매수수료": "CATEGORY_TR", "입출고/배송비": "WAREHOUSING_SHIPPING", "보관비": "STORAGE_FEE",
+              "재고 손실 보상": "INVENTORY_COMPENSATION", "부가서비스비": "BARCODE_LABELING_FEE",
+              "반품 회수/재입고 비용": "CRETURN_PICKUP_RESTOCKING", "반출비": "VRETURN_HANDLING",
+              "반출 배송 서비스비": "VRETURN_SHIPPING", "리뷰 이벤트 비용": "PPIR"}   # sellerReportType(화면 코드 실측)
+# 정산현황 상세의 비용 차감 칸 → 비용 리포트. 위 6칸은 리포트 최종비용과 원 단위 일치 실측(2026-10-06·12-15 주),
+# 반출 2칸·재고손실보상은 이름 대응(금액 있을 때만 요청 → 틀려도 빈 파일 1건).
+_COST_FIELDS = {"totalWarehousingFeeDeductionAmount": "입출고/배송비", "totalFulfillmentFeeDeductionAmount": "입출고/배송비",
+                "totalStorageFeeDeductionAmount": "보관비", "totalBarcodeLabelingFeeDeductionAmount": "부가서비스비",
+                "totalCreturnGradingFeeDeductionAmount": "반품 회수/재입고 비용",
+                "totalCreturnReverseShippingFeeDeductionAmount": "반품 회수/재입고 비용",
+                "totalVreturnHandlingFeeDeductionAmount": "반출비", "totalVreturnShippingFeeDeductionAmount": "반출 배송 서비스비",
+                "totalCfsInventoryCompensationAmount": "재고 손실 보상"}
+_COST_UNMAPPED = ("totalContainerUnloadingFeeDeductionAmount", "totalPostPurchaseDeductionAmount")   # 대응 리포트 미확인
 _KST = timedelta(hours=9)
 
 
@@ -85,7 +97,42 @@ def rg_events(resp: dict, account: str) -> list[SettleEvent]:
         if cycle != "WEEKLY":
             raise SiteChangedError(f"로켓그로스 모르는 정산주기: {cycle!r} ({key})")
         kind = "최종액" if int(float(ratio)) == 30 else "주정산"
-        out.append(SettleEvent(account, "로켓그로스", kind, _kst_date(sd), _kst_date(ps), _kst_date(pe), ref=key))
+        out.append(SettleEvent(account, "로켓그로스", kind, _kst_date(sd), _kst_date(ps), _kst_date(pe),
+                               reports=cost_reports(r.get("settlementStatusReportDetail") or {}), ref=key))
+    return out
+
+
+def cost_reports(detail: dict) -> tuple:
+    """정산현황 상세 → 그 주에 금액이 있는 비용 리포트 이름(요청 수를 줄이려 0원 리포트는 받지 않음)."""
+    return tuple(sorted({rep for f, rep in _COST_FIELDS.items() if detail.get(f)}))
+
+
+def unmapped_costs(resp: dict) -> list[str]:
+    """금액은 있는데 받을 리포트를 아직 모르는 비용 칸(처리기록에 남겨 확인)."""
+    out = []
+    for r in resp.get("settlementStatusReports", []):
+        d = r.get("settlementStatusReportDetail") or {}
+        out += [f"{r.get('settlementGroupKey')}: {f}={d[f]}" for f in _COST_UNMAPPED if d.get(f)]
+    return out
+
+
+def amount_rows(resp: dict, channel: str) -> list[dict]:
+    """정산현황 응답 → 쿠팡 지급 내역(금액 칸만·계좌정보 등 제외) — 집계의 '쿠팡 지급 내역' 시트·대조용."""
+    out = []
+    if channel == "윙":
+        for r in resp.get("paymentReports", []):
+            d = r.get("detail") or {}
+            out.append({"정산일": r["payDate"], "기간 시작": r["recognitionFrom"], "기간 끝": r["recognitionTo"],
+                        "지급비율": r.get("ratio"), "최종지급액": r.get("finalPaidAmount"),
+                        **{k: v for k, v in d.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}})
+    else:
+        for r in resp.get("settlementStatusReports", []):
+            d = r.get("settlementStatusReportDetail") or {}
+            out.append({"정산일": _kst_date(r["settlementDate"]).isoformat(),
+                        "기간 시작": _kst_date(r["settlementPeriodStartDate"]).isoformat(),
+                        "기간 끝": _kst_date(r["settlementPeriodEndDate"]).isoformat(),
+                        "지급비율": r.get("settlementRatio"), "최종지급액": r.get("finalSettlementAmount"),
+                        **{k: v for k, v in d.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}})
     return out
 
 
@@ -122,8 +169,14 @@ def wing_request_id(resp: dict) -> str:
     return str(data)
 
 
+class RequestThrottled(Exception):
+    """쿠팡이 '잠시 후 다시'(remainingTime>0)라고 응답 — 그 계정 요청을 이번 실행에서 멈춤(단위 미확인이라 기다리지 않음)."""
+
+
 def rg_request_id(resp: dict) -> str:
-    rid, dup = _need(resp, "requestId", "duplicateRequest", where="로켓그로스 다운로드 요청")
+    rid, dup, wait = _need(resp, "requestId", "duplicateRequest", "remainingTime", where="로켓그로스 다운로드 요청")
+    if wait:
+        raise RequestThrottled(f"로켓그로스 요청 대기시간 응답 remainingTime={wait} (중복요청={dup})")
     if not rid:
         raise SiteChangedError(f"로켓그로스 다운로드 요청에 requestId 없음 (중복요청={dup})")
     return str(rid)
