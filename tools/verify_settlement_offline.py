@@ -370,6 +370,19 @@ def p7_settle_files():
     assert len(w.warnings) == 1 and "정산금액" in w.warnings[0], w.warnings                          # 1004 검산 위반
     assert not any(hasattr(r, "buyer") for r in w.rows) and "홍길동" not in str([vars(r) for r in w.rows])
     assert w.rows[0].option_id == "95467404277" and w.rows[1].coupon == 20000
+    cg = _rg_grid()                                                                   # 쿠팡지원할인(C) 줄(실측 모양)
+    cg[2][RG_HDR.index("쿠팡지원할인(C)")], cg[2][RG_HDR.index("매출금액(A*B-C)")] = 2000.0, 7310.0
+    assert SF.parse_rg_fee(cg, account="A", period_start=D("2026-08-03"), period_end=D("2026-08-09")).warnings == []
+    cg[2][RG_HDR.index("정산대상액")] = 6205.0                                         # 매출금액 기준 값 = 어긋남 경고
+    assert len(SF.parse_rg_fee(cg, account="A", period_start=D("2026-08-03"), period_end=D("2026-08-09")).warnings) == 1
+    ci = WING_HDR.index("판매자 할인쿠폰(A+B)")
+    old = _wing_grid()
+    for row in old[2:4]:
+        row[ci] = row[WING_HDR.index("마이샵수수료할인")] = None                       # 옛 파일 모양: 배송비 줄 금액칸 빈칸
+    assert SF.parse_wing_detail(old, account="A", period_start=D("2026-08-24"), period_end=D("2026-08-30")).dropped_zero == 2
+    old[1][ci] = None                                                                 # 상품 줄 빈칸은 여전히 오류
+    expect(SF.SettlementParseError, lambda: SF.parse_wing_detail(old, account="A", period_start=D("2026-08-24"),
+                                                                 period_end=D("2026-08-30")), "상품 줄 빈 쿠폰")
     g = SF.parse_rg_fee(_rg_grid(), account="계정A", period_start=D("2026-08-03"), period_end=D("2026-08-09"))
     assert (len(g.rows), g.settle_total, g.rows[0].fee, g.warnings) == (2, 0, 1105, []), g
     expect(SF.SettlementParseError, lambda: SF.parse_rg_fee(_rg_grid("2026-08-16"), account="계정A",
@@ -618,11 +631,12 @@ def p11_runlog():
         try:
             raise ValueError("표 머리글 없음")
         except ValueError as exc:
-            lg.error("B-2", "조회", exc)
+            lg.error("B-2", "조회", exc, channel="윙", settle_date="2026-01-13")
         lg2 = RLG.RunLog(tmp, now=datetime(2026, 10, 7, 21, 0, 0), echo=out.append)
         lg2.record("A-1", "받기", RLG.WAIT, "아직 WAIT", channel="윙")
         rows = list(_csv.DictReader(open(lg.csv, encoding="utf-8-sig")))
         assert [r["결과"] for r in rows] == ["정상", "정상", "차단", "실패"] and rows[1]["정산일"] == "2026-01-12"
+        assert (rows[3]["채널"], rows[3]["정산일"]) == ("윙", "2026-01-13")                    # 실패 줄에도 정산일
         total = list(_csv.DictReader(open(lg.total, encoding="utf-8-sig")))
         assert len(total) == 5 and {r["실행ID"] for r in total} == {"261006_210000", "261007_210000"}   # 누적
         tb = lg.errors.read_text(encoding="utf-8")

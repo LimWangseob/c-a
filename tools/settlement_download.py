@@ -218,7 +218,7 @@ def cmd_request(a, b, args, jobs: list) -> None:
         try:
             rid = _request_one(b, j, name)
         except API.SiteChangedError as exc:
-            LOG.error(name, "요청", exc)
+            LOG.error(name, "요청", exc, **_job_fields(j))
             raise
         SJ.mark_requested(j, datetime.now(), rid)
         SJ.save_jobs(JOBS, jobs)
@@ -281,7 +281,7 @@ def cmd_download(a, b, args, jobs: list) -> None:
             except BlockDetected:
                 raise
             except Exception as exc:                       # 그 파일만 실패 기록 후 다음 파일(무음 아님)
-                LOG.error(name, "받기", exc)
+                LOG.error(name, "받기", exc, **_job_fields(j))
             SJ.save_jobs(JOBS, jobs)
 
 
