@@ -94,8 +94,13 @@ def first_payout_70(policy: str, rows: list[int]) -> int:
 
 
 def payout_amount(policy: str, row_amounts) -> int:
-    """지급 비율 금액(예측값 — 실지급은 쿠팡 화면·파일이 정본). 70% = first_payout_70, **30% = 전체 − 70%**
-    (로켓그로스 실측 확인·윙 30% 는 같은 나머지 방식으로 추정 — 실측 대기), 월정산 100% = 전체.
+    """지급 비율 금액(예측값 — 실지급은 쿠팡 화면·파일이 정본). 실측 확정(2026-10-06·화면 원 단위 일치):
+    - 70%(주정산) = first_payout_70 — 윙=전체×70%, 로켓그로스=줄별 70% 합.
+    - 로켓그로스 30% = 전체 − 줄별 70% 합(row_amounts = 그 주 줄 금액들, 788,368 → 236,467).
+    - **윙 최종액 30% = 그 달 합계 − (주별 70% 의 합)** — row_amounts = **주별 정산 합계 목록**(파일의
+      정산예정일별 묶음). 8월: [49,721·16,364·11,191·337,770] → 415,046 − 290,533 = 124,513(화면 일치;
+      전체×30% 는 124,514 로 1원 틀림).
+    - 월정산 100% = 전체.
     ⚠ 옛 규칙 '모든 비율 행 단위 반올림 후 합산'은 실측과 불일치해 폐기(2026-10-06)."""
     if policy not in _RULES:
         raise ValueError(f"알 수 없는 지급 정책: {policy!r}")
@@ -107,6 +112,8 @@ def payout_amount(policy: str, row_amounts) -> int:
     ratio = _RULES[policy][2]
     if ratio == 1:
         return sum(rows)
+    if policy == PAYOUT_MP_WEEKLY_FINAL:                # 주별 합계마다 70% 를 뺀 나머지
+        return sum(rows) - sum(_half_up(Decimal(w) * Decimal("0.7")) for w in rows)
     first = first_payout_70(policy, rows)
     return first if ratio == Decimal("0.7") else sum(rows) - first
 

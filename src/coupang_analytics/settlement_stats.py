@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import payout as P
 from .settlement_files import CH_WING, SettleFile
 
 SHIPPING_KEY = "배송비"
@@ -62,17 +63,33 @@ class StatsResult:
 
 
 def _order_files(files: list[SettleFile], warns: list) -> list[SettleFile]:
+    """같은 파일(계정·채널·유형·리포트·기간)은 한 번만."""
     seen, keep = set(), []
     for f in files:
-        if f.channel == CH_WING and f.kind == "최종액":
-            continue                                  # 같은 주문이 주정산 파일에 있음(이중 집계 방지)
-        key = (f.account, f.channel, f.report, f.period_start, f.period_end)
+        key = (f.account, f.channel, f.kind, f.report, f.period_start, f.period_end)
         if key in seen:
             warns.append(f"같은 정산 파일이 두 번 있음 — 한 번만 집계: {key}")
             continue
         seen.add(key)
         keep.append(f)
     return keep
+
+
+def _order_rows(files: list[SettleFile], warns: list):
+    """집계할 (파일, 줄). 윙 최종액 파일은 같은 주문이 주정산 파일에 다시 들어 있어(이중 집계·함정 1)
+    **주정산 파일이 없는 정산예정일의 줄만** 쓴다(주정산 파일을 아직 못 받은 주를 빠뜨리지 않게)."""
+    files = _order_files(files, warns)
+    covered = {(f.account, f.settle_date) for f in files if f.channel == CH_WING and f.kind != "최종액"}
+    filled = 0
+    for f in files:
+        final = f.channel == CH_WING and f.kind == "최종액"
+        for r in f.rows:
+            if final and (r.account, r.due) in covered:
+                continue
+            filled += final
+            yield f, r
+    if filled:
+        warns.append(f"윙 최종액 파일에서 주정산 파일이 없는 주의 줄 {filled}건을 집계에 넣음")
 
 
 def _add(p: ProductMonth, r) -> None:
@@ -96,24 +113,46 @@ def aggregate(files: list[SettleFile]) -> StatsResult:
     table: dict = {}
     seen_rows: set = set()
     undated = dup = 0
-    for f in _order_files(files, res.warnings):
-        for r in f.rows:
-            rk = (r.channel, r.account, r.order_id, r.option_id, r.kind, r.recognized, r.settle, r.qty)
-            if rk in seen_rows:
-                dup += 1
-                continue
-            seen_rows.add(rk)
-            day = r.recognized or f.period_end
-            undated += r.recognized is None
-            pid = r.product_id or (SHIPPING_KEY if r.option_id.startswith("<") else r.option_id)
-            key = (r.account, f"{day:%Y-%m}", pid)
-            _add(table.setdefault(key, ProductMonth(r.account, f"{day:%Y-%m}", pid)), r)
+    for f, r in _order_rows(files, res.warnings):
+        rk = (r.channel, r.account, r.order_id, r.option_id, r.kind, r.recognized, r.settle, r.qty)
+        if rk in seen_rows:
+            dup += 1
+            continue
+        seen_rows.add(rk)
+        day = r.recognized or f.period_end
+        undated += r.recognized is None
+        pid = r.product_id or (SHIPPING_KEY if r.option_id.startswith("<") else r.option_id)
+        key = (r.account, f"{day:%Y-%m}", pid)
+        _add(table.setdefault(key, ProductMonth(r.account, f"{day:%Y-%m}", pid)), r)
     if undated:
         res.warnings.append(f"날짜 없는 금액 줄 {undated}건 — 각 파일 정산 기간 끝의 달로 집계")
     if dup:
         res.warnings.append(f"여러 파일에 겹친 같은 줄 {dup}건 — 한 번만 집계")
     res.products = [table[k] for k in sorted(table)]
     return res
+
+
+def payout_lines(files: list[SettleFile], warns: list | None = None) -> list[tuple]:
+    """파일별 계산 지급액(예상) — 쿠팡 화면 금액과 대조용. (파일, 구분, 금액) 목록. 실측 규칙은 payout.payout_amount.
+    윙 주정산=70% · 윙 최종액=30%(정산예정일별 주 합계로 계산) · 로켓그로스=같은 파일이 70%·30% 두 지급에 쓰임."""
+    warns = warns if warns is not None else []
+    out = []
+    for f in files:
+        amounts = [r.settle for r in f.rows]
+        if f.channel == CH_WING and f.kind == "최종액":
+            weeks: dict = {}
+            for r in f.rows:
+                weeks[r.due] = weeks.get(r.due, 0) + r.settle
+            if None in weeks:
+                warns.append(f"{f.account} 윙 최종액 {f.period_start}~{f.period_end}: 정산예정일 없는 금액 줄 — "
+                             "30% 계산이 화면과 다를 수 있음")
+            out.append((f, "최종액 30%", P.payout_amount(P.PAYOUT_MP_WEEKLY_FINAL, list(weeks.values()))))
+        elif f.channel == CH_WING:
+            out.append((f, "주정산 70%", P.payout_amount(P.PAYOUT_MP_WEEKLY_1ST, [sum(amounts)])))
+        else:
+            out.append((f, "주정산 70%", P.payout_amount(P.PAYOUT_RG_WEEKLY_1ST, amounts)))
+            out.append((f, "2차 30%", P.payout_amount(P.PAYOUT_RG_WEEKLY_FINAL, amounts)))
+    return out
 
 
 def contractor_amount(contract_amount: int | None, coupang_settled: int) -> int:
@@ -131,8 +170,9 @@ _P_HEAD = ["계정", "월(매출인식)", "등록상품ID", "상품명", "윙 �
 _A_HEAD = ["계정", "쿠팡 정산금액 합계(부가비용 차감 전)", "계약금액", "계약자 정산금액(계약금액−쿠팡 정산금액)"]
 
 
-def write_stats(path, res: StatsResult, contracts: dict | None = None) -> Path:
-    """집계 엑셀: '상품별 월별'·'계정별 월별'·'계약자 정산'·'경고' 시트. contracts={계정: 계약금액}(없는 계정은 빈칸)."""
+def write_stats(path, res: StatsResult, contracts: dict | None = None, files: list | None = None) -> Path:
+    """집계 엑셀: '상품별 월별'·'계정별 월별'·'계약자 정산'·'지급액 검산'(files 주면)·'경고' 시트.
+    contracts={계정: 계약금액}(없는 계정은 빈칸)."""
     import openpyxl
     contracts = contracts or {}
     wb = openpyxl.Workbook()
@@ -151,6 +191,8 @@ def write_stats(path, res: StatsResult, contracts: dict | None = None) -> Path:
     for acct, settled in sorted(res.account_totals().items()):
         c = contracts.get(acct)
         cs.append([acct, settled, c if c is not None else "", contractor_amount(c, settled) if c is not None else ""])
+    if files is not None:
+        _payout_sheet(wb, files, res.warnings)
     wn = wb.create_sheet("경고")
     wn.append(["경고"])
     for w in res.warnings:
@@ -159,3 +201,11 @@ def write_stats(path, res: StatsResult, contracts: dict | None = None) -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     wb.save(p)
     return p
+
+
+def _payout_sheet(wb, files: list, warns: list) -> None:
+    ws = wb.create_sheet("지급액 검산")
+    ws.append(["계정", "채널", "유형", "정산일", "기간 시작", "기간 끝", "정산 합계", "구분", "계산 지급액(예상·화면과 대조)"])
+    for f, label, amount in payout_lines(files, warns):
+        ws.append([f.account, f.channel, f.kind, f.settle_date.isoformat() if f.settle_date else "",
+                   f.period_start.isoformat(), f.period_end.isoformat(), f.settle_total, label, amount])

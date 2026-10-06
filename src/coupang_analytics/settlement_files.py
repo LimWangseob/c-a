@@ -25,7 +25,8 @@ PII_COLUMNS = ("구매자명",)
 _WING_COLS = {"order_id": "주문번호", "product_id": "상품 ID", "product_name": "상품명", "option_id": "옵션 ID",
               "option_name": "옵션명", "unit_price": "판매가", "qty": "판매수량", "refund_qty": "환불수량",
               "sales": "판매액", "coupon": "판매자 할인쿠폰(A+B)", "fee": "판매수수료", "myshop": "마이샵수수료할인",
-              "settle": "정산금액", "recognized": "구매확정일", "kind": "구매확정(출고)유형"}
+              "settle": "정산금액", "recognized": "구매확정일", "kind": "구매확정(출고)유형",
+              "due": "정산예정일"}
 _RG_COLS = {"order_id": "주문ID", "product_id": "등록상품 ID", "product_name": "등록상품명", "option_id": "옵션ID",
             "option_name": "옵션명", "unit_price": "판매가(A)", "qty": "판매수량(B)", "gross": "판매액(A*B)",
             "sales": "매출금액(A*B-C)", "coupon": "판매자할인쿠폰(D+E)", "fee": "판매수수료", "fee_vat": "판매수수료 VAT",
@@ -53,6 +54,7 @@ class SettleRow:
     settle: int
     recognized: date | None
     kind: str
+    due: date | None = None          # 윙 정산예정일(주정산 묶음 — 최종액 30% 계산에 씀)·로켓그로스는 없음
 
 
 @dataclass
@@ -100,7 +102,7 @@ def _values(raw: list, cols: dict, idx: dict, r: int, where: str) -> dict:
             out[f] = str(v).strip()                 # 윙 배송비 줄 표시값(<기본배송료>·<추가배송료>) — ID 아님
         elif f in ("option_id", "product_id", "order_id"):
             out[f] = parse_id(v, f"{where} {r}행 '{h}'") if str(v or "").strip() else ""
-        elif f in ("recognized", "cycle_end"):
+        elif f in ("recognized", "cycle_end", "due"):
             out[f] = parse_date(v, f"{where} {r}행 '{h}'") if str(v or "").strip() else None
         else:
             out[f] = str(v or "").strip()
@@ -122,16 +124,18 @@ def parse_wing_detail(rows: list, *, account: str, period_start: date, period_en
         _check_wing(v, r, out)
         out.rows.append(SettleRow(CH_WING, account, period_start, period_end, v["order_id"], v["product_id"],
                                   v["option_id"], v["product_name"], v["option_name"], v["qty"] - v["refund_qty"],
-                                  v["sales"], v["coupon"], v["fee"], v["settle"], v["recognized"], v["kind"]))
+                                  v["sales"], v["coupon"], v["fee"], v["settle"], v["recognized"], v["kind"],
+                                  v["due"]))
     return out
 
 
 def _check_wing(v: dict, r: int, out: SettleFile) -> None:
     if v["settle"] != v["sales"] - v["coupon"] - v["fee"] + v["myshop"]:
         out.warnings.append(f"윙 {r}행 정산금액 {v['settle']} ≠ 판매액−쿠폰−수수료+마이샵할인")
-    if v["sales"] != v["unit_price"] * v["qty"]:
+    ship = bool(_SHIP_MARK.fullmatch(v["option_id"]))
+    if v["sales"] != v["unit_price"] * v["qty"] and not ship:   # 배송비 줄은 판매가·수량 0 에 금액만(실측 6,000)
         out.warnings.append(f"윙 {r}행 판매액 {v['sales']} ≠ 판매가×판매수량")
-    if not v["product_name"] and not _SHIP_MARK.fullmatch(v["option_id"]):
+    if not v["product_name"] and not ship:
         out.warnings.append(f"윙 {r}행 상품명 없는 금액 줄(옵션 {v['option_id']}) — 집계에 포함")
     d = v["recognized"]
     if d and not (out.period_start <= d <= out.period_end):

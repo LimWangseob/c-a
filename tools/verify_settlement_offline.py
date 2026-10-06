@@ -135,7 +135,8 @@ def p2_payout_rules():
     expect(ValueError, lambda: P.payout_date(P.PAYOUT_MP_MONTHLY, revenue_month="2026/08", holidays=HOL), "월 형식")
     # 실측 규칙(2026-10-06): 윙 70%=전체×70% · 로켓그로스 70%=줄별 70% 사사오입 합 · 30%=전체−70%
     assert P.payout_amount(P.PAYOUT_MP_WEEKLY_1ST, [15, 25]) == 28             # 40×0.7 (줄별이면 29)
-    assert P.payout_amount(P.PAYOUT_MP_WEEKLY_FINAL, [15, 25]) == 12           # 40−28
+    assert P.payout_amount(P.PAYOUT_MP_WEEKLY_FINAL, [15, 25]) == 40 - (11 + 18)  # 윙 최종액=주별 합계마다 70% 뺀 나머지
+    assert P.payout_amount(P.PAYOUT_MP_WEEKLY_FINAL, [49721, 16364, 11191, 337770]) == 124513   # 실측 8월 최종액 화면값
     assert P.payout_amount(P.PAYOUT_RG_WEEKLY_1ST, [15, 25]) == 11 + 18        # 10.5→11·17.5→18(줄별)
     assert P.payout_amount(P.PAYOUT_RG_WEEKLY_FINAL, [15, 25]) == 40 - 29      # 나머지(줄별 30% 합 5+8=13 아님)
     assert P.payout_amount(P.PAYOUT_RG_MONTHLY, [15, 25]) == 40
@@ -319,14 +320,16 @@ RG_HDR = ["정산유형", "정산주기(종료일)", "세금계산서 발행월"
           "판매수수료 VAT"]
 
 
-def _wing_row(order, pid, name, oid, price, qty, coupon, fee, settle, buyer="홍길동", conf="2026-08-27"):
+def _wing_row(order, pid, name, oid, price, qty, coupon, fee, settle, buyer="홍길동", conf="2026-08-27",
+              due="2026-09-18", sales=None):
     v = dict.fromkeys(WING_HDR, "")
     v.update({"주문번호": order, "상품 ID": pid, "상품명": name, "옵션 ID": oid, "옵션명": name and "옵션",
-              "판매가": float(price), "판매수량": float(qty), "환불수량": 0.0, "판매액": float(price * qty),
+              "판매가": float(price), "판매수량": float(qty), "환불수량": 0.0,
+              "판매액": float(price * qty if sales is None else sales),
               "판매자 할인쿠폰(A+B)": float(coupon), "판매자 할인쿠폰(A.즉시할인)": float(coupon),
               "판매자 할인쿠폰(B.다운로드)": 0.0, "판매수수료": float(fee), "서비스이용율(%,VAT별도)": "10.8",
               "마이샵수수료할인": 0.0, "정산금액": float(settle), "구매자명": buyer if name else "",
-              "구매확정일": conf if name else "", "정산예정일": "2026-09-18" if name else ""})
+              "구매확정일": conf if name else "", "정산예정일": due})
     return [v[h] for h in WING_HDR]
 
 
@@ -336,7 +339,7 @@ def _wing_grid():
             _wing_row("1001", "", "", "<기본배송료>", 0, 0, 0, 0, 0),
             _wing_row("1001", "", "", "<추가배송료>", 0, 0, 0, 0, 0),
             _wing_row("1002", "88", "압축포장기", "95425233537", 37900, 1, 20000, 1933, 15967),
-            _wing_row("1003", "", "", "<기본배송료>", 6000, 1, 0, 0, 6000),               # 금액 있는 배송비 줄 = 남김
+            _wing_row("1003", "", "", "<기본배송료>", 0, 0, 0, 0, 6000, sales=6000),     # 실측 모양: 판매가·수량 0·금액만
             _wing_row("1004", "77", "보냉백", "95467404277", 12700, 2, 0, 2744, 99999)]   # 검산 위반 = 경고
 
 
@@ -460,33 +463,39 @@ def p9_settle_stats():
     from coupang_analytics import settlement_files as SF
     from coupang_analytics import settlement_stats as ST
     w = SF.parse_wing_detail(_wing_grid(), account="A", period_start=D("2026-08-24"), period_end=D("2026-08-30"))
-    w.kind = "주정산"
+    w.kind, w.settle_date = "주정산", D("2026-09-18")
     wfinal = SF.parse_wing_detail([*_wing_grid(), _wing_row("1009", "77", "보냉백", "95467404277", 12700, 1, 0, 1372,
-                                                            11328, conf="2026-08-12")],
+                                                            11328, conf="2026-08-12", due="2026-08-31")],
                                   account="A", period_start=D("2026-08-03"), period_end=D("2026-08-30"))
     wfinal.kind = "최종액"
     g = SF.parse_rg_fee(_rg_grid(), account="A", period_start=D("2026-08-03"), period_end=D("2026-08-09"))
     g.kind, g.report = "주정산", "판매수수료"
     res = ST.aggregate([w, wfinal, g, g])
     by = {(p.month, p.product_id): p for p in res.products}
-    assert by[("2026-08", "77")].wing_settle == 11328 + 99999 and by[("2026-08", "77")].rg_settle == 0
+    assert by[("2026-08", "77")].wing_settle == 11328 + 99999 + 11328 and by[("2026-08", "77")].rg_settle == 0
     assert by[("2026-08", "77")].rg_qty == 0 and by[("2026-08", "77")].product_name == "보냉백"
     assert by[("2026-08", ST.SHIPPING_KEY)].wing_settle == 6000                      # 날짜 없는 배송비 = 기간 끝 달
-    assert res.account_totals() == {"A": 11328 + 15967 + 6000 + 99999}               # 최종액 파일 제외(이중 집계 X)
+    assert res.account_totals() == {"A": 11328 + 15967 + 6000 + 99999 + 11328}       # 최종액은 주정산 없는 주(1009)만
+    assert any("주정산 파일이 없는 주의 줄 1건" in x for x in res.warnings), res.warnings
     assert any("두 번" in x for x in res.warnings) and any("날짜 없는" in x for x in res.warnings)
-    assert not any("겹친 같은 줄" in x for x in res.warnings)                        # 최종액은 파일 단위로 제외됨
+    assert not any("겹친 같은 줄" in x for x in res.warnings)                        # 주정산 있는 주는 최종액서 제외
+    lines = {(f.kind, f.channel, label): amt for f, label, amt in ST.payout_lines([w, wfinal, g])}
+    assert lines[("주정산", "윙", "주정산 70%")] == 93306                               # 133,294×0.7
+    assert lines[("최종액", "윙", "최종액 30%")] == 144622 - (93306 + 7930)            # 주별(09-18·08-31) 70% 뺀 나머지
+    assert lines[("주정산", "로켓그로스", "주정산 70%")] == 0 and ("주정산", "로켓그로스", "2차 30%") in lines
     assert ST.contractor_amount(10_000_000, 3_764_453) == 6_235_547
     expect(ValueError, lambda: ST.contractor_amount(None, 1), "계약금액 미입력")
     expect(TypeError, lambda: ST.contractor_amount(1.5, 1), "정수 아닌 계약금액")
     import openpyxl
     with tempfile.TemporaryDirectory() as tmp:
-        out = ST.write_stats(Path(tmp) / "집계.xlsx", res, {"A": 200_000})
+        out = ST.write_stats(Path(tmp) / "집계.xlsx", res, {"A": 200_000}, files=[w, wfinal, g])
         wb = openpyxl.load_workbook(out)
-        assert wb.sheetnames == ["상품별 월별", "계정별 월별", "계약자 정산", "경고"]
-        assert [c.value for c in wb["계약자 정산"][2]] == ["A", 133294, 200000, 66706]
+        assert wb.sheetnames == ["상품별 월별", "계정별 월별", "계약자 정산", "지급액 검산", "경고"]
+        assert [c.value for c in wb["계약자 정산"][2]] == ["A", 144622, 200000, 55378]
+        assert wb["지급액 검산"].max_row == 1 + 4                                       # 윙 2 + 로켓그로스 70%·30%
         out2 = ST.write_stats(Path(tmp) / "집계2.xlsx", res)
         assert [c.value for c in openpyxl.load_workbook(out2)["계약자 정산"][2]][2:] == [None, None]   # 미입력=빈칸
-    ok("최종액 제외·중복 파일 1회·배송비 묶음·월 귀속·계약자 정산금액(미입력=빈칸·0 가정 없음)·엑셀 4시트")
+    ok("최종액=주정산 없는 주만·중복 파일 1회·배송비 묶음·월 귀속·지급액 검산(윙 최종액 30% 주별)·계약자 정산금액·엑셀 5시트")
 
 
 def main():
