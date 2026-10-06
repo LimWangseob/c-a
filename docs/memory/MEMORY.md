@@ -1,4 +1,5 @@
 ## 현재 상태 · 프로젝트 방향
+- [⭐구현 Wave1: D2 소싱 1단계(sourcing·sourcing_score·오프라인)](impl-d2-sourcing-261006.md) — **도메인 전용 세션 정책 첫 배정**(Agent worktree→통제 병합)·게이트 15종 초록·master 병합됨. L1만 호출(AI 제외=계층). 남은=L1핀·라이브 1P·UI 02-x.
 - [⭐통합 앱 실행 셸 1차: ui/app_integrated.py(사이드바13+신규 도메인 작동 패널·로컬 JSON)](impl-integrated-app-shell-261005.md) — 실행 `python ui/app_integrated.py`·기존 app_qt 미접촉·offscreen 스모크 통과. 남은=theme_qt·기존7탭 승격·실 GSheet 배선.
 - [⭐구현 Wave1: D10 CS 수동 트래커 1단계(cs_model·cs_store·cs_gsheet)](impl-d10-cs-tracker-261005.md) — K 레인·게이트 14종 초록·**master 병합됨**. 문의+이벤트 replay·개인정보 가림·열람 로그·통계·수집 0. 남은=UI·config키·CS권한/IO reconcile·2단계 수집.
 - [⭐구현 Wave1 첫 산출: D8 흡수 원장 3종 1단계(업무일지·계약·채권자)](impl-d8-absorb-ledger-261005.md) — E 레인·게이트 13종 초록·**master 병합됨**(fast-forward 3e5b026). greenfield·registry_lock 재사용·config 미접촉. 남은=UI·config키·2·3단계.
@@ -86,6 +87,7 @@
 
 ## 참조
 - [입출력 정의서 v1(파일 칸↔화면 칸 1:1)](io-definition-spec.md) — 앱이 읽고/쓰는 128칸을 화면·필수·형식·검사·민감과 1:1. 구현 시 SSOT=designs/IO_DEFINITION.md. 현재 정의/시안만(구현 보류). 5영역 배정 ✅(계약·사업·채권자→D8·마케팅→D1·문의CS→신규 D10·소유자 2026-10-05).
+- [정산 파일 배치다운로드·월집계·계약자 정산금액 요구(2026-10-06)](settlement-batch-download-decisions.md) — 전 위탁계정 윙+로켓그로스 정산파일 2026-01~·파일명=계정명+정산일·병합→상품별 최종정산·계약자금=계약금−쿠팡정산. 순위와 동시실행 조건부. 지급일 실측 불일치 2건(9월최종 11/2·RG 30%).
 - [정산 도메인 지식(D8 구현 입력)](settlement-domain-knowledge.md) — 지급일 규칙6·공휴일/영업일·금액식3·파싱·불변식·운영위탁 계약. SSOT=designs/COUPANG_SETTLEMENT_DOMAIN.md + coupang_golden_cases.json(100%통과=완료). 미구현.
 - [쿠팡 공식 운영지식](coupang-official-reference.md) — 상품등록·주문·배송·수수료·SEO/ID(productId 가변/vendorItemId 불변).
 - [상품명 규약: 대장=담당자명·결과=노출명](product-name-convention-ledger-vs-result.md) — 결과파일 긴 이름=쿠팡 노출명(정상). "낡았다" 오판 금지.
