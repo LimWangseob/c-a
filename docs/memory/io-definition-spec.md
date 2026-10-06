@@ -1,6 +1,6 @@
 ---
 name: io-definition-spec
-description: 입출력 정의서 v1(designs/IO_DEFINITION.md) — 앱이 읽고/쓰는 모든 파일 칸(128)을 화면 칸과 1:1로 맞춘 기준표. 구현 시 SSOT·현재는 정의/시안만(구현 보류)
+description: 입출력 정의서 v1(designs/IO_DEFINITION.md) — 앱이 읽고/쓰는 모든 파일 칸(137, 2026-10-05 05-1 문의 9칸 추가)을 화면 칸과 1:1로 맞춘 기준표. 메뉴 ID=v3.3. 구현 시 SSOT
 metadata:
   node_type: memory
   type: reference

@@ -1,5 +1,6 @@
 # 입출력 정의서 (IO_DEFINITION) v1
 
+> 시안(v32): https://claude.ai/artifact/UNnyH5Hs3SD33dH2QqGkXD · 보관 사본: `Downloads\커머스판로_시안_원본_20261003\`. 진입 메모=[[handoff-design-mockup-261006]].
 > 작성 2026-10-05 (H_ui 레인 · 소유자 요청 "입출력 정의서를 다른 도메인에 작성하고 디자인에도 반영").
 > 앱이 읽고 쓰는 모든 파일의 칸을 화면 칸과 1:1로 맞춘 기준표 — 실제 앱 구현 시 SSOT. 시안 보드 'F. 입출력 정의서' · 엑셀 `커머스판로_입출력정의서_v1_20261005.xlsx`와 같은 내용.
 > 상태: **정의·시안만** — 앱은 아직 구글시트 파일을 읽고 씀(구현 보류). 근거: input_list.py·config.py(IN_ALIASES_*)·company_stock.py·registry_model.py·gsheet_index.py·workbook_*·OPERATION_DATA_MODEL.md·LEDGER_REGISTRY.md·SETTLEMENT_MODULE.md.

@@ -1,5 +1,6 @@
 # 화면 조립 설계 (UI_SCREENS) v1 — H UI 레인
 
+> 시안(v32): https://claude.ai/artifact/UNnyH5Hs3SD33dH2QqGkXD · 보관 사본·생성 스크립트: `Downloads\커머스판로_시안_원본_20261003\` (`_시안_작업_안내.md`). 메뉴 SSOT=시안 A 보드(Sitemap). 진입 메모=[[handoff-design-mockup-261006]].
 > 작성 2026-10-05 (H_ui 레인 · 소유자 요청 "IO 정의서 메뉴 ID 전체를 실제 앱 화면 구조로 조립").
 > 목적: `designs/IO_DEFINITION.md`의 **메뉴 ID 전체**를 실제 앱의 **네비게이션·화면·카드**로 조립하고,
 > 디자인 컨셉([[decision-design-concept-261003]])을 반영한 화면 구조·레이아웃·공통 컴포넌트·데이터 흐름을 정의한다.
