@@ -1,4 +1,7 @@
 ## 현재 상태 · 프로젝트 방향
+- [⭐통합 앱 실행 셸 1차: ui/app_integrated.py(사이드바13+신규 도메인 작동 패널·로컬 JSON)](impl-integrated-app-shell-261005.md) — 실행 `python ui/app_integrated.py`·기존 app_qt 미접촉·offscreen 스모크 통과. 남은=theme_qt·기존7탭 승격·실 GSheet 배선.
+- [⭐구현 Wave1: D10 CS 수동 트래커 1단계(cs_model·cs_store·cs_gsheet)](impl-d10-cs-tracker-261005.md) — K 레인·게이트 14종 초록·**master 병합됨**. 문의+이벤트 replay·개인정보 가림·열람 로그·통계·수집 0. 남은=UI·config키·CS권한/IO reconcile·2단계 수집.
+- [⭐구현 Wave1 첫 산출: D8 흡수 원장 3종 1단계(업무일지·계약·채권자)](impl-d8-absorb-ledger-261005.md) — E 레인·게이트 13종 초록·**master 병합됨**(fast-forward 3e5b026). greenfield·registry_lock 재사용·config 미접촉. 남은=UI·config키·2·3단계.
 - [⭐⭐새 세션 진입점(2026-10-05 최신): 멀티플랫폼 설계 완료 → **구현 착수 준비**](handoff-session-261005.md) — 설계 동결·구현 SSOT=docs/IMPL_PLAN.md. **새 세션/병렬 도메인 세션에서 구현 진행**(오프라인 읽기 우선·추천 1차=D8 흡수원장·D10 CS·D2 소싱). 레인=PARALLEL_DEV(I·J·P·K·D3·D4 신규). 쓰기/라이브=Wave2(선행 U3·쿠팡 쓰기 캡처 후). 메뉴 v3.3 정합·운용PC 설정URL 교정(사람)은 별건.
 - [⭐도메인 설계 10건 + 멀티플랫폼 대확장(2026-10-05)](domain-design-elaboration-261005.md) — 설계 심화(구현 보류)·병렬 에이전트. 1차=D2·D8 2·3+흡수·D10 CS·H UI 화면 / 2차=멀티플랫폼(쿠팡+스마트스토어·샵마인=주문배송만)+배치수집+정산3층+D3 등록·D4 변경+프로세스개요. SSOT=designs/PLATFORM_INTEGRATION·SETTLEMENT_MODEL·PROCESS_OVERVIEW·DOMAIN_D2/D3/D4/D8/D10·UI_SCREENS. ⭐선행: ~~U1 스마트스토어 API~~ **보류**·~~U2 kw→L1(M1)~~ **완료(2026-10-05·핀 등재)**·남은=U3 WING정산API·U4 샵마인 CS경계·쿠팡 쓰기 엔드포인트 라이브캡처(사무실 라이브·소유자 확인).
 - [⭐새 세션 진입점(2026-10-04 최신): 안정성 6종 수정+설정일원화 병합+배포본 생성](handoff-session-261004.md) — master HEAD=6d6937d·게이트 초록. 이중제출·백업401·전원억제(야간 멈춤 차단·라이브 확인됨)·sheet_id방어·로그인대기90초·18시원인. **⭐최우선 미해결=설정 URL 저장소 분열**(18:00 무인이 옛 URL 써서 결과시트 반영 404/400·올바른 URL4개는 메모에). dist 직접운용 금지.
@@ -27,6 +30,7 @@
 - [실행 UI=app_qt·상시가동](runtime-ui-and-always-on.md) — app.py 아님. 설정탭=파일/API키+구글시트 카드(순위값 UI 없음·config.py만). 무인 --auto 야간모드.
 
 ## 작업 원칙(피드백)
+- [통합 앱 완성 전까지 기존 앱 무중단 운영](keep-existing-app-running-until-integrated.md) — 신규는 greenfield·배선 전 휴면·공유 L0/L1 행동 불변·배선은 기존 7탭/무인 보존하며 추가. Wave2가 위험구간.
 - [폴백 최소화 원칙(중요)](no-silent-fallback-principle.md) — 폴백 신중히·최대한 금지·불가피할 때만 조건부(로그 명시). 근본 해결/실측 우선.
 - [분석 요청=코드 수정 금지](analysis-request-no-code-change.md) — "분석해줘"면 분석만, 명시 수정요청 전까지 편집·커밋 금지.
 - [시안 "적용"=기존 위에 끼워 넣기(다시 짜기 금지)](feedback-design-extend-not-redo.md) — 홈 시안 통째 교체를 소유자가 정정(2026-10-05). 공간 부족은 줄 수·여백으로.

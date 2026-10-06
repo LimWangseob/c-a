@@ -12,7 +12,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_ROOT))              # 저장소 루트 — `python ui/app_integrated.py` 직접 실행 시 `import ui.*` 되게
+sys.path.insert(0, str(_ROOT / "src"))      # coupang_analytics 패키지
 
 from PySide6 import QtCore, QtWidgets  # noqa: E402
 
