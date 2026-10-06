@@ -30,6 +30,7 @@
 - [실행 UI=app_qt·상시가동](runtime-ui-and-always-on.md) — app.py 아님. 설정탭=파일/API키+구글시트 카드(순위값 UI 없음·config.py만). 무인 --auto 야간모드.
 
 ## 작업 원칙(피드백)
+- [⭐정책(고정): 도메인별 작업=도메인 전용 세션(worktree 레인)에 할당](policy-per-domain-sessions.md) — 한 세션에 여러 도메인 몰지 말 것. 레인=PARALLEL_DEV·SSOT=IMPL_PLAN. 통제 세션이 공유파일·master 병합 직렬 담당. 런타임 병렬 금지.
 - [통합 앱 완성 전까지 기존 앱 무중단 운영](keep-existing-app-running-until-integrated.md) — 신규는 greenfield·배선 전 휴면·공유 L0/L1 행동 불변·배선은 기존 7탭/무인 보존하며 추가. Wave2가 위험구간.
 - [폴백 최소화 원칙(중요)](no-silent-fallback-principle.md) — 폴백 신중히·최대한 금지·불가피할 때만 조건부(로그 명시). 근본 해결/실측 우선.
 - [분석 요청=코드 수정 금지](analysis-request-no-code-change.md) — "분석해줘"면 분석만, 명시 수정요청 전까지 편집·커밋 금지.
