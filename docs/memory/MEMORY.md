@@ -23,6 +23,7 @@
 - [판매상태 불일치 경고](feature-sale-status-mismatch-flag.md) · [VID 출처=상품조회·옵션분리](feature-vid-source-from-product-list.md)
 
 ## 작업 원칙(피드백·정책)
+- [⛔불변: 메모리→CLAUDE.md 이관·CLAUDE.md 200라인 이하(넘으면 색인+분리)](policy-memory-to-claudemd-200line.md) — 모든 세션 공통·영구. SSOT=전역 CLAUDE.md
 - [⭐정확도 우선·레인 간 요청 규칙(소유자 2026-10-06)](feedback-accuracy-over-speed-and-lane-handoff.md) — 환경 사실은 확인 후 보고(못 하면 추정 분리)·브랜치 master 맞춘 뒤 착수·공유/배포 요청은 단위 끝에 한 번·결정은 받은 세션이 통합에 즉시 전달
 - [⭐도메인별 작업=도메인 전용 세션(worktree 레인)](policy-per-domain-sessions.md) — 공유파일·병합은 통제 세션 직렬
 - [통합 앱 완성 전 기존 앱 무중단](keep-existing-app-running-until-integrated.md) — 신규 greenfield·배선 전 휴면
