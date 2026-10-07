@@ -207,7 +207,7 @@ function Register-AutoTasks {
     $triggerR.Delay = 'PT2M'      # 로그온 2분 뒤(세션·네트워크 안정 대기)
     Register-ScheduledTask -TaskName '쿠팡애널리틱스_재부팅복구' -Action $actionR -Trigger $triggerR `
         -Settings $settings -Description '재부팅/로그온 시 오늘 중단분 이어서(--resume)' -Force | Out-Null
-    # 3) 정산 파일 자동 다운로드(watch): 로그온 2분 뒤 + 매일 08:00 (①판매수집 완료 후 재개·17:40 멈춤·중복은 IgnoreNew)
+    # 3) 정산 파일 자동 다운로드(watch): 로그온 2분 뒤 + 매일 08:00 (24시간 감시·①판매수집 중만 정지·중복은 IgnoreNew)
     #    정산 입력=data\정산_계정목록.txt(비번 평문·운용 PC 에 소유자가 직접 둠). 파일 없으면 watch 가 기록 남기고 종료.
     $settleExe = Join-Path $root '정산다운로드.exe'
     if (Test-Path $settleExe) {
@@ -217,7 +217,7 @@ function Register-AutoTasks {
         $setS = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
             -ExecutionTimeLimit (New-TimeSpan -Seconds 0) -MultipleInstances IgnoreNew   # 시간제한 없음(상시)
         Register-ScheduledTask -TaskName '쿠팡애널리틱스_정산다운로드' -Action $actionS -Trigger @($logonS, $dailyS) `
-            -Settings $setS -Description '정산 파일 자동 다운로드(①판매수집 완료 후 재개·17:40 멈춤)' -Force | Out-Null
+            -Settings $setS -Description '정산 파일 자동 다운로드(24시간 감시·①판매수집 중만 정지)' -Force | Out-Null
     }
 }
 function Unregister-AutoTasks {

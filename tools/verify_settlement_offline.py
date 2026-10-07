@@ -706,41 +706,39 @@ def p11_runlog():
 
 
 def p12_watch_decide():
-    print("[P12] 자동 대기·재개 — 앱 ①판매수집 완료 후 재개·다음날 17:40 멈춤·기록 없으면 새벽 2시 재개·하루 1바퀴")
+    print("[P12] 24h 감시 판단 — ①판매수집 중 정지·소급 연속·받을 것 없으면 다음 ①완료까지 대기")
+    import os as _os
     from datetime import datetime
     from coupang_analytics import settlement_watch as W
     T = datetime
-    assert W.cycle_start(T(2026, 10, 6, 17, 39)) == T(2026, 10, 5, 17, 40)
-    assert W.cycle_start(T(2026, 10, 6, 17, 40)) == T(2026, 10, 6, 17, 40)
-    sales = {"stage": "sales", "at": T(2026, 10, 6, 19, 30)}
-    a, why, p = W.decide(T(2026, 10, 6, 18, 5), None, None)                         # 앱 시작 직후 = 대기
-    assert a == "wait" and p == T(2026, 10, 6, 17, 40)
-    a, _, _ = W.decide(T(2026, 10, 6, 18, 5), {"stage": "done", "at": T(2026, 10, 6, 5, 0)}, None)
-    assert a == "wait"                                                              # 어제 주기 기록 = 이번 것 아님
-    a, why, p = W.decide(T(2026, 10, 6, 19, 31), sales, None)
-    assert a == "run" and "①판매수집 완료" in why                                     # ① 끝나면 바로 재개
-    a, _, _ = W.decide(T(2026, 10, 7, 11, 0), {"stage": "ranks", "at": T(2026, 10, 7, 0, 30)}, None)
-    assert a == "run"                                                               # 자정 넘겨 기록돼도 이번 주기
-    a, _, _ = W.decide(T(2026, 10, 7, 1, 59), None, None)
-    assert a == "wait"
-    a, why, _ = W.decide(T(2026, 10, 7, 2, 0), None, None)
-    assert a == "run" and "기록 없음" in why                                          # 앱이 안 돈 날
-    a, why, _ = W.decide(T(2026, 10, 7, 11, 0), sales, T(2026, 10, 6, 17, 40))
-    assert a == "wait" and "완료" in why                                              # 이번 주기 이미 다 돌았음
-    a, _, _ = W.decide(T(2026, 10, 7, 20, 0), {"stage": "sales", "at": T(2026, 10, 7, 19, 50)}, T(2026, 10, 6, 17, 40))
-    assert a == "run"                                                               # 다음 주기는 다시
+    # plan_watch: ① 진행 중이면 정지(busy 사유 전달)
+    a, r = W.plan_watch(True, "①판매수집 진행 중", T(2026, 10, 7, 19, 0), None)
+    assert a == "wait" and "진행 중" in r
+    # 소급(last_sales_at=None): ①완료 기록이 있든 없든 항상 실행
+    assert W.plan_watch(False, "", None, None) == ("run", "소급 수집(밀린 정산 받는 중)")
+    assert W.plan_watch(False, "", T(2026, 10, 7, 19, 30), None)[0] == "run"
+    # 정상(소급 끝·last_sales_at 있음): 새 ①완료가 있어야만 1회
+    a, r = W.plan_watch(False, "", T(2026, 10, 7, 19, 30), T(2026, 10, 7, 19, 30))
+    assert a == "wait" and "없음" in r                                              # 같은 ①완료 = 이미 함
+    a, r = W.plan_watch(False, "", T(2026, 10, 8, 19, 30), T(2026, 10, 7, 19, 30))
+    assert a == "run" and "새 ①판매수집" in r                                        # 다음날 새 ①완료 = 1회
+    assert W.plan_watch(False, "", None, T(2026, 10, 7, 19, 30))[0] == "wait"        # ①완료 기록 없음 = 대기
+    # sales_in_progress: _진행중.json 수정 시각(신선=진행 중)
     with tempfile.TemporaryDirectory() as tmp:
+        prog = Path(tmp) / "진행중.json"
+        assert W.sales_in_progress(prog)[0] is False                                # 파일 없음
+        prog.write_text("{}", encoding="utf-8")
+        _os.utime(prog, (T(2026, 10, 7, 12, 0, 0).timestamp(),) * 2)
+        assert W.sales_in_progress(prog, now=T(2026, 10, 7, 12, 10))[0] is True      # 10분 전 = 진행 중
+        assert W.sales_in_progress(prog, now=T(2026, 10, 7, 12, 40))[0] is False     # 40분 전 = 아님(①끝남)
+        # read_marker 왕복
         mp = Path(tmp) / "단계.json"
         assert W.read_marker(mp)[0] is None and "없음" in W.read_marker(mp)[1]
-        mp.write_text('{"date": "2026-10-06", "stage": "sales", "at": "2026-10-06T19:30:00"}', encoding="utf-8")
-        assert W.read_marker(mp)[0] == sales
+        mp.write_text('{"date": "2026-10-07", "stage": "sales", "at": "2026-10-07T19:30:00"}', encoding="utf-8")
+        assert W.read_marker(mp)[0] == {"stage": "sales", "at": T(2026, 10, 7, 19, 30)}
         mp.write_text("{깨짐", encoding="utf-8")
         assert W.read_marker(mp)[0] is None and "읽기 실패" in W.read_marker(mp)[1]
-        sp = Path(tmp) / "상태.json"
-        assert W.load_last_cycle(sp) is None
-        W.save_last_cycle(sp, T(2026, 10, 6, 17, 40))
-        assert W.load_last_cycle(sp) == T(2026, 10, 6, 17, 40)
-    ok("멈춤 시각 경계·①완료 후 재개·어제 기록 무시·자정 넘김·새벽 2시 대체 재개·하루 1바퀴·기록 파일 왕복")
+    ok("① 진행 중 정지·소급 연속(last_sales_at None)·정상 1회(새 ①완료)·진행 파일 신선도·단계 기록 왕복")
 
 
 def p13_accounts_file():

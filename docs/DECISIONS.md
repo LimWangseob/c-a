@@ -169,3 +169,5 @@
 2026-10-06 · 정산 입력 = 소유자 계정 파일 data\정산_계정목록.txt(계정ID·비번·대표자-사업자·UTF-8)·정산 대상=대장보다 넓은 위탁계정 전부 · ⚠비번 평문이라 zip/씨앗 미동봉(운용 PC data 에 소유자 직접·업데이트 보존)·읽은 비번은 credstore(DPAPI) 암호화 저장·기록/파일명에 비번 금지 · 소유자 결정
 2026-10-07 · 정산 다운로드 실행 로그 모니터링 = (1)settlement_runlog.heartbeat 가 output/정산/로그/_현재상태.txt 덮어쓰기(생존신호·비번/구매자명 미기록) (2)app_qt 정산 탭 상태 카드(색 배지·마지막활동·멈춤 의심 12분·오늘 집계·최근 로그·5초 자동) (3)deploy/정산_상태확인.bat 사람용 · 순수 추가·읽기 전용·야간 파이프라인 불변 · 소유자 요구
 2026-10-07 · ui 모듈 Qt 지연 import 규칙 = settlement_status_panel_qt 는 PySide6 를 메서드 안에서 import(순수 리더는 Qt 없이) — 회귀 pytest 게이트가 PySide6 없는 Python312 에서 돌기 때문(모듈 top 두면 ModuleNotFoundError) · 실측 근거
+2026-10-07 · 정산 다운로드 = 24시간 감시 모델(소유자) = plan_watch: ①판매수집 진행 중(_진행중.json mtime)이면 정지·아니면 실행. 소급(2026-01~오늘 밀린 정산)은 받을 게 있는 동안 연속(60초 쉼)·소진되면 다음 ①완료까지 대기(하루 1회·계정 보호). 전체실행(①②③)은 18:00 1회 유지(정산만 24h). 옛 "①완료 후 1회·17:40 멈춤"(decide·cycle_start·load/save_last_cycle) 물리 삭제
+2026-10-07 · app_qt 정산 탭 [정산 시작]/[정산 중지] = 별도 프로세스(정산다운로드.exe watch·frozen / python·dev) 제어(CREATE_NO_WINDOW·watch lock으로 1개만·중지=taskkill)·정산 전용 상태/로그(대기중/실행 계정/정산일/오류)는 heartbeat 상태카드로 전체실행 로그와 분리 · 소유자 요구

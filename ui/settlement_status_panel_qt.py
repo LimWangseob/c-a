@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 import csv
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -26,6 +28,8 @@ _BADGE = {
     "대기중": ("● 대기 중 (앱 판매수집 끝나면 시작)", "#2563eb", "#ffffff"),
     "완료": ("● 이번 분량 완료", "#334155", "#ffffff"),
     "오류": ("● 오류 — 아래 로그 확인", "#b91c1c", "#ffffff"),
+    "시작함": ("● 시작함 — 곧 상태 갱신", "#2563eb", "#ffffff"),
+    "중지됨": ("● 중지됨 (사용자가 멈춤)", "#64748b", "#ffffff"),
 }
 _UNKNOWN_BADGE = ("정산 자동 다운로드가 아직 실행된 적 없음", "#94a3b8", "#ffffff")
 _RESULT_ORDER = ("정상", "건너뜀", "대기", "실패", "차단")
@@ -131,6 +135,8 @@ class SettlementStatusMixin:
     # App 이 제공하는 것(정적검사용 선언)
     _card: Callable[[str], Any]
     _open_folder: Callable[[str], None]
+    log: Callable[[str], None]
+    _settle_proc: Any = None
 
     @staticmethod
     def _settlement_log_dir() -> Path:
@@ -149,6 +155,19 @@ class SettlementStatusMixin:
         f.setBold(True)
         self.settle_badge.setFont(f)
         v.addWidget(self.settle_badge)
+
+        ctrl = QtWidgets.QHBoxLayout()
+        self.settle_start_btn = QtWidgets.QPushButton("정산 시작")
+        self.settle_start_btn.clicked.connect(self._settle_start)
+        self.settle_stop_btn = QtWidgets.QPushButton("정산 중지")
+        self.settle_stop_btn.clicked.connect(self._settle_stop)
+        ctrl.addWidget(self.settle_start_btn)
+        ctrl.addWidget(self.settle_stop_btn)
+        ctrl.addStretch(1)
+        hint = QtWidgets.QLabel("24시간 감시 — 판매수집 중엔 자동으로 멈췄다 끝나면 재개")
+        hint.setObjectName("muted")
+        ctrl.addWidget(hint)
+        v.addLayout(ctrl)
 
         self.settle_active_lbl = QtWidgets.QLabel()
         self.settle_active_lbl.setWordWrap(True)
@@ -233,6 +252,66 @@ class SettlementStatusMixin:
     def _scroll_log_bottom(self) -> None:
         sb = self.settle_log_view.verticalScrollBar()
         sb.setValue(sb.maximum())
+
+    # ── 정산 감시 시작/중지(별도 프로세스 제어) ──────────────────────────
+    @staticmethod
+    def _settle_watch_cmd() -> tuple[list[str], str]:
+        """24시간 감시(watch)를 띄울 명령 + 작업 폴더. frozen=정산다운로드.exe(형제)·개발=python tools/..."""
+        if getattr(sys, "frozen", False):
+            folder = Path(sys.executable).parent
+            return [str(folder / "정산다운로드.exe"), "watch"], str(folder)
+        root = Path(__file__).resolve().parents[1]
+        return [sys.executable, str(root / "tools" / "settlement_download.py"), "watch"], str(root)
+
+    def _settle_start(self) -> None:
+        cmd, cwd = self._settle_watch_cmd()
+        if getattr(sys, "frozen", False) and not Path(cmd[0]).exists():
+            self._settle_write_status("오류", f"정산다운로드.exe 를 찾을 수 없습니다: {cmd[0]}")
+            self._refresh_settlement_status()
+            return
+        try:
+            # CREATE_NO_WINDOW(0x08000000): 콘솔창 깜빡임 없이 백그라운드 실행(함정 #8). 이미 돌면 watch 잠금으로 1개만.
+            self._settle_proc = subprocess.Popen(
+                cmd, cwd=cwd, creationflags=0x08000000,
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self._settle_write_status("시작함", "정산 감시를 시작했습니다 — 곧 상태가 갱신됩니다(이미 돌고 있으면 그대로).")
+        except OSError as exc:
+            self.log(f"[정산] 시작 실패: {exc}")
+            self._settle_write_status("오류", f"정산 시작 실패: {exc}")
+        self._refresh_settlement_status()
+
+    def _settle_stop(self) -> None:
+        killed = self._kill_settlement()
+        self._settle_write_status(
+            "중지됨", "사용자가 정산 감시를 멈췄습니다." if killed else "중지 요청 — 실행 중인 정산이 없었습니다.")
+        self._refresh_settlement_status()
+
+    def _kill_settlement(self) -> bool:
+        """정산 감시 프로세스를 종료. frozen=이름으로, 개발=우리가 띄운 PID 로. 하나라도 죽였으면 True."""
+        killed = False
+        if getattr(sys, "frozen", False):
+            r = subprocess.run(["taskkill", "/F", "/T", "/IM", "정산다운로드.exe"],
+                               creationflags=0x08000000, capture_output=True)
+            killed = r.returncode == 0
+        proc = getattr(self, "_settle_proc", None)
+        if proc is not None and proc.poll() is None:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           creationflags=0x08000000, capture_output=True)
+            killed = True
+        self._settle_proc = None
+        return killed
+
+    def _settle_write_status(self, status: str, detail: str) -> None:
+        """시작/중지/오류처럼 프로세스가 스스로 못 남기는 상태를 앱이 _현재상태.txt 에 직접 적는다(배지 즉시 반영)."""
+        d = self._settlement_log_dir()
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "_현재상태.txt").write_text(
+                "정산 자동 다운로드 — 현재 상태\n"
+                f"갱신: {datetime.now():%Y-%m-%d %H:%M:%S}\n상태: {status}\n내용: {detail}\n"
+                "실행ID: -\n상세 로그: -\n", encoding="utf-8")
+        except OSError as exc:
+            self.log(f"[정산] 상태 기록 실패: {exc}")
 
 
 if __name__ == "__main__":   # 단독 스모크(offscreen 가능) — 실제 output/정산/로그 를 읽어 1회 그린다

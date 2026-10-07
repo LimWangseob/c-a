@@ -1,32 +1,23 @@
 """정산 다운로드 자동 대기·재개 판단(순수 로직·오프라인 검증) — 운용 PC에서 기존 앱과 번갈아 돌기.
 
-소유자 결정(2026-10-06): 정산은 **기존 앱 무인 실행의 ①판매수집이 끝난 직후 재개**하고, **다음날 17:40에 멈춘다**
-(18:00 무인 실행 전 — 진행 중 요청 마무리·받기·Chrome 닫기 여유). 로그인을 쓰는 건 ①판매수집뿐이라 ②키워드·
-③순위(로그인 없음·별도 프로필)와는 겹쳐도 된다.
+소유자 결정(2026-10-07): 정산은 **24시간 감시**하되 **①판매수집이 돌고 있을 때만 일시정지**하고, 끝나면 재개한다.
+- **소급(초기)**: 2026-01 ~ 오늘치 밀린 정산을 다 받아야 하므로, 받을 게 있는 동안은 **연속**으로 바퀴를 돈다.
+- **정상(소급 후)**: 받을 게 없어지면 **다음 ①판매수집 완료마다 1회**만 돈다(매번 전 계정 재로그인하지 않음 = 계정 보호).
+- ⛔ 로그인을 쓰는 건 ①판매수집뿐이라 ②키워드·③순위(로그인 없음·별도 프로필)와는 겹쳐도 된다.
 
-판단 기준 = 앱이 남기는 단계 기록(`output/…_실행단계.json`: stage sales=①완료·ranks=②완료·done=전부, at=기록 시각).
-- 주기 시작 P = 가장 최근의 17:40.
-- P 이후에 ①완료(sales/ranks/done) 기록이 있으면 → 실행(다음 17:40까지).
-- 기록이 없으면 대기. 단 P + FALLBACK(8시간 20분 = 새벽 2시)이 지나도 없으면 앱이 그날 안 돈 것으로 보고 실행
-  (같은 계정 Chrome 이 떠 있으면 그 계정은 건너뛰는 안전장치가 그대로 있음) — 이유를 기록에 남긴다.
-- 이번 주기를 이미 끝까지 마쳤으면 다음 주기까지 대기(하루 1바퀴 — 매번 26계정 다시 로그인하지 않음).
+신호 둘:
+- `_진행중.json` 수정 시각(`sales_in_progress`) = ①판매수집이 '지금' 도는지(일시정지 판단).
+- `_실행단계.json`(`read_marker`: stage sales=①완료·at=시각) = ①판매수집이 '언제' 끝났는지(정상 1회 트리거).
+실제 '소급 연속 vs 하루 1회'는 호출부가 한 바퀴 처리 건수로 정한다(받은 게 있으면 바로 다음 바퀴).
 """
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
-STOP_HM = "17:40"
-FALLBACK = timedelta(hours=8, minutes=20)
 SALES_DONE = ("sales", "ranks", "done")
-
-
-def cycle_start(now: datetime, stop_hm: str = STOP_HM) -> datetime:
-    """가장 최근의 멈춤 시각(오늘 17:40 이 지났으면 오늘, 아니면 어제)."""
-    hh, mm = (int(x) for x in stop_hm.split(":"))
-    today = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-    return today if now >= today else today - timedelta(days=1)
+SALES_STALE_MIN = 20   # _진행중.json 이 이보다 최근에 갱신됐으면 ①판매수집이 '지금 돌고 있다'고 본다
 
 
 def read_marker(path) -> tuple[dict | None, str]:
@@ -41,30 +32,30 @@ def read_marker(path) -> tuple[dict | None, str]:
         return None, f"앱 단계 기록 읽기 실패: {exc.__class__.__name__}: {exc}"
 
 
-def decide(now: datetime, marker: dict | None, last_cycle: datetime | None, stop_hm: str = STOP_HM
-           ) -> tuple[str, str, datetime]:
-    """→ ('run'|'wait', 사유, 이번 주기 시작 P). 실행이면 멈출 시각 = P + 1일."""
-    p = cycle_start(now, stop_hm)
-    if last_cycle is not None and last_cycle >= p:
-        return "wait", f"이번 주기({p:%m-%d %H:%M}~) 정산 완료 — 다음 ①판매수집 완료까지 대기", p
-    if marker and marker["stage"] in SALES_DONE and marker["at"] >= p:
-        return "run", f"앱 ①판매수집 완료 기록({marker['at']:%m-%d %H:%M}·{marker['stage']}) 확인 — 재개", p
-    if now >= p + FALLBACK:
-        return "run", (f"{p + FALLBACK:%m-%d %H:%M} 까지 앱 ①판매수집 완료 기록 없음 — 앱이 안 돈 것으로 보고 재개"
-                       "(계정 Chrome 사용 중이면 그 계정 건너뜀)"), p
-    return "wait", f"앱 ①판매수집 완료 기다림(주기 {p:%m-%d %H:%M}~·늦어도 {p + FALLBACK:%m-%d %H:%M} 재개)", p
+def plan_watch(busy: bool, busy_why: str, sales_at: datetime | None,
+               last_sales_at: datetime | None) -> tuple[str, str]:
+    """다음 행동(순수). busy=①판매수집 진행 중 · sales_at=현재 ①완료 기록 시각 ·
+    last_sales_at=마지막으로 정산을 '받을 것 없음'까지 돌린 ①완료 시각(=소급 끝난 뒤 '하루 1회' 기준, 소급 중엔 None).
+      → 'wait' : ①판매수집 중(busy)이거나, 소급 끝났고 새 ①완료가 아직 없음.
+      → 'run'  : 지금 한 바퀴(소급 중=항상·정상 중=새 ①완료 있을 때)."""
+    if busy:
+        return "wait", busy_why
+    if last_sales_at is not None and (sales_at is None or sales_at <= last_sales_at):
+        return "wait", "받을 정산 없음 — 다음 ①판매수집 완료까지 대기"
+    return "run", ("소급 수집(밀린 정산 받는 중)" if last_sales_at is None
+                   else "새 ①판매수집 완료 — 정산 수집")
 
 
-def load_last_cycle(path) -> datetime | None:
-    p = Path(path)
+def sales_in_progress(progress_path, *, now: datetime | None = None,
+                      stale_min: int = SALES_STALE_MIN) -> tuple[bool, str]:
+    """①판매수집이 지금 돌고 있는지 — 앱이 ①판매수집 동안 계정마다 갱신하는 `_진행중.json` 의 수정 시각으로 판정.
+    (존재 + 최근 stale_min 분 내 갱신)=진행 중 → 정산 일시정지. ①끝나면 파일이 지워지거나(완료) 갱신이
+    멈춰(미완료 남김) 곧 '진행 중 아님'이 된다. 계정별 `_profile_busy` 건너뜀이 추가 안전장치다."""
+    p = Path(progress_path)
     if not p.exists():
-        return None
-    return datetime.fromisoformat(json.loads(p.read_text(encoding="utf-8"))["last_cycle"])
-
-
-def save_last_cycle(path, cycle: datetime) -> None:
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps({"last_cycle": cycle.isoformat(timespec="seconds")}), encoding="utf-8")
-    tmp.replace(p)
+        return False, ""
+    now = now or datetime.now()
+    age_min = (now - datetime.fromtimestamp(p.stat().st_mtime)).total_seconds() / 60
+    if age_min <= stale_min:
+        return True, f"①판매수집 진행 중(진행 파일 {max(0, int(age_min))}분 전 갱신) — 정산 일시정지"
+    return False, ""

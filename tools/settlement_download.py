@@ -423,6 +423,7 @@ def _run_accounts(accts, run, args) -> int:
         if past_until(args):
             LOG.record("(전체)", "중단", RL.WAIT, f"멈춤 시각 {args.until} 지남 — 남은 계정은 다음 실행에서 이어감")
             return 0
+        LOG.heartbeat("작동중", f"실행 중: {name}")   # 상태 화면에 '어느 계정 실행 중' 표시(정산일은 로그 줄에)
         log(f"== {name} {args.command} ==")
         try:
             with session(a, args.hidden) as b:
@@ -442,46 +443,64 @@ def _run_accounts(accts, run, args) -> int:
     return 0
 
 
-WATCH_STATE = BASE / "_자동실행.json"
-WATCH_POLL_SEC = 300
+WATCH_POLL_SEC = 300             # 대기/쉼 확인 간격
+WATCH_CATCHUP_REST_SEC = 60      # 소급(받을 게 남음) 중 한 바퀴와 다음 바퀴 사이 짧은 쉼
+
+
+def _sweep_work_count(lg) -> int:
+    """이번 한 바퀴에서 실제로 한 일(새 요청·받은 파일) 수 — 0이면 '받을 정산 없음'(소급 끝)."""
+    return sum(1 for r in lg.rows if r["단계"] in ("요청", "받기") and r["결과"] == RL.OK)
 
 
 def cmd_watch(args) -> int:
-    """운용 PC 상시 실행: 앱 ①판매수집 완료 → 정산 재개(숨김 창) → 다음날 17:40 멈춤 → 반복(settlement_watch).
-    같은 PC에 watch 가 둘 뜨지 않게 잠금. 대기 중엔 5분마다 확인하고, 판단이 바뀔 때만 기록한다."""
+    """운용 PC 24시간 감시: ①판매수집이 돌 때만 정지(_진행중.json), 아니면 한 바퀴 실행.
+    받을 게 있으면(소급) 짧게 쉬고 바로 다음 바퀴, 받을 게 없으면 다음 ①판매수집 완료까지 대기(정상 하루 1회).
+    같은 PC에 watch 가 둘 뜨지 않게 잠금."""
     from coupang_analytics import settlement_watch as W
-    from coupang_analytics.pipeline_paths import _run_stage_path
+    from coupang_analytics.pipeline_paths import _progress_path, _run_stage_path
     from coupang_analytics.registry_lock import RegistryLockError, registry_lock
     global LOG
+    prog = _progress_path("output")
     try:
         with registry_lock(BASE / "_잠금" / "_watch.lock", wait_sec=0, on_log=log):
-            last = ""
+            args.until, args.until_at, args.hidden = "", None, True   # 멈춤 시각 없음(①정지는 루프가 담당)
+            last_sales_at = None   # 받을 것 없음까지 돌린 ①완료 시각(소급 끝난 뒤 '하루 1회' 기준)
+            last_state = ""
             while True:
-                marker, why = W.read_marker(_run_stage_path("output"))
-                action, reason, cycle = W.decide(datetime.now(), marker, W.load_last_cycle(WATCH_STATE))
-                if reason != last:
-                    log(f"[자동] {reason}" + (f" ({why})" if why and action == "wait" else ""))
-                    last = reason
+                busy, busy_why = W.sales_in_progress(prog)
+                marker, _ = W.read_marker(_run_stage_path("output"))
+                sales_at = marker["at"] if marker and marker["stage"] in W.SALES_DONE else None
+                action, reason = W.plan_watch(busy, busy_why, sales_at, last_sales_at)
                 if action == "wait":
-                    # 대기 중엔 로그는 판단이 바뀔 때만 남기지만, 상태 파일은 매 폴링마다 덮어써
-                    # '갱신' 시각이 계속 바뀌게 한다 → 운용 PC에서 창 없이도 '살아있음'을 확인할 수 있다.
-                    LOG.heartbeat("대기중", reason + (f" ({why})" if why else ""))
+                    if reason != last_state:
+                        log(f"[자동] {reason}")
+                        last_state = reason
+                    LOG.heartbeat("대기중", reason)      # 매 폴링마다 '갱신' 시각 바뀜 = 살아있음 신호
                     time.sleep(WATCH_POLL_SEC)
                     continue
                 LOG = RL.RunLog(BASE)
-                args.until_at, args.end, args.hidden = cycle + timedelta(days=1), date.today(), True
-                log(f"실행 {LOG.run_id} · 자동 · {reason} · 기간 {args.start}~{args.end} · 멈춤 {args.until_at:%m-%d %H:%M}")
-                LOG.heartbeat("작동중", f"{reason} · 멈춤 {args.until_at:%m-%d %H:%M}")
+                args.end = date.today()
+                log(f"실행 {LOG.run_id} · 자동 · {reason} · 기간 {args.start}~{args.end}")
+                LOG.heartbeat("작동중", f"{reason} · 기간 {args.start}~{args.end}")
                 try:
                     _run_accounts(load_accounts(set()), cmd_run, args)
-                    if not past_until(args):             # 멈춤 전에 한 바퀴 다 돌았음(연속 차단 중단 포함) = 이번 주기 완료
-                        W.save_last_cycle(WATCH_STATE, cycle)
+                    work = _sweep_work_count(LOG)
                     cmd_stats()
-                except Exception as exc:                 # 그 바퀴만 실패 기록 후 5분 뒤 다시 판단(watch 는 계속)
+                except Exception as exc:                 # 그 바퀴만 실패 기록 후 다시 판단(watch 는 계속)
                     LOG.error("(전체)", "자동실행", exc)
                     LOG.heartbeat("오류", f"자동실행 예외 — {exc.__class__.__name__}: {exc}")
                     time.sleep(WATCH_POLL_SEC)
+                    last_state = ""
+                    continue
                 LOG.summary()
+                if work > 0:                             # 소급: 아직 받을 게 있음 → 짧게 쉬고 바로 다음 바퀴
+                    LOG.heartbeat("대기중", f"{work}건 처리 — 곧 다음 바퀴(소급)")
+                    time.sleep(WATCH_CATCHUP_REST_SEC)
+                else:                                    # 받을 것 없음 → 다음 ①판매수집 완료까지 대기(정상)
+                    last_sales_at = sales_at or datetime.now()
+                    LOG.heartbeat("대기중", "받을 정산 없음 — 다음 ①판매수집 완료까지 대기")
+                    time.sleep(WATCH_POLL_SEC)
+                last_state = ""
     except RegistryLockError:
         log("[자동] 정산 자동 실행이 이미 떠 있음 — 이 실행은 종료")
         return 0
