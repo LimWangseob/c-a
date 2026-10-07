@@ -23,6 +23,7 @@
 - [판매상태 불일치 경고](feature-sale-status-mismatch-flag.md) · [VID 출처=상품조회·옵션분리](feature-vid-source-from-product-list.md)
 
 ## 작업 원칙(피드백·정책)
+- [⭐정확도 우선·레인 간 요청 규칙(소유자 2026-10-06)](feedback-accuracy-over-speed-and-lane-handoff.md) — 환경 사실은 확인 후 보고(못 하면 추정 분리)·브랜치 master 맞춘 뒤 착수·공유/배포 요청은 단위 끝에 한 번·결정은 받은 세션이 통합에 즉시 전달
 - [⭐도메인별 작업=도메인 전용 세션(worktree 레인)](policy-per-domain-sessions.md) — 공유파일·병합은 통제 세션 직렬
 - [통합 앱 완성 전 기존 앱 무중단](keep-existing-app-running-until-integrated.md) — 신규 greenfield·배선 전 휴면
 - [시안 "적용"=기존 위에 더하기(다시 짜기 금지)](feedback-design-extend-not-redo.md)
@@ -54,3 +55,4 @@
 ## 출력·배포·참조
 - [출력=셀독 서식](seldoc-output-format.md) · [날짜컬럼=실행날짜](date-column-run-date-rule.md) · [구글시트 통합 스펙](gsheet-unified-spec.md)
 - [상세 이미지 추출(CDP attach)](detail-image-extraction.md) · [exe 배포·Defender 보안제외](exe-packaging-deploy.md) · [쿠팡 공식 운영지식](coupang-official-reference.md)
+- [정산 다운로드 상태 모니터링(heartbeat+앱 상태카드)](feature-settlement-status-monitoring.md) — 창 없는 watch 생존·상태 색 배지·멈춤 의심. Qt 지연import 필수(게이트 PySide6 없음)

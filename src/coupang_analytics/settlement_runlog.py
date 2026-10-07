@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import csv
+import os
 import traceback
 from collections import Counter
 from datetime import datetime
@@ -30,6 +31,7 @@ class RunLog:
         self.csv = self.dir / f"처리기록_{self.run_id}.csv"
         self.total = self.dir / "처리기록_누적.csv"
         self.errors = self.dir / f"오류_{self.run_id}.log"
+        self.status = self.dir / "_현재상태.txt"   # 매 실행이 **덮어쓰는** 고정 경로 — 창 없는 자동 실행 모니터링용.
         self.echo = echo
         self.rows: list[dict] = []
 
@@ -38,6 +40,24 @@ class RunLog:
         self.echo(stamped)
         with self.text.open("a", encoding="utf-8") as f:
             f.write(stamped + "\n")
+
+    def heartbeat(self, status: str, detail: str = "", *, extra: tuple[str, ...] = ()) -> None:
+        """현재 상태를 고정 경로(`로그/_현재상태.txt`)에 **덮어쓴다**(append 아님) — 창 없는(console=False)
+        자동 실행을 운용 PC에서 한눈에 확인(살아있나·뭘 하나). 매 호출마다 '갱신' 시각이 바뀌어 생존 신호가 된다.
+        비밀번호·구매자명 등 개인정보는 호출부가 넘기지 않는다(내용은 300자로 자름). 임시파일→os.replace 로
+        읽는 쪽이 반쪽 파일을 보지 않게 한다."""
+        lines = [
+            "정산 자동 다운로드 — 현재 상태",
+            f"갱신: {datetime.now():%Y-%m-%d %H:%M:%S}",
+            f"상태: {status}",
+            f"내용: {str(detail)[:300]}",
+            f"실행ID: {self.run_id}",
+            f"상세 로그: {self.text.name}",
+            *extra,
+        ]
+        tmp = self.status.with_name(self.status.name + ".tmp")
+        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.replace(tmp, self.status)
 
     def record(self, account: str, step: str, result: str, reason: str = "", *, channel: str = "", kind: str = "",
                settle_date: str = "", period: str = "") -> None:

@@ -167,3 +167,5 @@
 2026-10-06 · 정산 다운로드 운용 = 운용 PC watch: 앱 ①판매수집 완료 후 재개·다음날 17:40 멈춤·반복(기록 없으면 새벽2시 대체)·①(로그인 단계)만 피하면 ②③과 병행 가능 · 소유자 결정
 2026-10-06 · 정산 다운로드 배포 = 별도 exe(정산다운로드.exe·console=False) 같은 onedir·설치(install.ps1) 때 watch 무인 자동 등록(로그온2분+매일08:00·IgnoreNew)·remove_autorun에 watch 매칭 추가 · 소유자 결정(통제 빌드)
 2026-10-06 · 정산 입력 = 소유자 계정 파일 data\정산_계정목록.txt(계정ID·비번·대표자-사업자·UTF-8)·정산 대상=대장보다 넓은 위탁계정 전부 · ⚠비번 평문이라 zip/씨앗 미동봉(운용 PC data 에 소유자 직접·업데이트 보존)·읽은 비번은 credstore(DPAPI) 암호화 저장·기록/파일명에 비번 금지 · 소유자 결정
+2026-10-07 · 정산 다운로드 실행 로그 모니터링 = (1)settlement_runlog.heartbeat 가 output/정산/로그/_현재상태.txt 덮어쓰기(생존신호·비번/구매자명 미기록) (2)app_qt 정산 탭 상태 카드(색 배지·마지막활동·멈춤 의심 12분·오늘 집계·최근 로그·5초 자동) (3)deploy/정산_상태확인.bat 사람용 · 순수 추가·읽기 전용·야간 파이프라인 불변 · 소유자 요구
+2026-10-07 · ui 모듈 Qt 지연 import 규칙 = settlement_status_panel_qt 는 PySide6 를 메서드 안에서 import(순수 리더는 Qt 없이) — 회귀 pytest 게이트가 PySide6 없는 Python312 에서 돌기 때문(모듈 top 두면 ModuleNotFoundError) · 실측 근거

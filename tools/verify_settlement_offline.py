@@ -688,7 +688,21 @@ def p11_runlog():
         summ = lg.summary()
         assert "[요약] A-1: 정상 2" in summ and "[요약] B-2: 실패 1 · 차단 1" in summ, summ
         assert "[비정상] 조회 실패: 1건" in summ and "[비정상] 차단감지 차단: 1건" in summ
-    ok("실행·누적 CSV(엑셀용)·정산일 칸·차단/로그인 기록·오류 전체 추적·계정별/단계별 요약")
+        # heartbeat: 창 없는 자동 실행 모니터링 — 고정 경로(_현재상태.txt)에 **덮어쓰기**(append 아님)·개인정보 없음.
+        lg.heartbeat("대기중", "앱 ①판매수집 완료 기다림")
+        st = lg.status
+        assert st.name == "_현재상태.txt" and st.parent == lg.dir                    # 로그 폴더 안 고정 파일
+        txt1 = st.read_text(encoding="utf-8")
+        assert "상태: 대기중" in txt1 and "앱 ①판매수집 완료 기다림" in txt1
+        assert f"실행ID: {lg.run_id}" in txt1 and f"상세 로그: {lg.text.name}" in txt1
+        lg.heartbeat("작동중", "요청 누르는 중", extra=("추가줄",))
+        txt2 = st.read_text(encoding="utf-8")
+        assert "상태: 작동중" in txt2 and "추가줄" in txt2
+        assert "대기중" not in txt2 and txt2.count("상태:") == 1                      # 누적 아님 — 최신 1건만
+        assert not st.with_name(st.name + ".tmp").exists()                           # 임시파일은 남기지 않음(os.replace)
+        lg2.heartbeat("완료", "명령 run")                                             # 다른 RunLog 도 같은 고정 파일을 공유
+        assert lg2.status == st and "상태: 완료" in st.read_text(encoding="utf-8")
+    ok("실행·누적 CSV(엑셀용)·정산일 칸·차단/로그인 기록·오류 전체 추적·계정별/단계별 요약·상태 파일 덮어쓰기 모니터링")
 
 
 def p12_watch_decide():
@@ -762,6 +776,37 @@ def p13_accounts_file():
     ok("공백/탭 혼합·3열=비번→이름 없음(경고·repr 비노출)·중복/칸 없음/빈 파일/UTF-8 아님=오류·BOM·계정ID 끝 기준 이름 맞춤")
 
 
+def p14_status_reader():
+    print("[P14] 상태 화면 리더 — heartbeat(_현재상태.txt)↔UI 리더 계약·멈춤 의심 판정·오늘 집계")
+    import os as _os
+    import re as _re
+    from datetime import datetime as _dtm
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ui"))
+    import settlement_status_panel_qt as UI               # PySide6 는 이 프로젝트 필수 의존(앱 UI)
+    from coupang_analytics import settlement_runlog as RLG
+    fixed = _dtm(2026, 10, 7, 12, 55, 0)
+    with tempfile.TemporaryDirectory() as tmp:
+        lg = RLG.RunLog(tmp, now=fixed)                             # RunLog.dir = <tmp>/로그
+        lg.heartbeat("작동중", "①판매수집 완료 — 재개 · 멈춤 10-07 17:40")
+        lg.record("A-1", "요청", RLG.OK, "다운로드 요청함", channel="윙", settle_date="2026-01-12")
+        lg.record("B-2", "요청", RLG.BLOCK, "차단 화면", channel="윙", settle_date="2026-01-12")
+        # heartbeat 의 '갱신'은 실제 now(생존신호) → 시간 판정만 고정(형식·라벨은 heartbeat 실제 출력 그대로 검증).
+        lg.status.write_text(_re.sub(r"갱신: .*", f"갱신: {fixed:%Y-%m-%d %H:%M:%S}",
+                                     lg.status.read_text(encoding="utf-8")), encoding="utf-8")
+        _os.utime(lg.text, (fixed.timestamp(),) * 2)               # 로그 mtime 도 고정
+        info = UI.read_settlement_status(lg.dir, now=_dtm(2026, 10, 7, 12, 57, 0))
+        assert info["exists"] and info["상태"] == "작동중" and not info["stale"], info   # 2분 전 = 정상
+        assert info["내용"].startswith("①판매수집 완료") and info["log_name"] == lg.text.name
+        cnt = UI.read_settlement_status(lg.dir, now=_dtm.now())["today_counts"]    # 누적 CSV 는 실제 '시각'(오늘)
+        assert cnt.get(RLG.OK) == 1 and cnt.get(RLG.BLOCK) == 1, cnt              # 오늘 쓴 2줄 집계
+        late = UI.read_settlement_status(lg.dir, now=_dtm(2026, 10, 7, 13, 20, 0))
+        assert late["stale"] is True, late                                       # 25분 무변화 = 멈춤 의심
+        empty = Path(tmp) / "빈폴더"
+        assert UI.read_settlement_status(empty)["exists"] is False               # 로그 없음 = 아직 실행 안 됨
+        assert UI._counts_text({}) == "오늘 받은 기록 없음" and "분 전" in UI._age_text(180)
+    ok("heartbeat 덮어쓰기 파싱·작동중/대기중 멈춤 의심(STALE_SEC)·오늘 결과 집계·로그 없음/빈값 표기")
+
+
 def main():
     g1_payout_dates()
     g2_amounts()
@@ -779,6 +824,7 @@ def main():
     p11_runlog()
     p12_watch_decide()
     p13_accounts_file()
+    p14_status_reader()
     print("정산 계산 모듈 오프라인 검증 통과(골든 payout 12·amount 2·불변식 4행/3식 100%)")
 
 

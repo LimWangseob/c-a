@@ -35,7 +35,8 @@ _EXCLUDES = [
 # app_qt.py 는 ui/ 의 형제 모듈을 맨이름으로 import(registry_ui·registry_panel_qt·stock_panel_qt).
 # → pathex 에 'ui' 를 넣어 PyInstaller 가 이 모듈들을 찾게 하고, hiddenimports 로도 명시(누락=런타임
 #   ModuleNotFoundError). H_ui 가 정산/회사재고 UI 를 추가한 뒤 spec 미갱신으로 빠졌던 것(2026-09-29).
-_ui_hidden = hiddenimports + ["registry_ui", "registry_panel_qt", "stock_panel_qt"]
+_ui_hidden = hiddenimports + ["registry_ui", "registry_panel_qt", "stock_panel_qt",
+                              "settlement_status_panel_qt"]
 
 # 메인 GUI 앱(콘솔 없음).
 a = Analysis(

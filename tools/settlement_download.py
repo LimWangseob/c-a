@@ -463,11 +463,15 @@ def cmd_watch(args) -> int:
                     log(f"[자동] {reason}" + (f" ({why})" if why and action == "wait" else ""))
                     last = reason
                 if action == "wait":
+                    # 대기 중엔 로그는 판단이 바뀔 때만 남기지만, 상태 파일은 매 폴링마다 덮어써
+                    # '갱신' 시각이 계속 바뀌게 한다 → 운용 PC에서 창 없이도 '살아있음'을 확인할 수 있다.
+                    LOG.heartbeat("대기중", reason + (f" ({why})" if why else ""))
                     time.sleep(WATCH_POLL_SEC)
                     continue
                 LOG = RL.RunLog(BASE)
                 args.until_at, args.end, args.hidden = cycle + timedelta(days=1), date.today(), True
                 log(f"실행 {LOG.run_id} · 자동 · {reason} · 기간 {args.start}~{args.end} · 멈춤 {args.until_at:%m-%d %H:%M}")
+                LOG.heartbeat("작동중", f"{reason} · 멈춤 {args.until_at:%m-%d %H:%M}")
                 try:
                     _run_accounts(load_accounts(set()), cmd_run, args)
                     if not past_until(args):             # 멈춤 전에 한 바퀴 다 돌았음(연속 차단 중단 포함) = 이번 주기 완료
@@ -475,6 +479,7 @@ def cmd_watch(args) -> int:
                     cmd_stats()
                 except Exception as exc:                 # 그 바퀴만 실패 기록 후 5분 뒤 다시 판단(watch 는 계속)
                     LOG.error("(전체)", "자동실행", exc)
+                    LOG.heartbeat("오류", f"자동실행 예외 — {exc.__class__.__name__}: {exc}")
                     time.sleep(WATCH_POLL_SEC)
                 LOG.summary()
     except RegistryLockError:
@@ -500,8 +505,10 @@ def main() -> int:
     apppaths.set_workdir()
     LOG = RL.RunLog(BASE)
     log(f"실행 {LOG.run_id} · 명령 {args.command} · 기간 {args.start}~{args.end} · 데이터 폴더 {Path.cwd()}")
+    LOG.heartbeat("작동중", f"명령 {args.command} · 기간 {args.start}~{args.end}")   # 수동 실행도 창 없이 모니터링
     if args.command == "stats":
         cmd_stats()
+        LOG.heartbeat("완료", "명령 stats")
         return 0
     if args.command == "watch":
         return cmd_watch(args)
@@ -512,6 +519,7 @@ def main() -> int:
     rc = _run_accounts(accts, run, args)
     LOG.summary()
     log(f"기록: {LOG.csv} · 오류 추적: {LOG.errors if LOG.errors.exists() else '없음'}")
+    LOG.heartbeat("완료", f"명령 {args.command} · 종료코드 {rc}")
     return rc
 
 

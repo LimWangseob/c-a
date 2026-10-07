@@ -44,6 +44,7 @@ from coupang_analytics.rank import make_matcher, organic_rank, warmup  # noqa: E
 import registry_ui  # noqa: E402
 from proxy_panel_qt import ProxyPanelMixin  # noqa: E402
 from registry_panel_qt import RegistryPanelMixin  # noqa: E402
+from settlement_status_panel_qt import SettlementStatusMixin  # noqa: E402
 from stock_panel_qt import KEY_STOCK_URL, StockPanelMixin  # noqa: E402
 
 _PROFILE = "data/chrome-ui"
@@ -180,7 +181,7 @@ _GS_LINKS = {
 }
 
 
-class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, QtWidgets.QMainWindow):
+class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatusMixin, QtWidgets.QMainWindow):
     log_signal = QtCore.Signal(str)
     finish_signal = QtCore.Signal(object, object, object, object)   # (btn, on_done, result, err)
     gs_status_signal = QtCore.Signal(str, object, str)   # (_GS_LINKS 종류, 연결됨 True/False/None=미확인, 설명)
@@ -418,6 +419,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, QtWidgets.QMainW
         sub.setObjectName("muted")
         sub.setWordWrap(True)
         v.addWidget(sub)
+        v.addWidget(self._settlement_status_card())  # 창 없는 정산 자동 다운로드의 '지금 상태'를 색으로 한눈에
         v.addWidget(self._stock_card())     # 회사 재고(판매자배송) — 재고현황 → 관리대장 '회사보유재고'
         v.addWidget(self._registry_card())  # 셀독등록원장(원장 링크·미리보기/반영·비밀번호 불일치)
         v.addStretch(1)
