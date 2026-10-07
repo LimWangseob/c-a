@@ -1027,7 +1027,29 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self._settings_hold = False             # 설정 탭을 떠나면 '결과 보이기' 유지 해제
         self._update_log_visibility()
 
-    def run_bg(self, task, on_done=None, btn=None, exclusive=False):
+    @staticmethod
+    def _pipe_lock_path() -> str:
+        """교차 프로세스 파이프라인 실행 잠금 — 열어둔 GUI 와 18:00 무인(--auto)이 **동시에** 파이프라인을
+        돌려 마스터·계정이 충돌하는 것을 막는다. 유휴 GUI 는 잠금을 쥐지 않으므로 무인은 항상 실행된다."""
+        d = app_output_dir() / "_잠금"
+        d.mkdir(parents=True, exist_ok=True)
+        return str(d / "파이프라인.lock")
+
+    def run_bg(self, task, on_done=None, btn=None, exclusive=False, pipelinelock=False):
+        lock_cm = None
+        if pipelinelock:   # 계정 로그인·마스터 쓰기 실행 = 이 PC 전체에서 한 번에 하나(다른 창/무인과도 배타)
+            from coupang_analytics.registry_lock import RegistryLockError, registry_lock
+            lock_cm = registry_lock(self._pipe_lock_path(), wait_sec=0, on_log=self.log)
+            try:
+                lock_cm.__enter__()
+            except RegistryLockError:
+                self.log("[안내] 다른 창이나 무인 실행에서 파이프라인이 진행 중입니다 — 동시 실행을 막습니다. "
+                         "끝난 뒤 다시 실행하세요.")
+                if btn:
+                    btn.setEnabled(True)
+                if on_done is not None:        # 흐름 마무리 — 무인(--auto)은 이 경로로 정상 종료된다
+                    self.finish_signal.emit(btn, on_done, None, None)
+                return
         if exclusive:   # 브라우저/파이프라인 실행 = 한 번에 하나(배타). btn 은 그 실행의 소유 표식.
             self._run_active = True
             self._active_btn = btn
@@ -1045,6 +1067,12 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
                 result = task()
             except Exception as exc:
                 err = exc
+            finally:
+                if lock_cm is not None:      # 실행 끝(성공·실패 무관)에 잠금 해제 — 프로세스 죽어도 OS 가 해제
+                    try:
+                        lock_cm.__exit__(None, None, None)
+                    except Exception:
+                        pass
             self.finish_signal.emit(btn, on_done, result, err)
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1553,7 +1581,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self.run_bg(lambda: self._full_pipeline_task(
             input_list, naver_creds, key, df, dt, dlabel, resume, carry, redo_today,
             grow, keywords_off, gs_in, gs_out, stop),
-            on_done=self._pipeline_done, btn=btn, exclusive=True)
+            on_done=self._pipeline_done, btn=btn, exclusive=True, pipelinelock=True)
 
     def _full_pipeline_task(self, input_list, naver_creds, key, df, dt, dlabel, resume, carry,
                             redo_today, grow, keywords_off, gs_in, gs_out, stop):
@@ -1686,7 +1714,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             except Exception as exc:                # 무인: 어떤 오류도 앱을 매달아두지 않게 로그 후 종료로
                 self.log(f"[무인] 실행 중 오류: {exc.__class__.__name__}: {exc}")
             return None
-        self.run_bg(task, on_done=self._auto_done, btn=None)
+        self.run_bg(task, on_done=self._auto_done, btn=None, pipelinelock=True)
 
     def _auto_done(self, _result=None):
         self.log("== [무인 자동 실행] 완료 — 종료 ==")
@@ -1766,7 +1794,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             except Exception as exc:               # 복구도 무인이라 어떤 오류도 매달지 않고 로그 후 종료
                 self.log(f"[재부팅 복구] 실행 중 오류: {exc.__class__.__name__}: {exc}")
             return None
-        self.run_bg(task, on_done=self._auto_done, btn=None)
+        self.run_bg(task, on_done=self._auto_done, btn=None, pipelinelock=True)
 
     def do_select_keywords(self):
         """② 키워드 선정 — 로그인 불필요. 최신 결과 워크북 상품에 키워드만 채운다(순위 없음)."""
@@ -1790,7 +1818,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             backup_sources(output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
             return select_keywords_stage(NaverAdApi(naver_creds), key, grow=grow, on_log=self.log,
                                          gsheet_output_url=gs_out, stock_url=stock_url)
-        self.run_bg(task, on_done=self._pipeline_done, btn=self.kw_btn, exclusive=True)
+        self.run_bg(task, on_done=self._pipeline_done, btn=self.kw_btn, exclusive=True, pipelinelock=True)
 
     def do_track_ranks(self, semi: bool = True):
         """③ 노출순위 조회(반자동) — 로그인 불필요. 앱이 창을 띄우고 키워드를 안내, 사용자가 직접
@@ -1813,7 +1841,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             backup_sources(output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
             return track_ranks_stage(semi=True, should_stop=should_stop, on_log=self.log,
                                      gsheet_output_url=gs_out, stock_url=stock_url)
-        self.run_bg(task_semi, on_done=self._pipeline_done, btn=self.track_semi_btn, exclusive=True)
+        self.run_bg(task_semi, on_done=self._pipeline_done, btn=self.track_semi_btn, exclusive=True, pipelinelock=True)
 
     def _stop_semi(self):
         """반자동 순위 중지 요청 — 현재 키워드까지만 처리하고 멈춤(진행분은 저장됨)."""

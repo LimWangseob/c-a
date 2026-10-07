@@ -36,6 +36,7 @@
 
 ## 실행·로그인
 - [실행 UI=app_qt·상시가동·설정탭 일원화](runtime-ui-and-always-on.md) · [재부팅 자동복구 --resume](reboot-recovery.md)
+- [파이프라인 동시 실행 방지(교차 프로세스 잠금)](feature-pipeline-single-run-lock.md) — 열어둔 GUI+18:00 무인 동시 run_full 차단·유휴 GUI는 잠금 안 쥠(무인 항상 실행)·⚠라이브 미검증
 - [로그인=실제 Chrome+CDP만(위장 금지)](login-policy-real-browser-only.md) · [2차인증=위치기반(사무실만)](login-2fa-location-based.md)
 - [로그인 차단=세션우선+서킷브레이커](login-block-session-first-circuit-breaker.md) · [쿠팡 세션 하루내 만료](coupang-session-short-lived.md)
 - [OpenAPI 불가(위탁)→WING 세션 유일](coupang-openapi-not-available-consignment.md) · [샵마인=WebView2 실증](shopmine-architecture.md)
