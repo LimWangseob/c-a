@@ -30,7 +30,7 @@ copy /Y "%~dp0deploy\정산_상태확인.bat" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0deploy\정산_지금실행.bat" "dist\coupang-analytics\" >nul
 rem 정산 다운로드 watch 는 install.ps1 이 자동 등록(정산다운로드.exe). 이 스크립트는 수동 재등록/-Exe 지정용 보조.
 rem 정산_상태확인.bat = 창 없는 정산 자동 다운로드의 '지금 상태'를 더블클릭으로 보는 모니터링 창(사람용).
-rem 정산_지금실행.bat = 사무실에서 더블클릭으로 정산 다운로드를 지금 한 번 수동 실행(run --until 17:40).
+rem 정산_지금실행.bat = 사무실에서 더블클릭으로 정산 다운로드를 아무 때나 한 번 수동 실행(run·끝까지·겹친 계정은 건너뜀).
 echo.
 echo [4/5] 이 PC 설정(구글시트 링크·입력소스 + 네이버/OpenAI/구글SA 키) 패키지에 포함...
 echo   * 새 PC에서 추가 입력 없이 쓰도록 담습니다. _설정값.json 은 평문이라 설치 시 자동 삭제됩니다.
