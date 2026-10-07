@@ -2030,10 +2030,14 @@ def _import_settings(path: str) -> None:
         return
     st = QtCore.QSettings("coupang-analytics", "ui")
     qs = data.get("qsettings") or {}
-    for k, v in qs.items():
-        st.setValue(k, v)
+    # 운용 PC 재배포(업데이트) 때 **이미 저장된 값(config.json)은 보존** — 패키지의 옛 링크로 덮어쓰지 않는다.
+    # (소유자 2026-10-07: 재배포마다 구글시트 URL 이 과거 값으로 초기화돼 매번 재설정하던 문제 근본 수정.)
+    imported = [k for k, v in qs.items() if not appconfig.get(k, "")]
+    for k in imported:
+        st.setValue(k, qs[k])
     st.sync()
-    appconfig.update({k: v for k, v in qs.items() if isinstance(v, str)})   # config.json(보존 폴더)에도 이식
+    appconfig.update({k: qs[k] for k in imported if isinstance(qs[k], str)})   # config.json(보존 폴더)에도 이식
+    kept = [k for k in qs if k not in imported]
     cs = CredStore()
     n = 0
     for k, v in (data.get("credstore") or {}).items():
@@ -2046,7 +2050,8 @@ def _import_settings(path: str) -> None:
         deleted = "평문 파일 삭제함"
     except OSError:
         deleted = "[주의] 평문 파일 삭제 실패-수동 삭제 필요"
-    print(f"[설정 가져오기] 완료 - 링크/소스 {len(data.get('qsettings') or {})}개, 키 {n}개 이 PC용 암호화 저장, {deleted}")
+    print(f"[설정 가져오기] 완료 - 링크/소스 이식 {len(imported)}개·기존 보존 {len(kept)}개, "
+          f"키 {n}개 이 PC용 암호화 저장, {deleted}")
 
 
 def main():
