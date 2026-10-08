@@ -1042,7 +1042,8 @@ def p19_verify_sheet():
     assert w["지급일 2026-10-15"]["판정"] == SV.PENDING                                      # 수집일 이후 = 미정산
     assert w["~2026-10-08"]["판정"] == SV.OK                                                 # 입금 − 인출 = 잔액
     comp = [x for x in SV.rg_wallet("A", rg, v) if x["대조"] == "재고손실보상"]
-    assert comp[0]["우리(계산)"] == 53057 + 69394 and comp[0]["판정"] == SV.CHECK
+    assert comp[0]["우리(계산)"] == 53057 + 69394 and comp[0]["판정"] == SV.CONFIRMED          # 공식: 대표계좌 별도 입금
+    assert "대표 정산 계좌" in comp[0]["비고"]
     ours = {"202605": {"매출": 8602500, "쿠폰": 0, "수수료": 968234, "정산대상": 7634266}}
     ws = SV.wing_sales("A", ours, v)
     assert [x["판정"] for x in ws if x["기준"] == "202605"] == [SV.OK] * 4
@@ -1070,6 +1071,56 @@ def p19_verify_sheet():
        "지급상태 HOLD=확인 필요·부가세 윙/RG·보류0/추가지급1·자료 없음")
 
 
+def p20_rg_payout_dates():
+    print("[P20] 로켓그로스 지급일 — 70%·100%=주마감+20영업일 · 30% 월걸침 주=+25 · 30% 일반=익익월 첫 영업일(실측 629/629)")
+    from coupang_analytics import payout as P
+    hol = {D(x) for x in ("2026-01-01", "2026-02-16", "2026-02-17", "2026-02-18", "2026-03-02", "2026-05-01", "2026-05-05",
+                          "2026-05-25", "2026-06-03", "2026-07-17", "2026-08-17", "2026-09-24", "2026-09-25",
+                          "2026-10-05")}   # 테스트 주입(쿠팡 실지급일과 맞춘 영업일 기준)
+    cases = [  # (지급비율, 기간 시작, 기간 끝, 실제 지급일) — nicoable·bux1004 등 운용 PC 정산현황 실값
+        (70, "2026-07-27", "2026-07-31", "2026-08-31"), (30, "2026-07-27", "2026-07-31", "2026-09-07"),   # 소유자 화면 확인
+        (30, "2026-08-01", "2026-08-02", "2026-09-07"), (30, "2026-08-03", "2026-08-09", "2026-10-01"),
+        (70, "2026-08-31", "2026-08-31", "2026-10-07"),
+        (100, "2026-01-26", "2026-01-31", "2026-03-05"), (100, "2026-05-25", "2026-05-31", "2026-06-29"),
+        (30, "2026-06-01", "2026-06-07", "2026-08-03"), (70, "2026-04-13", "2026-04-19", "2026-05-19"),
+        (70, "2026-06-15", "2026-06-21", "2026-07-20")]
+    for ratio, ps, pe, want in cases:
+        got = P.rg_payout_date(ratio, D(ps), D(pe), hol)
+        assert got == D(want), (ratio, ps, pe, got, want)
+    expect(ValueError, lambda: P.rg_payout_date(50, D("2026-08-03"), D("2026-08-09"), hol), "모르는 지급비율")
+    old = P.payout_date(P.PAYOUT_RG_WEEKLY_FINAL, revenue_month="2026-07", holidays=hol)
+    assert old != D("2026-09-07")                                                      # 옛 규칙(익익월)은 월걸침 주를 못 맞춤
+    ok("70%·100%=+20(5/1·7/17 비영업일 반영)·30% 월걸침=+25(07-27~31·08-01~02→09-07)·30% 일반=익익월·모르는 비율=오류")
+
+
+def p21_bank_inflows():
+    print("[P21] 계좌 입금 — 윙 지급·월렛 입금/인출·재고 손실 보상(대표계좌)·물류비 환급(익월 21일)·지급월별 합계")
+    from coupang_analytics import settlement_verify as SV
+    wing = [{"정산일": "2026-07-01", "최종지급액": 2235280, "지급상태": "DONE"},
+            {"정산일": "2026-10-20", "최종지급액": 999, "지급상태": "SCHEDULED"}]                      # 미래 = 제외
+    rg = [{"정산일": "2026-08-03", "기간 시작": "2026-06-29", "최종지급액": 412909, "totalCfsInventoryCompensationAmount": 53057},
+          {"정산일": "2026-07-27", "기간 시작": "2026-06-22", "최종지급액": 0, "totalCfsFeeAdjustment": 10125}]
+    v = {"수집일": "2026-10-08", "wallet": [
+        {"walletEventType": "DEPOSIT", "paymentDate": "20260803000729", "amount": 359852},
+        {"walletEventType": "WITHDRAWAL", "paymentDate": "20260805121648", "amount": 359852}]}
+    rows = {r["지급월"]: r for r in SV.inflows("A", wing, rg, v, today=D("2026-10-08"))}
+    assert rows["2026-07"]["윙 지급"] == 2235280 and rows["2026-07"]["물류비 환급"] == 10125         # 6월분 환급 = 7월 21일
+    assert "07-21" in rows["2026-07"]["비고"]
+    a = rows["2026-08"]
+    assert (a["RG 월렛 입금"], a["RG 월렛 인출"], a["재고 손실 보상"]) == (359852, 359852, 53057)
+    assert a["쿠팡 지급 합계"] == 359852 + 53057 and a["대표계좌 입금 합계"] == 359852 + 53057
+    assert "2026-10" not in rows                                                         # 지급 전 회차 제외
+    none = SV.inflows("A", wing, rg, None, today=D("2026-10-08"))
+    assert all(r["RG 월렛 입금"] is None for r in none) and "월렛 자료 없음" in none[0]["비고"]
+    import openpyxl
+    from coupang_analytics import settlement_stats as ST
+    with tempfile.TemporaryDirectory() as tmp:
+        wb = openpyxl.load_workbook(ST.write_stats(Path(tmp) / "i.xlsx", ST.aggregate([]),
+                                                   inflows=SV.inflows("A", wing, rg, v, today=D("2026-10-08"))))
+        assert [c.value for c in wb["계좌 입금"][1]] == SV.INFLOW_HEAD and wb["계좌 입금"].max_row == 3
+    ok("윙=지급일 지난 회차·월렛 입금/인출·보상=정산일 대표계좌·환급=매출인식 익월 21일·합계 2종·지급 전 제외·월렛 없음 표시")
+
+
 def main():
     g1_payout_dates()
     g2_amounts()
@@ -1093,6 +1144,8 @@ def main():
     p17_server_busy()
     p18_verify_collect()
     p19_verify_sheet()
+    p20_rg_payout_dates()
+    p21_bank_inflows()
     print("정산 계산 모듈 오프라인 검증 통과(골든 payout 12·amount 2·불변식 4행/3식 100%)")
 
 

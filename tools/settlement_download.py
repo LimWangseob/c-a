@@ -522,7 +522,7 @@ def cmd_stats() -> None:
     res = ST.aggregate(files, lines)
     verify = SV.build_all(files, amounts, vdatas, ST._order_rows)
     out = ST.write_stats(BASE / f"정산집계_{datetime.now():%y%m%d_%H%M%S}.xlsx", res, files=files, amounts=amounts,
-                         costs=costs, verify=verify)
+                         costs=costs, verify=verify, inflows=SV.inflows_all(amounts, vdatas, today=date.today()))
     log(f"집계 정산 파일 {len(files)}개·비용 리포트 {len(costs)}시트·쿠팡 지급 내역 {len(amounts)}줄 → {out} "
         f"(경고 {len(res.warnings)}건)")
 

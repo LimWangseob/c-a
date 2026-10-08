@@ -16,7 +16,7 @@ PAYOUT_MP_WEEKLY_1ST = "PAYOUT_MP_WEEKLY_1ST"       # 윙 주정산 70%: 주 마
 PAYOUT_MP_WEEKLY_FINAL = "PAYOUT_MP_WEEKLY_FINAL"   # 윙 최종액 30%: 매출인식월 익익월 1일(보정 없음)
 PAYOUT_MP_MONTHLY = "PAYOUT_MP_MONTHLY"             # 윙 월정산 100%: 월 마감일 + 15영업일
 PAYOUT_RG_WEEKLY_1ST = "PAYOUT_RG_WEEKLY_1ST"       # 로켓그로스 주정산 70%: 주 마감일 + 20영업일
-PAYOUT_RG_WEEKLY_FINAL = "PAYOUT_RG_WEEKLY_FINAL"   # 로켓그로스 2차 30%: 판매마감월 익익월 첫 영업일
+PAYOUT_RG_WEEKLY_FINAL = "PAYOUT_RG_WEEKLY_FINAL"   # 로켓그로스 2차 30%: 판매마감월 익익월 첫 영업일(월걸침 주=rg_payout_date)
 PAYOUT_RG_MONTHLY = "PAYOUT_RG_MONTHLY"             # 로켓그로스 월정산 100%: 월 마감일 + 20영업일
 
 # policy → (기준, 영업일 수(월말 최종액=0·미사용), 지급 비율)
@@ -78,6 +78,23 @@ def payout_date(policy: str, *, week_end: date | None = None, revenue_month: str
         return add_business_days(_month_end(revenue_month), days, holidays)
     first = _add_months(_month_start(revenue_month), 2)            # 익익월 1일
     return first if basis == "month_final_calendar" else next_business_day(first, holidays)
+
+
+def rg_payout_date(ratio: int, period_start: date, period_end: date, holidays) -> date:
+    """로켓그로스 정산현황 한 줄의 지급일 — 쿠팡 도움말 「로켓그로스 상품의 정산은 어떻게 되나요?」 1.1 + 실측 629/629
+    (2026-10-08, 운용 PC 13계정 정산현황 지급일 전부 일치):
+    - 70%·100% = 그 주 마감일(일) + 20영업일 (100% = 월말 조각이 한 번에 지급된 줄·비율은 쿠팡 응답값을 그대로 씀)
+    - 30%, 월이 바뀌는 주(월요일과 일요일의 달이 다름)의 조각 = 주 마감일 + **25영업일**
+    - 30%, 그 밖 = 매출인식 달의 익익월 첫 영업일(PAYOUT_RG_WEEKLY_FINAL)
+    ⚠ 영업일 공휴일 집합은 쿠팡 기준과 같아야 함(실측: 2026-05-01·07-17 도 비영업일). 모르는 비율 = ValueError."""
+    if ratio in (70, 100):
+        return payout_date(PAYOUT_RG_WEEKLY_1ST, week_end=period_end, holidays=holidays)
+    if ratio != 30:
+        raise ValueError(f"로켓그로스 지급비율은 70·30·100 중 하나여야 함: {ratio!r}")
+    monday = period_start - timedelta(days=period_start.weekday())
+    if monday.month != week_sunday(period_end).month:
+        return add_business_days(week_sunday(period_end), 25, holidays)
+    return payout_date(PAYOUT_RG_WEEKLY_FINAL, revenue_month=f"{period_start:%Y-%m}", holidays=holidays)
 
 
 def _half_up(x: Decimal) -> int:

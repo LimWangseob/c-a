@@ -229,7 +229,8 @@ _A_HEAD = ["계정", "쿠팡 정산금액 합계(부가비용 차감 전)", "계
 
 
 def write_stats(path, res: StatsResult, contracts: dict | None = None, files: list | None = None,
-                amounts: list | None = None, costs: list | None = None, verify: list | None = None) -> Path:
+                amounts: list | None = None, costs: list | None = None, verify: list | None = None,
+                inflows: list | None = None) -> Path:
     """집계 엑셀: '상품별 월별'·'계정별 월별'·'계약자 정산'·'지급액 검산'(files 주면)·'쿠팡 지급 내역'(amounts)·
     '로켓그로스 비용'(costs)·'경고' 시트. contracts={계정: 계약금액}(없는 계정은 빈칸).
     amounts = [{'계정','채널','정산일','기간 시작','기간 끝','지급비율','최종지급액', 쿠팡 금액 칸…}],
@@ -260,6 +261,12 @@ def write_stats(path, res: StatsResult, contracts: dict | None = None, files: li
         _payout_sheet(wb, files, res.warnings)
     if verify:
         _verify_sheet(wb, verify, res.warnings)
+    if inflows:
+        from .settlement_verify import INFLOW_HEAD
+        ws_in = wb.create_sheet("계좌 입금")
+        ws_in.append(INFLOW_HEAD)
+        for r in inflows:
+            ws_in.append([r[h] for h in INFLOW_HEAD])
     if amounts:
         _table_sheet(wb, "쿠팡 지급 내역", amounts, _AMOUNT_FIRST)
     if costs:

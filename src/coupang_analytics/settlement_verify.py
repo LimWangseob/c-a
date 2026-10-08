@@ -3,7 +3,8 @@
 기준은 2026-10-08 nicoable 실측(화면·응답 원 단위 확인)으로 확정한 규칙:
 - RG계산식: 로켓그로스 최종지급액 = 지급액(H) − 추가 상계(I) − 이번 정산 물류비(J) + 재고 손실 보상(K) + 매출 조정
   (J='이번 정산 비용'은 기납부·미납 조정을 이미 반영 — 629/629 일치)
-- RG입금: 지급일별 Σ(최종지급액 − 재고 손실 보상) = 그날 월렛 입금 합(19/19) — 보상은 월렛에 안 들어옴(지급 경로 미확인)
+- RG입금: 지급일별 Σ(최종지급액 − 재고 손실 보상) = 그날 월렛 입금 합(19/19) — 보상은 월렛이 아니라
+  대표 정산 계좌로 정산일 별도 입금(쿠팡 도움말 7.4·2.1, 2026-10-08 확인)
 - 월렛장부: 입금 합 − 인출 합 = 잔액(조회 시작 전 내역이 있으면 다를 수 있음)
 - 윙판매: 우리 윙 파일 월 합(매출·판매자쿠폰·수수료·정산대상액) = 매출내역 (월=구매확정일)
 - 윙지급: 정산현황 월별(지급액·정산차감·최종지급액) = 매출내역(정산대상액·정산차감·최종지급예정액), 지급 회차는 지급완료
@@ -15,7 +16,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-OK, DIFF, PENDING, NODATA, CHECK = "일치", "다름", "미정산", "자료 없음", "확인 필요"
+OK, DIFF, PENDING, NODATA, CHECK, CONFIRMED = "일치", "다름", "미정산", "자료 없음", "확인 필요", "확인됨"
+HELP_RG = "쿠팡 도움말 「로켓그로스 상품의 정산은 어떻게 되나요?」"
 HEAD = ["계정", "대조", "기준", "항목", "우리(계산)", "쿠팡", "차이", "판정", "비고"]
 _RECENT_MONTHS = 2
 
@@ -83,7 +85,7 @@ def rg_wallet(acct: str, amounts: list, vdata: dict | None) -> list[dict]:
     comp_all = sum(r.get("totalCfsInventoryCompensationAmount") or 0 for r in amounts)
     if comp_all:
         out.append({**_row(acct, "재고손실보상", "전체", "정산현황 보상 합", comp_all, None,
-                           "월렛 입금에 없음 — 지급 경로 미확인(쿠팡 문의 필요)"), "판정": CHECK})
+                           f"대표 정산 계좌로 정산일 별도 입금(월렛 아님) — {HELP_RG} 7.4"), "판정": CONFIRMED})
     return out
 
 
@@ -221,4 +223,68 @@ def build_all(files: list, amounts: list, vdatas: dict, order_rows) -> list[dict
         aw = [r for r in amounts if r["계정"] == a and r["채널"] == "윙"]
         ar = [r for r in amounts if r["계정"] == a and r["채널"] == "로켓그로스"]
         out += build(a, wing.get(a, {}), rg.get(a, {}), aw, ar, vdatas.get(a))
+    return out
+
+
+# ── 계좌 입금(지급월별) ───────────────────────────────────────────
+INFLOW_HEAD = ["계정", "지급월", "윙 지급", "RG 월렛 입금", "RG 월렛 인출", "재고 손실 보상", "물류비 환급", "쿠팡 지급 합계",
+               "대표계좌 입금 합계", "비고"]
+
+
+def _refund_day(period_start: str) -> str:
+    """마이너스 물류비 환급일 = 매출인식 달의 익월 21일(주말·공휴일이면 다음 영업일 — 날짜는 표시용 근사)."""
+    y, m = int(period_start[:4]), int(period_start[5:7])
+    y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return f"{y}-{m:02d}-21"
+
+
+def inflows(acct: str, amounts_wing: list, amounts_rg: list, vdata: dict | None, *, today) -> list[dict]:
+    """쿠팡이 실제로 내보낸 돈을 지급월별로(쿠팡 도움말 로켓그로스 정산 2.1·2.5·7.4):
+    윙 지급(대표계좌 직접·지급일 지난 회차) · RG 월렛 입금/인출(인출=대표계좌로 이체) · 재고 손실 보상(대표계좌·정산일) ·
+    마이너스 물류비 환급(totalCfsFeeAdjustment·대표계좌·익월 21일). 쿠팡 지급 합계=윙+월렛 입금+보상+환급,
+    대표계좌 입금 합계=윙+월렛 인출+보상+환급(월렛 잔액은 아직 대표계좌에 없음). 지급일이 오늘 이후면 제외."""
+    t = today.isoformat()
+    m: dict = defaultdict(lambda: defaultdict(float))
+    notes: dict = defaultdict(list)
+    for r in amounts_wing:
+        if r["정산일"] <= t and r.get("지급상태") in (None, "DONE"):
+            m[r["정산일"][:7]]["윙 지급"] += r["최종지급액"] or 0
+    for r in amounts_rg:
+        comp = r.get("totalCfsInventoryCompensationAmount") or 0
+        if comp and r["정산일"] <= t:
+            m[r["정산일"][:7]]["재고 손실 보상"] += comp
+        adj = r.get("totalCfsFeeAdjustment") or 0
+        if adj and _refund_day(r["기간 시작"]) <= t:
+            day = _refund_day(r["기간 시작"])
+            m[day[:7]]["물류비 환급"] += adj
+            notes[day[:7]].append(f"물류비 환급 {day[5:]}경")
+    wallet = (vdata or {}).get("wallet")
+    for h in wallet or []:
+        d = str(h.get("paymentDate") or "")
+        ym = f"{d[:4]}-{d[4:6]}"
+        kind = {"DEPOSIT": "RG 월렛 입금", "WITHDRAWAL": "RG 월렛 인출"}.get(h.get("walletEventType"))
+        if kind:
+            m[ym][kind] += h.get("amount") or 0
+    out = []
+    for ym in sorted(m):
+        c = m[ym]
+        row = {"계정": acct, "지급월": ym, **{k: c.get(k, 0) for k in INFLOW_HEAD[2:7]}}
+        base = c.get("윙 지급", 0) + c.get("재고 손실 보상", 0) + c.get("물류비 환급", 0)
+        row["쿠팡 지급 합계"] = base + c.get("RG 월렛 입금", 0)
+        row["대표계좌 입금 합계"] = base + c.get("RG 월렛 인출", 0)
+        note = sorted(set(notes[ym]))
+        if wallet is None:
+            row["RG 월렛 입금"] = row["RG 월렛 인출"] = None
+            note.append("월렛 자료 없음(검증 자료 수집 전) — 합계에 RG 월렛 미포함")
+        row["비고"] = " · ".join(note)
+        out.append(row)
+    return out
+
+
+def inflows_all(amounts: list, vdatas: dict, *, today) -> list[dict]:
+    accts = sorted({a["계정"] for a in amounts} | set(vdatas))
+    out: list = []
+    for a in accts:
+        out += inflows(a, [r for r in amounts if r["계정"] == a and r["채널"] == "윙"],
+                       [r for r in amounts if r["계정"] == a and r["채널"] == "로켓그로스"], vdatas.get(a), today=today)
     return out
