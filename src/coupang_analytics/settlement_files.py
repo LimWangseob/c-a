@@ -56,6 +56,7 @@ class SettleRow:
     recognized: date | None
     kind: str
     due: date | None = None          # 윙 정산예정일(주정산 묶음 — 최종액 30% 계산에 씀)·로켓그로스는 없음
+    gross: int = 0                   # 로켓그로스 판매액(A×B, 쿠팡지원할인 전) — 로켓그로스 부가세 대조용·윙은 0
 
 
 @dataclass
@@ -163,7 +164,8 @@ def parse_rg_fee(rows: list, *, account: str, period_start: date, period_end: da
             out.warnings.append(f"로켓그로스 {r}행 정산대상액 {v['settle']} ≠ 판매액−쿠폰−수수료−VAT")
         out.rows.append(SettleRow(CH_RG, account, period_start, period_end, v["order_id"], v["product_id"],
                                   v["option_id"], v["product_name"], v["option_name"], v["qty"], v["sales"],
-                                  v["coupon"], v["fee"] + v["fee_vat"], v["settle"], v["recognized"], v["kind"]))
+                                  v["coupon"], v["fee"] + v["fee_vat"], v["settle"], v["recognized"], v["kind"],
+                                  gross=v["gross"]))
     return out
 
 

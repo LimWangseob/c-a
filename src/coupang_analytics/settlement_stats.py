@@ -229,7 +229,7 @@ _A_HEAD = ["계정", "쿠팡 정산금액 합계(부가비용 차감 전)", "계
 
 
 def write_stats(path, res: StatsResult, contracts: dict | None = None, files: list | None = None,
-                amounts: list | None = None, costs: list | None = None) -> Path:
+                amounts: list | None = None, costs: list | None = None, verify: list | None = None) -> Path:
     """집계 엑셀: '상품별 월별'·'계정별 월별'·'계약자 정산'·'지급액 검산'(files 주면)·'쿠팡 지급 내역'(amounts)·
     '로켓그로스 비용'(costs)·'경고' 시트. contracts={계정: 계약금액}(없는 계정은 빈칸).
     amounts = [{'계정','채널','정산일','기간 시작','기간 끝','지급비율','최종지급액', 쿠팡 금액 칸…}],
@@ -258,6 +258,8 @@ def write_stats(path, res: StatsResult, contracts: dict | None = None, files: li
         cs.append([acct, settled, c if c is not None else "", contractor_amount(c, settled) if c is not None else ""])
     if files is not None:
         _payout_sheet(wb, files, res.warnings)
+    if verify:
+        _verify_sheet(wb, verify, res.warnings)
     if amounts:
         _table_sheet(wb, "쿠팡 지급 내역", amounts, _AMOUNT_FIRST)
     if costs:
@@ -312,3 +314,16 @@ def _cost_product_sheet(wb, products: list) -> None:
     for p in rows:
         ws.append([p.account, p.month, p.product_id, p.product_name, *[p.costs.get(k, 0) for k in kinds],
                    p.rg_cost, p.rg_comp])
+
+
+def _verify_sheet(wb, rows: list, warns: list) -> None:
+    """'검증' — 쿠팡의 다른 장부와 계정별 대조(settlement_verify). 다름·확인 필요 건수는 경고에도."""
+    from .settlement_verify import CHECK, DIFF, HEAD
+    ws = wb.create_sheet("검증")
+    ws.append(HEAD)
+    for r in rows:
+        ws.append([r[h] for h in HEAD])
+    for verdict in (DIFF, CHECK):
+        n = sum(1 for r in rows if r["판정"] == verdict)
+        if n:
+            warns.append(f"검증 '{verdict}' {n}건 — '검증' 시트에서 계정·대조별 확인")

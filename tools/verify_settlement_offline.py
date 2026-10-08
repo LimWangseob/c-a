@@ -1008,6 +1008,68 @@ def p18_verify_collect():
     ok("월 끝=어제·빈 달 없음·화면 먼저·월렛 2쪽·예금주/계좌 제거·504 달=조회 실패 기록 후 계속·부가세 요청 모양")
 
 
+def p19_verify_sheet():
+    print("[P19] 정산 검증 — RG계산식·RG입금(보상 제외)·월렛장부·윙판매/지급·부가세·보류/추가지급·판정 규칙")
+    from coupang_analytics import settlement_verify as SV
+    rg = [{"정산일": "2026-08-03", "기간 시작": "2026-06-29", "기간 끝": "2026-06-30", "지급비율": 70, "최종지급액": 412909,
+           "totalPayableAmount": 359852, "totalCfsInventoryCompensationAmount": 53057},
+          {"정산일": "2026-08-03", "기간 시작": "2026-06-08", "기간 끝": "2026-06-14", "지급비율": 30, "최종지급액": 158356,
+           "totalPayableAmount": 152130, "totalSalesAdjustment": 6226},
+          {"정산일": "2026-10-07", "기간 시작": "2026-08-31", "기간 끝": "2026-08-31", "지급비율": 70, "최종지급액": 69394,
+           "totalPayableAmount": 112832, "totalAdditionalDeductionAmount": 112832, "totalCfsInventoryCompensationAmount": 69394},
+          {"정산일": "2026-10-15", "기간 시작": "2026-08-31", "기간 끝": "2026-08-31", "지급비율": 30, "최종지급액": 7111,
+           "totalPayableAmount": 48354, "totalAdditionalDeductionAmount": 16284, "totalFinalCfsFeeDeductionAmount": 24959}]
+    f = SV.rg_formula("A", rg)
+    assert f[0]["우리(계산)"] == 4 and f[0]["판정"] == SV.OK and len(f) == 1                  # 4줄 모두 H−I−J+K+조정
+    bad = SV.rg_formula("A", [{**rg[0], "최종지급액": 1}])
+    assert bad[1]["판정"] == SV.DIFF and bad[1]["차이"] == 412908
+    v = {"수집일": "2026-10-08", "기간": ["2026-01-01", "2026-10-07"], "조회 실패": [], "wallet_balance": 300000,
+         "wallet": [{"walletEventType": "DEPOSIT", "paymentDate": "20260803000729", "amount": 359852 + 158356},
+                    {"walletEventType": "WITHDRAWAL", "paymentDate": "20260805", "amount": 518208 - 300000}],
+         "purchase": {"202605": {"purchaseReports": [{"revenueAmount": 8602500, "sellerDiscountCoupon": 0, "feeAmount": 968234,
+                                                      "apAmount": 7634266, "deductionAmount": 55000, "finalPaidAmount": 7579266}]},
+                      "202609": {"purchaseReports": [{"revenueAmount": 2065700, "sellerDiscountCoupon": 1116300, "feeAmount": 94452,
+                                                      "apAmount": 854948, "deductionAmount": 87556, "finalPaidAmount": 767392}]},
+                      "202610": None},
+         "wing_vat": {"paymentMethodReports": [{"yearMonth": "202605", "total": 8602500}]},
+         "rg_vat": {"vatResponseAggregatedDtos": [{"yearMonth": "2026-07", "creditCardPaymentAmountAgg": 7106626,
+                                                   "cashPaymentAmountAgg": 2231507, "otherPaymentAmountAgg": 10701127,
+                                                   "sellerFundedCouponAggAmount": 10134700}]},
+         "pending": {"202605": {"totalRecordCount": 0}}, "additional": {"202605": {"reports": [{"x": 1}]}}}
+    w = {x["기준"]: x for x in SV.rg_wallet("A", rg, v)}
+    assert w["지급일 2026-08-03"]["판정"] == SV.OK and "보상 53,057 제외" in w["지급일 2026-08-03"]["비고"]
+    assert w["지급일 2026-10-07"]["판정"] == SV.OK and w["지급일 2026-10-07"]["쿠팡"] == 0      # 보상만 있는 날: 0 = 입금 없음
+    assert w["지급일 2026-10-15"]["판정"] == SV.PENDING                                      # 수집일 이후 = 미정산
+    assert w["~2026-10-08"]["판정"] == SV.OK                                                 # 입금 − 인출 = 잔액
+    comp = [x for x in SV.rg_wallet("A", rg, v) if x["대조"] == "재고손실보상"]
+    assert comp[0]["우리(계산)"] == 53057 + 69394 and comp[0]["판정"] == SV.CHECK
+    ours = {"202605": {"매출": 8602500, "쿠폰": 0, "수수료": 968234, "정산대상": 7634266}}
+    ws = SV.wing_sales("A", ours, v)
+    assert [x["판정"] for x in ws if x["기준"] == "202605"] == [SV.OK] * 4
+    assert all(x["판정"] == SV.PENDING for x in ws if x["기준"] == "202609")                  # 최근 달·우리 0 = 미정산
+    assert any(x["기준"] == "202610" and x["판정"] == SV.NODATA for x in ws)                   # 조회 실패 달
+    wp = SV.wing_pay("A", [{"정산일": "2026-07-01", "기간 시작": "2026-05-01", "최종지급액": 7579266, "paidAmount": 7634266,
+                            "totalDeductionAmount": 55000, "지급상태": "DONE"},
+                           {"정산일": "2026-06-01", "기간 시작": "2026-05-04", "최종지급액": 0, "지급상태": "HOLD"}], v)
+    assert [x["판정"] for x in wp if x["기준"] == "202605"] == [SV.OK] * 3
+    assert any(x["항목"] == "지급상태" and x["판정"] == SV.CHECK and x["비고"] == "HOLD" for x in wp)
+    vt = SV.vat("A", ours, {"202607": {"판매액": 20039260, "쿠폰": 10134700}}, v)
+    assert [x["판정"] for x in vt] == [SV.OK, SV.OK, SV.OK], vt
+    h = {x["대조"]: x["판정"] for x in SV.holds("A", v)}
+    assert h == {"보류": SV.OK, "추가지급": SV.CHECK}
+    assert SV.build("A", {}, {}, [], [], None)[1]["판정"] == SV.NODATA                       # 검증 자료 없음
+    import openpyxl
+    from coupang_analytics import settlement_stats as ST
+    rows = SV.build("A", ours, {}, [], rg, v)
+    with tempfile.TemporaryDirectory() as tmp:
+        res = ST.aggregate([])
+        wb = openpyxl.load_workbook(ST.write_stats(Path(tmp) / "v.xlsx", res, verify=rows))
+        assert [c.value for c in wb["검증"][1]] == SV.HEAD and wb["검증"].max_row == 1 + len(rows)
+        assert any("검증 '확인 필요'" in w for w in res.warnings)                        # 보상·추가지급 = 확인 필요
+    ok("RG계산식 4줄·틀리면 다름·입금=최종−보상·수집일 이후=미정산·월렛장부·보상=확인 필요·윙판매/지급(최근 달 미정산)·"
+       "지급상태 HOLD=확인 필요·부가세 윙/RG·보류0/추가지급1·자료 없음")
+
+
 def main():
     g1_payout_dates()
     g2_amounts()
@@ -1030,6 +1092,7 @@ def main():
     p16_cost_by_product()
     p17_server_busy()
     p18_verify_collect()
+    p19_verify_sheet()
     print("정산 계산 모듈 오프라인 검증 통과(골든 payout 12·amount 2·불변식 4행/3식 100%)")
 
 

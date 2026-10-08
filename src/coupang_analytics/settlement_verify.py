@@ -1,0 +1,224 @@
+"""정산 검증 — 우리 정산 파일·쿠팡 지급 내역을 쿠팡의 다른 장부(검증 자료)와 계정마다 자동 대조(순수 로직).
+
+기준은 2026-10-08 nicoable 실측(화면·응답 원 단위 확인)으로 확정한 규칙:
+- RG계산식: 로켓그로스 최종지급액 = 지급액(H) − 추가 상계(I) − 이번 정산 물류비(J) + 재고 손실 보상(K) + 매출 조정
+  (J='이번 정산 비용'은 기납부·미납 조정을 이미 반영 — 629/629 일치)
+- RG입금: 지급일별 Σ(최종지급액 − 재고 손실 보상) = 그날 월렛 입금 합(19/19) — 보상은 월렛에 안 들어옴(지급 경로 미확인)
+- 월렛장부: 입금 합 − 인출 합 = 잔액(조회 시작 전 내역이 있으면 다를 수 있음)
+- 윙판매: 우리 윙 파일 월 합(매출·판매자쿠폰·수수료·정산대상액) = 매출내역 (월=구매확정일)
+- 윙지급: 정산현황 월별(지급액·정산차감·최종지급액) = 매출내역(정산대상액·정산차감·최종지급예정액), 지급 회차는 지급완료
+- 윙부가세: 우리 윙 (매출 − 판매자쿠폰) 월 합 = 부가세 신고내역 월 합계
+- RG부가세: 우리 로켓그로스 판매액(A×B)·판매자쿠폰 월 합 = 로켓그로스 부가세(카드+현금+기타·판매자쿠폰)
+판정: 일치 · 다름 · 미정산(최근 달 — 정산 전 몫이 빠져 다를 수 있음) · 자료 없음 · 확인 필요.
+"""
+from __future__ import annotations
+
+from collections import defaultdict
+
+OK, DIFF, PENDING, NODATA, CHECK = "일치", "다름", "미정산", "자료 없음", "확인 필요"
+HEAD = ["계정", "대조", "기준", "항목", "우리(계산)", "쿠팡", "차이", "판정", "비고"]
+_RECENT_MONTHS = 2
+
+
+def _row(acct, kind, basis, item, ours, theirs, note="", recent=False) -> dict:
+    diff = (round(ours) - round(theirs)) if ours is not None and theirs is not None else None
+    verdict = NODATA if diff is None else OK if diff == 0 else PENDING if recent else DIFF
+    return {"계정": acct, "대조": kind, "기준": basis, "항목": item, "우리(계산)": ours, "쿠팡": theirs, "차이": diff,
+            "판정": verdict, "비고": note}
+
+
+def _recent(ym: str, collected: str) -> bool:
+    """수집일 기준 최근 2개월(그 달 포함) — 정산이 덜 끝난 달."""
+    y, m = int(collected[:4]), int(collected[5:7])
+    yy, mm = int(ym[:4]), int(ym[-2:])
+    return (y - yy) * 12 + (m - mm) < _RECENT_MONTHS
+
+
+# ── 로켓그로스 ───────────────────────────────────────────────────
+def rg_formula(acct: str, amounts: list) -> list[dict]:
+    """RG계산식 — 다른 줄만 하나씩, 맞는 줄은 개수 요약 1줄."""
+    out, same = [], 0
+    for r in amounts:
+        calc = (r.get("totalPayableAmount") or 0) - (r.get("totalAdditionalDeductionAmount") or 0) \
+            - (r.get("totalFinalCfsFeeDeductionAmount") or 0) + (r.get("totalCfsInventoryCompensationAmount") or 0) \
+            + (r.get("totalSalesAdjustment") or 0)
+        if round(calc) == round(r["최종지급액"] or 0):
+            same += 1
+        else:
+            out.append(_row(acct, "RG계산식", f"정산일 {r['정산일']}", f"{r['기간 시작']}~{r['기간 끝']} {r['지급비율']}%",
+                            calc, r["최종지급액"], "H−I−J+K+매출조정"))
+    return [_row(acct, "RG계산식", f"{same + len(out)}줄", "일치 줄 수", same, same + len(out))] + out
+
+
+def _deposits(wallet: list) -> dict:
+    out: dict = defaultdict(float)
+    for h in wallet:
+        if h.get("walletEventType") == "DEPOSIT":
+            d = str(h.get("paymentDate") or "")
+            out[f"{d[:4]}-{d[4:6]}-{d[6:8]}"] += h.get("amount") or 0
+    return out
+
+
+def rg_wallet(acct: str, amounts: list, vdata: dict | None) -> list[dict]:
+    """RG입금(지급일별) + 월렛장부 + 재고 손실 보상(지급 경로 미확인)."""
+    if not vdata or vdata.get("wallet") is None:
+        return [_row(acct, "RG입금", "-", "월렛 내역", None, None, "검증 자료 없음")]
+    collected = vdata["수집일"]
+    dep, by_day = _deposits(vdata["wallet"]), defaultdict(lambda: [0.0, 0.0])
+    for r in amounts:
+        by_day[r["정산일"]][0] += r["최종지급액"] or 0
+        by_day[r["정산일"]][1] += r.get("totalCfsInventoryCompensationAmount") or 0
+    out = []
+    for d in sorted(by_day):
+        fin, comp = by_day[d]
+        if d >= collected:
+            out.append({**_row(acct, "RG입금", f"지급일 {d}", "최종−보상 ↔ 월렛 입금", fin - comp, None), "판정": PENDING})
+            continue
+        out.append(_row(acct, "RG입금", f"지급일 {d}", "최종−보상 ↔ 월렛 입금", fin - comp, dep.get(d, 0.0),
+                        f"보상 {comp:,.0f} 제외" if comp else ""))
+    total_in = sum(dep.values())
+    total_out = sum(h.get("amount") or 0 for h in vdata["wallet"] if h.get("walletEventType") == "WITHDRAWAL")
+    out.append(_row(acct, "월렛장부", f"~{collected}", "입금−인출 ↔ 잔액", total_in - total_out, vdata.get("wallet_balance"),
+                    "다르면 조회 시작(2025-01) 전 내역 영향 가능"))
+    comp_all = sum(r.get("totalCfsInventoryCompensationAmount") or 0 for r in amounts)
+    if comp_all:
+        out.append({**_row(acct, "재고손실보상", "전체", "정산현황 보상 합", comp_all, None,
+                           "월렛 입금에 없음 — 지급 경로 미확인(쿠팡 문의 필요)"), "판정": CHECK})
+    return out
+
+
+# ── 윙 ──────────────────────────────────────────────────────────
+def _purchase(vdata: dict) -> dict:
+    """매출내역 → {YYYYMM: {매출·쿠폰·수수료·정산대상·차감·최종}} (조회 실패한 달 = None)."""
+    out: dict = {}
+    for ym, resp in (vdata.get("purchase") or {}).items():
+        if resp is None:
+            out[ym] = None
+            continue
+        c: dict = defaultdict(float)
+        for r in resp.get("purchaseReports") or []:
+            for k, f in (("매출", "revenueAmount"), ("쿠폰", "sellerDiscountCoupon"), ("수수료", "feeAmount"),
+                         ("정산대상", "apAmount"), ("차감", "deductionAmount"), ("최종", "finalPaidAmount")):
+                c[k] += r.get(f) or 0
+        out[ym] = c
+    return out
+
+
+def wing_sales(acct: str, ours: dict, vdata: dict | None) -> list[dict]:
+    """ours = {YYYYMM: {매출·쿠폰·수수료·정산대상}} (우리 윙 파일, 월=구매확정일)."""
+    if not vdata:
+        return [_row(acct, "윙판매", "-", "매출내역", None, None, "검증 자료 없음")]
+    pr, out = _purchase(vdata), []
+    for ym in sorted(set(pr) | set(ours)):
+        o, t = ours.get(ym, {}), pr.get(ym)
+        if t is None:
+            out.append(_row(acct, "윙판매", ym, "매출내역", None, None, "그 달 조회 실패"))
+            continue
+        if not any(o.values()) and not any(t.values()):
+            continue
+        for k in ("매출", "쿠폰", "수수료", "정산대상"):
+            out.append(_row(acct, "윙판매", ym, k, o.get(k, 0), t[k], recent=_recent(ym, vdata["수집일"])))
+    return out
+
+
+def wing_pay(acct: str, amounts: list, vdata: dict | None) -> list[dict]:
+    """정산현황(윙) 월별 지급·차감·최종 ↔ 매출내역 + 지급일 지난 회차의 지급완료 여부."""
+    if not vdata:
+        return []
+    pr = _purchase(vdata)
+    by: dict = defaultdict(lambda: defaultdict(float))
+    out = []
+    for r in amounts:
+        ym = r["기간 시작"][:7].replace("-", "")
+        by[ym]["정산대상"] += r.get("paidAmount") or 0
+        by[ym]["차감"] += r.get("totalDeductionAmount") or 0
+        by[ym]["최종"] += r["최종지급액"] or 0
+        if r["정산일"] < vdata["수집일"] and r.get("지급상태") not in (None, "DONE"):
+            out.append({**_row(acct, "윙지급", f"정산일 {r['정산일']}", "지급상태", None, None, str(r.get("지급상태"))),
+                        "판정": CHECK})
+    for ym in sorted(set(by) | set(pr)):
+        if pr.get(ym) is None:
+            continue
+        for k in ("정산대상", "차감", "최종"):
+            if by[ym][k] or pr[ym][k]:
+                out.append(_row(acct, "윙지급", ym, k, by[ym][k], pr[ym][k], recent=_recent(ym, vdata["수집일"])))
+    return out
+
+
+# ── 부가세 ────────────────────────────────────────────────────────
+def vat(acct: str, wing_ours: dict, rg_ours: dict, vdata: dict | None) -> list[dict]:
+    """wing_ours={YYYYMM:{매출,쿠폰}} · rg_ours={YYYYMM:{판매액,쿠폰}} (우리 파일)."""
+    if not vdata:
+        return []
+    out, collected = [], vdata["수집일"]
+    for r in ((vdata.get("wing_vat") or {}).get("paymentMethodReports") or []):
+        ym, o = r["yearMonth"], wing_ours.get(r["yearMonth"], {})
+        mine = o.get("매출", 0) - o.get("쿠폰", 0)
+        if mine or r.get("total"):
+            out.append(_row(acct, "윙부가세", ym, "매출−판매자쿠폰", mine, r.get("total") or 0, recent=_recent(ym, collected)))
+    for r in ((vdata.get("rg_vat") or {}).get("vatResponseAggregatedDtos") or []):
+        ym = r["yearMonth"].replace("-", "")
+        o = rg_ours.get(ym, {})
+        paid = (r.get("creditCardPaymentAmountAgg") or 0) + (r.get("cashPaymentAmountAgg") or 0) \
+            + (r.get("otherPaymentAmountAgg") or 0)
+        if o.get("판매액") or paid:
+            out.append(_row(acct, "RG부가세", ym, "판매액", o.get("판매액", 0), paid, recent=_recent(ym, collected)))
+            out.append(_row(acct, "RG부가세", ym, "판매자쿠폰", o.get("쿠폰", 0), r.get("sellerFundedCouponAggAmount") or 0,
+                            recent=_recent(ym, collected)))
+    return out
+
+
+def holds(acct: str, vdata: dict | None) -> list[dict]:
+    """보류목록·추가지급 — 있으면 '확인 필요'(정산 금액을 바꾸는 항목)."""
+    if not vdata:
+        return []
+    n_pend = sum((v or {}).get("totalRecordCount") or 0 for v in (vdata.get("pending") or {}).values())
+    n_add = sum(len((v or {}).get("reports") or []) for v in (vdata.get("additional") or {}).values())
+    return [{**_row(acct, k, vdata["기간"][0] + "~", "건수", n, 0), "판정": OK if n == 0 else CHECK}
+            for k, n in (("보류", n_pend), ("추가지급", n_add))]
+
+
+def failures(acct: str, vdata: dict | None) -> list[dict]:
+    return [{**_row(acct, "조회실패", vdata["수집일"], f, None, None), "판정": NODATA}
+            for f in ((vdata or {}).get("조회 실패") or [])]
+
+
+def build(acct: str, wing_ours: dict, rg_ours: dict, amounts_wing: list, amounts_rg: list,
+          vdata: dict | None) -> list[dict]:
+    """계정 하나의 검증 줄 전부."""
+    return (rg_formula(acct, amounts_rg) + rg_wallet(acct, amounts_rg, vdata) + wing_sales(acct, wing_ours, vdata)
+            + wing_pay(acct, amounts_wing, vdata) + vat(acct, wing_ours, rg_ours, vdata) + holds(acct, vdata)
+            + failures(acct, vdata))
+
+
+def month_sums(files: list, order_rows) -> tuple[dict, dict]:
+    """우리 파일 → (윙 {계정:{YYYYMM:{매출,쿠폰,수수료,정산대상}}}, RG {계정:{YYYYMM:{판매액,쿠폰}}}).
+    윙은 집계와 같은 줄 선택 규칙(order_rows=settlement_stats._order_rows·최종액 파일은 주정산 없는 주만)."""
+    wing: dict = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
+    rg: dict = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
+    for f, r in order_rows([f for f in files if f.channel == "윙"], []):
+        m = wing[r.account][f"{(r.recognized or f.period_end):%Y%m}"]
+        m["매출"] += r.sales
+        m["쿠폰"] += r.coupon
+        m["수수료"] += r.fee
+        m["정산대상"] += r.settle
+    for f in files:
+        if f.channel == "윙":
+            continue
+        for r in f.rows:
+            m = rg[r.account][f"{(r.recognized or f.period_end):%Y%m}"]
+            m["판매액"] += r.gross
+            m["쿠폰"] += r.coupon
+    return wing, rg
+
+
+def build_all(files: list, amounts: list, vdatas: dict, order_rows) -> list[dict]:
+    """모든 계정의 검증 줄. amounts=[{계정,채널,…}] · vdatas={계정: 검증 자료}(계정명=파일 이름 글자 규칙)."""
+    wing, rg = month_sums(files, order_rows)
+    accts = sorted(set(wing) | set(rg) | {a["계정"] for a in amounts} | set(vdatas))
+    out: list = []
+    for a in accts:
+        aw = [r for r in amounts if r["계정"] == a and r["채널"] == "윙"]
+        ar = [r for r in amounts if r["계정"] == a and r["채널"] == "로켓그로스"]
+        out += build(a, wing.get(a, {}), rg.get(a, {}), aw, ar, vdatas.get(a))
+    return out
