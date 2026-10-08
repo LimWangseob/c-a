@@ -51,6 +51,7 @@ JOBS = BASE / "_요청기록.json"
 FILES = BASE / "파일"
 COSTS = FILES / "비용"                                   # 로켓그로스 비용 리포트(집계 파일 목록과 분리)
 AMOUNTS = BASE / "쿠팡지급내역"                           # 정산현황 금액(계정별 JSON) — 집계 대조용
+VERIFY = BASE / "검증자료"                                # 월렛·매출내역·부가세·보류·추가지급(계정별 JSON·하루 1회)
 GAP_SEC = (45, 75)                                      # 요청 사이 = 앱 반자동 순위 간격과 같게(소유자 2026-10-06)
 LOOKUP_GAP_SEC = (3, 8)                                 # 조회·받기 사이(화면에서 넘겨 보는 정도)
 LOG: RL.RunLog = None  # type: ignore[assignment]   # main() 에서 실행 시작 시 생성
@@ -467,6 +468,25 @@ def cmd_run(a, b, args, jobs: list) -> None:
     if not args.dry_run:
         time.sleep(90)
         cmd_download(a, b, args, jobs)
+        collect_verify(a, b, args)
+
+
+def collect_verify(a, b, args) -> None:
+    """검증 원자료(조회만)를 계정별로 하루 한 번 저장 — settlement_verify_collect. 오늘 이미 모았으면 건너뜀."""
+    from coupang_analytics import settlement_verify_collect as VC
+    name = name_of(a)
+    path = VERIFY / f"{SF._token(name, '계정명')}.json"
+    today = date.today()
+    if path.exists() and json.loads(path.read_text(encoding="utf-8")).get("수집일") == today.isoformat():
+        return
+    data = VC.collect(lambda m, p, body: api(b, name, m, p, body), lambda url: goto(b, url, name), args.start, today,
+                      note=lambda m: LOG.record(name, "검증", RL.WAIT, m),
+                      gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+    LOG.record(name, "검증", RL.OK, f"검증 자료 저장 — 월렛 {len(data.get('wallet') or [])}건·조회 실패 {len(data['조회 실패'])}건")
 
 
 def cmd_probe(a, b, args, jobs: list) -> None:

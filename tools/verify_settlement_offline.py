@@ -971,6 +971,43 @@ def p17_server_busy():
     ok("504→502→성공=값 반환·3번 실패=ServerBusy·403=차단 기록·계정 단위 일시 오류=대기·연속 3계정도 전체 중단 안 함")
 
 
+def p18_verify_collect():
+    print("[P18] 검증 자료 수집 — 월 끝=어제·화면 먼저 열기·월렛 여러 쪽·계좌 칸 제거·한 달 일시 오류여도 계속")
+    from datetime import date
+    from coupang_analytics import settlement_verify_collect as VC
+    from coupang_analytics import settlement_wing_api as API
+    ms = VC.months(D("2026-01-01"), D("2026-10-08"))
+    assert len(ms) == 10 and ms[0] == ("202601", D("2026-01-01"), D("2026-01-31")) and ms[-1] == ("202610", D("2026-10-01"), D("2026-10-07"))
+    assert VC.months(D("2026-10-01"), D("2026-10-01")) == []                          # 어제 이전 달 없음
+    log: list = []
+
+    def open_page(url):
+        log.append(("화면", url))
+
+    def call(method, path, body):
+        log.append((method, path))
+        if path == VC.WALLET_HIST:
+            return {"walletHistories": [{"amount": 10 + body["pageNumber"], "bankAccountOwner": "예금주"}], "totalPage": 2}
+        if path == VC.WALLET_BAL:
+            return {"content": {"balanceAmount": 21, "bankAccountNumber": "123"}}
+        if path == VC.PURCHASE and body["fromDate"] == "2026-09-01":
+            raise API.ServerBusy("504")
+        return {"ok": path, "body": body}
+    d = VC.collect(call, open_page, D("2026-08-01"), D("2026-10-08"))
+    assert d["wallet"] == [{"amount": 10}, {"amount": 11}] and d["wallet_balance"] == 21    # 2쪽·예금주 제거
+    assert "예금주" not in str(d) and "123" not in str(d)
+    assert d["purchase"]["202609"] is None and d["purchase"]["202608"]["body"]["toDate"] == "2026-08-31"
+    assert d["purchase"]["202610"]["body"]["toDate"] == "2026-10-07"                         # 오늘 이후 날짜 안 넣음
+    assert len(d["조회 실패"]) == 1 and "매출내역 202609" in d["조회 실패"][0]
+    assert d["wing_vat"]["body"] == {"from": 202608, "to": 202610}
+    assert d["rg_vat"]["ok"].endswith("?fromYearMonth=2026-08&toYearMonth=2026-10")
+    assert d["pending"]["202608"]["body"]["year"] == 2026 and d["pending"]["202608"]["body"]["month"] == 8
+    i = log.index(("화면", VC.SALES_URL))
+    assert log[i + 1] == ("POST", VC.PURCHASE)                                             # 매출내역 화면 연 뒤 조회
+    assert log.index(("화면", VC.PENDING_URL)) < log.index(("POST", VC.PENDING))
+    ok("월 끝=어제·빈 달 없음·화면 먼저·월렛 2쪽·예금주/계좌 제거·504 달=조회 실패 기록 후 계속·부가세 요청 모양")
+
+
 def main():
     g1_payout_dates()
     g2_amounts()
@@ -992,6 +1029,7 @@ def main():
     p15_browser_closed_transient()
     p16_cost_by_product()
     p17_server_busy()
+    p18_verify_collect()
     print("정산 계산 모듈 오프라인 검증 통과(골든 payout 12·amount 2·불변식 4행/3식 100%)")
 
 
