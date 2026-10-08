@@ -44,14 +44,10 @@ from coupang_analytics import settlement_accounts as SA  # noqa: E402
 from coupang_analytics import settlement_files as SF  # noqa: E402
 from coupang_analytics import settlement_jobs as SJ  # noqa: E402
 from coupang_analytics import settlement_runlog as RL  # noqa: E402
+from coupang_analytics import settlement_store as STORE  # noqa: E402
+from coupang_analytics.settlement_store import AMOUNTS, BASE, COSTS, FILES, JOBS, VERIFY  # noqa: E402,F401
 from coupang_analytics import settlement_wing_api as API  # noqa: E402
 
-BASE = Path("output") / "정산"
-JOBS = BASE / "_요청기록.json"
-FILES = BASE / "파일"
-COSTS = FILES / "비용"                                   # 로켓그로스 비용 리포트(집계 파일 목록과 분리)
-AMOUNTS = BASE / "쿠팡지급내역"                           # 정산현황 금액(계정별 JSON) — 집계 대조용
-VERIFY = BASE / "검증자료"                                # 월렛·매출내역·부가세·보류·추가지급(계정별 JSON·하루 1회)
 GAP_SEC = (45, 75)                                      # 요청 사이 = 앱 반자동 순위 간격과 같게(소유자 2026-10-06)
 LOOKUP_GAP_SEC = (3, 8)                                 # 조회·받기 사이(화면에서 넘겨 보는 정도)
 LOG: RL.RunLog = None  # type: ignore[assignment]   # main() 에서 실행 시작 시 생성
@@ -105,21 +101,6 @@ def load_accounts(only: set) -> list:
     return picked
 
 
-def _merge_amount_file(src: Path, dst: Path) -> None:
-    """금액 기록 JSON 을 dst 로 옮김. dst 가 이미 있으면 (정산일·기간·비율) 키로 합침(dst 값 우선) 후 src 삭제."""
-    if not dst.exists():
-        os.replace(src, dst)
-        return
-    key = lambda r: (r["정산일"], r["기간 시작"], r["기간 끝"], r["지급비율"])   # noqa: E731
-    rows = {key(r): r for r in json.loads(src.read_text(encoding="utf-8"))}
-    rows.update({key(r): r for r in json.loads(dst.read_text(encoding="utf-8"))})
-    tmp = dst.with_suffix(".tmp")
-    tmp.write_text(json.dumps(sorted(rows.values(), key=lambda r: (r["정산일"], r["기간 시작"])), ensure_ascii=False,
-                              indent=1), encoding="utf-8")
-    os.replace(tmp, dst)
-    src.unlink()
-
-
 def cmd_merge(args) -> int:
     """다른 PC(노트북)에서 옮겨 온 정산 폴더(--src)를 이 PC 기록에 합침. 자동 실행(watch)이 돌면 거부(진행분 덮어쓰기 방지).
     요청 기록=같은 작업은 이 PC 우선·나머지 추가 / 받은 파일=같은 이름 있으면 그대로 둠 / 금액 기록=키로 합침.
@@ -131,26 +112,7 @@ def cmd_merge(args) -> int:
     try:
         with registry_lock(BASE / "_잠금" / "_watch.lock", wait_sec=0, on_log=log):
             accts = load_accounts(set())                    # 이 PC 기록부터 지금 계정명으로
-            jobs, extra = SJ.load_jobs(JOBS), SJ.load_jobs(src / "_요청기록.json")
-            _rename_jobs(extra, accts)                      # 옮겨 온 기록도 같은 이름 규칙 → 같은 작업은 한 번만
-            added, dup = SJ.merge_jobs(jobs, extra)
-            SJ.save_jobs(JOBS, jobs)
-            moved = kept = 0
-            for sub, dst in (("파일", FILES), ("파일/비용", COSTS)):
-                dst.mkdir(parents=True, exist_ok=True)
-                srcs = sorted((src / sub).glob("*.xlsx"))
-                mt = SA.renames([p.name.partition("_")[0] for p in srcs], accts, tok=lambda x: SF._token(x, "계정명"))
-                for p in srcs:
-                    acct, _, tail = p.name.partition("_")
-                    target = dst / f"{mt.get(acct, acct)}_{tail}"         # 지금 이름 기준으로 같은 파일 있는지
-                    if target.exists():
-                        kept += 1
-                    else:
-                        os.replace(p, target)
-                        moved += 1
-            AMOUNTS.mkdir(parents=True, exist_ok=True)
-            for p in sorted((src / "쿠팡지급내역").glob("*.json")):
-                _merge_amount_file(p, AMOUNTS / p.name)
+            added, dup, moved, kept = STORE.merge_folder(src, accts)
             LOG.record("(전체)", "합치기", RL.OK, f"{src} → 요청 기록 {added}건 추가·{dup}건 이미 있음 · 파일 {moved}개 옮김·"
                        f"{kept}개 같은 이름 있어 그대로 둠(원본 폴더에 남음)")
             _migrate_names(accts)                           # 옮긴 파일·금액 기록의 예전 계정명 → 지금 계정명
@@ -163,38 +125,11 @@ def name_of(a) -> str:
     return SA.display_name(a)
 
 
-def _rename_jobs(jobs, accts, file_accounts=()) -> tuple[dict, dict]:
-    """요청 기록 안의 예전 계정명·파일 이름 → 지금 이름(제자리). 반환 (계정명 바꿈표, 파일 계정명 바꿈표)."""
-    m = SA.renames([j.account for j in jobs], accts)
-    mt = SA.renames([*file_accounts, *[j.file.split("/")[-1].split("_")[0] for j in jobs if j.file]], accts,
-                    tok=lambda x: SF._token(x, "계정명"))
-    for j in jobs:
-        j.account = m.get(j.account, j.account)
-        if j.file:
-            head, _, rest = j.file.rpartition("/")
-            acct, _, tail = rest.partition("_")
-            j.file = (head + "/" if head else "") + mt.get(acct, acct) + "_" + tail
-    return m, mt
+_rename_jobs = STORE.rename_jobs
 
 
 def _migrate_names(accts) -> None:
-    """요청 기록(_요청기록.json)·받은 파일·쿠팡 지급 내역 파일의 예전 계정명 → 지금 계정명(멱등)."""
-    jobs = SJ.load_jobs(JOBS)
-    m, mt = _rename_jobs(jobs, accts, [SF.parse_file_name(p.name)["account"] for d in (FILES, COSTS)
-                                       for p in d.glob("*.xlsx")])
-    if m or mt:
-        SJ.save_jobs(JOBS, jobs)
-    for d in (FILES, COSTS):
-        for p in list(d.glob("*.xlsx")):
-            acct, _, tail = p.name.partition("_")
-            if acct in mt:
-                os.replace(p, p.with_name(mt[acct] + "_" + tail))
-    for p in list(AMOUNTS.glob("*.json")):
-        acct, _, ch = p.stem.rpartition("_")
-        if acct in mt:
-            _merge_amount_file(p, p.with_name(f"{mt[acct]}_{ch}.json"))
-    if m or mt:
-        log(f"  [계정명 맞춤] 요청 기록 {len(m)}개·파일 계정명 {len(mt)}개를 지금 계정 파일 이름으로 바꿈")
+    STORE.migrate_names(accts, log)
 
 
 def _profile_in_use(profile: str) -> bool:
@@ -316,16 +251,7 @@ def read_events(b, name: str, start: date, end: date) -> list:
 
 
 def _save_amounts(name: str, ch: str, resp: dict) -> None:
-    """쿠팡 정산현황 금액을 계정·채널별 JSON 에 (정산일·기간·비율) 키로 덮어 모아 둔다(원자적 저장)."""
-    path = AMOUNTS / f"{SF._token(name, '계정명')}_{ch}.json"
-    old = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
-    merged = {(r["정산일"], r["기간 시작"], r["기간 끝"], r["지급비율"]): r for r in old}
-    merged.update({(r["정산일"], r["기간 시작"], r["기간 끝"], r["지급비율"]): r for r in API.amount_rows(resp, ch)})
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(sorted(merged.values(), key=lambda r: (r["정산일"], r["기간 시작"])), ensure_ascii=False,
-                              indent=1), encoding="utf-8")
-    os.replace(tmp, path)
+    STORE.save_amounts(name, ch, API.amount_rows(resp, ch))
 
 
 def past_until(args) -> bool:
@@ -483,9 +409,7 @@ def collect_verify(a, b, args) -> None:
                       note=lambda m: LOG.record(name, "검증", RL.WAIT, m),
                       gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)))
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
+    STORE.write_json_atomic(path, data)
     LOG.record(name, "검증", RL.OK, f"검증 자료 저장 — 월렛 {len(data.get('wallet') or [])}건·조회 실패 {len(data['조회 실패'])}건")
 
 
@@ -504,24 +428,7 @@ def cmd_probe(a, b, args, jobs: list) -> None:
 
 
 def load_holidays(amounts: list):
-    """지급일 대조용 공휴일(정산일이 걸친 해 전부). 해마다 캐시(output/_holidays_YYYY.json) → 없으면 특일정보 API(키=credstore)
-    → 둘 다 없으면 None(지급일 대조만 '자료 없음'·집계는 계속). 실패 사유는 로그에 남김(무음 아님)."""
-    from coupang_analytics import holiday_kr as HK
-    from coupang_analytics import holiday_source as HS
-    years = sorted({int(r["정산일"][:4]) for r in amounts if r.get("정산일")})
-    if not years:
-        return None
-    try:
-        fetch = HS.fetch_from_store()
-    except HS.HolidayApiError as exc:
-        fetch, why = None, str(exc)
-    else:
-        why = ""
-    try:
-        return set().union(*(HK.holidays(y, fetch=fetch) for y in years))
-    except HK.HolidaySourceError as exc:
-        log(f"  [공휴일] 지급일 대조 건너뜀 — {exc}" + (f" ({why})" if why else ""))
-        return None
+    return STORE.load_holidays(amounts, log)
 
 
 def cmd_stats() -> None:
