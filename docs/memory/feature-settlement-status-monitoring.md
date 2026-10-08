@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: c48bfd01-5750-43b7-bf3c-9d574e709d12
-  modified: 2026-10-07T08:10:11.469Z
+  modified: 2026-10-08T00:47:35.900Z
 ---
 
 정산 자동 다운로드(`tools/settlement_download.py`, console=False·창 없음)를 운용 PC에서 **앱으로 켜고/끄고·상태를 보는** 기능(2026-10-07 구현·게이트15+복잡도 초록·미라이브).
@@ -23,5 +23,11 @@ metadata:
 - **spec 등록**: `coupang_analytics.spec` `_ui_hidden` 에 `settlement_status_panel_qt` 추가(함정#9: UI 모듈 누락=런타임 ModuleNotFoundError).
 - **게이트 핀**: `verify_settlement_offline.py` P11(heartbeat 덮어쓰기)·P14(heartbeat↔리더 계약·멈춤 의심·오늘 집계). 결정적·오프라인.
 - **표시 조건**: 새 빌드 배포 + 새 정산다운로드.exe 1회 실행 후부터 값이 참(그 전=없음/준비 전). 기존 야간 파이프라인 행동 불변(순수 추가·읽기 전용).
+
+## 2026-10-08 라이브 수정(운용 PC 기록 근거)
+- **반출비 받기 실패 16건**(D8): '쿠팡귀책' 두 번째 시트=금액 없는 수량표 → '반출비 청구 제외 수량(B)' 머리글 시트만 제외. 16/16 일치.
+- **18:00 전체 중단 근본 해결**(통제): 앱 시작 `reap_orphan_chrome`이 정산 Chrome 을 종료 → `TargetClosedError`를 '차단'·연속 2실패로 세어 전체 중단되던 것 → `_is_browser_closed`로 **일시적(WAIT·재시도)** 처리(bad 미증가·차단 로그 미오염). Chrome 사망 자체는 reap 특성이라 잔존하나 무해화. 핀 P15.
+- **watch 상태 2중 기록**(통제): main() 시작 heartbeat 를 watch 엔 건너뜀 → 2번째 watch(잠금 실패 즉시 종료)가 실제 실행 상태 안 덮음.
+- **merge --src**(D8): 노트북 자료가 운용 PC `output\정산\정산\`로 들어가 미사용 → `정산다운로드.exe merge --src output\정산\정산` 로 통합(재배포 후 [중지]→merge→[시작]).
 
 관련: [[settlement-batch-download-decisions]] · [[runtime-ui-and-always-on]] · [[exe-packaging-deploy]] · [[code-health-regression-gate]]

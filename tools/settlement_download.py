@@ -72,6 +72,18 @@ class BlockDetected(Exception):
     """쿠팡 차단 화면(Access Denied 등) 감지 — 그 계정 즉시 중단."""
 
 
+def _is_browser_closed(exc: BaseException) -> bool:
+    """브라우저/탭이 닫혀 생긴 오류인지(차단이 아님). 18:00 앱 시작 시 reap_orphan_chrome 이 정산 Chrome 을
+    같이 종료하면 playwright 가 TargetClosedError 를 던진다 — 이걸 '차단'·'연속 실패'로 세면 안 된다(일시적·재시도)."""
+    name = exc.__class__.__name__
+    msg = str(exc)
+    return ("TargetClosed" in name
+            or "Target page, context or browser has been closed" in msg
+            or "has been closed" in msg
+            or "Browser closed" in msg
+            or "Connection closed" in msg)
+
+
 # ── 계정·세션 ─────────────────────────────────────────────────────
 def load_accounts(only: set) -> list:
     """정산 계정 파일(계정ID·비번·대표자-사업자) — 위치=config.json settlement/accounts_file(기본 data/정산_계정목록.txt).
@@ -496,9 +508,13 @@ def _run_accounts(accts, run, args) -> int:
         except BlockDetected as exc:
             bad += 1
             LOG.error(name, "계정", exc, RL.BLOCK)
-        except Exception as exc:                           # 그 계정만 중단(무음 아님·전체 추적은 오류 로그)
-            bad += 1
-            LOG.error(name, "계정", exc)
+        except Exception as exc:
+            if _is_browser_closed(exc):   # 브라우저 닫힘(예: 18:00 앱 시작 reap)=일시적 → '차단'·연속실패로 안 셈·다음 바퀴 재시도
+                LOG.record(name, "계정", RL.WAIT,
+                           f"브라우저가 닫힘(일시적·차단 아님) — 다음 바퀴에 재시도 ({exc.__class__.__name__})")
+            else:                                          # 그 계정만 중단(무음 아님·전체 추적은 오류 로그)
+                bad += 1
+                LOG.error(name, "계정", exc)
         if bad >= 2:
             LOG.record("(전체)", "중단", RL.BLOCK, "연속 2계정 실패/차단 — 전체 중단(화면 변경·차단 의심, probe 로 확인)")
             return 1
@@ -587,7 +603,8 @@ def main() -> int:
     apppaths.set_workdir()
     LOG = RL.RunLog(BASE)
     log(f"실행 {LOG.run_id} · 명령 {args.command} · 기간 {args.start}~{args.end} · 데이터 폴더 {Path.cwd()}")
-    LOG.heartbeat("작동중", f"명령 {args.command} · 기간 {args.start}~{args.end}")   # 수동 실행도 창 없이 모니터링
+    if args.command != "watch":   # watch 는 잠금을 얻은 뒤 cmd_watch 가 상태를 쓴다 — 2중 실행(잠금 실패로 즉시
+        LOG.heartbeat("작동중", f"명령 {args.command} · 기간 {args.start}~{args.end}")   # 종료)이 실제 실행 상태를 덮지 않게
     if args.command == "stats":
         cmd_stats()
         LOG.heartbeat("완료", "명령 stats")

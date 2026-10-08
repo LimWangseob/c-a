@@ -827,6 +827,19 @@ def p14_status_reader():
     ok("heartbeat 덮어쓰기 파싱·작동중/대기중 멈춤 의심(STALE_SEC)·오늘 결과 집계·로그 없음/빈값 표기")
 
 
+def p15_browser_closed_transient():
+    print("[P15] 브라우저 닫힘(reap)=일시적 — '차단'·연속 실패로 안 셈·다음 바퀴 재시도")
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+    import settlement_download as SD
+    # 브라우저/탭 닫힘 오류는 True(일시적), 그 외 오류는 False(진짜 실패)
+    assert SD._is_browser_closed(Exception("Target page, context or browser has been closed"))
+    assert SD._is_browser_closed(type("TargetClosedError", (Exception,), {})("x"))
+    assert SD._is_browser_closed(Exception("Connection closed while reading from the driver"))
+    assert not SD._is_browser_closed(Exception("Access Denied"))
+    assert not SD._is_browser_closed(ValueError("표 머리글 없음"))
+    ok("TargetClosedError·'has been closed'·'Connection closed'=일시적(True)·그 외(차단/파싱 오류)=False")
+
+
 def main():
     g1_payout_dates()
     g2_amounts()
@@ -845,6 +858,7 @@ def main():
     p12_watch_decide()
     p13_accounts_file()
     p14_status_reader()
+    p15_browser_closed_transient()
     print("정산 계산 모듈 오프라인 검증 통과(골든 payout 12·amount 2·불변식 4행/3식 100%)")
 
 

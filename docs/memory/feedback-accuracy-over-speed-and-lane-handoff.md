@@ -23,3 +23,5 @@ metadata:
 - 다른 레인 파일(build·config 등)이 필요하면 착수 전에 담당을 정하고 시작(중간 왕복 금지).
 
 [[policy-per-domain-sessions]] · [[fix-from-real-evidence]] · [[verify-by-data-not-status]]
+
+**추가(소유자 2026-10-08):** "통합세션이 해야 해, 도메인별 역할에 충실할 것." — 재배포(병합·빌드·zip)는 소유자가 급해도 **도메인 세션이 대신하지 않는다**. 도메인 세션은 요청·근거 전달까지만, 대신하겠다는 제안도 하지 않는다.
