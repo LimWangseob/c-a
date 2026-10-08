@@ -2,13 +2,13 @@
 
 <!-- 누적 금지. 매 세션 종료 시 /session-close 가 전체 덮어쓰기. 100줄 이하. 핸드오프 SSOT. -->
 
-- BUILD_TAG: R1
+- BUILD_TAG: R2
 - 갱신: 2026-10-08
-- 마지막 커밋: e8da71e (문서 크기 상한 정책 구체화 — 메모리 30~50줄·CLAUDE.md<200줄)
-- 세션 핸드오프 전환: 이번 세션부터 **STATE.md가 단일 핸드오프**(옛 handoff-session-*.md 메모리는 아카이브·recall만)
+- 마지막 커밋: 9bed077 ([R1] session-kit 전역 전환 — STATE.md·D-001 DECISIONS·/session-close)
+- 세션 핸드오프 전환: **STATE.md가 단일 핸드오프**(옛 handoff-session-*.md 메모리는 아카이브·recall만). 세션 종료=`/session-close`.
 
 ## 현재 Step
-session-kit 전역 전환(STATE.md·D-001 DECISIONS·[R{n}] 커밋·/session-close 스킬) 진행 중 + 정산 라이브 검증 대기.
+✅ session-kit 전역 전환 완료 + 정산/안정성 개선 완료(아래). **대기 = 정산 18:00 라이브 검증**(다음 작업 1).
 
 ## 이번 세션 완료 (최근 → 과거)
 - 문서 크기 상한 정책(메모리 30~50줄·CLAUDE.md<200줄·DECISIONS append-only)·MEMORY.md 60→38줄 정리 — 전역/프로젝트 CLAUDE.md
