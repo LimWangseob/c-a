@@ -436,6 +436,43 @@ def _sweep_dead_duplicates(wb, biz: str, live_vids, log) -> None:
                     log(f"  [정체성] '{b}' 죽은 중복 블록 삭제(vid {vids} 상품조회에 없음·live 형제 존재)")
 
 
+def _skip_unmatched(wb, biz: str, product, seen_products: list, unmatched: list) -> bool:
+    """미매칭(VID 없음) 상품은 블록을 만들지·쓰지 않는다(D-008, 소유자 2026-10-08: 쿠팡 상품이면 VID 는 반드시 있다 →
+    VID 없는 블록 = 매칭 실패 오류. 예전엔 대장명으로 블록을 만들어 판매자배송·0·'50위밖' 기본값이 실제 값처럼 보였다).
+    대장명은 unmatched 에 기록(로그). 같은 이름의 **VID 있는 기존 블록**은 오늘만 못 찾은 것이라 seen 에 넣어
+    판매중지 표기·삭제를 막는다(오늘 칸은 공란). 반환 True = 이 상품 건너뜀."""
+    if any(o.vendor_item_ids for o in product.options):
+        return False
+    unmatched.append(product.name)
+    if wb.has_product(biz, product.name) and wb.product_vids(biz, product.name):
+        seen_products.append(product.name)
+    return True
+
+
+def _purge_vidless_blocks(wb, biz: str, seen_products, account_id: str, live_vids, log) -> list[str]:
+    """VID 없는 잔재 블록 정리(D-008) — 이번 실행에 기록 안 됐고(seen 아님) VID 도 없는 블록 = 매칭 실패 잔재.
+    예: 대장 '문어발선풍기m10 (대체요망)' 이름으로 만들어졌다가 9/29 VID 블록 '문어발선풍기 M10' 으로 매칭된 뒤에도
+    등록명이 달라 _migrate_product_blocks 가 못 지우고 남은 것(이름 기반 순위로 '50위밖' 이 계속 찍혔다).
+    ⚠ 이번 상품조회 실패(live_vids 비어 있음)면 건너뜀 — 구글시트 복원 마스터는 숨김 메타(VID)가 없어 정상 블록도
+    VID 가 비어 보인다(오삭제 방지). 다계정ID 스코핑: 그 계정ID 소속(또는 미태깅)만. 반환=삭제한 블록명."""
+    if not live_vids:
+        return []
+    seen = set(seen_products)
+    acct = (account_id or "").strip()
+    removed: list[str] = []
+    for p in list(wb.products_of(biz)):
+        if p in seen or wb.product_vids(biz, p):
+            continue
+        if acct and wb.product_account_id(biz, p) not in ("", acct):
+            continue
+        if wb.delete_product_block(biz, p):
+            removed.append(p)
+    if removed:
+        log(f"  [정체성] [{biz}] VID 없는 잔재 블록 {len(removed)}개 삭제(매칭 실패 잔재·D-008): "
+            f"{removed[:3]}{'…' if len(removed) > 3 else ''}")
+    return removed
+
+
 def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid,
                      date_iso, grow, log, save_path, skip_ranks: bool = False,
                      keywords_off: bool = False, sale_status=None, upbundle_vids=None,
@@ -458,7 +495,10 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
     wb.ensure_account(biz)
     _purge_upbundle_blocks(wb, biz, upbundle_vids, log)   # 옛 업번들 잔재 정리(reconcile 판매중지 표기 전)
     seen_products: list[str] = []          # 이번 대장에 존재한 옵션 블록명 — 대조로 판매중지 감지
+    unmatched: list[str] = []              # 쿠팡 상품과 매칭 안 된 대장 상품명(D-008: 블록 미생성)
     for product in report_acc.products:
+        if _skip_unmatched(wb, biz, product, seen_products, unmatched):
+            continue
         title = product.display_title
         kind = product.kind or config.KIND_PERSONAL
         opts = list(product.options) or [Option("")]
@@ -490,8 +530,19 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
             # #8(2026-09-27): 대장 판매중지/취소선도 수집(위에서 지표·재고·판매가·판매상태 채움)하되 ③순위만 제외.
             # rank_suppressed(is_discontinued) 가 순위를 건너뛴다. 재판매(취소선 해제)면 False 로 해제.
             wb.set_discontinued(biz, bname, product.discontinued)
+    _finish_account(wb, biz, report_acc, seen_products, unmatched, live_vids, log)
+    wb.save(save_path)
+
+
+def _finish_account(wb, biz: str, report_acc, seen_products, unmatched, live_vids, log) -> None:
+    """계정 루프 뒤 마무리(행동 불변 분해 — _process_account 복잡도 C 유지): 미매칭 경고 → 죽은 중복·VID 없는
+    잔재 정리 → 대장 대조(완전삭제·판매중지 표기) 로그."""
+    if unmatched:
+        log(f"  ⚠ [{biz}] 쿠팡 상품과 매칭 안 된 대장 상품 {len(unmatched)}개 — 블록 미생성(D-008·대장 상품명/쿠팡 등록 "
+            f"확인 필요): {unmatched[:5]}{'…' if len(unmatched) > 5 else ''}")
     # 죽은 중복 블록 정리(안전 규칙): live 형제 있고 vid 가 상품조회서 소멸한 잔재만 삭제(reconcile 판매중지 표기 전)
     _sweep_dead_duplicates(wb, biz, live_vids, log)
+    _purge_vidless_blocks(wb, biz, seen_products, report_acc.account_id, live_vids, log)   # VID 없는 잔재(D-008)
     # 대장 대조(항목⑥, 소유자 2026-09-25): **줄이 완전히 사라진 상품 = 이력 포함 완전삭제**(백업 안전망),
     # 대장에 **판매중지/취소선으로 남은(줄 존재)** 상품 = 판매중지 표기 유지. ledger_products=줄 존재 전체.
     newly, deleted = wb.reconcile_account(biz, seen_products, report_acc.ledger_products,
@@ -502,4 +553,3 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
     if newly:
         log(f"  [{biz}] 대장에 판매중지로 남은 상품 {len(newly)}개 → 판매중지 표기(유지): "
             f"{newly[:3]}{'…' if len(newly) > 3 else ''}")
-    wb.save(save_path)

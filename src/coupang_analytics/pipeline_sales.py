@@ -360,7 +360,7 @@ def _pid_by_vid(inv_pids: dict, metrics: dict, item_pids: dict | None = None) ->
 
 
 def _log_discover_summary(a: Account, products, metrics, inventory, sale_status, tracked, n_match, log) -> None:
-    """계정 요약(진행경과·오류추적): 소스별 개수 + 대장 매칭/미매칭(vid 없는 상품은 등록명으로 추적)."""
+    """계정 요약(진행경과·오류추적): 소스별 개수 + 대장 매칭/미매칭(vid 없는 상품=미매칭·블록 미생성 D-008)."""
     unmatched = [tp.name for tp in tracked if not any(o.vendor_item_ids for o in tp.options)]
     vid_count = sum(len(o.vendor_item_ids) for tp in tracked for o in tp.options)
     log(f"  [계정 {a.account_id}/{a.label}] 소스: 상품조회 {len(products)}상품 · 판매분석 {len(metrics)}옵션"

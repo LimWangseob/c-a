@@ -17,7 +17,9 @@
 - 한 발견상품은 한 대장상품에만 배정(유일 배정)해 1:다 오매칭을 막는다.
 
 매칭되면 발견 상품의 **노출제목·vid·구분(계약/개인)** 을 부여(시트 표시=노출제목).
-매칭 안 되면(휴면·이름 상이 등) 대장명으로 추적한다 — 판매지표·재고는 공란, 키워드·순위는 대장명 기준.
+매칭 안 되면(휴면·이름 상이 등) 대장명·VID 없음으로 반환하고, 호출부는 **블록을 만들지 않는다**(D-008·2026-10-08:
+쿠팡 상품이면 VID 는 반드시 있다 → VID 없는 블록=매칭 실패 오류. `pipeline_process._skip_unmatched` 가 로그로 경고).
+① 괄호 **포함**일치는 본문 핵심어도 그 제목에 있어야 인정(`_paren_agrees` — 색상 괄호 '(골드)' 오매칭 차단).
 한 번 vid 가 잡히면 이후 실행은 vid 앵커(`workbook.resolve_block_name`)로 안정 식별한다.
 """
 from __future__ import annotations
@@ -36,7 +38,7 @@ _CODE_TAIL = re.compile(r"[A-Za-z]{1,5}-?\d{2,}[A-Za-z0-9]*$")   # 토큰 끝 �
 _SPEC = re.compile(r"^\d+[가-힣a-zA-Z%]{0,3}$")
 
 # 정밀 매칭 임계(2026-09-18, 정밀 우선) — 대장명이 쿠팡명과 100% 일치하지 않아도 **확신 있는 것만** 매칭하고
-# 애매하면 미매칭(대장명 추적·통계 공란)으로 둔다. 엉뚱한(비관리) 상품에 붙이는 것보다 공란이 안전.
+# 애매하면 미매칭(블록 미생성·로그 경고, D-008)으로 둔다. 엉뚱한(비관리) 상품에 붙이는 것보다 안전.
 #   RECALL_MIN = 대장 상품 핵심어(IDF 가중)의 재현율 하한, MARGIN = 최고-차선 재현율 마진.
 _RECALL_MIN = 0.55
 _MARGIN = 0.15
@@ -161,14 +163,28 @@ def _score_candidates(ptoks: set, ndisc: list[str], w) -> tuple[list, float, flo
     return scored, best, second
 
 
+def _paren_agrees(lp: Product, nd: str, brand: set, w) -> bool:
+    """괄호 **포함**일치가 본문과 모순되지 않는지 — 본문 핵심어(IDF 최고)가 그 발견제목에 있어야 한다.
+
+    실측(woolins 2026-10-06): 대장 '크리스마스트리 R060 (골드)'의 색상 괄호 '골드'가 쿠팡 '크리스마스풍선세트 (골드)'에
+    포함돼 트리가 풍선세트를 가져가고 진짜 풍선세트 줄이 미매칭(VID 없는 블록)이 됐다. 본문이 코드뿐(핵심어 없음)이면
+    괄호가 유일한 정체성이라 통과."""
+    body = {t for t in _tokens(lp.name) if t not in brand} or set(_tokens(lp.name))
+    if not body:
+        return True
+    return max(body, key=lambda t: (w(t), len(t))) in nd
+
+
 def _qualify_line(lp: Product, discovered: list[Product], ndisc: list[str], brand: set, w):
     """대장 한 줄의 매칭 판정 → ('paren', di) | ('match', (best, di)) | ('merge', dis) | (None, None).
 
-    ① 괄호 노출제목 정확일치(최우선) → ② 핵심어 게이트+재현율≥RECALL_MIN+마진≥MARGIN → 애매면 보조키(_tiebreak)."""
+    ① 괄호 노출제목 일치(최우선 — 정확일치, 또는 포함일치면서 본문 핵심어도 제목에 있음) → ② 핵심어 게이트+
+    재현율≥RECALL_MIN+마진≥MARGIN → 애매면 보조키(_tiebreak)."""
     par = _norm(_paren(lp.name))
-    if par:                                              # ① 괄호 노출제목 정확일치(대장 '코드 (노출제목)')
+    if par:                                              # ① 괄호 노출제목 일치(대장 '코드 (노출제목)')
         hit = next((di for di in range(len(discovered))
-                    if par == ndisc[di] or par in ndisc[di] or ndisc[di] in par), None)
+                    if par == ndisc[di] or ((par in ndisc[di] or ndisc[di] in par)
+                                            and _paren_agrees(lp, ndisc[di], brand, w))), None)
         if hit is not None:
             return "paren", hit
     core_text, ptoks = _core_tokens(lp, brand)           # ② 본문 우선(원인②)
@@ -222,7 +238,7 @@ def _assign(ledger: list[Product], discovered: list[Product]) -> dict[int, Produ
       ① 괄호 노출제목 정확일치 = 최우선(신뢰 최고),
       ② 아니면 **대장 상품의 핵심어(IDF 최고 토큰)를 발견제목이 반드시 포함**(핵심 게이트) +
          **핵심어 IDF 재현율 ≥ RECALL_MIN** + **최고-차선 마진 ≥ MARGIN**일 때만 매칭,
-      ③ 미달 = 미매칭(호출부가 대장명으로 추적·통계 공란) — 엉뚱한 데이터보다 공란이 안전.
+      ③ 미달 = 미매칭(호출부가 블록 미생성·로그 경고, D-008) — 엉뚱한 데이터보다 안전.
     로직은 헬퍼로 분해(_match_context·_qualify_line·_resolve_assignment)하되 **행동 불변**(2026-09-29 정리).
     """
     if not discovered:
@@ -316,7 +332,7 @@ def _color_overrides(ledger: list[Product], discovered: list[Product],
 def scope_to_ledger(ledger: list[Product], discovered: list[Product]) -> tuple[list[Product], int]:
     """대장 상품만 추적 대상으로. 반환: (추적 Product 목록, 매칭된 개수).
 
-    매칭 상품 = 발견 노출제목/vid/구분 부여(시트 표시=노출제목). 미매칭 = 대장명으로 추적(지표·재고 공란).
+    매칭 상품 = 발견 노출제목/vid/구분 부여(시트 표시=노출제목). 미매칭 = 대장명·VID 없음(호출부 블록 미생성·D-008).
     **색상별 대장 줄**(신형타프 (블랙)/(베이지))은 그 색상 옵션(vid)만 배정해 별도 블록·별도 계정목록 줄이
     되게 한다(소유자 2026-09-29·재고관리상 색상 분리). 색상 지정 없는 줄은 기존대로 전체 옵션.
     """

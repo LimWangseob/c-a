@@ -1699,6 +1699,67 @@ def t1_power_keep_awake():
     print("  ✓ keep_awake 정상(윈도우=True·타OS=no-op False)·예외 없음")
 
 
+def t1_no_vidless_blocks():
+    print("[35] VID 없는 블록 금지(D-008) — 색상 괄호 오매칭 차단·미매칭 블록 미생성·VID 없는 잔재 정리")
+    from coupang_analytics.input_list import Option, Product
+    from coupang_analytics.pipeline_process import _purge_vidless_blocks, _skip_unmatched
+    from coupang_analytics.product_match import scope_to_ledger
+
+    def disc(title, vids):
+        return Product(name=title, title=title, kind=config.KIND_CONTRACT, options=[Option("", list(vids), [])])
+
+    def vids_of(tp):
+        return sorted(v for o in tp.options for v in o.vendor_item_ids)
+
+    # ① 실측(woolins 2026-10-06): 대장 '크리스마스트리 R060 (골드)'의 색상 괄호 '골드'가 쿠팡 '크리스마스풍선세트 (골드)'를
+    #    괄호 일치로 가져가 진짜 풍선세트 줄이 미매칭(VID 없는 블록)이 됐다 → 색상 괄호는 다른 상품을 끌어오면 안 된다.
+    d_w = [disc("크리스마스 미니트리", ["v_tree_g", "v_tree_s"]), disc("크리스마스풍선세트 (골드)", ["v_bal_g", "v_bal_s"])]
+    t, _ = scope_to_ledger([Product(name="크리스마스 풍선세트 (골드)"), Product(name="크리스마스트리 R060 (골드)")], d_w)
+    assert vids_of(t[0]) == ["v_bal_g", "v_bal_s"], f"풍선세트 줄이 풍선세트에 매칭돼야 함: {vids_of(t[0])}"
+    assert "v_bal_g" not in vids_of(t[1]), f"트리 줄이 색상 괄호로 풍선세트를 가져감(오매칭): {vids_of(t[1])}"
+    t1b, _ = scope_to_ledger([Product(name="크리스마스트리 R060 (골드)")], d_w)
+    assert "v_bal_g" not in vids_of(t1b[0]), "트리 줄 단독도 풍선세트에 붙으면 안 됨(괄호 '골드'만으로 매칭)"
+    # 회귀: 괄호=실제 노출제목(정확일치·본문이 제목과 일치하는 포함)은 그대로 최우선 매칭
+    t2, _ = scope_to_ledger([Product(name="목견인기(의료용 경추 거북목 교정기 견인기 넥 스트레쳐 넥메딕스)")],
+                            [disc("의료용 경추 거북목 교정기 견인기 넥 스트레쳐 넥메딕스", ["v_neck"]), disc("무지외반증 교정기", ["v_toe"])])
+    assert vids_of(t2[0]) == ["v_neck"], f"괄호 노출제목 정확일치 매칭이 깨짐: {vids_of(t2[0])}"
+    t3, _ = scope_to_ledger([Product(name="LED 스탠드 HJ123(디프 듀얼 와이드 시력보호 LED 스탠드)")],
+                            [disc("디프 듀얼 와이드 시력보호 LED 스탠드 블랙", ["v_led"]), disc("너프건 P90", ["v_gun"])])
+    assert vids_of(t3[0]) == ["v_led"], f"괄호 노출제목 포함 매칭이 깨짐: {vids_of(t3[0])}"
+    _ok("색상 괄호(골드)로 다른 상품 매칭 차단·풍선세트 정매칭·괄호=노출제목 매칭 유지")
+
+    # ③ 미매칭(VID 없음) 상품은 블록을 만들지 않는다. 같은 이름의 VID 있는 기존 블록은 '이번 대장에 있음'으로 보존.
+    BIZ = "VID테스트"
+    wb = OutputWorkbook.empty()
+    seen, unmatched = [], []
+    assert _skip_unmatched(wb, BIZ, Product(name="접이식 정리함 JK0026", options=[Option("")]), seen, unmatched)
+    assert "접이식 정리함 JK0026" not in wb.products_of(BIZ), "미매칭 상품 블록이 생김"
+    assert unmatched == ["접이식 정리함 JK0026"] and seen == [], f"미매칭 기록/seen 오류: {unmatched} {seen}"
+    wb.ensure_product_block(BIZ, "휘핑기 CT0064", config.KIND_CONTRACT, ["kw"], registered="휘핑기 CT0064")
+    wb.set_product_vids(BIZ, "휘핑기 CT0064", ["v_whip"])
+    assert _skip_unmatched(wb, BIZ, Product(name="휘핑기 CT0064", options=[Option("")]), seen, unmatched)
+    assert seen == ["휘핑기 CT0064"], "VID 있는 기존 블록이 오늘 미매칭으로 판매중지/삭제 대상이 되면 안 됨"
+    assert not _skip_unmatched(wb, BIZ, Product(name="무드등 CT0229", options=[Option("", ["v_mood"])]), seen, unmatched), \
+        "VID 있는(매칭) 상품을 건너뜀"
+    _ok("미매칭=블록 미생성·로그 기록·같은 이름 VID 블록 보존·매칭 상품은 정상 처리")
+
+    # ② VID 없는 잔재 블록 정리(실측: 웨이브텍 '문어발선풍기m10 (대체요망)' — 9/29 M10 VID 블록으로 매칭된 뒤에도 잔존)
+    wb2 = OutputWorkbook.empty()
+    for name, vids, acct in (("문어발선풍기 M10", ["v_m10"], "wavetech"), ("문어발선풍기m10 (대체요망)", [], "wavetech"),
+                             ("다른계정 VID없음", [], "other_id")):
+        wb2.ensure_product_block(BIZ, name, config.KIND_PERSONAL, ["kw"], registered=name)
+        if vids:
+            wb2.set_product_vids(BIZ, name, vids)
+        wb2.set_product_account_id(BIZ, name, acct)
+    assert _purge_vidless_blocks(wb2, BIZ, ["문어발선풍기 M10"], "wavetech", set(), lambda m: None) == [], \
+        "상품조회 실패(live_vids 비어 있음)인데 정리함 — 복원 마스터 등 오삭제 위험"
+    removed = _purge_vidless_blocks(wb2, BIZ, ["문어발선풍기 M10"], "wavetech", {"v_m10"}, lambda m: None)
+    assert removed == ["문어발선풍기m10 (대체요망)"], f"VID 없는 잔재 정리 실패: {removed}"
+    assert "문어발선풍기 M10" in wb2.products_of(BIZ), "VID 있는 블록이 지워짐"
+    assert "다른계정 VID없음" in wb2.products_of(BIZ), "다른 계정ID 소속 블록을 지움(다계정 스코핑 위반)"
+    _ok("VID 없는 잔재 정리·VID 블록 보존·상품조회 실패 시 미정리·다른 계정ID 미접촉")
+
+
 def main():
     print("=" * 60)
     print("  로그인 불필요 부분 실증 (실제 실행 — 가짜 아님)")
@@ -1724,6 +1785,7 @@ def main():
     t1_product_id_source()
     t1_data_quality_summary()
     t1_product_match_precision()
+    t1_no_vidless_blocks()
     t1_vid_source_option_split()
     t1_ledger_dedup()
     t1_date_columns()
