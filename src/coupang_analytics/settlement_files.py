@@ -255,6 +255,115 @@ def _summary_cost(name: str, rows: list, period_end: date) -> int:
     return parse_int(rows[3][3], f"{name} 최종비용")
 
 
+# ── 로켓그로스 비용 리포트 → 상품별 ────────────────────────────────
+_COST_AMOUNT = ("최종비용(A-B-C)", "최종비용", "할인적용가(A-B)")   # 하위 머리글, 앞에 있는 것 우선(실측 8종)
+_COST_PRODUCT = ("등록상품 ID", "대표 등록상품 ID")                 # 반출 배송 서비스비=박스 단위라 '대표' 상품
+_COST_NAME = ("등록상품명", "대표 등록상품명")
+COMPENSATION = "재고 손실 보상"
+MULTI_PRODUCT = "(여러 상품)"          # 반출 배송 박스에 서로 다른 상품이 함께 — 나누는 기준이 없어 묶음으로 둠
+NO_PRODUCT = "(상품 미표기)"           # 대표 등록상품 ID 가 '-'
+
+
+def _cost_pid(v, where: str) -> str:
+    """상품 ID 칸 → ID. 반출 배송 서비스비는 박스 단위라 'a,b'·'-' 가 있음(실측 95줄 중 10줄):
+    같은 ID 반복=그 상품, 서로 다른 ID=MULTI_PRODUCT, '-'=NO_PRODUCT(추측 배분 안 함·집계 경고로 남김)."""
+    parts = [x.strip() for x in str(v or "").split(",") if x.strip()]
+    if not parts or parts == ["-"]:
+        return NO_PRODUCT
+    ids = {parse_id(x, where) for x in parts}
+    return ids.pop() if len(ids) == 1 else MULTI_PRODUCT
+
+
+@dataclass
+class CostLine:
+    """비용 리포트의 상품·월 묶음 1줄. ex_vat=VAT 별도(상세 줄 합·정확), vat=시트 세액을 금액 비율로 나눈 몫
+    (끝수는 큰 몫부터 1원씩 → 상품별 합 = 시트 세액). 재고 손실 보상은 받는 돈(+)이라 kind 로 구분·vat 0."""
+    account: str
+    month: str
+    product_id: str                  # 재고 손실 보상은 파일에 없음 → '' (집계에서 옵션ID 로 찾음)
+    option_id: str
+    product_name: str
+    kind: str                        # 시트 이름(입출고비·배송비·보관비…·재고 손실 보상)
+    ex_vat: int
+    vat: int = 0
+
+
+def _split(total: int, parts: list) -> list[int]:
+    """total 을 parts 비율로 나눈 정수(합=total). 끝수는 소수 부분이 큰 순서로 1원씩. parts 합이 0 이면 전부 0."""
+    base = sum(parts)
+    if not total:
+        return [0] * len(parts)
+    if not base:
+        raise SettlementParseError(f"나눌 금액 합이 0 인데 나눌 값 {total} 이 있음 — 배분 불가")
+    raw = [total * x / base for x in parts]
+    out = [int(r // 1) for r in raw]
+    for i in sorted(range(len(raw)), key=lambda i: raw[i] - out[i], reverse=True)[:total - sum(out)]:
+        out[i] += 1
+    return out
+
+
+def _col(cells: list, names: tuple, where: str) -> int:
+    for n in names:
+        if _norm(n) in cells:
+            return cells.index(_norm(n))
+    raise SettlementParseError(f"{where}: 머리글 {names} 없음")
+
+
+def _summary_lines(name: str, rows: list, account: str, period_end: date) -> list[CostLine]:
+    """요약형 시트(4행 요약 + 7·8행 2줄 머리글 + 상세 줄) → 상품·월 묶음. 상세 합 ≠ 요약 합계면 오류."""
+    hi = next((i for i, r in enumerate(rows[:15]) if r and _norm(r[0]) == "정산유형"), None)
+    if hi is None:
+        raise SettlementParseError(f"비용 리포트 '{name}': 상세 머리글(정산유형) 없음")
+    top, sub = [_norm(c) for c in rows[hi]], [_norm(c) for c in rows[hi + 1]]
+    ai, pi = _col(sub, _COST_AMOUNT, name), _col(top, _COST_PRODUCT, name)
+    ni, mi, ci = _col(top, _COST_NAME, name), _col(top, ("매출인식일",), name), _col(top, ("정산주기(종료일)",), name)
+    oi = top.index("옵션ID") if "옵션ID" in top else None
+    groups: dict = {}
+    for r in rows[hi + 2:]:
+        if ai >= len(r) or not str(r[ai] or "").strip():
+            continue
+        if parse_date(r[ci], f"{name} 정산주기") != period_end:
+            raise SettlementParseError(f"비용 리포트 '{name}': 정산주기(종료일)가 {period_end} 아닌 줄")
+        key = (_cost_pid(r[pi], f"{name} 상품ID"), f"{parse_date(r[mi], f'{name} 매출인식일'):%Y-%m}")
+        g = groups.setdefault(key, {"amt": 0, "name": str(r[ni] or "").strip(),
+                                    "opt": parse_id(r[oi], f"{name} 옵션ID") if oi is not None else ""})
+        g["amt"] += parse_int(r[ai], f"{name} 금액")
+    total, tax = parse_int(rows[3][1], f"{name} 합계"), parse_int(rows[3][2], f"{name} 세액")
+    if sum(g["amt"] for g in groups.values()) != total:
+        raise SettlementParseError(f"비용 리포트 '{name}': 상세 합 {sum(g['amt'] for g in groups.values())} ≠ 요약 합계 {total}")
+    keys = sorted(groups)
+    vats = _split(tax, [groups[k]["amt"] for k in keys])
+    return [CostLine(account, m, pid, groups[(pid, m)]["opt"], groups[(pid, m)]["name"], name, groups[(pid, m)]["amt"], v)
+            for (pid, m), v in zip(keys, vats)]
+
+
+def _compensation_lines(name: str, rows: list, account: str, period_end: date) -> list[CostLine]:
+    """재고 손실 보상(건별 목록) → 옵션·월 묶음(등록상품ID 없음). 월=발생일."""
+    hi = next(i for i, r in enumerate(rows[:5]) if "보상금액" in {_norm(c) for c in r})
+    top = [_norm(c) for c in rows[hi]]
+    ai, oi, ni, di = (top.index("보상금액"), _col(top, ("옵션ID",), name), _col(top, ("등록상품명",), name),
+                      _col(top, ("발생일",), name))
+    _listed_cost(name, rows, hi, period_end)                     # 정산주기 대조(다른 주 줄 있으면 오류)
+    groups: dict = {}
+    for r in rows[hi + 1:]:
+        if ai < len(r) and str(r[ai] or "").strip():
+            key = (parse_id(r[oi], f"{name} 옵션ID"), f"{parse_date(r[di], f'{name} 발생일'):%Y-%m}")
+            g = groups.setdefault(key, {"amt": 0, "name": str(r[ni] or "").strip()})
+            g["amt"] += parse_int(r[ai], f"{name} 보상 금액")
+    return [CostLine(account, m, "", opt, g["name"], COMPENSATION, g["amt"]) for (opt, m), g in sorted(groups.items())]
+
+
+def rg_cost_lines(sheets: dict, account: str, period_end: date) -> list[CostLine]:
+    """비용 리포트 전체 시트 → 상품·월별 줄(수량 안내 시트 제외). 시트별 합은 rg_cost_totals 와 같다."""
+    out: list[CostLine] = []
+    for name, rows in sheets.items():
+        if any(_QTY_NOTICE in {_norm(c) for c in r} for r in rows[:20]):
+            continue
+        listed = any("보상금액" in {_norm(c) for c in r} for r in rows[:5])
+        out += (_compensation_lines if listed else _summary_lines)(name, rows, account, period_end)
+    return out
+
+
 # ── 파일 이름 규칙 ────────────────────────────────────────────────
 _BAD = re.compile(r'[\\/:*?"<>|_\s]+')
 _NAME = re.compile(r"^(?P<account>.+)_(?P<settle>\d{8})_(?P<channel>[^_]+)_(?P<kind>[^_]+)_(?P<report>[^_]+)_"

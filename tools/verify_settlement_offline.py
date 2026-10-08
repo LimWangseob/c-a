@@ -840,6 +840,60 @@ def p15_browser_closed_transient():
     ok("TargetClosedError·'has been closed'·'Connection closed'=일시적(True)·그 외(차단/파싱 오류)=False")
 
 
+def p16_cost_by_product():
+    print("[P16] 로켓그로스 비용 상품별 — 상세 줄→상품·월(VAT 별도 정확·세액 비율 배분 합 일치)·보상=옵션→상품·박스 여러 상품=묶음")
+    from coupang_analytics import settlement_files as SF
+    from coupang_analytics import settlement_stats as ST
+    end = D("2025-12-21")
+    head = [[], ["쿠팡풀필먼트서비스(CFS) 배송비 정산 내역"], ["정산주기(종료일)", "배송비 합계", "세액", "최종비용"],
+            ["2025-12-21", 1000.0, 101.0, 1101.0], [], [],
+            ["정산유형", "정산주기(종료일)", "매출인식일", "등록상품 ID", "옵션ID", "등록상품명", "판매수량",
+             "쿠팡풀필먼트서비스(CFS) 배송비 (VAT 별도)", None, None, None, None],
+            [None, None, None, None, None, None, None, "발생비용(A)", "할인가(B)", "할인적용가(A-B)", "추가비용", "최종비용"]]
+    ship = head + [["주정산", "2025-12-21", "2025-12-15", "77", "701", "보냉백", 1, 900, 0, 900, 0, 700.0],
+                   ["주정산", "2025-12-21", "2025-12-16", "77", "701", "보냉백", 1, 900, 0, 900, 0, -100.0],   # 음수 조정 줄
+                   ["주정산", "2025-12-21", "2026-01-02", "88", "801", "압축팩", 1, 400, 0, 400, 0, 400.0]]
+    lines = SF.rg_cost_lines({"배송비": ship}, "A", end)
+    got = [(c.product_id, c.month, c.ex_vat, c.vat) for c in lines]
+    assert got == [("77", "2025-12", 600, 61), ("88", "2026-01", 400, 40)], got   # '최종비용' 칸·월=매출인식일·세액 합 101
+    bad = [r[:] for r in ship]
+    bad[8][11] = 701.0                                                              # 상세 합 ≠ 요약 합계
+    expect(SF.SettlementParseError, lambda: SF.rg_cost_lines({"배송비": bad}, "A", end), "상세 합 불일치")
+    ret = [[], ["반출 배송"], ["정산주기(종료일)", "합계", "세액", "최종비용"], ["2025-12-21", 3000.0, 300.0, 3300.0], [], [],
+           ["정산유형", "정산주기(종료일)", "매출인식일", "대표 등록상품 ID", "대표 등록상품명", "비용 청구 수량", "X", None],
+           [None, None, None, None, None, None, "발생비용(A)", "최종비용(A-B-C)"]]
+    ret += [["주정산", "2025-12-21", "2025-12-15", "77,77", "보냉백,보냉백", 1, 0, 1000.0],      # 같은 상품 반복 = 그 상품
+            ["주정산", "2025-12-21", "2025-12-15", "77,88", "보냉백,압축팩", 1, 0, 1000.0],      # 서로 다른 상품 = 묶음
+            ["주정산", "2025-12-21", "2025-12-15", "-", "-", 1, 0, 1000.0]]                    # 미표기
+    rl = SF.rg_cost_lines({"반출 배송 서비스비 리포트": ret}, "A", end)
+    assert sorted(c.product_id for c in rl) == sorted(["77", SF.MULTI_PRODUCT, SF.NO_PRODUCT])
+    assert sum(c.vat for c in rl) == 300
+    comp = [[None] * 3, ["발생일", "정산주기(종료일)", "주문ID", "옵션ID", "등록상품명", "보상 금액"],
+            [None] * 6, ["2025-12-02", "2025-12-21", "1", "701", "보냉백", 4775.0],
+            ["2025-12-09", "2025-12-21", "2", "999", "모르는상품", 1000.0]]
+    cl = SF.rg_cost_lines({"재고 손실 보상": comp}, "A", end)
+    assert [(c.kind, c.option_id, c.ex_vat, c.vat) for c in cl] == [
+        (SF.COMPENSATION, "701", 4775, 0), (SF.COMPENSATION, "999", 1000, 0)]
+    assert SF._split(101, [900, -100, 400]) == [76, -9, 34] and sum(SF._split(7, [1, 1, 1])) == 7
+    expect(SF.SettlementParseError, lambda: SF._split(5, [1, -1]), "합 0 인데 나눌 값")
+    res = ST.aggregate([], lines + rl + cl)
+    by = {p.product_id: p for p in res.products if p.month == "2025-12"}
+    assert by["77"].rg_cost == 661 + 1100 and by["77"].rg_comp == 4775            # 배송 + 반출배송(같은 상품 반복)
+    assert by["77"].settle_after_costs == 0 - 1761 + 4775 and by["77"].costs["배송비"] == 661
+    assert "옵션 999" in by and any("옵션ID 로 상품을 못 찾아" in w for w in res.warnings)
+    assert any(SF.MULTI_PRODUCT in w for w in res.warnings) and any(SF.NO_PRODUCT in w for w in res.warnings)
+    import openpyxl
+    with tempfile.TemporaryDirectory() as tmp:
+        wb = openpyxl.load_workbook(ST.write_stats(Path(tmp) / "c.xlsx", res))
+        ws = wb["로켓그로스 비용 상품별"]
+        hdr = [c.value for c in ws[1]]
+        assert hdr[:5] == ["계정", "월(매출인식)", "등록상품ID", "상품명", "배송비"] and hdr[-2:] == ["물류비 합계(VAT포함)", "재고 손실 보상"]
+        am = [c.value for c in wb["계정별 월별"][2]]
+        assert am[5:] == [sum(p.rg_cost for p in by.values()), 5775, -sum(p.rg_cost for p in by.values()) + 5775]
+    ok("상세→상품·월(음수 줄 포함)·세액 배분 합 일치·상세 합 불일치=오류·박스 같은 상품/여러 상품/미표기·보상 옵션→상품·"
+       "못 찾음=옵션 줄+경고·상품/계정 시트 물류비·보상·반영 후")
+
+
 def main():
     g1_payout_dates()
     g2_amounts()
@@ -859,6 +913,7 @@ def main():
     p13_accounts_file()
     p14_status_reader()
     p15_browser_closed_transient()
+    p16_cost_by_product()
     print("정산 계산 모듈 오프라인 검증 통과(골든 payout 12·amount 2·불변식 4행/3식 100%)")
 
 

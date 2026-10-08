@@ -477,12 +477,14 @@ def cmd_stats() -> None:
     for p in sorted(AMOUNTS.glob("*.json")):
         acct, ch = p.stem.rsplit("_", 1)
         amounts += [{"계정": acct, "채널": ch, **r} for r in json.loads(p.read_text(encoding="utf-8"))]
-    costs = []
+    costs, lines = [], []
     for p in sorted(COSTS.glob("*.xlsx")):
         m = SF.parse_file_name(p.name)
-        for sheet, v in SF.rg_cost_totals(SF.read_sheets(p), m["period_end"]).items():
+        sheets = SF.read_sheets(p)
+        for sheet, v in SF.rg_cost_totals(sheets, m["period_end"]).items():
             costs.append((m["account"], m["settle_date"], m["period_start"], m["period_end"], m["report"], sheet, v))
-    res = ST.aggregate(files)
+        lines += SF.rg_cost_lines(sheets, m["account"], m["period_end"])
+    res = ST.aggregate(files, lines)
     out = ST.write_stats(BASE / f"정산집계_{datetime.now():%y%m%d_%H%M%S}.xlsx", res, files=files, amounts=amounts,
                          costs=costs)
     log(f"집계 정산 파일 {len(files)}개·비용 리포트 {len(costs)}시트·쿠팡 지급 내역 {len(amounts)}줄 → {out} "

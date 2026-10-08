@@ -9,8 +9,10 @@
 - 월 = 매출인식일 기준(윙=구매확정일, 로켓그로스=매출인식일). 날짜 없는 금액 줄(윙 배송비 등)은 그 파일 정산 기간
   끝의 달로 넣고 **건수를 경고로 남긴다**.
 - 상품 = 계정 + 등록상품ID(윙 '상품 ID'·로켓그로스 '등록상품 ID'). 배송비 줄은 '배송비' 묶음.
-- ⚠ 로켓그로스 부가 비용(밀크런·광고비·입출고/보관 등)은 상품별 집계엔 아직 반영 전 → 열 이름에 '부가비용 차감 전'.
-  실제 지급액·차감 내역은 '쿠팡 지급 내역'(정산현황 금액 그대로) · 비용 리포트 합은 '로켓그로스 비용' 시트.
+- 로켓그로스 물류비(비용 리포트 8종: 입출고·배송·보관·바코드·반품회수/재입고·반출·반출배송)는 **상품·월별**로
+  더한다(VAT 포함·월=매출인식일) · 재고 손실 보상은 받는 돈(+)·월=발생일·등록상품ID 가 없어 옵션ID 로 상품 찾음.
+  광고비·밀크런·쿠팡라이브·이월 차감은 상품 상세가 없어 계정 단위('쿠팡 지급 내역' 시트)에만 있다.
+- 실제 지급액·차감 내역은 '쿠팡 지급 내역'(정산현황 금액 그대로) · 비용 리포트 시트별 합은 '로켓그로스 비용' 시트.
 """
 from __future__ import annotations
 
@@ -18,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import payout as P
-from .settlement_files import CH_WING, SettleFile
+from .settlement_files import CH_WING, COMPENSATION, MULTI_PRODUCT, NO_PRODUCT, SettleFile
 
 SHIPPING_KEY = "배송비"
 
@@ -37,10 +39,17 @@ class ProductMonth:
     rg_settle: int = 0
     coupon: int = 0
     fee: int = 0
+    rg_cost: int = 0                 # 로켓그로스 물류비(VAT 포함·차감할 돈)
+    rg_comp: int = 0                 # 재고 손실 보상(받을 돈)
+    costs: dict = field(default_factory=dict)   # 비용 종류(시트 이름) → VAT 포함 금액
 
     @property
     def settle_total(self) -> int:
         return self.wing_settle + self.rg_settle
+
+    @property
+    def settle_after_costs(self) -> int:
+        return self.settle_total - self.rg_cost + self.rg_comp
 
 
 @dataclass
@@ -51,9 +60,11 @@ class StatsResult:
     def account_months(self) -> dict:
         out: dict = {}
         for p in self.products:
-            a = out.setdefault((p.account, p.month), {"wing": 0, "rg": 0})
+            a = out.setdefault((p.account, p.month), {"wing": 0, "rg": 0, "cost": 0, "comp": 0})
             a["wing"] += p.wing_settle
             a["rg"] += p.rg_settle
+            a["cost"] += p.rg_cost
+            a["comp"] += p.rg_comp
         return out
 
     def account_totals(self) -> dict:
@@ -108,8 +119,9 @@ def _add(p: ProductMonth, r) -> None:
         p.product_name = r.product_name
 
 
-def aggregate(files: list[SettleFile]) -> StatsResult:
-    """정산 파일들 → 계정·월·상품별 집계(정렬: 계정 → 월 → 상품)."""
+def aggregate(files: list[SettleFile], cost_lines=()) -> StatsResult:
+    """정산 파일들 + 로켓그로스 비용 리포트 줄(settlement_files.rg_cost_lines) → 계정·월·상품별 집계
+    (정렬: 계정 → 월 → 상품)."""
     res = StatsResult()
     table: dict = {}
     seen_rows: set = set()
@@ -129,8 +141,40 @@ def aggregate(files: list[SettleFile]) -> StatsResult:
         res.warnings.append(f"날짜 없는 금액 줄 {undated}건 — 각 파일 정산 기간 끝의 달로 집계")
     if dup:
         res.warnings.append(f"여러 파일에 겹친 같은 줄 {dup}건 — 한 번만 집계")
+    _add_costs(table, list(cost_lines), files, res.warnings)
     res.products = [table[k] for k in sorted(table)]
     return res
+
+
+def _option_products(files: list[SettleFile], lines: list) -> dict:
+    """(계정, 옵션ID) → 등록상품ID — 정산 파일·비용 리포트 줄에서(재고 손실 보상은 옵션ID 만 있음)."""
+    out = {(r.account, r.option_id): r.product_id for f in files for r in f.rows if r.option_id and r.product_id}
+    out.update({(c.account, c.option_id): c.product_id for c in lines if c.option_id and c.product_id
+                and c.product_id not in (MULTI_PRODUCT, NO_PRODUCT)})
+    return out
+
+
+def _add_costs(table: dict, lines: list, files: list[SettleFile], warns: list) -> None:
+    o2p = _option_products(files, lines)
+    unmapped, bucket = 0, {}
+    for c in lines:
+        pid = c.product_id or o2p.get((c.account, c.option_id))
+        if not pid:
+            pid, unmapped = f"옵션 {c.option_id}", unmapped + 1
+        amt = c.ex_vat + c.vat
+        if pid in (MULTI_PRODUCT, NO_PRODUCT):
+            bucket[pid] = bucket.get(pid, 0) + amt
+        p = table.setdefault((c.account, c.month, pid), ProductMonth(c.account, c.month, pid))
+        p.product_name = p.product_name or c.product_name
+        if c.kind == COMPENSATION:
+            p.rg_comp += amt
+        else:
+            p.rg_cost += amt
+        p.costs[c.kind] = p.costs.get(c.kind, 0) + amt
+    if unmapped:
+        warns.append(f"재고 손실 보상 {unmapped}묶음 — 옵션ID 로 상품을 못 찾아 '옵션 ID' 줄로 따로 집계")
+    for k, v in bucket.items():
+        warns.append(f"반출 배송 서비스비 {v:,}원(VAT 포함) — 박스에 {k}: 상품별로 나누지 않고 '{k}' 줄로 집계")
 
 
 def payout_lines(files: list[SettleFile], warns: list | None = None) -> list[tuple]:
@@ -177,7 +221,10 @@ def contractor_amount(contract_amount: int | None, coupang_settled: int) -> int:
 
 _P_HEAD = ["계정", "월(매출인식)", "등록상품ID", "상품명", "윙 수량", "윙 판매액", "윙 정산금액", "로켓그로스 수량",
            "로켓그로스 매출금액", "로켓그로스 정산대상액", "판매자할인쿠폰", "판매수수료(VAT포함)",
-           "쿠팡 정산금액 합계(부가비용 차감 전)"]
+           "쿠팡 정산금액 합계(부가비용 차감 전)", "로켓그로스 물류비(VAT포함)", "재고 손실 보상",
+           "물류비·보상 반영 후(광고비 등 계정 차감 전)"]
+_COST_ORDER = ["입출고비", "배송비", "보관비", "바코드 부가 서비스", "반품회수비", "반품재입고비", "반출비",
+               "반출 배송 서비스비 리포트"]
 _A_HEAD = ["계정", "쿠팡 정산금액 합계(부가비용 차감 전)", "계약금액", "계약자 정산금액(계약금액−쿠팡 정산금액)"]
 
 
@@ -195,11 +242,15 @@ def write_stats(path, res: StatsResult, contracts: dict | None = None, files: li
     ws.append(_P_HEAD)
     for p in res.products:
         ws.append([p.account, p.month, p.product_id, p.product_name, p.wing_qty, p.wing_sales, p.wing_settle,
-                   p.rg_qty, p.rg_sales, p.rg_settle, p.coupon, p.fee, p.settle_total])
+                   p.rg_qty, p.rg_sales, p.rg_settle, p.coupon, p.fee, p.settle_total, p.rg_cost, p.rg_comp,
+                   p.settle_after_costs])
     am = wb.create_sheet("계정별 월별")
-    am.append(["계정", "월(매출인식)", "윙 정산금액", "로켓그로스 정산대상액", "합계(부가비용 차감 전)"])
+    am.append(["계정", "월(매출인식)", "윙 정산금액", "로켓그로스 정산대상액", "합계(부가비용 차감 전)",
+               "로켓그로스 물류비(VAT포함)", "재고 손실 보상", "물류비·보상 반영 후(광고비 등 계정 차감 전)"])
     for (acct, month), v in sorted(res.account_months().items()):
-        am.append([acct, month, v["wing"], v["rg"], v["wing"] + v["rg"]])
+        am.append([acct, month, v["wing"], v["rg"], v["wing"] + v["rg"], v["cost"], v["comp"],
+                   v["wing"] + v["rg"] - v["cost"] + v["comp"]])
+    _cost_product_sheet(wb, res.products)
     cs = wb.create_sheet("계약자 정산")
     cs.append(_A_HEAD)
     for acct, settled in sorted(res.account_totals().items()):
@@ -244,3 +295,17 @@ def _table_sheet(wb, title: str, rows: list, first: list) -> None:
     ws.append(cols)
     for r in rows:
         ws.append([r.get(c, "") for c in cols])
+
+
+def _cost_product_sheet(wb, products: list) -> None:
+    """'로켓그로스 비용 상품별' — 상품·월마다 비용 종류별(VAT 포함) + 합계 + 재고 손실 보상. 비용 없으면 시트 안 만듦."""
+    rows = [p for p in products if p.costs]
+    if not rows:
+        return
+    kinds = [k for k in _COST_ORDER if any(k in p.costs for p in rows)]
+    kinds += sorted({k for p in rows for k in p.costs} - set(kinds) - {COMPENSATION})
+    ws = wb.create_sheet("로켓그로스 비용 상품별")
+    ws.append(["계정", "월(매출인식)", "등록상품ID", "상품명", *kinds, "물류비 합계(VAT포함)", "재고 손실 보상"])
+    for p in rows:
+        ws.append([p.account, p.month, p.product_id, p.product_name, *[p.costs.get(k, 0) for k in kinds],
+                   p.rg_cost, p.rg_comp])
