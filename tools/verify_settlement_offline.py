@@ -1162,6 +1162,40 @@ def p22_paydates_verify():
     ok("RG 3줄 중 2 일치·틀린 줄 하나만 상세·윙 70% 일치·윙 30%/100% 제외·공휴일 없음=자료 없음 1줄")
 
 
+def p23_calendar():
+    print("[P23] 정산캘린더 — 윙 지급일은 캘린더로 대조(30% 포함·공휴일 불필요)·수집은 폼 본문·캘린더 없으면 규칙")
+    from coupang_analytics import settlement_verify as SV
+    from coupang_analytics import settlement_verify_collect as VC
+    cal = [{"title": "9월 최종액 정산", "start": "2026-11-02 00:00:00", "transactionCycleCode": "R",
+            "recognitionFrom": "2026-09-01", "recognitionTo": "2026-09-30"},
+           {"title": "[주정산]\n08/31 ~ 09/06", "start": "2026-09-29 00:00:00", "transactionCycleCode": "W",
+            "recognitionFrom": "2026-08-31", "recognitionTo": "2026-09-06"},
+           {"title": "신정", "start": "2025-01-01 00:00:00", "transactionCycleCode": "UK", "recognitionFrom": None,
+            "recognitionTo": None}]
+    wing = [{"정산일": "2026-09-29", "기간 시작": "2026-08-31", "기간 끝": "2026-08-31", "지급비율": 70, "최종지급액": 1},
+            {"정산일": "2026-09-29", "기간 시작": "2026-09-01", "기간 끝": "2026-09-06", "지급비율": 70, "최종지급액": 1},
+            {"정산일": "2026-11-01", "기간 시작": "2026-09-01", "기간 끝": "2026-09-30", "지급비율": 30, "최종지급액": 1},   # 하루 틀림
+            {"정산일": "2026-07-20", "기간 시작": "2026-05-17", "기간 끝": "2026-05-17", "지급비율": 100, "최종지급액": 1}]
+    rows = SV.paydates("A", wing, [], None, calendar=cal)
+    summ = {r["항목"]: r for r in rows if r["기준"] == "요약"}
+    assert summ["윙(캘린더)"]["우리(계산)"] == 2 and summ["윙(캘린더)"]["쿠팡"] == 3 and summ["윙(캘린더)"]["판정"] == SV.DIFF
+    bad = [r for r in rows if r["기준"] != "요약" and r["판정"] == SV.DIFF]
+    assert len(bad) == 1 and bad[0]["비고"] == "캘린더 2026-11-02"                          # 휴일 보정된 최종액 날짜
+    assert not any("RG" in r["항목"] or r["항목"] == "공휴일" for r in rows)                  # RG 줄 없으면 공휴일 불요
+    miss = SV.paydates("A", [{**wing[0], "기간 시작": "2026-01-05", "기간 끝": "2026-01-11"}], [], None, calendar=cal)
+    assert any(r["판정"] == SV.NODATA and "캘린더에 없음" in r["비고"] for r in miss)
+    log: list = []
+
+    def call(method, path, body):
+        log.append((method, path, body))
+        return cal if path == VC.CALENDAR else {}
+    d = VC.collect(call, lambda url: log.append(("화면", url)), D("2026-01-01"), D("2026-10-08"))
+    assert d["calendar"] == cal
+    i = log.index(("화면", VC.CALENDAR_URL))
+    assert log[i + 1] == ("POST", VC.CALENDAR, "startDate=2025-12-25&endDate=2026-12-17")    # 폼 본문·시작 7일 전~오늘+70일
+    ok("윙 캘린더 대조(분할 주·최종액·틀린 날 1)·100% 제외·RG 없으면 공휴일 불요·캘린더에 없는 회차=자료 없음·수집 폼 본문")
+
+
 def main():
     g1_payout_dates()
     g2_amounts()
@@ -1188,6 +1222,7 @@ def main():
     p20_rg_payout_dates()
     p21_bank_inflows()
     p22_paydates_verify()
+    p23_calendar()
     print("정산 계산 모듈 오프라인 검증 통과(골든 payout 12·amount 2·불변식 4행/3식 100%)")
 
 

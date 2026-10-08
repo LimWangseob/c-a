@@ -8,6 +8,7 @@
 | 윙 부가세 신고내역 | 정산 > 부가세 신고내역 | POST /tenants/msf/wing/api/payment-method/list {from,to=YYYYMM} |
 | 로켓그로스 부가세 | 로켓그로스 부가세 화면 | GET /tenants/rfm/api/settlements/vat/search?fromYearMonth&toYearMonth |
 | 보류목록 / 추가지급(월별) | 정산 > 보류목록 / 추가지급 | POST …/payment-pending-report/list · …/additional-payment-report/list |
+| 윙 정산캘린더(지급일·예정) | 정산 현황 > 정산캘린더 | POST /tenants/msf/wing/api/payout-date-calendar/payout-dates (폼 startDate·endDate) |
 ⚠ 매출내역 등은 그 화면을 연 상태에서 불러야 한다(다른 화면에서 부르면 504 — 실측). 오늘 이후 날짜를 넣으면 504(실측)
 → 월 끝은 어제까지. 서버 일시 오류(ServerBusy)는 그 항목만 '조회 실패'로 남기고 다음 항목 진행.
 개인정보(계좌·예금주)는 저장하지 않는다.
@@ -25,6 +26,7 @@ PENDING_URL = f"{_W}/tenants/finance/wing/contentsurl/payments-pending"
 ADDITIONAL_URL = f"{_W}/tenants/msf/wing/view/additional-payment-report-view"
 WING_VAT_URL = f"{_W}/tenants/finance/wing/contentsurl/proportion-sales"
 RG_VAT_URL = f"{_W}/tenants/rfm/settlements/vat-report"
+CALENDAR_URL = f"{_W}/tenants/msf/wing/view/payout-date-calendar"
 PURCHASE = "/tenants/msf/wing/api/purchase-report/list"
 PENDING = "/tenants/msf/wing/api/payment-pending-report/list"
 ADDITIONAL = "/tenants/msf/wing/api/additional-payment-report/list"
@@ -32,6 +34,8 @@ WING_VAT = "/tenants/msf/wing/api/payment-method/list"
 RG_VAT = "/tenants/rfm/api/settlements/vat/search"
 WALLET_HIST = "/tenants/rfm/v2/wallet/histories/search/api"
 WALLET_BAL = "/tenants/rfm/v2/wallet/balance/api"
+CALENDAR = "/tenants/msf/wing/api/payout-date-calendar/payout-dates"   # 윙 정산캘린더(폼 본문·과거~미래 지급일)
+CALENDAR_AHEAD = timedelta(days=70)
 WALLET_FROM = date(2025, 1, 1)          # 월렛 장부(입금−인출=잔액) 대조용 — 소급 시작보다 넉넉히
 _PII = ("bank", "owner", "accountnumber")
 
@@ -73,6 +77,9 @@ def collect(call, open_page, start: date, today: date, *, note=lambda m: None, g
         finally:
             gap()
 
+    open_page(CALENDAR_URL)
+    data["calendar"] = safe("정산캘린더", lambda: call("POST", CALENDAR, f"startDate={start - timedelta(days=7)}"
+                                                                         f"&endDate={today + CALENDAR_AHEAD}"))
     open_page(RG_URL)
     data["wallet"] = safe("월렛 내역", lambda: _wallet(call, WALLET_FROM, today))
     bal = safe("월렛 잔액", lambda: call("GET", WALLET_BAL, None))

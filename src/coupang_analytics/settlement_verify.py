@@ -180,32 +180,53 @@ def holds(acct: str, vdata: dict | None) -> list[dict]:
             for k, n in (("보류", n_pend), ("추가지급", n_add))]
 
 
-def paydates(acct: str, amounts_wing: list, amounts_rg: list, holidays) -> list[dict]:
-    """지급일 대조 — 정산현황 정산일 ↔ 규칙 계산(공휴일 필요). 로켓그로스=payout.rg_payout_date(도움말 1.1·629/629),
-    윙=70%만(주 마감+15영업일). 윙 30%(익익월 1일 휴일 보정 여부 규칙 확정 대기)·100%(보류 해제 지급)는 대상 아님.
-    holidays 없음(공휴일 키 미등록·조회 실패) = '자료 없음' 1줄."""
+def _date_group(acct: str, label: str, rows: list, calc) -> list[dict]:
+    """한 묶음의 지급일 대조 — calc(r)=계산/캘린더 날짜('YYYY-MM-DD') 또는 None(기준 없음). 요약 1줄 + 다른 줄."""
+    same, bad, none = 0, [], []
+    for r in rows:
+        want = calc(r)
+        if want is None:
+            none.append(_row(acct, "지급일", f"정산일 {r['정산일']}", f"{label} {r['기간 시작']}~{r['기간 끝']}", None, None,
+                             "캘린더에 없음"))
+        elif want == r["정산일"]:
+            same += 1
+        else:
+            bad.append(_row(acct, "지급일", f"정산일 {r['정산일']}", f"{label} {r['기간 시작']}~{r['기간 끝']} {r['지급비율']}%",
+                            0, 1, f"{'캘린더' if '캘린더' in label else '계산'} {want}"))
+    if not rows:
+        return []
+    return [_row(acct, "지급일", "요약", label, same, len(rows) - len(none), "일치 줄 수 / 전체")] + bad + none
+
+
+def _calendar_lookup(calendar: list):
+    """윙 정산현황 줄 → 그 기간을 포함하는 캘린더 회차의 지급일(70%=W 주정산·30%=R 최종액)."""
+    def find(r):
+        code = {70: "W", 30: "R"}[int(float(r["지급비율"]))]
+        hits = [c for c in calendar if c.get("transactionCycleCode") == code and c.get("recognitionFrom")
+                and c["recognitionFrom"] <= r["기간 시작"] and r["기간 끝"] <= c["recognitionTo"]]
+        return hits[0]["start"][:10] if len(hits) == 1 else None
+    return find
+
+
+def paydates(acct: str, amounts_wing: list, amounts_rg: list, holidays, calendar: list | None = None) -> list[dict]:
+    """지급일 대조. 윙=쿠팡 정산캘린더 날짜(30% 최종액 포함·공휴일 불필요 — 소유자 지시 2026-10-08, nicoable 18/18),
+    캘린더 없으면 규칙(70%만·주 마감+15영업일). 로켓그로스=payout.rg_payout_date(공휴일 필요·629/629).
+    윙 100%(보류 해제 지급)는 대상 아님. 공휴일이 필요한데 없으면 '자료 없음' 1줄."""
     from datetime import date as _d
 
     from . import payout as P
-    if holidays is None:
-        return [_row(acct, "지급일", "-", "공휴일", None, None, "공휴일 자료 없음 — 앱 설정 탭에서 공휴일 API 키 등록")]
+    wing = [r for r in amounts_wing if int(float(r["지급비율"])) in (70, 30)]
     out: list = []
-    groups = (("로켓그로스", amounts_rg, lambda r: P.rg_payout_date(int(float(r["지급비율"])), _d.fromisoformat(r["기간 시작"]),
-                                                                      _d.fromisoformat(r["기간 끝"]), holidays)),
-              ("윙 70%", [r for r in amounts_wing if int(float(r["지급비율"])) == 70],
-               lambda r: P.payout_date(P.PAYOUT_MP_WEEKLY_1ST, week_end=_d.fromisoformat(r["기간 끝"]), holidays=holidays)))
-    for label, rows, calc in groups:
-        same, bad = 0, []
-        for r in rows:
-            want = calc(r).isoformat()
-            if want == r["정산일"]:
-                same += 1
-            else:
-                bad.append(_row(acct, "지급일", f"정산일 {r['정산일']}", f"{label} {r['기간 시작']}~{r['기간 끝']} {r['지급비율']}%",
-                                0, 1, f"계산 {want}"))
-        if rows:
-            out.append(_row(acct, "지급일", "요약", label, same, len(rows), "일치 줄 수 / 전체"))
-            out += bad
+    if calendar is not None:
+        out += _date_group(acct, "윙(캘린더)", wing, _calendar_lookup(calendar))
+        wing = []
+    need_hol = bool(amounts_rg) or any(int(float(r["지급비율"])) == 70 for r in wing)
+    if need_hol and holidays is None:
+        return out + [_row(acct, "지급일", "-", "공휴일", None, None, "공휴일 자료 없음 — 앱 설정 탭에서 공휴일 API 키 등록")]
+    out += _date_group(acct, "로켓그로스", amounts_rg, lambda r: P.rg_payout_date(
+        int(float(r["지급비율"])), _d.fromisoformat(r["기간 시작"]), _d.fromisoformat(r["기간 끝"]), holidays).isoformat())
+    out += _date_group(acct, "윙 70%", [r for r in wing if int(float(r["지급비율"])) == 70], lambda r: P.payout_date(
+        P.PAYOUT_MP_WEEKLY_1ST, week_end=_d.fromisoformat(r["기간 끝"]), holidays=holidays).isoformat())
     return out
 
 
@@ -219,7 +240,8 @@ def build(acct: str, wing_ours: dict, rg_ours: dict, amounts_wing: list, amounts
     """계정 하나의 검증 줄 전부."""
     return (rg_formula(acct, amounts_rg) + rg_wallet(acct, amounts_rg, vdata) + wing_sales(acct, wing_ours, vdata)
             + wing_pay(acct, amounts_wing, vdata) + vat(acct, wing_ours, rg_ours, vdata) + holds(acct, vdata)
-            + paydates(acct, amounts_wing, amounts_rg, holidays) + failures(acct, vdata))
+            + paydates(acct, amounts_wing, amounts_rg, holidays, (vdata or {}).get("calendar"))
+            + failures(acct, vdata))
 
 
 def month_sums(files: list, order_rows) -> tuple[dict, dict]:

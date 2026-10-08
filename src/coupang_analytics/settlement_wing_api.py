@@ -240,15 +240,17 @@ def month_windows(start: date, end: date) -> list[tuple[date, date]]:
 _CALL_JS = """
 async ([method, path, body]) => {
   const x = decodeURIComponent((document.cookie.match(/XSRF-TOKEN=([^;]+)/) || [])[1] || '');
-  const h = {'content-type': 'application/json', 'x-xsrf-token': x};
+  const form = typeof body === 'string';            // 폼 본문(정산캘린더 등) — 문자열 그대로
+  const h = {'content-type': form ? 'application/x-www-form-urlencoded; charset=UTF-8' : 'application/json',
+             'x-xsrf-token': x};
   if (path.startsWith('/tenants/rfm/')) h['x-rfm-portal2-request-id'] = crypto.randomUUID();
-  const r = await fetch(path, {method, headers: h, body: body === null ? undefined : JSON.stringify(body)});
+  const r = await fetch(path, {method, headers: h, body: body === null ? undefined : (form ? body : JSON.stringify(body))});
   return {status: r.status, ctype: r.headers.get('content-type') || '', text: await r.text()};
 }
 """
 
 
-def call(page, method: str, path: str, body: dict | None = None):
+def call(page, method: str, path: str, body: dict | str | None = None):
     """로그인된 WING 페이지 안에서 화면과 같은 방식으로 호출 → JSON. 502·503·504=ServerBusy(일시 오류),
     403·429·그 밖 HTML=ApiBlocked, 그 밖 오류=SiteChangedError."""
     r = page.evaluate(_CALL_JS, [method, path, body])
