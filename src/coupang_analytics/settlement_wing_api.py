@@ -56,6 +56,10 @@ class ApiBlocked(Exception):
     """403·429·HTML 응답 — 차단 의심(그 계정 즉시 중단)."""
 
 
+class ServerBusy(Exception):
+    """502·503·504 — 쿠팡 서버 일시 오류(차단 아님·잠시 뒤 재시도). 실측 2026-10-08: 매출내역 조회 504 Gateway Time-out."""
+
+
 # ── 순수 변환(오프라인 검증) ──────────────────────────────────────
 def _kst_date(text: str) -> date:
     """'2026-09-06T15:00:00.000Z'(UTC) → 한국 날짜 2026-09-07. 날짜만이면 그대로."""
@@ -236,9 +240,12 @@ async ([method, path, body]) => {
 
 
 def call(page, method: str, path: str, body: dict | None = None):
-    """로그인된 WING 페이지 안에서 화면과 같은 방식으로 호출 → JSON. 403·429·HTML=ApiBlocked, 그 밖 오류=SiteChangedError."""
+    """로그인된 WING 페이지 안에서 화면과 같은 방식으로 호출 → JSON. 502·503·504=ServerBusy(일시 오류),
+    403·429·그 밖 HTML=ApiBlocked, 그 밖 오류=SiteChangedError."""
     r = page.evaluate(_CALL_JS, [method, path, body])
     st, text = r["status"], r["text"]
+    if st in (502, 503, 504):
+        raise ServerBusy(f"{path} → {st} 서버 일시 오류")
     if st in (403, 429) or text.lstrip().startswith("<"):
         raise ApiBlocked(f"{path} → {st} ({r['ctype']}) {text[:80]!r}")
     if st != 200:

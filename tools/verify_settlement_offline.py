@@ -665,6 +665,10 @@ def p10_wing_api_parse():
     expect(API.ApiBlocked, lambda: API.call(FakePage(403, "x"), "GET", "/p"), "403=차단")
     expect(API.ApiBlocked, lambda: API.call(FakePage(200, "<html>Access Denied"), "GET", "/p"), "HTML=차단")
     expect(API.SiteChangedError, lambda: API.call(FakePage(500, "{}"), "GET", "/p"), "500=중단")
+    for st in (502, 503, 504):                                                      # 실측 2026-10-08: 504 HTML = 서버 일시 오류
+        expect(API.ServerBusy, lambda st=st: API.call(FakePage(st, "<html><title>%d Gateway Time-out</title>" % st), "GET", "/p"),
+               f"{st}=일시 오류(차단 아님)")
+        assert not issubclass(API.ServerBusy, API.ApiBlocked)
     ok("윙/RG 일정(UTC→한국 날짜·묶음키)·요청 본문·요청번호·목록(부가세 메뉴 무시)·달 구간·403/HTML=차단·500=중단")
 
 
@@ -894,6 +898,65 @@ def p16_cost_by_product():
        "못 찾음=옵션 줄+경고·상품/계정 시트 물류비·보상·반영 후")
 
 
+def p17_server_busy():
+    print("[P17] 서버 일시 오류(502·503·504) — 재시도 후 성공·끝내 실패=대기(차단·연속실패 아님)·전체 중단 안 함")
+    import contextlib
+    from datetime import datetime
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    from coupang_analytics import settlement_runlog as RLG
+    from coupang_analytics import settlement_wing_api as API
+
+    class SeqPage:                                                      # 응답 차례대로
+        def __init__(self, seq):
+            self.seq = list(seq)
+
+        def evaluate(self, js, arg=None):
+            st, text = self.seq.pop(0)
+            return {"status": st, "ctype": "x", "text": text}
+
+    class B:
+        def __init__(self, seq):
+            self.page = SeqPage(seq)
+    old_retry, old_log = TD.SERVER_BUSY_RETRY, TD.LOG
+    with tempfile.TemporaryDirectory() as tmp:
+        TD.LOG = RLG.RunLog(tmp, now=datetime(2026, 10, 8, 12), echo=lambda m: None)
+        TD.SERVER_BUSY_RETRY = (0, 2)
+        try:
+            assert TD.api(B([(504, "<html>"), (502, "<html>"), (200, '{"ok":1}')]), "A", "POST", "/p", {}) == {"ok": 1}
+            expect(API.ServerBusy, lambda: TD.api(B([(504, "<html>")] * 3), "A", "POST", "/p", {}), "3번 다 504")
+            expect(TD.BlockDetected, lambda: TD.api(B([(403, "x")]), "A", "POST", "/p", {}), "403=차단")
+            assert [r["결과"] for r in TD.LOG.rows] == [RLG.BLOCK]                 # 504 는 차단 기록 없음
+
+            @contextlib.contextmanager
+            def fake_session(a, hidden):
+                yield None
+
+            def busy_run(a, b, args, jobs):
+                raise API.ServerBusy("/tenants/x → 504 서버 일시 오류")
+
+            class Acc:
+                def __init__(self, i):
+                    self.account_id, self.label = i, i
+
+            class Args:
+                until, until_at, hidden, command = "", None, True, "run"
+            old_session, old_name = TD.session, TD.name_of
+            TD.session, TD.name_of = fake_session, (lambda a: a.account_id)
+            try:
+                TD.LOG = RLG.RunLog(tmp, now=datetime(2026, 10, 8, 13), echo=lambda m: None)
+                rc = TD._run_accounts([Acc("a1"), Acc("a2"), Acc("a3")], busy_run, Args)
+            finally:
+                TD.session, TD.name_of = old_session, old_name
+            assert rc == 0, rc                                                      # 연속 2계정이어도 전체 중단 안 함
+            res = [(r["계정"], r["결과"]) for r in TD.LOG.rows if r["단계"] == "계정"]
+            assert res == [("a1", RLG.WAIT), ("a2", RLG.WAIT), ("a3", RLG.WAIT)], res
+            assert not any(r["결과"] == RLG.BLOCK for r in TD.LOG.rows)
+        finally:
+            TD.SERVER_BUSY_RETRY, TD.LOG = old_retry, old_log
+    ok("504→502→성공=값 반환·3번 실패=ServerBusy·403=차단 기록·계정 단위 일시 오류=대기·연속 3계정도 전체 중단 안 함")
+
+
 def main():
     g1_payout_dates()
     g2_amounts()
@@ -914,6 +977,7 @@ def main():
     p14_status_reader()
     p15_browser_closed_transient()
     p16_cost_by_product()
+    p17_server_busy()
     print("정산 계산 모듈 오프라인 검증 통과(골든 payout 12·amount 2·불변식 4행/3식 100%)")
 
 

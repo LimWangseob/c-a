@@ -267,13 +267,24 @@ def goto(b, url: str, who: str) -> None:
     b.page.wait_for_timeout(2500)                       # 화면 스크립트가 쿠키(XSRF) 준비할 시간
 
 
+SERVER_BUSY_RETRY = (15, 2)                            # 쿠팡 서버 일시 오류: 15초 쉬고 최대 2번 더
+
+
 def api(b, who: str, method: str, path: str, body: dict | None = None):
-    """WING 주소 호출. 차단 의심(403·429·HTML)이면 '차단' 기록 후 BlockDetected."""
-    try:
-        return API.call(b.page, method, path, body)
-    except API.ApiBlocked as exc:
-        LOG.record(who, "차단감지", RL.BLOCK, str(exc))
-        raise BlockDetected(str(exc)) from exc
+    """WING 주소 호출. 차단 의심(403·429·HTML)이면 '차단' 기록 후 BlockDetected. 서버 일시 오류(502·503·504)는
+    잠시 쉬고 다시 시도, 그래도 안 되면 ServerBusy 를 올림(호출부가 '대기'로 기록·차단으로 세지 않음)."""
+    wait, retries = SERVER_BUSY_RETRY
+    for attempt in range(retries + 1):
+        try:
+            return API.call(b.page, method, path, body)
+        except API.ApiBlocked as exc:
+            LOG.record(who, "차단감지", RL.BLOCK, str(exc))
+            raise BlockDetected(str(exc)) from exc
+        except API.ServerBusy:
+            if attempt == retries:
+                raise
+            log(f"  [서버 일시 오류] {path} — {wait}초 뒤 다시 시도({attempt + 1}/{retries})")
+            time.sleep(wait)
 
 
 # ── 정산 일정 조회 ────────────────────────────────────────────────
@@ -443,6 +454,8 @@ def cmd_download(a, b, args, jobs: list) -> None:
                 _fetch_one(b, j, row, name)
             except BlockDetected:
                 raise
+            except API.ServerBusy as exc:                 # 서버 일시 오류 = 그 파일만 다음 바퀴에(차단·실패 아님)
+                LOG.record(name, "받기", RL.WAIT, f"{exc} — 다음 바퀴에 다시", **_job_fields(j))
             except Exception as exc:                       # 그 파일만 실패 기록 후 다음 파일(무음 아님)
                 LOG.error(name, "받기", exc, **_job_fields(j))
             SJ.save_jobs(JOBS, jobs)
@@ -510,6 +523,8 @@ def _run_accounts(accts, run, args) -> int:
         except BlockDetected as exc:
             bad += 1
             LOG.error(name, "계정", exc, RL.BLOCK)
+        except API.ServerBusy as exc:                     # 쿠팡 서버 일시 오류 = 차단 아님·연속 실패로 안 셈·다음 바퀴
+            LOG.record(name, "계정", RL.WAIT, f"{exc} — 재시도해도 안 됨, 다음 바퀴에 다시")
         except Exception as exc:
             if _is_browser_closed(exc):   # 브라우저 닫힘(예: 18:00 앱 시작 reap)=일시적 → '차단'·연속실패로 안 셈·다음 바퀴 재시도
                 LOG.record(name, "계정", RL.WAIT,
