@@ -7,7 +7,10 @@
 `.claude` 실사용본, `docs/memory/` 는 그 백업 스냅샷).
 
 경로 우선순위: env `COUPANG_MEMORY_DIR` > 기본(`%USERPROFILE%\\.claude\\projects\\<slug>\\memory`).
-<slug> = repo 절대경로에서 `:`·`\\`·`/` → `-`(하네스 규칙, 예 `D:\\coupang-analytics` → `D--coupang-analytics`).
+<slug> = **본체 저장소** 절대경로에서 `:`·`\\`·`/` → `-`(하네스 규칙, 예 `D:\\coupang-analytics` → `D--coupang-analytics`).
+본체 저장소 = git 공통 폴더(`git rev-parse --git-common-dir`)의 상위 — worktree(`D:\\ca-worktree\\…`·`.claude\\worktrees\\…`)
+에서 커밋해도 본체 메모리를 미러한다(2026-10-08: 예전엔 worktree 경로로 찾아 폴더가 없어 미러를 건너뛰어 docs/memory 가
+낡았고, worktree 전용 메모리 폴더가 생기면 그 몇 개 파일 기준으로 스냅샷이 지워질 위험도 있었음).
 외부 메모리 폴더가 없으면(다른 PC·메모리 미사용) **조용히 no-op**(커밋을 막지 않는다·exit 0).
 
 사용:
@@ -30,6 +33,17 @@ except AttributeError:
     pass
 
 
+def _main_root(root: Path = ROOT) -> Path:
+    """본체 저장소 폴더 = git 공통 폴더의 상위(worktree 면 본체, 본체면 자기 자신)."""
+    out = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=str(root),
+                         capture_output=True, text=True, check=True).stdout.strip()
+    return Path(out).resolve().parent
+
+
+def _slug(root: Path) -> str:
+    return str(root).replace(":", "-").replace("\\", "-").replace("/", "-")
+
+
 def _memory_src() -> Path | None:
     env = os.environ.get("COUPANG_MEMORY_DIR")
     if env:
@@ -38,8 +52,12 @@ def _memory_src() -> Path | None:
     profile = os.environ.get("USERPROFILE") or os.environ.get("HOME")
     if not profile:
         return None
-    slug = str(ROOT).replace(":", "-").replace("\\", "-").replace("/", "-")
-    p = Path(profile) / ".claude" / "projects" / slug / "memory"
+    try:
+        main = _main_root()
+    except (OSError, subprocess.CalledProcessError) as exc:     # 미러를 건너뛰되 사유는 알림(무음 아님·커밋은 막지 않음)
+        print(f"  [메모리 동기화] ⚠ 본체 저장소 확인 실패({exc.__class__.__name__}) → 건너뜀")
+        return None
+    p = Path(profile) / ".claude" / "projects" / _slug(main) / "memory"
     return p if p.is_dir() else None
 
 
