@@ -217,13 +217,20 @@ def assert_no_pii(sheets: dict, columns=PII_COLUMNS) -> None:
                 raise SettlementParseError(f"비용 리포트 '{name}' 시트에 개인정보 칸 {sorted(hit)} — 저장 중단")
 
 
+_QTY_NOTICE = _norm("반출비 청구 제외 수량(B)")
+
+
 def rg_cost_totals(sheets: dict, period_end: date) -> dict:
     """비용 리포트 → {시트명: 최종비용(VAT 포함)}. 실측 모양 2가지(2026-10-06):
     ① 4행 요약 [정산주기(종료일), 합계, 세액, 최종비용] — 보관비·입출고비·배송비·바코드·반품회수·재입고
     ② 건별 목록(머리글에 '보상 금액') — 재고 손실 보상: 그 열 합.
-    정산주기(종료일)가 요청 기간 끝과 다르면 오류(엉뚱한 주 파일)."""
+    ③ 금액 없는 수량 안내 시트(머리글 '반출비 청구 제외 수량(B)') — 반출비 리포트의 '자동반출(고객반품) - 쿠팡귀책'
+       (실측 2026-10-08 운용 PC 16개: 반출비 시트 최종비용이 쿠팡 차감액과 16/16 일치, 이 시트는 금액 칸 없음) → 제외.
+    그 밖의 모양은 오류. 정산주기(종료일)가 요청 기간 끝과 다르면 오류(엉뚱한 주 파일)."""
     out = {}
     for name, rows in sheets.items():
+        if any(_QTY_NOTICE in {_norm(c) for c in r} for r in rows[:20]):
+            continue
         head = next((i for i, r in enumerate(rows[:5]) if "보상금액" in {_norm(c) for c in r}), None)
         out[name] = (_summary_cost(name, rows, period_end) if head is None
                      else _listed_cost(name, rows, head, period_end))

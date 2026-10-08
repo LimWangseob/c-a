@@ -190,6 +190,15 @@ def match_downloads(rows: list[DownloadRow], jobs: list[Job]) -> tuple[list[tupl
     return out, notes
 
 
+def merge_jobs(base: list[Job], extra: list[Job]) -> tuple[int, int]:
+    """다른 PC 의 요청 기록(extra)을 base 에 합침(제자리). 같은 키(계정·채널·리포트·기간)는 base 우선 = 건너뜀.
+    반환 (추가 수, 건너뛴 수). 계정명이 예전 이름이어도 그대로 넣고, 이름 맞춤은 다음 실행의 계정명 맞춤이 한다."""
+    keys = {j.key for j in base}
+    added = [j for j in extra if j.key not in keys]
+    base.extend(added)
+    return len(added), len(extra) - len(added)
+
+
 # ── 기록 파일 ─────────────────────────────────────────────────────
 def load_jobs(path) -> list[Job]:
     p = Path(path)

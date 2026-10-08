@@ -8,6 +8,7 @@
   python tools/settlement_download.py run      [--from …] [--to …] [--accounts …]   # 요청+받기 한 세션(전체 확대용)
   python tools/settlement_download.py watch                             # 운용 PC 상시: 앱 ①판매수집 완료 후 재개·17:40 멈춤
   python tools/settlement_download.py stats                             # 받은 파일 집계 엑셀
+  python tools/settlement_download.py merge --src output\정산\정산          # 다른 PC 정산 폴더 합치기(자동 실행 중지 후)
 
 규칙(차단 위험 완화·소유자 2026-10-06): 정산현황 '정산확정' 줄만 · 윙은 월별(최종액) 파일이 나온 달이면 주정산 생략 ·
 로켓그로스는 같은 매출 주 1회·비용 리포트는 그 주 금액이 있는 종류만 · 계정당 실행 상한(--cap) · 요청 사이 45~75초
@@ -91,22 +92,83 @@ def load_accounts(only: set) -> list:
     return picked
 
 
+def _merge_amount_file(src: Path, dst: Path) -> None:
+    """금액 기록 JSON 을 dst 로 옮김. dst 가 이미 있으면 (정산일·기간·비율) 키로 합침(dst 값 우선) 후 src 삭제."""
+    if not dst.exists():
+        os.replace(src, dst)
+        return
+    key = lambda r: (r["정산일"], r["기간 시작"], r["기간 끝"], r["지급비율"])   # noqa: E731
+    rows = {key(r): r for r in json.loads(src.read_text(encoding="utf-8"))}
+    rows.update({key(r): r for r in json.loads(dst.read_text(encoding="utf-8"))})
+    tmp = dst.with_suffix(".tmp")
+    tmp.write_text(json.dumps(sorted(rows.values(), key=lambda r: (r["정산일"], r["기간 시작"])), ensure_ascii=False,
+                              indent=1), encoding="utf-8")
+    os.replace(tmp, dst)
+    src.unlink()
+
+
+def cmd_merge(args) -> int:
+    """다른 PC(노트북)에서 옮겨 온 정산 폴더(--src)를 이 PC 기록에 합침. 자동 실행(watch)이 돌면 거부(진행분 덮어쓰기 방지).
+    요청 기록=같은 작업은 이 PC 우선·나머지 추가 / 받은 파일=같은 이름 있으면 그대로 둠 / 금액 기록=키로 합침.
+    끝나면 계정 파일 기준 계정명 맞춤까지(load_accounts)."""
+    from coupang_analytics.registry_lock import RegistryLockError, registry_lock
+    src = Path(args.src)
+    if not (src / "_요청기록.json").exists():
+        raise SystemExit(f"합칠 폴더에 _요청기록.json 이 없음: {src}")
+    try:
+        with registry_lock(BASE / "_잠금" / "_watch.lock", wait_sec=0, on_log=log):
+            accts = load_accounts(set())                    # 이 PC 기록부터 지금 계정명으로
+            jobs, extra = SJ.load_jobs(JOBS), SJ.load_jobs(src / "_요청기록.json")
+            _rename_jobs(extra, accts)                      # 옮겨 온 기록도 같은 이름 규칙 → 같은 작업은 한 번만
+            added, dup = SJ.merge_jobs(jobs, extra)
+            SJ.save_jobs(JOBS, jobs)
+            moved = kept = 0
+            for sub, dst in (("파일", FILES), ("파일/비용", COSTS)):
+                dst.mkdir(parents=True, exist_ok=True)
+                srcs = sorted((src / sub).glob("*.xlsx"))
+                mt = SA.renames([p.name.partition("_")[0] for p in srcs], accts, tok=lambda x: SF._token(x, "계정명"))
+                for p in srcs:
+                    acct, _, tail = p.name.partition("_")
+                    target = dst / f"{mt.get(acct, acct)}_{tail}"         # 지금 이름 기준으로 같은 파일 있는지
+                    if target.exists():
+                        kept += 1
+                    else:
+                        os.replace(p, target)
+                        moved += 1
+            AMOUNTS.mkdir(parents=True, exist_ok=True)
+            for p in sorted((src / "쿠팡지급내역").glob("*.json")):
+                _merge_amount_file(p, AMOUNTS / p.name)
+            LOG.record("(전체)", "합치기", RL.OK, f"{src} → 요청 기록 {added}건 추가·{dup}건 이미 있음 · 파일 {moved}개 옮김·"
+                       f"{kept}개 같은 이름 있어 그대로 둠(원본 폴더에 남음)")
+            _migrate_names(accts)                           # 옮긴 파일·금액 기록의 예전 계정명 → 지금 계정명
+    except RegistryLockError:
+        raise SystemExit("정산 자동 실행이 도는 중 — 앱 정산 탭 [정산 중지] 후 다시 실행하세요(진행분 덮어쓰기 방지)") from None
+    return 0
+
+
 def name_of(a) -> str:
     return SA.display_name(a)
 
 
-def _migrate_names(accts) -> None:
-    """요청 기록(_요청기록.json)·받은 파일·쿠팡 지급 내역 파일의 예전 계정명 → 지금 계정명(멱등)."""
-    jobs = SJ.load_jobs(JOBS)
+def _rename_jobs(jobs, accts, file_accounts=()) -> tuple[dict, dict]:
+    """요청 기록 안의 예전 계정명·파일 이름 → 지금 이름(제자리). 반환 (계정명 바꿈표, 파일 계정명 바꿈표)."""
     m = SA.renames([j.account for j in jobs], accts)
-    mt = SA.renames([SF.parse_file_name(p.name)["account"] for d in (FILES, COSTS) for p in d.glob("*.xlsx")]
-                    + [j.file.split("/")[-1].split("_")[0] for j in jobs if j.file], accts, tok=lambda x: SF._token(x, "계정명"))
+    mt = SA.renames([*file_accounts, *[j.file.split("/")[-1].split("_")[0] for j in jobs if j.file]], accts,
+                    tok=lambda x: SF._token(x, "계정명"))
     for j in jobs:
         j.account = m.get(j.account, j.account)
         if j.file:
             head, _, rest = j.file.rpartition("/")
             acct, _, tail = rest.partition("_")
             j.file = (head + "/" if head else "") + mt.get(acct, acct) + "_" + tail
+    return m, mt
+
+
+def _migrate_names(accts) -> None:
+    """요청 기록(_요청기록.json)·받은 파일·쿠팡 지급 내역 파일의 예전 계정명 → 지금 계정명(멱등)."""
+    jobs = SJ.load_jobs(JOBS)
+    m, mt = _rename_jobs(jobs, accts, [SF.parse_file_name(p.name)["account"] for d in (FILES, COSTS)
+                                       for p in d.glob("*.xlsx")])
     if m or mt:
         SJ.save_jobs(JOBS, jobs)
     for d in (FILES, COSTS):
@@ -117,7 +179,7 @@ def _migrate_names(accts) -> None:
     for p in list(AMOUNTS.glob("*.json")):
         acct, _, ch = p.stem.rpartition("_")
         if acct in mt:
-            os.replace(p, p.with_name(f"{mt[acct]}_{ch}.json"))
+            _merge_amount_file(p, p.with_name(f"{mt[acct]}_{ch}.json"))
     if m or mt:
         log(f"  [계정명 맞춤] 요청 기록 {len(m)}개·파일 계정명 {len(mt)}개를 지금 계정 파일 이름으로 바꿈")
 
@@ -509,7 +571,7 @@ def cmd_watch(args) -> int:
 def main() -> int:
     global LOG
     ap = argparse.ArgumentParser(description="쿠팡 정산 파일 배치 다운로드")
-    ap.add_argument("command", choices=("probe", "request", "download", "run", "watch", "stats"))
+    ap.add_argument("command", choices=("probe", "request", "download", "run", "watch", "stats", "merge"))
     ap.add_argument("--accounts", default="", help="계정ID 쉼표 구분(비우면 관리대장 전체)")
     ap.add_argument("--from", dest="start", type=date.fromisoformat, default=date(2026, 1, 1))
     ap.add_argument("--to", dest="end", type=date.fromisoformat, default=date.today())
@@ -517,6 +579,7 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="요청 대상만 보여 주고 누르지 않음")
     ap.add_argument("--hidden", action="store_true", help="창 숨김(2차인증 필요하면 실패)")
     ap.add_argument("--channel", choices=("윙", "로켓그로스"), default="", help="한 채널만")
+    ap.add_argument("--src", default="", help="merge: 합칠 정산 폴더(예: output\정산\정산 — 노트북에서 옮겨 온 것)")
     ap.add_argument("--until", default="", help="HH:MM 이후엔 새 요청·새 계정 시작 안 함(앱 18:00 무인 실행 전 멈춤)")
     args = ap.parse_args()
     global CHANNELS
@@ -531,6 +594,8 @@ def main() -> int:
         return 0
     if args.command == "watch":
         return cmd_watch(args)
+    if args.command == "merge":
+        return cmd_merge(args)
     accts = load_accounts({x.strip() for x in args.accounts.split(",") if x.strip()})
     if args.command == "probe":
         accts = accts[:1]

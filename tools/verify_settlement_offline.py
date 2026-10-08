@@ -386,6 +386,11 @@ def p7_settle_files():
     comp_bad = [*comp, ["2025-12-03", "2025-12-28", "3", "7", 100.0]]
     expect(SF.SettlementParseError, lambda: SF.rg_cost_totals({"재고 손실 보상": comp_bad}, end), "다른 주 보상 줄")
     expect(SF.SettlementParseError, lambda: SF.rg_cost_totals({"x": [["a"], ["b"]]}, end), "모르는 모양")
+    notice = [[], ["고객 반품된 상품을 재판매하지 않고 자동으로 반출받는 경우 …"], [], [],
+              ["세금계산서 발행월", "발생일", "반출ID", "옵션ID", "반출 완료 수량(A)", "반출비 청구 제외 수량(B)",
+               "최종 반출 수량(A-B) (쿠팡 귀책 제외)"], ["2025-12", "2025-12-02", "9", "8", 3.0, 1.0, 2.0]]
+    assert SF.rg_cost_totals({"보관비": summ, "자동반출(고객반품) - 쿠팡귀책": notice}, end) == {"보관비": 201287}
+    expect(SF.SettlementParseError, lambda: SF.rg_cost_totals({"안내": notice[:4]}, end), "수량 머리글 없는 안내문")
     SF.assert_no_pii({"보관비": summ})
     expect(SF.SettlementParseError, lambda: SF.assert_no_pii({"x": [["주문ID", "구매자명"]]}), "개인정보 칸")
     ci = WING_HDR.index("판매자 할인쿠폰(A+B)")
@@ -504,6 +509,10 @@ def p8_settle_jobs():
                 status=SJ.ST_REQUESTED, requested_at=t0.isoformat())
     pairs, notes = SJ.match_downloads(lst, [w3])
     assert pairs == [] and "요청 번호" in notes[0]                                   # 번호 없으면 받지 않음
+    mb = [SJ.Job("A", "윙", "주정산", "주문상세", "2026-08-24", "2026-08-30", "2026-09-18", status=SJ.ST_DONE)]
+    mx = [SJ.Job("A", "윙", "주정산", "주문상세", "2026-08-24", "2026-08-30", "2026-09-18"),            # 같은 키 = 이 PC 우선
+          SJ.Job("W", "윙", "최종액", "주문상세", "2026-01-01", "2026-01-31", "2026-03-02", status=SJ.ST_DONE)]
+    assert SJ.merge_jobs(mb, mx) == (1, 1) and mb[0].status == SJ.ST_DONE and mb[1].account == "W"
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "기록.json"
         SJ.save_jobs(p, jobs)
@@ -771,7 +780,20 @@ def p13_accounts_file():
     tok = lambda x: SF._token(x, "계정명")
     assert SA.renames(["(주)가나-acc1", "옛이름-plan-it"], accts, tok=tok) == {
         "(주)가나-acc1": "홍길동-주식회사-가나-acc1", "옛이름-plan-it": "김다라-플랜-plan-it"}
-    ok("공백/탭 혼합·3열=비번→이름 없음(경고·repr 비노출)·중복/칸 없음/빈 파일/UTF-8 아님=오류·BOM·계정ID 끝 기준 이름 맞춤")
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    from coupang_analytics import settlement_jobs as SJ
+    here = [SJ.Job("홍길동-주식회사 가나-acc1", "윙", "주정산", "주문상세", "2026-01-05", "2026-01-11", "2026-01-30",
+                   status=SJ.ST_DONE, file="홍길동-주식회사-가나-acc1_20260130_윙_주정산_주문상세_20260105-20260111.xlsx")]
+    came = [SJ.Job("(주)가나-acc1", "윙", "주정산", "주문상세", "2026-01-05", "2026-01-11", "2026-01-30",
+                   file="(주)가나-acc1_20260130_윙_주정산_주문상세_20260105-20260111.xlsx"),
+            SJ.Job("(주)가나-acc1", "윙", "최종액", "주문상세", "2026-01-01", "2026-01-31", "2026-03-02",
+                   file="비용/(주)가나-acc1_20260302_윙_최종액_주문상세_20260101-20260131.xlsx")]
+    TD._rename_jobs(came, accts)
+    assert came[1].file == "비용/홍길동-주식회사-가나-acc1_20260302_윙_최종액_주문상세_20260101-20260131.xlsx"
+    assert SJ.merge_jobs(here, came) == (1, 1) and here[0].status == SJ.ST_DONE     # 옛 이름이어도 같은 작업은 한 번
+    ok("공백/탭 혼합·3열=비번→이름 없음(경고·repr 비노출)·중복/칸 없음/빈 파일/UTF-8 아님=오류·BOM·계정ID 끝 기준 이름 맞춤"
+       "·다른 PC 기록 합치기(옛 이름 맞춘 뒤 중복 없음)")
 
 
 def p14_status_reader():
