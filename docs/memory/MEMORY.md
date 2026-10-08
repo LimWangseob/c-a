@@ -1,5 +1,6 @@
 ## 진입점 (최신 먼저)
-- [⭐⭐새 세션 진입점 2026-10-06: 구현 Wave1 통합(D8흡수·D10CS·D2소싱·통합앱+보라·정산 배치다운로드·윙30%)](handoff-session-261006.md) — 도메인 전용 세션 정책·master 통합·게이트15. 다음=L1핀·사무실 라이브·소유자결정(정산 지급일·계약금액)
+- ⭐⭐**현재 핸드오프 SSOT = repo `STATE.md`**(2026-10-08 session-kit 전역 전환부터). 아래 handoff-* 메모리는 **아카이브**(recall만·새로 만들지 않음). 세션 종료=`/session-close`.
+- [기록용: 구현 Wave1 통합 2026-10-06](handoff-session-261006.md) — 도메인 전용 세션 정책·master 통합·게이트15
 - [⭐화면 시안 2026-10-06: 메뉴 v3.3 대13·중84·정의서137칸](handoff-design-mockup-261006.md) · [시안 승격1(공용위젯+홈추이)](impl-home-trend-widgets-261006.md)
 - 구현 Wave1 1단계(전부 master 병합·남은=UI·config키·2·3단계): [D8흡수원장3종](impl-d8-absorb-ledger-261005.md) · [D10 CS트래커](impl-d10-cs-tracker-261005.md) · [D2 소싱](impl-d2-sourcing-261006.md) · [통합앱 셸](impl-integrated-app-shell-261005.md)
 - [도메인 설계10+멀티플랫폼 2026-10-05](domain-design-elaboration-261005.md) — SSOT=designs/PLATFORM_INTEGRATION·SETTLEMENT_MODEL·DOMAIN_D2~D10·UI_SCREENS
@@ -12,7 +13,7 @@
 - [판매상태 불일치 경고](feature-sale-status-mismatch-flag.md) · [VID 출처=상품조회·옵션분리](feature-vid-source-from-product-list.md)
 
 ## 작업 원칙(피드백·정책)
-- [⛔불변: 메모리 30~50줄·CLAUDE.md<200줄(초과=색인분리)·DECISIONS append-only·세션 시작/종료 규율](policy-memory-to-claudemd-200line.md) — 모든 세션 공통·영구. SSOT=전역 CLAUDE.md
+- [⛔불변·전역: 메모리30~50줄·CLAUDE.md<200·핸드오프=STATE.md·DECISIONS D-번호 append-only·종료=/session-close·커밋[R{n}]](policy-memory-to-claudemd-200line.md) — session-kit 전역 일원화. SSOT=전역 CLAUDE.md
 - [⭐정확도 우선·레인 간 요청 규칙](feedback-accuracy-over-speed-and-lane-handoff.md) · [⭐도메인별=전용 세션(worktree)](policy-per-domain-sessions.md) · [통합 전 기존 앱 무중단](keep-existing-app-running-until-integrated.md)
 - [시안 적용=더하기(재작성 금지)](feedback-design-extend-not-redo.md) · [분석 요청=수정 금지](analysis-request-no-code-change.md) · [실측 근거 수정](fix-from-real-evidence.md) · [데이터로 검증](verify-by-data-not-status.md)
 - [폴백 최소화](no-silent-fallback-principle.md) · [코드 건강 게이트](code-health-regression-gate.md) · [괴물함수 전멸](monster-functions-extinct-260929.md) · [판단 흐려지면 새 세션](recommend-new-session-when-degraded.md)

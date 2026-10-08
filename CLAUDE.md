@@ -1,10 +1,11 @@
 # coupang-analytics
 
-> ⛔**불변 정책 — 모든 도메인·세션·worktree·향후 생성될 세션에 영구 적용**(소유자 2026-10-07·08): ①**메모리
-> (MEMORY.md 색인)는 30~50줄** 유지, 50줄 초과분은 **CLAUDE.md로 이관**(메모리=색인·보조). ②**CLAUDE.md는
-> 200줄 미만** 유지, 넘으면 **색인만 남기고 상세는 별도 파일로 분리**해 링크/참조(이 파일·전역 둘 다). ③**DECISIONS
-> 추가 전용**(기존 수정·삭제 금지·뒤집으면 새 항목+`SUPERSEDED by …`). ④세션 시작=핸드오프·DECISIONS 읽고 git
-> 대조 요약 후 착수·종료=정책 반영+핸드오프 갱신+검증·커밋. 되돌림·완화 금지. 전역 SSOT=`~/.claude/CLAUDE.md` 같은 절.
+> ⛔**불변 정책 — 모든 도메인·세션·worktree·향후 세션에 영구 적용**(소유자 2026-10-07·08·session-kit 전역 일원화):
+> ①**메모리(MEMORY.md 색인) 30~50줄**·초과분 CLAUDE.md 이관. ②**CLAUDE.md 200줄 미만**·초과 시 색인만+상세 별도 파일.
+> ③**핸드오프 = `STATE.md` 한 곳**(repo 루트·100줄 이하·세션마다 전체 덮어쓰기·새 handoff 문서 난립 금지). ④**DECISIONS =
+> `docs/DECISIONS.md` D-번호 블록·추가 전용**(기존 수정·삭제 금지·뒤집으면 새 항목+`SUPERSEDED by D-xxx`·전환 전 한 줄은 동결 아카이브).
+> ⑤**세션 시작** = STATE.md+DECISIONS 읽고 `git log/status` 대조 3줄 요약 후 착수. ⑥**세션 종료 = `/session-close`**·커밋 =
+> `[R{n}] 요약`. 되돌림·완화 금지. 전역 SSOT = `~/.claude/CLAUDE.md` "결정 기록·핸드오프·세션 종료" 절.
 
 관리 쿠팡 판매자 계정들의 **상품별×일자별** 지표(노출순위·노출건수·판매건수·방문자)를 수집해
 통합 엑셀(`쿠팡데이타분석_yymmdd_시분초.xlsx`)을 생성하는 **Windows 데스크톱 GUI(.exe, PyInstaller)**.

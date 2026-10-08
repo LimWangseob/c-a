@@ -1,5 +1,24 @@
 # DECISIONS — 확정된 정책·설계·구조 결정 (SSOT)
 
+## 형식 (2026-10-08 session-kit 전환 — D-번호 블록)
+```
+### D-xxx [POLICY_TAG] 제목 (YYYY-MM-DD, R{n})
+- 결정 / 근거(실측·로그·코드) / 버린 대안 / 영향 범위 / 상태: ACTIVE | SUPERSEDED by D-xxx
+```
+추가 전용·번호 연속. 기존 항목 수정·삭제 금지(뒤집으면 새 항목 + 기존에 `SUPERSEDED by D-xxx`).
+
+## 항목 (신규·D-번호)
+
+### D-001 [SESSION_KIT] 세션 관리 전역 일원화 (2026-10-08, R1)
+- 결정: 핸드오프=STATE.md 한 곳 · DECISIONS=D-번호 블록 · 커밋=`[R{n}]` · 세션 종료=`/session-close`(전역 스킬) · 메모리 30~50줄·CLAUDE.md<200줄 상한.
+- 근거: 소유자 업로드 session-kit + "전환하여 일원화(병행 금지)" 지시. handoff 메모리 난립·형식 혼재 방지.
+- 버린 대안: (a)개념만 흡수=자동 강제 없음 (b)병행 설치=STATE+handoff 이원화 — 소유자 일원화 선택. kit verify(ruff/mypy --strict/cycle_audit)는 프로젝트 게이트와 불일치해 `run_checks`로 일반화.
+- 영향 범위: ~/.claude/CLAUDE.md · ~/.claude/skills/session-close · STATE.md · docs/DECISIONS.md · 프로젝트 CLAUDE.md
+- 상태: ACTIVE
+
+---
+
+## 전환 전 결정 (한 줄·동결 아카이브·2026-10-08 이전·재작성 금지=추측 방지)
 형식: `YYYY-MM-DD · 요지 · 사유`
 
 2026-09-24 · 재고칸 = 재고현황 있으면 값(0=품절)·없으면 판매중지 무관 "미입고"(옛 판매중지→공란 폐기·`_block_sellable` 제거) · 제한계정 all-SUSPENDED여도 재고칸이 텅 비지 않게(웰빙곳간 47블록중 31공란 실측).

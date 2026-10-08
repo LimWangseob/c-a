@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: feedback
   originSessionId: c48bfd01-5750-43b7-bf3c-9d574e709d12
-  modified: 2026-10-08T02:48:07.495Z
+  modified: 2026-10-08T04:03:59.548Z
 ---
 
 ⛔**불변·영구 정책(소유자 2026-10-07·반드시 적용·모든 세션 공통)**. SSOT=전역 `~/.claude/CLAUDE.md` "메모리·CLAUDE.md 관리" 절.
@@ -18,6 +18,12 @@ metadata:
 
 **Why:** 메모리 파일이 많아지면(83개) 한 세션에서 다 못 읽어 맥락 누락. 항상 로드되는 MEMORY.md/CLAUDE.md를 수치 상한으로 lean 유지하고 상세는 recall. session-kit(소유자 업로드)의 세션 핸드오프·DECISIONS 규율을 흡수.
 
-**How to apply:** 매 세션/작업 종료 시 `wc -l`로 MEMORY.md(≤50)·전역/프로젝트 CLAUDE.md(<200) 점검. 초과 시 색인 통합/분리. 되돌림·완화 금지(불변). ⛔session-kit의 session-close 스킬은 그대로 설치 안 함(verify가 `ruff/mypy --strict/cycle_audit.py`로 이 프로젝트 게이트 `tools/run_checks.py`와 불일치) — 개념만 흡수.
+**전환 완료(2026-10-08·소유자 "3번+일원화·전역"):** session-kit을 **전역 전면 도입**(병행 없음).
+- **핸드오프 = `STATE.md` 한 곳**(repo 루트·100줄 이하·세션마다 덮어쓰기). 옛 handoff-session-* 메모리=아카이브(recall만·새로 안 만듦).
+- **DECISIONS = D-번호 블록**(`### D-xxx [TAG] 제목` + 결정/근거/버린대안/영향/상태). 전환 전 한 줄 기록은 **동결 아카이브**(재작성 금지=추측 방지). D-001=이 전환.
+- **세션 종료 = `/session-close`**(전역 스킬 `~/.claude/skills/session-close`·verify는 프로젝트 게이트로 일반화: 이 프로젝트=`run_checks`+`check_complexity`). 커밋=`[R{n}] 요약`.
+- SSOT=전역 `~/.claude/CLAUDE.md` "결정 기록·핸드오프·세션 종료" 절. 다른 프로젝트도 작업 시 같은 체계로 전환.
 
-적용 현황(2026-10-08): 전역 CLAUDE.md 56줄·프로젝트 127줄·MEMORY.md 38줄 — 전부 상한 이하. 관련 [[commit-with-design-and-memory]]·[[code-health-regression-gate]].
+**How to apply:** 매 세션/작업 종료 `/session-close` 실행(STATE 갱신·게이트·커밋·푸시). 줄 수 상한 점검(`wc -l`). 되돌림·완화 금지(불변).
+
+적용 현황(2026-10-08): 전역 CLAUDE.md 54줄·프로젝트 129줄·MEMORY.md ≤50 — 전부 상한 이하. 관련 [[commit-with-design-and-memory]]·[[code-health-regression-gate]].
