@@ -287,14 +287,17 @@ _AMOUNT_FIRST = ["계정", "채널", "정산일", "기간 시작", "기간 끝",
 
 
 def _table_sheet(wb, title: str, rows: list, first: list) -> None:
-    """dict 줄 → 시트. 앞 열 고정 + 나머지 칸(쿠팡 응답 이름 그대로)은 처음 나온 순서로 — 칸을 버리지 않음."""
+    """dict 줄 → 시트. 앞 열 고정 + 나머지 칸(쿠팡 응답 이름 그대로)은 처음 나온 순서로 — 칸을 버리지 않음.
+    목록·사전 값(차감 사유·상계 상세)은 글자(JSON)로 펼쳐 넣는다."""
+    import json
     cols = list(first)
     for r in rows:
         cols += [k for k in r if k not in cols]
     ws = wb.create_sheet(title)
     ws.append(cols)
     for r in rows:
-        ws.append([r.get(c, "") for c in cols])
+        ws.append([json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v
+                   for v in (r.get(c, "") for c in cols)])
 
 
 def _cost_product_sheet(wb, products: list) -> None:

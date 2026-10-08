@@ -565,6 +565,11 @@ def p9_settle_stats():
         assert [c.value for c in wb3["쿠팡 지급 내역"][1]][-1] == "totalPayableAmount"
         assert [c.value for c in wb3["쿠팡 지급 내역"][2]][6:] == [3479206, 5658592]
         assert wb3["로켓그로스 비용"].cell(2, 7).value == 205791
+        out4 = ST.write_stats(Path(tmp) / "집계4.xlsx", res, amounts=[
+            {"계정": "A", "채널": "윙", "정산일": "2026-07-01", "기간 시작": "2026-05-01", "기간 끝": "2026-05-31", "지급비율": 30,
+             "최종지급액": 2235280, "차감 사유": [{"사유": "판매자서비스이용료", "금액": 55000}]}])
+        c = [x.value for x in openpyxl.load_workbook(out4)["쿠팡 지급 내역"][2]]
+        assert '"사유": "판매자서비스이용료"' in c[-1], c                                # 목록 = 글자로 펼쳐 저장
         out2 = ST.write_stats(Path(tmp) / "집계2.xlsx", res)
         assert [c.value for c in openpyxl.load_workbook(out2)["계약자 정산"][2]][2:] == [None, None]   # 미입력=빈칸
     ok("최종액=주정산 없는 주만·중복 파일 1회·배송비 묶음·월 귀속·지급액 검산(윙 최종액 30% 주별)·계약자 정산금액·엑셀 5시트")
@@ -634,11 +639,20 @@ def p10_wing_api_parse():
     assert API.rg_request_body(cj, 1)["sellerReportType"] == "WAREHOUSING_SHIPPING"
     am = API.amount_rows({"paymentReports": [{**wresp["paymentReports"][1], "finalPaidAmount": 19664,
                                               "bankAccountInfo": {"bank": "가림"}, "isAdditionalPayment": False,
-                                              "detail": {"paidAmount": 19664, "deductionDetail": [], "isActualPayment": True}}]}, "윙")
+                                              "detail": {"paidAmount": 19664, "isActualPayment": True,
+                                                         "payableSummarySeqList": [1, 2],
+                                                         "deductionDetail": [{"serviceFeeAmount": 55000, "serviceType": "CLR_3SF",
+                                                                              "serviceTypeNameKR": "판매자서비스이용료",
+                                                                              "serviceTypeNameEN": "SELLER SERVICE FEE"}]}}]}, "윙")
     assert am == [{"정산일": "2026-01-23", "기간 시작": "2026-01-01", "기간 끝": "2026-01-04", "지급비율": 70,
-                   "최종지급액": 19664, "paidAmount": 19664}], am                       # 계좌·참거짓·목록 칸 제외
-    ar = API.amount_rows({"settlementStatusReports": [r70]}, "로켓그로스")[0]
+                   "최종지급액": 19664, "지급상태": "DONE", "실지급": True,
+                   "차감 사유": [{"사유": "판매자서비스이용료", "금액": 55000}], "paidAmount": 19664}], am   # 계좌·내부번호 제외
+    r70x = {**r70, "settlementStatusReportDetail": {**det, "pastDeductedCfsFeeDetails": [{"paymentRatio": 30, "pastDeductedCfsFeeAmount": 24959.0}],
+                                                    "adSalesOffsetYearMonthBreakdown": {"2026-08": 59266.0}, "salesAdjustmentDetails": []}}
+    ar = API.amount_rows({"settlementStatusReports": [r70x]}, "로켓그로스")[0]
     assert ar["정산일"] == "2026-09-07" and ar["totalStorageFeeDeductionAmount"] == 201287
+    assert ar["pastDeductedCfsFeeDetails"] == [{"paymentRatio": 30, "pastDeductedCfsFeeAmount": 24959.0}]   # 상계 상세 보존
+    assert ar["adSalesOffsetYearMonthBreakdown"] == {"2026-08": 59266.0} and "salesAdjustmentDetails" not in ar   # 빈 목록은 생략
     wl = API.wing_list_rows([
         {"id": 1, "excelType": "MSF_PAYMENT_REVENUE_DETAIL", "status": "FINISHED", "startedAt": "2026-10-06 14:49:59",
          "downloadUrl": "https://x/dl?id=1", "jsonItems": '[{"key":"구매확정일", "value":"2026-09-01 - 2026-09-06", "view":true}]'},

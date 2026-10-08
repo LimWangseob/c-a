@@ -120,15 +120,24 @@ def unmapped_costs(resp: dict) -> list[str]:
     return out
 
 
+def _numbers(d: dict) -> dict:
+    return {k: v for k, v in d.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
+
+
 def amount_rows(resp: dict, channel: str) -> list[dict]:
-    """정산현황 응답 → 쿠팡 지급 내역(금액 칸만·계좌정보 등 제외) — 집계의 '쿠팡 지급 내역' 시트·대조용."""
+    """정산현황 응답 → 쿠팡 지급 내역 — 집계의 '쿠팡 지급 내역'·'검증' 시트용. 계좌정보·내부 번호 목록은 저장 안 함.
+    윙: 금액 칸 + 지급상태·실지급 여부·정산차감 사유(사유·금액). 로켓그로스: 금액 칸 + 상세의 목록 칸(매출 조정·
+    기납부/미납 물류비·광고비/밀크런 월별 상계·마이너스 상계 등 — 비어 있지 않은 것만)."""
     out = []
     if channel == "윙":
         for r in resp.get("paymentReports", []):
             d = r.get("detail") or {}
             out.append({"정산일": r["payDate"], "기간 시작": r["recognitionFrom"], "기간 끝": r["recognitionTo"],
                         "지급비율": r.get("ratio"), "최종지급액": r.get("finalPaidAmount"),
-                        **{k: v for k, v in d.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}})
+                        "지급상태": r.get("paymentStatus"), "실지급": d.get("isActualPayment"),
+                        "차감 사유": [{"사유": x.get("serviceTypeNameKR"), "금액": x.get("serviceFeeAmount")}
+                                   for x in d.get("deductionDetail") or []],
+                        **_numbers(d)})
     else:
         for r in resp.get("settlementStatusReports", []):
             d = r.get("settlementStatusReportDetail") or {}
@@ -136,7 +145,7 @@ def amount_rows(resp: dict, channel: str) -> list[dict]:
                         "기간 시작": _kst_date(r["settlementPeriodStartDate"]).isoformat(),
                         "기간 끝": _kst_date(r["settlementPeriodEndDate"]).isoformat(),
                         "지급비율": r.get("settlementRatio"), "최종지급액": r.get("finalSettlementAmount"),
-                        **{k: v for k, v in d.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}})
+                        **_numbers(d), **{k: v for k, v in d.items() if isinstance(v, (list, dict)) and v}})
     return out
 
 
