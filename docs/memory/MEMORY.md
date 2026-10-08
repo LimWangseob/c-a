@@ -9,7 +9,7 @@
 ## 사업·범위·결정
 - [⭐⭐사업 맥락: 커머스 판로·위탁관리·사업4종·채권자 370명/300억](business-context-consignment-creditors.md) · [앱 범위: 주문배송=샵마인·우리=등록+관리+통계+CS(D10)](app-scope-no-orders-shopmine.md)
 - [디자인 컨셉(보라)·통합앱 적용](decision-design-concept-261003.md) · [저장소=구글시트+규칙4](decision-storage-gsheet-4rules.md) · [입출력 정의서137칸](io-definition-spec.md)
-- [정산 배치다운로드·계약자금액](settlement-batch-download-decisions.md) · [정산 도메인 지식 D8](settlement-domain-knowledge.md) · [셀독등록원장](feature-ledger-registry.md)
+- [⭐정산 D8 현재 상태·다음 세션 시작점(다운로드·검증·지급일·계좌입금)](settlement-batch-download-decisions.md) · [정산 도메인 지식 D8](settlement-domain-knowledge.md) · [셀독등록원장](feature-ledger-registry.md)
 - [판매상태 불일치 경고](feature-sale-status-mismatch-flag.md) · [VID 출처=상품조회·옵션분리](feature-vid-source-from-product-list.md)
 
 ## 작업 원칙(피드백·정책)
