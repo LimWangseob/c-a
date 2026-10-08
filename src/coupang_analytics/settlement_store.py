@@ -73,10 +73,13 @@ def rename_jobs(jobs, accts, file_accounts=()) -> tuple[dict, dict]:
 
 
 def migrate_names(accts, log) -> None:
-    """요청 기록(_요청기록.json)·받은 파일·쿠팡 지급 내역 파일의 예전 계정명 → 지금 계정명(멱등)."""
+    """요청 기록(_요청기록.json)·받은 파일·쿠팡 지급 내역 파일의 예전 계정명 → 지금 계정명(멱등).
+    금액 기록 파일 이름의 계정명도 바꿈표에 넣는다 — 합치기로 옮겨 온 금액 기록만 예전 이름일 때(파일·요청 기록은
+    이미 새 이름) 바꿈표가 비어 계정이 둘로 갈리던 결함(2026-10-08 재현·수정)."""
     jobs = SJ.load_jobs(JOBS)
-    m, mt = rename_jobs(jobs, accts, [SF.parse_file_name(p.name)["account"] for d in (FILES, COSTS)
-                                      for p in d.glob("*.xlsx")])
+    names = [SF.parse_file_name(p.name)["account"] for d in (FILES, COSTS) for p in d.glob("*.xlsx")]
+    names += [p.stem.rpartition("_")[0] for p in AMOUNTS.glob("*.json")]
+    m, mt = rename_jobs(jobs, accts, names)
     if m or mt:
         SJ.save_jobs(JOBS, jobs)
     for d in (FILES, COSTS):

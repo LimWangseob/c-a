@@ -727,13 +727,11 @@ def p24_local_store():
             assert (TD.FILES / f_new).read_bytes() == b"old" and (src / "파일" / f_old).exists()   # 같은 이름 = 그대로 둠
             assert (TD.FILES / fname(new, "2026-02-06", ps="2026-01-12", pe="2026-01-18")).read_bytes() == b"f2" and not (src / "파일" / f2_old).exists()
             assert [p.name for p in TD.COSTS.glob("*.xlsx")] == [fname(new, "2026-01-30", "주정산", "보관비", "로켓그로스")]
-            # ⚠현재 동작 고정(2026-10-08): 옮겨 온 금액 기록은 예전 이름 그대로 남음 — 파일·요청 기록은 합치는 중에 이미
-            # 지금 이름이 돼 _migrate_names 의 바꿈표가 비기 때문(결함 후보·별도 수정 사이클에서 이 단언을 바꿀 것).
-            assert sorted(p.name for p in TD.AMOUNTS.glob("*.json")) == [f"{told}_윙.json", f"{tnew}_윙.json"]
-            assert [(r["정산일"], r["최종지급액"]) for r in rjson(TD.AMOUNTS / f"{told}_윙.json")] == [
-                ("2026-01-30", 555), ("2026-02-13", 3)]
+            # 옮겨 온 금액 기록(예전 이름)도 지금 이름 하나로 합침·같은 키는 이 PC 값 우선(2026-10-08 결함 수정 —
+            # 예전엔 파일·요청 기록만 새 이름이 되고 금액 기록은 예전 이름으로 남아 집계에서 계정이 둘로 갈렸음)
+            assert sorted(p.name for p in TD.AMOUNTS.glob("*.json")) == [f"{tnew}_윙.json"]
             assert [(r["정산일"], r["최종지급액"]) for r in rjson(TD.AMOUNTS / f"{tnew}_윙.json")] == [
-                ("2026-01-30", 100), ("2026-02-06", 7)]
+                ("2026-01-30", 100), ("2026-02-06", 7), ("2026-02-13", 3)]
             rec = [r for r in TD.LOG.rows if r["단계"] == "합치기"]
             assert len(rec) == 1 and rec[0]["결과"] == RLG.OK and "1건 추가·1건 이미 있음" in rec[0]["사유"] \
                 and "파일 2개 옮김·1개 같은 이름" in rec[0]["사유"], rec
@@ -743,6 +741,14 @@ def p24_local_store():
             TD._save_amounts(new, "윙", resp)
             got = rjson(TD.AMOUNTS / f"{tnew}_윙.json")
             assert [(r["정산일"], r["최종지급액"]) for r in got] == [("2026-01-30", 100), ("2026-02-06", 7), ("2026-02-13", 4)]
+            # (d) 이 PC 에 예전 이름 금액 기록만 남은 경우(받은 파일·요청 기록엔 예전 이름 없음)도 다음 실행 때 맞춰짐
+            wjson(TD.AMOUNTS / f"{told}_로켓그로스.json", [amt("2026-03-03", 11)])
+            TD._migrate_names(accts)
+            assert sorted(p.name for p in TD.AMOUNTS.glob("*.json")) == [f"{tnew}_로켓그로스.json", f"{tnew}_윙.json"]
+            assert [r["최종지급액"] for r in rjson(TD.AMOUNTS / f"{tnew}_로켓그로스.json")] == [11]
+            wjson(TD.AMOUNTS / "남의이름-zzz_윙.json", [amt("2026-03-03", 1)])               # 계정 파일에 없는 계정 = 그대로
+            TD._migrate_names(accts)
+            assert (TD.AMOUNTS / "남의이름-zzz_윙.json").exists()
             assert not list(TD.AMOUNTS.glob("*.tmp"))
         finally:
             os.chdir(old_cwd)
