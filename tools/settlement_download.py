@@ -503,6 +503,27 @@ def cmd_probe(a, b, args, jobs: list) -> None:
             LOG.error(name, "probe", exc)
 
 
+def load_holidays(amounts: list):
+    """지급일 대조용 공휴일(정산일이 걸친 해 전부). 해마다 캐시(output/_holidays_YYYY.json) → 없으면 특일정보 API(키=credstore)
+    → 둘 다 없으면 None(지급일 대조만 '자료 없음'·집계는 계속). 실패 사유는 로그에 남김(무음 아님)."""
+    from coupang_analytics import holiday_kr as HK
+    from coupang_analytics import holiday_source as HS
+    years = sorted({int(r["정산일"][:4]) for r in amounts if r.get("정산일")})
+    if not years:
+        return None
+    try:
+        fetch = HS.fetch_from_store()
+    except HS.HolidayApiError as exc:
+        fetch, why = None, str(exc)
+    else:
+        why = ""
+    try:
+        return set().union(*(HK.holidays(y, fetch=fetch) for y in years))
+    except HK.HolidaySourceError as exc:
+        log(f"  [공휴일] 지급일 대조 건너뜀 — {exc}" + (f" ({why})" if why else ""))
+        return None
+
+
 def cmd_stats() -> None:
     from coupang_analytics import settlement_stats as ST
     files = [SF.load_settle_file(p) for p in sorted(FILES.glob("*.xlsx"))]
@@ -520,7 +541,7 @@ def cmd_stats() -> None:
     from coupang_analytics import settlement_verify as SV
     vdatas = {p.stem: json.loads(p.read_text(encoding="utf-8")) for p in sorted(VERIFY.glob("*.json"))}
     res = ST.aggregate(files, lines)
-    verify = SV.build_all(files, amounts, vdatas, ST._order_rows)
+    verify = SV.build_all(files, amounts, vdatas, ST._order_rows, holidays=load_holidays(amounts))
     out = ST.write_stats(BASE / f"정산집계_{datetime.now():%y%m%d_%H%M%S}.xlsx", res, files=files, amounts=amounts,
                          costs=costs, verify=verify, inflows=SV.inflows_all(amounts, vdatas, today=date.today()))
     log(f"집계 정산 파일 {len(files)}개·비용 리포트 {len(costs)}시트·쿠팡 지급 내역 {len(amounts)}줄 → {out} "

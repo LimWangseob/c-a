@@ -1121,6 +1121,47 @@ def p21_bank_inflows():
     ok("윙=지급일 지난 회차·월렛 입금/인출·보상=정산일 대표계좌·환급=매출인식 익월 21일·합계 2종·지급 전 제외·월렛 없음 표시")
 
 
+def p22_paydates_verify():
+    print("[P22] 지급일 대조 — RG 전부·윙 70%·윙 30%/100%는 대상 아님·공휴일 없으면 자료 없음")
+    from coupang_analytics import settlement_verify as SV
+    hol = {D(x) for x in ("2026-08-17", "2026-09-24", "2026-09-25", "2026-10-05")}
+    rg = [{"정산일": "2026-08-31", "기간 시작": "2026-07-27", "기간 끝": "2026-07-31", "지급비율": 70, "최종지급액": 1},
+          {"정산일": "2026-09-07", "기간 시작": "2026-07-27", "기간 끝": "2026-07-31", "지급비율": 30, "최종지급액": 1},
+          {"정산일": "2026-09-08", "기간 시작": "2026-08-01", "기간 끝": "2026-08-02", "지급비율": 30, "최종지급액": 1}]   # 하루 틀림
+    wing = [{"정산일": "2026-09-18", "기간 시작": "2026-08-24", "기간 끝": "2026-08-30", "지급비율": 70, "최종지급액": 1},
+            {"정산일": "2026-10-01", "기간 시작": "2026-08-01", "기간 끝": "2026-08-31", "지급비율": 30, "최종지급액": 1},
+            {"정산일": "2026-07-20", "기간 시작": "2026-05-17", "기간 끝": "2026-05-17", "지급비율": 100, "최종지급액": 1}]
+    rows = SV.paydates("A", wing, rg, hol)
+    summ = {r["항목"]: r for r in rows if r["기준"] == "요약"}
+    assert summ["로켓그로스"]["우리(계산)"] == 2 and summ["로켓그로스"]["쿠팡"] == 3 and summ["로켓그로스"]["판정"] == SV.DIFF
+    assert summ["윙 70%"]["판정"] == SV.OK and summ["윙 70%"]["쿠팡"] == 1
+    bad = [r for r in rows if r["판정"] == SV.DIFF and r["기준"] != "요약"]
+    assert len(bad) == 1 and "2026-08-01" in bad[0]["항목"] and bad[0]["비고"] == "계산 2026-09-07"
+    assert not any("30%" in r["항목"] and r["대조"] == "지급일" and "윙" in r["항목"] for r in rows)     # 윙 30%·100% 대상 아님
+    none = SV.paydates("A", wing, rg, None)
+    assert len(none) == 1 and none[0]["판정"] == SV.NODATA and "공휴일" in none[0]["비고"]
+    import os
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    from datetime import datetime
+    from coupang_analytics import settlement_runlog as RLG
+    old_cwd, old_log = os.getcwd(), TD.LOG
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            TD.LOG = RLG.RunLog(tmp, now=datetime(2026, 10, 8), echo=lambda m: None)
+            (Path(tmp) / "output").mkdir()
+            (Path(tmp) / "output" / "_holidays_2026.json").write_text('["2026-08-17", "2026-10-05"]', encoding="utf-8")
+            got = TD.load_holidays([{"정산일": "2026-08-31"}])
+            assert got == {D("2026-08-17"), D("2026-10-05")}                                 # 캐시 우선(키 없어도)
+            assert TD.load_holidays([{"정산일": "2025-12-01"}]) is None                       # 캐시·키 없는 해 = None
+            assert any("지급일 대조 건너뜀" in r for r in TD.LOG.text.read_text(encoding="utf-8").splitlines())
+        finally:
+            os.chdir(old_cwd)
+            TD.LOG = old_log
+    ok("RG 3줄 중 2 일치·틀린 줄 하나만 상세·윙 70% 일치·윙 30%/100% 제외·공휴일 없음=자료 없음 1줄")
+
+
 def main():
     g1_payout_dates()
     g2_amounts()
@@ -1146,6 +1187,7 @@ def main():
     p19_verify_sheet()
     p20_rg_payout_dates()
     p21_bank_inflows()
+    p22_paydates_verify()
     print("정산 계산 모듈 오프라인 검증 통과(골든 payout 12·amount 2·불변식 4행/3식 100%)")
 
 

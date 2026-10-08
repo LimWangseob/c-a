@@ -180,17 +180,46 @@ def holds(acct: str, vdata: dict | None) -> list[dict]:
             for k, n in (("보류", n_pend), ("추가지급", n_add))]
 
 
+def paydates(acct: str, amounts_wing: list, amounts_rg: list, holidays) -> list[dict]:
+    """지급일 대조 — 정산현황 정산일 ↔ 규칙 계산(공휴일 필요). 로켓그로스=payout.rg_payout_date(도움말 1.1·629/629),
+    윙=70%만(주 마감+15영업일). 윙 30%(익익월 1일 휴일 보정 여부 규칙 확정 대기)·100%(보류 해제 지급)는 대상 아님.
+    holidays 없음(공휴일 키 미등록·조회 실패) = '자료 없음' 1줄."""
+    from datetime import date as _d
+
+    from . import payout as P
+    if holidays is None:
+        return [_row(acct, "지급일", "-", "공휴일", None, None, "공휴일 자료 없음 — 앱 설정 탭에서 공휴일 API 키 등록")]
+    out: list = []
+    groups = (("로켓그로스", amounts_rg, lambda r: P.rg_payout_date(int(float(r["지급비율"])), _d.fromisoformat(r["기간 시작"]),
+                                                                      _d.fromisoformat(r["기간 끝"]), holidays)),
+              ("윙 70%", [r for r in amounts_wing if int(float(r["지급비율"])) == 70],
+               lambda r: P.payout_date(P.PAYOUT_MP_WEEKLY_1ST, week_end=_d.fromisoformat(r["기간 끝"]), holidays=holidays)))
+    for label, rows, calc in groups:
+        same, bad = 0, []
+        for r in rows:
+            want = calc(r).isoformat()
+            if want == r["정산일"]:
+                same += 1
+            else:
+                bad.append(_row(acct, "지급일", f"정산일 {r['정산일']}", f"{label} {r['기간 시작']}~{r['기간 끝']} {r['지급비율']}%",
+                                0, 1, f"계산 {want}"))
+        if rows:
+            out.append(_row(acct, "지급일", "요약", label, same, len(rows), "일치 줄 수 / 전체"))
+            out += bad
+    return out
+
+
 def failures(acct: str, vdata: dict | None) -> list[dict]:
     return [{**_row(acct, "조회실패", vdata["수집일"], f, None, None), "판정": NODATA}
             for f in ((vdata or {}).get("조회 실패") or [])]
 
 
 def build(acct: str, wing_ours: dict, rg_ours: dict, amounts_wing: list, amounts_rg: list,
-          vdata: dict | None) -> list[dict]:
+          vdata: dict | None, holidays=None) -> list[dict]:
     """계정 하나의 검증 줄 전부."""
     return (rg_formula(acct, amounts_rg) + rg_wallet(acct, amounts_rg, vdata) + wing_sales(acct, wing_ours, vdata)
             + wing_pay(acct, amounts_wing, vdata) + vat(acct, wing_ours, rg_ours, vdata) + holds(acct, vdata)
-            + failures(acct, vdata))
+            + paydates(acct, amounts_wing, amounts_rg, holidays) + failures(acct, vdata))
 
 
 def month_sums(files: list, order_rows) -> tuple[dict, dict]:
@@ -214,7 +243,7 @@ def month_sums(files: list, order_rows) -> tuple[dict, dict]:
     return wing, rg
 
 
-def build_all(files: list, amounts: list, vdatas: dict, order_rows) -> list[dict]:
+def build_all(files: list, amounts: list, vdatas: dict, order_rows, holidays=None) -> list[dict]:
     """모든 계정의 검증 줄. amounts=[{계정,채널,…}] · vdatas={계정: 검증 자료}(계정명=파일 이름 글자 규칙)."""
     wing, rg = month_sums(files, order_rows)
     accts = sorted(set(wing) | set(rg) | {a["계정"] for a in amounts} | set(vdatas))
@@ -222,7 +251,7 @@ def build_all(files: list, amounts: list, vdatas: dict, order_rows) -> list[dict
     for a in accts:
         aw = [r for r in amounts if r["계정"] == a and r["채널"] == "윙"]
         ar = [r for r in amounts if r["계정"] == a and r["채널"] == "로켓그로스"]
-        out += build(a, wing.get(a, {}), rg.get(a, {}), aw, ar, vdatas.get(a))
+        out += build(a, wing.get(a, {}), rg.get(a, {}), aw, ar, vdatas.get(a), holidays)
     return out
 
 
