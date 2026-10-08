@@ -2,35 +2,34 @@
 
 <!-- 누적 금지. 매 세션 종료 시 /session-close 가 전체 덮어쓰기. 100줄 이하. 핸드오프 SSOT. -->
 
-- BUILD_TAG: R2
+- BUILD_TAG: R3
 - 갱신: 2026-10-08
-- 마지막 커밋: 9bed077 ([R1] session-kit 전역 전환 — STATE.md·D-001 DECISIONS·/session-close)
-- 세션 핸드오프 전환: **STATE.md가 단일 핸드오프**(옛 handoff-session-*.md 메모리는 아카이브·recall만). 세션 종료=`/session-close`.
+- 마지막 커밋: 9eb8df3 (D8 정산 병합 ff) + [R3] DECISIONS D-002~007 기록(이 커밋)
+- 세션 핸드오프: STATE.md 단일. 세션 종료=`/session-close`.
 
 ## 현재 Step
-✅ session-kit 전역 전환 완료 + 정산/안정성 개선 완료(아래). **대기 = 정산 18:00 라이브 검증**(다음 작업 1).
+✅ D8 정산 작업 master 병합 완료(9eb8df3·소유자 9eb8df3 범위 직접 확인). **대기 = ①18:00 정산 라이브 검증 ②검증 통과 후 재배포**.
 
 ## 이번 세션 완료 (최근 → 과거)
-- 문서 크기 상한 정책(메모리 30~50줄·CLAUDE.md<200줄·DECISIONS append-only)·MEMORY.md 60→38줄 정리 — 전역/프로젝트 CLAUDE.md
-- 정산: 24h 감시 모델(plan_watch·sales_in_progress)·탭 실행/중지 버튼·전용 상태카드(heartbeat)·18:00 전체중단 근본수정(TargetClosedError=일시적)·watch 상태 2중기록 방지
-- 파이프라인 동시 실행 방지(교차프로세스 잠금·열어둔 GUI+18:00 무인)
-- 재배포 시 운용 PC 구글시트 URL 보존(_import_settings 기존값 미덮음)
-- D8 병합(ff): 반출비 쿠팡귀책 시트 제외(받기 실패 16건)·merge --src 폴더합치기·로켓그로스 비용 상품별 집계
-- 운용 PC: 최신 zip 배포·merge --src 실행 완료(요청 192·파일 103 통합 확인)
+- D8 정산 병합(ff, 95fd694→9eb8df3): 5xx≠차단·차감사유/상계 상세 보존·검증자료 수집(월렛·매출·부가세·보류·추가지급·캘린더)·집계 '검증'/'계좌 입금' 시트·RG 지급일 629/629·공휴일 연결·윙 지급일=정산캘린더 18/18·재고손실보상=대표계좌 별도입금. 게이트 15종·복잡도 0 (제가 HEAD 4개 재검증).
+- DECISIONS D-002~007 기록(SETTLE_ERRORS·VERIFY·RG_PAYDATE·COMPENSATION·INFLOW·CALENDAR).
+- 18:00 라이브 검증 절차·판정 기준 확정(정산 로그 reap 내성 3신호).
 
 ## 다음 작업 (우선순위)
-1. **오늘 18:00 정산 라이브 검증** — reap 로 Chrome 닫혀도 '차단'으로 안 멈추고 일시정지→재개되는지 로그 확인(output\정산\로그\ "브라우저가 닫힘(일시적…재시도)")
-2. 운용 PC 설정 URL 4개 교정 확인(config.json 권위·재배포해도 보존되는지)
-3. L1 핀·사무실 라이브: 정산 probe·쿠팡 쓰기 엔드포인트 캡처(U3 WING 정산 API·U4 샵마인 CS 경계)
-4. 소유자 결정 대기: 정산 지급일 규칙·계약금액(골든케이스)·CS(D10) 2단계 수집
+1. **18:00 정산 라이브 검증** — 현재 배포본 reap 내성. 소유자가 운용 PC `output\정산\로그\처리기록_누적.csv` 업로드 예정. 판정: ①"브라우저가 닫힘(일시적" 존재(흡수) ②"연속 2계정 실패/차단"이 18:0x에 없음 ③닫힘 이후 요청/받기 '정상' 재개.
+2. **검증 통과 후 재배포**(9eb8df3) — ⚠watch 바퀴마다 계정당 조회 **+35회**(검증자료·캘린더, 요청 아님). 소유자 승인됨(재배포는 18시 검증 후).
+3. 운용 PC 공휴일 키(특일정보) 등록 점검 — RG 지급일 대조용(없으면 그 대조만 '자료 없음').
+4. 골든 PAYOUT_MP_WEEKLY_FINAL '보정 없음' 수정 여부(통제 판단·검증은 캘린더 써서 비급).
+5. 계약 정산(②층)·비번 오류 3계정(bandu11·bongfarm2003·globalline) 소유자 확인.
 
 ## 미해결 이슈
-- (확인된 사실) 18:00 앱 시작 reap_orphan_chrome 이 정산 Chrome 종료 → TargetClosedError. (b) 수정으로 '차단'·전체중단은 막았으나 **Chrome 사망 자체는 잔존**(일시적 재시도로 흡수). 근본차단(reap 가 정산 프로필 미종료)은 browser.py 변경 필요·보류.
-- (미확인) 10-07 18:02:45 두 번째 Chrome 닫힘 원인(앱 로그 미확보). 오늘 18:00 로그로 재확인 필요.
-- (대기) 정산 지급일 실측 불일치 2건(9월 최종 11/2·RG 30%) — 소유자 확인.
+- (사실) 18:00 앱 시작 reap_orphan_chrome 이 정산 Chrome 종료 → TargetClosedError. 수정으로 '차단'·전체중단은 막음(일시적 재시도 흡수)·Chrome 사망 자체는 잔존(browser.py 근본차단 보류).
+- (미확인) 10-07 18:02:45 2차 Chrome 닫힘 원인 — reap 성공 시 로그 없음 + `--auto` pythonw 라 print 소실(앱 로그 미확보). 오늘 18:00 로그로 재확인·필요 시 reap 영속 로그 계측(재배포 필요).
+- (미확인) 윙 1원/55,001 차이 원인.
+- (후보) settlement_download.py 668줄·verify_settlement_offline.py 1,100줄 분할.
 
 ## 주의
-- 런타임 병렬 금지(단일 브라우저·위탁계정·Akamai). master 병합·빌드=통제 직렬.
-- 정산다운로드.exe=console 없음 → 결과는 output\정산\로그\ 로만 확인. PowerShell 실행은 `.\정산다운로드.exe`.
-- 운용 PC 재배포=폴더 덮어쓰기→앱 재시작. output·data·config.json·proxies.txt 는 보존(덮어써도).
-- DECISIONS 전환: 전환 전 한 줄 기록은 동결 아카이브(재작성 금지). 신규는 D-001 블록.
+- 런타임 병렬 금지(단일 브라우저·위탁계정·Akamai). master 병합·빌드=통제 직렬. D8 세션 종료됨.
+- 재배포 = 폴더 덮어쓰기→앱 재시작. output·data·config.json·proxies.txt 보존. **18:00 검증 통과 후에만**.
+- 정산다운로드.exe=console 없음 → 결과는 output\정산\로그\ 로만. PowerShell 실행=`.\정산다운로드.exe`.
+- DECISIONS 전환: 전환 전 한 줄 기록은 동결 아카이브(재작성 금지). 신규는 D-번호 블록(현재 D-007까지).
