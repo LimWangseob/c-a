@@ -26,7 +26,7 @@
 - [OpenAPI 불가→WING 세션](coupang-openapi-not-available-consignment.md) · [샵마인=WebView2](shopmine-architecture.md)
 
 ## 입력·수집
-- [입력=셀독 관리대장(헤더2행·여러줄=첫줄)](input-ledger-format.md) · [대장 스코핑](ledger-scoped-tracking.md) · [판매 API vi-detail-search](sales-data-api-vi-detail-search.md) · [재고 API orderableQuantity](inventory-api-rfm-search.md)
+- [입력=셀독 관리대장(헤더2행·여러줄=첫줄)](input-ledger-format.md) · [대장 스코핑·AI 매칭+VID 고정(D-009)](ledger-scoped-tracking.md) · [판매 API vi-detail-search](sales-data-api-vi-detail-search.md) · [재고 API orderableQuantity](inventory-api-rfm-search.md)
 - [판매데이터 익일반영](coupang-sales-data-lag.md) · [productId 소스 API](api-productid-source-vendor-items-with-vendoritems.md) · [상품명 규약(대장=담당자·결과=노출명)](product-name-convention-ledger-vs-result.md)
 
 ## 키워드·순위
@@ -37,4 +37,4 @@
 
 ## 출력·배포·참조
 - [출력=셀독 서식](seldoc-output-format.md) · [날짜컬럼=실행날짜](date-column-run-date-rule.md) · [구글시트 통합 스펙](gsheet-unified-spec.md) · [상세 이미지 추출(CDP)](detail-image-extraction.md)
-- [exe 배포·Defender 제외](exe-packaging-deploy.md) · [쿠팡 공식 운영지식](coupang-official-reference.md) · [정산 상태 모니터링(heartbeat+카드)](feature-settlement-status-monitoring.md)
+- [exe 배포·Defender 제외](exe-packaging-deploy.md) · [쿠팡 공식 운영지식](coupang-official-reference.md) · [정산 실행흐름(①뒤 기동·다 받으면 종료 D-010)·상태 카드](feature-settlement-status-monitoring.md)

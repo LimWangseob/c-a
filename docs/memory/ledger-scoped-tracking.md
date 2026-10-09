@@ -1,6 +1,6 @@
 ---
 name: ledger-scoped-tracking
-description: "추적 범위를 판매분석 발견 전체→입력 대장 상품만으로 전환(위탁 관리분). product_match.scope_to_ledger로 대장↔발견 매칭, 매칭시 노출제목 사용"
+description: "추적 범위=입력 대장 상품만(위탁 관리분). 매칭=D-009 AI 중심+VID 고정(product_match_ai·_매칭고정.json), 글자 규칙(scope_to_ledger/_assign)은 참고·AI 장애 대체"
 metadata: 
   node_type: memory
   type: project
@@ -31,3 +31,5 @@ metadata:
 **⚠ 한계(옛):** ①매처는 대장에 괄호 노출제목 있으면 완벽, 없는 짧은코드명은 소수 오매칭(디케이 공기청정기필터↔유닛). 대장에 괄호제목 채우면 정확↑. (2026-09-18 정밀화로 오매칭은 미매칭=공란으로 안전화됨.) ②시트명=발견제목이라 셀러가 제목 바꾸면 새 행(시계열 단절 가능) — 사용자 선택(B). ③한컴 셀 대장파일은 openpyxl 스타일로드가 깨져(read_only 필요) **취소선 자동감지 불가할 때가 있음**(strike_ok=False, 경고표시) — 그때 globalline 등 해지계정 자동제외 안 됨(비번오류로 어차피 로그인실패=무해). ⛔ parse는 반드시 read_only=True로 값 로드(read_only=False면 이 파일서 크래시).
 
 **미커밋:** 이 변경 + 서식(개인=판매량·방문자·노출량, 재고는 계약만) + 순위 placeholder 공란화 + 재고 전량재요청 = 다음 새통계 실행부터 적용. 라이브 검증은 사무실.
+
+**⭐현행 = D-009 AI 중심 매칭 + VID 고정(2026-10-09 소유자 "파이썬이 상품명 인식 못함 → AI 가 의미까지·대장 95%는 등록상품·두 이름이면 가장 유사한 것")**: `product_match_ai.match_ledger` = ①**VID 고정**(`output/_매칭고정.json`·확정 VID 가 지금도 있으면 AI 없이·상품조회 실패일 스냅샷·VID 사라짐/판매중지면 재매칭·대장명 바꾸면 재매칭) ②괄호/이름 정확일치 ③AI(줄마다 후보 ≤12[≤30이면 전부]·등록명/노출명/옵션/판매상태·규칙 결과=참고 후보) ④AI 장애=규칙 대체(고정 안 함). high/medium 만 고정. 마무리 `build_tracked`=**색상 필터 전 경로**(봄날 트리 실버 섞임 원인=옛 `augment_unmatched` 색상 무시 → 삭제)·동명 판매중 리스팅 함께·충돌=우선순위. `Product.ledger_name` 이월(원장 쿠팡확인 키). 실데이터 10/09 69줄: 68 매칭·5 개선. 옛 `augment_ai`·`kw_ai.match_products`·`_augment_vids` 삭제. 검증 verify_offline[36]. SSOT=DECISIONS D-009.

@@ -25,10 +25,9 @@ copy /Y "%~dp0deploy\remove_autorun.ps1" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0deploy\첫실행_설정안내.txt" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0deploy\라이브검증_안내.txt" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0INSTALL.md" "dist\coupang-analytics\" >nul
-copy /Y "%~dp0tools\settlement_watch_register.ps1" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0deploy\정산_상태확인.bat" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0deploy\정산_지금실행.bat" "dist\coupang-analytics\" >nul
-rem 정산 다운로드 watch 는 install.ps1 이 자동 등록(정산다운로드.exe). 이 스크립트는 수동 재등록/-Exe 지정용 보조.
+rem 정산 다운로드는 예약작업 없음(D-010): 18:00 앱이 ①판매수집 뒤 정산다운로드.exe watch 를 띄우고 다 받으면 종료.
 rem 정산_상태확인.bat = 창 없는 정산 자동 다운로드의 '지금 상태'를 더블클릭으로 보는 모니터링 창(사람용).
 rem 정산_지금실행.bat = 사무실에서 더블클릭으로 정산 다운로드를 아무 때나 한 번 수동 실행(run·끝까지·겹친 계정은 건너뜀).
 echo.

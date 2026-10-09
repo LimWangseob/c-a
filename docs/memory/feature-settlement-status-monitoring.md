@@ -1,6 +1,6 @@
 ---
 name: feature-settlement-status-monitoring
-description: 정산 자동 다운로드 = 24h 감시(판매수집 중만 정지)·app_qt 정산 탭 시작/중지 버튼 + heartbeat 상태 카드
+description: 정산 자동 다운로드 = ①판매수집 뒤 앱이 기동·다 받으면 종료(D-010, 옛 24h 감시 대체)·app_qt 정산 탭 시작/중지 버튼 + heartbeat 상태 카드
 metadata:
   node_type: memory
   type: project
@@ -10,7 +10,13 @@ metadata:
 
 정산 자동 다운로드(`tools/settlement_download.py`, console=False·창 없음)를 운용 PC에서 **앱으로 켜고/끄고·상태를 보는** 기능(2026-10-07 구현·게이트15+복잡도 초록·미라이브).
 
-## 24시간 감시 모델(2026-10-07 소유자 — 옛 "①완료 후 1회·17:40 멈춤" 모델 물리 삭제)
+## ⭐현행 = D-010(2026-10-09 소유자): ①판매수집 뒤 앱이 기동·다 받으면 종료
+- 18:00 `--auto` 앱 시작 시 `app_process.prepare_auto_start`: 이전 앱 창·정산 프로그램 종료 + 옛 정산 예약작업(인자 `watch`) 삭제 → reap 이 그 Chrome 정리. 예약작업·`tools/settlement_watch_register.ps1` 폐기(install.ps1 도 등록 안 함).
+- ①완료(야간 재시도 포함) 직후 `start_settlement_watch`(창 없음·`CREATE_BREAKAWAY_FROM_JOB` 우선 — 앱이 ③ 뒤 끝나도 정산 생존, 불가 시 경고). `--resume` 도 ①이 끝나 있으면 기동.
+- `cmd_watch`: ① 진행 중(_진행중.json 20분 내)엔 대기 → 바퀴 → `settlement_watch.plan_after_pass(stopped, work, pending, waits, idle)`: again(60s)/later(5분)/**done='✅ 모든 정산 파일 다운로드 완료'→종료**/stop(연속실패 중단)·giveup(진전없음 3바퀴)→기록 후 종료. `output/정산/로그/_완료.json`(키=①완료 시각)로 같은 ① 기준 재실행 방지. 배지 '완료'/'종료'.
+- HTTP **500=서버 일시 오류**(ServerBusy·15s×2 후 계정 '대기')·윙 주기 **'M'**=그 줄만 건너뛰고 '확인 필요'(novanest1284). ⚠ breakaway 가능 여부·첫 18:00 로그로 확인 필요.
+
+## (대체됨) 24시간 감시 모델(2026-10-07 — D-010 으로 대체)
 - `settlement_watch.plan_watch(busy, busy_why, sales_at, last_sales_at)` 순수 판정: **①판매수집 진행 중이면 정지, 아니면 실행**. `sales_in_progress(_진행중.json)`=① 지금 도는지(mtime ~20분 내=진행 중·`SALES_STALE_MIN`). `read_marker(_실행단계.json)`=①완료 시각.
 - `cmd_watch` 루프: 받을 게 있으면(소급·`_sweep_work_count`>0) 짧게 쉬고(`WATCH_CATCHUP_REST_SEC=60`) **바로 다음 바퀴**(2026-01~오늘 밀린 정산 다 받음). 받을 것 없으면 **다음 ①판매수집 완료까지 대기**(정상 하루 1회·`last_sales_at`). 즉 **소급=연속→소진 후 하루1회 자동 전환**(로그인 줄어 계정 보호). 계정별 `_profile_busy` 건너뜀이 추가 안전장치.
 - ⛔삭제: `decide`·`cycle_start`·`STOP_HM`·`FALLBACK`·`load/save_last_cycle`·`WATCH_STATE`(17:40 주기). **전체실행(①②③)은 18:00 1회 그대로**(정산만 24h라 "다음날 앱 방법" 변경 없음).
