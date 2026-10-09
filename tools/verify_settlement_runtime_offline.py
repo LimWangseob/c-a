@@ -50,6 +50,11 @@ def p10_wing_api_parse():
         ("주정산", D("2026-01-23"), D("2026-01-01"), D("2026-01-04"))], ev
     expect(API.SiteChangedError, lambda: API.wing_events(
         {"paymentReports": [{**wresp["paymentReports"][0], "transactionCycleCode": "X"}]}, "a"), "모르는 주기 코드")
+    # D-010: 'M'(월정산 추정·받기 방법 미확인)은 계정 실패 대신 그 줄만 건너뛰고 '확인 필요'로 기록(실측 novanest1284)
+    mresp = {"paymentReports": [wresp["paymentReports"][1], {**wresp["paymentReports"][0], "transactionCycleCode": "M",
+                                                            "payDate": "2026-01-22"}]}
+    assert [e.kind for e in API.wing_events(mresp, "a")] == ["주정산"], "M 줄은 건너뛰고 나머지는 그대로"
+    assert len(API.unsupported_cycles(mresp)) == 1 and "2026-01-22" in API.unsupported_cycles(mresp)[0]
     expect(API.SiteChangedError, lambda: API.wing_events({"reports": []}, "a"), "응답 칸 없음")
     rresp = {"settlementStatusReports": [
         {"settlementDate": "2026-09-06T15:00:00.000Z", "settlementPeriodStartDate": "2026-07-26T15:00:00.000Z",
@@ -137,12 +142,12 @@ def p10_wing_api_parse():
     assert API.call(FakePage(200, '{"a":1}'), "GET", "/p") == {"a": 1}
     expect(API.ApiBlocked, lambda: API.call(FakePage(403, "x"), "GET", "/p"), "403=차단")
     expect(API.ApiBlocked, lambda: API.call(FakePage(200, "<html>Access Denied"), "GET", "/p"), "HTML=차단")
-    expect(API.SiteChangedError, lambda: API.call(FakePage(500, "{}"), "GET", "/p"), "500=중단")
-    for st in (502, 503, 504):                                                      # 실측 2026-10-08: 504 HTML = 서버 일시 오류
+    for st in (500, 502, 503, 504):                     # D-010: 500 도 서버 일시 오류(실측 10/09 지급내역 500 HTML·빈 본문)                                                      # 실측 2026-10-08: 504 HTML = 서버 일시 오류
         expect(API.ServerBusy, lambda st=st: API.call(FakePage(st, "<html><title>%d Gateway Time-out</title>" % st), "GET", "/p"),
                f"{st}=일시 오류(차단 아님)")
         assert not issubclass(API.ServerBusy, API.ApiBlocked)
-    ok("윙/RG 일정(UTC→한국 날짜·묶음키)·요청 본문·요청번호·목록(부가세 메뉴 무시)·달 구간·403/HTML=차단·500=중단")
+    expect(API.SiteChangedError, lambda: API.call(FakePage(400, "{}"), "GET", "/p"), "400=중단")
+    ok("윙/RG 일정(UTC→한국 날짜·묶음키)·요청 본문·요청번호·목록(부가세 메뉴 무시)·달 구간·403/HTML=차단·500/502~504=일시오류·M=건너뜀")
 
 
 def p11_runlog():
@@ -192,23 +197,33 @@ def p11_runlog():
 
 
 def p12_watch_decide():
-    print("[P12] 24h 감시 판단 — ①판매수집 중 정지·소급 연속·받을 것 없으면 다음 ①완료까지 대기")
+    print("[P12] 정산 실행 판단(D-010) — 다 받으면 종료·중단/진전없음 종료·같은 ①완료 재실행 안 함·① 중 정지")
     import os as _os
     from datetime import datetime
     from coupang_analytics import settlement_watch as W
     T = datetime
-    # plan_watch: ① 진행 중이면 정지(busy 사유 전달)
-    a, r = W.plan_watch(True, "①판매수집 진행 중", T(2026, 10, 7, 19, 0), None)
-    assert a == "wait" and "진행 중" in r
-    # 소급(last_sales_at=None): ①완료 기록이 있든 없든 항상 실행
-    assert W.plan_watch(False, "", None, None) == ("run", "소급 수집(밀린 정산 받는 중)")
-    assert W.plan_watch(False, "", T(2026, 10, 7, 19, 30), None)[0] == "run"
-    # 정상(소급 끝·last_sales_at 있음): 새 ①완료가 있어야만 1회
-    a, r = W.plan_watch(False, "", T(2026, 10, 7, 19, 30), T(2026, 10, 7, 19, 30))
-    assert a == "wait" and "없음" in r                                              # 같은 ①완료 = 이미 함
-    a, r = W.plan_watch(False, "", T(2026, 10, 8, 19, 30), T(2026, 10, 7, 19, 30))
-    assert a == "run" and "새 ①판매수집" in r                                        # 다음날 새 ①완료 = 1회
-    assert W.plan_watch(False, "", None, T(2026, 10, 7, 19, 30))[0] == "wait"        # ①완료 기록 없음 = 대기
+    # 한 바퀴 뒤 판단: 중단 > 새로 한 일 있음(곧 다음 바퀴) > 대기 남음(잠시 뒤·진전 없으면 미완료 종료) > 완료
+    assert W.plan_after_pass(True, 5, 3, 1, 0)[0] == "stop"                        # 연속 실패/차단 = 중단 종료
+    assert W.plan_after_pass(False, 4, 9, 0, 0)[0] == "again"                       # 받는 중(소급) = 곧 다음 바퀴
+    assert W.plan_after_pass(False, 0, 2, 0, 1)[0] == "later"                       # 파일 생성 대기 = 잠시 뒤
+    assert W.plan_after_pass(False, 0, 0, 1, 1)[0] == "later"                       # 서버 일시 오류 계정 = 잠시 뒤
+    a, r = W.plan_after_pass(False, 0, 2, 0, W.MAX_IDLE_PASSES)
+    assert a == "giveup" and "남음" in r                                           # 진전 없이 반복 = 미완료 종료
+    a, r = W.plan_after_pass(False, 0, 0, 0, 1)
+    assert a == "done" and "모든 정산 파일 다운로드 완료" in r                        # 다 받음 = 기록 후 정상 종료
+    # 완료 기록 키 = ①완료 시각(앱이 띄움) / 없으면 오늘(수동) — 같은 키 '완료'면 다시 안 돎
+    mk = {"stage": "sales", "at": T(2026, 10, 9, 19, 54, 35)}
+    assert W.sales_key(mk, T(2026, 10, 9, 20, 0)) == "2026-10-09T19:54:35"
+    assert W.sales_key(None, T(2026, 10, 9, 20, 0)) == "수동:2026-10-09"
+    with tempfile.TemporaryDirectory() as tmp:
+        dp = Path(tmp) / "_완료.json"
+        assert W.read_done(dp) is None
+        W.write_done(dp, "k1", "stop", "중단 사유")
+        assert not W.already_done(W.read_done(dp), "k1")                            # 중단 = 다시 돌아야
+        W.write_done(dp, "k1", "done", "완료")
+        assert W.already_done(W.read_done(dp), "k1") and not W.already_done(W.read_done(dp), "k2")   # 새 ①완료 = 다시
+        dp.write_text("{깨짐", encoding="utf-8")
+        assert W.read_done(dp) is None                                              # 손상 = 기록 없음(한 바퀴 더)
     # sales_in_progress: _진행중.json 수정 시각(신선=진행 중)
     with tempfile.TemporaryDirectory() as tmp:
         prog = Path(tmp) / "진행중.json"
@@ -224,7 +239,7 @@ def p12_watch_decide():
         assert W.read_marker(mp)[0] == {"stage": "sales", "at": T(2026, 10, 7, 19, 30)}
         mp.write_text("{깨짐", encoding="utf-8")
         assert W.read_marker(mp)[0] is None and "읽기 실패" in W.read_marker(mp)[1]
-    ok("① 진행 중 정지·소급 연속(last_sales_at None)·정상 1회(새 ①완료)·진행 파일 신선도·단계 기록 왕복")
+    ok("다 받으면 완료 종료·중단/진전없음 종료·같은 ①완료 재실행 안 함·① 진행 중 정지·단계 기록 왕복")
 
 
 def p13_accounts_file():
@@ -756,6 +771,39 @@ def p24_local_store():
     ok("예전 이름 파일·요청·금액 → 지금 이름(멱등)·합치기(같은 작업 1회·같은 이름 파일 원본 보존·비용 폴더·금액 키 병합)"
        "·정산현황 금액 덮어 모음")
 
+def p25_app_launch():
+    print("[P25] 앱이 정산 띄우기(D-010) — 명령·창 없음·작업 묶음 분리(불가 시 분리 없이+경고)·실패 로그")
+    import subprocess as _sp
+    from coupang_analytics import app_process as AP
+    cmd, cwd = AP.settlement_watch_cmd()
+    assert cmd[-1] == "watch" and cmd[-2].endswith("settlement_download.py") and Path(cwd).is_dir(), (cmd, cwd)
+    calls, logs = [], []
+    real = _sp.Popen
+
+    class _P:
+        pid = 1
+
+    def fake(cmd, cwd=None, creationflags=0, **k):
+        calls.append(creationflags)
+        if creationflags & AP._BREAKAWAY and len(calls) == 1 and fake.deny:
+            raise PermissionError("job breakaway denied")
+        return _P()
+    try:
+        _sp.Popen = fake
+        fake.deny = False
+        assert AP.start_settlement_watch(logs.append) is not None
+        assert calls[-1] & AP._BREAKAWAY and calls[-1] & AP._NO_CONSOLE and "⚠" not in logs[-1]
+        calls.clear()
+        fake.deny = True
+        assert AP.start_settlement_watch(logs.append) is not None
+        assert len(calls) == 2 and not calls[-1] & AP._BREAKAWAY and "분리 불가" in logs[-1]
+        _sp.Popen = lambda *a, **k: (_ for _ in ()).throw(OSError("없음"))
+        assert AP.start_settlement_watch(logs.append) is None and "시작 실패" in logs[-1]
+    finally:
+        _sp.Popen = real
+    ok("watch 명령·창 없이·작업 묶음 분리 우선·분리 불가 시 경고 후 그대로·시작 실패 로그")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -772,6 +820,7 @@ def main():
     p22_paydates_verify()
     p23_calendar()
     p24_local_store()
+    p25_app_launch()
     print("정산 런타임 오프라인 검증 통과")
 
 

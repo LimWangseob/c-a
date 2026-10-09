@@ -1,23 +1,28 @@
-"""정산 다운로드 자동 대기·재개 판단(순수 로직·오프라인 검증) — 운용 PC에서 기존 앱과 번갈아 돌기.
+"""정산 다운로드 실행 판단(순수 로직·오프라인 검증) — 앱이 ①판매수집 뒤에 띄우고, 다 받으면 스스로 끝난다.
 
-소유자 결정(2026-10-07): 정산은 **24시간 감시**하되 **①판매수집이 돌고 있을 때만 일시정지**하고, 끝나면 재개한다.
-- **소급(초기)**: 2026-01 ~ 오늘치 밀린 정산을 다 받아야 하므로, 받을 게 있는 동안은 **연속**으로 바퀴를 돈다.
-- **정상(소급 후)**: 받을 게 없어지면 **다음 ①판매수집 완료마다 1회**만 돈다(매번 전 계정 재로그인하지 않음 = 계정 보호).
-- ⛔ 로그인을 쓰는 건 ①판매수집뿐이라 ②키워드·③순위(로그인 없음·별도 프로필)와는 겹쳐도 된다.
+소유자 결정(D-010·2026-10-09, 2026-10-07 '24시간 감시'를 대체):
+- 18:00 앱이 시작되면 기존 정산 프로그램을 끝내고, **①판매수집이 끝나면 앱이 정산을 띄운다**(예약작업 없음).
+- 정산은 ②키워드·③순위와 겹쳐도 계속 돈다(로그인을 쓰는 건 ①뿐·③은 비로그인 별도 프로필).
+- 받을 게 있으면(소급) 연속으로 바퀴를 돌고, **모든 정산 파일을 받으면 기록하고 정상 종료**한다.
+- 연속 실패·차단으로 중단되면 기록하고 종료 → 다음 ①판매수집 완료 후 이어서. 파일 생성 대기·서버 일시 오류만
+  남았으면 몇 바퀴 더 보고(MAX_IDLE_PASSES) 그래도 남으면 '미완료'로 종료(무한 재로그인 방지).
+- 같은 ①완료 기준으로 이미 '완료'면 다시 돌지 않는다(`_완료.json`·재부팅 복구·수동 재시작 중복 방지).
 
-신호 둘:
-- `_진행중.json` 수정 시각(`sales_in_progress`) = ①판매수집이 '지금' 도는지(일시정지 판단).
-- `_실행단계.json`(`read_marker`: stage sales=①완료·at=시각) = ①판매수집이 '언제' 끝났는지(정상 1회 트리거).
-실제 '소급 연속 vs 하루 1회'는 호출부가 한 바퀴 처리 건수로 정한다(받은 게 있으면 바로 다음 바퀴).
+신호: `_진행중.json` 수정 시각(`sales_in_progress`)=①이 '지금' 도는지(그동안 정지) · `_실행단계.json`(`read_marker`)=
+①이 '언제' 끝났는지(완료 기록의 기준 키).
 """
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
 SALES_DONE = ("sales", "ranks", "done")
 SALES_STALE_MIN = 20   # _진행중.json 이 이보다 최근에 갱신됐으면 ①판매수집이 '지금 돌고 있다'고 본다
+MAX_IDLE_PASSES = 3    # 새로 받은 게 없는데 생성 대기·일시 오류만 남은 바퀴를 이만큼까지(그 뒤 '미완료' 종료)
+RESULT = {"done": "완료", "stop": "중단", "giveup": "미완료"}
 
 
 def read_marker(path) -> tuple[dict | None, str]:
@@ -32,18 +37,55 @@ def read_marker(path) -> tuple[dict | None, str]:
         return None, f"앱 단계 기록 읽기 실패: {exc.__class__.__name__}: {exc}"
 
 
-def plan_watch(busy: bool, busy_why: str, sales_at: datetime | None,
-               last_sales_at: datetime | None) -> tuple[str, str]:
-    """다음 행동(순수). busy=①판매수집 진행 중 · sales_at=현재 ①완료 기록 시각 ·
-    last_sales_at=마지막으로 정산을 '받을 것 없음'까지 돌린 ①완료 시각(=소급 끝난 뒤 '하루 1회' 기준, 소급 중엔 None).
-      → 'wait' : ①판매수집 중(busy)이거나, 소급 끝났고 새 ①완료가 아직 없음.
-      → 'run'  : 지금 한 바퀴(소급 중=항상·정상 중=새 ①완료 있을 때)."""
-    if busy:
-        return "wait", busy_why
-    if last_sales_at is not None and (sales_at is None or sales_at <= last_sales_at):
-        return "wait", "받을 정산 없음 — 다음 ①판매수집 완료까지 대기"
-    return "run", ("소급 수집(밀린 정산 받는 중)" if last_sales_at is None
-                   else "새 ①판매수집 완료 — 정산 수집")
+def sales_key(marker: dict | None, now: datetime) -> str:
+    """완료 기록 기준 키 = ①판매수집 완료 시각(앱이 띄운 경우). ① 기록이 없으면(수동 시작) 오늘 날짜."""
+    if marker and marker.get("stage") in SALES_DONE:
+        return marker["at"].isoformat(timespec="seconds")
+    return f"수동:{now.date().isoformat()}"
+
+
+def already_done(done: dict | None, key: str) -> bool:
+    return bool(done) and done.get("key") == key and done.get("result") == RESULT["done"]
+
+
+def read_done(path) -> dict | None:
+    p = Path(path)
+    if not p.exists():
+        return None
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else None
+    except (OSError, ValueError):
+        return None                     # 손상 = 기록 없음(한 바퀴 더 돌 뿐 — 안전한 쪽)
+
+
+def write_done(path, key: str, action: str, reason: str, now: datetime | None = None) -> None:
+    """완료/중단/미완료 기록(원자적 쓰기)."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    rec = {"key": key, "result": RESULT[action], "reason": reason,
+           "at": (now or datetime.now()).isoformat(timespec="seconds")}
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(rec, fh, ensure_ascii=False, indent=1)
+    os.replace(tmp, p)
+
+
+def plan_after_pass(stopped: bool, work: int, pending: int, waits: int, idle_passes: int) -> tuple[str, str]:
+    """한 바퀴 뒤 다음 행동(순수). stopped=연속 실패/차단 중단 · work=이번에 새로 요청/받은 수 ·
+    pending=요청예정/요청됨(파일 생성 대기) 작업 수 · waits=일시 오류·브라우저 닫힘으로 '대기'된 계정 수 ·
+    idle_passes=새로 한 일 없이 끝난 연속 바퀴 수.
+      → 'again'(곧 다음 바퀴) · 'later'(5분 뒤 다음 바퀴) · 'done'(다 받음·종료) · 'stop'(중단·종료) · 'giveup'(미완료·종료)"""
+    if stopped:
+        return "stop", "연속 실패/차단으로 중단 — 다음 ①판매수집 완료 후 이어서 받음"
+    if work > 0:
+        return "again", f"{work}건 처리 — 곧 다음 바퀴(아직 받을 것 확인)"
+    if pending or waits:
+        left = f"파일 생성 대기 {pending}건·일시 오류 대기 {waits}계정"
+        if idle_passes >= MAX_IDLE_PASSES:
+            return "giveup", f"{left} 남음({idle_passes}바퀴 진전 없음) — 다음 ①판매수집 완료 후 이어서"
+        return "later", f"{left} — 잠시 뒤 다시 확인"
+    return "done", "✅ 모든 정산 파일 다운로드 완료 — 정상 종료"
 
 
 def sales_in_progress(progress_path, *, now: datetime | None = None,

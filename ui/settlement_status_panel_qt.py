@@ -26,7 +26,8 @@ _LABELS = {"상태": "상태", "갱신": "갱신", "내용": "내용", "실행ID
 _BADGE = {
     "작동중": ("● 작동 중", "#047857", "#ffffff"),
     "대기중": ("● 대기 중 (앱 판매수집 끝나면 시작)", "#2563eb", "#ffffff"),
-    "완료": ("● 이번 분량 완료", "#334155", "#ffffff"),
+    "완료": ("● 모두 받음 — 종료(다음 ①판매수집 뒤 다시)", "#334155", "#ffffff"),
+    "종료": ("● 중단·미완료로 종료 — 아래 로그 확인(다음 ①판매수집 뒤 이어서)", "#b45309", "#ffffff"),
     "오류": ("● 오류 — 아래 로그 확인", "#b91c1c", "#ffffff"),
     "시작함": ("● 시작함 — 곧 상태 갱신", "#2563eb", "#ffffff"),
     "중지됨": ("● 중지됨 (사용자가 멈춤)", "#64748b", "#ffffff"),
@@ -164,7 +165,7 @@ class SettlementStatusMixin:
         ctrl.addWidget(self.settle_start_btn)
         ctrl.addWidget(self.settle_stop_btn)
         ctrl.addStretch(1)
-        hint = QtWidgets.QLabel("24시간 감시 — 판매수집 중엔 자동으로 멈췄다 끝나면 재개")
+        hint = QtWidgets.QLabel("18:00 실행의 ①판매수집이 끝나면 자동 시작 — 다 받으면 스스로 종료")
         hint.setObjectName("muted")
         ctrl.addWidget(hint)
         v.addLayout(ctrl)
@@ -256,12 +257,9 @@ class SettlementStatusMixin:
     # ── 정산 감시 시작/중지(별도 프로세스 제어) ──────────────────────────
     @staticmethod
     def _settle_watch_cmd() -> tuple[list[str], str]:
-        """24시간 감시(watch)를 띄울 명령 + 작업 폴더. frozen=정산다운로드.exe(형제)·개발=python tools/..."""
-        if getattr(sys, "frozen", False):
-            folder = Path(sys.executable).parent
-            return [str(folder / "정산다운로드.exe"), "watch"], str(folder)
-        root = Path(__file__).resolve().parents[1]
-        return [sys.executable, str(root / "tools" / "settlement_download.py"), "watch"], str(root)
+        """정산 자동 수집(watch) 명령 + 작업 폴더 — 앱 무인 실행과 같은 것(app_process·D-010)."""
+        from coupang_analytics.app_process import settlement_watch_cmd
+        return settlement_watch_cmd()
 
     def _settle_start(self) -> None:
         cmd, cwd = self._settle_watch_cmd()

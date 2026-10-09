@@ -72,6 +72,13 @@
 - 영향 범위: 신규 `product_match_ai.py`·`match_anchor.py`, `pipeline_sales._match_to_ledger`(+`_roster_candidates`=상품조회 실패일만), `product_match.build_tracked`(scope_to_ledger 공통 마무리), `input_list.Product.ledger_name`, `pipeline.run_full` 이 `anchor_file` 전달. 삭제: `product_match.augment_unmatched/augment_ai`, `kw_ai.match_products`, `pipeline_sales._augment_vids/_augment_ai_match`. 계정당 OpenAI 1회(고정 안 된 줄이 있을 때만). ⚠ 첫 실행은 전 줄이 AI 판단(이후 고정). 기존 결과 블록 중 잘못 섞였던 VID 블록(봄날 트리 실버·판매자배송 '(9551)'·'(골드, Free_)', LED 스탠드 '(블랙_)')은 더 매칭되지 않아 다음 실행 reconcile ⑥(대장에 그 이름 없음)으로 이력과 함께 삭제된다.
 - 상태: ACTIVE
 
+### D-010 [SETTLE_LIFECYCLE] 정산 다운로드 = ①판매수집 뒤 앱이 기동·다 받으면 종료 (2026-10-09, R3)
+- 결정: ①18:00 무인 앱이 시작되면 **이전 앱 창·정산 프로그램을 종료**하고 옛 정산 예약작업(로그온+08:00, 인자 `watch`)을 지운다(`app_process.prepare_auto_start` → 이어서 reap 이 그 Chrome 정리). ②**①판매수집(야간 1회 재시도 포함)이 끝나면 앱이 정산을 띄운다**(`start_settlement_watch`·창 없음·작업 묶음 분리 `CREATE_BREAKAWAY_FROM_JOB`, 불가 시 경고 후 그대로)·재부팅 복구(--resume)도 ①이 끝나 있으면 띄움. ③정산은 ②③와 병행하고, **모든 정산 파일을 받으면 '✅ 모든 정산 파일 다운로드 완료'를 기록하고 정상 종료**(`settlement_watch.plan_after_pass`). 연속 실패/차단 중단·진전 없는 대기 3바퀴 초과도 기록 후 종료(다음 ①완료 뒤 이어서). 같은 ①완료 기준 '완료'면 다시 돌지 않음(`output/정산/로그/_완료.json`). ④윙 지급내역 등 **HTTP 500 = 서버 일시 오류**(15초×2 재시도 후 그 계정 '대기'·차단으로 안 셈). ⑤윙 정산주기 **'M'(월정산 추정)** 은 그 줄만 건너뛰고 '확인 필요' 기록(계정 실패 금지·모르는 다른 코드는 여전히 중단).
+- 근거: 소유자 지시(2026-10-09 "정산 실행 중 18시가 되면 앱이 하나 더 실행 → 18시 앱 실행 시 기존 정산 종료·판매수집 완료 후 정산 기동·순위 끝나도 계속·다 받으면 로그 남기고 정상 종료")·질문 답("정산 예약작업 삭제"·"500=서버 오류로 처리"). 실측(output(16) 10/08·10/09): 10/08 18:00:53·18:24·18:26 앱 시작 reap 으로 정산 Chrome 닫힘(대기로 흡수) · 10/09 00:41·00:44·12:01 지급내역 조회 500(HTML/빈 본문)이 차단·실패로 세어져 연속 2계정 중단 → 12:01 이후 정산 정지 · 노바네스트 'M' 이 10/08 18:29·10/09 11:53 계정 실패(중단 원인 1) · 옛 watch 는 중단(rc=1)을 '받을 정산 없음'으로 착각해 다음 ①완료까지 대기.
+- 버린 대안: (a) 24시간 감시 유지(2026-10-07 결정 — 18:00 이중 실행·하루 종일 상주) (b) 정산 예약작업 유지(소유자 '삭제' 선택·시작마다 43계정 재로그인) (c) 500 계속 차단 취급(소유자 '서버 오류' 선택).
+- 영향 범위: 신규 `src/coupang_analytics/app_process.py`, `settlement_watch.py`(plan_watch/24h 대기 → plan_after_pass·완료 기록), `tools/settlement_download.py cmd_watch`, `settlement_wing_api`(500·'M'), `ui/app_qt.py`(main·start_auto·start_resume), `ui/settlement_status_panel_qt.py`(명령 공유·배지 '종료'), `deploy/install.ps1`(정산 예약작업 등록 제거·남은 것 삭제)·첫실행 안내. 2026-10-07 '24시간 감시' 운용을 대체. ⚠ 운용 PC 재배포 필요·작업 묶음 분리 가능 여부는 첫 18:00 로그로 확인.
+- 상태: ACTIVE
+
 ---
 
 ## 전환 전 결정 (한 줄·동결 아카이브·2026-10-08 이전·재작성 금지=추측 방지)

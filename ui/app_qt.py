@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))   # ui/ 형제 모듈(r
 
 from coupang_analytics import appconfig, config, keyword_store  # noqa: E402
 from coupang_analytics.apppaths import output_dir as app_output_dir, set_workdir  # noqa: E402
+from coupang_analytics.app_process import prepare_auto_start, start_settlement_watch  # noqa: E402
 from coupang_analytics.browser import WingBrowser, find_chrome, reap_orphan_chrome  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics import detail_images  # noqa: E402
@@ -1696,6 +1697,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
                                  registry_url=reg_url, stock_url=stock_url)
                 if not stop.is_set():
                     write_run_stage("sales")       # ① 완료 표시(재부팅 복구용)
+                    start_settlement_watch(self.log)   # D-010: ①완료 → 정산 자동 수집(②③와 병행·다 받으면 스스로 종료)
                 # ② 키워드 선정(노출측정 없음·로그인 불필요·부족분 4개까지 보충)
                 if not stop.is_set():
                     select_keywords_stage(naver, key, grow=False, on_log=self.log, gsheet_output_url=gs_out,
@@ -1779,6 +1781,8 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
                              registry_url=reg_url, stock_url=stock_url)
                     if not stop.is_set():
                         write_run_stage("sales")
+                if not stop.is_set():              # D-010: ①이 끝나 있으면 정산 자동 수집(이미 다 받았으면 정산이 바로 종료)
+                    start_settlement_watch(self.log)
                 if not stop.is_set() and do_keywords:   # ② 키워드 선정(동결분 유지·부족분만)
                     select_keywords_stage(naver, key, grow=False, on_log=self.log, gsheet_output_url=gs_out,
                                           stock_url=stock_url)
@@ -2107,11 +2111,16 @@ def main():
                 "이 PC 에 Chrome 이 설치돼 있지 않습니다. https://www.google.com/chrome 에서 "
                 "Chrome 을 설치한 뒤 다시 실행하세요.")
         sys.exit(1)
+    pre_logs: list[str] = []
+    if auto:                        # D-010: 18:00 무인 = 이전 앱·정산 프로그램 종료 + 옛 정산 예약작업 제거(그 Chrome 은 아래 reap)
+        prepare_auto_start(pre_logs.append)
     reaped = reap_orphan_chrome()   # 이전 실행이 강제종료·크래시로 남긴 좀비 Chrome 정리(누적 원천 차단)
     if reaped:
-        print(f"[시작] 잔여(좀비) Chrome {reaped}개 정리함")
+        pre_logs.append(f"[시작] 잔여(좀비) Chrome {reaped}개 정리함")
     win = App(auto=(auto or resume))
     win.show()
+    for m in pre_logs:
+        win.log(m)
     if resume:                      # 재부팅 복구 — 오늘 중단분만 이어서(없으면 스스로 종료)
         QtCore.QTimer.singleShot(1500, win.start_resume)
     elif auto:                      # 이벤트 루프 뜬 직후 무인 실행 자동 시작

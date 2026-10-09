@@ -32,6 +32,9 @@ RG_LIST = "/tenants/rfm/v2/settlements/download-list/api"
 RG_GET = "/tenants/rfm/v2/settlements/download/api/v2"
 WING_EXCEL = "MSF_PAYMENT_REVENUE_DETAIL"
 _WING_KIND = {"W": "주정산", "R": "최종액"}        # transactionCycleCode(실측: 주정산 70%=W·월별 최종액 30%=R)
+# 아는데 아직 받기 방법을 확인 못 한 주기 — 그 줄만 건너뛰고 처리기록에 '확인 필요'(계정 전체 실패 금지·D-010).
+# 실측 2026-10-08·09 노바네스트(novanest1284) 지급일 2026-01-22 'M' → 매 실행 계정 실패·연속실패 중단 원인.
+_WING_UNSUPPORTED = {"M": "월정산(추정)"}
 _RG_REPORT = {"판매수수료": "CATEGORY_TR", "입출고/배송비": "WAREHOUSING_SHIPPING", "보관비": "STORAGE_FEE",
               "재고 손실 보상": "INVENTORY_COMPENSATION", "부가서비스비": "BARCODE_LABELING_FEE",
               "반품 회수/재입고 비용": "CRETURN_PICKUP_RESTOCKING", "반출비": "VRETURN_HANDLING",
@@ -57,7 +60,8 @@ class ApiBlocked(Exception):
 
 
 class ServerBusy(Exception):
-    """502·503·504 — 쿠팡 서버 일시 오류(차단 아님·잠시 뒤 재시도). 실측 2026-10-08: 매출내역 조회 504 Gateway Time-out."""
+    """500·502·503·504 — 쿠팡 서버 일시 오류(차단 아님·잠시 뒤 재시도). 실측 2026-10-08: 매출내역 조회 504 Gateway Time-out.
+    500 은 소유자 결정(2026-10-09·D-010): 10/09 지급내역 조회 500(HTML·빈 본문)이 차단으로 세어져 정산이 멈췄다."""
 
 
 # ── 순수 변환(오프라인 검증) ──────────────────────────────────────
@@ -83,6 +87,8 @@ def wing_events(resp: dict, account: str) -> list[SettleEvent]:
     for r in reports:
         pay, code, f, t = _need(r, "payDate", "transactionCycleCode", "recognitionFrom", "recognitionTo",
                                 where="윙 정산현황 줄")
+        if code in _WING_UNSUPPORTED:
+            continue                                   # 받기 방법 미확인 주기 — unsupported_cycles 로 기록(D-010)
         if code not in _WING_KIND:
             raise SiteChangedError(f"윙 모르는 정산주기 코드: {code!r} (지급일 {pay})")
         out.append(SettleEvent(account, "윙", _WING_KIND[code], date.fromisoformat(pay), date.fromisoformat(f),
@@ -109,6 +115,12 @@ def rg_events(resp: dict, account: str) -> list[SettleEvent]:
 def cost_reports(detail: dict) -> tuple:
     """정산현황 상세 → 그 주에 금액이 있는 비용 리포트 이름(요청 수를 줄이려 0원 리포트는 받지 않음)."""
     return tuple(sorted({rep for f, rep in _COST_FIELDS.items() if detail.get(f)}))
+
+
+def unsupported_cycles(resp: dict) -> list[str]:
+    """윙 정산현황에서 받기 방법을 아직 모르는 주기 줄(예 'M') — 처리기록에 '확인 필요'로 남긴다."""
+    return [f"{_WING_UNSUPPORTED[c]} 코드 {c!r} 지급일 {r.get('payDate')} ({r.get('recognitionFrom')}~{r.get('recognitionTo')})"
+            for r in resp.get("paymentReports", []) if (c := r.get("transactionCycleCode")) in _WING_UNSUPPORTED]
 
 
 def unmapped_costs(resp: dict) -> list[str]:
@@ -251,11 +263,11 @@ async ([method, path, body]) => {
 
 
 def call(page, method: str, path: str, body: dict | str | None = None):
-    """로그인된 WING 페이지 안에서 화면과 같은 방식으로 호출 → JSON. 502·503·504=ServerBusy(일시 오류),
+    """로그인된 WING 페이지 안에서 화면과 같은 방식으로 호출 → JSON. 500·502·503·504=ServerBusy(일시 오류),
     403·429·그 밖 HTML=ApiBlocked, 그 밖 오류=SiteChangedError."""
     r = page.evaluate(_CALL_JS, [method, path, body])
     st, text = r["status"], r["text"]
-    if st in (502, 503, 504):
+    if st in (500, 502, 503, 504):
         raise ServerBusy(f"{path} → {st} 서버 일시 오류")
     if st in (403, 429) or text.lstrip().startswith("<"):
         raise ApiBlocked(f"{path} → {st} ({r['ctype']}) {text[:80]!r}")
