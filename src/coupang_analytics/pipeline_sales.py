@@ -299,7 +299,7 @@ def _match_to_ledger(b, a: Account, products, metrics, inv_names: dict, date_to,
                      vendor_ok: bool, anchor_file, log):
     """대장 ↔ 쿠팡 매칭(D-009·소유자 2026-10-09) → (tracked, n_match).
 
-    ①VID 고정 ②괄호/이름 정확일치 ③AI 선택(글자 규칙은 참고 후보) ④AI 실패 시 규칙 대체 → 색상 필터 공통 적용
+    ①VID 고정 ②상품명 동일 ③의미 매칭(AI·후보 많으면 임베딩으로 추림) ④AI 실패 시 규칙 대체 → 색상 필터 공통 적용
     (product_match_ai). 상품조회 실패일(vendor_ok=False)은 당일 판매분석뿐이라 그로스 재고·최근 N일 roster 로 후보를
     보강하고, 고정 VID 는 스냅샷으로 유지한다. anchor_file=None 이면 고정 읽기/쓰기 안 함(도구·핀)."""
     from collections import Counter
@@ -317,7 +317,8 @@ def _match_to_ledger(b, a: Account, products, metrics, inv_names: dict, date_to,
             log(f"  [{a.label}] ⚠ {exc} — 이번 실행은 고정 없이 매칭")
     expo = {vid: m.product_name for vid, m in (metrics or {}).items()}
     out = PMA.match_ledger(a.products, cands, anchors=anchors, vendor_ok=vendor_ok,
-                           ask=PMA.openai_ask(ai_key) if ai_key else _no_ai, expo=expo)
+                           ask=PMA.openai_ask(ai_key) if ai_key else _no_ai, expo=expo,
+                           embed=PMA.openai_embed(ai_key) if ai_key else None)
     for note in out.notes:
         log(f"  [{a.label}] {note}")
     tracked, n_match = build_tracked(a.products, PMA.resolved(out))

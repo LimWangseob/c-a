@@ -700,7 +700,39 @@ def t1_ai_match_d009():
     assert vids(t9[0]) == ["v_dym"] and "C200." in calls[-1] and n_cands <= PMA.SHORTLIST_K, \
         f"후보 추리기에 진짜 상품 포함·후보 수 제한({n_cands})"
     assert PMA.parse_response({"matches": [{"line": "L0", "pick": "C999"}, {"line": 0, "pick": "zz"}]}, [0], [1]) == {}
-    _ok("큰 계정 후보 추리기(진짜 상품 포함·12개 이내)·잘못된 AI 응답 방어")
+    _ok("큰 계정 후보 추리기(진짜 상품 포함·15개 이내)·잘못된 AI 응답 방어")
+
+    # ⑧ 소유자 2026-10-09 "첫째 상품명 동일, 둘째 글자보다 문구 전체의 의미"
+    #  (a) 상품명 동일 = AI 없이 확정 — 대장 본문/괄호가 쿠팡 '노출명'과 같아도(등록명이 달라도) 동일로 본다
+    disc10 = [cand("내부등록명 A", [("", "v_a")]), cand("헬스 장갑", [("", "v_g")])]
+    calls.clear()
+    o10 = PMA.match_ledger([Product(name="HM001 (디프 두꺼운 헬스매트)")], disc10, anchors={}, vendor_ok=True,
+                           ask=boom, expo={"v_a": "디프 두꺼운 헬스매트"}, today="2026-10-09")
+    assert o10.picks[0].how == "exact" and o10.picks[0].di == 0 and not calls, "괄호 속 이름=노출명 → 상품명 동일(AI 없음)"
+    #      색상만 다른 줄(본문=등록명)은 둘 다 상품명 동일로 같은 상품 공유(실측 휴라엘 신형타프 블랙/베이지) → 색상별 옵션
+    taf = [cand("신형타프 R008", [("블랙 Free", "v_bk"), ("베이지 Free", "v_be")])]
+    o10b, t10b, _ = run([Product(name="신형타프 R008 (블랙 Free)"), Product(name="신형타프 R008 (베이지 Free)")], taf, boom)
+    assert [o10b.picks[i].how for i in (0, 1)] == ["exact", "exact"] and vids(t10b[1]) == ["v_be"] and len(o10b.anchors) == 2, \
+        "색상 줄 둘 다 상품명 동일·고정·색상 옵션"
+    #  (b) 의미 매칭 프롬프트: 글자 규칙 결과는 AI 에 보여 주지 않음 + '의미' 판단 규칙이 들어 있음
+    calls.clear()
+    run([Product(name="목견인기")], [cand("의료용 경추 거북목 교정기 견인기", [("", "v_n")]), cand("목베개", [("", "v_p")])],
+        fake([{"line": 0, "pick": "C0", "confidence": "medium"}]))
+    assert "규칙 후보" not in calls[-1] and "문구 전체의 의미" in PMA.MATCH_SYSTEM and "상품명이 같은지 먼저" in PMA.MATCH_SYSTEM
+    #  (c) 후보가 많은 계정은 '의미'(임베딩)로 추림 — 글자가 하나도 안 겹치는 같은 상품도 후보에 들어가야
+    many = [cand(f"무관 상품 {i:03d}", [("", f"w{i}")]) for i in range(200)] + [cand("의료용 경추 넥 스트레쳐", [("", "w_neck")])]
+
+    def fake_embed(texts):
+        return [[1.0, 0.0] if ("목견인기" in t or "넥 스트레쳐" in t) else [0.0, 1.0] for t in texts]
+    calls.clear()
+    o11 = PMA.match_ledger([Product(name="목견인기")], many, anchors={}, vendor_ok=True, today="2026-10-09",
+                           ask=fake([{"line": 0, "pick": "C200", "confidence": "medium"}]), embed=fake_embed)
+    assert "C200." in calls[-1] and o11.picks[0].di == 200, "의미 추리기가 글자 안 겹치는 같은 상품을 후보에 넣어야"
+    calls.clear()
+    o12 = PMA.match_ledger([Product(name="목견인기")], many, anchors={}, vendor_ok=True, today="2026-10-09",
+                           ask=fake([]), embed=lambda t: (_ for _ in ()).throw(RuntimeError("임베딩 장애")))
+    assert any("의미 추리기(임베딩) 실패" in x for x in o12.notes) and calls, "임베딩 장애 = 글자 추리기로 계속(로그)"
+    _ok("상품명 동일(등록명·노출명·괄호·본문)=AI 없이·프롬프트=의미 우선·규칙 결과 비표시·큰 계정 의미 추리기·임베딩 장애 대체")
 
     # ⑦ 고정 파일: 계정별 저장·다른 계정 보존·손상 파일 감지
     d = Path(tempfile.mkdtemp())
