@@ -383,15 +383,19 @@ def _product_coupang_check(product, inv_status: dict) -> str:
 
 
 def compute_coupang_checks(report_acc, inv_status, date_iso: str) -> dict:
-    """성공 계정의 쿠팡확인(줄 단위): 매칭 상품=확인됨/판매중지/판매중(불일치), 대장엔 있는데 미매칭=미등록.
-    키=(account_id, 상품명)·값=(쿠팡확인값, 확인일). write_coupang_check(§10-1)로 원장에 1회 기록."""
+    """성공 계정의 쿠팡확인(줄 단위): 매칭 상품=확인됨/판매중지/판매중(불일치), 대장엔 있는데 미매칭(VID 없음)=미등록.
+    키=(account_id, **대장 상품명**)·값=(쿠팡확인값, 확인일). write_coupang_check(§10-1)로 원장에 1회 기록.
+    ⚠ 매칭되면 상품 이름이 쿠팡명이 되므로 원장(대장명 키)과 맞추려면 `ledger_name` 을 쓴다(실측 10/09 '원장에 없음
+    18건'·그 대장 줄이 '미등록'으로 잘못 기록됨)."""
     aid = report_acc.account_id
     inv = inv_status or {}
     out: dict = {}
     matched = set()
     for p in report_acc.products:
-        matched.add(p.name.strip())
-        out[(aid, p.name)] = (_product_coupang_check(p, inv), date_iso)
+        key = getattr(p, "ledger_name", "") or p.name
+        matched.add(key.strip())
+        has_vid = any(v for o in p.options for v in o.vendor_item_ids)
+        out[(aid, key)] = (_product_coupang_check(p, inv) if has_vid else _CC_UNREG, date_iso)
     for name in (report_acc.ledger_products or set()):
         if name.strip() not in matched:
             out[(aid, name)] = (_CC_UNREG, date_iso)

@@ -912,7 +912,17 @@ def t1_product_id_source():
     assert merged == {"vNORMAL": "P_ALL", "vRFM": "P_INV", "vSALES": "P_SALES"}, f"병합 우선순위 오류: {merged}"
     # item_pids 없이도(옛 경로) 재고∪판매분석 동작(하위호환)
     assert _pid_by_vid({"a": "1"}, {"b": _OM("2")}) == {"a": "1", "b": "2"}, "하위호환(item_pids 생략) 실패"
-    _ok("productId 소스: 전 상품 GET 파싱·실패 비치명·pid_by_vid 병합 우선순위(전상품>재고>판매분석)")
+    # (d) 조회 대상 = 추적(대장 매칭) 상품이 든 등록상품만(2026-10-09 실측: 와이에이치 3,146건 중 옵션 있는 건 소수·
+    #     추적 1~3개인데 전부 GET 해 하루 ~58분). 옵션 없는 리스팅·추적 vid 없는 리스팅은 조회 안 함.
+    from types import SimpleNamespace as _NS
+    from coupang_analytics.pipeline_sales import _vinv_ids_for_pid
+
+    def _lst(vinv, vids):
+        return _NS(vendor_inventory_id=vinv, options=[_NS(vendor_item_id=v) for v in vids])
+    lsts = [_lst("L1", ["t1", "n1"]), _lst("L2", ["x1"]), _lst("L3", [])] + [_lst(f"Z{i}", []) for i in range(3000)]
+    assert _vinv_ids_for_pid(lsts, {}, {}, {"t1"}) == ["L1"], "추적 상품 든 등록상품만 조회해야"
+    assert _vinv_ids_for_pid(lsts, {}, {}, set()) == [], "추적 vid 없으면 조회 0"
+    _ok("productId 소스: 전 상품 GET 파싱·실패 비치명·pid_by_vid 병합 우선순위·조회 대상=추적 상품 든 등록상품만")
 
 
 def t1_data_quality_summary():
@@ -1699,6 +1709,16 @@ def t1_coupang_check_compute():
     vals = {v[0] for v in r.values()}
     assert vals <= set(COUPANG_CHECK_VALUES), f"계약(COUPANG_CHECK_VALUES) 밖 값: {vals - set(COUPANG_CHECK_VALUES)}"
     print("    [통과] 5줄 산출(확인됨·판매중(불일치)·판매중지×2·미등록)·값 6종 계약 정합")
+    # 실측(10/09 로그 '원장에 없음 18건'): 매칭되면 이름이 쿠팡명이 돼 원장(대장명 키)과 어긋났고, 그 대장 줄은
+    # '미등록'으로 잘못 적혔다. 매칭 안 된(VID 없음) 줄은 '확인됨'으로 잘못 적혔다 → 키=대장명·VID 없음=미등록.
+    acc2 = Account("a2", "대표", "비즈", [
+        Product("전동눈썹정리기 HS0030", [Option("", ["v9"])], ledger_name="전동눈썹정리기 HS0300"),   # 대장명≠쿠팡명
+        Product("접이식 정리함 JK0026", [Option("")], ledger_name="접이식 정리함 JK0026"),             # 미매칭(VID 없음)
+    ])
+    acc2.ledger_products = {"전동눈썹정리기 HS0300", "접이식 정리함 JK0026"}
+    r2 = compute_coupang_checks(acc2, {"v9": "판매중"}, D)
+    assert r2 == {("a2", "전동눈썹정리기 HS0300"): ("확인됨", D), ("a2", "접이식 정리함 JK0026"): ("미등록", D)},         f"대장명 키·VID 없음=미등록 실패: {r2}"
+    print("    [통과] 키=대장명(쿠팡명과 달라도)·VID 없는 줄=미등록")
 
 
 def t1_proxy_pool():

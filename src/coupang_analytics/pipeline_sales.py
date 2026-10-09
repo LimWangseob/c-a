@@ -280,14 +280,16 @@ def _discover_products(b, a: Account, date_from, date_to, log, ai_key: str | Non
     # 정리(_sweep_dead_duplicates)의 기준 — 이 집합에 없는 vid = 코팡서 사라짐. 상품조회 실패면 빈 집합(정리 skip).
     live_all_vids = {o.vendor_item_id for lst in listings for o in lst.options if o.vendor_item_id}
     vid_meta = vid_meta_of(listings)   # {vid: (판매가, 판매시작일)} — 헤더 표시(상품판매가·입고일 근사)
-    # 노출상품ID(productId) = vendor-inventory-items-with-vendorItems GET(판매방식·판매여부 무관·라이브 실측 2026-09-28)
-    # — 상품조회로 얻은 등록상품ID(vendor_inventory_id)마다 조회. 재고/판매분석 pid 보다 완전 → 우선 병합.
-    vinv_ids = _vinv_ids_for_pid(listings, inv_pids, metrics)
-    item_pids = fetch_product_ids(b.page, vinv_ids, log) if vinv_ids else {}
-    pid_by_vid = _pid_by_vid(inv_pids, metrics, item_pids)
     # 추적 범위 = 입력 대장 상품(위탁 관리분)만. 대장 ↔ 쿠팡 = AI 중심 매칭 + VID 고정(D-009·지표는 당일 것).
     tracked, n_match = _match_to_ledger(b, a, products, metrics, inv_names, date_to, ai_key,
                                         vendor_products is not None, anchor_file, log)
+    # 노출상품ID(productId) = vendor-inventory-items-with-vendorItems GET(판매방식·판매여부 무관·라이브 실측 2026-09-28)
+    # — **추적(대장 매칭) 상품이 든 등록상품만** 조회(2026-10-09: 전 상품 조회가 와이에이치 3,146건·55마켓 2,236건에
+    # 하루 약 58분·추적 상품은 계정당 1~3개). 재고/판매분석 pid 보다 완전 → 우선 병합.
+    tracked_vids = {v for tp in tracked for o in tp.options for v in o.vendor_item_ids}
+    vinv_ids = _vinv_ids_for_pid(listings, inv_pids, metrics, tracked_vids)
+    item_pids = fetch_product_ids(b.page, vinv_ids, log) if vinv_ids else {}
+    pid_by_vid = _pid_by_vid(inv_pids, metrics, item_pids)
     _log_discover_summary(a, products, metrics, inventory, sale_status, tracked, n_match, log)
     return (products, tracked, metrics, inventory, sale_status, upbundle_vids, live_all_vids,
             vid_meta, pid_by_vid)
@@ -351,16 +353,17 @@ def _discover_inventory(b, a: Account, products, log):
     return inventory, inv_names, rfm_status, inv_pids
 
 
-def _vinv_ids_for_pid(listings: list, inv_pids: dict, metrics: dict) -> list[str]:
-    """노출상품ID GET 대상 등록상품ID(vendor_inventory_id) 목록 — `config.PRODUCT_ID_FETCH_ALL`.
+def _vinv_ids_for_pid(listings: list, inv_pids: dict, metrics: dict, want_vids: set) -> list[str]:
+    """노출상품ID GET 대상 등록상품ID(vendor_inventory_id) 목록 — **추적 상품 vid(want_vids)가 든 리스팅만**.
 
-    True=전 상품(판매자배송·무판매까지 완전 커버). False=미확보만 보강(재고/판매분석에서 pid 못 얻은 옵션을
-    가진 상품만 → 트래픽↓). 상품조회 실패(listings=[])면 빈 목록."""
+    `config.PRODUCT_ID_FETCH_ALL` True=그 리스팅 전부(판매자배송·무판매까지 완전 커버). False=그중 재고/판매분석에서
+    pid 못 얻은 옵션을 가진 것만. 상품조회 실패(listings=[])·추적 vid 없음이면 빈 목록."""
+    mine = [l for l in listings if l.vendor_inventory_id
+            and any(o.vendor_item_id in want_vids for o in l.options)]
     if config.PRODUCT_ID_FETCH_ALL:
-        return [l.vendor_inventory_id for l in listings if l.vendor_inventory_id]
+        return [l.vendor_inventory_id for l in mine]
     known = set(inv_pids) | {oid for oid, om in metrics.items() if getattr(om, "product_id", "")}
-    return [l.vendor_inventory_id for l in listings if l.vendor_inventory_id
-            and any(o.vendor_item_id not in known for o in l.options)]
+    return [l.vendor_inventory_id for l in mine if any(o.vendor_item_id not in known for o in l.options)]
 
 
 def _pid_by_vid(inv_pids: dict, metrics: dict, item_pids: dict | None = None) -> dict[str, str]:
