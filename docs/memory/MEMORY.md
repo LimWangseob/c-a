@@ -11,6 +11,7 @@
 - [디자인 컨셉(보라)·통합앱 적용](decision-design-concept-261003.md) · [저장소=구글시트+규칙4](decision-storage-gsheet-4rules.md) · [입출력 정의서137칸](io-definition-spec.md)
 - [정산 D8 확정 사실(운용·API·규칙 — 상태는 STATE.md)](settlement-batch-download-decisions.md) · [정산 도메인 지식 D8](settlement-domain-knowledge.md) · [셀독등록원장](feature-ledger-registry.md)
 - [판매상태 불일치 경고](feature-sale-status-mismatch-flag.md) · [VID 출처=상품조회·옵션분리](feature-vid-source-from-product-list.md)
+- [⭐셀독 정산서 규칙: 저장=D:\토탈셀러\쿠팡 정산 자료·원천=앱 수집분만·쿠팡 실지급→계약 7:3(계정 합산)](settlement-statement-rules.md)
 
 ## 작업 원칙(피드백·정책)
 - [⛔불변·전역: 메모리30~50줄·CLAUDE.md<200·핸드오프=STATE.md·DECISIONS D-번호 append-only·종료=/session-close·커밋[R{n}]](policy-memory-to-claudemd-200line.md) — session-kit 전역 일원화. SSOT=전역 CLAUDE.md

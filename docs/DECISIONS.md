@@ -65,6 +65,13 @@
 - 영향 범위: product_match(괄호 규칙)·pipeline_process(_process_account·신규 _skip_unmatched/_purge_vidless_blocks/_finish_account)·designs/DESIGN.md §정밀매칭. 이전 설계 '미매칭=대장명으로 추적(통계 공란)'을 대체. ⚠ 미매칭 대장 상품은 결과·계정목록에서 사라지고 로그(⚠ 쿠팡 상품과 매칭 안 된 대장 상품)로만 보인다.
 - 상태: ACTIVE
 
+### D-009 [AI_MATCH_ANCHOR] 대장↔쿠팡 매칭 = AI 중심 + VID 고정 (2026-10-09, R3)
+- 결정: 대장 상품 ↔ 쿠팡 등록상품 매칭을 **AI 가 결정**한다. 순서 = ①**VID 고정**(`output/_매칭고정.json`, 이전 확정 VID 가 지금도 쿠팡 상품조회에 있으면 그대로·AI 호출 없음·상품조회 실패일은 스냅샷 유지·VID 사라지거나 고정 상품이 판매중지면 재매칭·대장명 바꾸면 재매칭) ②괄호/이름 **정확일치** ③**AI 선택**(줄마다 후보 추림·등록명/노출명/옵션/판매상태·글자 규칙 결과는 참고 후보·같은 종류 없을 때만 null) ④AI 장애 시 글자 규칙 대체(로그·고정 안 함). 고정 = 정확일치·AI 확신 high/medium(low 는 매칭하되 매일 재판단). 마무리 공통 = 색상 필터(`build_tracked`)·동명 판매중 리스팅 함께(별도 블록)·다른 상품 두 줄이 한 후보면 우선순위 높은 줄만(경고). 대장명은 `Product.ledger_name` 으로 이월.
+- 근거: 소유자 지시(2026-10-09 "파이썬이 상품명을 인식 못함 → AI 가 의미까지 분석해 매칭·관리대장 상품 95%는 쿠팡 등록상품·두 이름이 있으면 가장 유사한 상품 선택"·고정 여부 질문에 "고정함"). 실측: 10/09 봄날 '크리스마스트리 R060 (골드)' ↔ WING 등록명 '크리스마스 미니트리' 를 글자 규칙이 못 잡아 보강 경로(색상 필터 없음)로 실버·판매자배송 VID(96125939551·…553)가 섞임(원문 `woolins_vendor_inventory`). 운용 PC 10/09 원문 21계정 69줄 평가(실 OpenAI): 68줄 매칭·64 기존 동일·5 개선(트리 골드 로켓그로스 96125939552 만·LED 스탠드 판매자배송 중복 제거·코골이/DYM046/W200)·미매칭 1=케이씨 정리함(쿠팡에 없음). 게이트 16종·verify_offline[36]·복잡도 경고 0.
+- 버린 대안: (a) 기존 정밀 규칙 우선 + AI 는 남은 미매칭만(기존 — 약칭·다른 등록명을 놓치고 보강 경로가 색상 무시) (b) 매일 처음부터 AI 매칭(소유자 '고정' 선택·AI 실패일 블록 삭제 위험) (c) 낮은 확신은 미매칭(소유자 '최대한 매칭' — 대신 고정 안 함).
+- 영향 범위: 신규 `product_match_ai.py`·`match_anchor.py`, `pipeline_sales._match_to_ledger`(+`_roster_candidates`=상품조회 실패일만), `product_match.build_tracked`(scope_to_ledger 공통 마무리), `input_list.Product.ledger_name`, `pipeline.run_full` 이 `anchor_file` 전달. 삭제: `product_match.augment_unmatched/augment_ai`, `kw_ai.match_products`, `pipeline_sales._augment_vids/_augment_ai_match`. 계정당 OpenAI 1회(고정 안 된 줄이 있을 때만). ⚠ 첫 실행은 전 줄이 AI 판단(이후 고정). 기존 결과 블록 중 잘못 섞였던 VID 블록(봄날 트리 실버·판매자배송 '(9551)'·'(골드, Free_)', LED 스탠드 '(블랙_)')은 더 매칭되지 않아 다음 실행 reconcile ⑥(대장에 그 이름 없음)으로 이력과 함께 삭제된다.
+- 상태: ACTIVE
+
 ---
 
 ## 전환 전 결정 (한 줄·동결 아카이브·2026-10-08 이전·재작성 금지=추측 방지)

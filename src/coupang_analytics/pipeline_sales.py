@@ -94,7 +94,7 @@ def try_login_once(account_id: str, password: str, *, on_log=None) -> bool:
 
 
 def _login_and_discover(a: Account, date_from, date_to, get_password, log, login: bool = True,
-                        semi: bool = False, ai_key: str | None = None):
+                        semi: bool = False, ai_key: str | None = None, anchor_file=None):
     """계정 하나: (필요시) 로그인 → **같은 신선한 세션**에서 즉시 판매분석 발견 + 지표.
 
     반환: (report_account[활동 상품만] | None, {옵션ID: OptionMetric}, {옵션ID: 재고수량},
@@ -105,6 +105,7 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
     (반복 자동로그인 = IP 차단 유발이라, 세션 살아있는 계정을 먼저 다 수집). Akamai 차단 시 LoginBlocked.
     semi=True(**반자동 판매수집**): 창을 **처음부터 보이게**(offscreen=False) 띄우고 **무인 아님**(사람이
     2차인증/직접로그인 처리)으로 로그인 → 그 신뢰 창에서 수집. ③ 반자동과 같은 '보이는 신뢰 세션' 방식.
+    anchor_file = 매칭 고정 파일(D-009·run_full 이 output 기준으로 넘김). None 이면 고정 읽기/쓰기 안 함(도구·핀).
     """
     from . import collector
     from .collector import save_discovered   # 지연 import
@@ -114,7 +115,7 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
         if not _ensure_login(b, a, pw, log, login=login, semi=semi):
             return None, {}, {}, {}, set(), set(), {}, {}   # 이 계정 건너뜀(무인 비번없음·otp·로그인 미완료)
         collector.reset_raw()                # 계정별 응답 원문 버퍼 초기화(파일 분리)
-        found = _discover_products(b, a, date_from, date_to, log, ai_key=ai_key)
+        found = _discover_products(b, a, date_from, date_to, log, ai_key=ai_key, anchor_file=anchor_file)
         _dump_raw(a.account_id, log)         # 3 API 응답 원문 저장(가공 없음·분석용). found None(데이터없음)이어도 남김
         if found is None:                    # 판매분석·상품조회 모두 데이터 없음 → 건너뜀
             return None, {}, {}, {}, set(), set(), {}, {}
@@ -239,7 +240,7 @@ def _resolve_login_failure(b, a: Account, log, cred_fail: bool) -> bool:
     return False
 
 
-def _discover_products(b, a: Account, date_from, date_to, log, ai_key: str | None = None):
+def _discover_products(b, a: Account, date_from, date_to, log, ai_key: str | None = None, anchor_file=None):
     """발견 국면 — 상품조회/수정(vid 출처)·판매분석(지표)·재고현황·대장 스코핑/보강.
 
     반환: (products, tracked, metrics, inventory, sale_status, upbundle_vids). 판매분석·상품조회 **모두
@@ -247,7 +248,6 @@ def _discover_products(b, a: Account, date_from, date_to, log, ai_key: str | Non
     업번들(자동번들) 옵션 vid 집합(마스터 잔재 블록 자동삭제용, 소유자 2026-09-24). 제어흐름은 분해 전과 동일하다."""
     from .collector import (fetch_vendor_inventory, fetch_product_ids, products_from_vendor_inventory,
                             VendorInventoryFetchError, sale_status_by_vid, vid_meta_of)
-    from .product_match import scope_to_ledger
     # ── vid·옵션·상품 = 상품조회/수정(전 상품·전 옵션 나열, 당일 판매 0 상품도 포함). 폴백=판매분석 발견 ──
     # (vi-detail-search 는 당일 판매활동 상품만 잡혀 판매 0 상품 vid 누락 → 상품조회/수정으로 vid 출처 교체)
     vendor_products = None
@@ -285,32 +285,53 @@ def _discover_products(b, a: Account, date_from, date_to, log, ai_key: str | Non
     vinv_ids = _vinv_ids_for_pid(listings, inv_pids, metrics)
     item_pids = fetch_product_ids(b.page, vinv_ids, log) if vinv_ids else {}
     pid_by_vid = _pid_by_vid(inv_pids, metrics, item_pids)
-    # 추적 범위 = 입력 대장 상품(위탁 관리분)만. 당일 발견을 매칭해 노출제목·vid·구분 부여(지표는 당일 것).
-    tracked, n_match = scope_to_ledger(a.products, products)
-    tracked, n_match = _augment_vids(b, a, tracked, n_match, inv_names, date_to, log)
-    tracked, n_match = _augment_ai_match(a, tracked, products, n_match, ai_key, log)  # 남은 미매칭 = AI 의미 매칭 폴백
+    # 추적 범위 = 입력 대장 상품(위탁 관리분)만. 대장 ↔ 쿠팡 = AI 중심 매칭 + VID 고정(D-009·지표는 당일 것).
+    tracked, n_match = _match_to_ledger(b, a, products, metrics, inv_names, date_to, ai_key,
+                                        vendor_products is not None, anchor_file, log)
     _log_discover_summary(a, products, metrics, inventory, sale_status, tracked, n_match, log)
     return (products, tracked, metrics, inventory, sale_status, upbundle_vids, live_all_vids,
             vid_meta, pid_by_vid)
 
 
-def _augment_ai_match(a: Account, tracked, products, n_match: int, ai_key, log):
-    """정밀·roster 매칭 후 **남은 미매칭**을 AI 의미(문맥) 매칭으로 보강(폴백·소유자 2026-09-29).
+def _match_to_ledger(b, a: Account, products, metrics, inv_names: dict, date_to, ai_key,
+                     vendor_ok: bool, anchor_file, log):
+    """대장 ↔ 쿠팡 매칭(D-009·소유자 2026-10-09) → (tracked, n_match).
 
-    ai_key 없으면 그대로(no-op). '목견인기'↔'거북목 교정기 견인기'처럼 토큰이 안 겹쳐도 같은 상품을 잡는다.
-    실 API 실패는 kw_ai.match_products 가 빈 결과+로그로 삼켜 비치명(수집은 계속). 확신 없으면 공란 유지."""
-    if not ai_key:
-        return tracked, n_match
-    from .kw_ai import match_products
-    from .product_match import augment_ai
+    ①VID 고정 ②괄호/이름 정확일치 ③AI 선택(글자 규칙은 참고 후보) ④AI 실패 시 규칙 대체 → 색상 필터 공통 적용
+    (product_match_ai). 상품조회 실패일(vendor_ok=False)은 당일 판매분석뿐이라 그로스 재고·최근 N일 roster 로 후보를
+    보강하고, 고정 VID 는 스냅샷으로 유지한다. anchor_file=None 이면 고정 읽기/쓰기 안 함(도구·핀)."""
+    from collections import Counter
+    from . import product_match_ai as PMA
+    from .match_anchor import AnchorFileError, load_anchors, save_anchors
+    from .product_match import build_tracked
+    cands = list(products)
+    if not vendor_ok:
+        cands += _roster_candidates(b, a, cands, inv_names, date_to, log)
+    anchors: dict = {}
+    if anchor_file is not None:
+        try:
+            anchors = load_anchors(a.account_id, anchor_file)
+        except AnchorFileError as exc:
+            log(f"  [{a.label}] ⚠ {exc} — 이번 실행은 고정 없이 매칭")
+    expo = {vid: m.product_name for vid, m in (metrics or {}).items()}
+    out = PMA.match_ledger(a.products, cands, anchors=anchors, vendor_ok=vendor_ok,
+                           ask=PMA.openai_ask(ai_key) if ai_key else _no_ai, expo=expo)
+    for note in out.notes:
+        log(f"  [{a.label}] {note}")
+    tracked, n_match = build_tracked(a.products, PMA.resolved(out))
+    if anchor_file is not None:
+        try:
+            save_anchors(a.account_id, out.anchors, anchor_file)
+        except OSError as exc:                          # 고정 저장 실패 = 다음 실행이 다시 매칭(비치명·명시)
+            log(f"  [{a.label}] ⚠ 매칭 고정 저장 실패: {exc}")
+    hows = Counter(pk.how for pk in out.picks.values())
+    log(f"  [{a.label}] 매칭 경로: " + " · ".join(f"{k} {v}" for k, v in sorted(hows.items())) + f" (고정 {len(out.anchors)}줄)")
+    return tracked, n_match
 
-    def matcher(names, titles):
-        return match_products(names, titles, api_key=ai_key, log=log)
 
-    tracked, n_ai = augment_ai(a.products, tracked, products, matcher, log=log)
-    if n_ai:
-        log(f"  [{a.label}] AI 의미 매칭으로 미매칭 {n_ai}개 보강(정밀 매칭 폴백)")
-    return tracked, n_match + n_ai
+def _no_ai(system: str, user: str) -> dict:
+    """OpenAI 키 없음 — 예외로 알려 match_ledger 가 글자 규칙으로 대체(로그 명시)."""
+    raise KeywordAIError("OpenAI 키 없음(설정 탭에서 입력)")
 
 
 def _discover_inventory(b, a: Account, products, log):
@@ -402,26 +423,21 @@ def _run_discover(b, a: Account, date_from, date_to, has_vendor: bool, log):
             return _empty_or_skip()
 
 
-def _augment_vids(b, a: Account, tracked, n_match: int, inv_names: dict, date_to, log):
-    """대장에 있는데 당일 판매·방문 0이라 미매칭(vid 없음)인 상품 → 그로스 재고 vid + 최근 N일 판매분석
-    vid 로 **정체(vid)만** 보강(지표는 당일 것만 기록 — 넓은기간 합계 미반영, 사용자 정책 2026-09-13).
-
-    반환: (tracked, n_match). 미매칭이 없으면 그대로 반환(no-op)."""
+def _roster_candidates(b, a: Account, cands, inv_names: dict, date_to, log) -> list:
+    """상품조회 실패일 후보 보강 — 그로스 재고 roster + 최근 N일 판매분석 roster 중 **아직 후보에 없는 vid** 상품만.
+    (당일 판매·방문 0 상품도 대장과 맞출 수 있게. 지표는 당일 것만 기록 — 넓은기간 합계 미반영, 2026-09-13)"""
     from .collector import fetch_sales_roster, SalesFetchError
-    from .product_match import augment_unmatched
-    if not any(not any(o.vendor_item_ids for o in tp.options) for tp in tracked):
-        return tracked, n_match
     extra = _roster_from_names(inv_names, config.KIND_CONTRACT)   # 그로스 재고 roster(판매 무관 vid)
     try:
         d0 = (date.fromisoformat(date_to) - timedelta(days=config.SALES_VID_WINDOW_DAYS)).isoformat()
         extra += fetch_sales_roster(b.page, d0, date_to, log)     # 최근 N일 vid+이름(지표 미반영)
     except SalesFetchError as exc:   # 보강 실패는 비치명적 — 재고 roster 만으로 진행
         log(f"  [{a.label}] ⚠ vid 보강 {config.SALES_VID_WINDOW_DAYS}일 조회 실패(계속) — {str(exc)[:100]}")
-    tracked, added = augment_unmatched(a.products, tracked, extra)
-    n_match += added
-    if added:
-        log(f"  [{a.label}] 당일 미매칭 {added}개 vid 보강(그로스 재고/최근 {config.SALES_VID_WINDOW_DAYS}일 · 지표는 당일 유지)")
-    return tracked, n_match
+    seen = {v for p in cands for o in p.options for v in o.vendor_item_ids}
+    out = [p for p in extra if not ({v for o in p.options for v in o.vendor_item_ids} & seen)]
+    if out:
+        log(f"  [{a.label}] 상품조회 실패 → 재고/최근 {config.SALES_VID_WINDOW_DAYS}일 후보 {len(out)}개 보강")
+    return out
 
 
 def _persist_session(a: Account, b, log) -> None:
@@ -442,7 +458,7 @@ def _persist_session(a: Account, b, log) -> None:
 def _roster_from_names(names_by_vid: dict, kind: str) -> list:
     """{옵션ID(vid): 등록상품명} → 매칭 후보 Product 목록(상품명으로 그룹, 옵션=vid).
 
-    그로스 재고에서 얻은 **판매 무관 vid·상품명**을 scope_to_ledger/augment_unmatched 후보로 만든다
+    그로스 재고에서 얻은 **판매 무관 vid·상품명**을 AI 매칭 후보(상품조회 실패일)로 만든다
     (당일 판매 0인 그로스 상품의 vid 보강용). 지표는 없다 — 정체(vid) 보강 전용."""
     from .input_list import Option, Product
     by_name: dict[str, list[str]] = {}

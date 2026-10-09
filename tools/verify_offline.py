@@ -603,21 +603,120 @@ def t1_product_match_precision():
     green = next(tp for tp in tc2 if "초록" in tp.name)
     assert not [v for o in green.options for v in o.vendor_item_ids] and nc2 == 1, "없는 색상(초록)은 미매칭이어야(오매칭 방지)"
     _ok("색상별 대장 줄 → 색상 옵션(vid)별 별도 블록(계정목록 별도 줄)·없는 색상=미매칭·메모 괄호 불변")
-    # AI 의미 매칭 폴백(소유자 2026-09-29): 토큰이 안 겹쳐도 같은 상품이면 주입식 매처로 보강(미매칭에만·실 API 아님).
-    from coupang_analytics.product_match import augment_ai
-    disc7 = [disc("의료용 경추 거북목 교정기 견인기 넥 스트레쳐 넥메딕스", "v_neck")]
-    led7 = [Product(name="목견인기")]                                    # 토큰 안 겹침(견인기는 부분어) → 정밀 미매칭
-    t7, _ = scope_to_ledger(led7, disc7)
-    assert not any(o.vendor_item_ids for o in t7[0].options), "전제: 정밀 매칭이 목견인기를 미매칭으로 둬야"
 
-    def _fake_ai(names, titles):
-        return {0: 0} if names and titles else {}                        # 같은 상품 판정(페이크)
 
-    t7b, n7 = augment_ai(led7, t7, disc7, _fake_ai)
-    assert n7 == 1 and [v for o in t7b[0].options for v in o.vendor_item_ids] == ["v_neck"], "AI 폴백 매칭 실패"
-    t7c, n7c = augment_ai(led7, t7, disc7, lambda n, t: {})              # 확신 없음(빈 결과)
-    assert n7c == 0 and not any(o.vendor_item_ids for o in t7c[0].options), "AI none인데 매칭됨(공란 유지 실패)"
-    _ok("AI 의미 매칭 폴백: 토큰 안 겹쳐도 주입식 매처로 미매칭 보강·none이면 공란 유지(오매칭 방지)")
+def t1_ai_match_d009():
+    print("[36] AI 중심 매칭 + VID 고정(D-009) — 의미 매칭·색상 필터·고정·실패 대체·충돌·동명 병합")
+    import json as _json
+    from coupang_analytics import product_match_ai as PMA
+    from coupang_analytics.input_list import Option, Product
+    from coupang_analytics.match_anchor import load_anchors, save_anchors
+    from coupang_analytics.product_match import build_tracked
+
+    def cand(title, opts, status="판매중"):
+        return Product(name=title, title=title, kind=config.KIND_CONTRACT, sale_status=status,
+                       options=[Option(lbl, [vid], []) for lbl, vid in opts])
+
+    def vids(tp):
+        return sorted(v for o in tp.options for v in o.vendor_item_ids)
+
+    def run(ledger, disc, ask, anchors=None, vendor_ok=True):
+        out = PMA.match_ledger(ledger, disc, anchors=anchors or {}, vendor_ok=vendor_ok, ask=ask, today="2026-10-09")
+        tracked, n = build_tracked(ledger, PMA.resolved(out))
+        return out, tracked, n
+
+    calls = []
+
+    def fake(answer):
+        def ask(system, user):
+            calls.append(user)
+            return {"matches": answer}
+        return ask
+
+    def boom(system, user):
+        calls.append(user)
+        raise RuntimeError("가짜 AI 장애")
+
+    # ① 실측(봄날 10/09): 대장 약칭 '크리스마스트리 R060 (골드)' ↔ WING 등록명 '크리스마스 미니트리'(골드/실버 옵션)
+    #    글자 규칙은 못 잡음 → AI 가 고르고, 색상 필터로 골드 옵션만(실버 섞임 금지).
+    disc = [cand("크리스마스 미니트리", [("골드 Free", "v_g"), ("실버 Free", "v_s")]),
+            cand("크리스마스풍선세트 (골드)", [("1세트 골드세트", "v_bal")])]
+    led = [Product(name="크리스마스 풍선세트 (골드)"), Product(name="크리스마스트리 R060 (골드)")]
+    out, t, n = run(led, disc, fake([{"line": 1, "pick": "C0", "confidence": "medium", "reason": "트리"}]))
+    assert vids(t[1]) == ["v_g"], f"트리 줄은 골드 옵션만이어야: {vids(t[1])}"
+    assert vids(t[0]) == ["v_bal"] and out.picks[0].how == "exact", "풍선세트 = 정확일치(AI 불필요)"
+    assert t[1].ledger_name == "크리스마스트리 R060 (골드)" and n == 2, "대장명 이월·매칭 수"
+    assert set(out.anchors) == {"크리스마스 풍선세트 (골드)", "크리스마스트리 R060 (골드)"}, "정확·medium 은 고정"
+    assert "C1" not in calls[-1] or "L0." not in calls[-1], "정확일치 줄/후보는 AI 질문에서 빠져야"
+    _ok("의미 매칭(약칭↔등록명)·색상 필터(골드만)·정확일치는 AI 없이·대장명 이월·고정 저장")
+
+    # ② 고정: 다음 날 AI 가 죽어도 같은 VID(호출 0) / 상품조회 실패일=스냅샷 유지 / VID 사라짐=재매칭
+    anchors = out.anchors
+    calls.clear()
+    _o2, t2, _ = run(led, disc, boom, anchors=anchors)
+    assert vids(t2[1]) == ["v_g"] and vids(t2[0]) == ["v_bal"] and not calls, "고정이면 AI 호출 없이 같은 VID"
+    _o3, t3, _ = run(led, [], boom, anchors=anchors, vendor_ok=False)
+    assert vids(t3[1]) == ["v_g"], f"상품조회 실패일에도 고정 VID 유지(스냅샷): {vids(t3[1])}"
+    disc_new = [cand("크리스마스 미니트리 NEW", [("골드 Free", "v_g2")]), disc[1]]
+    o4, t4, _ = run(led, disc_new, fake([{"line": 1, "pick": "C0", "confidence": "high", "reason": "재등록"}]),
+                    anchors=anchors)
+    assert vids(t4[1]) == ["v_g2"] and any("사라짐" in x for x in o4.notes), "고정 VID 가 사라지면 다시 매칭"
+    _ok("고정: AI 장애에도 같은 VID·상품조회 실패일 스냅샷 유지·VID 사라지면 재매칭")
+
+    # ③ AI 실패 → 글자 규칙 결과로 대체(고정 안 함) / null=미매칭 / low=매칭하되 고정 안 함
+    led5 = [Product(name="헬스매트 HM001"), Product(name="접이식 정리함 JK0026")]
+    disc5 = [cand("헬스매트 HM001 대형", [("", "v_mat")]), cand("수납 바구니", [("", "v_box")])]
+    o5, t5, _ = run(led5, disc5, boom)
+    assert vids(t5[0]) == ["v_mat"] and o5.picks[0].how == "rule" and not o5.anchors, "AI 실패 = 규칙 대체·고정 안 함"
+    assert any("AI 매칭 실패" in x for x in o5.notes), "AI 실패는 로그로 명시"
+    o6, t6, _ = run(led5, disc5, fake([{"line": 0, "pick": "C0", "confidence": "low"}, {"line": 1, "pick": None}]))
+    assert vids(t6[0]) == ["v_mat"] and not o6.anchors, "low = 매칭하되 고정 안 함(다음 날 재판단)"
+    assert vids(t6[1]) == [], "null = 미매칭(VID 없음 → 블록 미생성 D-008)"
+    _ok("AI 실패=규칙 대체(고정 안 함)·null=미매칭·낮은 확신=고정 안 함")
+
+    # ④ 충돌: 색상 다른 같은 상품군은 한 상품 공유 허용, 다른 상품 두 줄이 같은 후보 → 하나만
+    disc7 = [cand("신형타프", [("블랙 Free", "v_b"), ("베이지 Free", "v_e")]), cand("기타", [("", "v_x")])]
+    led7 = [Product(name="신형타프 R008 (블랙)"), Product(name="신형타프 R008 (베이지)"), Product(name="캠핑의자 CH01")]
+    ans = [{"line": 0, "pick": "C0", "confidence": "high"}, {"line": 1, "pick": "C0", "confidence": "high"},
+           {"line": 2, "pick": "C0", "confidence": "low"}]
+    o7, t7, _ = run(led7, disc7, fake(ans))
+    assert vids(t7[0]) == ["v_b"] and vids(t7[1]) == ["v_e"], f"색상 줄은 같은 상품 공유·색상별 옵션: {vids(t7[0])} {vids(t7[1])}"
+    assert vids(t7[2]) == [] and any("먼저 차지" in x for x in o7.notes), "다른 상품 줄의 중복 선택은 미매칭+경고"
+    _ok("색상 줄은 한 상품 공유(색상별 옵션)·다른 상품 중복 선택=미매칭+경고")
+
+    # ⑤ 동명 병합 유지(2026-09-29): 같은 등록명 판매중 리스팅은 함께(별도 블록) · 판매중지 리스팅은 제외
+    disc8 = [cand("팔찌경보기 JN104", [("1개", "v_1")]), cand("팔찌경보기 JN104", [("1개", "v_2")]),
+             cand("팔찌경보기 JN104", [("1개", "v_dead")], status="판매중지")]
+    _o8, t8, _ = run([Product(name="팔찌경보기 JN104")], disc8, boom)
+    assert vids(t8[0]) == ["v_1", "v_2"], f"같은 이름 판매중 리스팅 함께·판매중지 제외: {vids(t8[0])}"
+    _ok("동명 판매중 리스팅 함께 추적(별도 블록)·판매중지 리스팅 제외")
+
+    # ⑥ 큰 계정(후보 > 30): 줄마다 추린 후보에 진짜 상품이 들어가야 + 응답 방어(범위 밖·형식 오류 무시)
+    big = [cand(f"무관 상품 {i:03d}", [("", f"v{i}")]) for i in range(200)] + [cand("디프 고주파마사지기 DYM046", [("", "v_dym")])]
+    calls.clear()
+    _o9, t9, _ = run([Product(name="EMS고주파마시지기 DYM046")], big,
+                     fake([{"line": 0, "pick": "C200", "confidence": "high"}, {"line": 9, "pick": "C1"}, "x"]))
+    n_cands = sum(1 for ln in calls[-1].splitlines() if ln.startswith("C"))
+    assert vids(t9[0]) == ["v_dym"] and "C200." in calls[-1] and n_cands <= PMA.SHORTLIST_K, \
+        f"후보 추리기에 진짜 상품 포함·후보 수 제한({n_cands})"
+    assert PMA.parse_response({"matches": [{"line": "L0", "pick": "C999"}, {"line": 0, "pick": "zz"}]}, [0], [1]) == {}
+    _ok("큰 계정 후보 추리기(진짜 상품 포함·12개 이내)·잘못된 AI 응답 방어")
+
+    # ⑦ 고정 파일: 계정별 저장·다른 계정 보존·손상 파일 감지
+    d = Path(tempfile.mkdtemp())
+    f = d / "_매칭고정.json"
+    save_anchors("acc1", {"a": {"vids": ["v1"]}}, f)
+    save_anchors("acc2", {"b": {"vids": ["v2"]}}, f)
+    assert load_anchors("acc1", f) == {"a": {"vids": ["v1"]}} and load_anchors("acc2", f)["b"]["vids"] == ["v2"]
+    f.write_text("{깨짐", encoding="utf-8")
+    try:
+        load_anchors("acc1", f)
+        raise AssertionError("손상 파일을 조용히 넘김")
+    except Exception as exc:
+        assert exc.__class__.__name__ == "AnchorFileError", exc
+    save_anchors("acc1", {"a": {"vids": ["v1"]}}, f)
+    assert _json.loads(f.read_text(encoding="utf-8")) == {"acc1": {"a": {"vids": ["v1"]}}}
+    _ok("고정 파일: 계정별 저장·다른 계정 보존·손상 감지 후 재생성")
 
 
 def t1_vid_source_option_split():
@@ -1785,6 +1884,7 @@ def main():
     t1_product_id_source()
     t1_data_quality_summary()
     t1_product_match_precision()
+    t1_ai_match_d009()
     t1_no_vidless_blocks()
     t1_vid_source_option_split()
     t1_ledger_dedup()

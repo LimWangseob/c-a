@@ -40,8 +40,9 @@ from .pipeline_gsheet import (  # noqa: E402,F401
 # _measure_safe/_reset_rank_state/_RANK_HALT 를 호출하므로 재수출 필요.
 # ① 판매수집 엔진(로그인·발견·계정처리)은 pipeline_sales 로 분리. pipeline.X 로 다시 노출
 # (run_full 이 _login_and_discover·_process_account 호출·NeedLogin류 catch·도구/핀이 여러 심볼 import).
+from .match_anchor import anchor_path  # noqa: E402
 from .pipeline_sales import (  # noqa: E402,F401
-    LoginBlocked, LoginCredentialError, NeedLogin, _augment_vids, _discover_inventory,
+    LoginBlocked, LoginCredentialError, NeedLogin, _discover_inventory,
     _discover_products, _dump_raw, _ensure_login, _fresh_login, _ilog, _log_discover_summary,
     _login_and_discover, _persist_session, _pid_by_vid, _resolve_login_failure,
     _roster_from_names, _run_discover, _semi_retry_login, _short, _vtag, account_profile,
@@ -492,7 +493,8 @@ def _collect_session_first(ctx: _RunCtx, accounts, get_password
         try:   # 한 계정의 어떤 오류(수집·워크북쓰기)도 전체를 막지 않게 계정 전체를 격리
             (report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids,
              vid_meta, pid_by_vid) = _login_and_discover(
-                a, ctx.date_from, ctx.date_to, get_password, log, login=False, ai_key=ctx.ai_key)
+                a, ctx.date_from, ctx.date_to, get_password, log, login=False, ai_key=ctx.ai_key,
+                anchor_file=anchor_path(ctx.out))
             _finish(ctx, a, report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids,
                     vid_meta, pid_by_vid)
         except NeedLogin:                         # 세션 없음 → 뒤로 미룸(자동제출 안 함)
@@ -527,7 +529,8 @@ def _collect_with_login(ctx: _RunCtx, login_needed, get_password, sales_semi: bo
         try:
             (report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids,
              vid_meta, pid_by_vid) = _login_and_discover(
-                a, ctx.date_from, ctx.date_to, get_password, log, login=True, semi=sales_semi, ai_key=ctx.ai_key)
+                a, ctx.date_from, ctx.date_to, get_password, log, login=True, semi=sales_semi, ai_key=ctx.ai_key,
+                anchor_file=anchor_path(ctx.out))
             blocks = 0                            # 로그인 성공 → 연속 차단 카운터 리셋
             _finish(ctx, a, report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids,
                     vid_meta, pid_by_vid)

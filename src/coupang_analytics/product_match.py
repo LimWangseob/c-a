@@ -1,5 +1,9 @@
 """입력 대장 상품 ↔ 쿠팡 발견(등록) 상품 매칭 → **추적 범위를 대장 상품으로 한정**.
 
+⚠ D-009(2026-10-09): 실제 매칭 결정은 **AI 중심 + VID 고정**(`product_match_ai`)이 한다. 이 모듈의 글자 규칙
+(`_assign`)은 그 AI 의 **참고 후보**이자 **AI 장애 시 대체**이고, `build_tracked`(색상 필터·대장 이월)는 모든 경로의
+공통 마무리다.
+
 정책(확정): 추적 대상 = 입력 대장에 있는 상품(위탁 관리분)만. 판매분석·상품조회에 잡힌 그 외 등록상품
 (소유자 직접판매 등)은 관리 대상이 아니라 제외한다. 쿠팡 상품조회로는 위탁/직접이 구분 안 되므로 **대장이
 유일 기준**인데, 대장명이 쿠팡 등록명과 100% 일치하지 않을 수 있다. 대장 상품명은 보통 `내부코드명
@@ -26,6 +30,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from typing import cast
 
 from . import config
 from .input_list import Option, Product, build_idf
@@ -336,19 +341,27 @@ def scope_to_ledger(ledger: list[Product], discovered: list[Product]) -> tuple[l
     **색상별 대장 줄**(신형타프 (블랙)/(베이지))은 그 색상 옵션(vid)만 배정해 별도 블록·별도 계정목록 줄이
     되게 한다(소유자 2026-09-29·재고관리상 색상 분리). 색상 지정 없는 줄은 기존대로 전체 옵션.
     """
-    res = _assign(ledger, discovered)
-    over = _color_overrides(ledger, discovered, res)
+    return build_tracked(ledger, _assign(ledger, discovered))
+
+
+def build_tracked(ledger: list[Product], res: dict[int, Product]) -> tuple[list[Product], int]:
+    """매칭 결과 {대장i: 발견 Product} → 추적 Product 목록(대장 1:1·정렬 유지)과 매칭 수.
+
+    **색상 필터(_color_overrides)를 모든 매칭 경로에 공통 적용**한다(D-009 — 예전 보강 경로는 색상 없이 전 옵션을
+    붙여 봄날 '(골드)' 줄에 실버 옵션이 섞였다). 대장 마케팅·입고·판매중지와 **대장명(ledger_name)** 을 이월."""
+    over = _color_overrides(ledger, list(res.values()), res)
 
     def _unmatched(lp: Product) -> Product:
         return Product(name=lp.name, title=lp.name, kind=config.KIND_PERSONAL, options=[Option("")],
                        mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon,
-                       inbound_summary=lp.inbound_summary, discontinued=lp.discontinued)
+                       inbound_summary=lp.inbound_summary, discontinued=lp.discontinued, ledger_name=lp.name)
 
     def _tracked(lp: Product, d: Product, opts: list[Option], name: str) -> Product:
         return Product(name=name, title=name, kind=d.kind,
                        options=[Option(o.label, list(o.vendor_item_ids), list(o.product_ids)) for o in opts],
                        mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon,
-                       inbound_summary=lp.inbound_summary, discontinued=lp.discontinued)   # 대장 마케팅·입고·판매중지 이월
+                       inbound_summary=lp.inbound_summary, discontinued=lp.discontinued,
+                       ledger_name=lp.name)                 # 대장 마케팅·입고·판매중지·대장명 이월
 
     out: list[Product] = []
     matched = 0
@@ -358,9 +371,9 @@ def scope_to_ledger(ledger: list[Product], discovered: list[Product]) -> tuple[l
             if ov is None:                             # #2 색상 미매칭
                 out.append(_unmatched(lp))
             else:                                       # #1 색상별 배정 — 블록명에 색상 옵션 라벨 붙여 구분
-                d, opts = ov                            # type: ignore[misc]
-                nm = f"{_title(d)} ({opts[0].label})" if (opts and opts[0].label) else _title(d)
-                out.append(_tracked(lp, d, opts, nm))
+                cd, copts = cast("tuple[Product, list[Option]]", ov)
+                nm = f"{_title(cd)} ({copts[0].label})" if (copts and copts[0].label) else _title(cd)
+                out.append(_tracked(lp, cd, copts, nm))
                 matched += 1
             continue
         d = res.get(li)
@@ -370,96 +383,3 @@ def scope_to_ledger(ledger: list[Product], discovered: list[Product]) -> tuple[l
         else:
             out.append(_unmatched(lp))
     return out, matched
-
-
-def augment_unmatched(ledger: list[Product], tracked: list[Product],
-                      extra: list[Product]) -> tuple[list[Product], int]:
-    """이미 매칭된 상품은 **그대로 두고**, vid 없는(미매칭) 대장 상품만 extra 후보와 매칭해 vid·노출명·구분을 채운다.
-
-    당일 발견으로 못 잡은 상품(당일 판매·방문 0)을 최근기간 판매분석·그로스 재고 roster(extra)로 보강할 때 쓴다.
-    ⚠ 지표는 호출부가 당일 것만 기록하므로 여기선 **정체(vid/이름/구분)만** 채운다(넓은기간 지표 미반영).
-    반환: (보강된 tracked, 새로 vid 채운 개수). tracked/ledger 는 1:1 이며 그 정렬을 유지한다."""
-    idxs = [i for i, tp in enumerate(tracked)
-            if not any(o.vendor_item_ids for o in tp.options)]   # vid 없는(미매칭) 대장 상품 위치
-    if not idxs or not extra:
-        return tracked, 0
-    # 이미 당일 매칭에 쓰인 vid 는 후보에서 제외 — 유사 상품 2개에 같은 vid 를 중복 배정하지 않게(정체성 유일).
-    used = {v for tp in tracked for o in tp.options for v in o.vendor_item_ids}
-    extra = [d for d in extra if not (used & {v for o in d.options for v in o.vendor_item_ids})]
-    if not extra:
-        return tracked, 0
-    sub = [ledger[i] for i in idxs]
-    res = _assign(sub, extra)                                    # {sub_pos: 매칭된 extra Product}
-    out = list(tracked)
-    added = 0
-    for pos, i in enumerate(idxs):
-        d = res.get(pos)
-        if d is None:
-            continue
-        lp = ledger[i]
-        out[i] = Product(
-            name=_title(d), title=_title(d), kind=d.kind,
-            options=[Option(o.label, list(o.vendor_item_ids), list(o.product_ids)) for o in d.options],
-            mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon,
-                               inbound_summary=lp.inbound_summary)   # 대장 마케팅·입고요약 이월
-        added += 1
-    return out, added
-
-
-def _tracked_from(lp: Product, d: Product) -> Product:
-    """발견 상품 d 의 정체(노출명·vid·구분)를 부여하고 대장 lp 의 마케팅·입고요약·판매중지를 이월한 추적 Product."""
-    return Product(
-        name=_title(d), title=_title(d), kind=d.kind,
-        options=[Option(o.label, list(o.vendor_item_ids), list(o.product_ids)) for o in d.options],
-        mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon,
-        inbound_summary=lp.inbound_summary, discontinued=lp.discontinued)
-
-
-def _vids_of(p: Product) -> set:
-    return {v for o in p.options for v in o.vendor_item_ids}
-
-
-def _ai_targets(tracked: list[Product], discovered: list[Product]) -> tuple[list[int], list[int], set]:
-    """AI 폴백 대상 — (미매칭 대장 위치 idxs, 아직 안 쓰인 발견 di 후보, 쓰인 vid 집합)."""
-    idxs = [i for i, tp in enumerate(tracked) if not _vids_of(tp)]
-    used = {v for tp in tracked for v in _vids_of(tp)}
-    cand = [di for di, d in enumerate(discovered) if not (used & _vids_of(d))]
-    return idxs, cand, used
-
-
-def _valid_pick(v, n: int) -> int:
-    """0..n-1 범위의 정수면 그 값, 아니면 -1(잘못된 AI 응답 방어)."""
-    try:
-        i = int(v)
-    except (TypeError, ValueError):
-        return -1
-    return i if 0 <= i < n else -1
-
-
-def augment_ai(ledger: list[Product], tracked: list[Product], discovered: list[Product],
-               matcher, log=None) -> tuple[list[Product], int]:
-    """정밀·roster 매칭 후에도 **남은 미매칭** 대장 상품을 **AI 의미(문맥) 매칭**으로 보강(폴백·소유자 2026-09-29).
-
-    토큰이 안 겹쳐도 의미가 같은 상품('목견인기'↔'거북목 교정기 견인기')을 잡는다. **미매칭에만** 적용하고
-    정밀 매칭 결과는 안 건드린다. `matcher(대장명들, 후보제목들) -> {대장i: 후보i}` 주입식(오프라인 테스트는
-    페이크·실 API 는 kw_ai). **확신 없으면 matcher 가 그 줄을 비운다 = 공란 유지(오매칭 방지)**. 이미 쓰인 vid
-    후보 제외·한 후보는 한 대장에만(유일 배정). 반환: (보강된 tracked, AI로 채운 개수)."""
-    log = log or (lambda m: None)
-    idxs, cand, used = _ai_targets(tracked, discovered)
-    if not idxs or not cand:
-        return tracked, 0
-    picks = matcher([ledger[i].name for i in idxs], [_title(discovered[di]) for di in cand]) or {}
-    out = list(tracked)
-    added = 0
-    for u_local, c_local in picks.items():
-        ui, ci = _valid_pick(u_local, len(idxs)), _valid_pick(c_local, len(cand))
-        if ui < 0 or ci < 0:
-            continue
-        i, d = idxs[ui], discovered[cand[ci]]
-        if _vids_of(d) & used:                                   # 이미 다른 대장에 배정 → 스킵(유일 배정)
-            continue
-        out[i] = _tracked_from(ledger[i], d)
-        used |= _vids_of(d)
-        added += 1
-        log(f"  [AI매칭] '{ledger[i].name}' ↔ '{_title(d)}'(의미 매칭·미매칭 폴백)")
-    return out, added
