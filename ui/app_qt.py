@@ -1589,14 +1589,15 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             stop = self._semi_stop
 
         gs_in = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/input_url", "", type=str).strip()
+        designated = not self.cb_today.isChecked()   # 날짜 지정(D-016) — 이력 없는 옛 칸은 판매값으로 수집 판정(D-019)
 
         self.run_bg(lambda: self._full_pipeline_task(
             input_list, naver_creds, key, df, dt, dlabel, resume, carry, redo_today,
-            grow, keywords_off, gs_in, gs_out, stop),
+            grow, keywords_off, gs_in, gs_out, stop, designated),
             on_done=self._pipeline_done, btn=btn, exclusive=True, pipelinelock=True)
 
     def _full_pipeline_task(self, input_list, naver_creds, key, df, dt, dlabel, resume, carry,
-                            redo_today, grow, keywords_off, gs_in, gs_out, stop):
+                            redo_today, grow, keywords_off, gs_in, gs_out, stop, designated=False):
         """전체실행/판매수집 백그라운드 작업 — ①반자동 판매수집 → ②키워드선정 → ③반자동 순위(offscreen 전무).
 
         재부팅 복구용 단계마커(write_run_stage)와 그로스 재고 역기록(push_ledger_inventory)까지 포함.
@@ -1610,7 +1611,8 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
                         get_password=self._account_pw, resume=resume, carry_forward=carry,
                         grow_keywords=False, skip_ranks=True, redo_today=redo_today,
                         sales_semi=True, date_label=dlabel, keywords_off=True, on_log=self.log,
-                        gsheet_output_url=gs_out, registry_url=reg_url, stock_url=stock_url)
+                        gsheet_output_url=gs_out, registry_url=reg_url, stock_url=stock_url,
+                        designated=designated)
         if keywords_off:                        # ① 단독 실행 → 판매데이터만 채우고 종료
             return snap
         write_run_stage("sales")                # ① 완료 표시(재부팅 복구: 여기부턴 ②③만)

@@ -570,6 +570,41 @@ def scenario_designated_date():
     _check(filled9 > 0 and filled10 == 0, f"순위는 지정 칸(10.09)에만 기록 — 10.09 {filled9}·10.10 {filled10}")
 
 
+def scenario_designated_filled_no_stamp():
+    print("[시나리오 16] 날짜 지정 + 칸별 이력 없는 옛 칸(D-019) — 그 칸에 판매값 있는 계정은 로그인 생략·빈 계정만 수집")
+    _STATE.update(select_calls=0, crash_at=None, error_at=None)
+    from coupang_analytics.workbook import OutputWorkbook
+    d = Path(tempfile.mkdtemp())
+    accts = _accounts(["a1", _LOGIN_FAIL_ID])   # a1=수집 성공 · FAIL=로그인 미완료(그 칸 공란 — 실측 DW·플랜잇 모양)
+    P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-10-03",
+               date_to="2026-10-03", date_label="2026-10-04", skip_ranks=True, on_log=lambda m: None)
+    from coupang_analytics.pipeline_paths import _MASTER_XLSX
+    master = d / _MASTER_XLSX                     # run_full 반환값은 날짜 스냅샷 — 이어쓰기는 마스터를 읽는다
+    wb = OutputWorkbook.load(master)              # D-016 배포 전 칸 재현: 칸별 이력(_수집스탬프) 없음
+    for sn in [s for s in wb.wb.sheetnames if s == "_수집스탬프"]:
+        del wb.wb[sn]
+    wb.save(master)
+    _check(not OutputWorkbook.load(master).has_sales("a1", "10.04"), "전제: 이력 없음 → 스탬프 판정으론 미수집")
+
+    def _run(designated: bool) -> list:
+        logs: list = []
+        P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-10-03", date_to="2026-10-03",
+                   date_label="2026-10-04", carry_forward=True, skip_ranks=True, redo_today=False,
+                   designated=designated, on_log=logs.append)
+        return logs
+    logs = _run(designated=True)
+    found = [x for x in logs if "발견(가짜)" in x]
+    _check(any("판매값 있음" in x and "비즈-a1" in x for x in logs), "a1: 그 칸 판매값 있음 → 로그인·수집 생략")
+    _check(not any("비즈-a1" in x for x in found), f"a1 재수집 없음({found})")
+    _check(any(_LOGIN_FAIL_ID in x and "로그인 미완료" in x for x in logs), "빈 계정(FAIL)은 수집 시도")
+    wb = OutputWorkbook.load(master)              # 대조: '오늘' 모드(designated=False)는 기존대로 스탬프만 본다
+    for sn in [s for s in wb.wb.sheetnames if s == "_수집스탬프"]:
+        del wb.wb[sn]
+    wb.save(master)
+    logs = _run(designated=False)
+    _check(any("비즈-a1" in x and "발견(가짜)" in x for x in logs), "대조: 날짜 지정 아니면 값 판정 안 함(기존 동작)")
+
+
 def main():
     _install_fakes()
     config.LOGIN_PACE_MIN_SEC = 0   # 시뮬은 로그인 페이싱 sleep 없이(즉시)
@@ -596,6 +631,7 @@ def main():
     scenario_restore_residue_cleanup()
     scenario_gsheet_index_tab_excluded()
     scenario_designated_date()
+    scenario_designated_filled_no_stamp()
     print("=" * 60)
     print("  [완료] 모든 시나리오 통과")
     print("=" * 60)

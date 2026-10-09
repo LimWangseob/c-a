@@ -66,6 +66,24 @@ class _DateMixin:
         return any(_norm(ws.cell(r, 1).value) == aid and label in _norm(ws.cell(r, 3).value).split(",")
                    for r in range(2, ws.max_row + 1))
 
+    def sales_filled(self, biz: str, account_id: str, date_label: str) -> bool:
+        """그 계정ID 상품의 **판매 지표 칸**(date_label 열)에 값이 하나라도 있는가(D-019·날짜 지정 전용).
+
+        칸별 이력(`_수집스탬프` 3열)은 2026-10-10 부터 쌓여, 그 전 칸은 이력이 없다 → 값이 있으면 그날 수집된 것으로
+        본다(지표는 수집 때만 기록). **값이 있을 때만 True** — 0/공란도 정상일 수 있어(판매데이터 없음) 공란은
+        '미수집'으로 다뤄 다시 수집(판정이 틀려도 로그인 1회 더일 뿐 데이터 누락 없음). 다계정ID 사업자는
+        그 계정ID 소속(또는 미태깅) 상품만 본다."""
+        col = self._date_col.get(biz, {}).get(_norm(date_label))
+        if col is None or biz not in self.wb.sheetnames:
+            return False
+        ws, aid = self.wb[biz], _norm(account_id)
+        for (b, product, _metric), row in self._metric_row.items():
+            if b != biz or self.product_account_id(biz, product) not in ("", aid):
+                continue
+            if ws.cell(row=row, column=col).value not in (None, ""):
+                return True
+        return False
+
     def is_rank_filled(self, biz: str, product: str, keyword: str, date_iso: str) -> bool:
         row = self._kw_row.get((biz, product, keyword))
         col = self._date_col.get(biz, {}).get(date_iso)

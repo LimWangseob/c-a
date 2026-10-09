@@ -369,6 +369,7 @@ class _RunCtx:
     ai_key: str | None
     log: object
     coupang_checks: dict   # 2-2(§10-1): {account_id | (account_id,상품명): (쿠팡확인값, 확인일)} — ①종료 시 원장 기록
+    designated: bool = False   # 날짜 지정 실행(D-016) — 칸별 이력 없는 옛 칸은 판매값으로 수집 여부 판정(D-019)
 
 
 def _save_ctx_progress(ctx: _RunCtx) -> None:
@@ -497,6 +498,13 @@ def _collect_session_first(ctx: _RunCtx, accounts, get_password
         if wb.has_sales(a.account_id, col_label):  # 오늘 판매수집 이미 완료(계정 단위 스탬프·항목5) → 로그인·수집 생략(재실행)
             log(f"== [{i}/{total}] {a.label} — 오늘({col_label}) 판매수집 완료됨 → 로그인·수집 생략(재실행). "
                 "키워드는 미보유분만 보완·순위는 미기입분만 조회 ==")
+            done.add(a.account_id)
+            _save_ctx_progress(ctx)
+            sales_skipped.append(a)
+            continue
+        if ctx.designated and wb.sales_filled(a.label, a.account_id, col_label):   # D-019: 이력 없는 옛 칸
+            log(f"== [{i}/{total}] {a.label} — 지정 칸({col_label})에 판매값 있음(칸별 이력 이전 수집분) → "
+                "로그인·수집 생략. 키워드는 미보유분만 보완·순위는 미기입분만 조회 ==")
             done.add(a.account_id)
             _save_ctx_progress(ctx)
             sales_skipped.append(a)
@@ -682,7 +690,8 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
              grow_keywords: bool = False, skip_ranks: bool = False, redo_today: bool = False,
              sales_semi: bool = False, date_label: str | None = None,
              keywords_off: bool = False, on_log=None, gsheet_output_url: str | None = None,
-             registry_url: str | None = None, stock_url: str | None = None) -> Path:
+             registry_url: str | None = None, stock_url: str | None = None,
+             designated: bool = False) -> Path:
     """계정별 end-to-end 완결 + **같은 날 이어서 하기** + **통계 마스터 이어쓰기(cross-day)**.
 
     실행 모드(3택, UI 실행모드와 대응):
@@ -747,7 +756,7 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     ctx = _RunCtx(wb=wb, out=out, partial=partial, date_from=date_from, date_to=date_to,
                   date_label=date_label, started_at=started_at, done=done, carry=carry, grow=grow,
                   skip_ranks=skip_ranks, keywords_off=keywords_off, col_label=col_label, total=total,
-                  naver=naver, ai_key=ai_key, log=log, coupang_checks={})
+                  naver=naver, ai_key=ai_key, log=log, coupang_checks={}, designated=designated)
 
     # 계정 수집 = 2패스(세션우선 → 로그인). Akamai IP 차단을 줄이려 로그인 없는 계정을 먼저 다 확보한다.
     login_needed, sales_skipped = _collect_session_first(ctx, accounts, get_password)
