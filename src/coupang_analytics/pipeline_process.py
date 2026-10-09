@@ -342,10 +342,9 @@ def _process_option(pctx: _ProcCtx, biz: str, product, base: str, kind: str, tit
                 continue
             wb.set_keyword_rank(biz, pname, kw, date_iso, ranks.get(kw))
             _ilog(log, "순위", opt_vids, "", f"'{kw}': {rank_label(ranks.get(kw))}")
-        # ⚠ set_display_name(노출명 교체) 중단 — 블록 이름을 등록상품명+옵션라벨로 고정(옵션 정체성 안정).
-        mi = cap.get("제품")                        # 노출명은 로그로만(블록명은 등록상품명 유지)
+        mi = cap.get("제품")                        # 블록 이름 현행화는 ①판매분석 노출명·③순위 검색 노출명(D-013)
         if mi is not None and getattr(mi, "name", ""):
-            _ilog(log, "노출명", opt_vids, "", f"검색결과 노출명 = {_short(mi.name, 40)} (블록명은 등록상품명 고정)")
+            _ilog(log, "노출명", opt_vids, "", f"검색결과 노출명 = {_short(mi.name, 40)}")
             wb.set_product_pid(biz, pname, getattr(mi, "product_id", ""))   # 항목3: 상품명 하이퍼링크용 productId
     wb.set_product_vids(biz, pname, opt_vids)          # 대표 옵션 vid 저장(③은 sibling_vids 합집합으로 매칭)
     _apply_pid(wb, biz, pname, opt_vids, pctx.pid_by_vid)   # 노출상품ID(항목2·판매분석∪재고·순위매칭 pid보다 완전)
@@ -360,9 +359,9 @@ def _block_names(wb, biz: str, product, base: str, opts, multi: bool, log) -> li
     """옵션별 블록 이름 = **쿠팡 노출상품명**(판매분석 productName·현행) + 옵션라벨(다중옵션만) — 상품명 현행화(D-013).
 
     소유자 2026-10-09: 검색 노출을 위해 상품명을 바꿔도 VID 는 같다 → 같은 VID 의 기존 블록을 새 이름으로 바꿔
-    **이력 승계**(set_display_name). 오늘 노출명을 모르면(판매·조회 0·30일 보강에도 없음) 기존 블록 이름 유지(등록명으로
-    되돌림 금지) — 단 **등록상품명 자체가 바뀌었으면** 새 등록상품명으로(기존 핀: 상품조회명 변경=블록명 갱신). 처음 보는
-    상품이면 등록상품명. 다른 상품 블록이 이미 그 이름이면 바꾸지 않고(병합 방지) 경고."""
+    **이력 승계**(set_display_name). ①에서 노출명을 못 찾으면(30일 판매분석에도 없음) **오류로 기록**(_fill_exposed_names)하고
+    여기선 임시로 기존 이름(등록상품명이 바뀌었으면 새 등록상품명·처음이면 등록상품명)을 두며, 그날 ③순위 검색 노출명으로
+    현행화한다(product_naming.rename_to_exposed). 다른 상품 블록이 이미 그 이름이면 바꾸지 않고(병합 방지) 경고."""
     disp = " ".join((getattr(product, "exposed_name", "") or "").split())
     out: list[str] = []
     for o in opts:

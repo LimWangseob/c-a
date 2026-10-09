@@ -843,7 +843,24 @@ def t1_exposed_name_current():
     assert ws.cell(1, 8).value == config.RANK_NOTE_TEXT, f"1행 H열 순위 안내: {ws.cell(1, 8).value!r}"
     assert ws.cell(1, 8).font.b and str(ws.cell(1, 8).font.color.rgb).endswith(config.RANK_NOTE_COLOR), "파랑 굵게"
     assert "옵션 상품과 판매중지건은 노출순위를 조사 안함" in config.RANK_NOTE_TEXT
-    _ok("노출명 블록·같은 VID 개명 이력 승계·모르면 유지·등록명 바뀌면 갱신·이름 충돌 경고·다중옵션 라벨·1행 순위 안내(파랑 굵게)")
+    # ③순위 검색결과 노출명으로 그날 현행화(①판매분석에 없던 상품) — 제목=첫 콤마 앞·옵션 블록 라벨 유지·충돌 경고
+    from coupang_analytics.product_naming import rename_to_exposed, serp_title
+    assert serp_title("디프 캠핑 타프  대형, 블랙, Free") == "디프 캠핑 타프 대형"
+    wb3 = OutputWorkbook.empty()
+    for nm, vid in (("신형타프 R008 (블랙 Free)", "b1"), ("신형타프 R008 (베이지 Free)", "b2")):
+        wb3.ensure_product_block(BIZ, nm, config.KIND_CONTRACT, ["kw"] if vid == "b1" else [], registered="신형타프 R008")
+        wb3.set_product_vids(BIZ, nm, [vid])
+    lg3: list = []
+    new = rename_to_exposed(wb3, BIZ, "신형타프 R008 (블랙 Free)", "캠핑 타프 그늘막, 블랙, Free", lg3.append)
+    assert new == "캠핑 타프 그늘막 (블랙 Free)" and sorted(wb3.products_of(BIZ)) ==         ["캠핑 타프 그늘막 (베이지 Free)", "캠핑 타프 그늘막 (블랙 Free)"], wb3.products_of(BIZ)
+    assert wb3.product_keywords(BIZ, new) == ["kw"] and wb3.product_vids(BIZ, "캠핑 타프 그늘막 (베이지 Free)") == ["b2"]
+    wb3.ensure_product_block(BIZ, "단일상품", config.KIND_CONTRACT, ["k"], registered="단일상품")
+    wb3.set_product_vids(BIZ, "단일상품", ["s1"])
+    assert rename_to_exposed(wb3, BIZ, "단일상품", "단일상품 검색용 새이름, 1개", lg3.append) == "단일상품 검색용 새이름"
+    wb3.ensure_product_block(BIZ, "다른것", config.KIND_CONTRACT, ["k"], registered="다른것")
+    wb3.set_product_vids(BIZ, "다른것", ["o1"])
+    assert rename_to_exposed(wb3, BIZ, "다른것", "단일상품 검색용 새이름", lg3.append) == "다른것" and         any("현행화 못 함" in x for x in lg3), "다른 상품 이름과 충돌 = 바꾸지 않고 경고"
+    _ok("노출명 블록·같은 VID 개명 이력 승계·등록명 바뀌면 갱신·이름 충돌 경고·다중옵션 라벨·③검색 노출명 현행화·1행 순위 안내(파랑 굵게)")
 
 
 def t1_vid_source_option_split():

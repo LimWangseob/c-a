@@ -19,6 +19,7 @@ from . import proxy_pool
 from . import session_state
 from .browser import WingBrowser
 from .kw_recommend import rank_label
+from .product_naming import rename_to_exposed
 from .rank import (RankBlocked, human_type_query, make_matcher, organic_ranks,
                    organic_ranks_batch, warmup)
 from .pipeline_gsheet import push_gsheet, inject_company_stock   # track_ranks_stage 종료 시 결과 반영·회사재고 주입(한 방향·순환 없음)
@@ -415,10 +416,11 @@ def _measure_product_auto(browser, wb, path, biz: str, pname: str, date, log) ->
         r = _best(measured.get(kw))       # 정상 측정: 미노출이면 '-', 노출이면 'N위'
         wb.set_keyword_rank(biz, pname, kw, date, r)
         log(f"  [{biz}] {pname} '{kw}': {rank_label(r)}")
-    mi = cap.get("제품")                   # 노출명은 로그로만(블록명=등록상품명 고정, set_display_name 중단)
+    mi = cap.get("제품")                   # 검색결과 노출명 = 지금 쿠팡에 보이는 이름 → 블록 이름 현행화(D-013)
     if mi is not None and getattr(mi, "name", ""):
-        log(f"  [노출명] 검색결과 노출명 = {mi.name} (블록명은 등록상품명 고정)")
+        log(f"  [노출명] 검색결과 노출명 = {mi.name}")
         wb.set_product_pid(biz, pname, getattr(mi, "product_id", ""))   # 항목3: 상품명 하이퍼링크용 productId
+        rename_to_exposed(wb, biz, pname, mi.name, log)   # 이 상품 키워드 기록을 다 끝낸 뒤(키 어긋남 방지)
     wb.save(path)   # **상품마다 저장** → 중단돼도 여기까지 보존(재실행 시 이어서)
     return halted, False
 
@@ -812,6 +814,7 @@ def _semi_track_product(st: _SemiState, browser, wb, biz, pname, date, path, sho
     if prep is None:
         return
     matcher, todo = prep
+    seen_name = ""                         # 검색결과 노출명(이 상품 키워드를 다 돈 뒤 블록 이름 현행화·D-013)
     for idx, kw in enumerate(todo, 1):
         if should_stop() or st.halted:
             break
@@ -833,7 +836,10 @@ def _semi_track_product(st: _SemiState, browser, wb, biz, pname, date, path, sho
         st.miss_streak = 0   # 성공 → 연속 실패 리셋
         st.cooldowns = 0     # 진전 발생 → 쿨다운 카운터도 리셋(IP 살아있음)
         st.searched += 1     # 종료 요약용 누적(리셋 안 함)
-        _semi_record(wb, pg, matcher, biz, pname, kw, date, path, idx, len(todo), log)
+        seen_name = _semi_record(wb, pg, matcher, biz, pname, kw, date, path, idx, len(todo), log) or seen_name
+    if seen_name:
+        rename_to_exposed(wb, biz, pname, seen_name, log)
+        wb.save(path)
 
 
 def _semi_search_one(st: _SemiState, browser, kw, should_stop, log):
@@ -901,8 +907,9 @@ def _semi_on_miss(st: _SemiState, kw, blocked: bool, should_stop, log) -> None:
     st.miss_streak = 0    # 쿨다운 끝 → 다음 키워드부터 재개
 
 
-def _semi_record(wb, pg, matcher, biz, pname, kw, date, path, idx, total, log) -> None:
-    """검색결과 페이지에서 순위를 파싱해 워크북에 기록·저장(상품마다 저장 → 중단해도 이어서)."""
+def _semi_record(wb, pg, matcher, biz, pname, kw, date, path, idx, total, log) -> str:
+    """검색결과 페이지에서 순위를 파싱해 워크북에 기록·저장(상품마다 저장 → 중단해도 이어서).
+    반환 = 잡힌 상품의 검색결과 노출명(없으면 "") — 호출부가 상품 루프 끝에 블록 이름 현행화."""
     from .rank import parse_serp_rank
     human_mouse.browse_serp(pg)   # 결과를 사람처럼 훑어봄(호버·스크롤, 클릭 없음)
     try:
@@ -911,12 +918,15 @@ def _semi_record(wb, pg, matcher, biz, pname, kw, date, path, idx, total, log) -
         res, scanned = parse_serp_rank(pg, matcher, max_rank=config.RANK_SCAN_MAX_SEMI)
     except Exception as exc:
         log(f"  [반자동] 「{kw}」 파싱 실패(공란) — {exc.__class__.__name__}: {str(exc)[:80]}")
-        return
+        return ""
     rank, mi = res.get("제품", (None, None))
     wb.set_keyword_rank(biz, pname, kw, date, rank, scanned=scanned)
     log(f"  ✅ 「{kw}」 순위 = {rank_label(rank) if rank else f'{scanned}위밖'}  — 기록 완료({idx}/{total})")
-    if mi is not None and getattr(mi, "name", ""):   # 노출명은 로그로만(블록명=등록상품명 고정)
-        log(f"  [노출명] 검색결과 노출명 = {mi.name} (블록명은 등록상품명 고정)")
+    name = ""
+    if mi is not None and getattr(mi, "name", ""):   # 검색결과 노출명 → 상품 루프 끝에 블록 이름 현행화(D-013)
+        log(f"  [노출명] 검색결과 노출명 = {mi.name}")
         wb.set_product_pid(biz, pname, getattr(mi, "product_id", ""))   # 항목3: 상품명 하이퍼링크용 productId
+        name = mi.name
     wb.save(path)
     # (키워드 사이 간격은 _semi_track_product 상단에서 '검색 앞'에 적용 — 마지막 검색 뒤 자투리 대기 제거)
+    return name
