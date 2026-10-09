@@ -218,7 +218,7 @@ python tools/verify_offline.py && python tools/verify_gsheet_offline.py && pytho
 - **죽은 삼항식 제거**: `detail_images.py:149` `best[key][1] if False else src` → `src`(오너 규칙 if False 우회 금지).
 - **검증**: 게이트 7종 + `check_complexity`(exit 0) 초록. `radon cc -n D <4파일>` = **빈 결과**(D+ 재전멸). 행동 불변(핀 3종·시뮬·렌더검증 그대로 통과).
 
-### 8-3. Tier B(모듈 분리·MI C→B) — ✅ pipeline 완료(B1~B5), 🔄 workbook 남음
+### 8-3. Tier B(모듈 분리·MI C→B) — ✅ pipeline 완료(B1~B5), ✅ workbook 완료(6c, 2026-10-10·D-017)
 
 **✅ pipeline 완전 해소(2026-09-26)**: 원래 pipeline.py 2684줄 MI C(0.00) → **6모듈 전부 A/B**.
 | 모듈 | 줄 | MI |
@@ -241,6 +241,16 @@ python tools/verify_offline.py && python tools/verify_gsheet_offline.py && pytho
 - ⚠**workbook.py 코어(1501줄) 는 여전히 C** — 데이터모델(init·setter/getter·reconcile·merge·delete·reindex·dates)이라 **응집**. 추가 분해(meta mixin·index/date mixin으로 <900줄 B)는 **인위적·diminishing returns**로 판단해 **보류**(복잡도 게이트는 KNOWN_BAD 로 통과). 실제 rot 위험(복잡 렌더)은 해소됨. 소유자가 굳이 B 원하면 setter/getter 군을 별 mixin 으로(저위험) 추가 분리 가능.
 - **B 도달엔 ~900줄 이하 필요**(radon 포화) → **3~4파일** 예상: `workbook_common.py`(leaf: 상수 _COL_*·라벨·시트명 + 헬퍼 _norm/_key/_parse_date/_vids_from_cell/_unmerge_all/_sty_* + dataclass _StyleCtx/_IdxStyle) ← 순환방지 · `workbook_render.py`(`_RenderMixin`: apply_style+_style_*+_idx_*+_build_index+_sync_marketing+_v4_*+_group/_regroup/_snapshot/_rewrite+promo_effect 클러스터+migration _migrate_keyword_col/_kw_migrate/_migrate_vids_to_meta/_clear_blank/_backfill_metric_rows) · `workbook.py`(`class OutputWorkbook(_RenderMixin)`: 데이터/인덱스/조회 메서드). 필요시 인덱스 mixin 추가.
 - ⚠apply_style 은 가장 핀-집약 경로 → **핀 초록 유지하며 mixin 하나씩·작은 커밋**. 새 mixin 파일도 C면 게이트가 차단(pipeline_sales 처럼)하니 각 파일 <~900줄·B+ 로.
+- ✅ **6c(2026-10-10·소유자 지시로 보류 해제·D-017, 커밋 4ce026f·7cf16cf·fc4d13e)**: 코어 1585줄(C 0.00)을 mixin 3개로 잘라 붙임(로직 무변경).
+  | 모듈 | 줄 | MI | 내용 |
+  |---|---|---|---|
+  | `workbook.py`(`OutputWorkbook`) | 596 | **B (18.83)** | 생성·로드·재색인·계정·상품/키워드 블록·값 기록·목록/품질 요약 |
+  | `workbook_meta.py`(`_MetaMixin`) | 511 | A (19.61) | 숨김 메타시트 상품 속성 38메서드(VID·pid·등록명·판매방식·판매상태·재고·노출명/블록명·제목 캐시·마케팅·판매중지) |
+  | `workbook_dates.py`(`_DateMixin`) | 289 | A (38.32) | 날짜 칸·수집 이력 스탬프·날짜 지정 리셋·측정 주기 16메서드 |
+  | `workbook_lifecycle.py`(`_LifecycleMixin`) | 225 | A (43.55) | 대장 대조(reconcile)·판매중지 동기화·계정 삭제/병합·블록 복사/삭제 7메서드 |
+  - `class OutputWorkbook(_RenderMixin, _IndexMixin, _MetaMixin, _DateMixin, _LifecycleMixin)`. 외부 호출처 수정 0(외부는 `OutputWorkbook`·`_norm`·`_key`·`_unmerge_all`·상수만 import·내부 monkeypatch 0).
+  - **행동 불변 증거**: 단계마다 ① `OutputWorkbook` 멤버 144개의 **바이트코드 지문**(co_code·상수·이름·인자)을 분리 전(7e119b4)과 대조 → 차이 0(MRO 로 다른 메서드가 잡히는 일 없음) ② 이동 메서드의 전역 참조(LOAD_GLOBAL)가 모듈에 전부 정의 → 미정의 0 ③ 게이트 16종·복잡도 초록.
+  - 게이트: `check_complexity.KNOWN_BAD` 에서 **workbook.py 제외**(소유자 선택) → 앞으로 workbook.py 가 MI C 로 떨어지면 커밋 차단(음성 테스트: 옛 C 파일로 exit 1 확인). ⚠제외 후 workbook.py 의 D+ 괴물함수는 다른 건강 파일처럼 **경고**(차단은 MI C).
 
 ### (구) 8-3 계획 메모(참고)
 - **왜 필요**: 함수 CC 를 낮춰도 pipeline·workbook·app_qt 는 **MI C(0.00) 포화** — 파일을 쪼개야 B↑.

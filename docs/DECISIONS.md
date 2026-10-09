@@ -303,3 +303,10 @@
 2026-10-08 · 로켓그로스 물류비 상품별 집계(D8) = 상세 줄 합(VAT 별도 정확) + 시트 세액 비율 배분 → 상품/계정 월별 물류비·재고손실보상·반영 후 칸 + 새 시트 '로켓그로스 비용 상품별'. 운용 PC 459파일·679시트 상품별 합=시트 합계/세액 일치·9계정 물류비·보상 합=쿠팡 차감액 원 단위 일치 실측. 핀 verify_settlement[P16]
 2026-10-08 · 반출 배송 서비스비 묶음 표기(D8) = 한 박스에 서로 다른 상품/미표기면 '(여러 상품)'·'(상품 미표기)'로 묶고 배분 안 함 — 쿠팡이 배분 기준을 안 줘 추측 금지(no silent fallback)
 2026-10-08 · 문서 크기 상한 정책 구체화(소유자·session-kit 반영) = 메모리(MEMORY.md 색인) 30~50줄 유지(초과분 CLAUDE.md 이관)·CLAUDE.md 200줄 미만(초과 시 색인만+상세 별도 파일 분리)·DECISIONS 추가 전용(기존 수정/삭제 금지·뒤집으면 SUPERSEDED 표기)·세션 시작=핸드오프/DECISIONS 읽고 git 대조 요약·종료=정책 반영+핸드오프 갱신+검증·커밋. 전역 ~/.claude/CLAUDE.md(모든 세션)+프로젝트 CLAUDE.md 상단(worktree/클론)에 영구. session-kit 의 session-close 스킬은 verify 명령 불일치(ruff/mypy --strict/cycle_audit vs run_checks)로 그대로 설치 안 함·개념만 흡수. 적용: MEMORY.md 60→38줄 정리
+
+### D-017 [WORKBOOK_SPLIT] workbook.py 코어 mixin 분리로 MI C→B·복잡도 게이트 보호 대상 편입 (2026-10-10, R5)
+- 결정: `OutputWorkbook` 코어(workbook.py 1585줄·MI C 0.00)를 **잘라 붙이기만**(로직 무변경)으로 mixin 3개에 나눈다 — `workbook_meta.py`(`_MetaMixin`·숨김 메타시트 상품 속성 38메서드) · `workbook_dates.py`(`_DateMixin`·날짜 칸·수집 이력·측정 주기 16메서드) · `workbook_lifecycle.py`(`_LifecycleMixin`·대장 대조·판매중지 동기화·삭제·병합 7메서드). 결과 workbook.py 596줄 **MI B(18.83)**·새 모듈 전부 A. `tools/check_complexity.KNOWN_BAD` 에서 **workbook.py 제외** → 앞으로 MI C 추락 커밋은 차단.
+- 근거: 소유자 지시(2026-10-10 "C부터 진행" = 800줄 초과 파일 모듈 분리·계획 승인) + KNOWN_BAD 제외 선택. 실측 — 분리 전 radon MI C(0.00)·4대형 파일 중 유일한 C(pipeline_ranks·collector·pipeline 은 B). 행동 불변 증거: 단계마다 `OutputWorkbook` 멤버 144개 바이트코드 지문을 7e119b4 대비 대조 → 차이 0 · 이동 메서드 전역 참조 미정의 0 · 게이트 16종·복잡도 초록 · 음성 테스트(옛 C 파일 → check_complexity exit 1). 외부 호출처 수정 0(외부 import=OutputWorkbook·_norm·_key·_unmerge_all·상수뿐·내부 monkeypatch 0).
+- 버린 대안: (a) 보류 유지(2026-09-26 판단 "인위적·효과 대비 낮음" — 소유자가 실행 선택) (b) pipeline_ranks·collector·pipeline 도 분리(이미 MI B·건강 파일 미접촉 규칙) (c) KNOWN_BAD 유지(재비대 감지 못함 — 소유자 선택 아님).
+- 영향 범위: `src/coupang_analytics/workbook.py`·`workbook_meta.py`·`workbook_dates.py`·`workbook_lifecycle.py`(신규), `tools/check_complexity.py`(KNOWN_BAD), `designs/CODE_HEALTH_PLAN.md §8-3 6c`. 런타임 동작·출력물 무변경(배포는 다음 빌드에 자연 포함·PyInstaller 정적 import 추적). ⚠ workbook.py 의 D+ 괴물함수는 이제 다른 건강 파일처럼 경고(차단은 MI C).
+- 상태: ACTIVE
