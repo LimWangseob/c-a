@@ -799,7 +799,7 @@ def t1_login_pw_candidates():
 
 
 def t1_exposed_name_current():
-    print("[38] 상품명 현행화(D-013) — 결과 블록=노출상품명·같은 VID 이름 바뀌면 이력 승계·모르면 유지 + 시트 1행 순위 안내")
+    print("[38] 상품명 현행화(D-013·D-015) — 결과 블록=노출상품명·같은 VID 개명 이력 승계·③검색 노출명 현행화 + 시트 1행 순위 안내 + 날짜 지정")
     from coupang_analytics.input_list import Option, Product
     from coupang_analytics.pipeline_process import _block_names
     BIZ = "현행화"
@@ -861,6 +861,24 @@ def t1_exposed_name_current():
     wb3.set_product_vids(BIZ, "다른것", ["o1"])
     assert rename_to_exposed(wb3, BIZ, "다른것", "단일상품 검색용 새이름", lg3.append) == "다른것" and         any("현행화 못 함" in x for x in lg3), "다른 상품 이름과 충돌 = 바꾸지 않고 경고"
     _ok("노출명 블록·같은 VID 개명 이력 승계·등록명 바뀌면 갱신·이름 충돌 경고·다중옵션 라벨·③검색 노출명 현행화·1행 순위 안내(파랑 굵게)")
+    # 날짜 지정(2026-10-10): ③순위는 지정 칸에 기록(최신 칸 아님)·칸이 없으면 추가
+    from coupang_analytics.pipeline_ranks import _rank_date
+    wb4 = OutputWorkbook.empty()
+    wb4.ensure_product_block(BIZ, "상품", config.KIND_CONTRACT, ["k"], registered="상품")
+    wb4.ensure_date(BIZ, "2026-10-09")
+    wb4.ensure_date(BIZ, "2026-10-10")
+    assert _rank_date(wb4, BIZ, None) == wb4.latest_date(BIZ) == "2026-10-10", "지정 없으면 최신 칸(기존)"
+    assert _rank_date(wb4, BIZ, "2026-10-09") == "2026-10-09", "지정하면 그 칸"
+    wb4.set_keyword_rank(BIZ, "상품", "k", "2026-10-09", 5)
+    assert wb4.is_rank_filled(BIZ, "상품", "k", "2026-10-09") and not wb4.is_rank_filled(BIZ, "상품", "k", "2026-10-10")
+    # 판매수집 완료 표시 = 칸별 이력: 10.09 수집 → 10.10 수집 → 10.09 지정 실행 시 '이미 수집'으로 건너뜀
+    wb4.mark_sales_collected("acc", "2026-10-09")
+    wb4.mark_sales_collected("acc", "2026-10-10")
+    assert wb4.has_sales("acc", "2026-10-09") and wb4.has_sales("acc", "2026-10-10") and not wb4.has_sales("acc", "2026-10-08")
+    wb4.mark_sales_collected("acc", "2026-10-08")              # 옛 칸을 나중에 채워도 '판매수집일'은 최신 유지
+    assert wb4.sales_collected_on("acc") == "2026-10-10" and wb4.has_sales("acc", "2026-10-08")
+    assert wb4.clear_sales_stamps() == 1 and not wb4.has_sales("acc", "2026-10-09"), "다시 수집=이력까지 해제"
+    _ok("날짜 지정: ③순위=지정 칸(최신 칸 아님)·채워진 칸 판정·판매수집 완료=칸별 이력(빈 칸만 채움)")
 
 
 def t1_vid_source_option_split():

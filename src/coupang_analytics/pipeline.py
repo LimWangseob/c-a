@@ -12,7 +12,7 @@ import json
 import random
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import config
@@ -100,13 +100,15 @@ class RunPlan:
 
 
 def plan_run_mode(newall: bool, redo: bool, meta: dict | None, master: bool,
-                  date_from: str, date_to: str, date_label: str = "") -> RunPlan:
+                  date_from: str, date_to: str, date_label: str = "", designated: bool = False) -> RunPlan:
     """실행모드 결정(순수·오프라인 검증 가능) — app_qt/app.do_run_full 의 if/elif 사슬을 백엔드로 공통화.
 
     입력: newall(통계 전체 새로)·redo(오늘 것만 다시)·meta(resumable_progress 결과|None)·
     master(master_exists())·date_from/to(기본 기간)·date_label(기본 날짜라벨). 반환 RunPlan:
     resume/carry/redo_today 플래그 + (meta 있으면 그 기간으로 덮은) date_from/to + 확인 팝업용 mode_desc +
     (재개면 meta 의 date_label 로 복원한) date_label. ⚠ grow 는 UI마다 달라 여기서 안 다룬다.
+    designated=True(사용자가 날짜 칸을 직접 지정·2026-10-10): 오늘 진행분(meta)의 날짜가 지정일과 다르면 그 진행분은
+    이어받지 않고 지정 칸을 채운다(빈 칸만 — 수집 완료 계정·채워진 순위는 건너뜀).
     **date_label 복원은 양쪽 UI 공통**(예전엔 app.py 만 처리해 app_qt 재개 시 오늘 컬럼으로 어긋나는 버그)."""
     resume = carry = redo_today = False
     if newall:
@@ -117,6 +119,11 @@ def plan_run_mode(newall: bool, redo: bool, meta: dict | None, master: bool,
             mode_desc = f"오늘 것만 다시 수집 — 오늘({date_to}) 초기화 후 전 계정 재수집(어제까지 유지·키워드 동결)"
         else:
             mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음·구글시트 복원 불가), 기간 {date_from}~{date_to}"
+    elif designated and meta and meta.get("date_label") not in (None, "") and meta["date_label"] != date_label:
+        carry = master                       # 날짜 지정 실행 ≠ 오늘 진행분의 날짜 → 그 진행분은 이어받지 않음(2026-10-10)
+        mode_desc = (f"지정 날짜({date_label}) 칸 채우기 — 빈 칸만(이미 수집된 계정·순위는 건너뜀), "
+                     f"판매 {date_from}~{date_to}" if master else
+                     f"새 통계 시작(첫 실행 — 마스터 없음), 기간 {date_from}~{date_to}")
     elif meta:
         resume = True
         carry = bool(meta.get("carry", False))
@@ -129,6 +136,14 @@ def plan_run_mode(newall: bool, redo: bool, meta: dict | None, master: bool,
     else:
         mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음·구글시트 복원 불가), 기간 {date_from}~{date_to}"
     return RunPlan(resume, carry, redo_today, date_from, date_to, mode_desc, date_label)
+
+
+def column_dates(label_iso: str) -> tuple[str, str, str]:
+    """날짜 칸 하나의 (판매조회_from, 판매조회_to, 칸 라벨) — 칸=그 날짜, 판매=**그 전날**(쿠팡 판매분석 D-1 확정).
+    '오늘' 실행과 '날짜 지정' 실행 공통(소유자 2026-10-10: 10.10 에 10.09 지정 → 10.09 칸에 10/08 판매·순위=지금 측정)."""
+    label = date.fromisoformat(label_iso)
+    d1 = (label - timedelta(days=1)).isoformat()
+    return d1, d1, label.isoformat()
 
 
 def run_title(keywords_off: bool, sales_semi: bool) -> str:

@@ -121,12 +121,12 @@ def _fake_organic_ranks(browser, kw, matchers, max_rank=None, mobile=False, log=
     return {lbl: 3 for lbl in matchers}
 
 
-def _fake_track_ranks_semi(wb, path, log, should_stop):
+def _fake_track_ranks_semi(wb, path, log, should_stop, date_label=None):
     """③ 반자동 순위 대체 — 실제 브라우저 타이핑 없이 미기입 키워드에 순위 3 기록.
 
-    _track_ranks_semi(wb, path, log, should_stop) 시그니처와 동일. 계정별 최신 일자에 채운다."""
+    _track_ranks_semi(wb, path, log, should_stop, date_label) 시그니처와 동일. 계정별 최신 일자(지정 시 그 칸)에 채운다."""
     for biz in wb.account_sheets():
-        date = wb.latest_date(biz)
+        date = PR._rank_date(wb, biz, date_label)
         if not date:
             continue
         for pname in wb.products_of(biz):
@@ -536,6 +536,40 @@ def scenario_gsheet_index_tab_excluded():
     _check("가게A" in wb2.account_sheets(), f"실계정 '가게A' 는 포함 — {wb2.account_sheets()}")
 
 
+def scenario_designated_date():
+    print("[시나리오 15] 날짜 지정(2026-10-10) — 10.10 실행 뒤 10.09 지정: 판매 재수집 없음(칸별 이력)·순위=10.09 칸만")
+    _STATE.update(select_calls=0, crash_at=None, error_at=None)
+    d = Path(tempfile.mkdtemp())
+    accts = _accounts(["a1", "b1"])
+    P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-10-08", date_to="2026-10-08",
+               date_label="2026-10-09", skip_ranks=True, on_log=lambda m: None)
+    P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-10-09", date_to="2026-10-09",
+               date_label="2026-10-10", carry_forward=True, skip_ranks=True, on_log=lambda m: None)
+    logs: list = []
+    master = P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-10-08",
+                        date_to="2026-10-08", date_label="2026-10-09", carry_forward=True, skip_ranks=True,
+                        on_log=logs.append)
+    skipped = [x for x in logs if "판매수집 완료됨" in x]
+    _check(len(skipped) == 2, f"10.09 지정: 두 계정 모두 이미 수집 → 로그인·수집 생략({len(skipped)})")
+    _check({"10.09", "10.10"} <= _date_headers(master), "날짜 칸 10.09·10.10 유지")
+    orig = PR._track_ranks_semi
+    PR._track_ranks_semi = _fake_track_ranks_semi
+    try:
+        p3 = P.track_ranks_stage(out_dir=str(d), semi=True, on_log=lambda m: None, date_label="2026-10-09")
+    finally:
+        PR._track_ranks_semi = orig
+    from coupang_analytics.workbook import OutputWorkbook
+    wb = OutputWorkbook.load(p3)
+    _check(any(wb.product_keywords(b, p) for b in wb.account_sheets() for p in wb.products_of(b)), "키워드 있음(순위 대상)")
+    filled9 = filled10 = 0
+    for biz in wb.account_sheets():
+        for p in wb.products_of(biz):
+            for kw in wb.product_keywords(biz, p):
+                filled9 += wb.is_rank_filled(biz, p, kw, "2026-10-09")
+                filled10 += wb.is_rank_filled(biz, p, kw, "2026-10-10")
+    _check(filled9 > 0 and filled10 == 0, f"순위는 지정 칸(10.09)에만 기록 — 10.09 {filled9}·10.10 {filled10}")
+
+
 def main():
     _install_fakes()
     config.LOGIN_PACE_MIN_SEC = 0   # 시뮬은 로그인 페이싱 sleep 없이(즉시)
@@ -561,6 +595,7 @@ def main():
     scenario_vid_change_reset()
     scenario_restore_residue_cleanup()
     scenario_gsheet_index_tab_excluded()
+    scenario_designated_date()
     print("=" * 60)
     print("  [완료] 모든 시나리오 통과")
     print("=" * 60)

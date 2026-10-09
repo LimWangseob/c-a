@@ -310,13 +310,23 @@ def _log_quality_summary(wb, log) -> None:
         log("==   ↳ '완료'여도 위 수치가 크면 불완전(차단·미수집·미매칭) — 데이터로 확인 후 재실행/재배포 판단 ==")
 
 
+def _rank_date(wb, biz: str, date_label: str | None) -> str | None:
+    """순위를 기록할 날짜 칸 — 지정일(date_label·날짜 지정 실행·소유자 2026-10-10)이면 그 칸(없으면 추가),
+    아니면 그 시트의 가장 최근 날짜 칸(기존 동작)."""
+    if date_label:
+        wb.ensure_date(biz, date_label)
+        return date_label
+    return wb.latest_date(biz)
+
+
 def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
                       should_stop=None, gsheet_output_url: str | None = None,
-                      stock_url: str | None = None) -> Path | None:
+                      stock_url: str | None = None, date_label: str | None = None) -> Path | None:
     """③ 노출순위 조회 전용 — 최신 워크북 로드, 상품(고유ID)+키워드로 순위 측정·기록. 로그인 불필요.
 
     ①(상품ID)·②(키워드)가 이미 워크북에 있어야 한다. 상품마다 저장된 vendorItemId 로 검색결과에서 내
-    상품을 찾아 오가닉 순위를 기록한다(가장 최근 일자 컬럼). 예외 안전 — 차단·browser 죽음도 공란 처리.
+    상품을 찾아 오가닉 순위를 기록한다(가장 최근 일자 컬럼, date_label 을 주면 **그 날짜 칸**·이미 채워진 칸은 건너뜀).
+    예외 안전 — 차단·browser 죽음도 공란 처리.
     매칭 시 계약상품명을 검색결과의 **정확한 노출명**으로 갱신한다.
     semi=True 면 **반자동** — 앱이 창을 띄우고 키워드를 안내, 사람이 직접 검색하면 그 화면만 읽어 순위 산출
     (자동 네비게이션 없음 → 차단 회피). should_stop() 이 참이면 중도 중단.
@@ -332,7 +342,7 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
         return None
     inject_company_stock(wb, stock_url, log)   # 회사보유재고 → 워크북(계정목록 5열) · apply_style 전(semi/자동 공통)
     if semi:
-        result = _track_ranks_semi(wb, path, log, should_stop or (lambda: False))
+        result = _track_ranks_semi(wb, path, log, should_stop or (lambda: False), date_label)
         push_gsheet(wb, gsheet_output_url, log)   # ③ 반자동 순위 채운 뒤 결과 구글시트에도 반영
         _log_quality_summary(wb, log)   # 데이터 품질 자가점검(완료가 가리는 불완전 가시화·③ 최종 시점)
         return result
@@ -351,7 +361,7 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
         for biz in wb.account_sheets():
             if halted:
                 break
-            date = wb.latest_date(biz)
+            date = _rank_date(wb, biz, date_label)
             if not date:
                 continue
             for pname in wb.products_of(biz):
@@ -702,7 +712,7 @@ class _SemiState:
     blocked_total: int = 0      # 확정 차단 페이지(사용권한 없음) 감지 총 횟수
 
 
-def _track_ranks_semi(wb, path, log, should_stop) -> Path:
+def _track_ranks_semi(wb, path, log, should_stop, date_label: str | None = None) -> Path:
     """반자동 순위조회 — 앱이 창을 띄우고 키워드를 안내, 사람이 직접 검색한 화면만 읽어 순위 산출·기록.
 
     우리가 검색(네비게이션)을 하지 않으므로 Akamai 봇차단이 안 생긴다. 상품마다 저장 → 중단해도 이어서.
@@ -718,7 +728,7 @@ def _track_ranks_semi(wb, path, log, should_stop) -> Path:
         for biz in wb.account_sheets():
             if should_stop() or st.halted:
                 break
-            date = wb.latest_date(biz)
+            date = _rank_date(wb, biz, date_label)
             if not date:
                 continue
             for pname in wb.products_of(biz):

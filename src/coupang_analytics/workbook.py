@@ -253,7 +253,7 @@ class OutputWorkbook(_RenderMixin, _IndexMixin):
             return self.wb[_STAMP_SHEET]
         ws = self.wb.create_sheet(_STAMP_SHEET)
         ws.sheet_state = "hidden"
-        ws.cell(1, 1, "계정ID"); ws.cell(1, 2, "판매수집일")
+        ws.cell(1, 1, "계정ID"); ws.cell(1, 2, "판매수집일"); ws.cell(1, 3, "수집일 이력")
         return ws
 
     def mark_sales_collected(self, account_id: str, date_label: str) -> None:
@@ -268,11 +268,13 @@ class OutputWorkbook(_RenderMixin, _IndexMixin):
         if not (aid and label):
             return
         ws = self._stamp_ws()
-        for r in range(2, ws.max_row + 1):
-            if _norm(ws.cell(r, 1).value) == aid:
-                ws.cell(r, 2, label); return
-        row = ws.max_row + 1
-        ws.cell(row, 1, aid); ws.cell(row, 2, label)
+        row = next((r for r in range(2, ws.max_row + 1) if _norm(ws.cell(r, 1).value) == aid), ws.max_row + 1)
+        ws.cell(row, 1, aid)
+        last = _norm(ws.cell(row, 2).value)
+        ws.cell(row, 2, max(last, label) if last else label)   # 판매수집일 = 가장 최근 칸(날짜 지정으로 옛 칸 채워도 유지)
+        # 칸별 이력(2026-10-10 날짜 지정): 옛 칸을 채울 때 이미 수집한 계정을 날짜별로 건너뛰는 근거(최근 30칸).
+        hist = {h for h in _norm(ws.cell(row, 3).value).split(",") if h} | {label}
+        ws.cell(row, 3, ",".join(sorted(hist)[-30:]))
 
     def sales_collected_on(self, account_id: str) -> str:
         """그 **계정(계정ID)** 에 마지막으로 기록된 판매수집일 라벨(없으면 '')."""
@@ -288,8 +290,18 @@ class OutputWorkbook(_RenderMixin, _IndexMixin):
     def has_sales(self, account_id: str, date_label: str) -> bool:
         """그 **계정(계정ID)** 의 판매수집이 date_label(오늘 컬럼) 기준으로 이미 완료됐는가(재실행 스킵 근거).
 
-        다른 날 라벨이면 False(자동으로 그날 새로 수집) → 날짜가 바뀌면 스탬프가 달라 재수집된다."""
-        return bool(_norm(date_label)) and self.sales_collected_on(account_id) == _norm(date_label)
+        다른 날 라벨이면 False(자동으로 그날 새로 수집) → 날짜가 바뀌면 스탬프가 달라 재수집된다. 날짜 지정으로
+        옛 칸을 채울 때는 **칸별 이력**(3열)도 본다 — 그 칸을 이미 수집한 계정은 건너뜀(2026-10-10)."""
+        label = _norm(date_label)
+        if not label:
+            return False
+        if self.sales_collected_on(account_id) == label:
+            return True
+        if _STAMP_SHEET not in self.wb.sheetnames:
+            return False
+        ws, aid = self.wb[_STAMP_SHEET], _norm(account_id)
+        return any(_norm(ws.cell(r, 1).value) == aid and label in _norm(ws.cell(r, 3).value).split(",")
+                   for r in range(2, ws.max_row + 1))
 
     def is_rank_filled(self, biz: str, product: str, keyword: str, date_iso: str) -> bool:
         row = self._kw_row.get((biz, product, keyword))
@@ -308,8 +320,9 @@ class OutputWorkbook(_RenderMixin, _IndexMixin):
         ws = self.wb[_STAMP_SHEET]
         n = 0
         for r in range(2, ws.max_row + 1):
-            if _norm(ws.cell(r, 2).value):
+            if _norm(ws.cell(r, 2).value) or _norm(ws.cell(r, 3).value):
                 ws.cell(r, 2).value = None
+                ws.cell(r, 3).value = None      # 칸별 이력도 해제(다시 수집 = 전부 재수집)
                 n += 1
         return n
 

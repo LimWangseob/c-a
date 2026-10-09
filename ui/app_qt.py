@@ -34,7 +34,7 @@ from coupang_analytics.input_list import (parse_input_list, parse_input_rows,  #
 from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
 from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_credentials_file  # noqa: E402
-from coupang_analytics.pipeline import (_interruptible_sleep, backup_sources,  # noqa: E402
+from coupang_analytics.pipeline import (column_dates, _interruptible_sleep, backup_sources,  # noqa: E402
                                         master_exists, plan_run_mode, push_company_stock,
                                         push_ledger_inventory,
                                         read_run_stage, resumable_progress, restore_master_from_gsheet,
@@ -879,7 +879,10 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self.cb_today.setToolTip("쿠팡 판매분석은 당일 데이터를 익일 이후 생성합니다.\n"
                                  "따라서 '당일'은 데이터가 확정된 어제(D-1) 날짜로 수집합니다.")
         self.cb_today.setChecked(True)
-        self.cb_range = QtWidgets.QRadioButton("기간")
+        self.cb_range = QtWidgets.QRadioButton("날짜 지정")
+        self.cb_range.setToolTip("지정한 날짜 칸을 채웁니다(빈 칸만 — 이미 수집된 계정·순위는 건너뜀).\n"
+                                 "판매 = 그 날짜의 전날 데이터 · 노출순위 = 지금 측정한 값.\n"
+                                 "예: 10.10 에 10.09 지정 → 10.09 칸에 10/08 판매 + 지금 순위.")
         self._period_group = QtWidgets.QButtonGroup(self)   # 하나만 선택(상호배타)
         self._period_group.setExclusive(True)
         self._period_group.addButton(self.cb_today)
@@ -887,15 +890,11 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self.cb_today.toggled.connect(self._toggle_range)
         pbar.addWidget(self.cb_today)
         pbar.addWidget(self.cb_range)
-        yday = (date.today() - timedelta(days=1)).isoformat()   # 기본값도 확정일(어제)
-        self.from_edit = QtWidgets.QLineEdit(yday)
-        self.to_edit = QtWidgets.QLineEdit(yday)
-        for e in (self.from_edit, self.to_edit):
-            e.setMaximumWidth(120)
-        pbar.addWidget(self.from_edit)
-        pbar.addWidget(QtWidgets.QLabel("~"))
+        yday = (date.today() - timedelta(days=1)).isoformat()   # 기본값=어제 칸(중단된 어제 작업 채우기)
+        self.to_edit = QtWidgets.QLineEdit(yday)          # 채울 날짜 칸(YYYY-MM-DD)
+        self.to_edit.setMaximumWidth(120)
         pbar.addWidget(self.to_edit)
-        hint = QtWidgets.QLabel("(기간: 판매분석=합계 · 노출순위=오늘)")
+        hint = QtWidgets.QLabel("(그 날짜 칸에: 판매=전날 · 노출순위=지금 측정 · 빈 칸만)")
         hint.setObjectName("muted")
         pbar.addWidget(hint)
         pbar.addStretch(1)
@@ -1508,9 +1507,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
 
     # ── 전체 실행 ─────────────────────────────────────────────
     def _toggle_range(self):
-        on = self.cb_range.isChecked()
-        self.from_edit.setEnabled(on)
-        self.to_edit.setEnabled(on)
+        self.to_edit.setEnabled(self.cb_range.isChecked())
 
     def _run_dates(self):
         """(판매조회_from, 판매조회_to, 컬럼라벨_실행날짜) 반환.
@@ -1518,13 +1515,10 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         쿠팡 판매분석은 당일 데이터를 익일 이후 생성 → **판매조회는 전일(D-1)**. 하지만 결과파일의
         **컬럼 제목은 실제 작업한 날(오늘=실행날짜)**로 적는다(순위는 오늘 측정이므로 라벨과 일치, 판매는
         전일 데이터가 그 컬럼에 함께 들어감). 새벽까지 이어져 날짜가 바뀌어도 이 값은 시작 시점에 한 번
-        정해져 실행날짜 기준으로 고정된다. 직접 날짜지정(순위 제외)은 그 날짜를 그대로 라벨로 쓴다."""
-        if self.cb_today.isChecked():
-            today = date.today().isoformat()
-            d1 = (date.today() - timedelta(days=1)).isoformat()
-            return d1, d1, today
-        dt = self.to_edit.text().strip()
-        return self.from_edit.text().strip(), dt, dt
+        정해져 실행날짜 기준으로 고정된다. **날짜 지정**(소유자 2026-10-10)도 같은 규칙: 칸=지정일, 판매=그 전날,
+        순위=지금 측정(그 칸에 기록)·빈 칸만 채움."""
+        label = date.today().isoformat() if self.cb_today.isChecked() else self.to_edit.text().strip()
+        return column_dates(label)   # (판매=전날, 판매=전날, 칸=label) — 형식 오류는 ValueError
 
     def _require_run_inputs(self) -> bool:
         """전체실행/판매수집 전 필수 입력·키 확인 — 없으면 경고 후 False."""
@@ -1544,9 +1538,12 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             return
         if not self._require_run_inputs():
             return
-        df, dt, dlabel = self._run_dates()
-        # 날짜를 직접 지정(어제 자동이 아님)하면 순위 조회 제외 = 그 날짜 판매데이터만 채움(차단 회피)
-        skip_ranks = not self.cb_today.isChecked()
+        try:
+            df, dt, dlabel = self._run_dates()
+        except ValueError:
+            QtWidgets.QMessageBox.warning(self, "날짜 형식", "날짜는 YYYY-MM-DD 로 입력하세요(예: 2026-10-09).")
+            return
+        skip_ranks = False   # 날짜 지정도 순위 포함(지금 측정값을 그 칸에·소유자 2026-10-10)
         n = sum(len(a.products) for a in self.input_list.accounts)
         title = run_title(keywords_off, sales_semi)
         # 실행 모드 3택 → 여기선 예/아니오만 확인.
@@ -1562,7 +1559,8 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             self.log("[통계] 마스터가 없어 결과 구글시트에서 복원을 시도합니다…")
             restore_master_from_gsheet("output", gs_out, self.log)
         meta = resumable_progress() if not (newall or redo) else None   # 이어서만 오늘 진행분 재개
-        plan = plan_run_mode(newall, redo, meta, master_exists(), df, dt, dlabel)   # 실행모드 결정(백엔드 공통)
+        plan = plan_run_mode(newall, redo, meta, master_exists(), df, dt, dlabel,   # 실행모드 결정(백엔드 공통)
+                             designated=not self.cb_today.isChecked())
         resume, carry, redo_today = plan.resume, plan.carry, plan.redo_today
         df, dt, mode_desc = plan.date_from, plan.date_to, plan.mode_desc
         dlabel = plan.date_label   # 재개 시 시작일 기준 날짜라벨 복원(백엔드 공통·app.py와 동일 동작)
@@ -1625,7 +1623,8 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self.log("[전체실행] ③ 반자동 순위 — 보이는 창 자동 타이핑(중지: '반자동 중지')")
         result = track_ranks_stage(semi=True,
                                    should_stop=(stop.is_set if stop is not None else (lambda: False)),
-                                   on_log=self.log, gsheet_output_url=gs_out, stock_url=stock_url)
+                                   on_log=self.log, gsheet_output_url=gs_out, stock_url=stock_url,
+                                   date_label=dlabel)   # ①과 같은 날짜 칸에(날짜 지정·재개 라벨 일치)
         # 입력 관리대장의 '그로스 재고'(AD) 컬럼을 수집 재고로 역기록(SA 편집권한 필요·없으면 로그 후 비치명)
         push_ledger_inventory(gs_in, self.log)   # gs_in = 위에서 정의(백업·역기록 공용)
         push_company_stock(self._stock_url(), gs_in, self.log)   # 회사보유재고(판매자배송) 역기록(비치명)
@@ -1843,9 +1842,15 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             QtWidgets.QMessageBox.warning(self, "먼저 ①②",
                                           "결과 파일이 없습니다. ① 판매수집·② 키워드 선정을 먼저 실행하세요.")
             return
+        try:   # '날짜 지정'이면 그 칸에(빈 칸만), '오늘'이면 기존대로 가장 최근 칸
+            rank_label = None if self.cb_today.isChecked() else column_dates(self.to_edit.text().strip())[2]
+        except ValueError:
+            QtWidgets.QMessageBox.warning(self, "날짜 형식", "날짜는 YYYY-MM-DD 로 입력하세요(예: 2026-10-09).")
+            return
         self._semi_stop = threading.Event()
         self.track_stop_btn.setEnabled(True)
-        self.log("[반자동 순위] 시작 — 뜬 창에서 로그에 안내되는 키워드를 직접 검색하세요(중지: '반자동 중지')")
+        self.log("[반자동 순위] 시작 — 뜬 창에서 로그에 안내되는 키워드를 직접 검색하세요(중지: '반자동 중지')"
+                 + (f" · 기록 칸 {rank_label}(지정)" if rank_label else ""))
         should_stop = self._semi_stop.is_set
         gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
 
@@ -1853,7 +1858,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         def task_semi():
             backup_sources(output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
             return track_ranks_stage(semi=True, should_stop=should_stop, on_log=self.log,
-                                     gsheet_output_url=gs_out, stock_url=stock_url)
+                                     gsheet_output_url=gs_out, stock_url=stock_url, date_label=rank_label)
         self.run_bg(task_semi, on_done=self._pipeline_done, btn=self.track_semi_btn, exclusive=True, pipelinelock=True)
 
     def _stop_semi(self):

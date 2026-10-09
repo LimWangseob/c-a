@@ -17,7 +17,7 @@ try:
 except AttributeError:
     pass
 
-from coupang_analytics.pipeline import plan_run_mode, run_log_labels, run_title  # noqa: E402
+from coupang_analytics.pipeline import column_dates, plan_run_mode, run_log_labels, run_title  # noqa: E402
 
 DF, DT = "2026-09-21", "2026-09-22"
 DL = "09.22"   # 기본 날짜라벨(오늘)
@@ -102,6 +102,21 @@ def pin_labels():
     _check(s == " · 순위 제외(판매데이터만)", "skip_ranks(재개 아님)=순위 제외 표기")
 
 
+def pin_designated_date():
+    print("[핀 P8] 날짜 지정(2026-10-10) — 칸=지정일·판매=전날·오늘 다른 날짜 진행분은 안 이어받음·빈 칸만")
+    _check(column_dates("2026-10-09") == ("2026-10-08", "2026-10-08", "2026-10-09"), "10.09 칸 = 10/08 판매")
+    _check(column_dates("2026-10-01") == ("2026-09-30", "2026-09-30", "2026-10-01"), "월 경계(10/01 칸=9/30 판매)")
+    meta = {"date_from": "2026-10-09", "date_to": "2026-10-09", "done": ["a"], "carry": True, "date_label": "2026-10-10"}
+    p = plan_run_mode(False, False, meta, True, "2026-10-08", "2026-10-08", "2026-10-09", designated=True)
+    _check(not p.resume and p.carry and p.date_label == "2026-10-09", "오늘(10.10) 진행분 대신 지정 칸(10.09) 채우기")
+    _check(p.date_from == "2026-10-08" and "빈 칸만" in p.mode_desc, "판매=지정일 전날·안내 문구")
+    p2 = plan_run_mode(False, False, dict(meta, date_label="2026-10-09"), True, "2026-10-08", "2026-10-08",
+                       "2026-10-09", designated=True)
+    _check(p2.resume and p2.date_label == "2026-10-09", "같은 지정 날짜 진행분이면 이어서")
+    p3 = plan_run_mode(False, False, meta, True, DF, DT, DL)
+    _check(p3.resume and p3.date_label == "2026-10-10", "날짜 지정 아니면 기존대로 진행분 이어서(라벨=진행분)")
+
+
 def main() -> int:
     print("=" * 60)
     print("  핀 테스트 — plan_run_mode 실행모드 결정")
@@ -113,6 +128,7 @@ def main() -> int:
     pin_carry_master_only()
     pin_first_run()
     pin_labels()
+    pin_designated_date()
     print("=" * 60)
     print("  [완료] 실행모드 핀 모두 통과")
     print("=" * 60)

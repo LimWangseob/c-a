@@ -88,7 +88,7 @@ python ui/app_qt.py     # 기본 UI = PySide6(Qt) + Windows 11 Fluent 스타일
 - **병합**: 각 레인 `run_checks` 초록 후 push → **master 병합은 직렬**(한 브랜치씩·게이트 재실행). **2~3레인이 최적**(7레인 통제 관료제 불필요).
 
 ## 현재 상태 (상세는 각 메모·SSOT·git, 최신순)
-- **✅2026-10-09 소유자 결정 D-009~D-015(SSOT=docs/DECISIONS.md·STATE.md)**: ①**매칭=AI 중심+VID 고정**(D-009·`product_match_ai`·`output/_매칭고정.json`)·판단 순서=**상품명 동일 → 문구 전체의 의미**(D-011·임베딩 추리기) ②**정산=①판매수집 뒤 앱이 기동·다 받으면 종료**(D-010·`app_process`·예약작업 폐기·500=서버오류·'M' 건너뜀) ③**로그인 비번=매 실행 현재 대장 값·줄마다 다르면 차례로 최대 2회**(D-012) ④**결과 블록 이름=현행 노출상품명 필수**(D-015·①판매분석→③검색 노출명·못 찾으면 ❌오류) ⑤통계 시트 1행 순위 조사 범위 안내(D-014) ⑥원장 쿠팡확인=대장명 키·노출상품ID=추적 상품만. 배포 zip 생성·⚠운용 PC 재배포 후 첫 18:00 로그 검증.
+- **✅2026-10-09 소유자 결정 D-009~D-015(SSOT=docs/DECISIONS.md·STATE.md)**: ①**매칭=AI 중심+VID 고정**(D-009·`product_match_ai`·`output/_매칭고정.json`)·판단 순서=**상품명 동일 → 문구 전체의 의미**(D-011·임베딩 추리기) ②**정산=①판매수집 뒤 앱이 기동·다 받으면 종료**(D-010·`app_process`·예약작업 폐기·500=서버오류·'M' 건너뜀) ③**로그인 비번=매 실행 현재 대장 값·줄마다 다르면 차례로 최대 2회**(D-012) ④**결과 블록 이름=현행 노출상품명 필수**(D-015·①판매분석→③검색 노출명·못 찾으면 ❌오류) ⑤통계 시트 1행 순위 조사 범위 안내(D-014) ⑥원장 쿠팡확인=대장명 키·노출상품ID=추적 상품만 ⑦**날짜 지정 실행=그 칸 빈 칸만**(D-016·2026-10-10). 배포 zip 생성·⚠운용 PC 재배포 후 첫 18:00 로그 검증.
 - **✅구현 Wave1 통합 착수(2026-10-06, 진입점=[[handoff-session-261006]])**: 도메인 전용 세션 정책([[policy-per-domain-sessions]]) 하에 오늘 master 통합 — D8 흡수원장3종(업무일지·계약·채권자·[[impl-d8-absorb-ledger-261005]])·D10 CS 수동트래커([[impl-d10-cs-tracker-261005]])·D2 소싱([[impl-d2-sourcing-261006]])·**통합앱 실행 셸 `ui/app_integrated.py`+확정 보라 디자인 `ui/theme_qt.py`**·정산(파일배치 다운로드 `tools/settlement_download.py`·윙30% 실측 확정·70/30 규칙 재확정). 전부 **greenfield·기존 `app_qt` 미접촉**(기존 앱 무중단·[[keep-existing-app-running-until-integrated]])·게이트15종·복잡도0. ⚠정산 라이브(probe)·쓰기 도메인(D3/D4)·D8 2·3단계는 사무실 선행·소유자 결정 후.
 - **✅화면 시안(커머스 판로) 설계 완료(2026-10-06)**: 메뉴 v3.3 대13·중84 전 화면·입출력 정의서 137칸(`designs/IO_DEFINITION.md`)·`UI_SCREENS` 정합 · 시안=claude.ai 아티팩트(메모 [[handoff-design-mockup-261006]]) · 구현은 IMPL_PLAN 도메인 레인.
 - **🧭커머스 판로 = 멀티플랫폼 통합 관리 앱 설계(2026-10-05·⛔전부 구현 보류·설계만, SSOT=[[domain-design-elaboration-261005]]·designs/PROCESS_OVERVIEW.md)**: 소유자 방향 — 상품·판매·정산·문의(CS)는 통합앱 직접, **샵마인=주문·배송만**([[app-scope-no-orders-shopmine]]). **v1 플랫폼=쿠팡 우선**(스마트스토어 API 위탁접근=**보류**·어댑터 자리만). 플랫폼 어댑터(L1 공유 파사드)+배치 수집 레이어+쓰기 반영(상품 CRUD·CS 답변·§5.4)=`designs/PLATFORM_INTEGRATION.md`. **정산 3층**(①플랫폼 ②계약 ③채권자 단방향·기구현 1단계=①)=`designs/SETTLEMENT_MODEL.md`. 도메인 상세=`designs/DOMAIN_D2_SOURCING/D3_REGISTER/D4_PRODUCT_MANAGE/D8_SETTLEMENT_PHASE23/D10_CS.md`·화면=`designs/UI_SCREENS.md`. 입출력 1:1 기준=`designs/IO_DEFINITION.md`([[io-definition-spec]]). **5영역 배정**(계약·사업·채권자→D8·마케팅→D1·문의CS→신규 D10·DOMAIN_DESIGN §9 R5). **✅U2=kw 조회 프리미티브(kw_volume·kw_suggest·kw_metrics) L1 재분류**(rank R4 동형·코드 이동 없음·핀 등재·D2 선행 M1 해소). **남은 선행(라이브·소유자)**: WING 정산 API 세션호출(U3)·샵마인 CS 경계(U4)·쿠팡 쓰기 엔드포인트 캡처. 게이트10(L1 핀 포함) 초록.
@@ -121,12 +121,12 @@ python ui/app_qt.py     # 기본 UI = PySide6(Qt) + Windows 11 Fluent 스타일
 - **관리대장 그로스 재고 역기록(AD열)**(매칭키=계정+등록상품명 유사도)·**계정 추가/삭제 반영**(줄 사라지면 완전삭제·판매중지로 남으면 유지·`ledger_account_ids`). ⚠삭제=되돌릴 수 없음. SSOT=DESIGN §0-0.
 - **대장↔쿠팡 매칭 = AI 중심 + VID 고정**(D-009·D-011, 2026-10-09): VID 고정 → 상품명 동일(등록명·노출명) → 문구 전체의 의미(AI) → AI 장애 시 글자 규칙(옛 정밀 매칭 2026-09-18 은 대체용). 색상 필터 전 경로·동명 판매중 함께.
 - **결과 상품명 = 현행 노출상품명**(D-015): 같은 VID 개명=이력 승계·못 찾으면 ❌오류 기록. **로그인 비번 = 매 실행 현재 대장 값**(D-012). **정산 = ① 뒤 앱이 기동·다 받으면 종료**(D-010).
-- **날짜 넘긴 중단 작업**: 진행 파일·단계 기록은 **오늘 시작분만** 이어받음 → 다음 날 실행은 새 작업(라벨=오늘·판매=D-1). 날짜 지정 불필요(기본 '오늘'). ⚠ 날짜가 바뀐 뒤 **③순위만 단독 실행하면 최신 날짜 칸(어제)에 기록**되므로 전체실행부터.
+- **날짜 넘긴 중단 작업**: 진행 파일·단계 기록은 **오늘 시작분만** 이어받음 → 다음 날 실행은 새 작업(라벨=오늘·판매=D-1). **날짜 지정(D-016)** = 그 날짜 칸을 빈 칸만 채움(판매=그 전날·순위=지금 측정·칸별 수집 이력). ⚠ '오늘' 모드 ③순위 단독은 최신 날짜 칸에 기록 — 어제 칸을 채우려면 날짜 지정.
 - **재부팅 자동복구(2026-09-16)**: 야간 재부팅 시 '로그온' 트리거 `--resume`→판매수집 스킵·순위부터. Windows 자동로그인 필요.
 - **로그인 2차인증**: ID/비번 단일단계(별도 OTP 페이지 없음). 2차인증=위치/환경 기반(사무실=OTP없이 통과·낯선환경=인증번호·5회오류 잠금). Akamai 차단 시 사람이 직접 타이핑(지문위조 금지라 우회 없음).
 - 라이브 검증됨: 반자동 밤샘 무인 완주(2026-09-14: 22계정·271키워드·10.5h·차단0). **로그인/판매수집 라이브=사무실만**(위탁계정·2차인증 위치기반).
 - 구글시트 `계정목록` 서식: 제목줄 동일색(B7C9E8)+사업자별 밴드8색(판매중지 행도 밴드색·값 보존). SSOT=GSHEET_UNIFIED.md.
-- 검증도구: `tools/simulate_pipeline.py`(14시나리오)·`verify_offline.py`·`verify_gsheet_offline.py`·`verify_render_precision.py`(셀단위·게이트)·`verify_registry_offline.py`·`verify_rank_live.py`.
+- 검증도구: `tools/simulate_pipeline.py`(15시나리오)·`verify_offline.py`·`verify_gsheet_offline.py`·`verify_render_precision.py`(셀단위·게이트)·`verify_registry_offline.py`·`verify_rank_live.py`.
 
 ## 환경
 - Windows, Python, Playwright(sync) + 실제 Google Chrome. 키(설정 탭에서 1회 입력→credstore 자동 로드): **필수** 네이버 검색광고 API + **OpenAI(ChatGPT) API**(키워드 AI 필수, 없으면 실행 중단).

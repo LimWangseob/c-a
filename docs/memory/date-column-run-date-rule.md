@@ -24,4 +24,4 @@ metadata:
 
 SSOT=`designs/DESIGN.md §일자 컬럼`. 관련 [[daily-stats-keyword-freeze]] [[coupang-sales-data-lag]] [[semi-auto-rank-and-exposed-name]] [[seldoc-output-format]]
 
-**날짜 넘긴 중단 작업(2026-10-10 확인)**: `resumable_progress`·`read_run_stage` 는 **오늘 시작분만** 이어받음 → 10/09 실행을 중단하고 10/10 에 다시 돌리면 새 작업(라벨 10.10·판매 10/09). 날짜 지정 불필요. 중단된 날의 ③순위 공란은 소급 불가(순위는 그날 측정). ⚠ 날짜가 바뀐 뒤 ③만 단독 실행하면 `latest_date`(어제 칸)에 기록됨 → 전체실행부터.
+**날짜 넘긴 중단 작업(2026-10-10 확인)**: `resumable_progress`·`read_run_stage` 는 **오늘 시작분만** 이어받음 → 10/09 실행을 중단하고 10/10 에 다시 돌리면 새 작업(라벨 10.10·판매 10/09). 날짜 지정 불필요. 중단된 날의 ③순위 공란은 소급 불가(순위는 그날 측정). **날짜 지정(D-016)**: UI '날짜 지정' = 그 칸을 빈 칸만(판매=전날·순위=지금 측정·칸별 수집 이력 `_수집스탬프` 3열). '오늘' 모드 ③ 단독은 여전히 최신 칸.

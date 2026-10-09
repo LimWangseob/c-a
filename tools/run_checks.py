@@ -25,7 +25,7 @@ except AttributeError:
 
 # (표시명, 스크립트, quick 포함 여부) — quick=커밋 전 빠른 것만
 CHECKS = [
-    ("시뮬레이션(파이프라인 14시나리오)", "tools/simulate_pipeline.py", True),
+    ("시뮬레이션(파이프라인 15시나리오)", "tools/simulate_pipeline.py", True),
     ("핀(로그인·발견·반자동순위 실제코드)", "tools/pin_login_ranks.py", True),
     ("핀(apply_style 서식 출력)", "tools/pin_apply_style.py", True),
     ("핀(실행모드 결정 plan_run_mode)", "tools/pin_run_plan.py", True),
