@@ -93,6 +93,20 @@
 - 영향 범위: `input_list`(PwCandidate·parse_password_candidates·read_xlsx_rows), `pipeline_sales`(_pw_list·_login_with_candidates), `ui/app_qt.py`(_apply_pw_candidates·_account_pw 가 후보 목록 반환·미사용 _store_passwords_from 삭제). ⚠ 값이 갈린 계정은 실행당 틀린 제출이 최대 1회 늘 수 있음 — 대장 정리 시 해소. 2026-09-15 '비번 1회 오류=재시도 금지'는 후보가 1개일 때 그대로 유지.
 - 상태: ACTIVE
 
+### D-013 [EXPOSED_NAME] 결과 블록 이름 = 현행 쿠팡 노출상품명·같은 VID 개명 시 이력 승계 (2026-10-09, R3)
+- 결정: 결과(통계 시트·계정목록) 블록 이름 = **쿠팡 노출상품명**(판매분석 productName·고객이 검색으로 보는 이름) + 옵션라벨(다중옵션만). 매 실행 추적 상품의 노출명을 확인(당일 판매분석 → 없으면 최근 30일 판매분석 1회 보충, `pipeline_sales._fill_exposed_names` → `Product.exposed_name`)하고, **같은 VID 의 기존 블록 이름이 다르면 새 이름으로 바꿔 이력 승계**(`pipeline_process._block_names` → `set_display_name`). 노출명을 모르는 날은 기존 이름 유지(등록명으로 되돌림 금지) — 단 등록상품명 자체가 바뀌면 새 등록상품명. 다른 상품 블록이 이미 그 이름이면 바꾸지 않고 경고(병합 방지). 등록상품명은 숨김 메타에 계속 최신화(`set_registered_name`).
+- 근거: 소유자 지시(2026-10-09 "상품명은 때론 변경돼 — 노출순위가 낮아 검색에 걸리도록 바꿈·VID 는 동일·결과파일엔 변경된 상품명이 기술돼야(현행화)") + 기존 규약(결과=쿠팡 노출 상품명, 메모 product-name-convention). 실측(10/09 마스터 118블록·원문): 노출명 확인 44블록 중 40블록이 등록명≠노출명(예 '기저귀가방 CHMM01' vs '기저귀가방 출산선물 캔버스 백 …') → 결과가 노출명이 아니었음. 미리보기: 34블록 이름 현행화. 게이트 16종·verify_offline[38]·시뮬 day4(등록명 변경=갱신) 유지.
+- 버린 대안: (a) 블록명=등록상품명 고정(2026-09 '노출명 교체 중단' — 검색용 개명 미반영·규약 불일치) (b) 순위 검색결과(SERP) 이름 사용(광고·표기 변형) (c) 모르는 날 등록명으로 표시(날마다 이름이 오락가락).
+- 영향 범위: `input_list.Product.exposed_name`, `pipeline_sales._fill_exposed_names`(빈 것이 있을 때만 30일 판매분석 1회 추가 조회), `pipeline_process._block_names`·`_process_option(pname)`·`_migrate_product_blocks(names)`. 첫 실행에 기존 블록 다수가 긴 노출명으로 이름이 바뀜(이력·키워드·순위 유지).
+- 상태: ACTIVE
+
+### D-014 [RANK_NOTE] 통계 시트마다 1행 노출순위 조사 범위 안내 (2026-10-09, R3)
+- 결정: 모든 통계(사업자) 시트 1행 H열에 '* (참고) 상품별로 노출순위를 조사하지만, 동일상품의 옵션 상품과 판매중지건은 노출순위를 조사 안함.' 을 파랑 굵게 표시(`config.RANK_NOTE_TEXT/COLOR`·`workbook_render` 제목행). 실제 규칙과 일치(2차 옵션 블록=순위행 없음·판매중지/취소선=rank_suppressed).
+- 근거: 소유자 지시(2026-10-09 캡처 — 한 시트에 손으로 적은 안내가 매 미러링 전체 교체로 유지 안 됨·"모든 시트에 명시·판매중지건 추가·색상 동일"). verify_offline[38].
+- 버린 대안: 시트에 수동 입력(미러링 때 사라짐).
+- 영향 범위: `config.py`·`workbook_render.py`(apply_style 마다 멱등 기록).
+- 상태: ACTIVE
+
 ---
 
 ## 전환 전 결정 (한 줄·동결 아카이브·2026-10-08 이전·재작성 금지=추측 방지)

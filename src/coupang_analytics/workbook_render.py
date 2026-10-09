@@ -353,6 +353,10 @@ class _RenderMixin:
         back.fill = PatternFill("solid", fgColor="FFF2CC")   # 옅은 노랑 강조 배경
         back.border = Border(bottom=Side(style="medium"))
         _sty_merge(ws, 1, _COL_SEARCH, 1, _COL_METRIC)  # F1:G1
+        # 순위 조사 범위 안내(H1·모든 통계 시트·소유자 2026-10-09). 병합 없이 오른쪽 빈 칸으로 넘쳐 보이게.
+        note = ws.cell(1, _FIRST_DATE, config.RANK_NOTE_TEXT)
+        note.font = Font(name=self._FN, size=11, bold=True, color=config.RANK_NOTE_COLOR)
+        note.alignment = Alignment(horizontal="left", vertical="center", wrap_text=False)
         ws.row_dimensions[1].height = 21          # 제목행 높이(샘플 서식 고정값)
         ws.freeze_panes = "H2"                     # A~G열·1행 고정, H~ 일자만 스크롤
         # 표준 열너비(레이아웃 v4): 좌측 라벨 칸 A:B 합(7+7=14) = 우측 지표 라벨 칸 G(14) 동일(소유자 #3).

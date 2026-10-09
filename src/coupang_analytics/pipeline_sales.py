@@ -354,6 +354,7 @@ def _match_to_ledger(b, a: Account, products, metrics, inv_names: dict, date_to,
     for note in out.notes:
         log(f"  [{a.label}] {note}")
     tracked, n_match = build_tracked(a.products, PMA.resolved(out))
+    _fill_exposed_names(b, a, tracked, metrics, date_to, log)   # 결과 블록 이름 = 현행 노출상품명(D-013)
     if anchor_file is not None:
         try:
             save_anchors(a.account_id, out.anchors, anchor_file)
@@ -362,6 +363,32 @@ def _match_to_ledger(b, a: Account, products, metrics, inv_names: dict, date_to,
     hows = Counter(pk.how for pk in out.picks.values())
     log(f"  [{a.label}] 매칭 경로: " + " · ".join(f"{k} {v}" for k, v in sorted(hows.items())) + f" (고정 {len(out.anchors)}줄)")
     return tracked, n_match
+
+
+def _fill_exposed_names(b, a: Account, tracked, metrics, date_to, log) -> None:
+    """추적 상품마다 **현행 쿠팡 노출상품명**(판매분석 productName)을 `exposed_name` 에 채운다(상품명 현행화·D-013).
+    당일 판매분석에 없는 상품은 최근 N일 판매분석 roster 로 보충(그 계정에 빈 것이 있을 때만 1회 조회). 그래도 없으면
+    빈 값 → 블록 이름은 기존 이름 유지(pipeline_process._block_names)."""
+    names = {vid: " ".join(m.product_name.split()) for vid, m in (metrics or {}).items() if m.product_name}
+
+    def _pick(tp):
+        return next((names[v] for o in tp.options for v in o.vendor_item_ids if v in names), "")
+    want = [tp for tp in tracked if any(o.vendor_item_ids for o in tp.options)]
+    if any(not _pick(tp) for tp in want):
+        from .collector import fetch_sales_roster, SalesFetchError
+        try:
+            d0 = (date.fromisoformat(date_to) - timedelta(days=config.SALES_VID_WINDOW_DAYS)).isoformat()
+            for p in fetch_sales_roster(b.page, d0, date_to, log):
+                for o in p.options:
+                    for v in o.vendor_item_ids:
+                        names.setdefault(v, " ".join(p.name.split()))
+        except SalesFetchError as exc:       # 비치명 — 모르는 상품은 기존 블록 이름 유지
+            log(f"  [{a.label}] ⚠ 노출상품명 보충({config.SALES_VID_WINDOW_DAYS}일) 조회 실패(계속) — {str(exc)[:100]}")
+    for tp in want:
+        tp.exposed_name = _pick(tp)
+    missing = sum(1 for tp in want if not tp.exposed_name)
+    if missing:
+        log(f"  [{a.label}] 노출상품명 미확인 {missing}개(최근 {config.SALES_VID_WINDOW_DAYS}일 판매·조회 없음) — 기존 블록 이름 유지")
 
 
 def _no_ai(system: str, user: str) -> dict:

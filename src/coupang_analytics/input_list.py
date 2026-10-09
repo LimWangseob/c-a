@@ -37,6 +37,7 @@ class Product:
     discontinued: bool = False      # 대장 판매중지/취소선(#8 2026-09-27): 수집은 하되 ③순위만 제외
     sale_status: str = ""           # 발견 상품의 쿠팡 판매상태(판매중/부분판매중/판매중지 등) — 중복 리스팅 중 판매중지 제외용(2026-09-29)
     ledger_name: str = ""           # 추적 상품이 대응하는 **관리대장 상품명**(매칭 후 name=쿠팡명이 되므로 대장 키 보존·D-009)
+    exposed_name: str = ""          # 쿠팡 **노출상품명**(판매분석 productName·현행) — 결과 블록 이름(상품명 현행화·D-013). 모르면 ""
 
     @property
     def display_title(self) -> str:

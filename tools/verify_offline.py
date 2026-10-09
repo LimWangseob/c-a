@@ -798,6 +798,54 @@ def t1_login_pw_candidates():
     _ok("거부 시 다른 줄 값으로 1회 더·성공 로그·후보 1개=재시도 없음·모두 거부=최대 2회 후 실패")
 
 
+def t1_exposed_name_current():
+    print("[38] 상품명 현행화(D-013) — 결과 블록=노출상품명·같은 VID 이름 바뀌면 이력 승계·모르면 유지 + 시트 1행 순위 안내")
+    from coupang_analytics.input_list import Option, Product
+    from coupang_analytics.pipeline_process import _block_names
+    BIZ = "현행화"
+    wb = OutputWorkbook.empty()
+    wb.ensure_product_block(BIZ, "기저귀가방 CHMM01", config.KIND_CONTRACT, ["kw"], registered="기저귀가방 CHMM01")
+    wb.set_product_vids(BIZ, "기저귀가방 CHMM01", ["v1"])
+    wb.ensure_date(BIZ, "2026-10-08")
+    wb.set_product_metric(BIZ, "기저귀가방 CHMM01", config.M_SALES, "2026-10-08", 7)
+    p = Product(name="기저귀가방 CHMM01", options=[Option("", ["v1"])], exposed_name="기저귀가방 출산선물 캔버스 백")
+    logs: list = []
+    assert _block_names(wb, BIZ, p, "기저귀가방 CHMM01", p.options, False, logs.append) == ["기저귀가방 출산선물 캔버스 백"]
+    assert wb.products_of(BIZ) == ["기저귀가방 출산선물 캔버스 백"] and any("현행화" in x for x in logs), "같은 VID 블록 이름 교체"
+    assert wb.product_vids(BIZ, "기저귀가방 출산선물 캔버스 백") == ["v1"], "VID 유지"
+    # 검색용으로 노출명을 또 바꿈(같은 VID) → 다시 현행화
+    p.exposed_name = "아기 기저귀가방 백팩 대용량"
+    assert _block_names(wb, BIZ, p, "기저귀가방 CHMM01", p.options, False, logs.append) == ["아기 기저귀가방 백팩 대용량"]
+    # 오늘 노출명을 모름 → 기존 이름 유지(등록명으로 되돌리지 않음)
+    p.exposed_name = ""
+    assert _block_names(wb, BIZ, p, "기저귀가방 CHMM01", p.options, False, logs.append) == ["아기 기저귀가방 백팩 대용량"]
+    # 등록상품명 자체가 바뀌고 노출명 모름 → 새 등록상품명(기존 핀 동작)
+    assert _block_names(wb, BIZ, p, "기저귀가방 CHMM02", p.options, False, logs.append) == ["기저귀가방 CHMM02"]
+    # 다른 상품 블록이 이미 그 이름 → 바꾸지 않고 경고(병합 방지)
+    wb.ensure_product_block(BIZ, "다른상품", config.KIND_CONTRACT, [], registered="다른상품")
+    wb.set_product_vids(BIZ, "다른상품", ["v9"])
+    p.exposed_name = "다른상품"
+    assert _block_names(wb, BIZ, p, "기저귀가방 CHMM02", p.options, False, logs.append) == ["기저귀가방 CHMM02"]
+    assert any("이미 다른 상품" in x for x in logs)
+    # 다중옵션: 옵션별로 노출명 + 라벨
+    q = Product(name="신형타프 R008", options=[Option("블랙 Free", ["b1"]), Option("베이지 Free", ["b2"])],
+                exposed_name="캠핑 타프 그늘막")
+    assert _block_names(wb, BIZ, q, "신형타프 R008", q.options, True, logs.append) ==         ["캠핑 타프 그늘막 (블랙 Free)", "캠핑 타프 그늘막 (베이지 Free)"]
+    # 이력 보존: 이름이 여러 번 바뀌어도 10/08 판매 값 그대로(apply_style 렌더 후 재로드까지)
+    d = Path(tempfile.mkdtemp())
+    wb.apply_style()
+    wb.save(d / "m.xlsx")
+    wb2 = OutputWorkbook.load(d / "m.xlsx")
+    assert "기저귀가방 CHMM02" in wb2.products_of(BIZ) and wb2.product_vids(BIZ, "기저귀가방 CHMM02") == ["v1"]
+    ws = wb2.wb[BIZ]
+    srow = wb2._metric_row[(BIZ, "기저귀가방 CHMM02", config.M_SALES)]
+    assert 7 in [ws.cell(srow, c).value for c in range(8, ws.max_column + 1)], "개명 여러 번 뒤에도 10/08 판매 이력 유지"
+    assert ws.cell(1, 8).value == config.RANK_NOTE_TEXT, f"1행 H열 순위 안내: {ws.cell(1, 8).value!r}"
+    assert ws.cell(1, 8).font.b and str(ws.cell(1, 8).font.color.rgb).endswith(config.RANK_NOTE_COLOR), "파랑 굵게"
+    assert "옵션 상품과 판매중지건은 노출순위를 조사 안함" in config.RANK_NOTE_TEXT
+    _ok("노출명 블록·같은 VID 개명 이력 승계·모르면 유지·등록명 바뀌면 갱신·이름 충돌 경고·다중옵션 라벨·1행 순위 안내(파랑 굵게)")
+
+
 def t1_vid_source_option_split():
     print("[12] VID 출처=이름칸 + 옵션 분리 블록 + 마이그레이션 (workbook, 실제 xlsx I/O)")
     d = Path(tempfile.mkdtemp())
@@ -1985,6 +2033,7 @@ def main():
     t1_product_match_precision()
     t1_ai_match_d009()
     t1_login_pw_candidates()
+    t1_exposed_name_current()
     t1_no_vidless_blocks()
     t1_vid_source_option_split()
     t1_ledger_dedup()

@@ -299,14 +299,13 @@ def _apply_pid(wb, biz: str, pname: str, opt_vids, pid_by_vid) -> None:
 
 
 def _process_option(pctx: _ProcCtx, biz: str, product, base: str, kind: str, title: str,
-                    i: int, opt, multi: bool) -> None:
+                    i: int, opt, multi: bool, pname: str) -> None:
     """상품의 옵션(vid) 한 개를 기록. 대표(i==0)=키워드/순위/지표, 2차 옵션=판매정보(지표·재고)만.
 
     keywords_off(①판매수집)면 대표도 지표·재고·vid만(키워드는 ②, 순위는 ③). 상품마다 저장(중단 복구).
     """
     wb, log = pctx.wb, pctx.log
     is_rep = (i == 0)
-    pname = _block_name(base, opt.label if multi else "")
     opt_vids = list(opt.vendor_item_ids)
     if pctx.keywords_off or not is_rep:
         # ① 판매수집 단계, 또는 다중옵션 2차 블록 → 지표·재고·vid만(키워드/순위 없음, rank_rows=is_rep)
@@ -357,8 +356,43 @@ def _process_option(pctx: _ProcCtx, biz: str, product, base: str, kind: str, tit
     wb.save(pctx.save_path)
 
 
+def _block_names(wb, biz: str, product, base: str, opts, multi: bool, log) -> list[str]:
+    """옵션별 블록 이름 = **쿠팡 노출상품명**(판매분석 productName·현행) + 옵션라벨(다중옵션만) — 상품명 현행화(D-013).
+
+    소유자 2026-10-09: 검색 노출을 위해 상품명을 바꿔도 VID 는 같다 → 같은 VID 의 기존 블록을 새 이름으로 바꿔
+    **이력 승계**(set_display_name). 오늘 노출명을 모르면(판매·조회 0·30일 보강에도 없음) 기존 블록 이름 유지(등록명으로
+    되돌림 금지) — 단 **등록상품명 자체가 바뀌었으면** 새 등록상품명으로(기존 핀: 상품조회명 변경=블록명 갱신). 처음 보는
+    상품이면 등록상품명. 다른 상품 블록이 이미 그 이름이면 바꾸지 않고(병합 방지) 경고."""
+    disp = " ".join((getattr(product, "exposed_name", "") or "").split())
+    out: list[str] = []
+    for o in opts:
+        label = o.label if multi else ""
+        vids = set(o.vendor_item_ids)
+        old = wb.resolve_block_name(biz, list(vids))
+        reg_changed = bool(old) and wb.registered_name(biz, old) not in ("", base)
+        if disp:
+            want = _block_name(disp, label)
+        elif old and not reg_changed:
+            want = old
+        else:
+            want = _block_name(base, label)
+        taken = wb.has_product(biz, want) and want != old and not (set(wb.product_vids(biz, want)) & vids)
+        if taken:                                       # 다른 상품 블록이 그 이름 → 기존/등록명 유지(병합 방지)
+            log(f"  [상품명] ⚠ '{want}' 은 이미 다른 상품 블록 이름 — 기존 이름 유지")
+            want = old or _block_name(base, label)
+        elif old and old != want:
+            if wb.set_display_name(biz, old, want):
+                log(f"  [상품명] 현행화 '{old}' → '{want}'(같은 VID·이력 승계)")
+            else:
+                want = old
+        if wb.has_product(biz, want):
+            wb.set_registered_name(biz, want, base)    # 등록상품명 최신화(다음 실행의 '등록명 바뀜' 판정 기준)
+        out.append(want)
+    return out
+
+
 def _migrate_product_blocks(wb, biz: str, base: str, rep_name: str, vids_all, opts, multi: bool,
-                            log) -> None:
+                            log, names: list[str] | None = None) -> None:
     """정체성/마이그레이션(소유자 2026-09-20: vid=상품당 1개).
 
     ① **같은 vid** = 같은 상품 → 기존 블록 승계 + 이름을 등록상품명으로 정규화(set_display_name 은
@@ -371,7 +405,7 @@ def _migrate_product_blocks(wb, biz: str, base: str, rep_name: str, vids_all, op
     if old and old != rep_name and not wb.has_product(biz, rep_name):
         if wb.set_display_name(biz, old, rep_name):
             log(f"  [정체성] 기존 블록 '{old}' → '{rep_name}'(같은 vid·과거 이력 승계·이름 정규화)")
-    new_names = {_block_name(base, o.label if multi else "") for o in opts}   # 이번에 쓸(이어쓸) 블록
+    new_names = set(names or [_block_name(base, o.label if multi else "") for o in opts])   # 이번에 쓸(이어쓸) 블록
     for stale in wb.blocks_with_registered_name(biz, base):
         stored = set(wb.product_vids(biz, stale))
         # ① vid 가 바뀐 옛 블록(교집합 없음) = 정체성 변경 → 삭제·새로 시작(단일옵션 동일이름도 삭제 후 재생성).
@@ -505,8 +539,9 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
         multi = len(opts) > 1                           # 옵션 라벨은 **다중옵션에만** 붙인다(단일옵션=등록상품명 그대로)
         base = product.name                            # 등록상품명(vendor-inventory) = 블록 기준명
         vids_all = [oid for o in opts for oid in o.vendor_item_ids]
-        rep_name = _block_name(base, opts[0].label if multi else "")
-        _migrate_product_blocks(wb, biz, base, rep_name, vids_all, opts, multi, log)
+        names = _block_names(wb, biz, product, base, opts, multi, log)   # 노출상품명 현행화(D-013)
+        rep_name = names[0]
+        _migrate_product_blocks(wb, biz, base, rep_name, vids_all, opts, multi, log, names)
         # 수집 주기·마케팅은 상품(대표) 단위. 오늘 대상 아니면 이 상품의 모든 옵션 블록을 오늘치 생략.
         if product.mkt_start or product.mkt_end or product.mkt_mon:   # 대장에 마케팅 값 있을 때만 반영
             wb.set_marketing(biz, rep_name, product.mkt_start, product.mkt_end, product.mkt_mon)
@@ -514,8 +549,7 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
             _due, _why = wb.product_due(biz, rep_name, date_iso)
             if not _due:
                 log(f"  [{title}] {_why} — 오늘 수집 생략(상품 주기)")
-                for o in opts:
-                    seen_products.append(_block_name(base, o.label if multi else ""))   # 있음(오늘 스킵돼도 '있음')
+                seen_products.extend(names)          # 있음(오늘 스킵돼도 '있음')
                 continue
         # ── 옵션 블록 루프: 대표(i==0)만 키워드/순위, 나머지는 판매정보만 ──
         pctx = _ProcCtx(wb=wb, naver=naver, ai_key=ai_key, browser=browser, metrics=metrics,
@@ -523,9 +557,9 @@ def _process_account(report_acc, wb, naver, ai_key, browser, metrics, inv_by_vid
                         keywords_off=keywords_off, log=log, save_path=save_path, sale_status=sale_status,
                         vid_meta=vid_meta, pid_by_vid=pid_by_vid)
         for i, opt in enumerate(opts):
-            bname = _block_name(base, opt.label if multi else "")
+            bname = names[i]
             seen_products.append(bname)
-            _process_option(pctx, biz, product, base, kind, title, i, opt, multi)
+            _process_option(pctx, biz, product, base, kind, title, i, opt, multi, bname)
             wb.set_product_account_id(biz, bname, report_acc.account_id)   # 항목5: 상품별 계정ID 태깅(다계정ID 사업자)
             # #8(2026-09-27): 대장 판매중지/취소선도 수집(위에서 지표·재고·판매가·판매상태 채움)하되 ③순위만 제외.
             # rank_suppressed(is_discontinued) 가 순위를 건너뛴다. 재판매(취소선 해제)면 False 로 해제.
