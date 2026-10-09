@@ -911,6 +911,29 @@ def t15_password_candidates() -> None:
     _ok("후보 여럿(행 번호 포함)·적은 줄 먼저·같으면 위쪽 행·빈 칸 무시·parse_password_rows=첫 후보")
 
 
+def t16_password_trim() -> None:
+    print("[16] 관리대장 비번 앞뒤 공백 제거(D-018) — 공백 때문에 로그인 거부되던 실측(DW·플랜잇·반달) 재발 방지")
+    from coupang_analytics.input_list import parse_password_candidates
+    hdr = ["사업자", "계정아이디", "비밀번호", "상품명"]
+    # 실측 모양(2026-10-10): DW = 1줄 옛 값 + 7줄 '새 값 + 끝 공백' · 플랜잇 = 유일 값 끝 공백 ·
+    # 반달 = 한 줄만 끝 공백(나머지와 공백만 다름) · 공백만 있는 칸(\xa0 포함) = 빈 칸
+    rows = [["관리대장"], hdr,
+            ["DW", "dalbong", "NEW ", "p1"], ["DW", "dalbong", "OLD", "p2"]] + [["DW", "dalbong", "NEW ", f"p{i}"] for i in range(3, 9)] + [
+            ["플랜잇", "plan", " PLAN\t", "q1"],
+            ["반달", "mrc", "SAME ", "m1"], ["반달", "mrc", "SAME", "m2"],
+            ["공백", "blank", " \xa0", "b1"]]
+    c = parse_password_candidates(rows)
+    dw = {x.password: x for x in c["dalbong"]}
+    assert set(dw) == {"NEW", "OLD"}, f"제출값 = 공백 뗀 값: {list(dw)}"
+    assert dw["NEW"].rows == (3, 5, 6, 7, 8, 9, 10) and dw["NEW"].trimmed == (3, 5, 6, 7, 8, 9, 10), dw["NEW"]
+    assert dw["OLD"].trimmed == (), "공백 없던 줄은 경고 대상 아님"
+    assert [(x.password, x.trimmed) for x in c["plan"]] == [("PLAN", (11,))], c["plan"]
+    assert [(x.password, x.rows, x.trimmed) for x in c["mrc"]] == [("SAME", (12, 13), (12,))], \
+        f"공백만 다른 두 값 = 한 후보(불필요한 오답 제출 없음): {c['mrc']}"
+    assert "blank" not in c, "공백만 있는 칸 = 빈 칸(후보 아님·저장값 유지)"
+    _ok("앞뒤 공백(스페이스·탭·\\xa0) 제거 후 제출·공백만 다른 값 합침·공백만=빈 칸·trimmed 행 기록(경고용)")
+
+
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
     for fn in (t1_ledger_rows, t1b_ledger_strike, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
@@ -919,7 +942,7 @@ def main() -> int:
                t8_exec_retry, t9_legacy_format_mismatch, t10_stats_full_replace_mismatch,
                t11_move_across_title_merge, t11b_merge_failure_nonfatal, t11c_stock_migration_frozen_cols,
                t12_delete_ghost_product_rows, t13_backup_result_via_sa, t14_sheet_id_robust,
-               t15_password_candidates):
+               t15_password_candidates, t16_password_trim):
         fn()
     print("=== 전부 통과 ===")
     return 0

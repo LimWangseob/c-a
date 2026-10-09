@@ -1170,6 +1170,10 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
                 order = " · ".join(f"값{k + 1}=행 {','.join(map(str, c.rows))}" for k, c in enumerate(cs))
                 self.log(f"[비번] ⚠ {aid}: 관리대장 줄마다 비밀번호가 다름({order}) — 로그인 시 값1부터 차례로 시도"
                          "(최대 2개). 대장에서 이 계정 비밀번호를 한 값으로 맞춰 주세요")
+            trimmed = sorted(r for c in cs for r in c.trimmed)
+            if trimmed:   # D-018: 앞뒤 공백은 떼고 제출(대장 원문은 그대로라 정리 요청)
+                self.log(f"[비번] ⚠ {aid}: 관리대장 행 {','.join(map(str, trimmed))} 비밀번호 앞뒤에 공백이 있어 "
+                         "떼고 입력합니다. 대장에서 공백을 지워 주세요")
 
     def _on_input_source_changed(self, checked=True) -> None:
         """기본 입력 소스 라디오 변경 → input/source 영속(다음 시작 자동로드가 이 값을 따른다)."""

@@ -199,6 +199,7 @@ class PwCandidate:
     """관리대장 한 계정의 비밀번호 후보 — 같은 계정 여러 줄(상품마다 한 줄)에 서로 다른 값이 적힌 경우를 다룬다."""
     password: str
     rows: tuple[int, ...]           # 그 값이 적힌 대장 행 번호(시트 기준 1부터)
+    trimmed: tuple[int, ...] = ()   # 그중 앞뒤 공백을 떼어낸 행(D-018 — 대장 정리 경고용)
 
 
 def parse_password_candidates(rows: list) -> dict[str, list[PwCandidate]]:
@@ -216,13 +217,19 @@ def parse_password_candidates(rows: list) -> dict[str, list[PwCandidate]]:
     norm = [h.lower().replace(" ", "") for h in header]
     i_id, i_pw = _alias_index(norm, _ID_ALIASES), _alias_index(norm, _PW_ALIASES)
     seen: dict[str, dict[str, list[int]]] = {}
+    trimmed: dict[tuple[str, str], list[int]] = {}
     for r, row in enumerate(rows[hrow + 1:], start=hrow + 2):
         aid = _norm(_cell(row, i_id))
         raw = _cell(row, i_pw)
-        pw = str(raw) if raw is not None else ""
+        full = str(raw) if raw is not None else ""
+        # 앞뒤 공백 제거(D-018): 대장에 새 비번을 적으며 끝 공백이 섞여 그대로 타이핑 → 로그인 거부(2026-10-10 실측
+        # DW 7줄·플랜잇·반달). 공백만 있는 칸=빈 칸. 뗀 행은 trimmed 로 남겨 앱이 대장 정리를 경고한다.
+        pw = full.strip()
         if aid and pw:
             seen.setdefault(aid, {}).setdefault(pw, []).append(r)
-    return {aid: sorted((PwCandidate(pw, tuple(rs)) for pw, rs in vals.items()),
+            if pw != full:
+                trimmed.setdefault((aid, pw), []).append(r)
+    return {aid: sorted((PwCandidate(pw, tuple(rs), tuple(trimmed.get((aid, pw), ()))) for pw, rs in vals.items()),
                         key=lambda c: (len(c.rows), c.rows[0]))
             for aid, vals in seen.items()}
 

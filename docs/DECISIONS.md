@@ -310,3 +310,10 @@
 - 버린 대안: (a) 보류 유지(2026-09-26 판단 "인위적·효과 대비 낮음" — 소유자가 실행 선택) (b) pipeline_ranks·collector·pipeline 도 분리(이미 MI B·건강 파일 미접촉 규칙) (c) KNOWN_BAD 유지(재비대 감지 못함 — 소유자 선택 아님).
 - 영향 범위: `src/coupang_analytics/workbook.py`·`workbook_meta.py`·`workbook_dates.py`·`workbook_lifecycle.py`(신규), `tools/check_complexity.py`(KNOWN_BAD), `designs/CODE_HEALTH_PLAN.md §8-3 6c`. 런타임 동작·출력물 무변경(배포는 다음 빌드에 자연 포함·PyInstaller 정적 import 추적). ⚠ workbook.py 의 D+ 괴물함수는 이제 다른 건강 파일처럼 경고(차단은 MI C).
 - 상태: ACTIVE
+
+### D-018 [LEDGER_PW_TRIM] 관리대장 비밀번호 앞뒤 공백은 떼고 입력·뗀 행은 경고 (2026-10-10, R5)
+- 결정: `input_list.parse_password_candidates` 가 비번 칸 값의 **앞뒤 공백(스페이스·탭·  등)을 떼고** 후보로 쓴다(PC 엑셀·구글 대장·Tk 폴백 모든 경로가 이 함수를 거침). 공백만 있는 칸=빈 칸(저장값 유지). 공백만 다른 값은 한 후보로 합침. 뗀 행은 `PwCandidate.trimmed` 로 남겨 앱이 `[비번] ⚠ {계정}: 관리대장 행 … 비밀번호 앞뒤에 공백이 있어 떼고 입력합니다. 대장에서 공백을 지워 주세요` 를 기록. 대장 원문은 바꾸지 않음(읽기만).
+- 근거: 소유자 승인(2026-10-10 "코드 쪽 방지책 승인"). 실측 — (DW)커머스 판매량 10.04~10.09 공란 원인 분석: 10/03 까지 로그인 성공한 값(지문 1ab2130e)은 대장 40행에만 남고, 39·42~48행은 **새 값+끝 공백 1칸(13자)** 이라 그대로 타이핑돼 10/04 부터 매 실행 "아이디 또는 비밀번호가 다릅니다". 같은 끝 공백이 플랜잇 22행(9/28 부터 거부)·반달 57행에도 있음. 코드: 비번을 strip 없이 읽어(`input_list.py`) `autofill_login` 이 한 글자씩 입력. 재현 테스트 verify_gsheet_offline[16] 실패 → 수정 → 통과 · 게이트 16종·복잡도 초록 · 실제 대장 읽기(지문만): DW 값2·플랜잇·반달 공백 제거 확인.
+- 버린 대안: (a) 대장 정리만 요청(같은 실수 재발 시 또 며칠 공란) (b) 공백 그대로 두고 경고만(로그인 계속 실패) (c) 원문·공백뗀 값 둘 다 시도(오답 제출 늘어 잠금 위험). 실제 비번이 공백으로 시작·끝나는 경우는 지원하지 않음(사례 없음·쿠팡 정책 미확인).
+- 영향 범위: `src/coupang_analytics/input_list.py`(PwCandidate.trimmed·parse_password_candidates), `ui/app_qt.py`(_apply_pw_candidates 경고), `tools/verify_gsheet_offline.py`(t16). D-012 후보 순서(적은 줄 먼저)는 그대로 — DW 는 40행 옛 값이 값1이라 실행마다 1회 거부 후 값2(새 값)로 시도. ⚠ 반달(mrc098)은 57·60행이 공백만 다른 같은 값이고 그 값이 10/10 에 이미 거부됨 → 이 수정과 무관하게 **대장 비번 자체가 틀림**(담당자 확인 필요).
+- 상태: ACTIVE
