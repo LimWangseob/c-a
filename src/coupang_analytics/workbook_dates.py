@@ -1,8 +1,8 @@
 """워크북 날짜 칸·수집 이력·측정 주기 mixin — workbook.py 에서 분리(대형 파일 정비, 행동 불변).
 
 판매수집 스탬프(_수집스탬프)·날짜 칸 추가/정규화/갭필·날짜 지정 칸 리셋·상품/계정 측정 주기(due).
-`class OutputWorkbook(_RenderMixin, _IndexMixin, _MetaMixin, _DateMixin)` 로 합쳐져 self 로 접근.
-workbook_common 재노출 사용.
+`class OutputWorkbook(_RenderMixin, _IndexMixin, _MetaMixin, _DateMixin, _LifecycleMixin)` 로 합쳐져
+self 로 접근. workbook_common 재노출 사용.
 """
 from __future__ import annotations
 

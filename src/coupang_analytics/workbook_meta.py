@@ -1,8 +1,8 @@
 """워크북 숨김 메타시트(상품 속성) mixin — workbook.py 에서 분리(대형 파일 정비, 행동 불변).
 
 VID·productId·등록명·판매방식·계정ID·판매상태·재고·노출명/블록명·제목 캐시·마케팅·판매중지 기록/조회.
-`class OutputWorkbook(_RenderMixin, _IndexMixin, _MetaMixin, _DateMixin)` 로 합쳐져 self 로 접근.
-workbook_common 재노출 사용.
+`class OutputWorkbook(_RenderMixin, _IndexMixin, _MetaMixin, _DateMixin, _LifecycleMixin)` 로 합쳐져
+self 로 접근. workbook_common 재노출 사용.
 """
 from __future__ import annotations
 
