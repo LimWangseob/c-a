@@ -751,6 +751,53 @@ def t1_ai_match_d009():
     _ok("고정 파일: 계정별 저장·다른 계정 보존·손상 감지 후 재생성")
 
 
+def t1_login_pw_candidates():
+    print("[37] 대장 비번 후보 로그인(D-012) — 거부되면 다른 줄 값으로 1회 더·후보 1개면 재시도 없음·최대 2개")
+    from coupang_analytics import pipeline_sales as PS
+    from coupang_analytics.input_list import Account
+    acc = Account("dalbong", "대표", "DW커머스", [])
+    assert PS._pw_list("x") == ["x"] and PS._pw_list(None) == [None] and PS._pw_list(["a", "b", "c"]) == ["a", "b"]
+    tried, logs = [], []
+
+    class _Page:
+        def wait_for_timeout(self, ms): pass
+
+    class _B:
+        page = _Page()
+        def goto(self, url): pass
+
+    def fake_ensure(b, a, pw, log, login=True, semi=False):
+        tried.append(pw)
+        if pw != "NEW":
+            raise PS.LoginCredentialError()
+        return True
+
+    def fake_fresh(b, a, pw, log, unattended):
+        return fake_ensure(b, a, pw, log)
+    old = PS._ensure_login, PS._fresh_login
+    try:
+        PS._ensure_login, PS._fresh_login = fake_ensure, fake_fresh
+        assert PS._login_with_candidates(_B(), acc, ["OLD", "NEW"], logs.append, login=True, semi=False) is True
+        assert tried == ["OLD", "NEW"] and any("2번째 비밀번호 값으로 로그인 성공" in x for x in logs), (tried, logs)
+        tried.clear()
+        try:
+            PS._login_with_candidates(_B(), acc, ["OLD"], logs.append, login=True, semi=False)
+            raise AssertionError("후보 1개 거부는 그대로 실패해야")
+        except PS.LoginCredentialError:
+            pass
+        assert tried == ["OLD"], "후보 1개면 재시도 없음(잠금 방지)"
+        tried.clear()
+        try:
+            PS._login_with_candidates(_B(), acc, ["X1", "X2"], logs.append, login=True, semi=False)
+            raise AssertionError("모두 거부면 실패")
+        except PS.LoginCredentialError:
+            pass
+        assert tried == ["X1", "X2"], "후보 2개 모두 거부 = 2회만 제출"
+    finally:
+        PS._ensure_login, PS._fresh_login = old
+    _ok("거부 시 다른 줄 값으로 1회 더·성공 로그·후보 1개=재시도 없음·모두 거부=최대 2회 후 실패")
+
+
 def t1_vid_source_option_split():
     print("[12] VID 출처=이름칸 + 옵션 분리 블록 + 마이그레이션 (workbook, 실제 xlsx I/O)")
     d = Path(tempfile.mkdtemp())
@@ -1937,6 +1984,7 @@ def main():
     t1_data_quality_summary()
     t1_product_match_precision()
     t1_ai_match_d009()
+    t1_login_pw_candidates()
     t1_no_vidless_blocks()
     t1_vid_source_option_split()
     t1_ledger_dedup()

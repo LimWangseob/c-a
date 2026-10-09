@@ -109,10 +109,10 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
     """
     from . import collector
     from .collector import save_discovered   # 지연 import
-    pw = get_password(a.account_id) if get_password else None
+    pws = _pw_list(get_password(a.account_id) if get_password else None)
     # 기본은 **창 숨김**(offscreen). 반자동(semi)이면 처음부터 보이게 띄운다(사람이 2차인증 처리).
     with WingBrowser(profile_dir=account_profile(a.account_id), offscreen=not semi) as b:
-        if not _ensure_login(b, a, pw, log, login=login, semi=semi):
+        if not _login_with_candidates(b, a, pws, log, login=login, semi=semi):
             return None, {}, {}, {}, set(), set(), {}, {}   # 이 계정 건너뜀(무인 비번없음·otp·로그인 미완료)
         collector.reset_raw()                # 계정별 응답 원문 버퍼 초기화(파일 분리)
         found = _discover_products(b, a, date_from, date_to, log, ai_key=ai_key, anchor_file=anchor_file)
@@ -127,6 +127,38 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
     report = Account(a.account_id, a.representative, a.business_name, tracked)
     report.ledger_products = set(a.ledger_products)   # ⑥: 줄 존재 전체(활성+판매중지/취소선) 전파 — 완전삭제 판정용
     return (report, metrics, inventory, sale_status, upbundle_vids, live_all_vids, vid_meta, pid_by_vid)
+
+
+PW_MAX_TRIES = 2   # 관리대장 한 계정 여러 줄의 비번이 서로 다를 때 실행당 시도할 최대 값 수(D-012·잠금 5회 대비)
+
+
+def _pw_list(v) -> list:
+    """get_password 반환 → 후보 목록. str=1개, list=대장 줄마다 다른 값(앞 것부터), None/빈 값=[None](비번 없음)."""
+    if isinstance(v, (list, tuple)):
+        vals = [x for x in v if x]
+        return vals[:PW_MAX_TRIES] or [None]
+    return [v or None]
+
+
+def _login_with_candidates(b, a: Account, pws: list, log, *, login: bool, semi: bool) -> bool:
+    """관리대장 비번 후보를 차례로 — 첫 값은 평소 로그인(_ensure_login), **'비밀번호가 다릅니다'(LoginCredentialError)
+    일 때만** 다음 값으로 1회 더(소유자 2026-10-09 D-012). 후보가 1개면 지금과 똑같다(재시도 없음). 모두 거부면 그대로 raise."""
+    for k, pw in enumerate(pws):
+        try:
+            if k == 0:
+                return _ensure_login(b, a, pw, log, login=login, semi=semi)
+            log(f"  [{a.label}] ⚠ 관리대장 비밀번호 {k}번째 값 거부 → 같은 계정 다른 줄의 {k + 1}번째 값으로 다시 시도"
+                f"({k + 1}/{len(pws)}) — 대장의 이 계정 비밀번호를 한 값으로 맞춰 주세요")
+            b.goto(WING_URL)
+            b.page.wait_for_timeout(1500)
+            ok = _fresh_login(b, a, pw, log, config.LOGIN_UNATTENDED and not semi)
+            if ok:
+                log(f"  [{a.label}] ✅ {k + 1}번째 비밀번호 값으로 로그인 성공(시작 로그의 '[비번] … 값{k + 1}=행 …' 이 맞는 값)")
+            return ok
+        except LoginCredentialError:
+            if k + 1 >= len(pws):
+                raise
+    return False
 
 
 def _ensure_login(b, a: Account, pw, log, *, login: bool = True, semi: bool = False) -> bool:

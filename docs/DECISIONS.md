@@ -86,6 +86,13 @@
 - 영향 범위: `product_match_ai`(MATCH_SYSTEM·_apply_exact·_candidate_ids·openai_embed·SEND_ALL_MAX 150), `pipeline_sales._match_to_ledger`(embed 전달). D-009 의 ③ 세부를 보완(D-009 는 ACTIVE 유지).
 - 상태: ACTIVE
 
+### D-012 [LEDGER_PW_CANDIDATES] 로그인 비밀번호 = 매 실행 현재 관리대장 값·줄마다 다르면 차례로 시도 (2026-10-09, R3)
+- 결정: 계정아이디·비밀번호·상품명은 **매 실행 관리대장을 다시 읽어** 쓴다(앱 시작·자동 로드마다). 한 계정의 여러 줄(상품마다 한 줄)에 비밀번호가 **서로 다르면** 후보로 모두 남기고(`input_list.parse_password_candidates`·적은 줄에 적힌 값 먼저·같으면 위쪽 행), 로그인 시 첫 값이 **'비밀번호가 다릅니다'(LoginCredentialError)로 거부될 때만** 다음 값으로 1회 더(`pipeline_sales._login_with_candidates`·실행당 최대 2개 `PW_MAX_TRIES`). 후보가 1개면 지금과 같다(재시도 없음). 로드마다 '[비번] ⚠ 계정: 값1=행… · 값2=행…' 경고, 성공 시 '✅ N번째 값으로 로그인 성공'. 대장 비번 칸이 빈 계정은 PC 저장값 유지(소유자 선택). 단일 값 API(`parse_password_rows`·`parse_password_file`)는 마지막 줄 → 첫 후보로 변경.
+- 근거: 소유자 지시(2026-10-09 "항상 현재 관리대장 비밀번호로 로그인·비밀번호가 바뀌어도 반영 안 됨·계정아이디/비밀번호/상품명 매번 비교")·질문 답("다른 값을 차례로 시도"·"빈 칸=예전 저장값"). 실측(관리대장 SA 읽기·값 미출력·지문 비교): (DW)커머스 9줄 중 40행만 다른 값·반달컴퍼니 57행≠60행 → 앱은 마지막 줄 값을 써 10/09 둘 다 '아이디 또는 비밀번호가 다릅니다'(정산 쪽 로그인은 같은 날 성공). 새 순서로는 두 계정 모두 10/09 실패 값이 아닌 값을 먼저 시도. 게이트 16종·verify_gsheet[15]·verify_offline[37].
+- 버린 대안: (a) 다르면 로그인 안 하고 경고만(수집 공백) (b) 첫 줄 값 고정(DW 는 첫 줄도 옛 값) (c) 마지막 줄 값(기존·실패 원인).
+- 영향 범위: `input_list`(PwCandidate·parse_password_candidates·read_xlsx_rows), `pipeline_sales`(_pw_list·_login_with_candidates), `ui/app_qt.py`(_apply_pw_candidates·_account_pw 가 후보 목록 반환·미사용 _store_passwords_from 삭제). ⚠ 값이 갈린 계정은 실행당 틀린 제출이 최대 1회 늘 수 있음 — 대장 정리 시 해소. 2026-09-15 '비번 1회 오류=재시도 금지'는 후보가 1개일 때 그대로 유지.
+- 상태: ACTIVE
+
 ---
 
 ## 전환 전 결정 (한 줄·동결 아카이브·2026-10-08 이전·재작성 금지=추측 방지)

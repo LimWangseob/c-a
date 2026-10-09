@@ -29,8 +29,8 @@ from coupang_analytics import detail_images  # noqa: E402
 from coupang_analytics import holiday_source  # noqa: E402
 from coupang_analytics import gsheet_api, gsheet_index  # noqa: E402
 from coupang_analytics.input_list import (parse_input_list, parse_input_rows,  # noqa: E402
-                                           parse_password_file, parse_password_rows,
-                                           read_ledger_rows)
+                                           parse_password_candidates,
+                                           read_ledger_rows, read_xlsx_rows)
 from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
 from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_credentials_file  # noqa: E402
@@ -1115,6 +1115,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
     def _set_input_list(self, il, label: str) -> None:
         """파싱된 InputList 를 UI 상태(상품목록·라벨·로그)에 반영. 파일/구글시트 공용."""
         self.input_list = il
+        self._pw_cands = {}                 # 대장 비번 후보(로더가 채움·D-012) — 입력 바뀌면 초기화
         self.product_business.clear()
         products = []
         for a in il.accounts:
@@ -1154,8 +1155,22 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         """PC 입력 엑셀 파싱·상품목록·비번 저장(수동/무인 공용). 영속은 호출부가 담당."""
         il = parse_input_list(path)
         self._set_input_list(il, label or Path(path).name)
-        self._store_passwords_from(path, quiet=True)
+        try:
+            self._apply_pw_candidates(parse_password_candidates(read_xlsx_rows(path)))
+        except Exception as exc:              # 비번 읽기 실패는 비치명(저장된 값으로 로그인·사유 명시)
+            self.log(f"[비번] PC 엑셀 비밀번호 읽기 실패({exc.__class__.__name__}) — 저장된 비밀번호 사용")
         return True
+
+    def _apply_pw_candidates(self, cands: dict) -> None:
+        """관리대장 비번 후보 반영(매 로드 = 매 실행 대장과 비교·D-012). 첫 후보는 DPAPI 저장(빈 칸 계정은 기존 저장값 유지),
+        한 계정 여러 줄의 값이 다르면 경고(행 번호·값 순서)하고 로그인 때 차례로 시도."""
+        self._pw_cands = cands
+        self._store_passwords_map({aid: c[0].password for aid, c in cands.items()}, quiet=True)
+        for aid, cs in cands.items():
+            if len(cs) > 1:
+                order = " · ".join(f"값{k + 1}=행 {','.join(map(str, c.rows))}" for k, c in enumerate(cs))
+                self.log(f"[비번] ⚠ {aid}: 관리대장 줄마다 비밀번호가 다름({order}) — 로그인 시 값1부터 차례로 시도"
+                         "(최대 2개). 대장에서 이 계정 비밀번호를 한 값으로 맞춰 주세요")
 
     def _on_input_source_changed(self, checked=True) -> None:
         """기본 입력 소스 라디오 변경 → input/source 영속(다음 시작 자동로드가 이 값을 따른다)."""
@@ -1194,7 +1209,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         title, rows, strike_grid = read_ledger_rows(url, store=self.creds_store)
         il = parse_input_rows(rows, strike_grid)
         self._set_input_list(il, f"[구글시트] {title}")
-        self._store_passwords_map(parse_password_rows(rows), quiet=True)
+        self._apply_pw_candidates(parse_password_candidates(rows))
         if not persist:
             return True
         _cfg_save_shared("gsheet/input_url", url)
@@ -1231,15 +1246,6 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             self.log(f"[입력] 자동 로드 실패({exc.__class__.__name__}): {exc}")
             return False
 
-    def _store_passwords_from(self, path, quiet=False) -> int:
-        try:
-            pw_map = parse_password_file(path)
-        except Exception as exc:
-            if not quiet:
-                QtWidgets.QMessageBox.warning(self, "비밀번호 파일 오류", str(exc))
-            return 0
-        return self._store_passwords_map(pw_map, quiet=quiet)
-
     def _store_passwords_map(self, pw_map: dict, quiet=False) -> int:
         """{계정아이디: 비밀번호} 를 DPAPI(이 PC 전용)로 저장. 관리대장(파일/구글시트) 공용.
 
@@ -1259,6 +1265,9 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         return saved
 
     def _account_pw(self, account_id):
+        cs = getattr(self, "_pw_cands", {}).get(account_id) or []
+        if len(cs) > 1:                       # 대장 줄마다 다른 값 → 후보 목록(파이프라인이 차례로 시도·D-012)
+            return [c.password for c in cs]
         try:
             return self.creds_store.get_password(account_id) or None
         except Exception:

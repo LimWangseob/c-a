@@ -171,29 +171,59 @@ _ID_ALIASES = ("계정아이디", "아이디", "id", "계정id", "account", "acc
 _PW_ALIASES = ("비밀번호", "비번", "password", "pw", "passwd")
 
 
-def parse_password_file(path: str | Path) -> dict[str, str]:
-    """계정아이디+비밀번호 컬럼이 있는 엑셀 → {계정아이디: 비밀번호}. 계정 블록/전용파일 모두 지원."""
+def read_xlsx_rows(path: str | Path) -> list:
+    """엑셀 첫 시트 값 격자(비번 후보 파싱 공용·read_only 핸들은 닫는다)."""
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
-    ws = wb[wb.sheetnames[0]]
-    rows = list(ws.iter_rows(values_only=True))
+    try:
+        return [list(r) for r in wb[wb.sheetnames[0]].iter_rows(values_only=True)]
+    finally:
+        wb.close()
 
+
+def parse_password_file(path: str | Path) -> dict[str, str]:
+    """계정아이디+비밀번호 컬럼이 있는 엑셀 → {계정아이디: 비밀번호(첫 후보)}. 계정 블록/전용파일 모두 지원."""
+    rows = read_xlsx_rows(path)
+
+    def _match(header: list[str]) -> bool:
+        norm = [h.lower().replace(" ", "") for h in header]
+        return _alias_index(norm, _ID_ALIASES) is not None and _alias_index(norm, _PW_ALIASES) is not None
+
+    if _find_header_row(rows, _match)[1] < 0:
+        raise ValueError("비밀번호 파일에 '계정아이디'/'비밀번호' 컬럼이 필요합니다(상단 8행 내 헤더 없음).")
+    return {aid: c[0].password for aid, c in parse_password_candidates(rows).items()}
+
+
+@dataclass(frozen=True)
+class PwCandidate:
+    """관리대장 한 계정의 비밀번호 후보 — 같은 계정 여러 줄(상품마다 한 줄)에 서로 다른 값이 적힌 경우를 다룬다."""
+    password: str
+    rows: tuple[int, ...]           # 그 값이 적힌 대장 행 번호(시트 기준 1부터)
+
+
+def parse_password_candidates(rows: list) -> dict[str, list[PwCandidate]]:
+    """값 격자 → {계정아이디: [비밀번호 후보…]}. 한 계정 여러 줄의 값이 다르면 후보가 여럿(D-012·2026-10-09).
+
+    순서 = **적은 줄에 적힌 값 먼저**(담당자가 한 줄만 새 비번으로 고친 경우가 실측 — DW커머스 9줄 중 40행만 다름·
+    반달컴퍼니 57행≠60행, 둘 다 '마지막 줄 값'으로 로그인 거부), 같으면 위쪽 행 먼저. 예전엔 마지막 줄 값 하나만 썼다."""
     def _match(header: list[str]) -> bool:
         norm = [h.lower().replace(" ", "") for h in header]
         return _alias_index(norm, _ID_ALIASES) is not None and _alias_index(norm, _PW_ALIASES) is not None
 
     header, hrow = _find_header_row(rows, _match)
     if hrow < 0:
-        raise ValueError("비밀번호 파일에 '계정아이디'/'비밀번호' 컬럼이 필요합니다(상단 8행 내 헤더 없음).")
+        return {}
     norm = [h.lower().replace(" ", "") for h in header]
     i_id, i_pw = _alias_index(norm, _ID_ALIASES), _alias_index(norm, _PW_ALIASES)
-    out: dict[str, str] = {}
-    for row in rows[hrow + 1:]:
+    seen: dict[str, dict[str, list[int]]] = {}
+    for r, row in enumerate(rows[hrow + 1:], start=hrow + 2):
         aid = _norm(_cell(row, i_id))
         raw = _cell(row, i_pw)
         pw = str(raw) if raw is not None else ""
         if aid and pw:
-            out[aid] = pw
-    return out
+            seen.setdefault(aid, {}).setdefault(pw, []).append(r)
+    return {aid: sorted((PwCandidate(pw, tuple(rs)) for pw, rs in vals.items()),
+                        key=lambda c: (len(c.rows), c.rows[0]))
+            for aid, vals in seen.items()}
 
 
 _DISCONTINUED = ("판매중지", "판매중단", "판매종료", "판매불가")   # 대장 텍스트 마커(판매부진=계속 판매라 제외)
@@ -548,27 +578,12 @@ def parse_input_rows(rows: list, strike_grid: list | None = None) -> InputList:
 
 
 def parse_password_rows(rows: list) -> dict[str, str]:
-    """구글시트 값 격자에서 {계정아이디: 비밀번호} 추출(관리대장 rows 재사용, 파일 재조회 없음).
+    """구글시트 값 격자에서 {계정아이디: 비밀번호(첫 후보)} 추출(관리대장 rows 재사용, 파일 재조회 없음).
+    한 계정 여러 줄의 값이 다르면 `parse_password_candidates` 순서의 첫 값(로그인은 후보를 차례로 시도).
 
     비번은 관리대장(입력)에만 존재 → 읽는 즉시 DPAPI 저장·메모리 폐기가 호출부 책임(결과시트엔 저장 안 함).
     """
-    def _match(header: list[str]) -> bool:
-        norm = [h.lower().replace(" ", "") for h in header]
-        return _alias_index(norm, _ID_ALIASES) is not None and _alias_index(norm, _PW_ALIASES) is not None
-
-    header, hrow = _find_header_row(rows, _match)
-    if hrow < 0:
-        return {}                                   # 비번 컬럼 없으면 빈 dict(치명 아님 — credstore 기존값 사용)
-    norm = [h.lower().replace(" ", "") for h in header]
-    i_id, i_pw = _alias_index(norm, _ID_ALIASES), _alias_index(norm, _PW_ALIASES)
-    out: dict[str, str] = {}
-    for row in rows[hrow + 1:]:
-        aid = _norm(_cell(row, i_id))
-        raw = _cell(row, i_pw)
-        pw = str(raw) if raw is not None else ""
-        if aid and pw:
-            out[aid] = pw
-    return out
+    return {aid: c[0].password for aid, c in parse_password_candidates(rows).items()}
 
 
 def read_ledger_rows(url_or_id: str, *, store=None, sa_path=None) -> tuple[str, list, list]:

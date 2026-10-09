@@ -892,6 +892,25 @@ def t14_sheet_id_robust() -> None:
     _ok("중복/깨진 URL 방어 — 유효 ID만 채택(마지막)·없으면 명확한 ValueError")
 
 
+def t15_password_candidates() -> None:
+    print("[15] 관리대장 비번 후보(D-012) — 한 계정 여러 줄 값이 다르면 후보 여럿·적은 줄 값 먼저·빈 칸 무시")
+    from coupang_analytics.input_list import parse_password_candidates
+    hdr = ["사업자", "계정아이디", "비밀번호", "상품명"]
+    # 실측 모양: DW커머스 9줄 중 1줄(3행)만 다른 값·반달 2줄 서로 다름·단일 계정·빈 칸 줄
+    rows = [["관리대장"], hdr,
+            ["DW", "dalbong", "OLD", "p1"], ["DW", "dalbong", "NEW", "p2"]] + [["DW", "dalbong", "OLD", f"p{i}"] for i in range(3, 10)] + [
+            ["반달", "mrc", "A57", "q1"], ["반달", "mrc", "B60", "q2"],
+            ["단일", "solo", "PW", "s1"], ["단일", "solo", "", "s2"],
+            ["빈칸", "empty", "", "e1"]]
+    c = parse_password_candidates(rows)
+    assert [x.password for x in c["dalbong"]] == ["NEW", "OLD"] and c["dalbong"][0].rows == (4,), c["dalbong"]
+    assert [x.password for x in c["mrc"]] == ["A57", "B60"], "같은 줄 수면 위쪽 행 먼저"
+    assert [x.password for x in c["solo"]] == ["PW"] and "empty" not in c, "빈 칸은 후보 아님(저장값 유지는 앱)"
+    pw = parse_password_rows(rows)
+    assert pw == {"dalbong": "NEW", "mrc": "A57", "solo": "PW"}, f"단일 값 = 첫 후보(예전: 마지막 줄 값): {pw}"
+    _ok("후보 여럿(행 번호 포함)·적은 줄 먼저·같으면 위쪽 행·빈 칸 무시·parse_password_rows=첫 후보")
+
+
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
     for fn in (t1_ledger_rows, t1b_ledger_strike, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
@@ -899,7 +918,8 @@ def main() -> int:
                t6b_multi_account_roster, t6c_content_col_widths, t7_staff_keywords_merge,
                t8_exec_retry, t9_legacy_format_mismatch, t10_stats_full_replace_mismatch,
                t11_move_across_title_merge, t11b_merge_failure_nonfatal, t11c_stock_migration_frozen_cols,
-               t12_delete_ghost_product_rows, t13_backup_result_via_sa, t14_sheet_id_robust):
+               t12_delete_ghost_product_rows, t13_backup_result_via_sa, t14_sheet_id_robust,
+               t15_password_candidates):
         fn()
     print("=== 전부 통과 ===")
     return 0
