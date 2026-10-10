@@ -17,7 +17,7 @@
 
 ```
 L0 플랫폼(공통·가장 안정·변경=계약): config·appconfig·apppaths·credstore·browser(+human_typing/mouse)·
-      session_store/state·wing_session·gsheet_api·gsheet
+      session_state·gsheet_api·gsheet
 L1 데이터 백본(공통): 조회 프리미티브(collector·rank ← 2026-09-28·§DOMAIN_DESIGN 5.3 · kw_volume·kw_suggest·kw_metrics ← 2026-10-05 U2 편입)·출력저장(workbook*)·입력/원장(input_list·registry_*)·시트동기(gsheet_index·gsheet_stats·pipeline_gsheet)
 L2 도메인(개별·병렬 개발 단위):
      · 상품분석(키워드·노출): kw_ai·kw_recommend·keyword_store·product_match·report  (rank·collector·kw_volume·kw_suggest·kw_metrics=L1 조회 프리미티브·호출)

@@ -47,7 +47,7 @@
 **핵심 규칙(불변)**: 의존은 **아래로만**(L2 도메인 → L0/L1). **도메인끼리·도메인→어댑터 직접 import 금지** — 융합은 **L1 백본(어댑터·workbook·registry·gsheet) 경유**. 조립(L3 pipeline)이 순서·전달을 오케스트레이션. (ARCHITECTURE §2·DOMAIN_DESIGN §3·PLATFORM_INTEGRATION §7)
 
 **계층 요약** (4단):
-- **L0 플랫폼(공유·가장 안정)**: `config`·`appconfig`·`apppaths`·`credstore`·`browser(+human_*)`·`session_*`·`wing_session`·`gsheet_api`·`gsheet` + **플랫폼 인증 관문(어댑터 세션)**.
+- **L0 플랫폼(공유·가장 안정)**: `config`·`appconfig`·`apppaths`·`credstore`·`browser(+human_*)`·`session_state`·`gsheet_api`·`gsheet` + **플랫폼 인증 관문(어댑터 세션)**.
 - **L1 데이터 백본(공유)**: 조회 프리미티브(`collector`·`rank` + **어댑터 읽기/쓰기**) · 저장(`workbook*`·`gsheet_index/stats`·`pipeline_gsheet`) · 입력/원장(`input_list`·`registry_*`·`product_match`·`report`·`keyword_store`).
 - **L2 도메인(개별·레인)**: D1~D10(§3).
 - **L3 조립·표현**: `pipeline(+_sales/_ranks/_process/_paths/_gsheet)` · `ui/app_qt`·`ui/app`.

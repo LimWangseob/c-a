@@ -13,7 +13,7 @@ WING API 호출 패턴, 세션/크리덴셜 기반. "전체 분석"이 아니라
 ## 0. 실측 요약 (설계의 근거)
 
 **의존 그래프 (src 내부 import·43모듈·13,377 LOC)** — `←N`=피참조수, 대표만:
-- **최하층(고피참조·leaf)**: `config`(←22) · `credstore`·`gsheet`(←2) · `apppaths`·`wing_session`·`keyword_store`(leaf).
+- **최하층(고피참조·leaf)**: `config`(←22) · `credstore`·`gsheet`(←2) · `apppaths`·`keyword_store`(leaf).
 - **저수준 플랫폼**: `browser`(←6→config·human_typing) · `human_typing/mouse` · `session_state/store` · `gsheet_api`(←3→credstore·gsheet).
 - **데이터 백본**: `input_list`(←7) · `workbook`(←6→common/render/index) · `collector`(→config·input_list·report) · `registry_*` · `gsheet_index/stats` · `product_match`.
 - **도메인**: `kw_*`(recommend←4·ai·volume·suggest·metrics) · `rank`(←6) · `detail_images`(leaf·고립) · `registry_gsheet`(원장 진입).
@@ -57,9 +57,9 @@ WING API 호출 패턴, 세션/크리덴셜 기반. "전체 분석"이 아니라
 ## 2. 도메인별 역할·모듈·갭
 
 ### L0 로그인/세션관리 (공유 플랫폼 — 도메인 아님, 전 도메인이 호출)
-- **모듈**: `browser.WingBrowser`(로그인 세션·CDP·표시제어)·`wing_session`(생존·vendorId·세션3요소 회수)·`session_store`(계정별 세션 blob DPAPI 영속)·`session_state`(관측 SQLite)·`credstore`(비번·API키 DPAPI).
+- **모듈**: `browser.WingBrowser`(로그인 세션·CDP·표시제어)·`session_state`(관측 SQLite)·`credstore`(비번·API키 DPAPI). (`wing_session`·`session_store`=저장만 하고 읽는 곳 없어 삭제, D-022 B3)
 - **재사용 규약**: 신규 도메인은 `with WingBrowser(profile_dir=...) as wb:` 로 열고 `wb.page` 에 same-origin fetch → 로그인 세션·XSRF 그대로 사용(실측 §4). **런타임 브라우저는 항상 1개**(rank_browser·로그인 동시 금지·CLAUDE.md).
-- **갭**: 세션 blob 복원 소비(load→주입 재로그인 생략)는 미구현(현재 `profile_dir` 재사용 의존). 신규 도메인 확장 전 사무실 라이브 1회 검증 필요(wing_session 자체 명시).
+- **세션 재사용**: `profile_dir`(계정별 영속 Chrome 프로필) 재사용만 쓴다.
 
 ### D1 상품 분석 ✅
 - **모듈(소유)**: `kw_ai`·`kw_recommend`(선정·추천 비즈니스 로직)·`keyword_store`·`product_match`·`report`. **호출만(L1 공유)**: `rank`·`collector`·`kw_volume`·`kw_suggest`·`kw_metrics`(조회 프리미티브·§5.3·§5.3-b).
@@ -96,7 +96,7 @@ WING API 호출 패턴, 세션/크리덴셜 기반. "전체 분석"이 아니라
 ### D6 배송 ⛔범위밖 (샵마인 담당 — 소유자 2026-10-02)
 > **우리 앱은 배송을 만들지 않는다**(샵마인 상용 담당). 단 **재고 반출(쿠팡→회사) 역흐름**은 신규 영역으로 별도 검토.
 - **역할**: 로켓그로스 발주/입고(관리대장에 입고 요약 존재)·판매자배송 출고·송장·배송상태.
-- **실마리**: `wing_session._DELIVERY_URL = /tenants/sfl-portal/delivery/management`(현재 vendorId 추출용 HTML만·API 호출 없음).
+- **실마리**: 배송관리 페이지 = `https://wing.coupang.com/tenants/sfl-portal/delivery/management`(HTML 에 `vendorId:'…'` 있음·API 미조사).
 - **재사용**: 세션·fetch 패턴·D8 원장(입고 이력). 신규=배송/출고 엔드포인트.
 - **신규 모듈(제안)**: `shipping.py`·`shipping_ledger.py`.
 
@@ -130,7 +130,7 @@ WING API 호출 패턴, 세션/크리덴셜 기반. "전체 분석"이 아니라
 
 ```
 L0 플랫폼(공유·가장 안정): config·appconfig·apppaths·credstore·browser(+human_*)·
-        session_store·session_state·wing_session·gsheet_api·gsheet
+        session_state·gsheet_api·gsheet
 L1 데이터 백본(공유): 
    · 조회 프리미티브: collector(WING 데이터 API) · rank(오가닉 순위)  ← §5.3 (a) 확정(2026-09-28)
    · 저장/출력: workbook*·gsheet_index·gsheet_stats·pipeline_gsheet
@@ -199,7 +199,7 @@ L3 조립·표현: pipeline(+_sales/_ranks/_process/_paths/_gsheet)·ui/app_qt·
 ---
 
 ## 6. 공유 자원 (직렬화 — 통합 세션 단독 작성)
-- 코드: `config`·`pipeline`(오케스트레이션)·`browser`·`credstore`·`apppaths`·`appconfig`·`session_*`·`wing_session`·`gsheet_api`.
+- 코드: `config`·`pipeline`(오케스트레이션)·`browser`·`credstore`·`apppaths`·`appconfig`·`session_state`·`gsheet_api`.
 - 계약/게이트: `docs/L1_CONTRACT.md`·`tools/pin_l1_contract.py`·`tools/verify_*`·`simulate_pipeline`·`pin_*`.
 - 문서/정책: `CLAUDE.md`·`designs/`·`docs/`(이 문서 포함)·`docs/DECISIONS.md`.
 

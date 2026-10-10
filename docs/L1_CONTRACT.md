@@ -24,7 +24,6 @@
 | `fetch_product_ids(page, vendor_inventory_ids, log=None)` | P:page:0 P:vendor_inventory_ids:0 P:log:1 |
 | `products_from_vendor_inventory(listings, log=None)` | P:listings:0 P:log:1 |
 | `sale_status_by_vid(listings, log=None)` | P:listings:0 P:log:1 |
-| `save_discovered(account_id, products)` | P:account_id:0 P:products:0 |
 | `reset_raw()` · `raw_dumps()` | (인자 없음) |
 | `kind_of(registration_types)` · `sale_status_of(product_status)` · `vid_meta_of(listings)` | 판정 유틸 |
 - 데이터/예외 타입: `VendorInventoryOption`·`VendorInventoryListing`·`SalesFetchError`·`InventoryFetchError`·`VendorInventoryFetchError`.

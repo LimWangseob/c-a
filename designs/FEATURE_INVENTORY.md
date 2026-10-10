@@ -77,7 +77,7 @@
 - ⚠ 이 분기들을 **게이트 시나리오(simulate 1~9·11~14·핀 F·N·O·O2)가 검증 중** → 삭제와 함께 시나리오를 **운영 조합으로 이전**해야 함(그래야 게이트가 운영 경로를 지킴 — 회귀 반복의 구조적 원인).
 
 ### 3-2. 쓰기만 하고 읽지 않음
-- `session_store`(쿠키 저장)·`wing_session` · `keyword_store`(키워드 탭 저장) · `collector.save_discovered`(`data/discovered/*.json`).
+- ✅ 삭제(B3): `session_store`(쿠키 저장)·`wing_session` · `collector.save_discovered`(`data/discovered/*.json`). 유지: `keyword_store`(키워드 탭 저장).
 
 ### 3-3. 테스트만 쓰는 함수
 - `product_match.scope_to_ledger` · `input_list.parse_password_rows` · `payout.estimate` · `settlement_amount.py` 전체 · `settlement_parse` Insights 파서 · `registry.managed_between` · `proxy_manager` 미사용 메서드 12개.
@@ -119,7 +119,7 @@
 - 순서(묶음마다 호출처 재확인 → 물리 삭제 → 게이트 → 커밋):
   - ✅ B1 Tk `ui/app.py` + `parse_password_file` (−896줄, d55c397)
   - ✅ B2 일회성 도구 10개 (−1,155줄, 0a5d5d3)
-  - ⏳ B3 쓰기만 하는 저장소: `session_store`·`wing_session`·`collector.save_discovered` (키워드 탭 유지라 `keyword_store` 는 유지)
+  - ✅ B3 쓰기만 하는 저장소: `session_store`·`wing_session`·`collector.save_discovered` (키워드 탭 유지라 `keyword_store` 는 유지) — 계정당 배송관리 페이지 추가 이동 1회도 함께 사라짐
   - ⏳ B4 테스트 전용 함수: `product_match.scope_to_ledger`·`parse_password_rows`·`payout.estimate`·`registry.managed_between`·`proxy_manager` 미사용 메서드
   - ⏳ B5 운영에서 안 도는 분기(§3-1) — **먼저 게이트 시나리오를 운영 조합으로 이전**(게이트가 운영 경로를 지키게) 후 삭제
   - ⏳ B6 중복 통합(§3-4): 야간 조립 3벌→백엔드 1개(+`--auto`/`--resume` 게이트) · 절전 2벌 · 정산 중지 2벌 · 18:00 옛 예약작업 제거 · `정산_지금실행.bat`

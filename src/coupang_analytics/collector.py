@@ -25,8 +25,6 @@ from . import config
 from .input_list import Option, Product
 from .report import OptionMetric, parse_by_option
 
-_DISCOVERED_DIR = Path("data") / "discovered"
-
 _SALES_URL = ("https://wing.coupang.com/tenants/business-insight/sales-analysis"
               "?start_date={f}&end_date={t}")
 _LOAD_WAIT_MS = 6000       # 데이터 안정화 대기
@@ -898,14 +896,3 @@ def fetch_sales_roster(page, date_from: str, date_to: str, log=None) -> list[Pro
     products = _products_from_metrics(fetch_sales_details(page, date_from, date_to, log))
     log(f"  [수집·보강] 최근기간({date_from}~{date_to}) roster {len(products)}개 상품(vid 확보용, 지표 미반영)")
     return products
-
-
-def save_discovered(account_id: str, products: list[Product]) -> Path:
-    """발견한 상품·옵션·vendorItemId 를 사이드카 JSON 으로 저장(원본 입력 미변경)."""
-    _DISCOVERED_DIR.mkdir(parents=True, exist_ok=True)
-    data = [{"name": p.name,
-             "options": [{"label": o.label, "vendorItemId": o.vendor_item_ids} for o in p.options]}
-            for p in products]
-    path = _DISCOVERED_DIR / f"{account_id}.json"
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    return path

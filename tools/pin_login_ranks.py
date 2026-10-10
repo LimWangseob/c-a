@@ -169,7 +169,6 @@ def _install_collector_fakes(*, vendor_ok=True, discover_behavior="ok"):
     C.discover = fake_discover
     C.fetch_inventory = fake_fetch_inventory
     C.fetch_sales_roster = fake_fetch_sales_roster
-    C.save_discovered = lambda account_id, products: None
     return _dstate
 
 

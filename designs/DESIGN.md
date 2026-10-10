@@ -346,8 +346,7 @@
 - **창 표시 원칙(🔒):** 기본 숨김. **자동입력만으로 되면 창이 전혀 안 뜬다.** 2차인증 등 사람이 꼭 필요할 때만, **로그로 미리 안내한 뒤** 표시(갑작스러운 창 금지).
 
 ### 4.4 세션 영속·재사용·킵얼라이브 (🔒 고정)
-- 로그인 성공 세션의 **3요소(WebSessionId·PCID·OAuthTokenRequestState) + 쿠키(_abck 포함)** 를 `SessionStore`(계정별 JSON, **DPAPI 암호화**)에 영속. 복원만으로 재로그인·2차인증을 건너뛴다.
-- 생존검증 = `wing_session.is_alive`(`winglayout/bell/notification/find` 응답 "OK", **로그인된 브라우저 컨텍스트로만**).
+- 세션 재사용 = **계정별 영속 Chrome 프로필**(`data/profiles/{계정}` 재사용·`authenticated()`로 판정). 세션 3요소+쿠키를 따로 저장하던 `SessionStore`·`wing_session`은 저장만 하고 읽는 곳이 없어 **삭제**(D-022 B3, 2026-10-10).
 - **세션 킵얼라이브**(선택, `session_keepalive.KeepAlive`): 앱이 켜진 동안 주기적으로 **숨긴 실제 Chrome으로 대시보드만 방문**해 세션을 살려둔다. **로그인 아님**(비번·2차인증·창 없음). 만료 계정은 로그인 시도 안 함. 전체 실행 중엔 자동 일시정지.
 
 ### 4.5 브라우저 안전장치 (🔒 고정 — 과거 버그 재발 금지)
@@ -482,7 +481,7 @@
 
 - **로그인은 반드시 사람이, 실제 Chrome에서.** Playwright가 '띄운' 브라우저는 webdriver 흔적으로 로그인 무한루프.
   → **실제 Chrome을 `--remote-debugging-port`로 구동(자동화/위장 플래그 없음) + 사람이 직접 로그인** = 통과 확인.
-- **⚠️ 정정(현재 구현, §0 line 44):** 아래 `storage_state`/쿠키주입 서술은 **폐지**. 현재는 **계정별 영속 Chrome 프로필** + 로그인 세션 3요소(WebSessionId·PCID·OAuthTokenRequestState)+쿠키를 **`SessionStore`(계정별 JSON·DPAPI 암호화)** 에 영속·복원(`session_store.py`/`wing_session.py`). 아래 두 줄은 역사적 기록.
+- **⚠️ 정정(현재 구현, §0 line 44):** 아래 `storage_state`/쿠키주입 서술은 **폐지**. 현재는 **계정별 영속 Chrome 프로필** 재사용(§4.4). 아래 두 줄은 역사적 기록.
 - **세션 저장(옛):** 로그인 후 `storage_state`(쿠키 32개)를 `session_{계정}.json`으로 저장.
 - **수집은 headless 불가.** headless+쿠키는 페이지는 열리나 **데이터 API가 403**(Akamai). → **실제 Chrome(오프라인 창) + 사람이 로그인한 그 세션/프로필 재사용**으로 수집(쿠키 주입 새 브라우저는 API가 막힘).
 - **재로그인:** 세션 만료 시에만 사람이 재로그인(쿠팡 세션은 하루내 만료 경향 [[coupang-session-short-lived]]).
@@ -540,7 +539,7 @@ src/coupang_analytics/
   gsheet.py       # 공개시트 xlsx export 읽기 폴백
   gsheet_index.py # 결과 '계정목록' 증분 동기화(sync_index·plan_sync·read/apply_marketing·roster_from_workbook)
   gsheet_stats.py # 사업자별 통계 시트 = openpyxl 마스터 미러링(push_statistics) + 직원 키워드 역머지(read/merge_staff_keywords)
-  session_store.py / wing_session.py / session_state.py  # 로그인 세션 3요소+쿠키 DPAPI 영속·복원
+  session_state.py  # 세션 관측(평문 SQLite·비밀값 없음)
   product_match.py # 대장↔발견 글자 규칙 매칭(_assign·build_tracked=색상필터·대장 이월) — D-009 에선 참고·대체
   product_match_ai.py # AI 중심 매칭(고정→정확일치→AI→규칙대체·동명병합·충돌해소) D-009
   match_anchor.py  # 매칭 고정(output/_매칭고정.json) 저장소 D-009

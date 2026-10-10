@@ -1,7 +1,7 @@
 """세션 관측(observability) — 추측 대신 실측을 위한 상태 테이블 + 이벤트 로그(평문 SQLite).
 
-**의사결정·관측용 조언 저장소**이지 재개 권위가 아니다(재개 권위=`쿠팡데이타분석_진행중.json`,
-세션 blob=DPAPI `SessionStore`). 깨져도 다시 채워지며, **비밀값(비번·쿠키·토큰)은 절대 저장하지 않는다**.
+**의사결정·관측용 조언 저장소**이지 재개 권위가 아니다(재개 권위=`쿠팡데이타분석_진행중.json`).
+깨져도 다시 채워지며, **비밀값(비번·쿠키·토큰)은 절대 저장하지 않는다**.
 
 두 테이블:
 - `account_session_state` : 계정별 현재 상태 1행(READY/REAUTH_REQUIRED/ACCOUNT_BLOCKED/AUTH_ENV_BLOCKED/DISABLED).

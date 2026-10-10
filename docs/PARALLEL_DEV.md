@@ -53,7 +53,7 @@ git 추적 파일(프로젝트 `CLAUDE.md`·`designs/`·`docs/`·`docs/memory/`)
 
 ## 공유 자원 = 직렬화 (한 번에 한 세션 · 또는 통제/통합 세션)
 - 코드: `config.py` · `pipeline.py`(오케스트레이션) · `browser.py` · `credstore.py` · `apppaths.py` · `appconfig.py` ·
-  `session_state.py` · `session_store.py` · `wing_session.py`
+  `session_state.py`
 - 문서/정책: `CLAUDE.md` · `designs/` · `docs/DECISIONS.md` · 이 파일
 - **레인이 config 값·공유 함수가 필요하면** 직접 편집하지 말고 **통제 세션에 요청**(작고 빠름) → 단일 작성자 유지.
 

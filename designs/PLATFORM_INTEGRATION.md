@@ -48,7 +48,7 @@
 
 ### 2.1 핵심 결정 — 어댑터는 **L1 경계의 공유 파사드**(제안)
 - 어댑터는 **여러 도메인(D1·D4·D8·D10)이 공유**하는 조회/쓰기 수단이다. 공유 자원이므로 **도메인(L2)이 아니라 L0/L1**에 둔다.
-  - **인증/세션 관문 = L0**(기존 `browser`·`wing_session`·`session_*`·`credstore`와 동급). 스마트스토어 토큰 관리도 L0.
+  - **인증/세션 관문 = L0**(기존 `browser`·`session_state`·`credstore`와 동급). 스마트스토어 토큰 관리도 L0.
   - **읽기/쓰기 호출(=조회 프리미티브 + 쓰기 빌더) = L1**(기존 `collector`·`rank`가 L1 조회 프리미티브인 것과 동형 — `DOMAIN_DESIGN §5.3`·R4 선례).
 - 이렇게 두면 `D1→어댑터`, `D4→어댑터`가 "도메인→L1" 이 되어 **의존 방향 규칙**(L2는 아래로만·도메인끼리 import 금지)과 합치한다.
 
@@ -59,7 +59,7 @@
 |---|---|---|---|---|
 | 식별 | `platform_id` | `"coupang"`·`"smartstore"` | 상수 | 상수 |
 | 능력 | `capabilities()` | 지원 기능 집합(읽기/쓰기별) | 읽기 전부·쓰기 일부 | API 가능 여부 따라 (미결) |
-| 인증 | `session(account) -> Session` | 로그인/토큰 확보·생존 | `WingBrowser`+`wing_session.is_alive` | OAuth2 토큰(커머스 API) |
+| 인증 | `session(account) -> Session` | 로그인/토큰 확보·생존 | `WingBrowser`+`authenticated()` | OAuth2 토큰(커머스 API) |
 | 읽기 | `fetch_products(session)` | 상품·옵션·vid | `collector.fetch_vendor_inventory`+`products_from_vendor_inventory` | 커머스 상품 목록 API |
 | 읽기 | `fetch_sales(session, d_from, d_to)` | 판매·방문·노출 | `collector.discover`/`fetch_sales_roster` | 커머스 통계/정산 API |
 | 읽기 | `fetch_inventory(session)` | 재고 | `collector.fetch_inventory` | 커머스 재고 API |
@@ -74,7 +74,7 @@
 
 ### 2.3 쿠팡 어댑터 — 기존 자산 100% 재사용 매핑 (확정 가능·코드 이동 없음)
 - `CoupangAdapter`는 **새 로직을 거의 안 만든다.** 기존 L0/L1을 조립·정규화하는 **얇은 파사드**다.
-- 세션 관문: `with WingBrowser(profile_dir=...) as wb:` → `wb.page`(로그인 세션 same-origin). `authenticated()`(윙 대시보드 URL + `KEYCLOAK_IDENTITY` 쿠키 둘 다)·`wing_session.is_alive`로 생존 확인. **런타임 브라우저는 항상 1개**(로그인·rank 동시 금지, [[login-policy-real-browser-only]]).
+- 세션 관문: `with WingBrowser(profile_dir=...) as wb:` → `wb.page`(로그인 세션 same-origin). `authenticated()`(윙 대시보드 URL + `KEYCLOAK_IDENTITY` 쿠키 둘 다)로 생존 확인. **런타임 브라우저는 항상 1개**(로그인·rank 동시 금지, [[login-policy-real-browser-only]]).
 - 읽기: `collector`의 `discover`·`fetch_sales_roster`·`fetch_vendor_inventory`·`fetch_inventory`·`fetch_product_ids`·`sale_status_by_vid`를 그대로 호출(L1 계약 §1). 호출 템플릿=`_POST_JSON_JS`/`_GET_JSON_JS`(cookie `XSRF-TOKEN`→`x-xsrf-token`·`credentials:include`). 순위=`rank.organic_ranks`(L1 계약 §7-b, 비로그인·프록시 뒤).
 - 원문 보관: collector의 `_raw`(gzip 사이드카 `output/_raw/`·`SAVE_RAW_RESPONSES`) 패턴 유지(§3.4).
 - ⚠ **위탁계정 = 판매자 OpenAPI 키 발급 불가**([[coupang-openapi-not-available-consignment]]) → 쿠팡은 **WING 세션이 유일 경로**. 어댑터의 쿠팡 인증은 API 키가 아니라 브라우저 세션이다(스마트스토어와 비대칭).
@@ -186,7 +186,7 @@ ingest/                        # 배치 수집 오케스트레이션(L2/L3 경�
 |---|---|---|
 | **P 플랫폼 어댑터** | `platform/base.py`·`platform/registry.py`·`platform/coupang/*`·`platform/smartstore/*` | base·registry·coupang는 L0/L1 세션을 건드려 **통합 세션 통제**(공유), smartstore는 신규·고립이라 병렬 가능 |
 | **J 수집(ingest)** | `ingest/*` | 백본 읽기만·비겹침 |
-- ⚠ base/registry/coupang 어댑터는 `browser`·`collector`·`wing_session`(공유 자원·`PARALLEL_DEV §공유`)에 밀접 → **통합 세션이 계약을 먼저 고정**(L1_CONTRACT에 어댑터 공개 API 등재·핀)한 뒤 도메인 레인이 호출. smartstore 어댑터와 ingest는 신규 고립이라 레인으로 병렬 안전.
+- ⚠ base/registry/coupang 어댑터는 `browser`·`collector`(공유 자원·`PARALLEL_DEV §공유`)에 밀접 → **통합 세션이 계약을 먼저 고정**(L1_CONTRACT에 어댑터 공개 API 등재·핀)한 뒤 도메인 레인이 호출. smartstore 어댑터와 ingest는 신규 고립이라 레인으로 병렬 안전.
 
 ---
 

@@ -15,7 +15,6 @@ from pathlib import Path
 
 from . import config
 from . import session_state
-from . import wing_session
 from .browser import WING_URL, WingBrowser
 from .input_list import Account
 from .kw_ai import KeywordAIError, recommend_title
@@ -23,7 +22,6 @@ from .kw_recommend import (attack_priority, comp_from_idx, diagnose_exposure,
                            keyword_in_title, rank_label, select_keywords_light)
 from .kw_volume import NaverAdApi
 from .rank import make_matcher
-from .session_store import SessionStore
 from .workbook import OutputWorkbook
 from .pipeline_paths import _PROFILES_DIR
 from .pipeline_ranks import _RANK_HALT, _best, _measure_safe
@@ -108,7 +106,6 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
     anchor_file = 매칭 고정 파일(D-009·run_full 이 output 기준으로 넘김). None 이면 고정 읽기/쓰기 안 함(도구·핀).
     """
     from . import collector
-    from .collector import save_discovered   # 지연 import
     pws = _pw_list(get_password(a.account_id) if get_password else None)
     # 기본은 **창 숨김**(offscreen). 반자동(semi)이면 처음부터 보이게 띄운다(사람이 2차인증 처리).
     with WingBrowser(profile_dir=account_profile(a.account_id), offscreen=not semi) as b:
@@ -121,9 +118,7 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
             return None, {}, {}, {}, set(), set(), {}, {}
         (products, tracked, metrics, inventory, sale_status, upbundle_vids, live_all_vids,
          vid_meta, pid_by_vid) = found
-        _persist_session(a, b, log)                                 # 세션 3요소+쿠키 영속(부가)
         session_state.observe_collection_done(a.account_id)         # 관측: 이 계정 수집 완료 시각
-    save_discovered(a.account_id, products)   # (요약 로그는 위 with 블록에서 계정 단위로 남김)
     report = Account(a.account_id, a.representative, a.business_name, tracked)
     report.ledger_products = set(a.ledger_products)   # ⑥: 줄 존재 전체(활성+판매중지/취소선) 전파 — 완전삭제 판정용
     return (report, metrics, inventory, sale_status, upbundle_vids, live_all_vids, vid_meta, pid_by_vid)
@@ -506,21 +501,6 @@ def _roster_candidates(b, a: Account, cands, inv_names: dict, date_to, log) -> l
     if out:
         log(f"  [{a.label}] 상품조회 실패 → 재고/최근 {config.SALES_VID_WINDOW_DAYS}일 후보 {len(out)}개 보강")
     return out
-
-
-def _persist_session(a: Account, b, log) -> None:
-    """로그인 성공 세션(3요소+쿠키[_abck 포함])을 영속 — 재사용·생존검증·데이터 HTTP 호출용.
-
-    수집이 이미 끝난 뒤의 **부가 작업**이라, 실패해도 수집 결과엔 영향이 없다(사유를 명시 로그).
-    ⚠️ is_alive/extract_vendor_id 의 엔드포인트는 사무실 라이브에서 최종 검증 대상.
-    """
-    try:
-        alive = wing_session.is_alive(b.page)
-        vid = wing_session.extract_vendor_id(b.page)
-        SessionStore().save(a.account_id, wing_session.capture(b.context, vid))
-        log(f"  [세션] 저장됨 (생존검증={alive}, vendorId={'추출' if vid else '미확인'})")
-    except Exception as exc:
-        log(f"  [세션] 영속 스킵 — {exc.__class__.__name__}: {str(exc)[:60]}")
 
 
 def _roster_from_names(names_by_vid: dict, kind: str) -> list:

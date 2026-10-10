@@ -62,7 +62,6 @@ FUNC_CONTRACTS: dict = {
         ("fetch_product_ids", "P:page:0 P:vendor_inventory_ids:0 P:log:1"),
         ("products_from_vendor_inventory", "P:listings:0 P:log:1"),
         ("sale_status_by_vid", "P:listings:0 P:log:1"),
-        ("save_discovered", "P:account_id:0 P:products:0"),
         ("reset_raw", ""),
         ("raw_dumps", ""),
         ("kind_of", "P:registration_types:0"),

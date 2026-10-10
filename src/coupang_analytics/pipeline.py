@@ -44,7 +44,7 @@ from .match_anchor import anchor_path  # noqa: E402
 from .pipeline_sales import (  # noqa: E402,F401
     LoginBlocked, LoginCredentialError, NeedLogin, _discover_inventory,
     _discover_products, _dump_raw, _ensure_login, _fresh_login, _ilog, _log_discover_summary,
-    _login_and_discover, _persist_session, _pid_by_vid, _resolve_login_failure,
+    _login_and_discover, _pid_by_vid, _resolve_login_failure,
     _roster_from_names, _run_discover, _semi_retry_login, _short, _vtag, account_profile,
     try_login_once)
 # 상품/옵션 처리(_process_account 등)는 pipeline_process 로 분리. pipeline.X 로 다시 노출
