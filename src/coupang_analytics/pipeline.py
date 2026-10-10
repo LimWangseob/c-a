@@ -30,7 +30,7 @@ from .pipeline_paths import (  # noqa: E402
     _PROFILE, _load_latest_wb, _master_path, _partial_path,
     _progress_path, _snapshot_path)
 # 재수출(UI·스케줄러·도구가 pipeline.X 로 쓰는 공개 API) — pipeline 내부 미사용이라 noqa.
-from .pipeline_paths import master_exists, read_run_stage, write_run_stage  # noqa: E402,F401
+from .pipeline_paths import column_label, master_exists, read_run_stage, write_run_stage  # noqa: E402,F401
 # 구글시트 연동·백업·복원은 pipeline_gsheet 로 분리(대형 파일 정비). pipeline.X 로 다시 노출.
 from .pipeline_gsheet import (  # noqa: E402,F401
     pull_gsheet_keywords, push_gsheet, push_coupang_checks, backup_sources,
@@ -174,10 +174,7 @@ def _column_label(date_from: str, date_to: str, date_label: str | None, log) -> 
     """
     label_src = date_label or date_to
     if date_from == date_to or date_label:
-        try:
-            col_label = datetime.strptime(label_src, "%Y-%m-%d").strftime("%m.%d")   # 년도 없는 '월.일'
-        except ValueError:
-            col_label = label_src
+        col_label = column_label(label_src)   # 년도 없는 '월.일'(③과 같은 규칙)
     else:
         col_label = f"{date_from}~{date_to}"
     if date_label and date_label != date_to:   # 라벨(실행일)과 판매조회일(전일)이 다르면 둘 다 안내
@@ -515,6 +512,17 @@ class _RunInit:
     date_label: str | None
 
 
+def _resume_source(master: Path, partial: Path) -> Path:
+    """이어서 하기의 기준 파일 = 진행 파일과 마스터 중 **나중에 저장된 것**.
+
+    ①이 미완료 계정을 남기고 끝나면 진행 파일은 ②③ **이전** 상태로 남고 ②키워드·③순위는 마스터에만 쓰인다 →
+    진행 파일을 기준으로 이어가면 앞 실행의 ②③ 결과가 지워진다(재현 simulate 18 · 결과시트 10.09 순위 전부 공란).
+    ① 도중 중단(마스터=그 전 실행)이면 진행 파일이 더 최신이라 그대로 쓴다."""
+    if master.exists() and master.stat().st_mtime_ns > partial.stat().st_mtime_ns:
+        return master
+    return partial
+
+
 def _init_run_state(input_list: InputList, out: Path, partial: Path, prog: Path, master: Path,
                     now: datetime, resume: bool, carry_forward: bool, redo_today: bool,
                     date_from, date_to, date_label, log) -> _RunInit:
@@ -531,9 +539,10 @@ def _init_run_state(input_list: InputList, out: Path, partial: Path, prog: Path,
         done = set(meta["done"])
         carry = bool(meta.get("carry", False))
         date_label = meta.get("date_label") or date_label   # 재개=원래 작업 실행날짜 라벨 유지(새벽 넘겨도 시작일 기준)
-        wb = OutputWorkbook.load(partial)
+        src = _resume_source(master, partial)
+        wb = OutputWorkbook.load(src)
         log(f"== 이어서 실행({'통계이어쓰기' if carry else '새통계'}) — 완료 {len(done)}개 건너뜀, "
-            f"기간 {date_from}~{date_to} ==")
+            f"기간 {date_from}~{date_to} · 기준 {src.name} ==")
         return _RunInit(wb, date_from, date_to, started_at, done, carry, date_label)
     # 새 실행(오늘)
     date_to = date_to or now.strftime("%Y-%m-%d")

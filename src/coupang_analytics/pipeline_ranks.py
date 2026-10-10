@@ -21,7 +21,7 @@ from .kw_recommend import rank_label
 from .product_naming import rename_to_exposed
 from .rank import human_type_query, make_matcher
 from .pipeline_gsheet import push_gsheet, inject_company_stock   # track_ranks_stage 종료 시 결과 반영·회사재고 주입(한 방향·순환 없음)
-from .pipeline_paths import _PROFILE, _load_latest_wb
+from .pipeline_paths import _PROFILE, _load_latest_wb, column_label
 
 
 # ── egress 재회전 드라이버 (2026-10-02, SSOT=memory proxy-rotation) ────────────────
@@ -169,8 +169,9 @@ def _rank_date(wb, biz: str, date_label: str | None) -> str | None:
     """순위를 기록할 날짜 칸 — 지정일(date_label·날짜 지정 실행·소유자 2026-10-10)이면 그 칸(없으면 추가),
     아니면 그 시트의 가장 최근 날짜 칸(기존 동작)."""
     if date_label:
-        wb.ensure_date(biz, date_label)
-        return date_label
+        label = column_label(date_label)   # ①과 같은 '월.일' 칸(ISO 를 그대로 쓰면 다른 칸이 생겼음)
+        wb.ensure_date(biz, label)
+        return label
     return wb.latest_date(biz)
 
 

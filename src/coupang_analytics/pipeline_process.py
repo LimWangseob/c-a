@@ -182,6 +182,8 @@ def _process_option(pctx: _ProcCtx, biz: str, product, base: str, kind: str, i: 
     opt_vids = list(opt.vendor_item_ids)
     wb.ensure_product_block(biz, pname, kind, wb.product_keywords(biz, pname),
                             rank_rows=is_rep, registered=base)
+    if is_rep and wb.ensure_keyword_section(biz, pname):   # 예전 2차 블록이 대표가 됨 → 키워드·순위 칸 생성
+        log(f"  [키워드칸] '{pname}' 대표 블록에 키워드 칸이 없어 추가(옵션 구성 변경) — ②에서 키워드 채움")
     wb.set_product_vids(biz, pname, opt_vids)      # 대표 옵션 vid 저장(③은 sibling_vids 합집합으로 매칭)
     _apply_pid(wb, biz, pname, opt_vids, pctx.pid_by_vid)   # 노출상품ID(항목2 하이퍼링크·판매분석∪재고)
     _apply_vid_meta(wb, biz, pname, kind, opt_vids, pctx.vid_meta, pctx.date_iso, product.inbound_summary)   # 판매가 지표행·판매일/최근입고 헤더

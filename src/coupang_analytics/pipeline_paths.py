@@ -40,6 +40,15 @@ def _snapshot_path(out_dir: str | Path, now: datetime) -> Path:
     return Path(out_dir) / f"{config.OUTPUT_FILE_PREFIX}_통계_{now.strftime('%y%m%d')}.xlsx"
 
 
+def column_label(date_label: str) -> str:
+    """날짜 칸 이름 = 년도 없는 '월.일'(예 '2026-10-09' → '10.09'). ①(run_full)·③(track_ranks_stage)이 같은 칸을 쓰게
+    하는 단일 규칙 — ③이 ISO 를 그대로 칸 이름으로 써 ①과 다른 칸이 생기던 문제(simulate 20). 날짜가 아니면 그대로."""
+    try:
+        return datetime.strptime(str(date_label), "%Y-%m-%d").strftime("%m.%d")
+    except ValueError:
+        return str(date_label)
+
+
 def master_exists(out_dir: str | Path = "output") -> bool:
     """이어쓸 통계 마스터가 있는지(UI가 '기존 통계에 추가' 옵션 노출 여부 판단)."""
     return _master_path(out_dir).exists()

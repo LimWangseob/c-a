@@ -405,6 +405,28 @@ class OutputWorkbook(_RenderMixin, _IndexMixin, _MetaMixin, _DateMixin, _Lifecyc
                 return True
         return False
 
+    def ensure_keyword_section(self, biz: str, product: str) -> bool:
+        """대표 블록에 키워드 소헤더가 없으면 **지표행 바로 아래에 소헤더를 끼워 넣는다**(있으면 무변경). 추가했으면 True.
+
+        옵션 구성이 바뀌어 예전 **2차 옵션 블록**(키워드 칸 없음)이 혼자 남거나 대표가 되면, ensure_product_block 은 기존
+        블록을 그대로 두므로 키워드·순위 칸이 끝내 안 생겼다(②가 has_keyword_section=False 로 건너뜀 — 재현 simulate 19,
+        결과시트 빔프로젝터·원룸 공기청정기). 소헤더만 넣으면 ②가 키워드를, pad_keyword_rows 가 빈 순위행을 채운다."""
+        if biz not in self.wb.sheetnames or self.has_keyword_section(biz, product):
+            return False
+        metric_rows = [self._metric_row[(biz, product, m)] for m in _ALL_METRICS
+                       if (biz, product, m) in self._metric_row]
+        if not metric_rows:
+            return False
+        ws = self.wb[biz]
+        _unmerge_all(ws)                       # insert_rows 전 병합 해제(데이터 손상 방지·이후 apply_style 재병합)
+        at = max(metric_rows) + 1
+        ws.insert_rows(at, amount=1)
+        ws.cell(at, _COL_KW, _LABEL_KEYWORD)
+        ws.cell(at, _COL_SEARCH, _LABEL_SEARCH)
+        ws.cell(at, _COL_METRIC, _LABEL_NOTE)
+        self._reindex()
+        return True
+
     def add_product_keywords(self, biz: str, product: str, keywords: list[str]) -> list[str]:
         """상품 블록에 새 키워드 추가. **빈 순위행부터 채우고**, 모자라면 새 행 삽입. 반환: 실제 추가분.
 

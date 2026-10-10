@@ -869,12 +869,13 @@ def t1_exposed_name_current():
     from coupang_analytics.pipeline_ranks import _rank_date
     wb4 = OutputWorkbook.empty()
     wb4.ensure_product_block(BIZ, "상품", config.KIND_CONTRACT, ["k"], registered="상품")
-    wb4.ensure_date(BIZ, "2026-10-09")
-    wb4.ensure_date(BIZ, "2026-10-10")
-    assert _rank_date(wb4, BIZ, None) == wb4.latest_date(BIZ) == "2026-10-10", "지정 없으면 최신 칸(기존)"
-    assert _rank_date(wb4, BIZ, "2026-10-09") == "2026-10-09", "지정하면 그 칸"
-    wb4.set_keyword_rank(BIZ, "상품", "k", "2026-10-09", 5)
-    assert wb4.is_rank_filled(BIZ, "상품", "k", "2026-10-09") and not wb4.is_rank_filled(BIZ, "상품", "k", "2026-10-10")
+    wb4.ensure_date(BIZ, "10.09")                               # ①이 만드는 칸 이름 = '월.일'
+    wb4.ensure_date(BIZ, "10.10")
+    assert _rank_date(wb4, BIZ, None) == wb4.latest_date(BIZ) == "10.10", "지정 없으면 최신 칸(기존)"
+    assert _rank_date(wb4, BIZ, "2026-10-09") == "10.09", "지정하면 그 칸(ISO 로 넘어와도 ①과 같은 '월.일' 칸)"
+    assert list(wb4._date_col[BIZ]) == ["10.09", "10.10"], "ISO 이름의 별도 칸을 만들지 않음"
+    wb4.set_keyword_rank(BIZ, "상품", "k", "10.09", 5)
+    assert wb4.is_rank_filled(BIZ, "상품", "k", "10.09") and not wb4.is_rank_filled(BIZ, "상품", "k", "10.10")
     # 판매수집 완료 표시 = 칸별 이력: 10.09 수집 → 10.10 수집 → 10.09 지정 실행 시 '이미 수집'으로 건너뜀
     wb4.mark_sales_collected("acc", "2026-10-09")
     wb4.mark_sales_collected("acc", "2026-10-10")

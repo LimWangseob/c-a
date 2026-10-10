@@ -380,3 +380,11 @@
 - 버린 대안: (a) Claude 제안(1·8번도 삭제) (b) 전부 유지.
 - 영향 범위: `tools/test_rank_images_live.py`(삭제)·`designs/FEATURE_INVENTORY.md` §3-5·`STATE.md`.
 - 상태: ACTIVE
+
+### D-028 [FIX_RANK_KW_LOSS] 순위 공란·키워드 칸 누락 근본 수정 — 이어서 하기 기준 파일·③ 날짜 칸 이름·대표 블록 키워드 칸 (2026-10-10, R10)
+- 결정: ①'이어서 하기'는 진행 파일과 마스터 중 **나중에 저장된 것**을 기준으로 이어간다(`pipeline._resume_source`). ②③ 날짜 칸 이름은 ①과 같은 규칙 `pipeline_paths.column_label`('2026-10-09'→'10.09')로 만든다(`_rank_date`). ③대표 옵션 블록에 키워드 소헤더가 없으면 지표행 아래에 끼워 넣는다(`OutputWorkbook.ensure_keyword_section`, `_process_option` 대표일 때).
+- 근거: 결과시트 읽기(SA): 10.09 칸 순위 값 = 25시트 전체 0개(10.08 은 169개)·키워드 칸 없는 블록 42개(옵션 라벨 없는 단독 블록 포함 — DW 빔프로젝터·원룸 공기청정기, 노트북 10-02 마스터에선 키워드 칸 있었음). 재현: (1) ① 미완료 계정이 남아 진행 파일이 ②③ 이전 상태로 남은 뒤 같은 날 '이어서 하기' → 앞 실행 키워드 `['kw1','kw2']`·순위 `3위` 소멸(simulate 18 실패→통과) (2) 옵션 2개→1개로 바뀌면 남은 2차 블록이 키워드 칸 없이 대표가 됨(simulate 19 실패→통과) (3) 전체실행(사람)·날짜 지정이 ③에 ISO 를 넘겨 '2026-09-02' 별도 칸 생성·채운 칸 재측정(simulate 20 실패→통과). 게이트 16종·복잡도 0. 기존 테스트 2곳(simulate 15·verify_offline [38])은 ISO 별도 칸을 기대값으로 고정하고 있어 실제 칸 이름('월.일')으로 정정. ⚠ 운용 PC 로그 미확인 — 10.09 공란이 (1) 경로였는지는 로그(`outputun_log_*.log`)로 확인 필요.
+- 버린 대안: (a) ②③ 저장 때 진행 파일도 함께 저장(저장 지점이 많아 누락 위험) (b) 키워드 칸 없는 블록을 지우고 새로 만들기(판매 이력 손실) (c) 2차 옵션 블록에도 키워드 칸(순위는 상품 단위 — 소유자 확정 설계 유지).
+- 영향 범위: `pipeline.py`(_resume_source·_column_label), `pipeline_paths.py`(column_label), `pipeline_ranks.py`(_rank_date), `workbook.py`(ensure_keyword_section), `pipeline_process.py`(_process_option), `tools/simulate_pipeline.py`(18·19·20·15 정정), `tools/verify_offline.py`([38] 정정).
+- 상태: ACTIVE
+

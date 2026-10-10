@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 import sys
 import tempfile
 from pathlib import Path
@@ -539,8 +540,8 @@ def scenario_designated_date():
     for biz in wb.account_sheets():
         for p in wb.products_of(biz):
             for kw in wb.product_keywords(biz, p):
-                filled9 += wb.is_rank_filled(biz, p, kw, "2026-10-09")
-                filled10 += wb.is_rank_filled(biz, p, kw, "2026-10-10")
+                filled9 += wb.is_rank_filled(biz, p, kw, "10.09")     # 결과파일 실제 칸 이름(①이 만든 '월.일')
+                filled10 += wb.is_rank_filled(biz, p, kw, "10.10")
     _check(filled9 > 0 and filled10 == 0, f"순위는 지정 칸(10.09)에만 기록 — 10.09 {filled9}·10.10 {filled10}")
 
 
@@ -601,6 +602,69 @@ def scenario_staff_keywords_pulled():
     _check("직원키워드" in _keywords_in(snap), "① 결과(→ 결과시트 미러링 원본)에 직원 키워드 보존")
 
 
+def _one_product(opts):
+    """상품-P 1개(옵션 목록 [(라벨, vid)]) 계정 — 옵션 구성 변경 검증용."""
+    p = Product(name="상품-P", options=[Option(label=l, vendor_item_ids=[v], product_ids=[]) for l, v in opts],
+                kind=config.KIND_CONTRACT)
+    return InputList(accounts=[Account("a1", "대표-a1", "비즈-a1", [p])], errors=[])
+
+
+def _ranks_of(wb, biz, pname, label):
+    col = wb._date_col.get(biz, {}).get(label)
+    return {kw: (wb.wb[biz].cell(wb._kw_row[(biz, pname, kw)], col).value if col else None)
+            for kw in wb.product_keywords(biz, pname)}
+
+
+def scenario_same_day_resume_keeps_stage23():
+    print("[시나리오 18] 같은 날 두 번째 실행('이어서 하기')이 앞 실행의 ②키워드·③순위를 지우지 않음")
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login={"b1"})
+    d = Path(tempfile.mkdtemp())
+    from coupang_analytics.workbook import OutputWorkbook
+    today = date.today().isoformat()
+    il = _accounts(["a1", "b1"])
+    _ops(il, d, date_from=today, date_to=today, date_label=today)        # 실행1: b1 차단 → 진행 파일 남음
+    _check(bool(P.resumable_progress(d)), "실행1 뒤 진행 파일 남음(b1 미완료)")
+    _STATE["block_login"] = set()
+    _run1(il, d, date_from=today, date_to=today, date_label=today, resume=True, carry_forward=True)   # 실행2 ①
+    wb = OutputWorkbook.load(P._master_path(d))
+    biz = "비즈-a1"
+    pname = wb.products_of(biz)[0]
+    lbl = wb.latest_date(biz)
+    _check(wb.product_keywords(biz, pname) == ["kw1", "kw2"], f"실행1 ② 키워드 보존 {wb.product_keywords(biz, pname)}")
+    _check(all(v == "3위" for v in _ranks_of(wb, biz, pname, lbl).values()) and _ranks_of(wb, biz, pname, lbl),
+           f"실행1 ③ 순위 보존 {_ranks_of(wb, biz, pname, lbl)}")
+    _check("비즈-b1" in wb.account_sheets(), "실행2 가 남은 계정(b1) 수집")
+
+
+def scenario_option_change_keeps_keyword_section():
+    print("[시나리오 19] 옵션 구성이 바뀌어 2차 블록만 남아도 대표 블록에 키워드·순위 칸이 생김")
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    d = Path(tempfile.mkdtemp())
+    from coupang_analytics.workbook import OutputWorkbook
+    _ops(_one_product([("화이트", "vA"), ("블랙", "vB")]), d, date_from="2026-09-01", date_to="2026-09-01")
+    _ops(_one_product([("블랙", "vB")]), d, date_from="2026-09-02", date_to="2026-09-02", carry_forward=True)
+    wb = OutputWorkbook.load(P._master_path(d))
+    blocks = [(p, wb.has_keyword_section("비즈-a1", p), wb.product_keywords("비즈-a1", p)) for p in wb.products_of("비즈-a1")]
+    _check(len(blocks) == 1 and blocks[0][1], f"남은 대표 블록에 키워드 구역 {blocks}")
+    _check(blocks[0][2] == ["kw1", "kw2"], f"② 가 키워드를 채움 {blocks}")
+    _check(all(v == "3위" for v in _ranks_of(wb, "비즈-a1", blocks[0][0], "09.02").values()), "③ 순위 기록")
+
+
+def scenario_rank_label_matches_sales_column():
+    print("[시나리오 20] ③에 '2026-09-02'(ISO)가 넘어와도 ①과 같은 '09.02' 칸에 기록·채운 칸은 다시 안 잼")
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    d = Path(tempfile.mkdtemp())
+    from coupang_analytics.workbook import OutputWorkbook
+    _run1(_account_one_vid("vidA"), d, date_from="2026-09-01", date_to="2026-09-01", date_label="2026-09-02")
+    _run2(d)
+    _run3(d, date_label="2026-09-02")
+    wb = OutputWorkbook.load(P._master_path(d))
+    _check(list(wb._date_col["비즈-a1"]) == ["09.02"], f"날짜 칸 하나('09.02') {list(wb._date_col['비즈-a1'])}")
+    _check(all(v == "3위" for v in _ranks_of(wb, "비즈-a1", "상품-a1", "09.02").values()), "순위가 ①과 같은 칸에")
+    _check(all(wb.is_rank_filled("비즈-a1", "상품-a1", kw, "09.02") for kw in wb.product_keywords("비즈-a1", "상품-a1")),
+           "채운 칸으로 인식(재측정 안 함)")
+
+
 def main():
     _install_fakes()
     config.LOGIN_PACE_MIN_SEC = 0   # 시뮬은 로그인 페이싱 sleep 없이(즉시)
@@ -629,6 +693,9 @@ def main():
     scenario_designated_date()
     scenario_designated_filled_no_stamp()
     scenario_staff_keywords_pulled()
+    scenario_same_day_resume_keeps_stage23()
+    scenario_option_change_keeps_keyword_section()
+    scenario_rank_label_matches_sales_column()
     print("=" * 60)
     print("  [완료] 모든 시나리오 통과")
     print("=" * 60)
