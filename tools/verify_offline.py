@@ -2036,6 +2036,25 @@ def t1_no_vidless_blocks():
     _ok("VID 없는 잔재 정리·VID 블록 보존·상품조회 실패 시 미정리·다른 계정ID 미접촉")
 
 
+def t1_kw_competition_query() -> None:
+    print("[F1] 키워드 추천 탭 쿠팡 1페이지 경쟁 조회 — 검색창에 **검색어 그대로** 입력(URL 문자열 아님)")
+    from types import SimpleNamespace
+    from coupang_analytics import kw_metrics as KM
+    from coupang_analytics.rank import SearchItem
+    seen: list = []
+    orig = (KM._load_results, KM.extract_items)
+    try:
+        KM._load_results = lambda browser, kw, *a, **k: seen.append(kw) or True
+        KM.extract_items = lambda page: [SearchItem(False, "p1", "v1", "a", True), SearchItem(True, "p2", "v2", "b"),
+                                         SearchItem(False, "p3", "v3", "c")]
+        comp = KM.page1_competition(SimpleNamespace(page=None), "캠핑 타프")
+    finally:
+        KM._load_results, KM.extract_items = orig
+    assert seen == ["캠핑 타프"], f"검색어가 아닌 값으로 검색: {seen}"
+    assert comp.found and comp.organic_count == 2 and comp.ad_count == 1 and comp.rocket_count == 1, comp
+    _ok("검색어 그대로 조회·오가닉 2·광고 1·로켓 1")
+
+
 def main():
     print("=" * 60)
     print("  로그인 불필요 부분 실증 (실제 실행 — 가짜 아님)")
@@ -2076,6 +2095,7 @@ def main():
     t1_proxy_pool()
     t1_power_keep_awake()
     t1_coupang_check_compute()
+    t1_kw_competition_query()
     t2_keywords(store, il)
     print("=" * 60)
     print("  [완료] 로그인 불필요 부분 실증 종료")

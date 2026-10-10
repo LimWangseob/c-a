@@ -20,7 +20,8 @@ from PySide6 import QtCore, QtGui, QtWidgets
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # ui/ 형제 모듈(registry_ui 등)
 
-from coupang_analytics import appconfig, config, keyword_store, power, proxy_pool  # noqa: E402
+from coupang_analytics import appconfig, config, power, proxy_pool  # noqa: E402
+from coupang_analytics.manual_keywords import ManualKeywordError, apply_manual_keywords  # noqa: E402
 from coupang_analytics.apppaths import output_dir as app_output_dir, set_workdir  # noqa: E402
 from coupang_analytics.app_process import (mark_app_finished, prepare_auto_start,  # noqa: E402
                                            start_settlement_watch)
@@ -704,9 +705,9 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self.title_btn = QtWidgets.QPushButton("상품명 추천(선택 키워드 기반)")
         self.title_btn.clicked.connect(self.do_recommend_title)
         btns.addWidget(self.title_btn)
-        save_btn = QtWidgets.QPushButton("선택 키워드 저장(3~5개)")
-        save_btn.clicked.connect(self.save_keywords)
-        btns.addWidget(save_btn)
+        self.kw_save_btn = QtWidgets.QPushButton("선택 키워드 저장(3~5개) → 결과파일·구글시트")
+        self.kw_save_btn.clicked.connect(self.save_keywords)
+        btns.addWidget(self.kw_save_btn)
         v.addLayout(btns)
         return w
 
@@ -1477,9 +1478,28 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             QtWidgets.QMessageBox.warning(self, "상품 필요", "상품을 먼저 선택하세요.")
             return
         business = self.product_business.get(product, "")
-        keyword_store.save(business, product, kws)
-        self.log(f"[저장] [{business}] {product} ← {kws}")
-        QtWidgets.QMessageBox.information(self, "저장 완료", f"{len(kws)}개 키워드를 저장했습니다.")
+        aid = next((a.account_id for a in (self.input_list.accounts if self.input_list else [])
+                    if a.business_name == business and any(p.name == product for p in a.products)), "")
+        gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
+        self.log(f"[키워드 저장] [{business}] {product} ← {kws} — 결과파일·결과 구글시트에 반영 중…")
+
+        def task():   # 결과파일 그 상품 블록에 추가 + 결과 구글시트 반영(F2 — 예전엔 data/keywords.json 에 쓰기만 했음)
+            try:
+                return apply_manual_keywords(aid, business, product, kws, gsheet_output_url=gs_out, on_log=self.log)
+            except ManualKeywordError as exc:   # 매칭 기록·결과파일·블록 없음 → 이유를 팝업으로
+                return exc
+
+        def done(res):
+            if res is None:                     # 다른 실행이 진행 중(잠금) — run_bg 가 이미 로그로 안내
+                return
+            if isinstance(res, ManualKeywordError):
+                self.log(f"[키워드 저장] ❌ {res}")
+                QtWidgets.QMessageBox.warning(self, "저장 안 됨", str(res))
+                return
+            QtWidgets.QMessageBox.information(
+                self, "저장 완료", f"{len(res)}개 키워드를 결과파일·결과 구글시트에 추가했습니다: {res}" if res
+                else "선택한 키워드가 이미 모두 등록돼 있습니다(변경 없음).")
+        self.run_bg(task, on_done=done, btn=self.kw_save_btn, exclusive=True, pipelinelock=True)
 
     # ── 순위 조회 ─────────────────────────────────────────────
     def do_rank(self):

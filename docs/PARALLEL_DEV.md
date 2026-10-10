@@ -35,7 +35,7 @@ git 추적 파일(프로젝트 `CLAUDE.md`·`designs/`·`docs/`·`docs/memory/`)
 | 레인 | 편집 소유 파일 | 비고 |
 |---|---|---|
 | **A 수집/판매** | `collector.py`·`pipeline_sales.py`·`pipeline_process.py`·`product_match.py`·`report.py` | |
-| **B 키워드** | `kw_*.py`·`keyword_store.py` | |
+| **B 키워드** | `kw_*.py`·`manual_keywords.py` | |
 | **C 순위** | `rank.py`·`pipeline_ranks.py` | |
 | **D 이미지** | `detail_images.py`(+해당 UI 탭 로직) | 거의 고립 |
 | **E 원장/정산** | `registry_*.py`(registry·_apply·_core·_gsheet·_history·_model·_rename)·`input_list.py` | |

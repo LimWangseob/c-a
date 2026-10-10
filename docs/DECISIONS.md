@@ -420,3 +420,10 @@ un_log_*.log`)로 확인 필요.
 - 영향 범위: `pipeline.py`(plan_run_mode), `tools/pin_run_plan.py`(P4·P8). CLAUDE.md 운영 정책 한 줄.
 - 상태: ACTIVE
 
+### D-033 [KW_TAB_FIX] 키워드 추천 탭 — 경쟁 조회는 검색어로(F1)·[저장]은 결과파일 블록 추가+결과시트 반영(F2) (2026-10-11, R10)
+- 결정: (F1) `kw_metrics.page1_competition` 은 `_load_results` 에 **검색어**를 넘긴다(예전엔 검색 URL 문자열 전체를 넘겨, 2026-09-13 '검색창 타이핑' 전환 뒤로 URL 글자를 검색해 경쟁 지표·추천 점수가 틀렸음). (F2) 키워드 탭 [선택 키워드 저장]은 `manual_keywords.apply_manual_keywords` 로 **결과파일의 그 상품 블록에 키워드 추가**(기존 유지·상한 `KW_MAX_TRACK`·이미 있는 키워드 건너뜀) 후 저장·**결과 구글시트 반영**(시트가 키워드 기준 — 안 하면 다음 ① 역머지가 지움). 대장명→블록은 ①이 남긴 `_매칭고정.json`(대장 줄→VID)으로 찾고 다중옵션이면 키워드 칸 있는 대표 블록. 매칭 기록·결과파일·블록이 없으면 저장하지 않고 이유를 팝업. 쓰기만 하던 `keyword_store`(data/keywords.json) 삭제.
+- 근거: 소유자 지시(2026-10-11 "F1, F2도 수정해줘"). 재현: F1 테스트가 '캠핑 타프' 대신 `https://www.coupang.com/np/search?q=…` 로 검색함을 확인(실패→수정 후 통과)·F2 simulate 23(저장 시 블록 키워드 추가·결과시트 반영·매칭 없는 상품 거부) 신설 통과. 게이트 16종·복잡도 0·UI import. UI 는 `run_bg(btn=저장 버튼, exclusive, pipelinelock)`(버튼 없이 exclusive 면 실행 중 표시가 안 풀리는 문제 회피).
+- 버린 대안: (a) keyword_store 를 ②에서 읽기(파일·결과시트·마스터 3곳에 키워드 기준이 생김) (b) 저장 시 기존 키워드 교체(순위 이력 삭제 위험 — 추가만, 빼려면 결과시트에서 지움).
+- 영향 범위: `kw_metrics.py`, `manual_keywords.py`(신규), `keyword_store.py`(삭제), `ui/app_qt.py`(_kw_tab·save_keywords), 테스트 verify_offline(F1)·simulate 23. 문서 FEATURE_INVENTORY·PARALLEL_DEV.
+- 상태: ACTIVE
+

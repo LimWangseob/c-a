@@ -715,6 +715,36 @@ def scenario_keyword_stage_proxy():
         proxy_pool.public_search_proxy = orig
 
 
+def scenario_manual_keywords_saved():
+    print("[시나리오 23] 키워드 추천 탭 [저장] = 결과파일 그 상품 블록에 추가(기존 유지·상한)·결과 구글시트 반영(F2)")
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    import json as _json
+    from coupang_analytics import manual_keywords as MK
+    from coupang_analytics.workbook import OutputWorkbook
+    d = Path(tempfile.mkdtemp())
+    _ops(_account_one_vid("vidK"), d, date_from="2026-09-01", date_to="2026-09-01")   # 키워드 kw1·kw2 생성
+    (d / "_매칭고정.json").write_text(_json.dumps({"a1": {"상품-a1": {"vids": ["vidK"]}}}, ensure_ascii=False),
+                                     encoding="utf-8")                                   # ①이 남기는 대장줄→VID 고정
+    pushed: list = []
+    orig = MK.push_gsheet
+    MK.push_gsheet = lambda wb, url, log, **k: pushed.append(url)
+    try:
+        added = MK.apply_manual_keywords("a1", "비즈-a1", "상품-a1", ["수동1", "kw1", "수동2"], out_dir=str(d),
+                                         gsheet_output_url="https://x/result", on_log=lambda m: None)
+        wb = OutputWorkbook.load(P._master_path(d))
+        _check(added == ["수동1", "수동2"], f"이미 있는 kw1 제외하고 추가 {added}")
+        _check(wb.product_keywords("비즈-a1", "상품-a1") == ["kw1", "kw2", "수동1", "수동2"],
+               f"기존 키워드 유지 + 추가 {wb.product_keywords('비즈-a1', '상품-a1')}")
+        _check(pushed == ["https://x/result"], "결과 구글시트 반영(다음 ① 역머지에서 지워지지 않게)")
+        try:
+            MK.apply_manual_keywords("a1", "비즈-a1", "매칭 안 된 상품", ["x"], out_dir=str(d), on_log=lambda m: None)
+            _check(False, "매칭 기록 없는 상품인데 저장됨")
+        except MK.ManualKeywordError as exc:
+            _check("①" in str(exc), f"매칭 안 된 상품 = 이유 안내·저장 안 함 ({exc})")
+    finally:
+        MK.push_gsheet = orig
+
+
 def main():
     _install_fakes()
     config.LOGIN_PACE_MIN_SEC = 0   # 시뮬은 로그인 페이싱 sleep 없이(즉시)
@@ -748,6 +778,7 @@ def main():
     scenario_rank_label_matches_sales_column()
     scenario_metrics_not_summed()
     scenario_keyword_stage_proxy()
+    scenario_manual_keywords_saved()
     print("=" * 60)
     print("  [완료] 모든 시나리오 통과")
     print("=" * 60)

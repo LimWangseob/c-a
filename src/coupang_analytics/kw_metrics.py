@@ -8,10 +8,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from urllib.parse import quote
 
 from .browser import WingBrowser
-from .rank import SEARCH_URL, _load_results, extract_items
+from .rank import _load_results, extract_items
 
 
 @dataclass
@@ -28,8 +27,10 @@ class KeywordCompetition:
 
 
 def page1_competition(browser: WingBrowser, keyword: str) -> KeywordCompetition:
-    """키워드의 쿠팡 검색 1페이지 경쟁 지표. 결과 없음이면 found=False."""
-    if not _load_results(browser, SEARCH_URL.format(q=quote(keyword), page=1)):
+    """키워드의 쿠팡 검색 1페이지 경쟁 지표. 결과 없음이면 found=False.
+    ⚠ `_load_results` 는 검색창에 **검색어를 타이핑**한다(2026-09-13~) → URL 이 아니라 검색어를 넘긴다(F1·D-033 — 예전엔
+    검색 URL 문자열 전체를 쳐서 엉뚱한 결과로 경쟁을 계산했음)."""
+    if not _load_results(browser, keyword):
         return KeywordCompetition(keyword, 0, 0, 0, found=False)
     items = extract_items(browser.page)
     organic = [it for it in items if not it.is_ad]
