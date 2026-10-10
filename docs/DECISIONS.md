@@ -383,8 +383,17 @@
 
 ### D-028 [FIX_RANK_KW_LOSS] 순위 공란·키워드 칸 누락 근본 수정 — 이어서 하기 기준 파일·③ 날짜 칸 이름·대표 블록 키워드 칸 (2026-10-10, R10)
 - 결정: ①'이어서 하기'는 진행 파일과 마스터 중 **나중에 저장된 것**을 기준으로 이어간다(`pipeline._resume_source`). ②③ 날짜 칸 이름은 ①과 같은 규칙 `pipeline_paths.column_label`('2026-10-09'→'10.09')로 만든다(`_rank_date`). ③대표 옵션 블록에 키워드 소헤더가 없으면 지표행 아래에 끼워 넣는다(`OutputWorkbook.ensure_keyword_section`, `_process_option` 대표일 때).
-- 근거: 결과시트 읽기(SA): 10.09 칸 순위 값 = 25시트 전체 0개(10.08 은 169개)·키워드 칸 없는 블록 42개(옵션 라벨 없는 단독 블록 포함 — DW 빔프로젝터·원룸 공기청정기, 노트북 10-02 마스터에선 키워드 칸 있었음). 재현: (1) ① 미완료 계정이 남아 진행 파일이 ②③ 이전 상태로 남은 뒤 같은 날 '이어서 하기' → 앞 실행 키워드 `['kw1','kw2']`·순위 `3위` 소멸(simulate 18 실패→통과) (2) 옵션 2개→1개로 바뀌면 남은 2차 블록이 키워드 칸 없이 대표가 됨(simulate 19 실패→통과) (3) 전체실행(사람)·날짜 지정이 ③에 ISO 를 넘겨 '2026-09-02' 별도 칸 생성·채운 칸 재측정(simulate 20 실패→통과). 게이트 16종·복잡도 0. 기존 테스트 2곳(simulate 15·verify_offline [38])은 ISO 별도 칸을 기대값으로 고정하고 있어 실제 칸 이름('월.일')으로 정정. ⚠ 운용 PC 로그 미확인 — 10.09 공란이 (1) 경로였는지는 로그(`outputun_log_*.log`)로 확인 필요.
+- 근거: 결과시트 읽기(SA): 10.09 칸 순위 값 = 25시트 전체 0개(10.08 은 169개)·키워드 칸 없는 블록 42개(옵션 라벨 없는 단독 블록 포함 — DW 빔프로젝터·원룸 공기청정기, 노트북 10-02 마스터에선 키워드 칸 있었음). 재현: (1) ① 미완료 계정이 남아 진행 파일이 ②③ 이전 상태로 남은 뒤 같은 날 '이어서 하기' → 앞 실행 키워드 `['kw1','kw2']`·순위 `3위` 소멸(simulate 18 실패→통과) (2) 옵션 2개→1개로 바뀌면 남은 2차 블록이 키워드 칸 없이 대표가 됨(simulate 19 실패→통과) (3) 전체실행(사람)·날짜 지정이 ③에 ISO 를 넘겨 '2026-09-02' 별도 칸 생성·채운 칸 재측정(simulate 20 실패→통과). 게이트 16종·복잡도 0. 기존 테스트 2곳(simulate 15·verify_offline [38])은 ISO 별도 칸을 기대값으로 고정하고 있어 실제 칸 이름('월.일')으로 정정. ⚠ 운용 PC 로그 미확인 — 10.09 공란이 (1) 경로였는지는 로그(`output
+un_log_*.log`)로 확인 필요.
 - 버린 대안: (a) ②③ 저장 때 진행 파일도 함께 저장(저장 지점이 많아 누락 위험) (b) 키워드 칸 없는 블록을 지우고 새로 만들기(판매 이력 손실) (c) 2차 옵션 블록에도 키워드 칸(순위는 상품 단위 — 소유자 확정 설계 유지).
 - 영향 범위: `pipeline.py`(_resume_source·_column_label), `pipeline_paths.py`(column_label), `pipeline_ranks.py`(_rank_date), `workbook.py`(ensure_keyword_section), `pipeline_process.py`(_process_option), `tools/simulate_pipeline.py`(18·19·20·15 정정), `tools/verify_offline.py`([38] 정정).
+- 상태: ACTIVE
+
+### D-029 [LOGIN_NO_SKIP] ① 로그인 서킷브레이커 폐지 — 차단돼도 전 계정 시도·① 끝에 미완료 계정 즉시 1회 재시도·야간 30분 재개 폐지 (2026-10-10, R10)
+- 결정: ① 로그인 패스에서 연속 차단(옛 `LOGIN_BLOCK_CIRCUIT=3`)이어도 남은 계정을 **건너뛰지 않는다**. 세션우선·로그인 패스가 끝나면 **완료 안 된 모든 계정**(차단·로그인 미완료·2차인증·처리 오류 — 비번 오류·의도적 생략은 완료 처리라 제외)을 **바로 1회 재시도**(`pipeline._not_done`·`_collect_with_login(pace_first)`). 무인 전용이던 '30분 쿨다운 후 1회 재개'(`pipeline_stages._night_resume`·`StagePlan.night_resume`·`LOGIN_NIGHT_RESUME*`)는 이 재시도로 대체해 삭제(모든 실행 공통). 로그인 사이 간격(45~120초)·비번 오류 재시도 금지·Akamai 차단 감지는 그대로.
+- 근거: 소유자 지시(2026-10-10 "단 1개의 계정도 누락되면 안됨", "30분 쉬지 말고 ① 끝난 뒤 바로 남은 계정 다시 시도") + 선택 답("멈추지 않고 끝까지 시도 + 끝나면 실패 계정 즉시 재시도"). simulate 8 을 새 기대값으로 다시 씀(실패→통과: 차단 계정마다 로그인 2회·첫 시도만 막힌 계정은 재시도에서 수집·미수집 있으면 진행 파일 유지). 게이트 16종·복잡도 0.
+- 버린 대안: (a) 서킷브레이커 유지(누락 발생) (b) 실패 계정 0 이 될 때까지 무한 반복(IP 차단 지속 시 끝나지 않음) (c) 야간 30분 재개 유지(소유자 지시와 다름·재시도 중복).
+- 위험(소유자 감수): 차단된 IP 로 남은 계정 로그인을 계속 두드려 그 IP 가 더 오래 막힐 수 있다(로그인 간격으로 완화).
+- 영향 범위: `pipeline.py`(_collect_with_login·_not_done·run_full), `pipeline_stages.py`, `config.py`(LOGIN_BLOCK_CIRCUIT·LOGIN_NIGHT_RESUME* 삭제), `ui/app_qt.py`(start_auto), `tools/simulate_pipeline.py`(8·가짜 로그인 block_once·시도 횟수), `tools/pin_run_plan.py`(P11 삭제). 정책 문구 CLAUDE.md·DESIGN·FEATURE_INVENTORY.
 - 상태: ACTIVE
 

@@ -64,10 +64,14 @@ def _fake_login_and_discover(a, date_from, date_to, get_password, log, login=Tru
         raise KeyboardInterrupt("시뮬레이션 프로세스 강제종료(계정격리로 안 잡힘 → resume 대상)")
     if _STATE["error_at"] is not None and _STATE["discover_calls"] == _STATE["error_at"]:
         raise RuntimeError("시뮬레이션 계정 처리 오류(일반 예외 → 그 계정만 건너뜀)")
-    if a.account_id in _STATE["block_login"]:      # Akamai 차단 계정
+    if login:                                      # 계정별 로그인 시도 횟수(재시도 검증용)
+        _STATE.setdefault("login_tries", {})
+        _STATE["login_tries"][a.account_id] = _STATE["login_tries"].get(a.account_id, 0) + 1
+    once = a.account_id in _STATE.get("block_once", set())   # 첫 로그인만 차단되는 계정
+    if a.account_id in _STATE["block_login"] or (once and (not login or _STATE["login_tries"][a.account_id] <= 1)):
         if not login:
             raise P.NeedLogin()                    # 1차: 세션 없음 → 대기열
-        raise P.LoginBlocked()                     # 2차: 로그인 차단(서킷브레이커 카운트)
+        raise P.LoginBlocked()                     # 2차: 로그인 차단
     if a.account_id in _STATE["need_login"] and not login:
         raise P.NeedLogin()                        # 1차: 세션 만료 → 대기열(2차 로그인 시 정상)
     if a.account_id == _LOGIN_FAIL_ID:
@@ -349,20 +353,25 @@ def scenario_session_first():
 
 
 def scenario_circuit_breaker():
-    print("[시나리오 8] 로그인 서킷브레이커 — 연속 Akamai 차단 K회 후 이후 로그인 생략")
+    print("[시나리오 8] 로그인 차단이 이어져도 남은 계정 전부 시도 + ① 끝에 실패 계정 즉시 1회 재시도(D-029·누락 0)")
     d = Path(tempfile.mkdtemp())
     blocked = {"x1", "x2", "x3", "x4"}
-    _STATE.update(discover_calls=0, crash_at=None, error_at=None,
-                  need_login=set(), block_login=blocked)
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=blocked,
+                  block_once={"y1"}, login_tries={})
     logs: list[str] = []
-    final = _run1(_accounts(["a1", "x1", "x2", "x3", "x4", "c1"]), d, date_from="2026-09-02",
+    final = _run1(_accounts(["a1", "x1", "x2", "x3", "x4", "y1", "c1"]), d, date_from="2026-09-02",
                   date_to="2026-09-02", resume=False, on_log=logs.append)
     joined = "\n".join(logs)
     _check(final is not None, "차단 다발에도 크래시 없이 완주")
     _check({"비즈-a1", "비즈-c1"} <= _sheets(final), "세션 있는 a1·c1은 수집됨(세션우선)")
-    _check("로그인 생략" in joined, f"연속 {config.LOGIN_BLOCK_CIRCUIT}회 차단 후 이후 로그인 생략(서킷브레이커)")
-    _check(all(f"비즈-{x}" not in _sheets(final) for x in blocked), "차단 계정은 미수집(다음에 재시도)")
-    _STATE.update(need_login=set(), block_login=set())   # 뒤 시나리오 누수 방지
+    _check("로그인 생략" not in joined, "연속 차단돼도 로그인을 생략하지 않음(서킷브레이커 없음)")
+    tries = _STATE["login_tries"]
+    _check(all(tries.get(x) == 2 for x in blocked), f"차단 계정마다 로그인 2회(본 시도+즉시 재시도) {tries}")
+    _check("비즈-y1" in _sheets(final) and tries.get("y1") == 2, "첫 시도만 막힌 y1 은 재시도에서 수집")
+    _check("즉시 1회 재시도" in joined, "재시도 로그")
+    _check(all(f"비즈-{x}" not in _sheets(final) for x in blocked), "끝까지 막힌 계정은 미수집(진행 파일로 다음에 이어서)")
+    _check(P._partial_path(d).exists(), "미수집 계정이 있으면 진행 파일 유지")
+    _STATE.update(need_login=set(), block_login=set(), block_once=set())   # 뒤 시나리오 누수 방지
 
 
 def _product_names(path: Path, sheet: str) -> list[str]:

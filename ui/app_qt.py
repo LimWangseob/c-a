@@ -1642,8 +1642,8 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         il, naver_creds, key, stop = self.input_list, self.naver_creds, self.ai_key, self._semi_stop
         gs_in = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/input_url", "", type=str).strip()
         # 무인이어도 **처리 방식은 반자동**(보이는 신뢰 창·실제 타이핑). 2차인증이 뜨는 계정만 건너뜀(멈춤 없음).
-        # ① 뒤 미완료 계정이 남으면 30분 쿨다운 후 1회만 더(night_resume). ③은 최신 날짜 칸.
-        plan = StagePlan(resume=mode.resume, night_resume=True)
+        # ① 미완료 계정은 run_full 이 끝에 즉시 1회 재시도(D-029). ③은 최신 날짜 칸.
+        plan = StagePlan(resume=mode.resume)
 
         def task():
             try:

@@ -409,6 +409,12 @@ def _finish(ctx: _RunCtx, a: Account, report_acc, metrics, inv_by_vid, inv_statu
     log(f"  [{a.label}] 완료 — 진행 {len(ctx.done)}/{ctx.total} (진행 저장: {ctx.partial.name})")
 
 
+def _not_done(accounts, done) -> list[tuple[int, Account]]:
+    """아직 완료 안 된 계정 [(순번, Account)] — 차단·로그인 미완료·2차인증·처리 오류 모두(비번 오류·의도적 생략은
+    완료 처리돼 제외 — 비번 재제출 금지)."""
+    return [(i, a) for i, a in enumerate(accounts, 1) if a.account_id not in done]
+
+
 def _collect_session_first(ctx: _RunCtx, accounts, get_password) -> list[tuple[int, Account]]:
     """1차 패스 — 세션 살아있는 계정 먼저 수집(로그인 없음 → 차단 위험 0). 세션 만료는 로그인 대기열로.
 
@@ -457,19 +463,14 @@ def _collect_session_first(ctx: _RunCtx, accounts, get_password) -> list[tuple[i
     return login_needed
 
 
-def _collect_with_login(ctx: _RunCtx, login_needed, get_password) -> None:
-    """2차 패스 — 로그인 필요 계정 처리. 서킷브레이커(연속 Akamai 차단 K회면 이후 로그인 생략)·
-    로그인 사이 사람 간격(몰아치기=IP 플래그 방지)·비번오류는 재시도 금지(계정잠금 방지)."""
+def _collect_with_login(ctx: _RunCtx, login_needed, get_password, *, pace_first: bool = False) -> None:
+    """로그인 패스 — 로그인 필요 계정을 **전부** 시도한다(차단이 이어져도 남은 계정을 건너뛰지 않음·D-029 누락 0).
+    로그인 사이 사람 간격(몰아치기=IP 플래그 방지)·비번오류는 재시도 금지(계정잠금 방지).
+    pace_first=True: 첫 로그인 전에도 간격(직전 패스에 이어 바로 도는 즉시 재시도용)."""
     log, done, total = ctx.log, ctx.done, ctx.total
-    if login_needed:
-        log(f"== 로그인 필요 계정 {len(login_needed)}개 처리(세션우선 수집 완료) ==")
     blocks = 0
-    attempted = 0
+    attempted = 1 if pace_first else 0
     for i, a in login_needed:
-        if blocks >= config.LOGIN_BLOCK_CIRCUIT:  # IP가 이미 플래그됨 → 더 두드리지 않음(더 태우기 방지)
-            log(f"== [{i}/{total}] {a.label} — Akamai 차단 지속(연속 {blocks}회)으로 로그인 생략 "
-                "→ 잠시 후/내일(쉰 IP) 이어서 수집 ==")
-            continue
         if attempted > 0:   # 로그인 사이에 사람 간격(몰아치기=IP 플래그 방지). 첫 로그인엔 대기 없음
             pace = random.uniform(config.LOGIN_PACE_MIN_SEC, config.LOGIN_PACE_MAX_SEC)
             if pace > 0:
@@ -485,10 +486,10 @@ def _collect_with_login(ctx: _RunCtx, login_needed, get_password) -> None:
             blocks = 0                            # 로그인 성공 → 연속 차단 카운터 리셋
             _finish(ctx, a, report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids,
                     vid_meta, pid_by_vid)
-        except LoginBlocked:                      # Akamai 차단 → 서킷브레이커 카운트
+        except LoginBlocked:                      # Akamai 차단 → 기록하고 다음 계정 계속(① 끝에 즉시 재시도)
             blocks += 1
             ctx.coupang_checks[a.account_id] = (_CC_LOGINFAIL, datetime.now().strftime("%Y-%m-%d"))
-            log(f"  [{a.label}] 로그인 차단 누적 {blocks}/{config.LOGIN_BLOCK_CIRCUIT}")
+            log(f"  [{a.label}] 로그인 차단(이번 패스 {blocks}번째) — 다음 계정 계속·① 끝에 즉시 재시도")
         except LoginCredentialError:              # 비번오류/계정잠금 → 재시도 금지: '처리됨'으로 표시해
             done.add(a.account_id)                # 야간 재개·같은 날 재실행이 비번을 다시 제출하지 않게(계정잠금 방지).
             ctx.coupang_checks[a.account_id] = (_CC_PWFAIL, datetime.now().strftime("%Y-%m-%d"))
@@ -684,11 +685,19 @@ def run_full(input_list: InputList, out_dir: str = "output",
                   col_label=col_label, total=total, ai_key=ai_key, log=log, coupang_checks={},
                   designated=designated)
 
-    # 계정 수집 = 2패스(세션우선 → 로그인). Akamai IP 차단을 줄이려 로그인 없는 계정을 먼저 다 확보한다.
+    # 계정 수집 = 세션우선 → 로그인 → **미완료 계정 즉시 1회 재시도**(D-029 — 한 계정도 빠지지 않게, 30분 쉬지 않음).
+    # Akamai IP 차단을 줄이려 로그인 없는 계정을 먼저 다 확보한다.
     login_needed = _collect_session_first(ctx, accounts, get_password)
+    if login_needed:
+        log(f"== 로그인 필요 계정 {len(login_needed)}개 처리(세션우선 수집 완료) ==")
     _collect_with_login(ctx, login_needed, get_password)
+    retry = _not_done(accounts, done)
+    if retry:
+        log(f"== ① 끝 — 미완료 계정 {len(retry)}개 즉시 1회 재시도(누락 방지): "
+            f"{', '.join(a.label for _, a in retry)} ==")
+        _collect_with_login(ctx, retry, get_password, pace_first=bool(login_needed))
 
-    uncollected = [a for _, a in login_needed if a.account_id not in done]
+    uncollected = [a for _, a in _not_done(accounts, done)]
     if uncollected:
         log(f"== ⚠ 로그인 못한 계정 {len(uncollected)}개(세션만료+Akamai차단): "
             f"{', '.join(a.label for a in uncollected)} — 쉰 IP(내일 등)에 재실행 시 수집됨 ==")

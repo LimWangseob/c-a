@@ -120,10 +120,9 @@ import coupang_analytics.pipeline_stages as _st  # noqa: E402
 from coupang_analytics.pipeline_stages import StagePlan, plan_resume_stages, run_stages  # noqa: E402
 
 
-def _fake_stages(remaining_after_first: bool = False, stop_at: str | None = None):
+def _fake_stages(stop_at: str | None = None):
     """가짜 단계 — 호출 순서·단계 기록만 모은다(실 로그인·API·시트 없음). stop_at=그 단계 실행 중 중지 요청."""
     calls, marks, stop = [], [], {"v": False}
-    left = {"v": remaining_after_first}
 
     def hit(name):
         calls.append(name)
@@ -132,8 +131,6 @@ def _fake_stages(remaining_after_first: bool = False, stop_at: str | None = None
 
     def fake_run_full(_il, **kw):
         hit("①재개" if kw["resume"] else "①")
-        if calls.count("①") + calls.count("①재개") >= 2:
-            left["v"] = False
         return "snap"
     _st.run_full = fake_run_full
     _st.select_keywords_stage = lambda *a, **k: hit("②")
@@ -141,8 +138,6 @@ def _fake_stages(remaining_after_first: bool = False, stop_at: str | None = None
     _st.push_ledger_inventory = lambda *a: hit("재고")
     _st.push_company_stock = lambda *a: hit("회사재고")
     _st.write_run_stage = lambda s: marks.append(s)
-    _st.resumable_progress = lambda: {"done": []} if left["v"] else None
-    _st._interruptible_sleep = lambda *a, **k: calls.append("쿨다운")
     return calls, marks, (lambda: stop["v"])
 
 
@@ -185,20 +180,6 @@ def pin_stage_assembly():
     _check(calls[-2:] == ["재고", "회사재고"] and marks == ["sales", "ranks"], "③ 중 중지 → 역기록은 함·'done' 없음")
 
 
-def pin_night_resume():
-    print("[핀 P11] 무인 야간 재개 — 미완료 계정 남으면 쿨다운 후 **1회만** ① 이어서(잠금 방지)")
-    calls, marks, stop = _fake_stages(remaining_after_first=True)
-    _run(StagePlan(night_resume=True), stop)
-    _check(calls[:3] == ["①", "쿨다운", "①재개"] and calls.count("①재개") == 1, f"1회 재개 {calls[:4]}")
-    _check(marks == ["sales", "ranks", "done"], "재개 뒤 정상 진행")
-    calls, marks, stop = _fake_stages(remaining_after_first=False)
-    _run(StagePlan(night_resume=True), stop)
-    _check("쿨다운" not in calls, "미완료 없으면 쿨다운 없음")
-    calls, marks, stop = _fake_stages(remaining_after_first=True)
-    _run(StagePlan(night_resume=False), stop)
-    _check("쿨다운" not in calls, "전체실행(사람) = 야간 재개 없음")
-
-
 def main() -> int:
     print("=" * 60)
     print("  핀 테스트 — plan_run_mode 실행모드 결정 + 단계 조립(run_stages)")
@@ -213,7 +194,6 @@ def main() -> int:
     pin_designated_date()
     pin_resume_plan()
     pin_stage_assembly()
-    pin_night_resume()
     print("=" * 60)
     print("  [완료] 실행모드 핀 모두 통과")
     print("=" * 60)
