@@ -100,7 +100,7 @@
 
 ### 3-5. 일회성 도구(임무 완료)
 `normalize_dates`·`rebuild_workbook`+`reflect_log_to_excel`·`recover_keywords`·`rebuild_index`/`relink_index`/`relink_index_inplace`·`registry_backfill`(실행 완료)·`simulate_stages`(고장)·`tools/upload_to_gdrive.bat`(rclone 폐기).
-보류(소유자 확인): `diag_inv_hidden`·`test_rank_images_live`·`probe_proxy_pool`·`migrate_to_operation_ledger`·`build_*` 4종·`install_schedule_py.*`.
+보류 결정(2026-10-10, D-027): `test_rank_images_live` **삭제** · `diag_inv_hidden`·`probe_proxy_pool`·`migrate_to_operation_ledger`·`build_*` 4종·`install_schedule_py.*` **유지**(소유자 선택).
 
 ## 4. 배포 안 된 신규 도메인 (죽은 코드 아님 — 연결 여부 결정 필요)
 - `app_integrated.py` + 계약(`contract_store`)·채권자(`creditor_store`)·업무일지(`worklog_store`)·CS(`cs_*`) — 로컬 JSON 으로만 동작, 운영 앱에서 접근 불가. 게이트 4종이 검증.

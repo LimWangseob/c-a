@@ -373,3 +373,10 @@
 - 버린 대안: (a) `organic_ranks` 를 L1 공개 API 로 계속 유지(호출처 0·offscreen 순위는 정책상 폐기 — 남기면 다시 쓰일 위험) (b) `sales_semi=False` 경로 유지(운영에서 안 도는 분기 = 게이트를 빠져나가는 회귀 구조, D-022 와 같은 이유).
 - 영향 범위: `rank.py`(530→274줄), `config.py`, `kw_recommend.py`, `pipeline.py`, `pipeline_stages.py`, `pipeline_sales.py`, `proxy_manager.py`, `proxy_pool.py`, `ui/app_qt.py`, 게이트 `pin_run_plan`(P7)·`pin_l1_contract`·`simulate_pipeline`·`verify_offline`, 문서 DESIGN·KEYWORD_SELECTION·PLATFORM_INTEGRATION·L1_CONTRACT·FEATURE_INVENTORY·CLAUDE.md.
 - 상태: ACTIVE
+
+### D-027 [CLEANUP_B8_HELD_TOOLS] 보류 도구 결정 — `test_rank_images_live` 삭제·나머지 7종 유지 (2026-10-10, R9)
+- 결정: FEATURE_INVENTORY §3-5 '보류(소유자 확인)' 도구 중 `tools/test_rank_images_live.py`(순위 이미지 ON/OFF 라이브 A/B)만 **삭제**. `diag_inv_hidden`·`probe_proxy_pool`·`migrate_to_operation_ledger`·`build_operation_template`·`build_inventory_template`·`build_result_sample`·`build_product_card_demo`·`deploy/install_schedule_py.bat/.ps1` 은 **유지**. 순위 이미지 끄기 설정(`rank/block_images`·기본 OFF)은 그대로 둔다(도구만 삭제).
+- 근거: 소유자 선택(2026-10-10 "2번 삭제, 나머지 유지"). 삭제 도구는 참조처 없음(git grep: STATE·FEATURE_INVENTORY 목록뿐). Claude 제안(diag_inv_hidden·build_product_card_demo 삭제)은 소유자가 유지로 결정.
+- 버린 대안: (a) Claude 제안(1·8번도 삭제) (b) 전부 유지.
+- 영향 범위: `tools/test_rank_images_live.py`(삭제)·`designs/FEATURE_INVENTORY.md` §3-5·`STATE.md`.
+- 상태: ACTIVE

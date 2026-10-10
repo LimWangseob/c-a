@@ -27,7 +27,7 @@
 1. **운용 PC 재배포**(사람): ⚠ 작업 관리자에서 `정산다운로드.exe` 직접 종료(옛 코드는 앱 종료 감시 없음) → 새 zip 의 `coupang-analytics\` 덮어쓰기 → **설치.bat 실행·자동실행 등록 Y**(E3 23h50m 반영 + 옛 정산 예약작업 정리) → 폴더에 남은 옛 `정산_지금실행.bat` 직접 삭제(덮어쓰기로 안 지워짐).
 2. 대장 비번 정리(DW 40행 새 값·반달 맞는 비번) → 날짜 지정 10-04~10-09 **전체 실행**(하나씩·18:00 과 겹치지 않게).
 3. 첫 18:00 로그 확인: ① 시작 `[구글시트] 직원 입력 키워드 반영`(있을 때)·'[단계] ② / ③' 로그·끝난 단계 기록·정산 '①판매수집 완료 대기'→받기·`[세션] 저장됨` 줄 없음.
-4. (소유자 판단) 보류 도구 8개(`diag_inv_hidden`·`test_rank_images_live`·`probe_proxy_pool`·`migrate_to_operation_ledger`·`build_*` 4종·`install_schedule_py.*`) · `reusable_coupang/`·git 밖 로컬 사본 2개 — 항목별 유지/삭제 결정.
+4. (소유자 판단) `reusable_coupang/`·git 밖 로컬 사본 2개 유지/삭제 결정. (보류 도구는 D-027 로 결정 완료 — `test_rank_images_live` 만 삭제·나머지 유지)
 
 ## 미해결 이슈
 - (사실) `dist\coupang-analytics_old_stuck\` — 삭제 거부된 옛 빌드 산출물(빈 `_websocket` 폴더 잠김). 재부팅 후 지우면 됨. 다음 빌드에는 영향 없음(빌드는 `dist\coupang-analytics\` 사용).
@@ -45,7 +45,7 @@
 - 런타임 병렬 금지(단일 브라우저·위탁계정·Akamai). master 병합·빌드=통제 직렬.
 - 재배포 = 폴더 덮어쓰기→앱 재시작. output·data·config.json·proxies.txt 보존. 배포 zip 에 키·프록시 자격증명 평문 → 외부 공유 금지.
 - 결과시트·관리대장 분석은 앱 서비스계정으로 읽기만(비번 값 출력 금지·지문 비교만).
-- DECISIONS: 현재 **D-026**까지(이번 세션 D-024·D-025·D-026). D-010=SUPERSEDED by D-021, D-013=SUPERSEDED by D-015.
+- DECISIONS: 현재 **D-027**까지(이번 세션 D-024~D-027). D-010=SUPERSEDED by D-021, D-013=SUPERSEDED by D-015.
 - 단계 조립 수정은 `pipeline_stages.run_stages` 한 곳 + `pin_run_plan` P9~P11. UI(app_qt)에 조립을 다시 만들지 말 것.
 - pre-commit 훅이 `docs/memory` 미러를 자동 동기화 — 커밋 후 `git show --stat` 으로 의도 파일만 들어갔는지 확인.
 - 스크립트 편집은 scratchpad `.py` 로(heredoc 이스케이프·CRLF 깨짐 주의 — bat/ps1 은 CRLF·BOM 유지). 콘솔 출력 깨지면 `PYTHONIOENCODING=utf-8`.
