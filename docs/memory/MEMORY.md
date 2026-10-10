@@ -16,6 +16,7 @@
 ## 작업 원칙(피드백·정책)
 - [⛔불변·전역: 메모리30~50줄·CLAUDE.md<200·핸드오프=STATE.md·DECISIONS D-번호 append-only·종료=/session-close·커밋[R{n}]](policy-memory-to-claudemd-200line.md) — session-kit 전역 일원화. SSOT=전역 CLAUDE.md
 - [⭐정확도 우선·레인 간 요청 규칙](feedback-accuracy-over-speed-and-lane-handoff.md) · [⭐도메인별=전용 세션(worktree)](policy-per-domain-sessions.md) · [통합 전 기존 앱 무중단](keep-existing-app-running-until-integrated.md)
+- [⭐무거운 작업(게이트·빌드·에이전트)은 하나씩 — 10-10 BSOD](feedback-heavy-tasks-sequential.md) · [기능 목록 SSOT=designs/FEATURE_INVENTORY.md(D-022)]
 - [시안 적용=더하기(재작성 금지)](feedback-design-extend-not-redo.md) · [분석 요청=수정 금지](analysis-request-no-code-change.md) · [실측 근거 수정](fix-from-real-evidence.md) · [데이터로 검증](verify-by-data-not-status.md)
 - [폴백 최소화](no-silent-fallback-principle.md) · [코드 건강 게이트](code-health-regression-gate.md) · [괴물함수 전멸](monster-functions-extinct-260929.md) · [판단 흐려지면 새 세션](recommend-new-session-when-degraded.md)
 - [커밋=코드+설계+메모리](commit-with-design-and-memory.md) · [커밋 4묶음 자동화](commit-4bundle-automation.md) · [쉬운 말](plain-language-no-jargon.md) · [한글](respond-in-korean.md) · [진단명령 최소화](diagnostic-commands-pop-consoles.md)
@@ -37,4 +38,4 @@
 
 ## 출력·배포·참조
 - [출력=셀독 서식](seldoc-output-format.md) · [날짜컬럼=실행날짜](date-column-run-date-rule.md) · [구글시트 통합 스펙](gsheet-unified-spec.md) · [상세 이미지 추출(CDP)](detail-image-extraction.md)
-- [exe 배포·Defender 제외](exe-packaging-deploy.md) · [쿠팡 공식 운영지식](coupang-official-reference.md) · [정산 실행흐름(①뒤 기동·다 받으면 종료 D-010)·상태 카드](feature-settlement-status-monitoring.md)
+- [exe 배포·Defender 제외](exe-packaging-deploy.md) · [쿠팡 공식 운영지식](coupang-official-reference.md) · [정산 실행흐름(18:00 동시 기동·①대기·17:55 종료 D-021·사람이 끄면 함께 종료 D-020)·상태 카드](feature-settlement-status-monitoring.md)

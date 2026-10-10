@@ -1,6 +1,6 @@
 ---
 name: feature-settlement-status-monitoring
-description: 정산 자동 다운로드 = ①판매수집 뒤 앱이 기동·다 받으면 종료(D-010, 옛 24h 감시 대체)·app_qt 정산 탭 시작/중지 버튼 + heartbeat 상태 카드
+description: 정산 자동 다운로드 = 18:00 앱과 함께 기동·①완료까지 대기·다 받으면/다음 날 17:55 종료(D-021)·앱을 사람이 끄면 함께 종료(D-020)·정산 탭 시작/중지 + heartbeat 상태 카드
 metadata:
   node_type: memory
   type: project
@@ -37,3 +37,5 @@ metadata:
 - **merge --src**(D8): 노트북 자료가 운용 PC `output\정산\정산\`로 들어가 미사용 → `정산다운로드.exe merge --src output\정산\정산` 로 통합(재배포 후 [중지]→merge→[시작]).
 
 관련: [[settlement-batch-download-decisions]] · [[runtime-ui-and-always-on]] · [[exe-packaging-deploy]] · [[code-health-regression-gate]]
+
+**2026-10-10 갱신(D-020·D-021, D-010 SUPERSEDED)**: 회차 18:00~다음 날 17:55(`settlement_watch.cycle_window`). 앱 main(`--auto`/`--resume`)이 시작하면서 `start_settlement_watch`(`watch --parent 앱PID`) → 정산은 이번 회차 ①완료 기록(`_실행단계.json` at≥회차 시작)까지 대기 → 받기 → 다 받으면 종료·17:55 종료. 무인이 스스로 끝나면(`_auto_quit`→`_앱정상종료.json`) 정산 계속, 사람이 닫음/작업관리자 종료면 `watch_parent`가 정산+Chrome 종료. 정산 탭 [정산 시작]도 같은 한 경로. ⚠ install.ps1 예약작업 13h 제한(E3)이 07:00 넘는 실행을 끊으면 정산도 함께 종료 — FEATURE_INVENTORY E3 수정 대기.
