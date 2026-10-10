@@ -20,7 +20,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # ui/ 형제 모듈(registry_ui 등)
 
-from coupang_analytics import appconfig, config, keyword_store  # noqa: E402
+from coupang_analytics import appconfig, config, keyword_store, power  # noqa: E402
 from coupang_analytics.apppaths import output_dir as app_output_dir, set_workdir  # noqa: E402
 from coupang_analytics.app_process import (mark_app_finished, prepare_auto_start,  # noqa: E402
                                            start_settlement_watch)
@@ -35,13 +35,13 @@ from coupang_analytics.input_list import (parse_input_list, parse_input_rows,  #
 from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
 from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_credentials_file  # noqa: E402
-from coupang_analytics.pipeline import (column_dates, _interruptible_sleep, backup_sources,  # noqa: E402
-                                        master_exists, plan_run_mode, push_company_stock,
-                                        push_ledger_inventory,
+from coupang_analytics.pipeline import (column_dates, backup_sources,  # noqa: E402
+                                        master_exists, plan_run_mode,
                                         read_run_stage, resumable_progress, restore_master_from_gsheet,
-                                        run_full, run_log_labels, run_title,
+                                        run_log_labels, run_title,
                                         select_keywords_stage,
-                                        track_ranks_stage, write_run_stage)
+                                        track_ranks_stage)
+from coupang_analytics.pipeline_stages import StagePlan, plan_resume_stages, run_stages  # noqa: E402
 from coupang_analytics.rank import make_matcher, organic_rank, warmup  # noqa: E402
 import registry_ui  # noqa: E402
 from proxy_panel_qt import ProxyPanelMixin  # noqa: E402
@@ -158,19 +158,6 @@ QScrollBar::handle:horizontal { background: #cbd5e1; border-radius: 5px; min-wid
 """
 
 _LOG_COLORS = {"ok": "#4ade80", "err": "#f87171", "warn": "#fbbf24", "head": "#60a5fa", "": "#e2e8f0"}
-
-
-def _prevent_sleep(on: bool) -> None:
-    """무인 야간 실행 동안 Windows 절전/화면꺼짐 방지(SetThreadExecutionState). 실패해도 무해."""
-    try:
-        import ctypes
-        ES_CONTINUOUS = 0x80000000
-        ES_SYSTEM_REQUIRED = 0x00000001
-        ES_DISPLAY_REQUIRED = 0x00000002
-        flags = ES_CONTINUOUS | ((ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED) if on else 0)
-        ctypes.windll.kernel32.SetThreadExecutionState(flags)
-    except Exception:
-        pass
 
 
 # 설정 탭 '구글 시트 연동' 카드의 링크 4개 — 종류 → (설정 키, 화면 이름). 링크 입력은 **설정 탭에서만**
@@ -1600,42 +1587,21 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
     def _full_pipeline_task(self, input_list, naver_creds, key, df, dt, dlabel, resume, carry,
                             redo_today, grow, keywords_off, gs_in, gs_out, stop, designated=False):
         """전체실행/판매수집 백그라운드 작업 — ①반자동 판매수집 → ②키워드선정 → ③반자동 순위(offscreen 전무).
+        인자는 do_run_full 시점의 스냅샷(실행 중 self.* 변경에 영향받지 않음)."""
+        plan = StagePlan(keywords=not keywords_off, ranks=not keywords_off, resume=resume)
+        return self._stages_task(input_list, plan, naver_creds, key, gs_in, gs_out,
+                                 date_from=df, date_to=dt, date_label=dlabel, carry=carry,
+                                 redo_today=redo_today, designated=designated, grow=grow,
+                                 rank_date_label=dlabel,   # ③도 ①과 같은 날짜 칸(날짜 지정·재개 라벨 일치)
+                                 should_stop=(stop.is_set if stop is not None else (lambda: False)))
 
-        재부팅 복구용 단계마커(write_run_stage)와 그로스 재고 역기록(push_ledger_inventory)까지 포함.
-        인자는 do_run_full 시점의 스냅샷(실행 중 self.* 변경에 영향받지 않음 — 행동 불변)."""
+    def _stages_task(self, il, plan, naver_creds, key, gs_in, gs_out, **run_kw):
+        """전체실행·무인·재부팅 복구 공통 — 작업 전 백업·원장 반영 후 run_stages(단계 조립 단일 구현, 정리 B6)."""
         backup_sources(input_url=gs_in, output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
-        input_list, reg_url = self._registry_presync(input_list, gs_in)   # 원장 자동 반영(비치명·2-1)
-        naver = NaverAdApi(naver_creds)
-        stock_url = self._stock_url()           # 회사보유재고 재고현황 링크(계정목록 표기 + 대장 역기록 공용)
-        # ① 반자동 판매수집 — 순위·키워드·노출측정 전무(offscreen 미사용)
-        snap = run_full(input_list, ai_key=key, date_from=df, date_to=dt,
-                        get_password=self._account_pw, resume=resume, carry_forward=carry,
-                        redo_today=redo_today, sales_semi=True, date_label=dlabel, on_log=self.log,
-                        gsheet_output_url=gs_out, registry_url=reg_url, stock_url=stock_url,
-                        designated=designated)
-        if keywords_off:                        # ① 단독 실행 → 판매데이터만 채우고 종료
-            return snap
-        write_run_stage("sales")                # ① 완료 표시(재부팅 복구: 여기부턴 ②③만)
-        if stop is not None and stop.is_set():
-            return snap
-        # ② 키워드 선정 — 공개검색(노출측정) 없이 AI 선정만(로그인 불필요·동결분 유지)
-        self.log("[전체실행] ② 키워드 선정 — 노출측정 없이 AI 선정(동결분 유지)")
-        select_keywords_stage(naver, key, grow=grow, on_log=self.log, gsheet_output_url=gs_out,
-                              stock_url=stock_url)
-        write_run_stage("ranks")                # ② 완료 표시(재부팅 복구: 여기부턴 ③만)
-        if stop is not None and stop.is_set():
-            return snap
-        # ③ 반자동 순위 — 보이는 창에서 자동 타이핑·검색(차단 회피)
-        self.log("[전체실행] ③ 반자동 순위 — 보이는 창 자동 타이핑(중지: '반자동 중지')")
-        result = track_ranks_stage(should_stop=(stop.is_set if stop is not None else (lambda: False)),
-                                   on_log=self.log, gsheet_output_url=gs_out, stock_url=stock_url,
-                                   date_label=dlabel)   # ①과 같은 날짜 칸에(날짜 지정·재개 라벨 일치)
-        # 입력 관리대장의 '그로스 재고'(AD) 컬럼을 수집 재고로 역기록(SA 편집권한 필요·없으면 로그 후 비치명)
-        push_ledger_inventory(gs_in, self.log)   # gs_in = 위에서 정의(백업·역기록 공용)
-        push_company_stock(self._stock_url(), gs_in, self.log)   # 회사보유재고(판매자배송) 역기록(비치명)
-        if not (stop is not None and stop.is_set()):
-            write_run_stage("done")             # 전부 완료 표시(재부팅 복구 안 함)
-        return result
+        run_il, reg_url = self._registry_presync(il, gs_in)   # 원장 자동 반영(비치명·2-1)
+        return run_stages(run_il, plan, ai_key=key, naver=NaverAdApi(naver_creds), get_password=self._account_pw,
+                          gsheet_input_url=gs_in, gsheet_output_url=gs_out, registry_url=reg_url,
+                          stock_url=self._stock_url(), on_log=self.log, **run_kw)
 
     # ── 무인 자동 실행(--auto, 18:00 시작 → **모든 처리 완주 후 종료**·강제종료 없음) ───────
     def start_auto(self):
@@ -1647,7 +1613,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         차단 시 쿨다운/자동재개. 절전은 실행 동안 방지. (2차인증은 사무실=신뢰 IP면 없이 통과.)
         """
         self.log("== [무인 자동 실행] 시작 ==")
-        _prevent_sleep(True)
+        power.keep_awake(True)
         if self.input_list is None:
             # 입력 자동 로드(_auto_load_input)가 구글시트·PC엑셀 모두 실패 → 바로 종료. 위에 이미 사유 로그가 있다
             # (예: 구글시트 403/404). 구글시트 사용자인데 "입력 엑셀이 없어"만 보여 혼동되던 것을 명확히 한다.
@@ -1663,66 +1629,28 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         # 끊고 60초 뒤 강제 종료했다 — 미처리분 발생·소유자 불가 판정.) 절전만 실행 동안 방지.
         df, dt, dlabel = self._run_dates()         # 판매조회=어제(D-1) · 컬럼라벨=실행날짜(오늘)
         meta = resumable_progress()
-        resume = bool(meta)
         gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
         # fix ③: 마스터가 없지만 결과 구글시트가 있으면 복원(무인이라 팝업 없이 자동) → 첫 실행 오판·과거 통계 유실 방지.
-        if not resume and not master_exists() and gs_out:
+        if not meta and not master_exists() and gs_out:
             self.log("[무인] 마스터가 없어 결과 구글시트에서 복원을 시도합니다…")
             restore_master_from_gsheet("output", gs_out, self.log)
-        carry = bool(meta.get("carry", False)) if meta else master_exists()
-        if resume:
-            df, dt = meta["date_from"], meta["date_to"]
-            dlabel = meta.get("date_label") or dlabel
+        mode = plan_run_mode(False, False, meta, master_exists(), df, dt, dlabel)   # 이어서/이어쓰기/새 통계
         self._semi_stop = threading.Event()
         n = sum(len(a.products) for a in self.input_list.accounts)
-        self.log(f"[무인] ①반자동 판매수집 → ②키워드선정 → ③반자동 순위 · 상품 {n}개 · 기간 {df}~{dt} · "
-                 f"{'이어서' if resume else ('이어쓰기' if carry else '새 통계')}")
+        self.log(f"[무인] ①반자동 판매수집 → ②키워드선정 → ③반자동 순위 · 상품 {n}개 · "
+                 f"기간 {mode.date_from}~{mode.date_to} · "
+                 f"{'이어서' if mode.resume else ('이어쓰기' if mode.carry else '새 통계')}")
         il, naver_creds, key, stop = self.input_list, self.naver_creds, self.ai_key, self._semi_stop
         gs_in = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/input_url", "", type=str).strip()
+        # 무인이어도 **처리 방식은 반자동**(보이는 신뢰 창·실제 타이핑). 2차인증이 뜨는 계정만 건너뜀(멈춤 없음).
+        # ① 뒤 미완료 계정이 남으면 30분 쿨다운 후 1회만 더(night_resume). ③은 최신 날짜 칸.
+        plan = StagePlan(resume=mode.resume, night_resume=True)
 
         def task():
             try:
-                backup_sources(input_url=gs_in, output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
-                run_il, reg_url = self._registry_presync(il, gs_in)   # 원장 자동 반영(비치명·2-1)
-                naver = NaverAdApi(naver_creds)
-                stock_url = self._stock_url()      # 회사보유재고 재고현황 링크(계정목록 표기 + 대장 역기록 공용)
-                # ① 반자동 판매수집(무인이어도 **처리 방식은 반자동** — 보이는 신뢰 창·실제 타이핑으로 Akamai 통과율↑).
-                #    2차인증은 사무실(신뢰 IP)이면 없이 통과; 낯선 환경서 뜨면 사람이 없어 그 계정만 건너뜀(멈춤 없음).
-                #    판매만(키워드·순위·노출측정 없음) → 이어서 ②③. 전체실행과 동일 조합(offscreen 전무).
-                run_full(run_il, ai_key=key, date_from=df, date_to=dt,
-                         get_password=self._account_pw, resume=resume, carry_forward=carry,
-                         sales_semi=True, date_label=dlabel, on_log=self.log, gsheet_output_url=gs_out,
-                         registry_url=reg_url, stock_url=stock_url)
-                # 야간 1회 쿨다운-재개: 차단 등으로 미완료 계정이 남았으면(진행중 파일 잔존) 30분 쉬고
-                # **남은 계정만 1회 더** 시도(제출 총량 억제 = 위탁계정 잠금 방지, 무한 재시도 금지). 역시 반자동.
-                if (not stop.is_set() and config.LOGIN_NIGHT_RESUME and resumable_progress()):
-                    mins = config.LOGIN_NIGHT_RESUME_COOLDOWN_SEC // 60
-                    self.log(f"[무인] 차단 등 미완료 계정 남음 → {mins}분 쿨다운 후 1회 재개(남은 계정만)")
-                    _interruptible_sleep(config.LOGIN_NIGHT_RESUME_COOLDOWN_SEC, stop.is_set,
-                                         self.log, resume_label=" — 로그인 재개")
-                    if not stop.is_set():
-                        self.log("[무인] 쿨다운 종료 — 미완료 계정 로그인 재개(1회)")
-                        run_full(run_il, ai_key=key, date_from=df, date_to=dt,
-                                 get_password=self._account_pw, resume=True, carry_forward=carry,
-                                 sales_semi=True, date_label=dlabel, on_log=self.log, gsheet_output_url=gs_out,
-                                 registry_url=reg_url, stock_url=stock_url)
-                if not stop.is_set():
-                    write_run_stage("sales")       # ① 완료 표시(재부팅 복구용·정산이 이 기록을 보고 받기 시작 D-021)
-                # ② 키워드 선정(노출측정 없음·로그인 불필요·부족분 4개까지 보충)
-                if not stop.is_set():
-                    select_keywords_stage(naver, key, grow=False, on_log=self.log, gsheet_output_url=gs_out,
-                                          stock_url=stock_url)
-                    write_run_stage("ranks")       # ② 완료 표시(재부팅 복구: 여기부턴 ③만)
-                # ③ 반자동 순위(autosubmit, 차단 시 쿨다운-재개)
-                if not stop.is_set():
-                    track_ranks_stage(should_stop=stop.is_set, on_log=self.log,
-                                      gsheet_output_url=gs_out, stock_url=stock_url)
-                # 입력 관리대장의 '그로스 재고'(AD) 컬럼을 수집 재고로 역기록(SA 편집권한 필요·없으면 비치명)
-                if not stop.is_set():
-                    push_ledger_inventory(gs_in, self.log)   # gs_in = 위에서 정의(백업·역기록 공용)
-                    push_company_stock(self._stock_url(), gs_in, self.log)   # 회사보유재고 역기록(비치명)
-                    write_run_stage("done")        # 전부 완료 표시
-                # (결과는 구글 시트 통합으로 결과시트에 직접 반영 — rclone 업로드 제거)
+                self._stages_task(il, plan, naver_creds, key, gs_in, gs_out, date_from=mode.date_from,
+                                  date_to=mode.date_to, date_label=mode.date_label, carry=mode.carry,
+                                  should_stop=stop.is_set)
             except Exception as exc:                # 무인: 어떤 오류도 앱을 매달아두지 않게 로그 후 종료로
                 self.log(f"[무인] 실행 중 오류: {exc.__class__.__name__}: {exc}")
             return None
@@ -1734,7 +1662,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
 
     def _auto_quit(self):
         mark_app_finished()   # D-020: 무인이 스스로 끝남 → 정산은 계속(17:55 까지). 사람이 끄면 이 표시 없음 → 함께 종료
-        _prevent_sleep(False)
+        power.keep_awake(False)
         QtWidgets.QApplication.quit()
 
     # ── 재부팅 복구(--resume): 재부팅으로 끊긴 '오늘 작업'만 이어서(없으면 조용히 종료) ──
@@ -1751,8 +1679,8 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         """
         marker = read_run_stage()
         prog = resumable_progress()
-        stage = marker.get("stage") if marker else None
-        if not prog and (stage is None or stage == "done"):
+        plan = plan_resume_stages(marker, prog)
+        if plan is None:
             self.log("[재부팅 복구] 오늘 이어서 할 중단 작업이 없습니다 — 종료")
             return self._auto_quit()
         if self.input_list is None:
@@ -1762,7 +1690,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             self.log("[재부팅 복구] 네이버/OpenAI 키 미설정 — 종료")
             return self._auto_quit()
 
-        _prevent_sleep(True)   # 06:00 강제 종료 폐지(소유자 2026-09-23) — 이어서 하는 작업도 완주 후에만 종료
+        power.keep_awake(True)   # 06:00 강제 종료 폐지(소유자 2026-09-23) — 이어서 하는 작업도 완주 후에만 종료
         self._semi_stop = threading.Event()
         stop = self._semi_stop
         df, dt, dlabel = self._run_dates()
@@ -1772,37 +1700,14 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         il, naver_creds, key = self.input_list, self.naver_creds, self.ai_key
         gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
         gs_in = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/input_url", "", type=str).strip()
-
-        do_sales = bool(prog)                      # 판매수집 진행중이면 ①부터 이어서(완료계정 건너뜀)
-        do_keywords = do_sales or stage == "sales"  # ①했거나 마커가 'sales'면 ②부터, 'ranks'면 ③만
+        stage = marker.get("stage") if marker else None
         self.log(f"== [재부팅 복구] 오늘 중단분 이어서 — 단계마커={stage!r}, 판매진행중={bool(prog)} → "
-                 f"{'①판매+' if do_sales else ''}{'②키워드+' if do_keywords else ''}③순위 ==")
+                 f"{'①판매+' if plan.sales else ''}{'②키워드+' if plan.keywords else ''}③순위 ==")
 
         def task():
             try:
-                backup_sources(input_url=gs_in, output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
-                run_il, reg_url = self._registry_presync(il, gs_in)   # 원장 자동 반영(비치명·2-1)
-                naver = NaverAdApi(naver_creds)
-                stock_url = self._stock_url()      # 회사보유재고 재고현황 링크(계정목록 표기 + 대장 역기록 공용)
-                if do_sales:                       # ① 판매수집 이어서(반자동·완료계정 건너뜀)
-                    run_full(run_il, ai_key=key, date_from=df, date_to=dt,
-                             get_password=self._account_pw, resume=True, carry_forward=carry,
-                             sales_semi=True, date_label=dlabel, on_log=self.log, gsheet_output_url=gs_out,
-                             registry_url=reg_url, stock_url=stock_url)
-                    if not stop.is_set():
-                        write_run_stage("sales")
-                if not stop.is_set() and do_keywords:   # ② 키워드 선정(동결분 유지·부족분만)
-                    select_keywords_stage(naver, key, grow=False, on_log=self.log, gsheet_output_url=gs_out,
-                                          stock_url=stock_url)
-                    if not stop.is_set():
-                        write_run_stage("ranks")
-                if not stop.is_set():              # ③ 반자동 순위(이미 채워진 순위는 건너뜀)
-                    track_ranks_stage(should_stop=stop.is_set, on_log=self.log,
-                                      gsheet_output_url=gs_out, stock_url=stock_url)
-                if not stop.is_set():              # 마무리: 그로스 재고 역기록 + 완료 표시
-                    push_ledger_inventory(gs_in, self.log)
-                    push_company_stock(self._stock_url(), gs_in, self.log)   # 회사보유재고 역기록(비치명)
-                    write_run_stage("done")
+                self._stages_task(il, plan, naver_creds, key, gs_in, gs_out, date_from=df, date_to=dt,
+                                  date_label=dlabel, carry=carry, should_stop=stop.is_set)
             except Exception as exc:               # 복구도 무인이라 어떤 오류도 매달지 않고 로그 후 종료
                 self.log(f"[재부팅 복구] 실행 중 오류: {exc.__class__.__name__}: {exc}")
             return None

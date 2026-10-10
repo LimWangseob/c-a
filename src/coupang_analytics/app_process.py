@@ -118,59 +118,35 @@ def _ps(script: str, env_extra: dict[str, str]) -> str:
 
 
 # 배포 exe 이름이 같거나, **python 프로세스**인데 명령줄에 스크립트 표식이 있는 것(개발)만 — 편집기 등 같은 파일을
-# 연 다른 프로그램은 제외. 자기 PID 제외. 종료한 것마다 'K' 한 줄 출력.
+# 연 다른 프로그램은 제외. 자기 PID 제외. 자식(그 프로그램이 띄운 Chrome)까지 트리째 종료. 종료한 것마다 'K' 한 줄.
 _KILL_PS = ("Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne [int]$env:SM_SELF -and "
             "($_.Name -eq $env:SM_NAME -or ($_.Name -like 'python*' -and $_.CommandLine -and "
             "$_.CommandLine.Contains($env:SM_MARK))) } | "
-            "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; 'K' }")
+            "ForEach-Object { taskkill /F /T /PID $_.ProcessId 2>&1 | Out-Null; 'K' }")
 
 
-def _kill(name: str, mark: str, log, what: str) -> int:
+def _kill(name: str, mark: str, log, what: str, tag: str) -> int:
     try:
         n = _ps(_KILL_PS, {"SM_SELF": str(os.getpid()), "SM_NAME": name, "SM_MARK": mark}).count("K")
     except (OSError, subprocess.SubprocessError) as exc:
-        log(f"[시작] ⚠ {what} 종료 확인 실패({exc.__class__.__name__}) — 계속")
+        log(f"{tag} ⚠ {what} 종료 확인 실패({exc.__class__.__name__}) — 계속")
         return 0
     if n:
-        log(f"[시작] 실행 중이던 {what} {n}개 종료")
+        log(f"{tag} 실행 중이던 {what} {n}개 종료")
     return n
 
 
-def stop_settlement(log) -> int:
-    """정산 프로그램(배포 exe·개발 python) 종료 — 그 Chrome 은 이어서 reap_orphan_chrome 이 정리."""
-    return _kill(SETTLE_EXE, "settlement_download.py", log, "정산 프로그램")
+def stop_settlement(log, tag: str = "[시작]") -> int:
+    """정산 프로그램(배포 exe·개발 python)과 그 Chrome 종료 — 18:00 시작 정리·정산 탭 [정산 중지] 공용. 종료 수 반환."""
+    return _kill(SETTLE_EXE, "settlement_download.py", log, "정산 프로그램", tag)
 
 
 def stop_other_apps(log) -> int:
     """다른 앱 창(배포 exe·개발 app_qt.py) 종료 — 18:00 무인 실행만 남긴다(자기 자신 제외)."""
-    return _kill(APP_EXE, "app_qt.py", log, "이전 앱")
-
-
-# 옛 예약작업(정산 watch: 로그온+매일 08:00) 제거 — 실행 인자 'watch' 로 찾음(한글 작업명 인코딩 문제 회피).
-_UNREG_PS = ("Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { "
-             "((($_.Actions | ForEach-Object { [string]$_.Arguments }) -join ' ') -match '(^|\\s)watch(\\s|$)') } | "
-             "ForEach-Object { try { Unregister-ScheduledTask -TaskName $_.TaskName -TaskPath $_.TaskPath "
-             "-Confirm:$false -ErrorAction Stop; 'K' } catch { 'E' } }")
-
-
-def remove_legacy_settlement_task(log) -> int:
-    """정산 예약작업(로그온·08:00)을 없앤다 — 이제 앱이 ① 뒤에만 띄움(D-010). 실패(권한)는 로그로 알림."""
-    try:
-        out = _ps(_UNREG_PS, {})
-    except (OSError, subprocess.SubprocessError) as exc:
-        log(f"[시작] ⚠ 옛 정산 예약작업 확인 실패({exc.__class__.__name__})")
-        return 0
-    if "E" in out:
-        log("[시작] ⚠ 옛 정산 예약작업(로그온·08:00) 삭제 실패(권한) — 작업 스케줄러에서 "
-            "'쿠팡애널리틱스_정산다운로드'를 직접 삭제하세요")
-    n = out.count("K")
-    if n:
-        log(f"[시작] 옛 정산 예약작업 {n}개 삭제(이제 ①판매수집 뒤 앱이 정산을 띄움)")
-    return n
+    return _kill(APP_EXE, "app_qt.py", log, "이전 앱", "[시작]")
 
 
 def prepare_auto_start(log) -> None:
-    """18:00 무인 시작 정리 — 이전 앱·정산 프로그램 종료 + 옛 정산 예약작업 제거(D-010)."""
+    """18:00 무인 시작 정리 — 이전 앱·정산 프로그램 종료(옛 정산 예약작업 제거는 install.ps1 이 설치 때 함)."""
     stop_other_apps(log)
     stop_settlement(log)
-    remove_legacy_settlement_task(log)

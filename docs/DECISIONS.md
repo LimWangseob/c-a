@@ -352,3 +352,10 @@
 - 버린 대안: (a) 둘 다 삭제(②층 구현 때 재작성 필요·설계서와 불일치) (b) `managed_between` 만 유지.
 - 영향 범위: `designs/FEATURE_INVENTORY.md` §3-3·§6 B4. 코드 변경 없음(두 함수와 테스트 그대로).
 - 상태: ACTIVE
+
+### D-024 [CLEANUP_B6_MERGE] 정리 B6 — 단계 조립 단일화·정산 중지 일원화·`정산_지금실행.bat` 삭제 (2026-10-10, R8)
+- 결정: ①전체실행·무인(`--auto`)·재부팅 복구(`--resume`)의 ①→②→③→재고 역기록 조립을 `pipeline_stages.run_stages` 하나로(UI 는 `StagePlan` 만 정함·복구 계획=`plan_resume_stages`). 세 벌이 갈라져 있던 규칙은 **단계 기록 = 실제로 끝난 단계**로 맞춤: ① 끝=sales(중지 요청이 있어도 ①이 끝났으면 기록 — 정산 D-021 이 이 기록을 봄) · ② 끝=ranks · ③을 중지 없이 끝냄=done · ① 단독은 기록 없음 · **재고 역기록은 ③까지 갔으면 함**(예전 전체실행 방식 — 무인에서 ③ 도중 사람이 중지한 경우만 달라짐). ③ 날짜 칸은 전체실행만 ①과 같은 칸 지정, 무인·복구는 최신 칸(기존 그대로). ②절전 방지 = `power.keep_awake` 하나(`app_qt._prevent_sleep` 삭제·같은 API). ③정산 중지 = `app_process.stop_settlement` 하나로(정산 탭 [정산 중지]도) — 그 정산이 띄운 Chrome 까지 **트리 종료**(`taskkill /F /T`)로 바꿈. ④18:00 마다 옛 정산 예약작업을 지우던 코드 삭제(install.ps1·자동실행_삭제가 계속 지움). ⑤`deploy/정산_지금실행.bat`(회차·앱 종료 감시와 무관하게 `run` 으로 즉시 실행) 삭제 — 수동 실행은 정산 탭 [정산 시작](watch·①완료 대기) 하나.
+- 근거: 소유자 지시 D-022(중복 통합) + ⑤는 소유자 선택(2026-10-10 "삭제"). 핀 P9~P11(가짜 단계로 순서·단계 기록·야간 1회 재개·중지)·게이트 16종·복잡도 경고 0·실제 프로세스 e2e(가짜 settlement_download.py 와 그 자식 → stop_settlement 후 둘 다 종료)·UI offscreen import.
+- 버린 대안: (a) 세 벌 유지(한 곳만 고치면 갈라지는 회귀 구조) (b) 단계 기록을 무인식 '중지 시 생략'으로 통일(①이 끝났는데 정산이 시작 못 함) (c) 정산 중지를 Stop-Process 그대로(패널에서 끄면 정산 Chrome 잔존 — 18:00 reap 은 앱의 순위 Chrome 까지 끄므로 패널에서 못 씀) (d) bat 을 watch 로(즉시 실행 기능이 사라져 존재 이유 없음).
+- 영향 범위: `src/coupang_analytics/pipeline_stages.py`(신규), `ui/app_qt.py`(_full_pipeline_task·_stages_task·start_auto·start_resume·_prevent_sleep 삭제), `src/coupang_analytics/app_process.py`(_KILL_PS 트리 종료·stop_settlement(tag)·remove_legacy_settlement_task 삭제), `ui/settlement_status_panel_qt.py`(_kill_settlement 삭제), `deploy/정산_지금실행.bat`(삭제)·`build.bat`·`deploy/첫실행_설정안내.txt`, `tools/pin_run_plan.py`(P9~P11). ⚠ 운용 PC 재배포(폴더 덮어쓰기)는 옛 `정산_지금실행.bat` 을 지우지 않음 → 직접 삭제. 재배포 때 설치.bat 실행(E3 재등록과 함께)으로 옛 정산 예약작업도 정리됨.
+- 상태: ACTIVE

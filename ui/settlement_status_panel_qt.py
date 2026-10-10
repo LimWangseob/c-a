@@ -9,8 +9,6 @@
 from __future__ import annotations
 
 import csv
-import subprocess
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -266,25 +264,12 @@ class SettlementStatusMixin:
         self._refresh_settlement_status()
 
     def _settle_stop(self) -> None:
-        killed = self._kill_settlement()
+        from coupang_analytics.app_process import stop_settlement
+        killed = stop_settlement(self.log, "[정산]") > 0   # 18:00 정리와 같은 한 경로(배포 exe·개발 python + 그 Chrome)
+        self._settle_proc = None
         self._settle_write_status(
             "중지됨", "사용자가 정산 감시를 멈췄습니다." if killed else "중지 요청 — 실행 중인 정산이 없었습니다.")
         self._refresh_settlement_status()
-
-    def _kill_settlement(self) -> bool:
-        """정산 감시 프로세스를 종료. frozen=이름으로, 개발=우리가 띄운 PID 로. 하나라도 죽였으면 True."""
-        killed = False
-        if getattr(sys, "frozen", False):
-            r = subprocess.run(["taskkill", "/F", "/T", "/IM", "정산다운로드.exe"],
-                               creationflags=0x08000000, capture_output=True)
-            killed = r.returncode == 0
-        proc = getattr(self, "_settle_proc", None)
-        if proc is not None and proc.poll() is None:
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                           creationflags=0x08000000, capture_output=True)
-            killed = True
-        self._settle_proc = None
-        return killed
 
     def _settle_write_status(self, status: str, detail: str) -> None:
         """시작/중지/오류처럼 프로세스가 스스로 못 남기는 상태를 앱이 _현재상태.txt 에 직접 적는다(배지 즉시 반영)."""

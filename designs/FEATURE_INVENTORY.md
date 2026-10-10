@@ -25,8 +25,8 @@
 | ② 키워드 선정 | 상품당 4개·기존 키워드 동결 | ②버튼·전체실행·무인 → `select_keywords_stage` | ✓ simulate 10·verify_offline [6][23](모킹) |
 | ③ 반자동 순위 | 자동 타이핑+Enter·쿨다운·노출명/pid 갱신 | ③버튼·전체실행·무인 → `track_ranks_stage` | ✓ pin_login_ranks J~Q2 · test_proxy_patch(차단→회전) |
 | 실행 모드(이어서/오늘 다시/새 통계/날짜 지정) | 칸·재개 규칙 | 전체실행 탭 → `plan_run_mode`·`column_dates` | ✓ pin_run_plan P1~P8 |
-| `--auto` 조립(①→재개→②→③→재고 역기록→종료) | 끝까지 완주 후 종료 | `start_auto` | △ 단계별만 · **조립(재개·쿨다운·단계 기록) ✗** |
-| `--resume` 재부팅 복구 | 남은 단계만 이어서 | `start_resume` | **✗** |
+| `--auto` 조립(①→재개→②→③→재고 역기록→종료) | 끝까지 완주 후 종료 | `start_auto` → `pipeline_stages.run_stages`(B6 단일 조립) | ✓ pin_run_plan P10·P11(순서·단계 기록·야간 1회 재개) |
+| `--resume` 재부팅 복구 | 남은 단계만 이어서 | `start_resume` → `plan_resume_stages` + `run_stages` | ✓ pin_run_plan P9·P10 |
 | 정산 자동 수집(D-020·D-021) | 18:00 함께 기동·①완료 대기·다 받으면/17:55 종료·사람이 앱 끄면 함께 종료 | main(`--auto`/`--resume`)·정산 탭 | ✓ runtime P25~P27·e2e |
 
 ### 1-2. 로그인·매칭·출력
@@ -88,15 +88,15 @@
 | 중복 | 내용 | 정리안 |
 |---|---|---|
 | UI 2벌 | `ui/app.py`(Tk·미배포·동작 이미 갈라짐) vs `app_qt` | app.py 삭제 |
-| 야간 조립 3벌 | `start_auto`·`start_resume`·`_full_pipeline_task` 가 ①→②→③→역기록을 각자 조립 | 백엔드 함수 1개로 → `--auto`/`--resume` 게이트 공백도 해소 |
-| 절전 방지 2벌 | `power.keep_awake` vs `app_qt._prevent_sleep` | power 로 통일 |
+| ✅ 야간 조립 3벌 | `start_auto`·`start_resume`·`_full_pipeline_task` 가 ①→②→③→역기록을 각자 조립 | **B6 완료**: `pipeline_stages.run_stages` 1개 + 핀 P9~P11 |
+| ✅ 절전 방지 2벌 | `power.keep_awake` vs `app_qt._prevent_sleep` | **B6 완료**: power 로 통일(같은 API·스레드 단위) |
 | 순위 구현 3벌 | ③반자동 · 순위 조회 탭(offscreen) · 자동/병렬(미사용) | 미사용 삭제 · 탭은 ③ 경로 재사용 또는 탭 삭제 |
 | 키워드 점수 2벌 | 키워드 탭 `_score` vs ② 100점 | 탭 유지 여부에 따라 |
 | 구글시트 내려받기 2벌 | 공개 export(복원) vs SA(백업) | SA 로 통일(=E2 수정) |
 | 비번 경로 5개 | 후보(운영)·rows(테스트)·file(Tk)·원장 이전값·credstore | 운영 경로 하나로 |
-| 정산 중지 2벌 | `app_process.stop_settlement` vs 패널 `_kill_settlement` | stop_settlement 로 |
-| 옛 정산 예약작업 제거 3곳 | 18:00 매번·install.ps1·remove_autorun | 18:00 매번 제거는 삭제 가능 |
-| 정산 실행 bat | `정산_지금실행.bat`(run — 회차·부모감시와 무관) | watch 로 통일 또는 삭제 |
+| ✅ 정산 중지 2벌 | `app_process.stop_settlement` vs 패널 `_kill_settlement` | **B6 완료**: stop_settlement(트리 종료=그 Chrome 까지) 하나로 |
+| ✅ 옛 정산 예약작업 제거 3곳 | 18:00 매번·install.ps1·remove_autorun | **B6 완료**: 18:00 매번 제거 삭제(install.ps1·remove_autorun 유지) |
+| ✅ 정산 실행 bat | `정산_지금실행.bat`(run — 회차·부모감시와 무관) | **B6 완료**: 삭제(소유자 선택·D-024) |
 
 ### 3-5. 일회성 도구(임무 완료)
 `normalize_dates`·`rebuild_workbook`+`reflect_log_to_excel`·`recover_keywords`·`rebuild_index`/`relink_index`/`relink_index_inplace`·`registry_backfill`(실행 완료)·`simulate_stages`(고장)·`tools/upload_to_gdrive.bat`(rclone 폐기).
@@ -108,7 +108,7 @@
 - 정산 '계약자 정산' 시트 — 계약금액 입력 기능이 없어 늘 빈칸(설계상 '나중에 입력' = 정산 ②층 미구현).
 
 ## 5. 게이트 공백 (운영 기능인데 목표 결과를 지키는 테스트 없음)
-`--auto`/`--resume` 조립 · 설정 저장/내보내기/가져오기/자동 로드 폴백 · 그로스 재고 역기록 · 쿠팡확인 원장 기록 · 원장 presync · 마스터 복원 · 판매분석 엑셀 다운로드 폴백 · 정산 중지 · 수동 탭 4개.
+~~`--auto`/`--resume` 조립~~(B6 핀 P9~P11) · 설정 저장/내보내기/가져오기/자동 로드 폴백 · 그로스 재고 역기록 · 쿠팡확인 원장 기록 · 원장 presync · 마스터 복원 · 판매분석 엑셀 다운로드 폴백 · 정산 중지 · 수동 탭 4개.
 
 ### 5-1. 조사 밖에서 추가 발견
 - `reusable_coupang/`(git 8파일) — 앱이 import 안 함. 다른 프로젝트용으로 일부러 뽑은 **독립 패키지**(README·커밋 6904991) → 죽은 코드 아님·유지 여부는 소유자 확인.
@@ -124,5 +124,5 @@
   - ✅ B3 쓰기만 하는 저장소: `session_store`·`wing_session`·`collector.save_discovered` (키워드 탭 유지라 `keyword_store` 는 유지) — 계정당 배송관리 페이지 추가 이동 1회도 함께 사라짐
   - ✅ B4 테스트 전용 함수: `product_match.scope_to_ledger`·`parse_password_rows`·`proxy_manager` 미사용 메서드 12개(+`active_count`) 삭제 · `payout.estimate`·`registry.managed_between` 은 ②층 자산이라 유지(D-023)
   - ✅ B5 운영에서 안 도는 분기(§3-1): 게이트 시나리오 운영 조합 이전(B5-1) → 분기·인자 물리 삭제(B5-2, 순 −727줄) · `_semi_retry_login` 은 정산 무인 경로라 유지
-  - ⏳ B6 중복 통합(§3-4): 야간 조립 3벌→백엔드 1개(+`--auto`/`--resume` 게이트) · 절전 2벌 · 정산 중지 2벌 · 18:00 옛 예약작업 제거 · `정산_지금실행.bat`
+  - ✅ B6 중복 통합(§3-4): 야간 조립 3벌→`pipeline_stages.run_stages`(+핀 P9~P11) · 절전 2벌→power · 정산 중지 2벌→stop_settlement(트리 종료) · 18:00 옛 예약작업 제거 삭제 · `정산_지금실행.bat` 삭제(D-024)
   - ⏳ 오류 E1~E7 일괄 수정(§2)
