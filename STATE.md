@@ -2,50 +2,48 @@
 
 <!-- 누적 금지. 매 세션 종료 시 /session-close 가 전체 덮어쓰기. 100줄 이하. 핸드오프 SSOT. -->
 
-- BUILD_TAG: R9
+- BUILD_TAG: R10
 - 갱신: 2026-10-10
-- 마지막 커밋: 이 STATE 커밋([R9]) ← d1979d2 (B7 잔여 삭제) ← 086dc77 (R8 세션 종료) ← a2fd142 (E1~E7) ← 6850dff (B6). 전부 origin/master 푸시.
-- 배포본: `dist\쿠팡애널리틱스_배포.zip` (**10/10 19:18 재빌드·d1979d2 기준 = B3~B7·E1~E7 포함**, 172MB). 18:34 빌드 zip 확인: `정산_지금실행.bat` 없음·install.ps1 23h50m. **운용 PC 미배포**.
+- 마지막 커밋: 이 STATE 커밋([R10]) ← cab6436 (D-031) ← a6c87a5 (D-030) ← 1dc2fba (D-029) ← 10d1ad5 (D-028) ← d357dd7 (R9 B8). 전부 origin/master 푸시.
+- 배포본: `dist\쿠팡애널리틱스_배포.zip` (**10/10 21:28 재빌드·cab6436 기준 = B3~B8·E1~E7·D-028~D-031 포함**, 172MB). **운용 PC 미배포**.
 - 세션 핸드오프: STATE.md 단일. 시작 = STATE+DECISIONS 읽고 git log/status 대조 3줄 요약. 종료=`/session-close`.
 
 ## 현재 Step
-**정리(D-022) B1~B7 + 오류 E1~E7 전부 완료 → 다음 = 운용 PC 재배포(사람 조치)·첫 18:00 로그 검증.**
+**결과파일 순위 공란·키워드 칸 누락 근본 수정(D-028) + 소유자 개선 지시 반영(D-029~D-031) 완료 → 다음 = 운용 PC 재배포·실운용 검증.**
 ⚠ 무거운 작업(게이트·빌드·에이전트·e2e)은 **하나씩**(10/10 BSOD — 메모 feedback-heavy-tasks-sequential).
 ⚠ 편집은 worktree+브랜치 → 게이트 → `git merge --ff-only` → 푸시(pre-push=전체 게이트) → worktree·브랜치 삭제.
 
-## 이번 세션 완료 (R7→R9, 2026-10-10)
-- **B7**(d1979d2·D-026, 순 −317줄): `rank.organic_ranks`·`organic_ranks_batch`+전용 헬퍼 7개·config 8개(L1 공개 API 에서도 제외) · `select_keywords_light(measure_ranks)`→`_score_pool`(결과 동일) · `run_full/run_title/do_run_full(sales_semi)`·`run_log_labels/do_run_full(skip_ranks)`·`do_track_ranks(semi)` · `pipeline_sales` 미사용 import 11개 · `ProxyNode` 건강 필드 6개·`ProxyManager(max_failures, strategy, verify_url)` · DESIGN §4.4 킵얼라이브 문단 정정. 게이트 16종·복잡도 0·test_proxy_patch 11 PASS·UI import. `_login_and_discover(semi=False)` 는 정산 무인 경로라 유지.
-- **B6**(6850dff·D-024): 전체실행·`--auto`·`--resume` 의 ①→②→③→재고 역기록 조립 3벌 → `pipeline_stages.run_stages` 1개(복구 계획 `plan_resume_stages`·UI 는 `StagePlan` 만). 단계 기록 = **실제로 끝난 단계**(① 끝=sales·② 끝=ranks·③ 중지 없이 끝=done·① 단독은 없음)·재고 역기록은 ③까지 갔으면 함. 핀 P9~P11(`pin_run_plan`) = `--auto`/`--resume` 게이트 공백 해소. `_prevent_sleep`→`power.keep_awake`. 정산 중지 = `app_process.stop_settlement`(트리 종료 `taskkill /T` — 정산 Chrome 까지) 하나로·패널 `_kill_settlement` 삭제. 18:00 옛 정산 예약작업 제거 코드 삭제(install.ps1 은 유지). `deploy/정산_지금실행.bat` 삭제(소유자 선택).
-- **E1~E7**(a2fd142·D-025):
-  - E1 직원 키워드 역머지 `pull_gsheet_keywords` 를 **① `run_full` 시작**에 무조건 호출(② 시작안은 ① 끝 결과시트 전체 교체 뒤라 소실 → 정정). simulate 17(재현 실패→통과).
-  - E2 마스터 복원 = 서비스계정 + 저장 타입 그대로(`read_values(unformatted=True)`)·`gsheet.download_xlsx` 삭제. verify_gsheet[17]. **실측(읽기만)**: 공개 export 401 재현·SA 복원 성공(사업자 24·숫자 3,140칸 숫자 유지·apply_style→저장→재로드 정상).
-  - E3 예약작업 제한 13h → **23h50m**(install.ps1·install_schedule_py.ps1) · E4 `정산_상태확인.bat` 이 18:00 `--auto` 작업 조회(cmd 로 두 분기 실행 확인) · E5 '06:00 자동 종료' 문구 정정(설치 안내·INSTALL.md) · E7 게이트 개수 표기 제거(run_checks·install_hooks·CLAUDE.md).
-- 검증: 게이트 16종(커밋 전·pre-commit·pre-push 각 회) + 복잡도 경고 0 + UI offscreen import + 정산 트리 종료 실제 프로세스 e2e + PowerShell 구문 검사 0 오류. **실운용 검증 없음**.
-- 재빌드: 첫 두 번 `dist\coupang-analytics\_internal\aiohttp\_websocket` 삭제 거부(빈 폴더·핸들 잡힘 추정)로 실패 → 옛 산출물 폴더를 `dist\coupang-analytics_old_stuck` 로 이름 바꿔 비키고 성공.
+## 이번 세션 완료 (R9→R10, 2026-10-10)
+- **조사(읽기만·SA)**: 결과시트 25시트 — 10.09 칸 순위 값 **0개**(10.08=169개) · 키워드 칸 없는 블록 42개(옵션 라벨 없는 단독 블록 포함: DW 빔프로젝터·원룸 공기청정기 등).
+- **D-028**(10d1ad5) 재현→수정: ①같은 날 '이어서 하기'가 ②③ 이전 진행 파일로 마스터를 덮어 키워드·순위 소멸 → `_resume_source`(진행 파일·마스터 중 최신) ②옵션 구성 변경으로 2차 블록이 대표가 되면 키워드 칸이 영원히 없음 → `ensure_keyword_section` ③전체실행(사람)·날짜 지정이 ③에 ISO 날짜를 넘겨 별도 칸·재측정 → `column_label`. simulate 18·19·20. 기존 테스트 2곳(simulate 15·verify_offline [38])이 ISO 별도 칸을 기대값으로 고정 → 실제 칸 이름('월.일')으로 정정.
+- **D-029**(1dc2fba) ① 서킷브레이커 폐지·① 끝 미완료 계정 즉시 1회 재시도(모든 실행)·야간 30분 재개(`_night_resume`·`LOGIN_NIGHT_RESUME*`) 삭제. simulate 8 재작성·핀 P11 삭제.
+- **D-030**(a6c87a5) ③ 30분 쿨다운·당일 중단 폐지 · 차단 시 프록시 풀 **무제한 회전**(한 바퀴 뒤 차단 이력 IP 재사용) · 프록시 없으면 다음 키워드 계속 · **VID 없음=❌오류**(상품명 폴백 삭제). 핀 K·L 재작성·핀 R 신설·test_proxy_patch 11 PASS.
+- **D-031**(cab6436) 판매량·방문자·노출량 합산 금지(조회값 그대로) · 정산 연속 실패=종료 대신 다음 바퀴(프록시 안 씀·소유자 선택) · 앱이 계정 Chrome 사용 중이면 회차 끝까지 대기 후 진행 · ② 쿠팡 자동완성·키워드 탭·순위 탭 프록시(`proxy_pool.public_search_proxy`). simulate 21·22·정산 P12 정정·P28 신설.
+- 소유자 선택(이번 세션): 정산 프록시=정책 유지(안 씀) · ① 차단=끝까지 시도+즉시 재시도 · ③ 차단=프록시 풀 돌려가며 계속 · AI 매칭=현 순서 유지(VID 고정→상품명 동일→AI).
+- 검증: 매 묶음 재현 실패→수정→통과 + 게이트 16종 + 복잡도 0 + UI offscreen import. **실운용 검증 없음**.
 
 ## 다음 작업 (우선순위)
-1. **운용 PC 재배포**(사람): ⚠ 작업 관리자에서 `정산다운로드.exe` 직접 종료(옛 코드는 앱 종료 감시 없음) → 새 zip 의 `coupang-analytics\` 덮어쓰기 → **설치.bat 실행·자동실행 등록 Y**(E3 23h50m 반영 + 옛 정산 예약작업 정리) → 폴더에 남은 옛 `정산_지금실행.bat` 직접 삭제(덮어쓰기로 안 지워짐).
-2. 대장 비번 정리(DW 40행 새 값·반달 맞는 비번) → 날짜 지정 10-04~10-09 **전체 실행**(하나씩·18:00 과 겹치지 않게).
-3. 첫 18:00 로그 확인: ① 시작 `[구글시트] 직원 입력 키워드 반영`(있을 때)·'[단계] ② / ③' 로그·끝난 단계 기록·정산 '①판매수집 완료 대기'→받기·`[세션] 저장됨` 줄 없음.
-4. (소유자 판단) `reusable_coupang/`·git 밖 로컬 사본 2개 유지/삭제 결정. (보류 도구는 D-027 로 결정 완료 — `test_rank_images_live` 만 삭제·나머지 유지)
+1. **운용 PC 로그 확보**: `output\run_log_*.log`(10-09·10-10) — 10.09 순위 공란이 D-028 ①경로(이어서 하기 덮어씀)였는지 확정. 다른 후보: 프록시 설정 키 없음→기본 ON→`proxies.txt` 없으면 순위 스킵(F4), 차단.
+2. **운용 PC 재배포**(사람): 작업 관리자에서 `정산다운로드.exe` 종료 → 새 zip 덮어쓰기 → **설치.bat 실행·자동실행 등록 Y**(E3) → 옛 `정산_지금실행.bat` 직접 삭제.
+3. 재배포 후 첫 실행 확인: `[키워드칸] … 추가` 로그(빔프로젝터·원룸 등) → ② 키워드 채움 → ③ 순위 기록 · `이어서 실행 … 기준 쿠팡데이타분석_통계.xlsx` · `① 끝 — 미완료 계정 N개 즉시 1회 재시도` · `[순위요약] … VID 없음 N`.
+4. 대장 비번 정리(DW·반달) → 날짜 지정 10-04~10-09 전체 실행(하나씩·18:00 과 겹치지 않게).
+5. (보류·소유자 결정) 기능 요약에서 찾은 F1 키워드 탭 경쟁 조회가 URL 을 검색(kw_metrics.py:32) · F2 키워드 탭 [저장] 미반영(keyword_store 쓰기만) · F3 상한 표기 7 vs 코드 10 · F4 프록시 키 없으면 기본 ON · F6 ③ 안내문 '직접 검색' · F7 main 낡은 주석 · `reusable_coupang/`·로컬 사본 2개.
 
 ## 미해결 이슈
-- (사실) `dist\coupang-analytics_old_stuck\` — 삭제 거부된 옛 빌드 산출물(빈 `_websocket` 폴더 잠김). 재부팅 후 지우면 됨. 다음 빌드에는 영향 없음(빌드는 `dist\coupang-analytics\` 사용).
-- (사실) 빌드한 exe 는 실행 스모크를 하지 않음(GUI·`--auto` 가 실제 파이프라인을 띄움) — 코드는 offscreen import·게이트로만 확인.
-- (사실) `pipeline.py` 상단 재수출 import(`# noqa: F401`, 핀·시뮬 monkeypatch 대상)는 의도된 것 — B7 범위 밖.
-- (사실) `_semi_retry_login` 은 운영 경로(정산 `--hidden` watch) — 삭제 대상 아님.
-- (사실) E1 의 역머지는 '시트 값 기준 동기화'(시트에서 지운 키워드는 워크북에서도 비움) — 전날 결과시트 반영이 실패했다면 다음 ① 역머지가 그 날 새 키워드를 지울 수 있음(원래 설계의 위험·D-025 버린 대안 b 참고). 결과시트 반영 실패 로그가 보이면 확인 필요.
-- (사실) 반달(mrc098) 대장 비번 자체가 틀림(10/10 거부) · 하성진(lslfgh) = 로그인 추가단계 미완료.
-- (소유자 확인) `reusable_coupang/` 유지/삭제 · 루트 `login_source_260904/`·`src - 복사본/`(git 밖·지우면 복구 불가).
-- (미확인) BSOD 0x13A 원인 드라이버(MEMORY.DMP 분석 미실시).
-- (미확인) 앱이 띄운 정산의 작업 묶음 분리(CREATE_BREAKAWAY_FROM_JOB) 허용 여부 — 첫 18:00 로그 '분리 불가' 경고 여부.
-- (미확인) 윙 1원/55,001 차이 원인 · 정산 ②층(계약금액 입력·손실 분담) 미구현 · 윙 'M' 받기 방법.
+- (미확인) 10.09 순위 공란의 실제 경로 — 운용 PC 로그 필요(위 1).
+- (사실·소유자 감수 위험) D-029: 차단 IP 로 남은 계정 로그인을 계속 시도 → IP 차단 연장 가능. D-030: 모든 egress 가 막히면 ③이 끝나지 않음(다음 날 18:00 시작 정리가 끝냄)·차단 IP 재사용.
+- (사실) D-030 이후 VID 없는 상품은 순위 공란+❌ — 예전엔 상품명으로 찾던 상품이 공란이 될 수 있음(①매칭 실패를 고쳐야 함).
+- (사실) 2차 옵션 블록('(2개)'·'(그레이 S)' 등)은 설계상 키워드·순위 칸 없음(순위=상품 단위·대표 블록에만).
+- (사실) `dist\coupang-analytics_old_stuck\` — 잠긴 옛 빌드 산출물, 재부팅 후 삭제.
+- (사실) 빌드 exe 실행 스모크 미실시(GUI·`--auto` 가 실제 파이프라인을 띄움).
+- (사실) 반달(mrc098) 대장 비번 틀림 · 하성진(lslfgh) 로그인 추가단계 미완료.
+- (미확인) BSOD 0x13A 원인 · 정산 작업 묶음 분리 허용 여부 · 윙 1원/55,001 차이 · 정산 ②층 미구현 · 윙 'M'.
 
 ## 주의
 - 런타임 병렬 금지(단일 브라우저·위탁계정·Akamai). master 병합·빌드=통제 직렬.
 - 재배포 = 폴더 덮어쓰기→앱 재시작. output·data·config.json·proxies.txt 보존. 배포 zip 에 키·프록시 자격증명 평문 → 외부 공유 금지.
-- 결과시트·관리대장 분석은 앱 서비스계정으로 읽기만(비번 값 출력 금지·지문 비교만).
-- DECISIONS: 현재 **D-027**까지(이번 세션 D-024~D-027). D-010=SUPERSEDED by D-021, D-013=SUPERSEDED by D-015.
-- 단계 조립 수정은 `pipeline_stages.run_stages` 한 곳 + `pin_run_plan` P9~P11. UI(app_qt)에 조립을 다시 만들지 말 것.
-- pre-commit 훅이 `docs/memory` 미러를 자동 동기화 — 커밋 후 `git show --stat` 으로 의도 파일만 들어갔는지 확인.
-- 스크립트 편집은 scratchpad `.py` 로(heredoc 이스케이프·CRLF 깨짐 주의 — bat/ps1 은 CRLF·BOM 유지). 콘솔 출력 깨지면 `PYTHONIOENCODING=utf-8`.
+- 결과시트·관리대장 분석은 앱 서비스계정으로 읽기만(비번 값 출력 금지).
+- DECISIONS: 현재 **D-031**까지(이번 세션 D-028~D-031). 🔒 로그인·판매수집·정산 = 프록시 금지 유지(D-031 에서 재확인).
+- 단계 조립 수정은 `pipeline_stages.run_stages` 한 곳 + `pin_run_plan` P9~P10. ① 재시도는 `pipeline.run_full`(simulate 8).
+- Python 으로 파일 쓸 때 `open(p,'wb')`+utf-8 바이트(텍스트 모드 'w' 는 Windows 에서 CRLF 로 바꿔 파일 전체가 diff 됨 — 이번 세션 1회 발생·커밋 수정). bat/ps1 은 CRLF·BOM 유지.
+- pre-commit 훅이 `docs/memory` 미러를 자동 동기화 — 커밋 후 `git show --stat` 확인.
