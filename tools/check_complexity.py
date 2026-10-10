@@ -1,7 +1,7 @@
 """품질 게이트 — 썩음이 **건강한 파일로 번지는 것**을 막는다(회귀 차단, 제자리 분해 유도).
 
 규칙(2026-09-22 기준, 근거=designs/CODE_HEALTH_PLAN.md §1):
-- 이미 썩은 파일(pipeline·app_qt·app — workbook 은 2026-10-10 B 달성으로 제외)은 MI **C 허용**(대형 파일·정비 대상)이나,
+- 이미 썩은 파일(pipeline·app_qt — workbook 은 B 달성·app.py 는 삭제로 2026-10-10 제외)은 MI **C 허용**(대형 파일·정비 대상)이나,
   **D+ 괴물함수는 0 유지가 규칙**(2026-09-26 D+ 전멸) — 재유입 시 **차단**(회귀 방지: 과거 정상→오류).
 - 그 외 파일이 유지보수지수(MI)가 **C로 떨어지면 차단**(exit 1) — 건강(A/B) 유지가 규칙.
 - 4파일 밖의 **기존 D+ 괴물함수**(CC≥D=21)는 **경고**(차단 아님, 회귀 출처 아님).
@@ -24,7 +24,7 @@ except AttributeError:
 
 # 이미 썩어서 정비 대상인 파일(여기만 MI C 허용). 정비로 B↑ 되면 이 목록에서 빼면 자동으로 회귀 방지됨.
 # workbook.py 는 2026-10-10 mixin 분리로 MI B(18.83) 달성 → 목록에서 제외(D-017·C 재추락 시 차단).
-KNOWN_BAD = {"pipeline.py", "app_qt.py", "app.py"}
+KNOWN_BAD = {"pipeline.py", "app_qt.py"}
 SCAN_DIRS = ["src/coupang_analytics", "ui"]
 CC_WARN_RANK = "D"   # D 이상(CC≥21)이면 괴물함수 경고
 _RANK_ORDER = {"A": 0, "B": 1, "C": 2, "D": 3, "E": 4, "F": 5}

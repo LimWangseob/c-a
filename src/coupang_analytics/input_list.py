@@ -181,19 +181,6 @@ def read_xlsx_rows(path: str | Path) -> list:
         wb.close()
 
 
-def parse_password_file(path: str | Path) -> dict[str, str]:
-    """계정아이디+비밀번호 컬럼이 있는 엑셀 → {계정아이디: 비밀번호(첫 후보)}. 계정 블록/전용파일 모두 지원."""
-    rows = read_xlsx_rows(path)
-
-    def _match(header: list[str]) -> bool:
-        norm = [h.lower().replace(" ", "") for h in header]
-        return _alias_index(norm, _ID_ALIASES) is not None and _alias_index(norm, _PW_ALIASES) is not None
-
-    if _find_header_row(rows, _match)[1] < 0:
-        raise ValueError("비밀번호 파일에 '계정아이디'/'비밀번호' 컬럼이 필요합니다(상단 8행 내 헤더 없음).")
-    return {aid: c[0].password for aid, c in parse_password_candidates(rows).items()}
-
-
 @dataclass(frozen=True)
 class PwCandidate:
     """관리대장 한 계정의 비밀번호 후보 — 같은 계정 여러 줄(상품마다 한 줄)에 서로 다른 값이 적힌 경우를 다룬다."""
