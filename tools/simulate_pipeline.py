@@ -6,7 +6,7 @@
 시나리오: 1)정상 전체실행 2)크래시→이어서 3)로그인 실패 계정 건너뛰기 4)통계 이어쓰기(동결)+발굴추가
   … 10)새 전체실행 조합(①반자동 판매만→②키워드선정(노출측정 없음)→③반자동 순위 + 백필가드).
 모든 시나리오는 **운영 호출과 같은 조합**(D-022 B5)으로 돈다 — ①=_run1(run_full 운영 인자) · ②=_run2
-(select_keywords_stage) · ③=_run3(track_ranks_stage semi=True) · 전체=_ops(①→②→③). 운영에서 안 도는
+(select_keywords_stage) · ③=_run3(track_ranks_stage·반자동) · 전체=_ops(①→②→③). 운영에서 안 도는
 인자 조합(인라인 키워드·순위)은 쓰지 않는다(게이트가 운영 경로를 지키게).
 실행: python tools/simulate_pipeline.py
 """
@@ -31,19 +31,14 @@ from coupang_analytics import config  # noqa: E402
 from coupang_analytics import pipeline as P  # noqa: E402
 from coupang_analytics import pipeline_ranks as PR  # noqa: E402  (③순위 분리 — rank 내부 patch 대상)
 from coupang_analytics import pipeline_sales as PS  # noqa: E402,F401  (①판매/로그인 분리)
-from coupang_analytics import pipeline_process as PP  # noqa: E402  (①상품처리 분리 — 수집중 키워드 patch 대상)
 from coupang_analytics.input_list import Account, InputList, Option, Product  # noqa: E402
 from coupang_analytics.kw_recommend import TrackKeyword  # noqa: E402
-from coupang_analytics.rank import SearchItem  # noqa: E402
 from coupang_analytics.report import OptionMetric  # noqa: E402
 
 # 프록시(노출순위 egress)는 외부 의존 — 시뮬/게이트 대상 아님. config.apply_proxy_override 는 미설정 시
 # '기본 ON'이라, 프록시 인프라가 없는 게이트에서 순위가 스킵돼 버린다 → 무력화해 '프록시 OFF' 기준선으로
 # 돈다(프록시 자체 검증은 test_proxy_patch·verify_offline[P]가 전담).
 config.apply_proxy_override = lambda log=None: None
-
-# 검색결과 매칭 시 반환되는 '정확 노출명'(가짜). run_full 동결 경로에서 계약상품명 갱신을 재현.
-_SERP_NAME = "쿠팡실제노출명"
 
 _LOGIN_FAIL_ID = "FAIL"
 _STATE = {"discover_calls": 0, "crash_at": None, "error_at": None,
@@ -110,20 +105,6 @@ def _fake_keywords(title, naver, ai_key=None, n=None, browser=None, log=None,
             TrackKeyword("kw2", 2000, 55.0, comp_idx="높음", exposure_best=3)]
 
 
-def _fake_batch(browser, keywords, matchers, max_rank=None, mobile=False, log=None):
-    """organic_ranks_batch 대체(동결 시 순위측정) — 상품 매처에 순위 3."""
-    return {kw: {lbl: 3 for lbl in matchers} for kw in keywords}
-
-
-def _fake_organic_ranks(browser, kw, matchers, max_rank=None, mobile=False, log=None, matched_out=None):
-    """organic_ranks 대체 — 순위 3. matched_out 주면 매칭 항목(정확 노출명)을 채워 노출명 갱신 재현."""
-    if matched_out is not None:
-        for lbl in matchers:
-            matched_out[lbl] = SearchItem(is_ad=False, product_id="pid1", vendor_item_id="v1",
-                                          name=_SERP_NAME)
-    return {lbl: 3 for lbl in matchers}
-
-
 def _fake_track_ranks_semi(wb, path, log, should_stop, date_label=None):
     """③ 반자동 순위 대체 — 실제 브라우저 타이핑 없이 미기입 키워드에 순위 3 기록.
 
@@ -143,29 +124,21 @@ def _fake_track_ranks_semi(wb, path, log, should_stop, date_label=None):
 def _install_fakes():
     P._login_and_discover = _fake_login_and_discover
     # select_keywords_light·recommend_title 은 pipeline(키워드-스테이지)과 pipeline_process(수집중) 이중 소속 → 둘 다 패치.
-    P.select_keywords_light = _fake_keywords
-    PP.select_keywords_light = _fake_keywords
-    P.recommend_title = lambda *a, **k: "권고 상품명 예시"
-    PP.recommend_title = lambda *a, **k: "권고 상품명 예시"
-    # ③순위는 pipeline_ranks 로 분리 — rank 내부 호출은 PR 네임스페이스로 resolve 되므로 PR 을 패치한다.
-    PR.organic_ranks_batch = _fake_batch
-    PR.organic_ranks = _fake_organic_ranks
-    # warmup·WingBrowser 은 pipeline(판매·키워드)과 pipeline_ranks(순위) 양쪽에서 호출되는 이중 소속 → 둘 다 패치.
+    P.select_keywords_light = _fake_keywords   # ② 키워드 선정(pipeline.select_keywords_stage)
     P.warmup = lambda browser: None
-    PR.warmup = lambda browser: None
-    P.WingBrowser = _FakeBrowser        # 로그인·판매·키워드(pipeline)
+    P.WingBrowser = _FakeBrowser        # ② 키워드-스테이지(pipeline)
     PR.WingBrowser = _FakeBrowser       # 순위(pipeline_ranks)
-    PR._track_ranks_semi = _fake_track_ranks_semi   # ③ 반자동 순위(track_ranks_stage semi=True 가 호출)
+    PR._track_ranks_semi = _fake_track_ranks_semi   # ③ 반자동 순위(track_ranks_stage 가 호출)
 
 
 # ── 운영 조합 실행 헬퍼(D-022 B5 — 운영 호출과 같은 인자) ──────────────────
-_OPS_RUN_FULL = dict(keywords_off=True, skip_ranks=True, sales_semi=True, grow_keywords=False)   # app_qt 운영 호출 고정값
+_OPS_RUN_FULL = dict(sales_semi=True)   # app_qt 운영 호출 고정값
 
 
 def _run1(il, d: Path, **kw) -> Path:
     """① 판매수집 = 운영 run_full(키워드·순위 없음). 반환 = 그날 스냅샷."""
     kw.setdefault("on_log", lambda m: None)
-    return P.run_full(il, naver=None, out_dir=str(d), ai_key="sim", **_OPS_RUN_FULL, **kw)
+    return P.run_full(il, out_dir=str(d), ai_key="sim", **_OPS_RUN_FULL, **kw)
 
 
 def _run2(d: Path, grow: bool = False, on_log=None) -> Path:
@@ -175,8 +148,8 @@ def _run2(d: Path, grow: bool = False, on_log=None) -> Path:
 
 
 def _run3(d: Path, date_label=None, on_log=None) -> Path:
-    """③ 반자동 순위 = 운영 track_ranks_stage(semi=True). 반환 = 마스터."""
-    return P.track_ranks_stage(out_dir=str(d), semi=True, on_log=on_log or (lambda m: None),
+    """③ 반자동 순위 = 운영 track_ranks_stage. 반환 = 마스터."""
+    return P.track_ranks_stage(out_dir=str(d), on_log=on_log or (lambda m: None),
                                date_label=date_label)
 
 
@@ -448,8 +421,8 @@ def scenario_display_name_rename():
 def scenario_full_composition():
     """새 전체실행 = do_run_full 전체실행 분기의 3단계 조합(2026-09-15, offscreen 추방).
 
-    ①run_full(keywords_off=True,sales_semi=True,skip_ranks=True)=판매만 → ②select_keywords_stage()=키워드
-    (노출측정 없음) → ③track_ranks_stage(semi=True)=반자동 순위. 각 단계가 워크북을 올바르게 진전시키는지 검증.
+    ①run_full(sales_semi=True)=판매만 → ②select_keywords_stage()=키워드
+    (노출측정 없음) → ③track_ranks_stage()=반자동 순위. 각 단계가 워크북을 올바르게 진전시키는지 검증.
     (offscreen 순위백필 _backfill_ranks 는 2026-09-26 폐기·물리 삭제 — ③은 반자동만.)"""
     print("[시나리오 10] 새 전체실행 조합 — ①반자동(판매만)→②키워드선정→③반자동 순위")
     _STATE.update(discover_calls=0, crash_at=None, error_at=None)

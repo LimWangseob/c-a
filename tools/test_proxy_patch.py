@@ -360,33 +360,30 @@ def test_rank_block_images() -> None:
         config.RANK_BLOCK_IMAGES = saved
 
 
-def test_rank_cooldown_rotate_signal() -> None:
-    """_rank_cooldown: 회전 가능하면 _RANK_HALT['rotate'] 세우고 쿨다운 생략(site3 전체실행 신호)·
-    회전 불가면 기존 경로로 _RANK_HALT['stop'](rotate 안 세움)."""
+def test_semi_block_rotate_signal() -> None:
+    """③ 반자동 _semi_on_miss: 확정 차단 시 회전 가능하면 쿨다운(30분 sleep) 생략·halted 로 drive_rank 에 새 IP 요청,
+    회전 불가 + 쿨다운 상한 0 이면 즉시 당일중단(halted)·sleep 안 함. (옛 인라인 _rank_cooldown 핀을 운영 경로로 이전·D-022 B5)"""
     from coupang_analytics import pipeline_ranks as PR
     import coupang_analytics.config as C
-    orig_can = PR.rotation_can_rotate
-    saved_max = C.RANK_COOLDOWN_MAX
+    orig_can, orig_sleep = PR.rotation_can_rotate, PR._interruptible_sleep
+    saved_max = C.RANK_SEMI_COOLDOWN_MAX
+    slept: list = []
     try:
-        PR._reset_rank_state()
-        assert PR._RANK_HALT["rotate"] is False and PR._RANK_HALT["stop"] is False
-        # 회전 가능 → rotate 신호·쿨다운(sleep) 생략
+        PR._interruptible_sleep = lambda *a, **k: slept.append(a)
+        # 회전 가능 → halted(새 egress 로 재개)·쿨다운 sleep 없음
         PR.rotation_can_rotate = lambda: True
-        assert PR._rank_cooldown(None, lambda m: None, "t") is False
-        assert PR._RANK_HALT["rotate"] is True and PR._RANK_HALT["stop"] is False
-        # 리셋이 rotate 도 지움
-        PR._reset_rank_state()
-        assert PR._RANK_HALT["rotate"] is False
-        # 회전 불가 + 쿨다운 상한 0 → 즉시 당일중단(stop), rotate 는 그대로 False, sleep 안 함
+        st = PR._SemiState()
+        PR._semi_on_miss(st, "kw", True, lambda: False, lambda m: None)
+        assert st.halted is True and st.cooldowns == 0 and not slept, (st, slept)
+        # 회전 불가 + 쿨다운 상한 0 → 즉시 당일중단(halted)·sleep 없음
         PR.rotation_can_rotate = lambda: False
-        C.RANK_COOLDOWN_MAX = 0
-        PR._RANK_CB["cooldowns"] = 0
-        assert PR._rank_cooldown(None, lambda m: None, "t") is False
-        assert PR._RANK_HALT["stop"] is True and PR._RANK_HALT["rotate"] is False
+        C.RANK_SEMI_COOLDOWN_MAX = 0
+        st = PR._SemiState()
+        PR._semi_on_miss(st, "kw", True, lambda: False, lambda m: None)
+        assert st.halted is True and st.cooldowns == 1 and not slept, (st, slept)
     finally:
-        PR.rotation_can_rotate = orig_can
-        C.RANK_COOLDOWN_MAX = saved_max
-        PR._reset_rank_state()
+        PR.rotation_can_rotate, PR._interruptible_sleep = orig_can, orig_sleep
+        C.RANK_SEMI_COOLDOWN_MAX = saved_max
 
 
 def main() -> None:
@@ -401,7 +398,7 @@ def main() -> None:
         test_proxy_blocklist,
         test_drive_rank_rotation,
         test_rank_block_images,
-        test_rank_cooldown_rotate_signal,
+        test_semi_block_rotate_signal,
     ]
     for test in tests:
         test()

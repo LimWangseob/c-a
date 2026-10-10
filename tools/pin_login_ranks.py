@@ -341,7 +341,6 @@ def _install_rank_fakes(wait_results, serp=None):
 def pin_rank_success():
     print("[핀 J] 반자동 순위 정상 — 자동검색·결과로드·파싱으로 순위 기록")
     _SPEC.clear(); _COUNT.clear()
-    config.RANK_SEMI_AUTOSUBMIT = True
     d = Path(tempfile.mkdtemp()); path = d / "m.xlsx"
     wb = _rank_wb(path)
     pg = object()
@@ -360,7 +359,6 @@ def pin_rank_success():
 def pin_rank_not_found():
     print("[핀 J2] 반자동 순위 미발견 → '센 개수 위밖' 기록(예 '44위밖', 공란 아님=재측정 안 함)")
     _SPEC.clear(); _COUNT.clear()
-    config.RANK_SEMI_AUTOSUBMIT = True
     config.RANK_SEMI_AUTO_MAX_MISS = 3
     config.RANK_SEMI_COOLDOWN_MAX = 4
     d = Path(tempfile.mkdtemp()); path = d / "m.xlsx"
@@ -380,7 +378,6 @@ def pin_rank_not_found():
 def pin_rank_block_then_recover():
     print("[핀 K] 차단 감지 → 쿨다운 후 자동 재개(하드중단 아님) → 다음 키워드 측정")
     _SPEC.clear(); _COUNT.clear()
-    config.RANK_SEMI_AUTOSUBMIT = True
     config.RANK_SEMI_AUTO_MAX_MISS = 1     # 1회 미로딩이면 곧장 쿨다운 판정(빠른 시험)
     config.RANK_SEMI_COOLDOWN_SEC = 0      # 쿨다운 즉시 종료
     config.RANK_SEMI_COOLDOWN_MAX = 2      # 2회까지는 재개(초과 시 중단)
@@ -403,7 +400,6 @@ def pin_rank_block_then_recover():
 def pin_rank_halt():
     print("[핀 L] 쿨다운 최대 초과 = IP 회복 불가 → 당일 중단(halt), 남은 키워드 공란")
     _SPEC.clear(); _COUNT.clear()
-    config.RANK_SEMI_AUTOSUBMIT = True
     config.RANK_SEMI_AUTO_MAX_MISS = 1
     config.RANK_SEMI_COOLDOWN_SEC = 0
     config.RANK_SEMI_COOLDOWN_MAX = 1      # 쿨다운 1회 후에도 차단이면 중단
@@ -422,7 +418,6 @@ def pin_rank_halt():
 def pin_rank_skip_optionless():
     print("[핀 M] 키워드 없는 2차 옵션 블록은 순위 대상 아님(건너뜀·크래시 없음)")
     _SPEC.clear(); _COUNT.clear()
-    config.RANK_SEMI_AUTOSUBMIT = True
     config.RANK_SEMI_AUTO_MAX_MISS = 3
     config.RANK_SEMI_COOLDOWN_MAX = 4
     d = Path(tempfile.mkdtemp()); path = d / "m.xlsx"
@@ -435,55 +430,9 @@ def pin_rank_skip_optionless():
     _check(not wb.has_keyword_section("비즈R", "상품R (그레이)"), "2차 블록=키워드 구역 없음(건너뜀)")
 
 
-def _rank_master(d: Path):
-    """track_ranks_stage(out_dir) 가 로드하도록 마스터에 저장한 워크북(계정1·상품1·키워드2·vid·최신일자)."""
-    path = P._master_path(d)
-    _rank_wb(path)   # 같은 픽스처를 마스터 경로에 저장
-    return path
-
-
-def pin_rank_auto_success():
-    print("[핀 O] 자동 순위(track_ranks_stage semi=False) — _measure 측정→기록")
-    _SPEC.clear(); _COUNT.clear()
-    d = Path(tempfile.mkdtemp())
-    _rank_master(d)
-    PR.WingBrowser = _FakeWing
-    PR.warmup = lambda browser: None
-    PR._best = lambda v: v
-    PR._measure = lambda browser, todo, matcher, log, matched_out=None: {kw: 3 for kw in todo}
-    P.track_ranks_stage(out_dir=str(d), semi=False, on_log=lambda m: None)
-    from coupang_analytics.workbook import OutputWorkbook
-    wb = OutputWorkbook.load(P._master_path(d))
-    dt = wb.latest_date("비즈R")
-    _check(wb.is_rank_filled("비즈R", "상품R", "kw1", dt), "kw1 자동 순위 기록")
-    _check(wb.is_rank_filled("비즈R", "상품R", "kw2", dt), "kw2 자동 순위 기록")
-
-
-def pin_rank_auto_halt():
-    print("[핀 O2] 자동 순위 차단(RankHalt) — 부분결과만 기록·나머지 공란·중단")
-    _SPEC.clear(); _COUNT.clear()
-    d = Path(tempfile.mkdtemp())
-    _rank_master(d)
-    PR.WingBrowser = _FakeWing
-    PR.warmup = lambda browser: None
-    PR._best = lambda v: v
-
-    def fake_measure(browser, todo, matcher, log, matched_out=None):
-        raise PR.RankHalt(partial={todo[0]: 7})   # 첫 키워드만 측정하고 차단 감지
-
-    PR._measure = fake_measure
-    P.track_ranks_stage(out_dir=str(d), semi=False, on_log=lambda m: None)
-    from coupang_analytics.workbook import OutputWorkbook
-    wb = OutputWorkbook.load(P._master_path(d))
-    dt = wb.latest_date("비즈R")
-    _check(wb.is_rank_filled("비즈R", "상품R", "kw1", dt), "차단 전 부분결과(kw1) 기록")
-    _check(not wb.is_rank_filled("비즈R", "상품R", "kw2", dt), "차단 후 kw2 공란(다음에 이어서)")
-
-
 def pin_rank_skip_suspended():
     print("[핀 P2] 판매중지 상품은 순위 검색 제외(rank_suppressed)")
     _SPEC.clear(); _COUNT.clear()
-    config.RANK_SEMI_AUTOSUBMIT = True
     config.RANK_SEMI_AUTO_MAX_MISS = 3
     config.RANK_SEMI_COOLDOWN_MAX = 4
     d = Path(tempfile.mkdtemp()); path = d / "m.xlsx"
@@ -497,33 +446,6 @@ def pin_rank_skip_suspended():
     dt = wb.latest_date("비즈R")
     _check(not wb.is_rank_filled("비즈R", "상품R", "kw1", dt), "판매중지 상품 kw1 순위 미기록(건너뜀)")
     _check(not wb.is_rank_filled("비즈R", "상품R", "kw2", dt), "판매중지 상품 kw2 순위 미기록(건너뜀)")
-
-
-def pin_rank_manual_mode():
-    print("[핀 N] 반자동(비자동제출) — 사람이 Enter, 감지된 페이지만 기록·미감지는 공란(중단 없음)")
-    _SPEC.clear(); _COUNT.clear()
-    config.RANK_SEMI_AUTOSUBMIT = False
-    config.RANK_SEMI_AUTO_MAX_MISS = 3
-    config.RANK_SEMI_COOLDOWN_MAX = 4
-    d = Path(tempfile.mkdtemp()); path = d / "m.xlsx"
-    wb = _rank_wb(path)
-    pg = object()
-    _install_rank_fakes([(pg, False)])   # 자동제출 경로 아님 → _wait_user_search 로 감지
-    detected = {"i": 0, "seq": [pg, None]}   # kw1 감지, kw2 미감지(사람이 검색 안 함)
-
-    def fake_user_search(browser, kw, log, should_stop):
-        i = detected["i"]; detected["i"] += 1
-        return detected["seq"][min(i, len(detected["seq"]) - 1)]
-
-    PR._wait_user_search = fake_user_search
-    logs: list[str] = []
-    P._track_ranks_semi(wb, path, logs.append, lambda: False)
-    joined = "\n".join(logs)
-    dt = wb.latest_date("비즈R")
-    _check(wb.is_rank_filled("비즈R", "상품R", "kw1", dt), "kw1 감지 → 순위 기록")
-    _check(not wb.is_rank_filled("비즈R", "상품R", "kw2", dt), "kw2 미감지 → 공란(다음에 이어서)")
-    _check("미감지/시간초과" in joined and "IP 회복 불가" not in joined,
-           "반자동은 미감지 공란(서킷브레이커·중단 없음)")
 
 
 class _FakeSubmitPage:
@@ -632,7 +554,7 @@ def main() -> int:
     PR.WingBrowser = _FakeWing       # 순위(pipeline_ranks)
     _orig_random = PR.random   # 순위 핀에서 pause=0 으로 바꾸므로 종료 시 원복(순위=pipeline_ranks.random)
     saved = {k: getattr(config, k, None) for k in (
-        "RANK_SEMI_AUTOSUBMIT", "RANK_SEMI_AUTO_MAX_MISS", "RANK_SEMI_COOLDOWN_SEC",
+        "RANK_SEMI_AUTO_MAX_MISS", "RANK_SEMI_COOLDOWN_SEC",
         "RANK_SEMI_COOLDOWN_MAX")}
     print("=" * 60)
     print("  핀 테스트 — _login_and_discover / _track_ranks_semi (실제 코드)")
@@ -652,9 +574,6 @@ def main() -> int:
         pin_rank_block_then_recover()
         pin_rank_halt()
         pin_rank_skip_optionless()
-        pin_rank_manual_mode()
-        pin_rank_auto_success()
-        pin_rank_auto_halt()
         pin_rank_skip_suspended()
         pin_submit_no_double_on_nav()
         pin_submit_fallback_on_no_nav()

@@ -5,7 +5,7 @@ _process_account 를 호출하고 NeedLogin/LoginBlocked/LoginCredentialError �
 pipeline.py 로 다시 import 해 `pipeline.X` 공개 API(run_full·도구·핀)를 그대로 유지한다(재수출).
 로그인은 이 모듈의 WingBrowser 로 열리므로, 로그인 핀 monkeypatch 는 pipeline_sales.WingBrowser 를 교체해야 한다.
 collector/product_match 는 기존처럼 함수 내부 지연 import(교체 시 collector 모듈을 patch → 이동 무관).
-의존 방향: pipeline_paths ← pipeline_ranks ← pipeline_sales(단방향·순환 없음).
+의존 방향: pipeline_paths ← pipeline_sales(단방향·순환 없음).
 """
 from __future__ import annotations
 
@@ -24,7 +24,6 @@ from .kw_volume import NaverAdApi
 from .rank import make_matcher
 from .workbook import OutputWorkbook
 from .pipeline_paths import _PROFILES_DIR
-from .pipeline_ranks import _RANK_HALT, _best, _measure_safe
 
 
 def account_profile(account_id: str) -> str:

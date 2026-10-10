@@ -17,7 +17,7 @@ class _MetaMixin:
         ws = self.wb.create_sheet(title=_META_SHEET)
         ws.sheet_state = "hidden"
         ws.cell(1, 1, "사업자"); ws.cell(1, 2, "상품명"); ws.cell(1, 3, "상품ID(vid)")   # vid 목록('/' 조인) — 레이아웃 v4서 vid 출처(A안, 헤더 이름칸 꼬리→여기로 이전)
-        ws.cell(1, 4, "키워드서명"); ws.cell(1, 5, "권고제목")   # ⑤ 제목 캐시(동결 상품 AI 재호출 생략)
+        ws.cell(1, 4, "키워드서명(미사용)"); ws.cell(1, 5, "권고제목(미사용)")   # 옛 ⑤ 제목 캐시 — 인라인 키워드 경로 삭제(D-022 B5)로 쓰기 중단·열 위치만 유지
         ws.cell(1, 6, "등록상품명")   # 대장 원본명(노출명으로 바뀌어도 불변) — 계정목록 안정키·3c 마케팅 매칭 기준
         ws.cell(1, 7, "판매상태(쿠팡)")   # 쿠팡 재고 판매상태(판매중/부분판매중/판매중지) — 대장 판매중지와 대조해 경고 표시
         ws.cell(1, 8, "상품판매가(미사용)")   # 판매가는 '판매가' 지표행으로 이관(2026-09-24)
@@ -391,24 +391,6 @@ class _MetaMixin:
                 self.wb[_META_SHEET].cell(row, 2, new_name)
             self._vid_row[(biz, new_name)] = row
         return True
-
-    def title_cache(self, biz: str, product: str) -> tuple[str, str]:
-        """(키워드서명, 권고제목) — 없으면 ('', ''). 서명이 현재 키워드와 같으면 AI 재호출 없이 재사용(⑤)."""
-        row = self._vid_row.get((biz, product))
-        if row is None or _META_SHEET not in self.wb.sheetnames:
-            return "", ""
-        ws = self.wb[_META_SHEET]
-        return _norm(ws.cell(row, 4).value), _norm(ws.cell(row, 5).value)
-
-    def set_title_cache(self, biz: str, product: str, sig: str, title: str) -> None:
-        """권고제목을 키워드서명과 함께 숨김 시트에 캐시(동결 상품은 매일 재생성하지 않도록)."""
-        ws = self._meta_ws()
-        row = self._vid_row.get((biz, product))
-        if row is None:
-            row = ws.max_row + 1
-            ws.cell(row, 1, biz); ws.cell(row, 2, product)
-            self._vid_row[(biz, product)] = row
-        ws.cell(row, 4, sig); ws.cell(row, 5, title)
 
     # ── 마케팅 기간(계정 목록에서 입력 → 숨김시트 보존) ──────────
     def _mkt_ws(self, create: bool = False):

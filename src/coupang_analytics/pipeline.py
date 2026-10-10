@@ -1,10 +1,10 @@
 """전체 실행 오케스트레이션(`run_full`) — **계정별로 처음부터 끝까지 완결 + 이어서 하기 지원**.
 
-계정마다 [로그인(방금 연 세션) → 판매분석 발견·지표 → 키워드 → 순위]를 완결하고 다음 계정으로.
+계정마다 [로그인(방금 연 세션) → 판매분석 발견·지표]를 완결하고 다음 계정으로(① 판매수집 — 키워드는
+② `select_keywords_stage`, 순위는 ③ `track_ranks_stage`. 전체실행 = ①→②→③).
 결과는 통합 워크북 1개에 누적하고, 진행 중엔 `쿠팡데이타분석_진행중.xlsx`(+`.json` 상태)에
 저장하며, 전부 끝나면 날짜·시각이 붙은 최종본으로 이름을 바꾼다. 이어서 할 때는 완료 계정을
-건너뛰고, 미완료 계정은 키워드 재사용 + 이미 조회한 순위 건너뛰기로 끊긴 지점부터 이어간다.
-순위 조회는 부하가 크므로 순차로 지연을 두며, 차단되면 공란 처리하고 계속 진행한다.
+건너뛰고 끊긴 지점부터 이어간다.
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from .input_list import Account, InputList, InputValidationError, validate_input
 from .kw_ai import KeywordAIError
 from .kw_recommend import select_keywords_light
 from .kw_volume import NaverAdApi
-from .rank import warmup   # 대부분 pipeline_ranks 로 이동(키워드-스테이지의 warmup 만 core 사용)
+from .rank import warmup   # ② 키워드-스테이지(자동완성용 쿠팡 오리진 로드)
 from .workbook import OutputWorkbook
 
 # 경로/단계 헬퍼·상수는 leaf 모듈 pipeline_paths 로 분리(순환 import 방지). 여기서 다시 import 해
@@ -35,9 +35,8 @@ from .pipeline_paths import master_exists, read_run_stage, write_run_stage  # no
 from .pipeline_gsheet import (  # noqa: E402,F401
     pull_gsheet_keywords, push_gsheet, push_coupang_checks, backup_sources,
     push_ledger_inventory, push_company_stock, inject_company_stock, restore_master_from_gsheet)
-# ③ 순위(측정·서킷브레이커·자동/반자동 검색·스테이지)는 pipeline_ranks 로 분리. pipeline.X 로 다시 노출
-# (핀/시뮬 monkeypatch 대상은 pipeline_ranks). core(_fill_product_metrics·_finalize_run)가 _best/
-# _measure_safe/_reset_rank_state/_RANK_HALT 를 호출하므로 재수출 필요.
+# ③ 순위(반자동 검색·egress 회전·스테이지)는 pipeline_ranks 로 분리. pipeline.X 로 다시 노출
+# (핀/시뮬 monkeypatch 대상은 pipeline_ranks).
 # ① 판매수집 엔진(로그인·발견·계정처리)은 pipeline_sales 로 분리. pipeline.X 로 다시 노출
 # (run_full 이 _login_and_discover·_process_account 호출·NeedLogin류 catch·도구/핀이 여러 심볼 import).
 from .match_anchor import anchor_path  # noqa: E402
@@ -48,20 +47,18 @@ from .pipeline_sales import (  # noqa: E402,F401
     _roster_from_names, _run_discover, _semi_retry_login, _short, _vtag, account_profile,
     try_login_once)
 # 상품/옵션 처리(_process_account 등)는 pipeline_process 로 분리. pipeline.X 로 다시 노출
-# (run_full._finish 가 _process_account 호출·도구가 _ProcCtx/_resolve_keywords/_fill_product_metrics 등 import).
+# (run_full._finish 가 _process_account 호출·도구가 _ProcCtx/_fill_product_metrics 등 import).
 from .pipeline_process import (  # noqa: E402,F401
     _ProcCtx, _apply_pid, _apply_vid_meta, _block_name, _block_sale_status,
-    _fill_frozen_search_volumes, _fill_product_metrics, _frozen_keywords, _log_diagnose,
-    _migrate_product_blocks, _process_account, _process_option, _product_matcher,
-    _purge_upbundle_blocks, _resolve_keywords, _sweep_dead_duplicates)
+    _fill_frozen_search_volumes, _fill_product_metrics,
+    _migrate_product_blocks, _process_account, _process_option,
+    _purge_upbundle_blocks, _sweep_dead_duplicates)
 from .pipeline_ranks import (  # noqa: E402,F401
-    RankHalt, _RANK_CB, _RANK_HALT, _RANK_TELEMETRY_ID, _all_pages, _best,
-    _interruptible_sleep, _live_url, _looks_blocked, _measure,
-    _measure_nav_serial, _measure_product_auto, _measure_safe,
-    _prefill_search, _rank_cooldown, _rank_matcher, _reset_rank_state, _search_q,
+    _all_pages, _interruptible_sleep, _live_url, _looks_blocked,
+    _prefill_search, _rank_matcher, _search_q,
     _semi_browser_prep, _semi_on_miss, _semi_prep_product, _semi_record, _semi_search_one,
     _semi_start_log, _semi_summary_log, _semi_track_product, _submit_search, _track_ranks_semi,
-    _wait_results_loaded, _wait_user_search, drive_rank, track_ranks_stage)
+    _wait_results_loaded, drive_rank, track_ranks_stage)
 
 
 def resumable_progress(out_dir: str | Path = "output") -> dict | None:
@@ -165,41 +162,12 @@ def run_log_labels(keywords_off: bool, resume: bool, redo_today: bool, carry: bo
     return mode_txt, stage_txt
 
 
-def _save_progress(out_dir, date_from, date_to, started_at, done,
-                   carry=False, grow=False, skip=False, date_label=None) -> None:
+def _save_progress(out_dir, date_from, date_to, started_at, done, carry=False, date_label=None) -> None:
     _progress_path(out_dir).write_text(
         json.dumps({"date_from": date_from, "date_to": date_to, "started_at": started_at,
-                    "done": list(done), "carry": carry, "grow": grow, "skip": skip,
-                    "date_label": date_label},   # 컬럼 라벨=작업 실행날짜(판매조회 D-1과 분리) — 재개 시 동일 라벨 유지
+                    "done": list(done), "carry": carry, "date_label": date_label},   # 컬럼 라벨=작업 실행날짜(판매조회 D-1과 분리) — 재개 시 동일 라벨 유지
                    ensure_ascii=False, indent=2),
         encoding="utf-8")
-
-
-def _select_keywords_for_skipped(wb, save_path, accounts, naver, ai_key, log) -> None:
-    """판매수집을 건너뛴(이미 오늘 수집됨) 계정의 상품 중 **키워드가 비어 있는 것만** 선정(로그인 없이).
-
-    전체실행 재실행에서 판매는 스킵하되 ②키워드가 빠지지 않게 하는 보완 단계. 기존 키워드가 있는 상품은
-    **동결**(건드리지 않음). select_keywords_stage(②)와 동일 로직(워크북 상품명 시드, 순위 조회 없음).
-    로그인 브라우저는 이미 닫혔으므로 순위 브라우저 1개만 연다(중첩 금지 준수)."""
-    biz_names = {a.label for a in accounts}
-    targets = [(biz, pname) for biz in wb.account_sheets() if biz in biz_names
-               for pname in wb.products_of(biz) if not wb.product_keywords(biz, pname)]
-    if not targets:
-        return
-    log(f"== 판매수집 스킵 계정의 키워드 미보유 상품 {len(targets)}개 선정(로그인 없이) ==")
-    with WingBrowser(profile_dir=_PROFILE, offscreen=True) as browser:
-        warmup(browser)
-        for biz, pname in targets:
-            try:
-                tracks = select_keywords_light(pname, naver, ai_key, browser=browser, log=log,
-                                               measure_ranks=None)
-                wb.add_product_keywords(biz, pname, [t.keyword for t in tracks])
-                for t in tracks:
-                    wb.set_keyword_search(biz, pname, t.keyword, t.volume)
-                log(f"  [키워드] {biz} · {pname} → {[t.keyword for t in tracks]}")
-            except Exception as exc:   # 한 상품 실패가 나머지·순위보완을 안 막게 격리
-                log(f"  [키워드] {biz} · {pname} 선정 실패(건너뜀) — {exc.__class__.__name__}: {str(exc)[:80]}")
-        wb.save(save_path)
 
 
 def _column_label(date_from: str, date_to: str, date_label: str | None, log) -> str:
@@ -360,12 +328,8 @@ class _RunCtx:
     started_at: str
     done: set                 # 완료 계정ID(가변 — 계정마다 add)
     carry: bool
-    grow: bool
-    skip_ranks: bool
-    keywords_off: bool
     col_label: str
     total: int
-    naver: NaverAdApi
     ai_key: str | None
     log: object
     coupang_checks: dict   # 2-2(§10-1): {account_id | (account_id,상품명): (쿠팡확인값, 확인일)} — ①종료 시 원장 기록
@@ -374,8 +338,7 @@ class _RunCtx:
 
 def _save_ctx_progress(ctx: _RunCtx) -> None:
     """실행 컨텍스트로 진행 상태 저장(_실행단계 진행파일). 9인자 호출 반복을 한 곳으로."""
-    _save_progress(ctx.out, ctx.date_from, ctx.date_to, ctx.started_at, ctx.done,
-                   ctx.carry, ctx.grow, ctx.skip_ranks, ctx.date_label)
+    _save_progress(ctx.out, ctx.date_from, ctx.date_to, ctx.started_at, ctx.done, ctx.carry, ctx.date_label)
 
 
 from .registry_model import COUPANG_CHECK_VALUES as _CCV  # noqa: E402  (2-2 쿠팡확인 값 정합)
@@ -432,39 +395,11 @@ def _finish(ctx: _RunCtx, a: Account, report_acc, metrics, inv_by_vid, inv_statu
         compute_coupang_checks(report_acc, inv_status, datetime.now().strftime("%Y-%m-%d")))
     wb.set_account_id(a.label, a.account_id)   # 목차 계정ID 표시용(비번은 저장 안 함)
     wb.set_representative(a.label, a.representative)   # 계정목록 대표자 컬럼(관리대장 대표자명)
-    # 자동완성(키워드 후보)·순위 모두 비로그인 쿠팡 세션이 필요하다. 로그인 브라우저가 닫힌 뒤 별도로
-    # 연다(중첩 금지 — sync playwright 충돌 방지). 활동 상품이 있을 때만 열고, 그 한 세션에서
-    # 키워드 선정(자동완성)→순위까지 재사용한다(warmup 먼저 = 쿠팡 오리진 로드, same-origin fetch).
     if report_acc.products:
-        if ctx.skip_ranks or ctx.keywords_off:
-            # 순위 제외(날짜지정) 또는 판매수집 전용(①): 쿠팡 순위 브라우저 안 열고(차단 접촉 0)
-            _process_account(report_acc, wb, ctx.naver, ctx.ai_key, None, metrics, inv_by_vid,
-                             ctx.col_label, ctx.grow, log, ctx.partial, skip_ranks=ctx.skip_ranks,
-                             keywords_off=ctx.keywords_off, sale_status=inv_status,
-                             upbundle_vids=upbundle_vids, live_vids=live_vids, vid_meta=vid_meta,
-                             pid_by_vid=pid_by_vid)
-        else:
-            # ③순위 egress 회전 — drive_rank 가 프록시 선택·열기·차단이력 선제 skip·차단 시 새 IP 재회전을
-            # 담당. 차단 시 _process_account 를 새 egress 로 재실행(키워드 동결이라 순위만 재측정·멱등).
-            ran = {"v": False}
-
-            def _run_site3(rank_browser, egress) -> bool:
-                _reset_rank_state()   # 새 egress → 차단 플래그 리셋(이전 IP 차단이 새 IP 측정 막지 않게)
-                warmup(rank_browser)
-                _process_account(report_acc, wb, ctx.naver, ctx.ai_key, rank_browser, metrics,
-                                 inv_by_vid, ctx.col_label, ctx.grow, log, ctx.partial,
-                                 sale_status=inv_status, upbundle_vids=upbundle_vids, live_vids=live_vids,
-                                 vid_meta=vid_meta, pid_by_vid=pid_by_vid)
-                ran["v"] = True
-                return bool(_RANK_HALT["stop"] or _RANK_HALT["rotate"])   # 차단 감지 → drive_rank 가 새 IP로 재개
-
-            drive_rank(offscreen=True, run_once=_run_site3, log=log)
-            if not ran["v"]:   # 프록시 ON인데 유효 egress 전무(설정오류/전부 소진) → 순위 없이 처리(직접연결 안 함)
-                _process_account(report_acc, wb, ctx.naver, ctx.ai_key, None, metrics, inv_by_vid,
-                                 ctx.col_label, ctx.grow, log, ctx.partial, skip_ranks=True,
-                                 keywords_off=ctx.keywords_off, sale_status=inv_status,
-                                 upbundle_vids=upbundle_vids, live_vids=live_vids, vid_meta=vid_meta,
-                                 pid_by_vid=pid_by_vid)
+        # ① 판매정보만 기록(키워드=②·순위=③ — 쿠팡 순위 브라우저를 열지 않음·차단 접촉 0)
+        _process_account(report_acc, wb, metrics, inv_by_vid, ctx.col_label, log, ctx.partial,
+                         sale_status=inv_status, upbundle_vids=upbundle_vids, live_vids=live_vids,
+                         vid_meta=vid_meta, pid_by_vid=pid_by_vid)
         # 판매상태 불일치 경고: 쿠팡 재고 판매상태맵을 마스터 전체 상품에 vid로 대조해 저장(멱등).
         # 대장에서 빠진(판매중지 표기) 상품도 쿠팡 재고에 살아있으면 vid로 잡혀 "판매중"으로 채워진다.
         # 상태맵은 ①판매수집 로그인 세션에서만 확보되므로(②③엔 없음) 여기서 1회 반영, 렌더는 apply_style이 담당.
@@ -481,16 +416,14 @@ def _finish(ctx: _RunCtx, a: Account, report_acc, metrics, inv_by_vid, inv_statu
     log(f"  [{a.label}] 완료 — 진행 {len(ctx.done)}/{ctx.total} (진행 저장: {ctx.partial.name})")
 
 
-def _collect_session_first(ctx: _RunCtx, accounts, get_password
-                           ) -> tuple[list[tuple[int, Account]], list[Account]]:
+def _collect_session_first(ctx: _RunCtx, accounts, get_password) -> list[tuple[int, Account]]:
     """1차 패스 — 세션 살아있는 계정 먼저 수집(로그인 없음 → 차단 위험 0). 세션 만료는 로그인 대기열로.
 
     반복 자동로그인이 Akamai IP 차단을 유발하므로, 로그인 없는 계정을 먼저 다 확보한다.
-    반환: (로그인 필요 [(순번, Account)], 오늘 판매수집 이미 완료라 생략한 계정[키워드 보완 대상]).
+    반환: 로그인 필요 [(순번, Account)].
     """
     wb, log, done, total, col_label = ctx.wb, ctx.log, ctx.done, ctx.total, ctx.col_label
     login_needed: list[tuple[int, Account]] = []
-    sales_skipped: list[Account] = []
     for i, a in enumerate(accounts, 1):
         if a.account_id in done:                  # 완료 계정 → 건너뜀
             log(f"== [{i}/{total}] {a.label} — 이미 완료, 건너뜀 ==")
@@ -500,14 +433,12 @@ def _collect_session_first(ctx: _RunCtx, accounts, get_password
                 "키워드는 미보유분만 보완·순위는 미기입분만 조회 ==")
             done.add(a.account_id)
             _save_ctx_progress(ctx)
-            sales_skipped.append(a)
             continue
         if ctx.designated and wb.sales_filled(a.label, a.account_id, col_label):   # D-019: 이력 없는 옛 칸
             log(f"== [{i}/{total}] {a.label} — 지정 칸({col_label})에 판매값 있음(칸별 이력 이전 수집분) → "
                 "로그인·수집 생략. 키워드는 미보유분만 보완·순위는 미기입분만 조회 ==")
             done.add(a.account_id)
             _save_ctx_progress(ctx)
-            sales_skipped.append(a)
             continue
         if ctx.carry and wb.has_marketing():      # 마케팅 설정됐을 때만 주기 게이팅(미설정=현행 매일 유지)
             due, why = wb.account_due(a.label, ctx.date_to, a.account_id)   # 항목5: 그 계정ID 상품만으로 판정
@@ -530,7 +461,7 @@ def _collect_session_first(ctx: _RunCtx, accounts, get_password
         except Exception as exc:
             first = (str(exc).splitlines() or [""])[0][:250]
             log(f"  [{a.label}] 처리 오류: {exc.__class__.__name__}: {first} — 건너뜀")
-    return login_needed, sales_skipped
+    return login_needed
 
 
 def _collect_with_login(ctx: _RunCtx, login_needed, get_password, sales_semi: bool) -> None:
@@ -585,18 +516,16 @@ class _RunInit:
     started_at: str
     done: set
     carry: bool
-    grow: bool
-    skip_ranks: bool
     date_label: str | None
 
 
 def _init_run_state(input_list: InputList, out: Path, partial: Path, prog: Path, master: Path,
-                    now: datetime, resume: bool, carry_forward: bool, grow_keywords: bool,
-                    skip_ranks: bool, redo_today: bool, date_from, date_to, date_label, log) -> _RunInit:
+                    now: datetime, resume: bool, carry_forward: bool, redo_today: bool,
+                    date_from, date_to, date_label, log) -> _RunInit:
     """실행 시작 상태 결정 — 같은 날 크래시 복구(resume) 또는 새 실행(통계 이어쓰기/새 통계).
 
-    resume=True고 오늘 진행분이 있으면 기간·완료계정·진행엑셀·모드(carry/grow/skip)를 복원한다.
-    새 실행이면 날짜·done을 세우고, carry_forward+마스터 존재면 마스터를 이어쓰기(키워드 동결),
+    resume=True고 오늘 진행분이 있으면 기간·완료계정·진행엑셀·모드(carry)를 복원한다.
+    새 실행이면 날짜·done을 세우고, carry_forward+마스터 존재면 마스터를 이어쓰기(오늘 컬럼 추가),
     아니면 빈 워크북(명시적 '새 통계'는 기존 마스터를 보관 후). 진행 기준선(partial)·진행파일을 저장한다.
     """
     meta = resumable_progress(out) if resume else None
@@ -605,27 +534,23 @@ def _init_run_state(input_list: InputList, out: Path, partial: Path, prog: Path,
         started_at = meta["started_at"]
         done = set(meta["done"])
         carry = bool(meta.get("carry", False))
-        grow = bool(meta.get("grow", False))
-        skip_ranks = bool(meta.get("skip", False))   # 재개 시 순위제외 모드도 그대로 유지
         date_label = meta.get("date_label") or date_label   # 재개=원래 작업 실행날짜 라벨 유지(새벽 넘겨도 시작일 기준)
         wb = OutputWorkbook.load(partial)
         log(f"== 이어서 실행({'통계이어쓰기' if carry else '새통계'}) — 완료 {len(done)}개 건너뜀, "
             f"기간 {date_from}~{date_to} ==")
-        return _RunInit(wb, date_from, date_to, started_at, done, carry, grow, skip_ranks, date_label)
+        return _RunInit(wb, date_from, date_to, started_at, done, carry, date_label)
     # 새 실행(오늘)
     date_to = date_to or now.strftime("%Y-%m-%d")
     date_from = date_from or date_to
     started_at = now.strftime("%Y-%m-%d %H:%M:%S")
     done: set = set()
     carry = carry_forward and master.exists()
-    grow = grow_keywords and carry
     if carry_forward and not master.exists():
         log("== ⚠ 통계 마스터가 없어 '새 통계'로 시작합니다 — 결과 구글시트가 있으면 UI가 먼저 복원합니다 ==")
     if carry:
         wb = OutputWorkbook.load(master)   # 기존 통계 이어쓰기(키워드 동결 + 오늘 컬럼)
         log(f"== {'오늘 처음(다시) 하기' if redo_today else '통계 이어쓰기'} — 마스터 로드, "
-            f"오늘 컬럼{' 초기화 후 재수집' if redo_today else ' 추가'}"
-            f"{' · 새 키워드 발굴 추가' if grow else ' · 키워드 동결'} ==")
+            f"오늘 컬럼{' 초기화 후 재수집' if redo_today else ' 추가'} ==")
     else:
         if not carry_forward and master.exists():   # 명시적 '새 통계' → 기존 마스터 보관(백업)
             bak = out / f"{config.OUTPUT_FILE_PREFIX}_통계_보관_{now.strftime('%y%m%d_%H%M%S')}.xlsx"
@@ -637,8 +562,8 @@ def _init_run_state(input_list: InputList, out: Path, partial: Path, prog: Path,
         if p.exists():
             p.unlink()
     wb.save(partial)                       # 크래시 복구 기준선(carry면 마스터 내용 포함)
-    _save_progress(out, date_from, date_to, started_at, done, carry, grow, skip_ranks, date_label)
-    return _RunInit(wb, date_from, date_to, started_at, done, carry, grow, skip_ranks, date_label)
+    _save_progress(out, date_from, date_to, started_at, done, carry, date_label)
+    return _RunInit(wb, date_from, date_to, started_at, done, carry, date_label)
 
 
 def _validate_or_raise(input_list: InputList, log) -> None:
@@ -684,15 +609,17 @@ def _finalize_run(ctx: _RunCtx, master: Path, prog: Path, now: datetime, gsheet_
     return snapshot
 
 
-def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
+def run_full(input_list: InputList, out_dir: str = "output",
              ai_key: str | None = None, date_from: str | None = None, date_to: str | None = None,
              get_password=None, resume: bool = False, carry_forward: bool = False,
-             grow_keywords: bool = False, skip_ranks: bool = False, redo_today: bool = False,
-             sales_semi: bool = False, date_label: str | None = None,
-             keywords_off: bool = False, on_log=None, gsheet_output_url: str | None = None,
+             redo_today: bool = False, sales_semi: bool = False, date_label: str | None = None,
+             on_log=None, gsheet_output_url: str | None = None,
              registry_url: str | None = None, stock_url: str | None = None,
              designated: bool = False) -> Path:
-    """계정별 end-to-end 완결 + **같은 날 이어서 하기** + **통계 마스터 이어쓰기(cross-day)**.
+    """① 판매수집 — 계정별 end-to-end 완결 + **같은 날 이어서 하기** + **통계 마스터 이어쓰기(cross-day)**.
+
+    키워드(②)·순위(③)는 이 함수에 없다 — 전체실행은 UI 가 ①→②`select_keywords_stage`→③`track_ranks_stage`
+    로 조립한다(인라인 키워드·순위 경로는 운영에서 안 돌아 D-022 B5 에서 삭제).
 
     실행 모드(3택, UI 실행모드와 대응):
     - **① 이어서 하기**: `resume`(오늘 진행분 있으면 이어서·완료계정 건너뜀) 또는 `carry_forward`(마스터에
@@ -700,19 +627,15 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     - **② 오늘 처음(다시) 하기**: `redo_today=True`(+carry_forward). 어제까지 유지하되 **오늘 컬럼·완료
       스탬프를 초기화**하고 전 계정을 오늘분 처음부터 재수집(완료계정도 다시). 키워드는 동결.
     - **③ 전체 새로 시작(fresh)**: `carry_forward=False`. 마스터가 있으면 보관(백업) 뒤 빈 워크북으로 새로.
-    - **통계 이어쓰기(carry_forward=True)**: 마스터(`쿠팡데이타분석_통계.xlsx`)를 불러와 **기존 키워드를
-      동결**하고 오늘 날짜 컬럼만 채운다(시계열 의미 유지). `grow_keywords=True`면 상한(KW_MAX_TRACK) 안에서
-      상품당 하루 최대 KW_ADD_PER_DAY개 **새 키워드만 발굴 추가**(기존은 절대 제거 안 함).
+    - **통계 이어쓰기(carry_forward=True)**: 마스터(`쿠팡데이타분석_통계.xlsx`)를 불러와 오늘 날짜 컬럼만
+      채운다(시계열 의미 유지·키워드는 그대로).
     - **같은 날 크래시 복구(resume=True)**: `진행중.xlsx`(+`.json`)를 읽어 완료 계정은 건너뛰고 끊긴
-      지점부터 이어간다. 진행 상태에 carry/grow 플래그가 있어 그 모드 그대로 재개된다.
+      지점부터 이어간다. 진행 상태에 carry 플래그가 있어 그 모드 그대로 재개된다.
 
     완료되면 마스터를 갱신하고 그날 스냅샷(`쿠팡데이타분석_통계_yymmdd.xlsx`)을 남긴 뒤 진행파일을 지운다.
-    키워드는 AI로 도출하므로 `ai_key` 필수(없으면 KeywordAIError). 한 계정이 막혀도 그 계정만 건너뛴다.
+    대장↔쿠팡 상품 매칭이 AI 중심(D-009)이라 `ai_key` 필수(없으면 KeywordAIError). 한 계정이 막혀도 그 계정만 건너뛴다.
     """
     log = on_log or (lambda m: None)
-    _reset_rank_state()          # 이번 실행 순위 차단 플래그·서킷브레이커(cooldown) 초기화
-    if not skip_ranks:           # 인라인 순위를 열 때만 프록시 설정 적용(config.json proxy/*·미설정=기본 ON)
-        config.apply_proxy_override(log)
     if not ai_key:
         raise KeywordAIError("OpenAI(ChatGPT) API 키가 없어 키워드 추출을 할 수 없습니다. "
                              "설정 탭에서 OpenAI API 키를 입력한 뒤 다시 실행하세요.")
@@ -724,20 +647,14 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
 
     master = _master_path(out)
     st = _init_run_state(input_list, out, partial, prog, master, now, resume, carry_forward,
-                         grow_keywords, skip_ranks, redo_today, date_from, date_to, date_label, log)
+                         redo_today, date_from, date_to, date_label, log)
     wb, date_from, date_to = st.wb, st.date_from, st.date_to
-    started_at, done, date_label = st.started_at, st.done, st.date_label
-    carry, grow, skip_ranks = st.carry, st.grow, st.skip_ranks
+    started_at, done, date_label, carry = st.started_at, st.done, st.date_label, st.carry
 
     # 목차 로스터 — 입력 전체 계정(계정ID·대표자명)을 등록해 **미수집 계정도 목차에 표시**(수집 현황 파악)
     for _a in input_list.accounts:
         wb.set_account_id(_a.label, _a.account_id)
         wb.set_representative(_a.label, _a.representative)   # 계정목록 대표자 컬럼 표시용(관리대장 대표자명)
-
-    # 직원이 결과 통계 시트에 직접 넣은 키워드를 역머지(값 있으면 그 상품은 AI 선정 대신 동결). 미러링 전에 워크북에
-    # 들어가야 종료 시 전체 교체돼도 보존된다. 새 상품(블록 없음)은 대상 아님(첫 수집 후 시트가 생겨야 입력 가능).
-    if not keywords_off:                       # ①판매수집 전용은 키워드 단계가 없어 역머지 불필요
-        pull_gsheet_keywords(wb, gsheet_output_url, log)
 
     # 일자 컬럼 라벨 = **작업 실행날짜**(date_label). 순위(③)는 같은 실행날짜 컬럼(latest_date)에 기록돼
     # '오늘 순위 + 전일 판매'가 한 컬럼에 나란히 쌓인다.
@@ -754,12 +671,12 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
     total = len(accounts)
     # 계정별 기록·진행 저장에 쓰는 공유 상태를 한 곳에 모은다(_finish 가 이 컨텍스트로 동작).
     ctx = _RunCtx(wb=wb, out=out, partial=partial, date_from=date_from, date_to=date_to,
-                  date_label=date_label, started_at=started_at, done=done, carry=carry, grow=grow,
-                  skip_ranks=skip_ranks, keywords_off=keywords_off, col_label=col_label, total=total,
-                  naver=naver, ai_key=ai_key, log=log, coupang_checks={}, designated=designated)
+                  date_label=date_label, started_at=started_at, done=done, carry=carry,
+                  col_label=col_label, total=total, ai_key=ai_key, log=log, coupang_checks={},
+                  designated=designated)
 
     # 계정 수집 = 2패스(세션우선 → 로그인). Akamai IP 차단을 줄이려 로그인 없는 계정을 먼저 다 확보한다.
-    login_needed, sales_skipped = _collect_session_first(ctx, accounts, get_password)
+    login_needed = _collect_session_first(ctx, accounts, get_password)
     _collect_with_login(ctx, login_needed, get_password, sales_semi)
 
     uncollected = [a for _, a in login_needed if a.account_id not in done]
@@ -769,12 +686,6 @@ def run_full(input_list: InputList, naver: NaverAdApi, out_dir: str = "output",
 
     removed_accounts, renamed_accounts = _reconcile_ledger_accounts(wb, input_list, uncollected, log)
 
-    # 판매수집을 건너뛴(이미 오늘 수집됨) 계정도 키워드가 비어 있으면 선정(로그인 없이·워크북 기반).
-    # 전체실행(①②③) 재실행에서 판매는 스킵하되 ②키워드가 빠지지 않게 한다(①판매수집 전용은 키워드 단계 없음).
-    if sales_skipped and not keywords_off:
-        _select_keywords_for_skipped(wb, partial, sales_skipped, naver, ai_key, log)
-
-    # (offscreen 순위백필 _backfill_ranks 는 폐기·물리 삭제 — 2026-09-26. ③순위는 반자동만·§DESIGN §5.2)
     # 통계 마스터/스냅샷 저장 + 결과 구글시트 반영 + 진행파일 정리
     return _finalize_run(ctx, master, prog, now, gsheet_output_url, removed_accounts, uncollected,
                          renamed_accounts=renamed_accounts, registry_url=registry_url, stock_url=stock_url)

@@ -182,7 +182,6 @@ def main() -> int:
     kws = wl.product_keywords("로움컨설팅", "타프 (베이지)")
     _chk(kws == ["kw1", "kw2"], f"AI 선정 키워드 적재={kws}")
     _chk(wl.keyword_search("로움컨설팅", "타프 (베이지)", "kw1") == 1000, "검색량(kw1)=1000")
-    _chk(P._best is not None, "순위 기록 경로 존재")  # 값 자체는 아래 셀에서
     hrk = _hdr_row(ws, "타프 (베이지)")
     kh = next((r for r in range(hrk, ws.max_row + 1) if _n(ws.cell(r, 1).value) == "키워드"), None)
     _chk(kh is not None and _n(ws.cell(kh + 1, dcol).value) == "3위", "키워드 노출순위=3위")

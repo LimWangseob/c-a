@@ -189,14 +189,14 @@ WB_PRESENT = sorted(set([
     "load", "empty", "save", "apply_style",
     # 기록
     "set_product_metric", "ensure_product_block", "add_product_keywords", "set_keyword_search",
-    "set_title_cache", "set_keyword_rank", "set_product_kind", "set_product_extra",
+    "set_keyword_rank", "set_product_kind", "set_product_extra",
     "set_product_pid", "set_product_vids", "set_display_name", "set_product_account_id",
     "set_discontinued", "set_marketing", "ensure_account", "reconcile_account",
     "delete_product_block", "set_account_id", "set_representative", "apply_sale_status",
     "mark_sales_collected", "merge_account", "sync_discontinued_from_ledger", "delete_account",
     "reset_date_column", "clear_sales_stamps", "pad_keyword_rows",
     # 조회
-    "keyword_search", "title_cache", "is_rank_filled", "product_keywords", "has_product",
+    "keyword_search", "is_rank_filled", "product_keywords", "has_product",
     "resolve_block_name", "blocks_with_registered_name", "product_vids", "products_of",
     "has_marketing", "product_due", "account_sheets", "account_ids_of", "account_id_of",
     "latest_date", "rank_suppressed", "sibling_vids", "data_quality_summary", "inventory_by_biz",

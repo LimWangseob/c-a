@@ -1,6 +1,6 @@
-"""③ 순위(노출조회) — 측정 헬퍼·서킷브레이커·자동/반자동 검색·track_ranks_stage.
+"""③ 순위(노출조회) — 반자동 검색(자동 타이핑+Enter·화면만 읽음)·egress 회전·track_ranks_stage.
 
-pipeline.py 에서 분리(대형 파일 정비, 행동 불변). 순위 함수 내부 호출·모듈 전역(_RANK_HALT 등)은 이 모듈에서
+pipeline.py 에서 분리(대형 파일 정비, 행동 불변). 순위 함수 내부 호출·모듈 전역(_ROT 등)은 이 모듈에서
 resolve 되므로, 테스트 monkeypatch(핀·시뮬)는 이 모듈(pipeline_ranks)의 심볼을 교체해야 한다(pipeline 아님).
 pipeline.py 가 이 심볼들을 다시 import 해 `pipeline.X` 공개 API(UI·도구)를 그대로 유지한다(재수출).
 """
@@ -16,37 +16,12 @@ from . import config
 from . import human_mouse
 from . import proxy_blocklist
 from . import proxy_pool
-from . import session_state
 from .browser import WingBrowser
 from .kw_recommend import rank_label
 from .product_naming import rename_to_exposed
-from .rank import (RankBlocked, human_type_query, make_matcher, organic_ranks,
-                   organic_ranks_batch, warmup)
+from .rank import human_type_query, make_matcher
 from .pipeline_gsheet import push_gsheet, inject_company_stock   # track_ranks_stage 종료 시 결과 반영·회사재고 주입(한 방향·순환 없음)
 from .pipeline_paths import _PROFILE, _load_latest_wb
-
-
-def _best(pair) -> int | None:
-    """(ranks_pc, ranks_mobile) → 최상위 순위(없으면 None). 새 서식은 상품 단일 매처라 값 1개."""
-    if not pair:
-        return None
-    pc, mo = pair
-    vals = [v for v in (*pc.values(), *mo.values()) if v]
-    return min(vals) if vals else None
-
-
-# 순위 차단(Akamai 챌린지) 감지 시 이번 실행의 순위 조회를 전면 중단(더 두드리지 않음). 실행마다 리셋.
-_RANK_HALT = {"stop": False, "rotate": False}   # stop=당일중단 · rotate=egress 회전 요청(차단이나 회전 가능)
-# 서킷브레이커 — 이번 실행에 쓴 cooldown 횟수(상한 초과 시 당일 중지). 실행마다 리셋.
-_RANK_CB = {"cooldowns": 0}
-_RANK_TELEMETRY_ID = "__rank__"   # 순위 응답 관측용 합성 계정ID(session_events 에 rank_* 이벤트)
-
-
-def _reset_rank_state() -> None:
-    """실행 시작 시 순위 차단 상태 초기화 — halt 플래그 해제 + 서킷브레이커 cooldown 카운터 리셋."""
-    _RANK_HALT["stop"] = False
-    _RANK_HALT["rotate"] = False
-    _RANK_CB["cooldowns"] = 0
 
 
 # ── egress 재회전 드라이버 (2026-10-02, SSOT=memory proxy-rotation) ────────────────
@@ -161,131 +136,11 @@ def drive_rank(offscreen: bool, run_once, log, should_stop=None) -> None:
         _ROT["active"], _ROT["can"] = False, (lambda: False)
 
 
-def _rank_cooldown(browser, log, reason: str) -> bool:
-    """이상징후 → 신규검색 중지 → 충분한 cooldown → (홈 1회 = 소량 정상요청). 재개 가능하면 True.
-
-    cooldown 반복이 상한(RANK_COOLDOWN_MAX) 초과면 당일 중지(False). 우회 재요청은 하지 않는다 —
-    호출부가 True면 같은 검색을 1회 재측정(=probe)해 정상 여부를 확인한다.
-    """
-    if rotation_can_rotate():
-        # 차단 egress 를 새 IP 로 바꾸는 게 30분 쿨다운보다 싸다 → 쿨다운 생략하고 회전으로 전환.
-        _RANK_HALT["rotate"] = True   # run_full(site3) 가 읽는 회전 신호(이후 _measure 는 이 egress 더 안 두드림)
-        log(f"  [노출측정] ⟳ 이상징후({reason}) — egress 회전 가능 → 쿨다운 생략, 새 IP로 전환")
-        return False   # 호출부가 RankHalt → drive_rank 가 egress 기록 후 새 IP로 재개
-    _RANK_CB["cooldowns"] += 1
-    if _RANK_CB["cooldowns"] > config.RANK_COOLDOWN_MAX:
-        _RANK_HALT["stop"] = True
-        log(f"  [노출측정] ⛔ 이상징후 반복({reason}) — cooldown {config.RANK_COOLDOWN_MAX}회 초과, "
-            "당일 중지. 쉰 시간/IP에 다시 실행하면 남은 것부터 이어서")
-        return False
-    cd = config.RANK_COOLDOWN_SEC
-    log(f"  [노출측정] ⚠ 이상징후 감지({reason}) → 신규검색 즉시 중지, {cd // 60}분 cooldown 후 "
-        f"probe(재측정)로 상태확인 (cooldown {_RANK_CB['cooldowns']}/{config.RANK_COOLDOWN_MAX})")
-    time.sleep(cd)
-    try:
-        warmup(browser)          # 홈 1회(신뢰쿠키 갱신) = 소량 정상요청
-    except Exception:
-        pass
-    return True
-
-
-class RankHalt(Exception):
-    """순위 조회 중 차단 감지 → 즉시 중단 신호. `.partial` = 중단 전까지 측정된 {키워드:(pc,mo)}."""
-    def __init__(self, partial=None):
-        super().__init__("순위 차단 감지 — 중단")
-        self.partial = partial or {}
-
-
-def _measure_nav_serial(browser, keywords, matchers, log, matched_out=None):
-    """기본(안전) 순위 측정 — **사람처럼 검색창을 하나씩** 직렬 네비게이션 + 랜덤 간격(RANK_NAV_DELAY).
-
-    **서킷브레이커**: 이상징후(응답시간 급증 RANK_SLOW_ABS_SEC↑ · 403/429/Akamai 챌린지 RankBlocked)를
-    감지하면 신규검색을 즉시 중지하고 충분한 cooldown(RANK_COOLDOWN_SEC) 후 같은 검색을 1회 재측정(probe)한다.
-    정상이면 재개, 또 이상이면 cooldown 반복(상한 RANK_COOLDOWN_MAX)→초과 시 당일 중지(_RANK_HALT)+RankHalt.
-    우회 재요청은 하지 않는다. 각 응답은 관측층에 기록(rank_ok/rank_empty/rank_challenge).
-    matched_out 를 주면 매칭된 검색결과 항목(정확 노출명 포함)을 채워 호출부가 노출명 갱신에 쓴다.
-    """
-    pc: dict = {}
-    for i, kw in enumerate(keywords):
-        if _RANK_HALT["stop"] or _RANK_HALT["rotate"]:   # 당일중단 or egress 회전요청 → 이 IP 더 안 두드림
-            break
-        if i > 0:   # 검색 사이 사람 간격(버스트 제거 = 차단 회피)
-            d = random.uniform(config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC)
-            log(f"  [노출측정] 다음 검색까지 {d:.0f}s 대기(사람 속도)")
-            time.sleep(d)
-        while True:   # 이상징후 → cooldown 후 같은 kw 재측정(probe). 반복 상한 초과면 당일 중지.
-            try:
-                t0 = time.monotonic()
-                r = organic_ranks(browser, kw, matchers, log=log, matched_out=matched_out)
-                dt = time.monotonic() - t0
-                if dt >= config.RANK_SLOW_ABS_SEC:      # 응답시간 급증 = 이상징후(조기감지)
-                    if not _rank_cooldown(browser, log, f"응답 {dt:.0f}s 급증"):
-                        raise RankHalt({k: (pc[k], {}) for k in pc})
-                    continue                            # cooldown 후 같은 kw 재측정(probe)
-                pc[kw] = r
-                session_state.record_event(
-                    _RANK_TELEMETRY_ID, "rank_ok" if any(v is not None for v in r.values()) else "rank_empty")
-                break
-            except RankBlocked:                         # 403/429/Akamai 챌린지 = 이상징후
-                session_state.record_event(_RANK_TELEMETRY_ID, "rank_challenge")
-                if not _rank_cooldown(browser, log, "차단(403/Challenge)"):
-                    raise RankHalt({k: (pc[k], {}) for k in pc})
-                continue                                # cooldown 후 같은 kw 재측정(probe)
-    return {kw: (pc.get(kw, {}), {}) for kw in keywords}
-
-
-def _measure(browser, keywords, matchers, log, matched_out=None):
-    """키워드들의 순위 측정 → {키워드: (ranks_pc, ranks_mobile)}.
-
-    기본 = 직렬 네비게이션(RANK_NAV_SERIAL, 안전). False면 (구) 병렬 fetch 경로(빠르나 봇틱).
-    이번 실행에 이미 차단 감지(_RANK_HALT)면 즉시 빈 결과(더 두드리지 않음).
-    모바일은 RANK_INCLUDE_MOBILE=True 일 때만(기본 제외).
-    matched_out(선택)엔 매칭된 검색결과 항목이 담겨 노출명 갱신에 쓰인다(직렬 경로에서만).
-    """
-    if not keywords or _RANK_HALT["stop"] or _RANK_HALT["rotate"]:
-        return {}
-    if config.RANK_NAV_SERIAL:
-        return _measure_nav_serial(browser, keywords, matchers, log, matched_out)
-    try:   # (구) 병렬 fetch 경로 — 옵션
-        pc = organic_ranks_batch(browser, keywords, matchers, log=log)
-        mo = (organic_ranks_batch(browser, keywords, matchers, mobile=True, log=log)
-              if config.RANK_INCLUDE_MOBILE else {})
-    except RankBlocked:
-        log("  [노출측정] 병렬 fetch 실패(차단/빈응답) → 순차 방식으로 폴백")
-        pc, mo = {}, {}
-        for kw in keywords:
-            try:
-                pc[kw] = organic_ranks(browser, kw, matchers, log=log)
-                if config.RANK_INCLUDE_MOBILE:
-                    mo[kw] = organic_ranks(browser, kw, matchers, mobile=True, log=log)
-            except RankBlocked:
-                log("  [노출측정] 쿠팡 검색 차단(과다 실행 시 Akamai) — 남은 순위 공란, 잠시 후/내일 재시도")
-                break
-    return {kw: (pc.get(kw, {}), mo.get(kw, {})) for kw in keywords}
-
-
-def _measure_safe(browser, keywords, matchers, log, matched_out=None):
-    """순위 측정 예외 안전 래퍼(run_full 경로) — 어떤 예외가 나도 공란 처리하고 계속(순위는 부가지표).
-
-    차단(RankHalt)이면 부분결과를 돌려주고, 이후 _measure 는 _RANK_HALT 로 자동 no-op → 그 실행의
-    나머지 순위는 안 두드린다(자동 중단). track_ranks_stage(③)는 RankHalt 를 직접 잡아 중단·저장한다.
-    """
-    if not keywords:
-        return {}
-    try:
-        return _measure(browser, keywords, matchers, log, matched_out)
-    except RankHalt as h:
-        return h.partial
-    except Exception as exc:
-        log(f"  [순위] 측정 실패(공란 처리) — {exc.__class__.__name__}: {str(exc)[:80]}")
-        return {}
-
-
 def _rank_matcher(vids, pname: str = ""):
     """③ 순위 매칭 매처 — vid 있으면 vid로 **정확 매칭**, 없으면 **상품명(부분일치) 폴백**(DESIGN §2.1).
 
     ⚠ 판매 0인 날은 vi-detail-search 가 그 상품을 안 줘서 vid 가 없을 수 있다(수집 자체는 정상 — 지표 0).
-    그런 상품도 건너뛰지 않고 상품명으로 순위를 추적한다(run_full 자체 경로 `_product_matcher` 와 동일 방침).
+    그런 상품도 건너뛰지 않고 상품명으로 순위를 추적한다.
     ③ 순위조회는 product 객체 없이 워크북의 (vid, 상품명)만 안다."""
     vset = set(str(v) for v in vids if v)
     return {"제품": make_matcher(vendor_item_ids=vset,
@@ -319,20 +174,18 @@ def _rank_date(wb, biz: str, date_label: str | None) -> str | None:
     return wb.latest_date(biz)
 
 
-def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
+def track_ranks_stage(out_dir: str = "output", on_log=None,
                       should_stop=None, gsheet_output_url: str | None = None,
                       stock_url: str | None = None, date_label: str | None = None) -> Path | None:
-    """③ 노출순위 조회 전용 — 최신 워크북 로드, 상품(고유ID)+키워드로 순위 측정·기록. 로그인 불필요.
+    """③ 노출순위 조회 전용(**반자동**) — 최신 워크북 로드, 상품(고유ID)+키워드로 순위 측정·기록. 로그인 불필요.
 
     ①(상품ID)·②(키워드)가 이미 워크북에 있어야 한다. 상품마다 저장된 vendorItemId 로 검색결과에서 내
     상품을 찾아 오가닉 순위를 기록한다(가장 최근 일자 컬럼, date_label 을 주면 **그 날짜 칸**·이미 채워진 칸은 건너뜀).
-    예외 안전 — 차단·browser 죽음도 공란 처리.
-    매칭 시 계약상품명을 검색결과의 **정확한 노출명**으로 갱신한다.
-    semi=True 면 **반자동** — 앱이 창을 띄우고 키워드를 안내, 사람이 직접 검색하면 그 화면만 읽어 순위 산출
-    (자동 네비게이션 없음 → 차단 회피). should_stop() 이 참이면 중도 중단.
+    앱이 보이는 창에서 키워드를 타이핑+Enter 하고 그 화면만 읽는다(offscreen 자동 순위는 폐기·D-022 B5 삭제).
+    매칭 시 블록 이름을 검색결과의 **노출명**으로 현행화한다. should_stop() 이 참이면 중도 중단.
     """
     log = on_log or (lambda m: None)
-    config.apply_rank_nav_delay_override(log)   # 설정 탭 순위 간격(config.json)으로 덮어씀 — 없으면 기본 유지(semi·auto 공통)
+    config.apply_rank_nav_delay_override(log)   # 설정 탭 순위 간격(config.json)으로 덮어씀 — 없으면 기본 유지
     config.apply_proxy_override(log)            # 노출순위 프록시 설정(config.json proxy/*) 런타임 적용 — 미설정=기본 ON
     config.apply_rank_images_override(log)      # 노출순위 이미지 로드 여부(config.json rank/block_images) — 미설정=기본(이미지 유지)
     out = Path(out_dir)
@@ -340,100 +193,11 @@ def track_ranks_stage(out_dir: str = "output", on_log=None, semi: bool = False,
     if wb is None:
         log("== 순위 조회: 결과 워크북이 없습니다 — 먼저 ①②를 실행하세요 ==")
         return None
-    inject_company_stock(wb, stock_url, log)   # 회사보유재고 → 워크북(계정목록 5열) · apply_style 전(semi/자동 공통)
-    if semi:
-        result = _track_ranks_semi(wb, path, log, should_stop or (lambda: False), date_label)
-        push_gsheet(wb, gsheet_output_url, log)   # ③ 반자동 순위 채운 뒤 결과 구글시트에도 반영
-        _log_quality_summary(wb, log)   # 데이터 품질 자가점검(완료가 가리는 불완전 가시화·③ 최종 시점)
-        return result
-    log(f"== 노출순위 조회 시작 — {path.name} ==")
-    _reset_rank_state()          # 이번 실행 차단 플래그·서킷브레이커(cooldown) 초기화
-    if config.RANK_NAV_SERIAL:
-        log(f"  [모드] 사람속도 직렬 네비게이션(검색 간격 {config.RANK_NAV_DELAY_MIN_SEC}"
-            f"~{config.RANK_NAV_DELAY_MAX_SEC}s) — 버스트 없이 차단 회피. 차단 감지 시 즉시 중단(이어서 재개)")
-    noname_box = {"n": 0}
-    halted_box = {"halted": False}
-
-    def _run_auto(browser, egress) -> bool:
-        _reset_rank_state()   # 새 egress → 차단 플래그/쿨다운 리셋(회전 시 이전 IP 상태가 새 IP 측정 막지 않게)
-        warmup(browser)
-        halted = False
-        for biz in wb.account_sheets():
-            if halted:
-                break
-            date = _rank_date(wb, biz, date_label)
-            if not date:
-                continue
-            for pname in wb.products_of(biz):
-                halted, noname = _measure_product_auto(browser, wb, path, biz, pname, date, log)
-                if noname:
-                    noname_box["n"] += 1
-                if halted:
-                    break
-        halted_box["halted"] = halted
-        return halted   # 차단으로 중단 → drive_rank 가 새 egress 로 남은 키워드 재개
-
-    drive_rank(offscreen=True, run_once=_run_auto, log=log)
-    noname_products = noname_box["n"]
-    halted = halted_box["halted"]
-    wb.apply_style()   # 저장본 서식 항상 표준으로 고정
-    wb.save(path)
-    if noname_products:
-        log(f"  [안내] vid·상품명이 모두 없는 상품 {noname_products}개는 매칭 근거가 없어 순위 공란입니다(이례).")
-    if halted:
-        log("== ⛔ 노출순위 중단(쿠팡 검색 차단 감지) — 진행분 저장됨. "
-            "쉰 IP/시간에 다시 실행하면 남은 것부터 이어서 조회합니다 ==")
-    else:
-        log("== 노출순위 조회 완료 ==")
-    push_gsheet(wb, gsheet_output_url, log)   # ③ 자동 순위 채운 뒤 결과 구글시트에도 반영(차단 중단이어도 진행분 반영)
+    inject_company_stock(wb, stock_url, log)   # 회사보유재고 → 워크북(계정목록 5열) · apply_style 전
+    result = _track_ranks_semi(wb, path, log, should_stop or (lambda: False), date_label)
+    push_gsheet(wb, gsheet_output_url, log)   # ③ 반자동 순위 채운 뒤 결과 구글시트에도 반영
     _log_quality_summary(wb, log)   # 데이터 품질 자가점검(완료가 가리는 불완전 가시화·③ 최종 시점)
-    return path
-
-
-def _measure_product_auto(browser, wb, path, biz: str, pname: str, date, log) -> tuple[bool, bool]:
-    """③ 자동(offscreen) 순위 — 한 상품 측정·기록·저장. 반환 (halted, noname).
-
-    keywords/vid 없거나 todo 비면 (False, ·)로 건너뜀. RankHalt=차단 감지(부분결과 기록·halted=True),
-    그 외 예외=공란(다음 재시도). 상품마다 저장 → 중단돼도 진행분 보존. (⚠ 현 정책은 반자동만 사용 —
-    이 자동 경로는 사문화에 가깝지만 track_ranks_stage(semi=False) 로 여전히 호출 가능·핀 O/O2 로 커버.)"""
-    if wb.rank_suppressed(biz, pname):   # 판매중지·임시저장·승인반려·대장취소선 → 순위 제외(소유자 2026-09-22)
-        return False, False
-    vids = wb.sibling_vids(biz, pname)   # 리스팅 전 옵션 vid 합집합(아이템위너 놓침 방지)
-    keywords = wb.product_keywords(biz, pname)
-    if not keywords:                     # 2차 옵션 블록(키워드 없음)은 순위 대상 아님
-        return False, False
-    if not vids and not (pname or "").strip():   # 매칭 근거(vid·상품명) 전무 → 측정 불가(이례)
-        return False, True
-    # 이미 채워진 키워드는 건너뜀 = **중단 지점부터 이어서**(당일 재작업 시 남은 것만)
-    todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
-    if not todo:
-        return False, False
-    if not vids:   # 판매 0 등으로 vid 없음 → 상품명(부분일치)으로 매칭(건너뛰지 않음)
-        log(f"  [순위] {biz} · {pname} — vid 없음(판매 0 등) → 상품명으로 매칭")
-    cap: dict = {}
-    halted = False
-    try:
-        measured = _measure(browser, todo, _rank_matcher(vids, pname), log, matched_out=cap)
-    except RankHalt as h:              # 차단 감지 → 부분결과만 기록하고 전면 중단
-        measured = h.partial
-        halted = True
-    except Exception as exc:           # 그 외 예외 → 공란(다음에 재시도)
-        log(f"  [순위] 측정 실패(공란) — {exc.__class__.__name__}: {str(exc)[:80]}")
-        measured = {}
-    for kw in todo:
-        if kw not in measured:            # 측정 안 됨(중단·실패) → 공란 유지(다음에 이어서)
-            continue
-        r = _best(measured.get(kw))       # 정상 측정: 미노출이면 '-', 노출이면 'N위'
-        wb.set_keyword_rank(biz, pname, kw, date, r)
-        log(f"  [{biz}] {pname} '{kw}': {rank_label(r)}")
-    mi = cap.get("제품")                   # 검색결과 노출명 = 지금 쿠팡에 보이는 이름 → 블록 이름 현행화(D-013)
-    if mi is not None and getattr(mi, "name", ""):
-        log(f"  [노출명] 검색결과 노출명 = {mi.name}")
-        wb.set_product_pid(biz, pname, getattr(mi, "product_id", ""))   # 항목3: 상품명 하이퍼링크용 productId
-        rename_to_exposed(wb, biz, pname, mi.name, log)   # 이 상품 키워드 기록을 다 끝낸 뒤(키 어긋남 방지)
-    wb.save(path)   # **상품마다 저장** → 중단돼도 여기까지 보존(재실행 시 이어서)
-    return halted, False
-
+    return result
 
 def _search_q(url: str) -> str | None:
     """검색결과 URL 이면 q(디코드·공백제거) 반환, 아니면 None."""
@@ -615,68 +379,6 @@ def _all_pages(browser):
     return pages or [browser.page]
 
 
-def _wait_user_search(browser, kw: str, log, should_stop, timeout: float = 300.0):
-    """사용자가 뜬 창에서 kw 를 직접 검색할 때까지 대기(폴링). 감지되면 **그 페이지**를, 타임아웃/중지면 None.
-
-    **여러 탭 전부**를 스캔한다(프로필 복원 탭·사용자가 연 새 탭이 browser.page 와 달라도 인식).
-    URL 이 /np/search 이고 q(디코드·공백무시)가 kw 와 같고 상품이 떠 있는 첫 탭을 그 검색으로 인정한다
-    (이전/다른 키워드 잔여결과를 잘못 기록하지 않도록 q 일치 요구). 자동 네비게이션은 하지 않는다.
-
-    안내를 **상황별로 정확히** 준다(과거엔 q 가 실제로 맞아도 무조건 "안내 키워드로 검색하세요"라고 떠서
-    올바로 검색한 사용자가 '인식 못 함'으로 오해했다 — 실측 재현):
-    - q 일치인데 상품 목록이 비면: **차단(권한없음) 페이지**인지, 단순 **로딩 대기**인지 구분해 알린다.
-    - q 불일치 검색결과만 있으면: 안내 키워드로 검색하라고 알린다.
-    - 검색결과가 아예 없으면: 검색창에 입력하라고 알린다.
-    """
-    from .rank import extract_items
-    want = kw.replace(" ", "")
-    deadline = time.time() + timeout
-    last = 0.0
-    while time.time() < deadline:
-        if should_stop():
-            return None
-        pages = _all_pages(browser)   # 모든 컨텍스트×탭 순회(사용자가 연 새 탭·창도 포함)
-        other_qs: list[str] = []      # 안내와 다른 키워드로 열린 검색결과
-        matched_empty = False         # 안내 키워드로 검색은 됐으나 상품이 안 잡힘(차단/로딩)
-        matched_blocked = False       # 그 중 차단/권한없음 페이지로 보임
-        err_reason = ""               # extract 예외 원인(있으면 로그에 노출 — 조용히 삼키지 않음)
-        for pg in pages:
-            q = _search_q(_live_url(pg))   # 캐시 pg.url 대신 렌더러 실제 location.href(이벤트 놓침 방지)
-            if q is None:
-                continue
-            if q != want:
-                other_qs.append(q)
-                continue
-            try:
-                items = extract_items(pg)
-            except Exception as exc:
-                err_reason = f"{exc.__class__.__name__}: {str(exc)[:60]}"
-                items = []
-            if items:
-                return pg
-            matched_empty = True
-            if _looks_blocked(pg):
-                matched_blocked = True
-        if time.time() - last > 15:
-            if matched_blocked:
-                log(f"    …「{kw}」 검색은 인식됐으나 **쿠팡 차단(사용권한 없음) 페이지**가 떴습니다 — "
-                    "그 창을 새로고침(F5)하거나 잠시 후 다시 검색하세요(자동 우회 없음)")
-            elif matched_empty:
-                extra = f" [{err_reason}]" if err_reason else ""
-                log(f"    …「{kw}」 검색은 인식됐으나 상품 목록이 아직 안 보입니다 — "
-                    f"페이지가 다 뜰 때까지 잠시 기다리거나 새로고침 해주세요{extra}")
-            elif other_qs:
-                _prefill_search(browser, kw)   # 창엔 옛 검색이 떠 있음 → 검색창을 kw로 재채움(사람은 Enter만)
-                log(f"    ⌨ 창엔 '{other_qs[0]}' 결과가 떠 있습니다 → 검색창에 「{kw}」를 다시 채웠으니"
-                    f" **그 창에서 Enter** 하세요(안 채워졌으면 직접 입력: {kw})")
-            else:
-                log(f"    … **뜬 Chrome 창**(빨간 띠)에서 「{kw}」로 검색(Enter)하세요"
-                    f" (자동입력 안 됐으면 직접 입력: {kw} · 다른 브라우저 아님 · 중지는 '반자동 중지')")
-            last = time.time()
-        time.sleep(1.0)
-    return None
-
-
 # 반자동 창 식별용 — 우리가 연 창에만 하단 빨간 띠(모든 페이지·검색결과에 계속 표시). 다른 Chrome 창엔 없어
 # 여러 창 중 이 창을 한눈에 찾게 한다. Akamai 탐지와 무관(우리 창 UI 표식일 뿐, 지문위조·행동위장 아님).
 _SEMI_BANNER_JS = r"""(() => {
@@ -700,7 +402,6 @@ _SEMI_BANNER_JS = r"""(() => {
 @dataclass
 class _SemiState:
     """반자동 순위 상태기계의 가변 카운터(헬퍼가 공유·변경). 제어흐름은 분해 전과 동일."""
-    autosubmit: bool
     halted: bool = False        # 자동제출 서킷브레이커(연속 차단/미감지) → 당일 전면 중단
     miss_streak: int = 0        # 자동제출 연속 실패 수(성공 시 0으로 리셋)
     cooldowns: int = 0          # 차단 감지 쿨다운 진입 횟수(진전 있으면 0으로 리셋) — 무한 재시도 방지
@@ -713,18 +414,18 @@ class _SemiState:
 
 
 def _track_ranks_semi(wb, path, log, should_stop, date_label: str | None = None) -> Path:
-    """반자동 순위조회 — 앱이 창을 띄우고 키워드를 안내, 사람이 직접 검색한 화면만 읽어 순위 산출·기록.
+    """반자동 순위조회 — 보이는 창에서 앱이 키워드를 사람처럼 타이핑+Enter, 검색결과 화면만 읽어 순위 산출·기록.
 
-    우리가 검색(네비게이션)을 하지 않으므로 Akamai 봇차단이 안 생긴다. 상품마다 저장 → 중단해도 이어서.
+    offscreen 네비게이션·직접 fetch 없음(차단 회피·DESIGN §5.2). 상품마다 저장 → 중단해도 이어서.
     """
-    st = _SemiState(autosubmit=config.RANK_SEMI_AUTOSUBMIT)
-    _semi_start_log(st.autosubmit, log)
+    st = _SemiState()
+    _semi_start_log(log)
 
     def _run_semi(browser, egress) -> bool:
         st.halted = False      # 새 egress → halt 해제(차단카운터·측정수 등 누적은 유지)
         st.cooldowns = 0       # 새 IP → 쿨다운 연속 카운터 리셋(이 IP 기준 다시)
         st.miss_streak = 0
-        _semi_browser_prep(browser, st.autosubmit, log)
+        _semi_browser_prep(browser)
         for biz in wb.account_sheets():
             if should_stop() or st.halted:
                 break
@@ -755,26 +456,22 @@ def _semi_summary_log(st: _SemiState, log) -> None:
 
     소유자가 검색간격을 45~75 → 35~55 로 낮춘 뒤 **차단이 늘면 되돌려야** 하는데, 그 판단을 로그 grep 없이
     바로 할 수 있게 한다. 차단/쿨다운이 0이면 현재 간격 유지 판단."""
-    if st.autosubmit:   # 자동제출(현재 기본)에서만 차단/쿨다운 카운터가 의미 있음
-        log(f"== [순위요약] 측정 {st.searched}건 · 쿨다운 {st.cooldown_total}회 · 차단감지 {st.blocked_total}회 "
-            f"· 검색간격 {config.RANK_NAV_DELAY_MIN_SEC}~{config.RANK_NAV_DELAY_MAX_SEC}s ==")
-        if st.cooldown_total or st.blocked_total:
-            log("== [순위요약] ⚠ 차단/쿨다운 발생 — config.py 의 RANK_NAV_DELAY 를 45~75 로 되돌리는 것을 권고합니다"
-                "(간격이 짧아 IP를 태우는 신호). 다음 실행에서도 계속 뜨면 상향 필요 ==")
-        else:
-            log("== [순위요약] 차단/쿨다운 0 — 현재 검색간격 유지 판단(무차단) ==")
-
-
-def _semi_start_log(autosubmit: bool, log) -> None:
-    if autosubmit:
-        log("== 반자동(자동검색) 노출순위 시작 — 앱이 키워드 자동입력+Enter까지 수행(손 안 대도 됨). "
-            f"키워드 간 {config.RANK_NAV_DELAY_MIN_SEC}~{config.RANK_NAV_DELAY_MAX_SEC}s 간격, "
-            f"연속 {config.RANK_SEMI_AUTO_MAX_MISS}회 차단 시 계정 보호로 당일 중단 ==")
+    log(f"== [순위요약] 측정 {st.searched}건 · 쿨다운 {st.cooldown_total}회 · 차단감지 {st.blocked_total}회 "
+        f"· 검색간격 {config.RANK_NAV_DELAY_MIN_SEC}~{config.RANK_NAV_DELAY_MAX_SEC}s ==")
+    if st.cooldown_total or st.blocked_total:
+        log("== [순위요약] ⚠ 차단/쿨다운 발생 — config.py 의 RANK_NAV_DELAY 를 45~75 로 되돌리는 것을 권고합니다"
+            "(간격이 짧아 IP를 태우는 신호). 다음 실행에서도 계속 뜨면 상향 필요 ==")
     else:
-        log("== 반자동 노출순위 시작 — 뜬 Chrome 창의 쿠팡 검색창에 '안내되는 키워드'를 직접 입력·검색하세요 ==")
+        log("== [순위요약] 차단/쿨다운 0 — 현재 검색간격 유지 판단(무차단) ==")
 
 
-def _semi_browser_prep(browser, autosubmit: bool, log) -> None:
+def _semi_start_log(log) -> None:
+    log("== 반자동(자동검색) 노출순위 시작 — 앱이 키워드 자동입력+Enter까지 수행(손 안 대도 됨). "
+        f"키워드 간 {config.RANK_NAV_DELAY_MIN_SEC}~{config.RANK_NAV_DELAY_MAX_SEC}s 간격, "
+        f"연속 {config.RANK_SEMI_AUTO_MAX_MISS}회 차단 시 계정 보호로 당일 중단 ==")
+
+
+def _semi_browser_prep(browser) -> None:
     """반자동 창 준비 — 빨간 띠(창 식별) 주입 + 쿠팡 홈(검색창) 이동 + 창 표시."""
     try:
         browser.page.add_init_script(_SEMI_BANNER_JS)   # 이후 모든 네비/검색결과에 빨간 띠(창 식별)
@@ -790,8 +487,6 @@ def _semi_browser_prep(browser, autosubmit: bool, log) -> None:
     except Exception:
         pass
     browser.show()   # goto 후 다시 중앙·맨앞으로
-    if not autosubmit:
-        log("  [반자동] ⬆ 창 여러 개 중 **하단에 빨간 띠('반자동 순위조회 창')**가 있는 창에서 검색하세요")
 
 
 def _semi_prep_product(st: _SemiState, wb, biz, pname, date, log):
@@ -828,7 +523,7 @@ def _semi_track_product(st: _SemiState, browser, wb, biz, pname, date, path, sho
     for idx, kw in enumerate(todo, 1):
         if should_stop() or st.halted:
             break
-        if st.measured_any and st.autosubmit:
+        if st.measured_any:
             # 검색 **사이** 사람속도 간격(버스트 없이 차단 회피). 검색 앞에 두어 마지막 검색 뒤엔
             # 대기 안 함(자투리 제거). 중단형이라 대기 중 '반자동 중지'도 즉시 반응.
             d = random.uniform(config.RANK_NAV_DELAY_MIN_SEC, config.RANK_NAV_DELAY_MAX_SEC)
@@ -853,36 +548,25 @@ def _semi_track_product(st: _SemiState, browser, wb, biz, pname, date, path, sho
 
 
 def _semi_search_one(st: _SemiState, browser, kw, should_stop, log):
-    """키워드 1건 검색 — 자동제출(타이핑+Enter+결과대기) 또는 반자동(자동입력+사람 Enter 대기).
+    """키워드 1건 검색 — 자동제출(사람처럼 타이핑 → 짧은 멈춤 → Enter → 결과 대기).
 
     반환: (pg, blocked, aborted). aborted=True 면 pause 중 중지/halt(호출부가 키워드 루프 종료)."""
     filled = _prefill_search(browser, kw)   # 사람처럼 한 글자씩 타이핑(붙여넣기 아님)
-    if st.autosubmit:
-        # 타이핑이 이미 사람 리듬(글자별 미세 랜덤)을 재현 → 다 치고 **짧게 멈춘 뒤** 검색(사람 패턴).
-        pause = random.uniform(0.5, 1.4)
-        log(f"     ⌨ 「{kw}」 한 글자씩 자동 타이핑{'' if filled else '(검색창 못찾음→URL 폴백)'}"
-            f" → {pause:.1f}s 뒤 자동검색(Enter)")
-        _interruptible_sleep(pause, should_stop)   # 다 치고 잠깐 멈춤(중지 반응 유지)
-        if should_stop() or st.halted:
-            return None, False, True
-        _submit_search(browser, kw)          # 사람 대신 앱이 Enter(제출) — 네비 확인 후에만 폼 폴백(이중요청 방지)
-        st.measured_any = True               # 실제 검색 발생 → 다음 키워드는 '검색 사이' 간격 적용
-        pg, blocked = _wait_results_loaded(browser, kw, should_stop, config.RANK_SEMI_AUTO_WAIT_SEC)
-        return pg, blocked, False
-    if filled:
-        log(f"     ✅ 검색창에 「{kw}」 자동입력됨 → **빨간 띠 창에서 Enter만** 누르세요"
-            f" (안 채워졌으면 직접 입력: {kw})")
-    else:
-        log(f"     그 창 검색창을 비우고, 아래 '검색어'만 더블클릭해 복사→붙여넣고 Enter:")
-        log(f"     검색어 ▶  {kw}")
-    return _wait_user_search(browser, kw, log, should_stop), False, False
+    # 타이핑이 이미 사람 리듬(글자별 미세 랜덤)을 재현 → 다 치고 **짧게 멈춘 뒤** 검색(사람 패턴).
+    pause = random.uniform(0.5, 1.4)
+    log(f"     ⌨ 「{kw}」 한 글자씩 자동 타이핑{'' if filled else '(검색창 못찾음→URL 폴백)'}"
+        f" → {pause:.1f}s 뒤 자동검색(Enter)")
+    _interruptible_sleep(pause, should_stop)   # 다 치고 잠깐 멈춤(중지 반응 유지)
+    if should_stop() or st.halted:
+        return None, False, True
+    _submit_search(browser, kw)          # 사람 대신 앱이 Enter(제출) — 네비 확인 후에만 폼 폴백(이중요청 방지)
+    st.measured_any = True               # 실제 검색 발생 → 다음 키워드는 '검색 사이' 간격 적용
+    pg, blocked = _wait_results_loaded(browser, kw, should_stop, config.RANK_SEMI_AUTO_WAIT_SEC)
+    return pg, blocked, False
 
 
 def _semi_on_miss(st: _SemiState, kw, blocked: bool, should_stop, log) -> None:
-    """검색 결과 미감지(pg=None) 처리 — 자동제출은 서킷브레이커(쿨다운 재개/당일 중단), 반자동은 공란."""
-    if not st.autosubmit:
-        log(f"  [반자동] 「{kw}」 미감지/시간초과 — 공란으로 두고 다음에 이어서 조회합니다")
-        return
+    """검색 결과 미감지(pg=None) 처리 — 서킷브레이커(egress 회전 / 쿨다운 재개 / 당일 중단)."""
     st.miss_streak += 1
     if blocked:   # 확정 차단 페이지(사용권한 없음)=IP 막힘 → 3회 안 기다리고 즉시 판정
         st.blocked_total += 1     # 종료 요약용 누적

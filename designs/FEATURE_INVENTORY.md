@@ -12,7 +12,7 @@
 | 배포 exe 3개 | `쿠팡애널리틱스.exe`(=`ui/app_qt.py`) · `정산다운로드.exe`(=`tools/settlement_download.py`) · `쿠팡진단.exe`(=`tools/verify_login_discover_live.py`) — `coupang_analytics.spec` |
 | 예약작업 2개 | 18:00 `--auto`(무인) · 로그온 `--resume`(재부팅 복구) — `deploy/install.ps1` |
 | **배포 안 됨** | `ui/app.py`(Tk 폴백, spec 이 tkinter 제외) · `ui/app_integrated.py`(통합앱 셸, 어디서도 참조 없음) |
-| 핵심 사실 ✔ | 운영의 모든 `run_full` 호출(①버튼·전체실행·`--auto`·`--resume`)은 **`keywords_off=True, skip_ranks=True, sales_semi=True`** 고정, ③은 **`semi=True`** 고정 → `run_full` 안의 키워드·순위 분기와 자동(offscreen) 순위 분기는 **운영에서 실행되지 않음** |
+| 핵심 사실 ✔ | 운영의 모든 `run_full` 호출(①버튼·전체실행·`--auto`·`--resume`)은 **`keywords_off=True, skip_ranks=True, sales_semi=True`** 고정, ③은 **`semi=True`** 고정이었음 → `run_full` 안의 키워드·순위 분기와 자동(offscreen) 순위 분기는 운영에서 실행되지 않음 → **B5 에서 삭제**(`run_full`·`track_ranks_stage` 에서 그 인자들도 제거) |
 
 ## 1. 운영 기능 (app_qt) — 목표 결과 · 진입점 · 게이트
 
@@ -21,9 +21,9 @@
 ### 1-1. 야간 무인·실행
 | 기능 | 목표 결과 | 진입점 | 게이트 |
 |---|---|---|---|
-| ① 판매수집 | 계정별 판매·노출·방문·재고·판매상태·가격·pid → 통계 마스터·스냅샷·결과시트 | ①버튼·전체실행·`--auto`·`--resume` → `run_full` | ✓ simulate 10·15·16(운영 조합) · ⚠시나리오 1~9·11~14 는 **운영과 다른 경로(keywords_off=False)** 를 검증 |
+| ① 판매수집 | 계정별 판매·노출·방문·재고·판매상태·가격·pid → 통계 마스터·스냅샷·결과시트 | ①버튼·전체실행·`--auto`·`--resume` → `run_full` | ✓ simulate 1~16 전부 운영 조합(①→②→③, B5-1) |
 | ② 키워드 선정 | 상품당 4개·기존 키워드 동결 | ②버튼·전체실행·무인 → `select_keywords_stage` | ✓ simulate 10·verify_offline [6][23](모킹) |
-| ③ 반자동 순위 | 자동 타이핑+Enter·쿨다운·노출명/pid 갱신 | ③버튼·전체실행·무인 → `track_ranks_stage(semi=True)` | ✓ pin_login_ranks J~Q2 |
+| ③ 반자동 순위 | 자동 타이핑+Enter·쿨다운·노출명/pid 갱신 | ③버튼·전체실행·무인 → `track_ranks_stage` | ✓ pin_login_ranks J~Q2 · test_proxy_patch(차단→회전) |
 | 실행 모드(이어서/오늘 다시/새 통계/날짜 지정) | 칸·재개 규칙 | 전체실행 탭 → `plan_run_mode`·`column_dates` | ✓ pin_run_plan P1~P8 |
 | `--auto` 조립(①→재개→②→③→재고 역기록→종료) | 끝까지 완주 후 종료 | `start_auto` | △ 단계별만 · **조립(재개·쿨다운·단계 기록) ✗** |
 | `--resume` 재부팅 복구 | 남은 단계만 이어서 | `start_resume` | **✗** |
@@ -60,21 +60,22 @@
 
 | # | 오류 | 근거 | 영향 |
 |---|---|---|---|
-| E1 ✔ | **직원이 결과시트에 입력한 키워드가 반영 안 됨** | `pipeline.py:739-740` 역머지는 `keywords_off=False` 일 때만 — 운영은 늘 True·②에도 호출 없음. 통계 시트는 매번 전체 교체 | 직원 입력 키워드가 덮어써짐(소실) |
+| E1 ✔ | **직원이 결과시트에 입력한 키워드가 반영 안 됨** | 역머지(`pull_gsheet_keywords`) 호출은 `keywords_off=False` 일 때만이라 운영에선 안 돌았고, B5 에서 그 분기와 함께 삭제 → **현재 호출처 없음**. 수정 = ② `select_keywords_stage` 시작에 연결. 통계 시트는 매번 전체 교체 | 직원 입력 키워드가 덮어써짐(소실) |
 | E2 ✔ | **마스터 복원이 막힌 경로 사용** | `pipeline_gsheet.restore_master_from_gsheet` 가 공개 export(`gsheet.download_xlsx`) — 같은 파일 백업 주석: 결과시트는 401(2026-10-02 실측) | 마스터 없는 PC(재설치)에서 과거 시계열 복원 실패 → 새 통계로 시작 |
 | E3 ✔ | **18:00 예약작업 13시간 제한** | `deploy/install.ps1:201` `-ExecutionTimeLimit 13h`(재부팅 복구 작업도 같은 설정) | 07:00 넘게 돌면 스케줄러가 앱 강제 종료 = '무인 강제 종료 금지' 위반 · D-020 상 **정산도 함께 종료** |
 | E4 ✔ | **정산 상태확인 bat 오안내** | `deploy/정산_상태확인.bat:19-23` 이 없앤 예약작업을 조회 → "정산 자동 다운로드가 안 돕니다" | 정상인데 고장으로 안내 |
 | E5 | install.ps1·설치 안내 문구 "06:00 자동 종료" | `install.ps1:196,199,203,228` — 06:00 강제 종료는 2026-09-23 폐지 | 잘못된 안내 |
-| E6 | `tools/simulate_stages.py` 고장 | `:106` `P.organic_ranks_batch` — pipeline_ranks 로 이동됨 → AttributeError(게이트 밖) | 도구 실행 불가 |
+| E6 ✅ | `tools/simulate_stages.py` 고장 | B2 에서 도구 삭제로 해소 | — |
 | E7 | 게이트 설명 문구 불일치 | `run_checks.py` "9종/8종"·`install_hooks.py` "3종" vs 실제 16/15종 | 안내 오류 |
 
 ## 3. 죽은 코드·중복 (삭제·통합 후보)
 
 ### 3-1. 운영에서 실행되지 않는 분기 (✔ 핵심 사실 기반)
-- `run_full` 인라인 키워드·순위: `pipeline.py:446-469`(인라인 drive_rank)·`:739-740`(→E1 은 ②로 재연결)·`:774-775`, `pipeline_process.py:321-355`(`_resolve_keywords`·`_frozen_keywords`·`_log_diagnose`)·`_select_keywords_for_skipped`·wb `title_cache`.
-- 자동(offscreen) 순위: `track_ranks_stage(semi=False)`(`pipeline_ranks.py:349-390`)·`_measure_product_auto`·`_measure*`.
-- 설정으로 꺼진 레거시: `organic_ranks_batch` 병렬 경로(`RANK_NAV_SERIAL=True`)·`_wait_user_search`(`RANK_SEMI_AUTOSUBMIT=True`)·`_semi_retry_login`(unattended 항상 False).
-- ⚠ 이 분기들을 **게이트 시나리오(simulate 1~9·11~14·핀 F·N·O·O2)가 검증 중** → 삭제와 함께 시나리오를 **운영 조합으로 이전**해야 함(그래야 게이트가 운영 경로를 지킴 — 회귀 반복의 구조적 원인).
+- ✅ 삭제(B5): `run_full` 인라인 키워드·순위(`_finish` 인라인 drive_rank·역머지 호출[→E1 은 ②로 재연결]·`_select_keywords_for_skipped`) + 그 인자 `naver`·`grow_keywords`·`skip_ranks`·`keywords_off` · `pipeline_process`(`_resolve_keywords`·`_frozen_keywords`·`_log_diagnose`·`_product_matcher`·대표 옵션 키워드/순위 분기) · wb `title_cache`(숨김 시트 4·5열은 '(미사용)' 표기로 위치만 유지).
+- ✅ 삭제(B5): 자동(offscreen) 순위 `track_ranks_stage(semi=False)`+`semi` 인자·`_measure_product_auto`·`_measure*`·`_rank_cooldown`·`RankHalt`·`_RANK_HALT`·`_best` · config `RANK_NAV_SERIAL`·`RANK_SLOW_ABS_SEC`·`RANK_COOLDOWN_SEC/MAX`.
+- ✅ 삭제(B5): 파이프라인의 `organic_ranks_batch` 병렬 경로 · 사람 Enter 대기 `_wait_user_search`·`RANK_SEMI_AUTOSUBMIT`(반자동은 자동제출만). `rank.organic_ranks/organic_ranks_batch` 자체는 L1 공개 API(L1_CONTRACT)라 유지 — 이제 호출처 없음(정리 후보).
+- ⛔ 정정: `_semi_retry_login` 은 **운영에서 돈다** — 정산 다운로드 무인(`settlement_download --hidden` = 18:00 watch)이 `_ensure_login(semi=False)` → `unattended=True` 경로를 탄다. 삭제 안 함.
+- ✅ 게이트 이전(B5-1): simulate 1~16 전부 운영 조합(①→②→③) · verify_offline [23] 동결 규칙=② `_select_product_keywords` · 정밀 렌더=운영 조합 뒤 마스터 · 핀 N·O·O2(삭제 경로 전용)는 코드와 함께 삭제 · 인라인 `_rank_cooldown` 회전 핀 → ③ `_semi_on_miss` 회전 핀으로 이전.
 
 ### 3-2. 쓰기만 하고 읽지 않음
 - ✅ 삭제(B3): `session_store`(쿠키 저장)·`wing_session` · `collector.save_discovered`(`data/discovered/*.json`). 유지: `keyword_store`(키워드 탭 저장).
@@ -122,6 +123,6 @@
   - ✅ B2 일회성 도구 10개 (−1,155줄, 0a5d5d3)
   - ✅ B3 쓰기만 하는 저장소: `session_store`·`wing_session`·`collector.save_discovered` (키워드 탭 유지라 `keyword_store` 는 유지) — 계정당 배송관리 페이지 추가 이동 1회도 함께 사라짐
   - ✅ B4 테스트 전용 함수: `product_match.scope_to_ledger`·`parse_password_rows`·`proxy_manager` 미사용 메서드 12개(+`active_count`) 삭제 · `payout.estimate`·`registry.managed_between` 은 ②층 자산이라 유지(D-023)
-  - ⏳ B5 운영에서 안 도는 분기(§3-1) — **먼저 게이트 시나리오를 운영 조합으로 이전**(게이트가 운영 경로를 지키게) 후 삭제
+  - ✅ B5 운영에서 안 도는 분기(§3-1): 게이트 시나리오 운영 조합 이전(B5-1) → 분기·인자 물리 삭제(B5-2, 순 −727줄) · `_semi_retry_login` 은 정산 무인 경로라 유지
   - ⏳ B6 중복 통합(§3-4): 야간 조립 3벌→백엔드 1개(+`--auto`/`--resume` 게이트) · 절전 2벌 · 정산 중지 2벌 · 18:00 옛 예약작업 제거 · `정산_지금실행.bat`
   - ⏳ 오류 E1~E7 일괄 수정(§2)

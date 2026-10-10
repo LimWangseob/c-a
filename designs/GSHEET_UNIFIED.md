@@ -184,8 +184,8 @@ F 그로스재고(자동갱신 MM.DD) | G 체험단시작 | H 체험단종료 | 
 - `gsheet_stats.read_staff_keywords(client, wb)` — 통계 시트를 push 레이아웃대로 되읽어 {(사업자,상품): [키워드]}.
   상품 헤더(G='날짜') / 키워드 소헤더(C='키워드') / 그 아래 C값 = 키워드(**위치 기반** — 직원 행에 G='노출 순위'가
   없어도 잡음). `merge_staff_keywords` = 워크북에 **없던 키워드만** 추가(`add_product_keywords`, 기존 보존·제거 없음).
-- `pipeline._pull_gsheet_keywords` = **실행 시작 시**(키워드 단계 전) 역머지 → 그 상품은 AI 선정 생략. 시작에
-  들어가므로 종료 시 미러링(전체 교체)돼도 직원 입력 보존. `keywords_off`(①판매수집 전용)엔 미적용.
+- `pipeline._pull_gsheet_keywords` = 역머지 → 그 상품은 AI 선정 생략. ⚠ 현재 **호출처 없음**(옛 호출은 운영에서 안 도는
+  run_full 인라인 키워드 분기 안에 있어 D-022 B5 에서 함께 삭제) — ② `select_keywords_stage` 시작에 연결하는 것이 오류 E1 수정(FEATURE_INVENTORY §2).
 - 제약: **추가만·제거 없음**(동결 원칙 일관). 첫 실행엔 통계 시트가 없어 no-op(시트 생성 후부터 입력 가능).
 - 검증: `verify_gsheet_offline.py` [7](위치기반 파싱·1개 추가·기존 보존·재실행 idempotent).
 
