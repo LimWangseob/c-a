@@ -255,27 +255,14 @@ class SettlementStatusMixin:
         sb.setValue(sb.maximum())
 
     # ── 정산 감시 시작/중지(별도 프로세스 제어) ──────────────────────────
-    @staticmethod
-    def _settle_watch_cmd() -> tuple[list[str], str]:
-        """정산 자동 수집(watch) 명령 + 작업 폴더 — 앱 무인 실행과 같은 것(app_process·D-010)."""
-        from coupang_analytics.app_process import settlement_watch_cmd
-        return settlement_watch_cmd()
-
     def _settle_start(self) -> None:
-        cmd, cwd = self._settle_watch_cmd()
-        if getattr(sys, "frozen", False) and not Path(cmd[0]).exists():
-            self._settle_write_status("오류", f"정산다운로드.exe 를 찾을 수 없습니다: {cmd[0]}")
-            self._refresh_settlement_status()
-            return
-        try:
-            # CREATE_NO_WINDOW(0x08000000): 콘솔창 깜빡임 없이 백그라운드 실행(함정 #8). 이미 돌면 watch 잠금으로 1개만.
-            self._settle_proc = subprocess.Popen(
-                cmd, cwd=cwd, creationflags=0x08000000,
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        """무인 실행과 같은 한 경로(app_process.start_settlement_watch)로 띄움 — 이미 돌면 watch 잠금으로 1개만."""
+        from coupang_analytics.app_process import start_settlement_watch
+        self._settle_proc = start_settlement_watch(self.log)
+        if self._settle_proc is None:
+            self._settle_write_status("오류", "정산 시작 실패 — 로그를 확인하세요.")
+        else:
             self._settle_write_status("시작함", "정산 감시를 시작했습니다 — 곧 상태가 갱신됩니다(이미 돌고 있으면 그대로).")
-        except OSError as exc:
-            self.log(f"[정산] 시작 실패: {exc}")
-            self._settle_write_status("오류", f"정산 시작 실패: {exc}")
         self._refresh_settlement_status()
 
     def _settle_stop(self) -> None:

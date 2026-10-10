@@ -775,8 +775,8 @@ def p25_app_launch():
     print("[P25] 앱이 정산 띄우기(D-010) — 명령·창 없음·작업 묶음 분리(불가 시 분리 없이+경고)·실패 로그")
     import subprocess as _sp
     from coupang_analytics import app_process as AP
-    cmd, cwd = AP.settlement_watch_cmd()
-    assert cmd[-1] == "watch" and cmd[-2].endswith("settlement_download.py") and Path(cwd).is_dir(), (cmd, cwd)
+    cmd, cwd = AP.settlement_watch_cmd(1)
+    assert cmd[-3] == "watch" and cmd[-4].endswith("settlement_download.py") and Path(cwd).is_dir(), (cmd, cwd)
     calls, logs = [], []
     real = _sp.Popen
 
@@ -804,6 +804,111 @@ def p25_app_launch():
     ok("watch 명령·창 없이·작업 묶음 분리 우선·분리 불가 시 경고 후 그대로·시작 실패 로그")
 
 
+def p26_parent_watch():
+    print("[P26] 앱 종료 감시(D-020) — 사람이 앱을 닫거나 강제 종료하면 정산도 종료·무인 정상 완료면 계속")
+    import subprocess as _sp
+    import tempfile
+    import threading
+    from coupang_analytics import app_process as AP
+    cmd, _ = AP.settlement_watch_cmd(4321)
+    assert cmd[-3:] == ["watch", "--parent", "4321"], cmd          # 앱이 자기 PID 를 넘김
+    done_file = Path(tempfile.mkdtemp()) / "_앱정상종료.json"
+
+    def _run(finished_normally: bool) -> bool:
+        app = _sp.Popen([sys.executable, "-c", "import time; time.sleep(60)"])   # '앱' 역할 실제 프로세스
+        gone = threading.Event()
+        AP.watch_parent(app.pid, gone.set, done_file=done_file, poll_sec=0.2)
+        assert not gone.wait(0.6), "앱이 살아 있는 동안은 정산 계속"
+        if finished_normally:
+            AP.mark_app_finished(done_file=done_file, pid=app.pid)   # 18:00 무인 ①②③ 완주 → _auto_done
+        app.kill()                                                     # 창 닫기·작업 관리자 강제 종료
+        app.wait()
+        return gone.wait(3)
+    assert _run(finished_normally=False), "사람이 앱을 닫음/강제 종료 → 정산 종료 신호"
+    assert not _run(finished_normally=True), "무인 정상 완료 뒤 앱 종료 → 정산 계속(다음 18:00 까지)"
+    AP.mark_app_finished(done_file=done_file, pid=999999)              # 다른(이전) 앱의 완료 표시는 무효
+    assert not AP.app_finished_normally(4321, done_file=done_file)
+    gone = threading.Event()
+    AP.watch_parent(999999, gone.set, done_file=Path(tempfile.mkdtemp()) / "x.json", poll_sec=0.2)
+    assert gone.wait(3), "시작 때 이미 앱이 없으면(완료 표시 없음) 바로 종료 신호"
+    ok("앱 PID 전달·앱 살아있으면 계속·사람 종료=정산 종료·무인 정상 완료=계속·다른 앱 완료 표시 무효·앱 이미 없음=종료")
+
+
+def p27_cycle():
+    print("[P27] 정산 회차(D-021) — 18:00 앱과 함께 기동·①완료까지 대기·다 받으면 종료·다음 날 17:55 종료")
+    import json as _json
+    import os
+    from datetime import datetime as RealDT, timedelta
+    from types import SimpleNamespace
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    from coupang_analytics import settlement_runlog as RLG
+    from coupang_analytics import settlement_watch as W
+    D = RealDT
+    assert W.cycle_window(D(2026, 10, 10, 18, 0, 5)) == (D(2026, 10, 10, 18), D(2026, 10, 11, 17, 55))
+    assert W.cycle_window(D(2026, 10, 11, 3, 0)) == (D(2026, 10, 10, 18), D(2026, 10, 11, 17, 55)), "새벽=전날 18시 회차"
+    assert W.cycle_window(D(2026, 10, 11, 18, 0))[0] == D(2026, 10, 11, 18), "18:00 = 새 회차"
+    start = D(2026, 10, 10, 18)
+    assert W.sales_done_in_cycle({"stage": "sales", "at": D(2026, 10, 10, 19)}, start)
+    assert W.sales_done_in_cycle({"stage": "done", "at": D(2026, 10, 11, 2)}, start)
+    assert not W.sales_done_in_cycle({"stage": "sales", "at": D(2026, 10, 9, 19)}, start), "지난 회차 ① = 대기"
+    assert not W.sales_done_in_cycle(None, start)
+
+    def run(marker_at, sales_after=None):
+        """가짜 시계로 cmd_watch 한 회차 실행 → (반환값, 한 바퀴 호출 수, 마지막 상태, until_at, 종료 시각)."""
+        clock = {"now": D(2026, 10, 10, 18, 0, 5)}
+        passes, hb = [], []
+        stage = Path("output") / "쿠팡데이타분석_실행단계.json"
+
+        def write_marker(at):
+            stage.write_text(_json.dumps({"date": f"{at:%Y-%m-%d}", "stage": "sales", "at": at.isoformat()}),
+                             encoding="utf-8")
+        if marker_at:
+            write_marker(marker_at)
+
+        class FakeDT(RealDT):
+            @classmethod
+            def now(cls, tz=None):
+                return clock["now"]
+
+        def fake_sleep(sec):
+            clock["now"] += timedelta(seconds=max(sec, 1))
+            if sales_after and clock["now"] >= sales_after and not stage.exists():
+                write_marker(clock["now"])                          # 앱의 ①판매수집이 끝남
+        olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG)
+        args = SimpleNamespace(parent=0, until="", until_at=None, hidden=False)
+        try:
+            TD.datetime, TD.time.sleep = FakeDT, fake_sleep
+            TD._one_pass = lambda a: (passes.append(clock["now"]), (False, 3 if len(passes) == 1 else 0))[1]   # 첫 바퀴 3건·다음 0건
+            TD._pending_jobs, TD._wait_accounts = (lambda: 0), (lambda lg: 0)
+            TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
+            TD.LOG.heartbeat = lambda st, msg: hb.append((st, msg))
+            rc = TD.cmd_watch(args)
+        finally:
+            TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG = olds
+        if stage.exists():
+            stage.unlink()
+        return rc, passes, hb[-1], args.until_at, clock["now"]
+
+    old_cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            (Path(tmp) / "output").mkdir()
+            rc, passes, last, until_at, end = run(None)                     # ① 이 끝나지 않는 회차
+            assert passes == [] and last[0] == "종료" and "회차 종료" in last[1], (passes, last)
+            assert end <= D(2026, 10, 11, 17, 55) + timedelta(seconds=1) and until_at == D(2026, 10, 11, 17, 55)
+            rc, passes, last, _, _ = run(D(2026, 10, 9, 19))                # 지난 회차 ① 기록만 = 받지 않음
+            assert passes == [] and last[0] == "종료", (passes, last)
+            rc, passes, last, _, _ = run(None, sales_after=D(2026, 10, 10, 19, 30))   # 19:30 ① 완료 → 받기
+            assert passes and passes[0] >= D(2026, 10, 10, 19, 30), passes
+            assert rc == 0 and len(passes) == 2 and last == ("완료", W.plan_after_pass(False, 0, 0, 0, 1)[1]), \
+                (rc, passes, last)                                              # 3건 받음 → 다음 바퀴 0건 = 다 받음 → 종료
+        finally:
+            os.chdir(old_cwd)
+    ok("회차=18:00~다음 날 17:55·①완료 전/지난 회차 기록=대기만 하다 17:55 종료·① 완료 후 받기·다 받으면 바로 종료")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -821,6 +926,8 @@ def main():
     p23_calendar()
     p24_local_store()
     p25_app_launch()
+    p26_parent_watch()
+    p27_cycle()
     print("정산 런타임 오프라인 검증 통과")
 
 

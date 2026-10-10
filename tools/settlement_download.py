@@ -529,45 +529,79 @@ def _one_pass(args) -> tuple[bool, int]:
     return rc == 1, work
 
 
+def _watch_app(parent_pid: int) -> None:
+    """D-020: 앱을 사람이 닫거나 강제 종료하면(무인 정상 완료 표시 없음) 정산도 자기 Chrome 과 함께 종료."""
+    from coupang_analytics import app_process as AP
+
+    def _gone() -> None:
+        reason = "앱이 종료돼(사람이 닫음·강제 종료) 정산도 종료 — 다음 실행에서 이어서 받음"
+        log(f"[자동] {reason}")
+        LOG.heartbeat("종료", reason)
+        AP.kill_self_tree()
+    AP.watch_parent(parent_pid, _gone)
+    log(f"[자동] 앱(PID {parent_pid}) 종료 감시 — 사람이 앱을 끄면 함께 종료·무인 정상 완료 뒤엔 계속")
+
+
+def _watch_wait_reason(W, prog, stage_path, cycle_start) -> tuple[str, dict | None]:
+    """받기 전에 기다릴 이유('' = 지금 받아도 됨)와 앱 단계 기록. 이번 회차 ① 완료 전·①이 지금 도는 중이면 대기."""
+    marker, _ = W.read_marker(stage_path)
+    if not W.sales_done_in_cycle(marker, cycle_start):
+        return f"①판매수집 완료 대기(이번 회차 {cycle_start:%m-%d %H:%M}~) — 완료되면 받기 시작", marker
+    busy, why = W.sales_in_progress(prog)
+    return (why if busy else ""), marker
+
+
+def _sleep_until(sec: float, end: datetime) -> None:
+    """sec 만큼 쉬되 회차 종료 시각(end)을 넘기지 않음."""
+    time.sleep(max(0.0, min(sec, (end - datetime.now()).total_seconds())))
+
+
 def cmd_watch(args) -> int:
-    """앱이 ①판매수집 뒤에 띄우는 정산 자동 수집(D-010). ①이 지금 돌면 기다리고, 받을 게 있으면 바퀴를 돌다가
-    **다 받으면 기록하고 정상 종료**. 중단(연속 실패/차단)·진전 없는 대기 초과도 기록하고 종료(다음 ①완료 후 이어서).
-    같은 ①완료 기준으로 이미 '완료'면 바로 끝낸다. 같은 PC 에 둘 뜨지 않게 잠금."""
+    """18:00 앱과 함께 뜨는 정산 자동 수집(D-021). **이번 회차 ①판매수집 완료까지 기다렸다가** 받고, 다 받으면
+    기록하고 종료·**다음 날 17:55** 가 되면 종료(남은 건 다음 회차). 중단(연속 실패/차단)·진전 없는 대기 초과도
+    기록하고 종료. 같은 ①완료 기준으로 이미 '완료'면 바로 끝낸다. 앱을 사람이 끄면 함께 종료(--parent·D-020).
+    같은 PC 에 둘 뜨지 않게 잠금."""
     from coupang_analytics import settlement_watch as W
     from coupang_analytics.pipeline_paths import _progress_path, _run_stage_path
     from coupang_analytics.registry_lock import RegistryLockError, registry_lock
-    prog = _progress_path("output")
+    prog, stage_path = _progress_path("output"), _run_stage_path("output")
     try:
         with registry_lock(BASE / "_잠금" / "_watch.lock", wait_sec=0, on_log=log):
-            args.until, args.until_at, args.hidden = "", None, True   # 멈춤 시각 없음(①정지는 루프가 담당)
-            marker, _ = W.read_marker(_run_stage_path("output"))
-            key = W.sales_key(marker, datetime.now())
-            if W.already_done(W.read_done(DONE_FILE), key):
-                log(f"[자동] 이번 ①판매수집({key}) 기준 정산 파일은 이미 모두 받음 — 종료")
-                LOG.heartbeat("완료", "이미 모두 받음")
-                return 0
+            cycle_start, cycle_end = W.cycle_window(datetime.now())
+            args.until, args.until_at, args.hidden = f"{cycle_end:%H:%M}", cycle_end, True   # 17:55 뒤 새 요청·새 계정 안 함
+            if args.parent:
+                _watch_app(args.parent)
             idle, last_state = 0, ""
-            while True:
-                busy, busy_why = W.sales_in_progress(prog)
-                if busy:
-                    if busy_why != last_state:
-                        log(f"[자동] {busy_why}")
-                        last_state = busy_why
-                    LOG.heartbeat("대기중", busy_why)    # 매 폴링마다 '갱신' 시각 바뀜 = 살아있음 신호
-                    time.sleep(WATCH_POLL_SEC)
+            while datetime.now() < cycle_end:
+                why, marker = _watch_wait_reason(W, prog, stage_path, cycle_start)
+                if why:
+                    if why != last_state:
+                        log(f"[자동] {why}")
+                        last_state = why
+                    LOG.heartbeat("대기중", why)      # 매 폴링마다 '갱신' 시각 바뀜 = 살아있음 신호
+                    _sleep_until(WATCH_POLL_SEC, cycle_end)
                     continue
                 last_state = ""
+                key = W.sales_key(marker, datetime.now())
+                if W.already_done(W.read_done(DONE_FILE), key):
+                    log(f"[자동] 이번 ①판매수집({key}) 기준 정산 파일은 이미 모두 받음 — 종료")
+                    LOG.heartbeat("완료", "이미 모두 받음")
+                    return 0
                 stopped, work = _one_pass(args)
                 idle = 0 if work else idle + 1
                 action, reason = W.plan_after_pass(stopped, work, _pending_jobs(), _wait_accounts(LOG), idle)
                 log(f"[자동] {reason}")
                 if action in ("again", "later"):
                     LOG.heartbeat("대기중", reason)
-                    time.sleep(WATCH_CATCHUP_REST_SEC if action == "again" else WATCH_POLL_SEC)
+                    _sleep_until(WATCH_CATCHUP_REST_SEC if action == "again" else WATCH_POLL_SEC, cycle_end)
                     continue
                 W.write_done(DONE_FILE, key, action, reason)
                 LOG.heartbeat("완료" if action == "done" else "종료", reason)
                 return 0 if action == "done" else 1
+            reason = f"회차 종료 시각({cycle_end:%m-%d %H:%M}) — 정산 종료(남은 건 18:00 다음 회차에서 이어서 받음)"
+            log(f"[자동] {reason}")
+            LOG.heartbeat("종료", reason)
+            return 0
     except RegistryLockError:
         log("[자동] 정산 자동 실행이 이미 떠 있음 — 이 실행은 종료")
         return 0
@@ -586,6 +620,7 @@ def main() -> int:
     ap.add_argument("--channel", choices=("윙", "로켓그로스"), default="", help="한 채널만")
     ap.add_argument("--src", default="", help="merge: 합칠 정산 폴더(예: output\정산\정산 — 노트북에서 옮겨 온 것)")
     ap.add_argument("--until", default="", help="HH:MM 이후엔 새 요청·새 계정 시작 안 함(앱 18:00 무인 실행 전 멈춤)")
+    ap.add_argument("--parent", type=int, default=0, help="watch: 앱 PID — 사람이 앱을 끄면 정산도 종료(D-020)")
     args = ap.parse_args()
     global CHANNELS
     CHANNELS = (args.channel,) if args.channel else ()

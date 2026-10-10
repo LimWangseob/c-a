@@ -22,7 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))   # ui/ 형제 모듈(r
 
 from coupang_analytics import appconfig, config, keyword_store  # noqa: E402
 from coupang_analytics.apppaths import output_dir as app_output_dir, set_workdir  # noqa: E402
-from coupang_analytics.app_process import prepare_auto_start, start_settlement_watch  # noqa: E402
+from coupang_analytics.app_process import (mark_app_finished, prepare_auto_start,  # noqa: E402
+                                           start_settlement_watch)
 from coupang_analytics.browser import WingBrowser, find_chrome, reap_orphan_chrome  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics import detail_images  # noqa: E402
@@ -1710,8 +1711,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
                                  keywords_off=True, on_log=self.log, gsheet_output_url=gs_out,
                                  registry_url=reg_url, stock_url=stock_url)
                 if not stop.is_set():
-                    write_run_stage("sales")       # ① 완료 표시(재부팅 복구용)
-                    start_settlement_watch(self.log)   # D-010: ①완료 → 정산 자동 수집(②③와 병행·다 받으면 스스로 종료)
+                    write_run_stage("sales")       # ① 완료 표시(재부팅 복구용·정산이 이 기록을 보고 받기 시작 D-021)
                 # ② 키워드 선정(노출측정 없음·로그인 불필요·부족분 4개까지 보충)
                 if not stop.is_set():
                     select_keywords_stage(naver, key, grow=False, on_log=self.log, gsheet_output_url=gs_out,
@@ -1737,6 +1737,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self._auto_quit()
 
     def _auto_quit(self):
+        mark_app_finished()   # D-020: 무인이 스스로 끝남 → 정산은 계속(17:55 까지). 사람이 끄면 이 표시 없음 → 함께 종료
         _prevent_sleep(False)
         QtWidgets.QApplication.quit()
 
@@ -1795,8 +1796,6 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
                              registry_url=reg_url, stock_url=stock_url)
                     if not stop.is_set():
                         write_run_stage("sales")
-                if not stop.is_set():              # D-010: ①이 끝나 있으면 정산 자동 수집(이미 다 받았으면 정산이 바로 종료)
-                    start_settlement_watch(self.log)
                 if not stop.is_set() and do_keywords:   # ② 키워드 선정(동결분 유지·부족분만)
                     select_keywords_stage(naver, key, grow=False, on_log=self.log, gsheet_output_url=gs_out,
                                           stock_url=stock_url)
@@ -2137,6 +2136,8 @@ def main():
     reaped = reap_orphan_chrome()   # 이전 실행이 강제종료·크래시로 남긴 좀비 Chrome 정리(누적 원천 차단)
     if reaped:
         pre_logs.append(f"[시작] 잔여(좀비) Chrome {reaped}개 정리함")
+    if auto or resume:              # D-021: 18:00(·재부팅 복구) 앱과 함께 정산 기동 — 정산은 ① 완료까지 대기
+        start_settlement_watch(pre_logs.append)
     win = App(auto=(auto or resume))
     win.show()
     for m in pre_logs:

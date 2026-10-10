@@ -1,4 +1,10 @@
-"""정산 다운로드 실행 판단(순수 로직·오프라인 검증) — 앱이 ①판매수집 뒤에 띄우고, 다 받으면 스스로 끝난다.
+"""정산 다운로드 실행 판단(순수 로직·오프라인 검증) — 18:00 앱과 함께 떠서 ①판매수집 완료를 기다렸다가 받고,
+다 받으면 끝난다(늦어도 다음 날 17:55).
+
+**D-021(소유자 2026-10-10, D-010 의 '①뒤 기동'을 대체)**: 회차 = 18:00 ~ 다음 날 17:55(`cycle_window`).
+18:00 무인 앱이 시작하면서 정산도 띄운다 → 정산은 **이번 회차의 ①판매수집 완료 기록**(`sales_done_in_cycle`)이
+생길 때까지 대기 → 받기 → 다 받으면 종료·17:55 가 되면 종료 → 18:00 둘 다 다시 기동. 앱을 사람이 끄면(배포 등)
+정산도 함께 종료(app_process.watch_parent·D-020).
 
 소유자 결정(D-010·2026-10-09, 2026-10-07 '24시간 감시'를 대체):
 - 18:00 앱이 시작되면 기존 정산 프로그램을 끝내고, **①판매수집이 끝나면 앱이 정산을 띄운다**(예약작업 없음).
@@ -16,13 +22,28 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from datetime import datetime
+from datetime import datetime, time as dtime, timedelta
 from pathlib import Path
 
 SALES_DONE = ("sales", "ranks", "done")
 SALES_STALE_MIN = 20   # _진행중.json 이 이보다 최근에 갱신됐으면 ①판매수집이 '지금 돌고 있다'고 본다
 MAX_IDLE_PASSES = 3    # 새로 받은 게 없는데 생성 대기·일시 오류만 남은 바퀴를 이만큼까지(그 뒤 '미완료' 종료)
 RESULT = {"done": "완료", "stop": "중단", "giveup": "미완료"}
+CYCLE_START = dtime(18, 0)              # 회차 시작 = 앱·정산 동시 기동(18:00 무인)
+CYCLE_END_GAP = timedelta(minutes=5)    # 다음 회차 5분 전(17:55)에 정산 종료
+
+
+def cycle_window(now: datetime) -> tuple[datetime, datetime]:
+    """now 가 속한 회차 (시작=가장 최근 18:00, 끝=그다음 날 17:55)."""
+    start = datetime.combine(now.date(), CYCLE_START)
+    if now < start:
+        start -= timedelta(days=1)
+    return start, start + timedelta(days=1) - CYCLE_END_GAP
+
+
+def sales_done_in_cycle(marker: dict | None, cycle_start: datetime) -> bool:
+    """이번 회차(cycle_start 이후)에 ①판매수집이 끝났나 — 앱 단계 기록(stage·at)으로 판정."""
+    return bool(marker) and marker.get("stage") in SALES_DONE and marker["at"] >= cycle_start
 
 
 def read_marker(path) -> tuple[dict | None, str]:
