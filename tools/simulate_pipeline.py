@@ -581,6 +581,30 @@ def scenario_designated_filled_no_stamp():
     _check(any("비즈-a1" in x and "발견(가짜)" in x for x in logs), "대조: 날짜 지정 아니면 값 판정 안 함(기존 동작)")
 
 
+def scenario_staff_keywords_pulled():
+    print("[시나리오 17] 직원 입력 키워드 역머지(E1) — ① 시작에 결과시트 키워드를 워크북에 넣고 그 뒤에 미러링")
+    d = Path(tempfile.mkdtemp(prefix="sim17_"))
+    accts = _accounts(["a1"])
+    _ops(accts, d, date_from="2026-09-02", date_to="2026-09-02")           # 1일차: 상품·AI 키워드 생성
+    order: list[str] = []
+    orig_pull, orig_push = P.pull_gsheet_keywords, P.push_gsheet
+
+    def fake_pull(wb, url, log):                 # 직원이 결과시트에 '직원키워드' 를 타이핑해 둔 상태
+        order.append("pull")
+        biz = wb.account_sheets()[0]
+        wb.add_product_keywords(biz, wb.products_of(biz)[0], ["직원키워드"])
+
+    P.pull_gsheet_keywords = fake_pull
+    P.push_gsheet = lambda wb, url, log, **k: order.append("push")
+    try:
+        snap = _run1(accts, d, date_from="2026-09-03", date_to="2026-09-03", carry_forward=True,
+                     gsheet_output_url="https://docs.google.com/spreadsheets/d/SIM/edit")
+    finally:
+        P.pull_gsheet_keywords, P.push_gsheet = orig_pull, orig_push
+    _check(order[:1] == ["pull"] and "push" in order, f"① 시작에 역머지 → 그 뒤 미러링 {order}")
+    _check("직원키워드" in _keywords_in(snap), "① 결과(→ 결과시트 미러링 원본)에 직원 키워드 보존")
+
+
 def main():
     _install_fakes()
     config.LOGIN_PACE_MIN_SEC = 0   # 시뮬은 로그인 페이싱 sleep 없이(즉시)
@@ -608,6 +632,7 @@ def main():
     scenario_gsheet_index_tab_excluded()
     scenario_designated_date()
     scenario_designated_filled_no_stamp()
+    scenario_staff_keywords_pulled()
     print("=" * 60)
     print("  [완료] 모든 시나리오 통과")
     print("=" * 60)

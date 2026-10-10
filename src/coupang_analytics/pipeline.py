@@ -656,6 +656,10 @@ def run_full(input_list: InputList, out_dir: str = "output",
         wb.set_account_id(_a.label, _a.account_id)
         wb.set_representative(_a.label, _a.representative)   # 계정목록 대표자 컬럼 표시용(관리대장 대표자명)
 
+    # 직원이 결과 통계 시트에 직접 넣은 키워드를 역머지(시트 값 기준 동기화 → 그 상품은 ②에서 동결). ①은 끝날 때 결과시트를
+    # **전체 교체**하므로 그 전에 워크북에 들어가야 보존된다(E1: 예전엔 키워드 단계가 있는 실행만 호출 → 운영 ①에선 안 돌아 소실).
+    pull_gsheet_keywords(wb, gsheet_output_url, log)
+
     # 일자 컬럼 라벨 = **작업 실행날짜**(date_label). 순위(③)는 같은 실행날짜 컬럼(latest_date)에 기록돼
     # '오늘 순위 + 전일 판매'가 한 컬럼에 나란히 쌓인다.
     col_label = _column_label(date_from, date_to, date_label, log)

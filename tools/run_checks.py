@@ -1,10 +1,12 @@
-"""회귀 게이트 — 오프라인 검증 9종을 순차 실행하고 하나라도 실패하면 exit 1.
+"""회귀 게이트 — 오프라인 검증(아래 CHECKS 목록 전부)을 순차 실행하고 하나라도 실패하면 exit 1.
 
 용도: 커밋/푸시 전(git 훅) 또는 수동으로 회귀를 잡는다. 모두 **로그인·실 API 없이** 결정적으로 돈다
 (verify_offline [6]도 기본은 결정적 모킹 — 실 API는 VERIFY_REAL_API=1 옵트인).
 
-    python tools/run_checks.py           # 전체 9종 (pre-push)
-    python tools/run_checks.py --quick   # 빠른 8종 (pre-commit, verify_offline 제외)
+    python tools/run_checks.py           # 전체 (pre-push)
+    python tools/run_checks.py --quick   # 빠른 (pre-commit, CHECKS 의 quick=False 항목[verify_offline] 제외)
+
+개수는 적지 않는다(검증이 늘 때마다 문구가 어긋났음 — E7). 실행 끝 요약에 'N종'이 나온다.
 
 각 스크립트는 실패 시 non-zero로 끝난다(assert/SystemExit). 여기선 하나가 죽어도 나머지를 계속
 돌려 **전체 결과를 한 번에** 보여주고, 실패가 하나라도 있으면 최종 exit 1.
@@ -25,7 +27,7 @@ except AttributeError:
 
 # (표시명, 스크립트, quick 포함 여부) — quick=커밋 전 빠른 것만
 CHECKS = [
-    ("시뮬레이션(파이프라인 15시나리오)", "tools/simulate_pipeline.py", True),
+    ("시뮬레이션(파이프라인 운영 조합 시나리오)", "tools/simulate_pipeline.py", True),
     ("핀(로그인·발견·반자동순위 실제코드)", "tools/pin_login_ranks.py", True),
     ("핀(apply_style 서식 출력)", "tools/pin_apply_style.py", True),
     ("핀(실행모드 결정 plan_run_mode)", "tools/pin_run_plan.py", True),

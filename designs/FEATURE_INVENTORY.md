@@ -60,18 +60,18 @@
 
 | # | 오류 | 근거 | 영향 |
 |---|---|---|---|
-| E1 ✔ | **직원이 결과시트에 입력한 키워드가 반영 안 됨** | 역머지(`pull_gsheet_keywords`) 호출은 `keywords_off=False` 일 때만이라 운영에선 안 돌았고, B5 에서 그 분기와 함께 삭제 → **현재 호출처 없음**. 수정 = ② `select_keywords_stage` 시작에 연결. 통계 시트는 매번 전체 교체 | 직원 입력 키워드가 덮어써짐(소실) |
-| E2 ✔ | **마스터 복원이 막힌 경로 사용** | `pipeline_gsheet.restore_master_from_gsheet` 가 공개 export(`gsheet.download_xlsx`) — 같은 파일 백업 주석: 결과시트는 401(2026-10-02 실측) | 마스터 없는 PC(재설치)에서 과거 시계열 복원 실패 → 새 통계로 시작 |
-| E3 ✔ | **18:00 예약작업 13시간 제한** | `deploy/install.ps1:201` `-ExecutionTimeLimit 13h`(재부팅 복구 작업도 같은 설정) | 07:00 넘게 돌면 스케줄러가 앱 강제 종료 = '무인 강제 종료 금지' 위반 · D-020 상 **정산도 함께 종료** |
-| E4 ✔ | **정산 상태확인 bat 오안내** | `deploy/정산_상태확인.bat:19-23` 이 없앤 예약작업을 조회 → "정산 자동 다운로드가 안 돕니다" | 정상인데 고장으로 안내 |
-| E5 | install.ps1·설치 안내 문구 "06:00 자동 종료" | `install.ps1:196,199,203,228` — 06:00 강제 종료는 2026-09-23 폐지 | 잘못된 안내 |
+| E1 ✅ | **직원이 결과시트에 입력한 키워드가 반영 안 됨** | 역머지(`pull_gsheet_keywords`) 호출은 `keywords_off=False` 일 때만이라 운영에선 안 돌았고, B5 에서 그 분기와 함께 삭제 → 호출처 없음. **수정(D-025)** = ① `run_full` 시작에 무조건 호출(원래 설계 위치) — ② 시작안은 ① 끝의 결과시트 전체 교체 뒤라 이미 소실(정정). 게이트 simulate 17 | 직원 입력 키워드가 덮어써짐(소실) |
+| E2 ✅ | **마스터 복원이 막힌 경로 사용** — **수정(D-025)**: SA·저장 타입 그대로 읽기·`download_xlsx` 삭제·게이트 verify_gsheet[17]·실측 복원 성공 | `pipeline_gsheet.restore_master_from_gsheet` 가 공개 export(`gsheet.download_xlsx`) — 같은 파일 백업 주석: 결과시트는 401(2026-10-02 실측) | 마스터 없는 PC(재설치)에서 과거 시계열 복원 실패 → 새 통계로 시작 |
+| E3 ✅ | **18:00 예약작업 13시간 제한** — **수정**: 23시간50분(⚠ 운용 PC 설치.bat 재등록 필요) | `deploy/install.ps1:201` `-ExecutionTimeLimit 13h`(재부팅 복구 작업도 같은 설정) | 07:00 넘게 돌면 스케줄러가 앱 강제 종료 = '무인 강제 종료 금지' 위반 · D-020 상 **정산도 함께 종료** |
+| E4 ✅ | **정산 상태확인 bat 오안내** — **수정**: 18:00 야간 무인 작업(--auto) 조회·'실행 안 함=정상일 수 있음' | `deploy/정산_상태확인.bat:19-23` 이 없앤 예약작업을 조회 → "정산 자동 다운로드가 안 돕니다" | 정상인데 고장으로 안내 |
+| E5 ✅ | install.ps1·설치 안내 문구 "06:00 자동 종료" — **수정**: install.ps1·install_schedule_py.ps1·첫실행 안내·INSTALL.md | `install.ps1:196,199,203,228` — 06:00 강제 종료는 2026-09-23 폐지 | 잘못된 안내 |
 | E6 ✅ | `tools/simulate_stages.py` 고장 | B2 에서 도구 삭제로 해소 | — |
-| E7 | 게이트 설명 문구 불일치 | `run_checks.py` "9종/8종"·`install_hooks.py` "3종" vs 실제 16/15종 | 안내 오류 |
+| E7 ✅ | 게이트 설명 문구 불일치 — **수정**: 개수 표기 제거(run_checks·install_hooks·CLAUDE.md) | `run_checks.py` "9종/8종"·`install_hooks.py` "3종" vs 실제 16/15종 | 안내 오류 |
 
 ## 3. 죽은 코드·중복 (삭제·통합 후보)
 
 ### 3-1. 운영에서 실행되지 않는 분기 (✔ 핵심 사실 기반)
-- ✅ 삭제(B5): `run_full` 인라인 키워드·순위(`_finish` 인라인 drive_rank·역머지 호출[→E1 은 ②로 재연결]·`_select_keywords_for_skipped`) + 그 인자 `naver`·`grow_keywords`·`skip_ranks`·`keywords_off` · `pipeline_process`(`_resolve_keywords`·`_frozen_keywords`·`_log_diagnose`·`_product_matcher`·대표 옵션 키워드/순위 분기) · wb `title_cache`(숨김 시트 4·5열은 '(미사용)' 표기로 위치만 유지).
+- ✅ 삭제(B5): `run_full` 인라인 키워드·순위(`_finish` 인라인 drive_rank·역머지 호출[→E1 은 ① 시작에 재연결]·`_select_keywords_for_skipped`) + 그 인자 `naver`·`grow_keywords`·`skip_ranks`·`keywords_off` · `pipeline_process`(`_resolve_keywords`·`_frozen_keywords`·`_log_diagnose`·`_product_matcher`·대표 옵션 키워드/순위 분기) · wb `title_cache`(숨김 시트 4·5열은 '(미사용)' 표기로 위치만 유지).
 - ✅ 삭제(B5): 자동(offscreen) 순위 `track_ranks_stage(semi=False)`+`semi` 인자·`_measure_product_auto`·`_measure*`·`_rank_cooldown`·`RankHalt`·`_RANK_HALT`·`_best` · config `RANK_NAV_SERIAL`·`RANK_SLOW_ABS_SEC`·`RANK_COOLDOWN_SEC/MAX`.
 - ✅ 삭제(B5): 파이프라인의 `organic_ranks_batch` 병렬 경로 · 사람 Enter 대기 `_wait_user_search`·`RANK_SEMI_AUTOSUBMIT`(반자동은 자동제출만). `rank.organic_ranks/organic_ranks_batch` 자체는 L1 공개 API(L1_CONTRACT)라 유지 — 이제 호출처 없음(정리 후보).
 - ⛔ 정정: `_semi_retry_login` 은 **운영에서 돈다** — 정산 다운로드 무인(`settlement_download --hidden` = 18:00 watch)이 `_ensure_login(semi=False)` → `unattended=True` 경로를 탄다. 삭제 안 함.
@@ -92,7 +92,7 @@
 | ✅ 절전 방지 2벌 | `power.keep_awake` vs `app_qt._prevent_sleep` | **B6 완료**: power 로 통일(같은 API·스레드 단위) |
 | 순위 구현 3벌 | ③반자동 · 순위 조회 탭(offscreen) · 자동/병렬(미사용) | 미사용 삭제 · 탭은 ③ 경로 재사용 또는 탭 삭제 |
 | 키워드 점수 2벌 | 키워드 탭 `_score` vs ② 100점 | 탭 유지 여부에 따라 |
-| 구글시트 내려받기 2벌 | 공개 export(복원) vs SA(백업) | SA 로 통일(=E2 수정) |
+| ✅ 구글시트 내려받기 2벌 | 공개 export(복원) vs SA(백업) | **E2 완료**: SA 로 통일·`download_xlsx` 삭제 |
 | 비번 경로 5개 | 후보(운영)·rows(테스트)·file(Tk)·원장 이전값·credstore | 운영 경로 하나로 |
 | ✅ 정산 중지 2벌 | `app_process.stop_settlement` vs 패널 `_kill_settlement` | **B6 완료**: stop_settlement(트리 종료=그 Chrome 까지) 하나로 |
 | ✅ 옛 정산 예약작업 제거 3곳 | 18:00 매번·install.ps1·remove_autorun | **B6 완료**: 18:00 매번 제거 삭제(install.ps1·remove_autorun 유지) |
@@ -125,4 +125,4 @@
   - ✅ B4 테스트 전용 함수: `product_match.scope_to_ledger`·`parse_password_rows`·`proxy_manager` 미사용 메서드 12개(+`active_count`) 삭제 · `payout.estimate`·`registry.managed_between` 은 ②층 자산이라 유지(D-023)
   - ✅ B5 운영에서 안 도는 분기(§3-1): 게이트 시나리오 운영 조합 이전(B5-1) → 분기·인자 물리 삭제(B5-2, 순 −727줄) · `_semi_retry_login` 은 정산 무인 경로라 유지
   - ✅ B6 중복 통합(§3-4): 야간 조립 3벌→`pipeline_stages.run_stages`(+핀 P9~P11) · 절전 2벌→power · 정산 중지 2벌→stop_settlement(트리 종료) · 18:00 옛 예약작업 제거 삭제 · `정산_지금실행.bat` 삭제(D-024)
-  - ⏳ 오류 E1~E7 일괄 수정(§2)
+  - ✅ 오류 E1~E7 일괄 수정(§2, D-025) — E6 는 B2 로 해소

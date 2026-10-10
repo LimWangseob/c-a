@@ -16,13 +16,13 @@ if (-not $pyw -or -not (Test-Path $pyw)) {
 }
 
 $set = New-ScheduledTaskSettingsSet -WakeToRun -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 13)
+    -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 23 -Minutes 50)
 
-# 1) 매일 18:00 무인 실행(06:00 앱이 스스로 종료)
+# 1) 매일 18:00 무인 실행(다 끝나면 앱이 스스로 종료)
 $a1 = New-ScheduledTaskAction -Execute $pyw -Argument 'ui\app_qt.py --auto' -WorkingDirectory $Root
 $t1 = New-ScheduledTaskTrigger -Daily -At 18:00
 Register-ScheduledTask -TaskName '쿠팡애널리틱스_야간무인' -Action $a1 -Trigger $t1 `
-    -Settings $set -Description '매일 18:00 무인 실행(06:00 자동 종료)' -Force | Out-Null
+    -Settings $set -Description '매일 18:00 무인 실행(다 끝나면 스스로 종료)' -Force | Out-Null
 
 # 2) 로그온 시 재부팅 복구(--resume: 오늘 중단분만 이어서, 없으면 즉시 종료)
 $a2 = New-ScheduledTaskAction -Execute $pyw -Argument 'ui\app_qt.py --resume' -WorkingDirectory $Root
@@ -34,6 +34,6 @@ Register-ScheduledTask -TaskName '쿠팡애널리틱스_재부팅복구' -Action
 Write-Host ('[완료] 두 작업 등록됨')
 Write-Host ('  python : ' + $pyw)
 Write-Host ('  작업폴더: ' + $Root)
-Write-Host '  1) 쿠팡애널리틱스_야간무인   — 매일 18:00 → 06:00 자동 종료'
+Write-Host '  1) 쿠팡애널리틱스_야간무인   — 매일 18:00 → 다 끝나면 스스로 종료'
 Write-Host '  2) 쿠팡애널리틱스_재부팅복구 — 로그온 시 오늘 중단분 이어서'
 Write-Host '  ※ 재부팅 복구가 무인으로 동작하려면 Windows "업데이트/재시작 후 자동 로그인 완료" 를 켜 두세요(이미 켜 두심).'

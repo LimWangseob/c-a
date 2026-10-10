@@ -193,14 +193,15 @@ if (Test-Path $cfg) {
 
 # ── 야간 무인 자동실행 등록/해제 (예전 install_schedule / uninstall_schedule 통합) ──
 function Register-AutoTasks {
-    # 1) 매일 18:00 무인 실행(--auto, 앱이 06:00 자동 종료)
+    # 1) 매일 18:00 무인 실행(--auto, 앱은 ①②③+재고 역기록을 다 끝내면 스스로 종료 — 강제 종료 없음)
     $action  = New-ScheduledTaskAction -Execute $exe -Argument '--auto' -WorkingDirectory $root
     $trigger = New-ScheduledTaskTrigger -Daily -At ([datetime]'18:00')
-    # WakeToRun=자는 PC 깨움 · StartWhenAvailable=놓치면 곧바로 · 13시간 제한(백스톱, 앱은 06:00 자동종료)
+    # WakeToRun=자는 PC 깨움 · StartWhenAvailable=놓치면 곧바로 · 23시간50분 제한(백스톱 — 다음 날 18:00 실행이
+    # 막히지 않게만. 예전 13시간은 07:00 넘는 실행을 끊고 정산까지 함께 끝냈음 E3·D-020)
     $settings = New-ScheduledTaskSettingsSet -WakeToRun -AllowStartIfOnBatteries `
-        -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 13)
+        -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 23 -Minutes 50)
     Register-ScheduledTask -TaskName '쿠팡애널리틱스_야간무인' -Action $action -Trigger $trigger `
-        -Settings $settings -Description '매일 18:00 무인 실행(06:00 자동 종료)' -Force | Out-Null
+        -Settings $settings -Description '매일 18:00 무인 실행(다 끝나면 스스로 종료)' -Force | Out-Null
     # 2) 재부팅 복구: 로그온 시 --resume(오늘 중단분만 이어서, 없으면 즉시 종료)
     $actionR  = New-ScheduledTaskAction -Execute $exe -Argument '--resume' -WorkingDirectory $root
     $triggerR = New-ScheduledTaskTrigger -AtLogOn
@@ -225,7 +226,7 @@ function Unregister-AutoTasks {
     return @($tasks).Count
 }
 
-Write-Host '[4/4] 야간 무인 자동실행(매일 18:00 시작 -> 06:00 종료)'
+Write-Host '[4/4] 야간 무인 자동실행(매일 18:00 시작 -> 다 끝나면 스스로 종료)'
 Write-Host '      * 설정(관리대장 링크·API 키)이 위에서 자동 적용됐으면 바로 무인 동작합니다.'
 Write-Host '        (자동 적용이 안 됐다면 프로그램을 1회 실행해 설정 탭에서 넣어 두세요.)'
 $ans = Read-Host '      등록=Y / 해제=R / 건너뛰기=N'

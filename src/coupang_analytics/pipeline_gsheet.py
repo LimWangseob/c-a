@@ -18,7 +18,9 @@ def restore_master_from_gsheet(out_dir: str | Path, url: str | None, on_log=None
     """통계 마스터(_통계.xlsx)가 없을 때 **결과 구글시트(전체 미러)에서 통째로 내려받아 복원**.
 
     다른 PC·재설치로 마스터가 없으면 '첫 실행'으로 오판해 과거 날짜 컬럼(시계열)을 유실한다 → 결과
-    구글시트가 있으면 export(xlsx)로 마스터를 복원해 이어쓴다(소유자 2026-09-20, fix ③).
+    구글시트가 있으면 **서비스계정(Sheets API)** 으로 값을 읽어 마스터를 복원해 이어쓴다(소유자 2026-09-20, fix ③).
+    E2(2026-10-10): 예전 공개 export 는 결과시트가 SA 공유만(비공개)이라 401 — 백업과 같은 SA 경로로, 숫자가 글자로
+    바뀌지 않게 저장 타입 그대로(UNFORMATTED) 읽는다.
     ⚠ 구글시트는 **가시 시트(계정목록·사업자별 통계)만** 미러라 숨김 메타(_상품ID/_마케팅 등)는 없다
     → 복원본은 과거 '값(시계열)'을 살리고, 숨김 메타는 다음 ①판매수집이 재구성(vid 재발견·대장 매칭).
     성공=True(이어쓰기), 실패=사유 로그 후 False(정상 첫 실행 — fallback 금지 원칙에 따라 조용히 넘기지 않음).
@@ -28,8 +30,7 @@ def restore_master_from_gsheet(out_dir: str | Path, url: str | None, on_log=None
     if master.exists() or not url:
         return False
     try:
-        from . import gsheet
-        gsheet.download_xlsx(url, master)
+        _download_gsheet_via_sa(url, master, log=log, unformatted=True)
         OutputWorkbook.load(master)          # 유효한 워크북인지 확인(빈/손상 파일이면 예외 → 첫 실행)
     except Exception as exc:
         if master.exists():
@@ -80,13 +81,14 @@ def _safe_sheet_name(title: str, used: set[str]) -> str:
     return name
 
 
-def _download_gsheet_via_sa(url: str, dest: Path, *, log) -> None:
+def _download_gsheet_via_sa(url: str, dest: Path, *, log, unformatted: bool = False) -> None:
     """결과 구글시트를 **서비스계정(Sheets API)** 으로 읽어 로컬 xlsx(값 스냅샷)로 저장한다.
 
     공개 export(gsheet.download_xlsx)는 시트를 '링크 공유(공개)'해야 하는데, 결과시트는 SA 공유만(비공개)이라
     401 로 실패했다(2026-10-02 실측). SA 로 각 시트 값을 읽어 openpyxl 로 쓴다(서식·수식 없는 **값 스냅샷** =
     작업 전 원본 보존이라는 백업 목적엔 충분). SA 미등록·권한없음(403)·없음(404)은 GSheetClient 가 GSheetError
     로 올린다(호출부가 로그로 명시). ⚠ 비밀번호 평문이 있는 관리대장에는 쓰지 않는다(결과시트 전용 — 호출부 참조).
+    unformatted=True = 저장 타입 그대로(마스터 복원용 — 숫자 칸이 글자가 되지 않게). 백업은 표시값.
     """
     import openpyxl
     from . import gsheet_api
@@ -96,7 +98,7 @@ def _download_gsheet_via_sa(url: str, dest: Path, *, log) -> None:
     used: set[str] = set()
     for title in client.sheet_titles():
         ws = wb.create_sheet(_safe_sheet_name(title, used))
-        for row in client.read_values(title):
+        for row in client.read_values(title, unformatted=unformatted):
             ws.append(list(row))
     if not wb.sheetnames:                # 시트가 하나도 없으면(이례) 빈 파일 저장 방지
         wb.create_sheet("빈")

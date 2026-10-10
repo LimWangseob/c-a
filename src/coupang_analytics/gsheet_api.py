@@ -265,17 +265,18 @@ class GSheetClient:
         return existing
 
     # ── 값 읽기/쓰기 ─────────────────────────────────────────────
-    def read_values(self, sheet: str, cell_range: str | None = None) -> list[list[Any]]:
+    def read_values(self, sheet: str, cell_range: str | None = None, *, unformatted: bool = False) -> list[list[Any]]:
         """시트(또는 'Sheet!A1:D')의 값 격자 반환. 빈 뒤쪽 셀은 잘려 행 길이가 다를 수 있다.
 
         UNFORMATTED_VALUE + 직렬 날짜 문자열 회피를 위해 표시값(FORMATTED_VALUE) 기준으로 읽는다
         (관리대장 파싱은 사람이 보는 문자열 기준이 안전 — 마케팅 날짜 등).
+        unformatted=True: 저장된 타입 그대로(숫자=숫자·글자=글자) — 결과시트로 통계 마스터를 복원할 때(E2).
         """
         rng = f"'{sheet}'" if cell_range is None else (
             cell_range if "!" in cell_range else f"'{sheet}'!{cell_range}")
         resp = self._exec(self._sheets().values().get(
             spreadsheetId=self.spreadsheet_id, range=rng,
-            valueRenderOption="FORMATTED_VALUE",
+            valueRenderOption="UNFORMATTED_VALUE" if unformatted else "FORMATTED_VALUE",
             dateTimeRenderOption="FORMATTED_STRING"), f"값 읽기({sheet})")
         return resp.get("values", [])
 

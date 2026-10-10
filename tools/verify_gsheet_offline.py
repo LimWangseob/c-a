@@ -856,7 +856,7 @@ def t13_backup_result_via_sa() -> None:
         def sheet_titles(self):
             return ["계정목록", "가게A"]
 
-        def read_values(self, sheet, cell_range=None):
+        def read_values(self, sheet, cell_range=None, unformatted=False):
             return {"계정목록": [["대표", "사업자"], ["대표A", "biz_A"]],
                     "가게A": [["키워드", "순위"], ["텀블러", "3"]]}.get(sheet, [])
 
@@ -941,6 +941,50 @@ def t16_password_trim() -> None:
     _ok("앞뒤 공백(스페이스·탭·\\xa0) 제거 후 제출·공백만 다른 값 합침·공백만=빈 칸·trimmed 행 기록(경고용)")
 
 
+def t17_restore_master_via_sa() -> None:
+    print("[17] 마스터 복원(E2) — 공개 export(401) 대신 SA 로 읽고 숫자는 숫자 그대로·인덱스 탭 제거")
+    from coupang_analytics import pipeline_gsheet as pg
+    from coupang_analytics import gsheet_api as ga
+    src = Path(tempfile.mkdtemp()) / "src.xlsx"
+    _sample_workbook().save(src)
+    xl = openpyxl.load_workbook(src)
+    grids = {n: [list(r) for r in xl[n].iter_rows(values_only=True)]
+             for n in xl.sheetnames if xl[n].sheet_state == "visible"}   # 결과시트 = 가시 시트 미러
+    grids["계정목록"] = [["대표자", "사업자"], ["홍길동", "가게A"]]          # 결과시트 인덱스 탭(공백 없음)
+    asked: list[bool] = []
+
+    class _FakeRestoreClient:
+        def __init__(self, url, **kw):
+            pass
+
+        def sheet_titles(self):
+            return list(grids)
+
+        def read_values(self, sheet, cell_range=None, unformatted=False):
+            asked.append(unformatted)
+            rows = grids.get(sheet, [])
+            return rows if unformatted else [["" if v is None else str(v) for v in r] for r in rows]
+
+    orig = ga.GSheetClient
+    ga.GSheetClient = _FakeRestoreClient
+    try:
+        d = Path(tempfile.mkdtemp())
+        ok = pg.restore_master_from_gsheet(d, "https://x/result", on_log=lambda m: None)
+    finally:
+        ga.GSheetClient = orig
+    assert ok, "복원 실패(공개 export 경로 잔존?)"
+    assert asked and all(asked), f"저장 타입(UNFORMATTED)으로 읽지 않음: {asked}"
+    master = pg._master_path(d)
+    wb = OutputWorkbook.load(master)
+    assert wb.products_of("가게A") == ["텀블러"], wb.products_of("가게A")
+    assert "텀블러" in wb.product_keywords("가게A", "텀블러")
+    nums = [c.value for ws in openpyxl.load_workbook(master).worksheets for row in ws.iter_rows() for c in row
+            if c.value in (5, 3)]
+    assert nums, "판매·순위 숫자가 글자로 복원됨"
+    assert "계정목록" not in openpyxl.load_workbook(master).sheetnames, "인덱스 탭 잔존"
+    _ok("결과시트→마스터 복원 = SA·저장 타입 그대로(숫자 보존)·인덱스 탭 제거")
+
+
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
     for fn in (t1_ledger_rows, t1b_ledger_strike, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
@@ -949,7 +993,7 @@ def main() -> int:
                t8_exec_retry, t9_legacy_format_mismatch, t10_stats_full_replace_mismatch,
                t11_move_across_title_merge, t11b_merge_failure_nonfatal, t11c_stock_migration_frozen_cols,
                t12_delete_ghost_product_rows, t13_backup_result_via_sa, t14_sheet_id_robust,
-               t15_password_candidates, t16_password_trim):
+               t15_password_candidates, t16_password_trim, t17_restore_master_via_sa):
         fn()
     print("=== 전부 통과 ===")
     return 0

@@ -1,18 +1,14 @@
-"""공개(링크 공유) 구글 시트를 xlsx 로 내려받아 입력 대장으로 사용 — 인증 불필요(export 엔드포인트).
+"""구글 시트 URL/ID 파싱 — `sheet_id_from_url` 만 남음.
 
-- 시트가 **'링크가 있는 모든 사용자 · 보기 가능'** 이어야 한다(비공개면 로그인 리다이렉트로 실패).
-- ⚠ 대장에 비밀번호 컬럼이 있으면 내려받은 파일에 **평문**으로 담긴다 → 호출부는 파싱 직후 그 임시 파일을
-  **삭제**해 평문이 디스크에 남지 않게 한다(비번은 파싱 시 DPAPI 로 암호화 저장됨).
+예전엔 공개(링크 공유) 시트를 export 엔드포인트로 xlsx 내려받는 `download_xlsx` 가 있었으나, 결과·대장 시트는
+서비스계정 공유(비공개)라 401 — 백업(2026-10-02)·마스터 복원(E2, 2026-10-10) 모두 서비스계정(Sheets API) 경로로
+옮기며 호출처가 없어져 삭제. 시트 읽기·쓰기는 `gsheet_api.GSheetClient`.
 """
 from __future__ import annotations
 
 import re
-from pathlib import Path
-
-import requests
 
 _ID_RE = re.compile(r"/spreadsheets/d/([A-Za-z0-9_-]+)")
-_EXPORT = "https://docs.google.com/spreadsheets/d/{sid}/export?format=xlsx"
 
 
 _SCHEME_WORDS = {"https", "http", "ftp"}   # 중복 붙여넣기 시 `/d/` 뒤에 잘못 잡히는 URL 스킴
@@ -40,16 +36,3 @@ def sheet_id_from_url(url: str) -> str:
             "링크 칸을 비우고 주소(또는 ID)를 한 번만 넣어 주세요.")
     raise ValueError("구글 시트 URL/ID 를 인식하지 못했습니다.")
 
-
-def download_xlsx(url: str, dest: str | Path, timeout: float = 30) -> Path:
-    """공개 구글 시트를 xlsx 로 내려받아 dest 에 저장하고 경로 반환. 실패 시 ValueError(사유 명시)."""
-    sid = sheet_id_from_url(url)
-    r = requests.get(_EXPORT.format(sid=sid), timeout=timeout)
-    if r.status_code != 200 or r.content[:2] != b"PK":
-        raise ValueError(
-            "구글 시트를 내려받지 못했습니다 — 시트를 '링크가 있는 모든 사용자 · 보기 가능'으로 "
-            f"공유했는지 확인하세요. (status={r.status_code})")
-    dest = Path(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(r.content)
-    return dest

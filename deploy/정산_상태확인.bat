@@ -14,12 +14,13 @@ if exist "output\정산\로그\_현재상태.txt" (
   echo   ^(정산 watch 가 한 번도 안 돌았거나, output 폴더가 아직 없음^)
 )
 echo.
-echo [2] 자동 실행 작업 등록 여부
+echo [2] 자동 실행 작업 등록 여부 ^(정산은 별도 작업 없음 - 18:00 야간 무인 실행이 함께 띄움^)
 echo --------------------------------------------------
-schtasks /query /tn "쿠팡애널리틱스_정산다운로드" >nul 2>&1 && (
-  echo   [등록됨] '쿠팡애널리틱스_정산다운로드' 작업이 있습니다.
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$t=Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { (($_.Actions | ForEach-Object { [string]$_.Arguments }) -join ' ') -match '(^|\s)--auto(\s|$)' }; if($t){ exit 0 } else { exit 1 }" && (
+  echo   [등록됨] 18:00 야간 무인 작업이 있습니다 - 정산은 이 실행이 함께 띄웁니다.
 ) || (
-  echo   [작업 없음] 설치.bat 로 등록되지 않았습니다 ^(정산 자동 다운로드가 안 돕니다^).
+  echo   [작업 없음] 18:00 야간 무인 작업이 없습니다 - 설치.bat 로 등록하세요 ^(없으면 정산도 자동으로 안 돕니다^).
 )
 echo.
 echo [3] 지금 프로세스가 떠 있나
@@ -27,7 +28,7 @@ echo --------------------------------------------------
 tasklist /fi "imagename eq 정산다운로드.exe" 2>nul | find /i "정산다운로드.exe" >nul && (
   echo   [실행 중] 정산다운로드.exe 프로세스가 떠 있습니다.
 ) || (
-  echo   [실행 안 함] 정산다운로드.exe 프로세스가 없습니다 ^(대기 중이면 보통 떠 있어야 함^).
+  echo   [실행 안 함] 정산다운로드.exe 프로세스가 없습니다 ^(다 받으면 스스로 끝나므로 정상일 수 있음 - [1] 상태 확인^).
 )
 echo.
 echo [4] 최신 상세 로그 끝부분 25줄

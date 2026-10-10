@@ -3,9 +3,9 @@
 3계층(designs/CODE_HEALTH_PLAN.md §단계1):
   1) pre-commit  : **메모리 백업**(`sync_memory.py --stage`=외부 .claude 메모리를 docs/memory/ 로 미러링·스테이징,
                    세션·PC 바뀌어도 손실 방지) + **4묶음 알림**(코드 변경인데 DECISIONS.md 없으면 경고·비차단)
-                   + 스테이징된 .py 문법 컴파일 + `run_checks.py --quick`(시뮬+구글시트, 빠른 오프라인).
+                   + 스테이징된 .py 문법 컴파일 + `run_checks.py --quick`(오프라인 게이트 중 빠른 것 전부).
   2) pre-push    : **메모리 백업**(`sync_memory.py --stage` + 미커밋 메모리 변경이면 자동 커밋=push 때에도 손실 방지)
-                   + `run_checks.py`(전체 3종) + `check_complexity.py`(MI 회귀 차단·괴물함수 경고).
+                   + `run_checks.py`(오프라인 게이트 전부) + `check_complexity.py`(MI 회귀 차단·괴물함수 경고).
 
 훅 본문은 이 파일이 유일 출처(SSOT)다. 새 PC/재설치:
     python tools/install_hooks.py            # 설치(.git/hooks/ 에 기록)

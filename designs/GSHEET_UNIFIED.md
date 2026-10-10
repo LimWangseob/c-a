@@ -91,8 +91,8 @@
 
 - `src/coupang_analytics/gsheet.py` — 공개 구글 시트 **읽기(export?format=xlsx)** 구현됨. 인증 불필요.
   - ⚠️ **한계: 읽기 전용.** 쓰기(통계 시트 갱신)는 불가능 → **Sheets API + 인증 필요**(§4).
-  - `sheet_id_from_url`, `download_xlsx` 재사용 가능(읽기 폴백/오프라인용으로 남길 수 있음).
-  - ⚠️ **작업 전 백업(`pipeline_gsheet.backup_sources`)은 공개 export 폐기(2026-10-02)**: 결과·대장 시트가 **SA 공유(비공개)**라 `download_xlsx`가 401. → 결과시트는 **서비스계정(Sheets API) 값 스냅샷**(`_download_gsheet_via_sa`)으로 백업, **관리대장은 평문 비밀번호 때문에 로컬 백업 생략**(출력물 평문 금지, 복구=구글 버전기록). `download_xlsx`는 `restore_master_from_gsheet`(마스터 복원)에만 잔존(구조 필요·별도 과제). 게이트 `verify_gsheet_offline[13]`.
+  - `sheet_id_from_url` 재사용(`gsheet.py` 에 남은 유일한 함수). 공개 export `download_xlsx` 는 호출처가 없어져 삭제(E2·2026-10-10).
+  - ⚠️ **작업 전 백업(`pipeline_gsheet.backup_sources`)은 공개 export 폐기(2026-10-02)**: 결과·대장 시트가 **SA 공유(비공개)**라 `download_xlsx`가 401. → 결과시트는 **서비스계정(Sheets API) 값 스냅샷**(`_download_gsheet_via_sa`)으로 백업, **관리대장은 평문 비밀번호 때문에 로컬 백업 생략**(출력물 평문 금지, 복구=구글 버전기록). 마스터 복원(`restore_master_from_gsheet`)도 같은 SA 경로로 옮김(E2·2026-10-10 — 숫자 칸이 글자가 되지 않게 `read_values(unformatted=True)`). 게이트 `verify_gsheet_offline[13]`(백업)·`[17]`(복원).
 - `src/coupang_analytics/input_list.py` — `parse_input_list`. 헤더 1~8행 자동감지, 마케팅 3열 별칭 처리
   (`mkt_start/mkt_end/mkt_mon`), 필수열=사업자·계정아이디·상품명. **구글 시트에서 읽은 행 데이터도 이 파서로
   재사용** 가능하도록 구조 맞추면 됨.
