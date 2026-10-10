@@ -9,7 +9,6 @@ from __future__ import annotations
 import random
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import config
@@ -24,12 +23,11 @@ from .pipeline_gsheet import push_gsheet, inject_company_stock   # track_ranks_s
 from .pipeline_paths import _PROFILE, _load_latest_wb, column_label
 
 
-# ── egress 재회전 드라이버 (2026-10-02, SSOT=memory proxy-rotation) ────────────────
-# drive_rank 가 ①프록시 선택 ②브라우저 열기 ③egress IP 에코+차단이력 선제 skip ④run_once 실행
-# ⑤차단(blocked=True)이면 그 egress 를 차단목록에 기록하고 **새 egress 로 남은 키워드 재개**(상한
-# RANK_PROXY_ROTATE_MAX) 를 담당한다. 기존 서킷브레이커(쿨다운·당일중단)는 run_once 안에 그대로 있고,
-# 차단 시 '회전 가능하면 쿨다운 대신 즉시 새 IP' 로만 바꾼다(rotation_can_rotate). RANK_PROXY_ROTATE_ON_BLOCK
-# =False 거나 프록시 OFF 면 기존 단일 open 과 100% 동일(롤백 안전·핀 불변).
+# ── egress 재회전 드라이버 (2026-10-02 · D-030 2026-10-10) ────────────────
+# drive_rank 가 ①프록시 선택 ②브라우저 열기 ③egress IP 에코+차단이력 선제 skip(첫 바퀴) ④run_once 실행
+# ⑤차단(blocked=True)이면 그 egress 를 차단목록에 기록하고 **새 egress 로 막힌 키워드부터 다시**(횟수 제한 없이
+# 풀을 돌려 씀). 30분 쿨다운·당일 중단은 폐지(D-030). RANK_PROXY_ROTATE_ON_BLOCK=False 거나 프록시 OFF 면
+# 1회 open(차단되면 다음 키워드 계속).
 _ROT = {"active": False, "can": (lambda: False)}
 
 
@@ -60,15 +58,15 @@ def _rank_single_open(offscreen: bool, run_once, log) -> None:
         run_once(browser, None)
 
 
-def _run_on_egress(offscreen: bool, px, run_once, log):
+def _run_on_egress(offscreen: bool, px, run_once, log, skip_blocked: bool = True):
     """한 egress 로 브라우저를 열어 실행. 반환 (egress_ip, outcome, blocked).
 
-    outcome="skip" = egress 가 차단이력이라 선제 skip(실행 안 함) · "ran" = run_once 실행(blocked 유효).
+    outcome="skip" = egress 가 차단이력이라 선제 skip(실행 안 함·skip_blocked=True 일 때만) · "ran" = run_once 실행.
     """
     with WingBrowser(profile_dir=_PROFILE, offscreen=offscreen, proxy=px,
                      block_images=getattr(config, "RANK_BLOCK_IMAGES", False)) as browser:
         egress = _echo_egress(browser, px, log)
-        if px and egress and proxy_blocklist.is_blocked(egress):
+        if skip_blocked and px and egress and proxy_blocklist.is_blocked(egress):
             e = proxy_blocklist.entry(egress) or {}
             log(f"  [프록시] ⚠ egress {egress} = 차단이력({e.get('last', '?')}, "
                 f"{e.get('count', '?')}회) → skip, 새 IP 요청")
@@ -81,8 +79,10 @@ def _run_on_egress(offscreen: bool, px, run_once, log):
 def drive_rank(offscreen: bool, run_once, log, should_stop=None) -> None:
     """순위 브라우저 수명 + egress 회전/차단목록. run_once(browser, egress_ip) -> blocked(bool).
 
-    blocked=True(=IP 차단으로 중단, 회전 대상)면 egress 를 기록하고 새 egress 로 재개한다(run_once 는
-    이미 채운 키워드를 건너뛰고 이어서 측정). 프록시 OFF/플래그 OFF면 기존처럼 1회 open 만 한다.
+    blocked=True(=IP 차단으로 중단)면 egress 를 기록하고 **새 egress 로 막힌 키워드부터 다시** 한다(run_once 는 채운
+    키워드를 건너뜀). **회전 횟수 제한 없이 프록시 풀을 돌려 쓴다**(D-030 — 30분 쿨다운·당일 중단 폐지): 한 바퀴를 다
+    쓰면 처음부터 다시 돌고, 그때부터는 차단 이력 IP 도 다시 쓴다. 끝 = 남은 키워드 없음·중지 요청·프록시 설정 오류.
+    프록시 OFF/회전 플래그 OFF면 기존처럼 1회 open 만 한다.
     """
     should_stop = should_stop or (lambda: False)
     log = log or (lambda m: None)
@@ -90,61 +90,37 @@ def drive_rank(offscreen: bool, run_once, log, should_stop=None) -> None:
         _rank_single_open(offscreen, run_once, log)
         return
 
-    rotate_max = int(getattr(config, "RANK_PROXY_ROTATE_MAX", 3))
-    launch_max = int(getattr(config, "RANK_PROXY_LAUNCH_MAX_ATTEMPTS", 5))
-    prog = {"rotations": 0, "tried": set()}
-    cur = {"px": None}
-    launch_skips = 0
-
-    def _can() -> bool:
-        if prog["rotations"] >= rotate_max:
-            return False
-        probe = set(prog["tried"])
-        if cur["px"]:
-            probe.add(cur["px"])
-        return proxy_pool.pick_rank_proxy(probe)[1]
-
-    _ROT["active"], _ROT["can"] = True, _can
+    prog = {"tried": set(), "round": 1, "rotations": 0}
+    _ROT["active"], _ROT["can"] = True, (lambda: True)   # 프록시 풀을 돌려 쓰므로 항상 회전 가능
     try:
-        while True:
+        while not should_stop():
             px, ok, status = proxy_pool.pick_rank_proxy(prog["tried"], log)
             if not ok:
-                if status == "exhausted":
-                    log("  [프록시] 사용 가능한 egress 소진(전부 차단이력/시도됨) — 순위 중단(다음 실행·다음날 재시도)")
-                return   # error 는 pick_rank_proxy 가 이미 로그 · 둘 다 순위 스킵(직접연결 안 함)
-            cur["px"] = px
-            egress, outcome, blocked = _run_on_egress(offscreen, px, run_once, log)
+                if status != "exhausted":
+                    return   # 설정 오류 — pick_rank_proxy 가 이미 로그·순위 스킵(직접연결 안 함)
+                prog["tried"], prog["round"] = set(), prog["round"] + 1
+                log(f"  [프록시] 풀 한 바퀴 다 씀 → {prog['round']}바퀴째(차단 이력 IP 도 다시 사용)")
+                continue
+            egress, outcome, blocked = _run_on_egress(offscreen, px, run_once, log,
+                                                      skip_blocked=prog["round"] == 1)
+            prog["tried"].add(px)
             if outcome == "skip":
-                prog["tried"].add(px)
-                launch_skips += 1
-                if launch_skips >= launch_max:
-                    log("  [프록시] 차단이력 없는 egress 확보 실패 — 순위 중단")
-                    return
-                continue   # 다른 프록시로 재오픈
-            if not blocked or px is None or should_stop():
+                continue   # 차단 이력 IP — 첫 바퀴에선 다른 IP 먼저
+            if not blocked or px is None:
                 return
             if egress:
                 proxy_blocklist.record(egress, "Akamai 검색차단")
                 log(f"  [프록시] ⛔ 차단 감지 — egress {egress} 차단목록 등록")
-            if prog["rotations"] >= rotate_max:
-                log(f"  [프록시] egress 회전 소진({prog['rotations']}/{rotate_max}) — 순위 중단(다음날 보완)")
-                return
-            prog["tried"].add(px)
             prog["rotations"] += 1
-            log(f"  [프록시] 🔄 egress 재회전 {prog['rotations']}/{rotate_max} — 새 IP로 남은 키워드 재개")
+            log(f"  [프록시] 🔄 새 IP로 전환({prog['rotations']}번째) — 막힌 키워드부터 다시")
     finally:
         _ROT["active"], _ROT["can"] = False, (lambda: False)
 
 
-def _rank_matcher(vids, pname: str = ""):
-    """③ 순위 매칭 매처 — vid 있으면 vid로 **정확 매칭**, 없으면 **상품명(부분일치) 폴백**(DESIGN §2.1).
-
-    ⚠ 판매 0인 날은 vi-detail-search 가 그 상품을 안 줘서 vid 가 없을 수 있다(수집 자체는 정상 — 지표 0).
-    그런 상품도 건너뛰지 않고 상품명으로 순위를 추적한다.
-    ③ 순위조회는 product 객체 없이 워크북의 (vid, 상품명)만 안다."""
-    vset = set(str(v) for v in vids if v)
-    return {"제품": make_matcher(vendor_item_ids=vset,
-                                 name_substr=None if vset else (pname or "").strip())}
+def _rank_matcher(vids):
+    """③ 순위 매칭 매처 — **VID 정확 매칭만**(D-030: 쿠팡 상품은 VID 가 반드시 있다 → VID 없음은 오류로 처리하고
+    상품명 부분일치로 찾지 않는다·호출부 _semi_prep_product)."""
+    return {"제품": make_matcher(vendor_item_ids={str(v) for v in vids if v})}
 
 
 def _log_quality_summary(wb, log) -> None:
@@ -403,15 +379,14 @@ _SEMI_BANNER_JS = r"""(() => {
 @dataclass
 class _SemiState:
     """반자동 순위 상태기계의 가변 카운터(헬퍼가 공유·변경). 제어흐름은 분해 전과 동일."""
-    halted: bool = False        # 자동제출 서킷브레이커(연속 차단/미감지) → 당일 전면 중단
+    halted: bool = False        # 차단 → 이 IP 로는 그만(drive_rank 가 새 IP 로 다시 엶)
     miss_streak: int = 0        # 자동제출 연속 실패 수(성공 시 0으로 리셋)
-    cooldowns: int = 0          # 차단 감지 쿨다운 진입 횟수(진전 있으면 0으로 리셋) — 무한 재시도 방지
-    noname_products: int = 0    # vid·상품명 모두 없어(이례) 측정 못 한 상품 수(집계 → 종료 시 안내)
+    novid_products: int = 0     # VID 가 없어 측정 못 한 상품 수(오류·종료 요약)
     measured_any: bool = False  # 첫 검색 전엔 대기 없음·마지막 검색 뒤에도 대기 없음(간격은 '검색 사이'에만)
-    # ── 종료 요약용 **누적** 카운터(진전 리셋 대상 아님 — 실행 전체 합계, B-1 간격 되돌림 판단) ──
+    # ── 종료 요약용 **누적** 카운터(실행 전체 합계) ──
     searched: int = 0           # 실제 측정(순위 기록)된 검색 건수
-    cooldown_total: int = 0     # 차단 감지로 쿨다운에 진입한 총 횟수(간격이 짧아 IP를 태우는지 신호)
-    blocked_total: int = 0      # 확정 차단 페이지(사용권한 없음) 감지 총 횟수
+    blocked_total: int = 0      # 차단 판정 총 횟수(차단 페이지 또는 연속 미로딩)
+    rotations: int = 0          # 차단으로 새 IP 로 바꾼 횟수
 
 
 def _track_ranks_semi(wb, path, log, should_stop, date_label: str | None = None) -> Path:
@@ -423,8 +398,7 @@ def _track_ranks_semi(wb, path, log, should_stop, date_label: str | None = None)
     _semi_start_log(log)
 
     def _run_semi(browser, egress) -> bool:
-        st.halted = False      # 새 egress → halt 해제(차단카운터·측정수 등 누적은 유지)
-        st.cooldowns = 0       # 새 IP → 쿨다운 연속 카운터 리셋(이 IP 기준 다시)
+        st.halted = False      # 새 egress → 다시 시작(누적 카운터는 유지)
         st.miss_streak = 0
         _semi_browser_prep(browser)
         for biz in wb.account_sheets():
@@ -442,34 +416,27 @@ def _track_ranks_semi(wb, path, log, should_stop, date_label: str | None = None)
     drive_rank(offscreen=False, run_once=_run_semi, log=log, should_stop=should_stop)
     wb.apply_style()
     wb.save(path)
-    if st.noname_products:
-        log(f"  [안내] vid·상품명이 모두 없는 상품 {st.noname_products}개는 매칭 근거가 없어 순위 공란입니다(이례).")
-    if st.halted:
-        log("== ⛔ 반자동(자동검색) 중단(차단 추정) — 진행분 저장됨. 쉰 시간/IP에 다시 실행하면 이어서 조회 ==")
-    else:
-        log("== 반자동 노출순위 종료 — 진행분 저장됨(중단 시 다음 실행이 남은 것부터 이어서) ==")
+    if st.novid_products:
+        log(f"  ❌ [순위] VID 없는 상품 {st.novid_products}개 — 매칭 실패(①판매수집에서 VID 를 못 찾음) 확인 필요·순위 공란")
+    log("== 반자동 노출순위 종료 — 진행분 저장됨(빈 칸은 다음 실행이 이어서 채움) ==")
     _semi_summary_log(st, log)
     return path
 
 
 def _semi_summary_log(st: _SemiState, log) -> None:
-    """순위 단계 종료 요약 — 측정·쿨다운·차단 누적 + 검색간격. 차단/쿨다운이 있으면 간격 되돌림을 권고(B-1).
-
-    소유자가 검색간격을 45~75 → 35~55 로 낮춘 뒤 **차단이 늘면 되돌려야** 하는데, 그 판단을 로그 grep 없이
-    바로 할 수 있게 한다. 차단/쿨다운이 0이면 현재 간격 유지 판단."""
-    log(f"== [순위요약] 측정 {st.searched}건 · 쿨다운 {st.cooldown_total}회 · 차단감지 {st.blocked_total}회 "
-        f"· 검색간격 {config.RANK_NAV_DELAY_MIN_SEC}~{config.RANK_NAV_DELAY_MAX_SEC}s ==")
-    if st.cooldown_total or st.blocked_total:
-        log("== [순위요약] ⚠ 차단/쿨다운 발생 — config.py 의 RANK_NAV_DELAY 를 45~75 로 되돌리는 것을 권고합니다"
-            "(간격이 짧아 IP를 태우는 신호). 다음 실행에서도 계속 뜨면 상향 필요 ==")
+    """순위 단계 종료 요약 — 측정·차단·IP 전환·VID 없음 누적 + 검색간격. 차단이 있으면 간격 상향 검토를 안내."""
+    log(f"== [순위요약] 측정 {st.searched}건 · 차단감지 {st.blocked_total}회 · IP 전환 {st.rotations}회 "
+        f"· VID 없음 {st.novid_products} · 검색간격 {config.RANK_NAV_DELAY_MIN_SEC}~{config.RANK_NAV_DELAY_MAX_SEC}s ==")
+    if st.blocked_total:
+        log("== [순위요약] ⚠ 차단 발생 — 검색간격(설정 탭 '순위 간격' · config RANK_NAV_DELAY) 상향 검토 ==")
     else:
-        log("== [순위요약] 차단/쿨다운 0 — 현재 검색간격 유지 판단(무차단) ==")
+        log("== [순위요약] 차단 0 — 현재 검색간격 유지 ==")
 
 
 def _semi_start_log(log) -> None:
     log("== 반자동(자동검색) 노출순위 시작 — 앱이 키워드 자동입력+Enter까지 수행(손 안 대도 됨). "
         f"키워드 간 {config.RANK_NAV_DELAY_MIN_SEC}~{config.RANK_NAV_DELAY_MAX_SEC}s 간격, "
-        f"연속 {config.RANK_SEMI_AUTO_MAX_MISS}회 차단 시 계정 보호로 당일 중단 ==")
+        f"차단되면 프록시 새 IP 로 그 키워드부터 다시(프록시 없으면 다음 키워드 계속) ==")
 
 
 def _semi_browser_prep(browser) -> None:
@@ -493,8 +460,8 @@ def _semi_browser_prep(browser) -> None:
 def _semi_prep_product(st: _SemiState, wb, biz, pname, date, log):
     """반자동 순위 추적 전 가드/준비 — 대상 아니면 None, 대상이면 (matcher, todo).
 
-    생략: 수집주기 밖·판매중지(rank_suppressed)·키워드 없음(2차 옵션)·미기입 todo 없음.
-    matcher = sibling_vids(전 옵션 vid 합집합·아이템위너 놓침 방지), vid 없으면 상품명(부분일치)."""
+    생략: 수집주기 밖·판매중지(rank_suppressed)·키워드 없음(2차 옵션)·미기입 todo 없음·**VID 없음(❌오류·D-030)**.
+    matcher = sibling_vids(전 옵션 vid 합집합·아이템위너 놓침 방지)."""
     if wb.has_marketing() and not wb.product_due(biz, pname, date)[0]:
         return None                        # 상품 수집 주기(마케팅 상품만 매일) — 오늘 대상 아니면 순위도 생략
     if wb.rank_suppressed(biz, pname):     # 판매중지·임시저장·승인반려·대장취소선 → 순위 제외(소유자 2026-09-22)
@@ -503,15 +470,14 @@ def _semi_prep_product(st: _SemiState, wb, biz, pname, date, log):
     keywords = wb.product_keywords(biz, pname)
     if not keywords:                       # 2차 옵션 블록(키워드 없음)은 순위 대상 아님
         return None
-    if not vids and not (pname or "").strip():   # 매칭 근거(vid·상품명) 전무 → 측정 불가(이례)
-        st.noname_products += 1
-        return None
     todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
     if not todo:
         return None
-    if not vids:   # 판매 0 등으로 vid 없음 → 상품명(부분일치)으로 매칭(건너뛰지 않음)
-        log(f"  [순위] {biz} · {pname} — vid 없음(판매 0 등) → 상품명으로 매칭")
-    return _rank_matcher(vids, pname), todo
+    if not vids:   # 쿠팡 상품은 VID 가 반드시 있다 → 없음 = ①매칭 실패 오류(상품명으로 찾지 않음·D-030)
+        st.novid_products += 1
+        log(f"  ❌ [순위] {biz} · {pname} — VID 없음(매칭 실패 오류) → 순위 검색 안 함")
+        return None
+    return _rank_matcher(vids), todo
 
 
 def _semi_track_product(st: _SemiState, browser, wb, biz, pname, date, path, should_stop, log) -> None:
@@ -540,7 +506,6 @@ def _semi_track_product(st: _SemiState, browser, wb, biz, pname, date, path, sho
             _semi_on_miss(st, kw, blocked, should_stop, log)
             continue
         st.miss_streak = 0   # 성공 → 연속 실패 리셋
-        st.cooldowns = 0     # 진전 발생 → 쿨다운 카운터도 리셋(IP 살아있음)
         st.searched += 1     # 종료 요약용 누적(리셋 안 함)
         seen_name = _semi_record(wb, pg, matcher, biz, pname, kw, date, path, idx, len(todo), log) or seen_name
     if seen_name:
@@ -567,7 +532,8 @@ def _semi_search_one(st: _SemiState, browser, kw, should_stop, log):
 
 
 def _semi_on_miss(st: _SemiState, kw, blocked: bool, should_stop, log) -> None:
-    """검색 결과 미감지(pg=None) 처리 — 서킷브레이커(egress 회전 / 쿨다운 재개 / 당일 중단)."""
+    """검색 결과 미감지(pg=None) 처리 — 차단 판정 시 프록시 새 IP 로 전환(없으면 다음 키워드 계속).
+    30분 쿨다운·당일 중단 없음(D-030)."""
     st.miss_streak += 1
     if blocked:   # 확정 차단 페이지(사용권한 없음)=IP 막힘 → 3회 안 기다리고 즉시 판정
         st.blocked_total += 1     # 종료 요약용 누적
@@ -579,28 +545,13 @@ def _semi_on_miss(st: _SemiState, kw, blocked: bool, should_stop, log) -> None:
             f"연속 {st.miss_streak}/{config.RANK_SEMI_AUTO_MAX_MISS}")
     if st.miss_streak < config.RANK_SEMI_AUTO_MAX_MISS:
         return
+    st.miss_streak = 0
     if rotation_can_rotate():
-        # 차단 egress 를 새 IP 로 바꾸는 게 30분 쿨다운보다 싸다 → 쿨다운 생략하고 회전으로 전환.
-        st.cooldown_total += 1   # 종료 요약용 누적(차단으로 egress 교체한 횟수도 신호)
-        st.halted = True         # drive_rank 가 egress 기록 후 새 IP로 남은 키워드 재개
-        log("  ⟳ 차단 — egress 회전 가능 → 쿨다운 생략하고 새 IP로 전환")
+        st.rotations += 1
+        st.halted = True         # drive_rank 가 차단 egress 기록 후 새 IP 로 이 키워드부터 다시
+        log("  ⟳ 차단 — 프록시 새 IP 로 전환해 이 키워드부터 다시")
         return
-    # 하드 스톱 대신 **긴 쿨다운 후 자동 재개**(무인 장시간). 쿨다운 후에도 진전 0이
-    # 반복되면(cooldowns 초과) 그때 당일 중단(IP 회복 불가 판단 — 무한 재시도 금지).
-    st.cooldowns += 1
-    st.cooldown_total += 1        # 종료 요약용 누적(진전 시 cooldowns 만 리셋·이건 유지)
-    if st.cooldowns > config.RANK_SEMI_COOLDOWN_MAX:
-        st.halted = True
-        log(f"  ⛔ 쿨다운 {config.RANK_SEMI_COOLDOWN_MAX}회 후에도 계속 차단 = IP 회복 불가"
-            " → 당일 중단. 쉰 시간/다른 IP에서 다시 실행하면 남은 것부터 이어서")
-        return
-    mins = config.RANK_SEMI_COOLDOWN_SEC // 60
-    resume_at = (datetime.now() + timedelta(seconds=config.RANK_SEMI_COOLDOWN_SEC)).strftime("%H:%M")
-    log(f"  ⏸ 차단 감지 — 하드중단 대신 {mins}분 쿨다운 후 자동 재개(약 {resume_at}). "
-        f"쿨다운 {st.cooldowns}/{config.RANK_SEMI_COOLDOWN_MAX} (재개 후 1개라도 측정되면 리셋)")
-    _interruptible_sleep(config.RANK_SEMI_COOLDOWN_SEC, should_stop, log, f"(약 {resume_at})")
-    st.miss_streak = 0    # 쿨다운 끝 → 다음 키워드부터 재개
-
+    log("  ⚠ 차단 — 바꿀 프록시 IP 없음 → 쉬지 않고 다음 키워드 계속(막힌 칸은 공란·다음 실행이 채움)")
 
 def _semi_record(wb, pg, matcher, biz, pname, kw, date, path, idx, total, log) -> str:
     """검색결과 페이지에서 순위를 파싱해 워크북에 기록·저장(상품마다 저장 → 중단해도 이어서).

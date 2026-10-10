@@ -301,13 +301,13 @@ def pin_vendor_fallback_to_discover():
 
 
 # ── 반자동 순위 상태기계 핀 ────────────────────────────────────
-def _rank_wb(path: Path, *, keywords=("kw1", "kw2"), second_optionless=False) -> OutputWorkbook:
+def _rank_wb(path: Path, *, keywords=("kw1", "kw2"), second_optionless=False, vids=("vidR",)) -> OutputWorkbook:
     """반자동 순위 구동용 최소 워크북 — 계정1·상품1(vid·키워드·최신 일자)."""
     wb = OutputWorkbook.empty()
     biz = "비즈R"
     wb.ensure_account(biz)
     wb.ensure_product_block(biz, "상품R", config.KIND_CONTRACT, list(keywords), registered="상품R")
-    wb.set_product_vids(biz, "상품R", ["vidR"])
+    wb.set_product_vids(biz, "상품R", list(vids))
     if second_optionless:   # 다중옵션 2차 블록(키워드 없음) → 순위 대상 아님(건너뜀 검증)
         wb.ensure_product_block(biz, "상품R (그레이)", config.KIND_CONTRACT, [],
                                 rank_rows=False, registered="상품R")
@@ -352,15 +352,14 @@ def pin_rank_success():
     _check(wb.is_rank_filled("비즈R", "상품R", "kw1", dt), "kw1 순위 기록됨")
     _check(wb.is_rank_filled("비즈R", "상품R", "kw2", dt), "kw2 순위 기록됨")
     # B-1 종료 요약: 무차단이면 유지 판단·되돌림 권고 없음
-    _check("[순위요약]" in joined and "차단/쿨다운 0" in joined, "무차단 종료 요약(측정·쿨다운·차단 집계)")
-    _check("되돌리는 것을 권고" not in joined, "무차단 시 간격 되돌림 권고 없음")
+    _check("[순위요약]" in joined and "차단 0" in joined, "무차단 종료 요약(측정·차단 집계)")
+    _check("RANK_NAV_DELAY" not in joined, "무차단 시 간격 상향 안내 없음")
 
 
 def pin_rank_not_found():
     print("[핀 J2] 반자동 순위 미발견 → '센 개수 위밖' 기록(예 '44위밖', 공란 아님=재측정 안 함)")
     _SPEC.clear(); _COUNT.clear()
     config.RANK_SEMI_AUTO_MAX_MISS = 3
-    config.RANK_SEMI_COOLDOWN_MAX = 4
     d = Path(tempfile.mkdtemp()); path = d / "m.xlsx"
     wb = _rank_wb(path)
     pg = object()
@@ -376,11 +375,9 @@ def pin_rank_not_found():
 
 
 def pin_rank_block_then_recover():
-    print("[핀 K] 차단 감지 → 쿨다운 후 자동 재개(하드중단 아님) → 다음 키워드 측정")
+    print("[핀 K] 차단 감지(프록시 없음) → 쉬지 않고 다음 키워드 계속 — 30분 쿨다운 없음(D-030)")
     _SPEC.clear(); _COUNT.clear()
-    config.RANK_SEMI_AUTO_MAX_MISS = 1     # 1회 미로딩이면 곧장 쿨다운 판정(빠른 시험)
-    config.RANK_SEMI_COOLDOWN_SEC = 0      # 쿨다운 즉시 종료
-    config.RANK_SEMI_COOLDOWN_MAX = 2      # 2회까지는 재개(초과 시 중단)
+    config.RANK_SEMI_AUTO_MAX_MISS = 1     # 1회 미로딩이면 곧장 차단 판정(빠른 시험)
     d = Path(tempfile.mkdtemp()); path = d / "m.xlsx"
     wb = _rank_wb(path)
     pg = object()
@@ -389,37 +386,49 @@ def pin_rank_block_then_recover():
     P._track_ranks_semi(wb, path, logs.append, lambda: False)
     joined = "\n".join(logs)
     dt = wb.latest_date("비즈R")
-    _check(not wb.is_rank_filled("비즈R", "상품R", "kw1", dt), "kw1 차단 → 공란(재측정 대상)")
-    _check(wb.is_rank_filled("비즈R", "상품R", "kw2", dt), "kw2 재개 후 측정됨")
-    _check("쿨다운 후 자동 재개" in joined and "IP 회복 불가" not in joined, "쿨다운 재개(하드중단 아님)")
-    # B-1 종료 요약: 차단/쿨다운 발생 → 간격 되돌림 권고
-    _check("[순위요약]" in joined and "쿨다운 1회" in joined and "차단감지 1회" in joined, "요약에 쿨다운·차단 누적 집계")
-    _check("RANK_NAV_DELAY 를 45~75" in joined, "차단/쿨다운 발생 시 간격 되돌림 권고 출력")
+    _check(not wb.is_rank_filled("비즈R", "상품R", "kw1", dt), "kw1 차단 → 공란(다음 실행이 다시 잼)")
+    _check(wb.is_rank_filled("비즈R", "상품R", "kw2", dt), "kw2 바로 이어서 측정됨")
+    _check("쿨다운" not in joined, "30분 쿨다운 없음")
+    _check("[순위요약]" in joined and "차단감지 1회" in joined, "요약에 차단 누적 집계")
+    _check("RANK_NAV_DELAY" in joined, "차단 발생 시 간격 상향 검토 안내")
 
 
 def pin_rank_halt():
-    print("[핀 L] 쿨다운 최대 초과 = IP 회복 불가 → 당일 중단(halt), 남은 키워드 공란")
+    print("[핀 L] 연속 차단이어도 당일 중단 없음 — 남은 키워드 전부 시도(D-030)")
     _SPEC.clear(); _COUNT.clear()
     config.RANK_SEMI_AUTO_MAX_MISS = 1
-    config.RANK_SEMI_COOLDOWN_SEC = 0
-    config.RANK_SEMI_COOLDOWN_MAX = 1      # 쿨다운 1회 후에도 차단이면 중단
     d = Path(tempfile.mkdtemp()); path = d / "m.xlsx"
     wb = _rank_wb(path)
     logs: list[str] = []
-    _install_rank_fakes([(None, True), (None, True)])   # 연속 차단
+    state = _install_rank_fakes([(None, True), (None, True)])   # 연속 차단
     P._track_ranks_semi(wb, path, logs.append, lambda: False)
     joined = "\n".join(logs)
     dt = wb.latest_date("비즈R")
-    _check("IP 회복 불가" in joined, "쿨다운 초과 → 당일 중단(IP 회복 불가) 로그")
+    _check(state["i"] == 2, f"두 키워드 모두 검색 시도({state['i']}회)")
+    _check("IP 회복 불가" not in joined and "당일 중단" not in joined, "당일 중단 없음")
     _check(not wb.is_rank_filled("비즈R", "상품R", "kw1", dt), "kw1 공란")
-    _check(not wb.is_rank_filled("비즈R", "상품R", "kw2", dt), "kw2 공란(중단으로 미측정)")
+    _check(not wb.is_rank_filled("비즈R", "상품R", "kw2", dt), "kw2 공란")
+
+
+def pin_rank_no_vid_error():
+    print("[핀 R] VID 없는 상품 = ❌오류 기록·상품명으로 검색 안 함(D-030 — 쿠팡 상품은 VID 가 반드시 있음)")
+    _SPEC.clear(); _COUNT.clear()
+    config.RANK_SEMI_AUTO_MAX_MISS = 3
+    d = Path(tempfile.mkdtemp()); path = d / "m.xlsx"
+    wb = _rank_wb(path, vids=())
+    logs: list[str] = []
+    state = _install_rank_fakes([(object(), False)])
+    P._track_ranks_semi(wb, path, logs.append, lambda: False)
+    joined = "\n".join(logs)
+    _check(state["i"] == 0, f"검색하지 않음({state['i']}회)")
+    _check("❌" in joined and "VID 없음" in joined, "VID 없음 오류 로그")
+    _check("VID 없음 1" in joined, "요약에 VID 없음 집계")
 
 
 def pin_rank_skip_optionless():
     print("[핀 M] 키워드 없는 2차 옵션 블록은 순위 대상 아님(건너뜀·크래시 없음)")
     _SPEC.clear(); _COUNT.clear()
     config.RANK_SEMI_AUTO_MAX_MISS = 3
-    config.RANK_SEMI_COOLDOWN_MAX = 4
     d = Path(tempfile.mkdtemp()); path = d / "m.xlsx"
     wb = _rank_wb(path, second_optionless=True)
     pg = object()
@@ -434,7 +443,6 @@ def pin_rank_skip_suspended():
     print("[핀 P2] 판매중지 상품은 순위 검색 제외(rank_suppressed)")
     _SPEC.clear(); _COUNT.clear()
     config.RANK_SEMI_AUTO_MAX_MISS = 3
-    config.RANK_SEMI_COOLDOWN_MAX = 4
     d = Path(tempfile.mkdtemp()); path = d / "m.xlsx"
     wb = _rank_wb(path)                                  # 상품R · kw1/kw2 · vid vidR
     wb.apply_sale_status("비즈R", {"vidR": True})        # True → 판매중지
@@ -554,8 +562,7 @@ def main() -> int:
     PR.WingBrowser = _FakeWing       # 순위(pipeline_ranks)
     _orig_random = PR.random   # 순위 핀에서 pause=0 으로 바꾸므로 종료 시 원복(순위=pipeline_ranks.random)
     saved = {k: getattr(config, k, None) for k in (
-        "RANK_SEMI_AUTO_MAX_MISS", "RANK_SEMI_COOLDOWN_SEC",
-        "RANK_SEMI_COOLDOWN_MAX")}
+        "RANK_SEMI_AUTO_MAX_MISS")}
     print("=" * 60)
     print("  핀 테스트 — _login_and_discover / _track_ranks_semi (실제 코드)")
     print("=" * 60)
@@ -573,6 +580,7 @@ def main() -> int:
         pin_rank_not_found()
         pin_rank_block_then_recover()
         pin_rank_halt()
+        pin_rank_no_vid_error()
         pin_rank_skip_optionless()
         pin_rank_skip_suspended()
         pin_submit_no_double_on_nav()

@@ -67,16 +67,11 @@ TYPE_DWELL_PER_CHAR_SEC = 1.0  # 글자당 추가(초) — '글자수 + 2초' = 
 def type_dwell(text) -> float:
     """검색어 입력 후 실행까지 사람같은 멈춤(초) = 글자수 × 초당타이핑 + 기본여유. 무작위 아님(사용자 지정)."""
     return len(str(text or "")) * TYPE_DWELL_PER_CHAR_SEC + TYPE_DWELL_BASE_SEC
-RANK_SEMI_AUTO_MAX_MISS = 3   # 자동제출 후 연속 미감지/차단 이 횟수면 '차단 감지'로 보고 쿨다운(아래) 진입
+RANK_SEMI_AUTO_MAX_MISS = 3   # 자동제출 후 연속 미감지 이 횟수면 '차단'으로 보고 프록시 새 IP 로 전환(없으면 다음 키워드)
 RANK_SEMI_AUTO_WAIT_SEC = 40  # 자동제출 1건의 결과 로딩 최대 대기(초). 넘으면 미감지로 카운트
 RANK_SUBMIT_CONFIRM_SEC = 2.0 # 자동제출 Enter 후 검색 네비(URL q 일치)를 이만큼 기다려 확인 — 되면 버튼/폼 submit
 #                               폴백을 **생략**(이중 검색요청 방지). 안 되면(Enter가 폼 못 넘김) 그때만 폴백.
-# 차단 감지 시 **하드 스톱 대신 긴 쿨다운 후 자동 재개**(무인 장시간 운용 — 자리 비운 새 4시간 방치 방지).
-# ⚠️ 짧은 백오프로 두드리면 IP만 탐(메모리 안티차단) → **충분히 긴 쿨다운** + **쿨다운 후에도 진전 0이
-# RANK_SEMI_COOLDOWN_MAX회 연속이면 그때 당일 중단**(IP 하드플래그로 판단, 무한 재시도 금지).
-# 쿨다운 뒤 한 개라도 측정되면(진전) 카운터 리셋하고 계속 → IP가 풀리는 한 밤새 점진 수집.
-RANK_SEMI_COOLDOWN_SEC = 1800  # 차단 감지 후 재개까지 대기(초). 30분(사용자 지정 — 볼륨 플래그 완화에 여유·IP 부담↓)
-RANK_SEMI_COOLDOWN_MAX = 4     # 쿨다운 후에도 진전 0이 이만큼 연속이면 당일 중단(그 IP는 회복 불가로 판단)
+# 차단 시 30분 쿨다운·당일 중단은 폐지(D-030) — 프록시 풀을 돌려 새 IP 로 계속(프록시 없으면 다음 키워드).
 RANK_PAGE_DELAY_MIN = 2.0     # 페이지 간 최소 지연(초). 스캔50=1페이지라 거의 미발동이나 2P+ 시 여유
 RANK_PAGE_DELAY_MAX = 5.0     # 페이지 간 최대 지연(초)
 # ⚠️ 키워드(검색) 사이 대기 — **반자동 순위조회**. 실제 대기 = MIN~MAX 무작위(사람처럼).
@@ -338,9 +333,7 @@ PROXY_ALLOW_AUTH = False    # HTTP(S) user:pass 프록시 인증을 명시적으
 # 순위검색 중 차단(RankBlocked) 감지 시 30분 쿨다운에 바로 들지 말고 **새 egress IP 로 먼저 교체**해 재시도.
 # 회전 소진/무효일 때만 기존 쿨다운→당일중단으로 떨어진다(기존 안전망 보존). 로그인·수집에는 무관.
 # 차단당한 **실제 egress IP** 를 파일에 기억(TTL 만료)해, 업체가 그 IP 를 다시 주면 skip 하고 다른 IP 를 받는다.
-RANK_PROXY_ROTATE_ON_BLOCK = True    # 차단 감지 시 쿨다운 전에 새 egress 로 먼저 교체
-RANK_PROXY_ROTATE_MAX = 3            # 차단 1건당 egress 회전 상한(소진 시 기존 쿨다운으로)
-RANK_PROXY_LAUNCH_MAX_ATTEMPTS = 5   # (재)기동 시 차단이력 egress 선제 skip 반복 상한(풀 전부 이력이면 fail-closed)
+RANK_PROXY_ROTATE_ON_BLOCK = True    # 차단 감지 시 새 egress 로 교체(횟수 제한 없이 풀을 돌려 씀·D-030)
 RANK_PROXY_PRECHECK_EGRESS = True    # (재)기동마다 egress IP 에코로 확인 + 차단목록 대조(이력이면 다른 IP 재요청)
 RANK_PROXY_BLOCKLIST_FILE = "rank_blocked_ips.json"  # data_root 기준·gitignore(운영 상태·비밀 아님)
 RANK_PROXY_BLOCKLIST_TTL_SEC = 259200   # 차단 egress 기억 유효기간 72h — 지나면 복귀(주거용 IP 회복·영구낙인 금지)

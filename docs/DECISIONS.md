@@ -397,3 +397,11 @@ un_log_*.log`)로 확인 필요.
 - 영향 범위: `pipeline.py`(_collect_with_login·_not_done·run_full), `pipeline_stages.py`, `config.py`(LOGIN_BLOCK_CIRCUIT·LOGIN_NIGHT_RESUME* 삭제), `ui/app_qt.py`(start_auto), `tools/simulate_pipeline.py`(8·가짜 로그인 block_once·시도 횟수), `tools/pin_run_plan.py`(P11 삭제). 정책 문구 CLAUDE.md·DESIGN·FEATURE_INVENTORY.
 - 상태: ACTIVE
 
+### D-030 [RANK_NO_HALT_VID_REQUIRED] ③ 순위 — 쿨다운·당일 중단 폐지·차단 시 프록시 풀 무제한 회전·VID 없음=오류 (2026-10-10, R10)
+- 결정: ③ 반자동 순위에서 차단 판정(연속 미로딩 `RANK_SEMI_AUTO_MAX_MISS` 또는 차단 페이지) 시 **30분 쿨다운·쿨다운 4회 초과 당일 중단을 하지 않는다**. 프록시 ON 이면 **새 egress 로 막힌 키워드부터 다시**(`drive_rank` — 회전 횟수 제한 없음·풀 한 바퀴 뒤엔 차단 이력 IP 도 재사용·끝=남은 키워드 없음·중지 요청·프록시 설정 오류), 프록시 OFF/회전 불가면 **쉬지 않고 다음 키워드**(막힌 칸 공란 → 다음 실행이 채움). 매칭은 **VID 정확 매칭만** — VID 없는 상품은 ❌오류로 기록하고 검색하지 않음(상품명 부분일치 폴백 삭제). 종료 요약 = 측정·차단감지·IP 전환·VID 없음·검색간격. config `RANK_SEMI_COOLDOWN_SEC/MAX`·`RANK_PROXY_ROTATE_MAX`·`RANK_PROXY_LAUNCH_MAX_ATTEMPTS` 삭제.
+- 근거: 소유자 지시(2026-10-10 "VID 가 없으면 오류임 — 모든 상품은 VID 가 있음", "30분 쉬고 다시·그날 멈춤 = 적용하지 말 것") + 선택 답("프록시 풀을 돌려가며 계속 재시도"). 핀 K·L 을 새 기대값으로 다시 씀·핀 R 신설(실패→통과), test_proxy_patch 회전 2종 갱신(11 PASS), 게이트 16종·복잡도 0.
+- 버린 대안: (a) 쿨다운 유지(소유자 지시와 다름) (b) 프록시 없을 때 무한 재시도(같은 IP 로 같은 키워드 반복 = 차단만 연장) (c) VID 없으면 상품명 폴백 유지(다른 상품을 내 상품으로 오인 가능·소유자 판단 '소스 오류').
+- 위험(소유자 감수): 모든 egress 가 막혀 있으면 ③이 끝나지 않고 계속 돈다(다음 날 18:00 시작 정리가 끝냄). 차단 IP 재사용으로 그 IP 평판이 더 나빠질 수 있다.
+- 영향 범위: `pipeline_ranks.py`(drive_rank·_run_on_egress(skip_blocked)·_rank_matcher·_SemiState·_semi_prep_product·_semi_on_miss·요약), `config.py`, `tools/pin_login_ranks.py`(J·K·L·R), `tools/test_proxy_patch.py`. 문서 CLAUDE.md·DESIGN.
+- 상태: ACTIVE
+

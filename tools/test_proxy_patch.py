@@ -282,12 +282,11 @@ class _FakeCM:
 
 
 def test_drive_rank_rotation() -> None:
-    """pipeline_ranks.drive_rank: egress 선제 skip(차단이력) + 차단 시 재회전(상한) + 기록 — 오프라인."""
+    """pipeline_ranks.drive_rank: egress 선제 skip(차단이력·첫 바퀴) + 차단 시 횟수 제한 없이 풀 회전(D-030) + 기록."""
     from coupang_analytics import pipeline_ranks as PR
     from coupang_analytics import proxy_blocklist as bl
 
-    saved = (config.PROXY_ENABLED, config.RANK_PROXY_ROTATE_ON_BLOCK,
-             config.RANK_PROXY_PRECHECK_EGRESS, config.RANK_PROXY_ROTATE_MAX)
+    saved = (config.PROXY_ENABLED, config.RANK_PROXY_ROTATE_ON_BLOCK, config.RANK_PROXY_PRECHECK_EGRESS)
     orig = (PR.WingBrowser, proxy_pool.rank_proxy_pool_urls,
             bl.resolve_egress_ip, bl.is_blocked, bl.record, bl.entry)
     proxy_pool.reset_cache()
@@ -315,11 +314,10 @@ def test_drive_rank_rotation() -> None:
         assert calls == ["2.2.2.2"], f"차단이력 IP skip 실패: {calls}"
         assert recorded == [], "선제 skip 인데 차단기록이 생김"
 
-        # ── 시나리오 2: 매 실행 차단(True) → 회전 상한까지 재회전 + egress 기록 ──
-        config.RANK_PROXY_ROTATE_MAX = 2
-        ips = iter(["10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4"])
+        # ── 시나리오 2: 매 실행 차단(True) → 풀 3개를 다 쓰고 2바퀴째(차단 이력 무시)까지 계속 회전 + egress 기록 ──
+        ips = iter([f"10.0.0.{k}" for k in range(1, 10)])
         bl.resolve_egress_ip = lambda browser, log=None: next(ips)
-        bl.is_blocked = lambda ip, data=None: False
+        bl.is_blocked = lambda ip, data=None: ip in recorded2   # 차단 기록된 IP = 이력(2바퀴째엔 무시돼야)
         recorded2: list = []
         bl.record = lambda ip, reason="": recorded2.append(ip)
         runs: list = []
@@ -328,13 +326,12 @@ def test_drive_rank_rotation() -> None:
             runs.append(e)   # 항상 차단
             return True
 
-        PR.drive_rank(offscreen=False, run_once=_blocked, log=lambda m: None)
-        # 첫 실행 + 회전 2회 = run_once 3회, 매번 egress 기록, 그 뒤 회전 소진으로 종료
-        assert len(runs) == 3, f"회전 상한 동작 오류(run_once {len(runs)}회)"
+        PR.drive_rank(offscreen=False, run_once=_blocked, log=lambda m: None, should_stop=lambda: len(runs) >= 5)
+        # 상한 없이 회전: 중지 요청(5회)까지 계속 — 풀 3개 → 2바퀴째로 넘어가서도 실행
+        assert len(runs) == 5, f"풀 회전이 상한 없이 계속되지 않음(run_once {len(runs)}회)"
         assert recorded2 == runs, f"차단 egress 기록 누락: {recorded2} vs {runs}"
     finally:
-        (config.PROXY_ENABLED, config.RANK_PROXY_ROTATE_ON_BLOCK,
-         config.RANK_PROXY_PRECHECK_EGRESS, config.RANK_PROXY_ROTATE_MAX) = saved
+        (config.PROXY_ENABLED, config.RANK_PROXY_ROTATE_ON_BLOCK, config.RANK_PROXY_PRECHECK_EGRESS) = saved
         (PR.WingBrowser, proxy_pool.rank_proxy_pool_urls,
          bl.resolve_egress_ip, bl.is_blocked, bl.record, bl.entry) = orig
         proxy_pool.reset_cache()
@@ -361,30 +358,23 @@ def test_rank_block_images() -> None:
 
 
 def test_semi_block_rotate_signal() -> None:
-    """③ 반자동 _semi_on_miss: 확정 차단 시 회전 가능하면 쿨다운(30분 sleep) 생략·halted 로 drive_rank 에 새 IP 요청,
-    회전 불가 + 쿨다운 상한 0 이면 즉시 당일중단(halted)·sleep 안 함. (옛 인라인 _rank_cooldown 핀을 운영 경로로 이전·D-022 B5)"""
+    """③ 반자동 _semi_on_miss(D-030): 차단 시 회전 가능하면 halted(새 IP 로 그 키워드부터)·회전 불가면 halted 아님
+    (다음 키워드 계속) — 둘 다 30분 쿨다운 sleep 없음."""
     from coupang_analytics import pipeline_ranks as PR
-    import coupang_analytics.config as C
     orig_can, orig_sleep = PR.rotation_can_rotate, PR._interruptible_sleep
-    saved_max = C.RANK_SEMI_COOLDOWN_MAX
     slept: list = []
     try:
         PR._interruptible_sleep = lambda *a, **k: slept.append(a)
-        # 회전 가능 → halted(새 egress 로 재개)·쿨다운 sleep 없음
         PR.rotation_can_rotate = lambda: True
         st = PR._SemiState()
         PR._semi_on_miss(st, "kw", True, lambda: False, lambda m: None)
-        assert st.halted is True and st.cooldowns == 0 and not slept, (st, slept)
-        # 회전 불가 + 쿨다운 상한 0 → 즉시 당일중단(halted)·sleep 없음
+        assert st.halted is True and st.rotations == 1 and not slept, (st, slept)
         PR.rotation_can_rotate = lambda: False
-        C.RANK_SEMI_COOLDOWN_MAX = 0
         st = PR._SemiState()
         PR._semi_on_miss(st, "kw", True, lambda: False, lambda m: None)
-        assert st.halted is True and st.cooldowns == 1 and not slept, (st, slept)
+        assert st.halted is False and st.blocked_total == 1 and not slept, (st, slept)
     finally:
         PR.rotation_can_rotate, PR._interruptible_sleep = orig_can, orig_sleep
-        C.RANK_SEMI_COOLDOWN_MAX = saved_max
-
 
 def main() -> None:
     tests = [
