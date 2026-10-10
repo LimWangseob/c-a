@@ -123,6 +123,14 @@ def rank_proxy_or_skip(log=None) -> tuple[Optional[str], bool]:
         return None, False
 
 
+def public_search_proxy(log=None) -> tuple[Optional[str], bool]:
+    """비로그인 쿠팡 공개 검색(② 자동완성·키워드 추천 탭·순위 조회 탭)의 프록시 — config.json 설정을 먼저 적용한 뒤
+    ③ 순위와 같은 규칙으로 선택(D-031). (url|None, ok): OFF=(None, True)·ON+오류=(None, False) → 호출부가 그 검색을
+    건너뜀(직접연결로 우회하지 않음). ⛔ 로그인·판매수집·정산에는 쓰지 않는다(🔒 정책)."""
+    config.apply_proxy_override(log)
+    return rank_proxy_or_skip(log)
+
+
 def _pick_url(urls: list[str], key: str) -> str:
     """raw_url 목록에서 결정적(rendezvous) 1개 선택 — _pick 과 동일한 점수식."""
     def score(u: str) -> bytes:
@@ -197,7 +205,7 @@ def redacted(url: Optional[str]) -> str:
 
 
 __all__ = [
-    "load_manager", "rank_proxy", "rank_proxy_url", "rank_proxy_or_skip",
+    "load_manager", "rank_proxy", "rank_proxy_url", "rank_proxy_or_skip", "public_search_proxy",
     "rank_proxy_pool_urls", "pick_rank_proxy",
     "reset_cache", "proxy_file_path", "redacted",
 ]

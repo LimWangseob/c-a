@@ -97,8 +97,8 @@ def plan_after_pass(stopped: bool, work: int, pending: int, waits: int, idle_pas
     pending=요청예정/요청됨(파일 생성 대기) 작업 수 · waits=일시 오류·브라우저 닫힘으로 '대기'된 계정 수 ·
     idle_passes=새로 한 일 없이 끝난 연속 바퀴 수.
       → 'again'(곧 다음 바퀴) · 'later'(5분 뒤 다음 바퀴) · 'done'(다 받음·종료) · 'stop'(중단·종료) · 'giveup'(미완료·종료)"""
-    if stopped:
-        return "stop", "연속 실패/차단으로 중단 — 다음 ①판매수집 완료 후 이어서 받음"
+    if stopped:   # D-031: 종료하지 않고 이번 바퀴만 멈춤 → 잠시 뒤 같은 사무실 IP 로 다음 바퀴(프록시 안 씀·🔒 로그인 정책)
+        return "later", "연속 실패/차단 — 이번 바퀴만 멈춤, 잠시 뒤 다음 바퀴에 다시 시도"
     if work > 0:
         return "again", f"{work}건 처리 — 곧 다음 바퀴(아직 받을 것 확인)"
     if pending or waits:

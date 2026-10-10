@@ -75,20 +75,17 @@ def _fill_product_metrics(wb, biz, pname, vids, kind, metrics, inv_by_vid, date_
                           log=None, sale_status=None) -> None:
     """**옵션(블록) 단위** 판매지표·재고·판매상태 기록 + **vid 기준 데이터 로그**(진행 추적).
 
-    vids = 이 블록에 속한 옵션ID 목록(단일옵션·판매자배송=상품 전 옵션, 다중옵션=그 옵션 하나). 지표는
-    vi-detail-search(metrics: vid→OptionMetric)에서, 재고는 RFM 재고 API(inv_by_vid: vid→수량)에서 vid 로
-    조인해 이 블록 vid 들만 합산한다. 재고행은 kind 가 로켓그로스/둘다일 때만.
+    vids = 이 블록에 속한 옵션ID 목록. 판매량·방문자·노출량은 vi-detail-search(metrics: vid→OptionMetric) **조회값
+    그대로**(합산 안 함·D-031), 재고는 RFM 재고 API(inv_by_vid: vid→수량)를 이 블록 vid 로 조인. 재고행은 kind 가
+    로켓그로스/둘다일 때만.
     **재고 규칙(소유자 2026-09-24 개정)**: 재고현황 API에 vid 있으면 수량(0=입고됐지만 품절) · **없으면
     판매중지 여부와 무관하게 '미입고'**(실입고 안 됨). 값 출처=재고현황 API만(상품조회 stockQuantity 금지).
     **판매상태(소유자 2026-09-24)**: 쿠팡 productStatus(sale_status)를 실행일 '판매상태' 지표행에 항상 기록
     (재고칸이 아니라 별도 지표행 — 쿠팡 상태 그대로 존중, 판매중지도 재고칸엔 미입고/값)."""
-    views = sales = visitors = 0
-    for oid in vids:
-        m = metrics.get(oid)
-        if m:
-            views += m.views
-            sales += m.sales
-            visitors += m.visitors
+    # 조회값 그대로(D-031 — 합치지 않음): 블록 VID 중 판매분석에 잡힌 **첫 VID** 의 값. 지금은 블록당 VID 가 1개라
+    # 대부분 그 값 그대로이고, 옛 블록처럼 VID 가 여러 개여도 더하지 않는다.
+    m = next((metrics[oid] for oid in vids if oid in metrics), None)
+    views, sales, visitors = (m.views, m.sales, m.visitors) if m else (0, 0, 0)
     wb.set_product_metric(biz, pname, config.M_SALES, date_iso, sales)
     wb.set_product_metric(biz, pname, config.M_VISITORS, date_iso, visitors)
     wb.set_product_metric(biz, pname, config.M_VIEWS, date_iso, views)

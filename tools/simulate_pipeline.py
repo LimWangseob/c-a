@@ -52,7 +52,8 @@ _STATE = {"discover_calls": 0, "crash_at": None, "error_at": None,
 
 # ── 가짜 의존성 ────────────────────────────────────────────────
 class _FakeBrowser:
-    def __init__(self, *a, **k): pass
+    def __init__(self, *a, **k):
+        _STATE.setdefault("browser_kw", []).append(k)   # 프록시 전달 검증용(시나리오 22)
     def __enter__(self): return self
     def __exit__(self, *exc): return False
 
@@ -674,6 +675,46 @@ def scenario_rank_label_matches_sales_column():
            "채운 칸으로 인식(재측정 안 함)")
 
 
+def scenario_metrics_not_summed():
+    print("[시나리오 21] 판매량·방문자·노출량 = 조회값 그대로(블록에 VID 가 여러 개여도 합치지 않음·D-031)")
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    d = Path(tempfile.mkdtemp())
+    from coupang_analytics.workbook import OutputWorkbook
+    p = Product(name="상품-M", options=[Option(label="", vendor_item_ids=["m1", "m2"], product_ids=[])],
+                kind=config.KIND_CONTRACT)
+    il = InputList(accounts=[Account("a1", "대표-a1", "비즈-a1", [p])], errors=[])
+    _run1(il, d, date_from="2026-09-01", date_to="2026-09-01")
+    wb = OutputWorkbook.load(P._master_path(d))
+    ws = wb.wb["비즈-a1"]
+    col = wb._date_col["비즈-a1"][wb.latest_date("비즈-a1")]
+    val = {m: ws.cell(wb._metric_row[("비즈-a1", "상품-M", m)], col).value
+           for m in (config.M_SALES, config.M_VISITORS, config.M_VIEWS)}
+    _check(val == {config.M_SALES: 7, config.M_VISITORS: 50, config.M_VIEWS: 100},
+           f"VID 2개(각 판매7·방문50·노출100)인데 합계 아닌 조회값 그대로 {val}")
+
+
+def scenario_keyword_stage_proxy():
+    print("[시나리오 22] ② 쿠팡 자동완성 브라우저에 노출순위 프록시 적용·프록시 오류면 자동완성만 건너뜀(D-031)")
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    from coupang_analytics import proxy_pool
+    d = Path(tempfile.mkdtemp())
+    _run1(_account_one_vid("vidK"), d, date_from="2026-09-01", date_to="2026-09-01")
+    orig = proxy_pool.public_search_proxy
+    try:
+        proxy_pool.public_search_proxy = lambda log=None: ("http://px:1", True)
+        _STATE["browser_kw"] = []
+        _run2(d)
+        _check(any(k.get("proxy") == "http://px:1" for k in _STATE["browser_kw"]), f"프록시 전달 {_STATE['browser_kw']}")
+        proxy_pool.public_search_proxy = lambda log=None: (None, False)
+        _STATE["browser_kw"] = []
+        logs: list = []
+        _run2(d, on_log=logs.append)
+        _check(not _STATE["browser_kw"] and any("자동완성" in x and "건너뜀" in x for x in logs),
+               "프록시 오류 → 브라우저 안 열고 자동완성만 건너뜀(직접연결 안 함)")
+    finally:
+        proxy_pool.public_search_proxy = orig
+
+
 def main():
     _install_fakes()
     config.LOGIN_PACE_MIN_SEC = 0   # 시뮬은 로그인 페이싱 sleep 없이(즉시)
@@ -705,6 +746,8 @@ def main():
     scenario_same_day_resume_keeps_stage23()
     scenario_option_change_keeps_keyword_section()
     scenario_rank_label_matches_sales_column()
+    scenario_metrics_not_summed()
+    scenario_keyword_stage_proxy()
     print("=" * 60)
     print("  [완료] 모든 시나리오 통과")
     print("=" * 60)

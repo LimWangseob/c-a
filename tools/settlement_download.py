@@ -142,14 +142,18 @@ def _profile_in_use(profile: str) -> bool:
     return r.stdout.strip() not in ("", "0")
 
 
-def _profile_busy(profile: str, wait_sec: int = 60) -> bool:
-    """사용 중이면 5초마다 다시 확인(최대 wait_sec). 실측 2026-10-06: 직전 실행의 Chrome 이 닫히는 데 약 1분 걸려
-    바로 다음 실행이 '사용 중'으로 잘못 건너뜀 → 잠깐 기다려 본 뒤에도 떠 있을 때만 사용 중으로 본다."""
-    end = time.monotonic() + wait_sec
+def _profile_busy(profile: str, wait_sec: int = 60, until: datetime | None = None) -> bool:
+    """사용 중이면 5초마다 다시 확인. until(자동 수집의 회차 끝)이 있으면 **그때까지 기다렸다가 앱이 그 계정을 끝내면
+    이어서 진행**(D-031 — 건너뛰지 않음), 없으면(직접 실행) 최대 wait_sec. 실측 2026-10-06: 직전 실행의 Chrome 이
+    닫히는 데 약 1분 걸려 바로 다음 실행이 '사용 중'으로 잘못 건너뛰던 것도 이 대기로 해소."""
+    end_mono = time.monotonic() + wait_sec
+    last = 0.0
     while _profile_in_use(profile):
-        if time.monotonic() >= end:
+        if (datetime.now() >= until) if until is not None else (time.monotonic() >= end_mono):
             return True
-        log("  (이 계정 Chrome 이 아직 떠 있음 — 닫히길 5초 기다림)")
+        if time.monotonic() - last >= 60:
+            log("  (앱이 이 계정 Chrome 을 쓰는 중 — 끝날 때까지 기다렸다가 이어서 진행)")
+            last = time.monotonic()
         time.sleep(5)
     return False
 
@@ -174,14 +178,14 @@ def _login(b, a, pw, hidden: bool) -> None:
 
 
 @contextmanager
-def session(a, hidden: bool):
-    """그 계정 로그인 세션(잠금·사용중 확인·로그인 판정 기록)."""
+def session(a, hidden: bool, until: datetime | None = None):
+    """그 계정 로그인 세션(잠금·사용중 확인[until 까지 대기]·로그인 판정 기록)."""
     from coupang_analytics.browser import WingBrowser
     from coupang_analytics.pipeline_sales import account_profile
     from coupang_analytics.registry_lock import RegistryLockError, registry_lock
     prof = account_profile(a.account_id)
-    if _profile_busy(prof):
-        raise SessionSkip("이 계정 Chrome 이 60초 넘게 실행 중(①판매수집 등)")
+    if _profile_busy(prof, until=until):
+        raise SessionSkip("이 계정 Chrome 이 계속 실행 중(①판매수집 등) — 회차 끝/대기 시간 초과")
     pw = a.password                                       # 정산 계정 파일 값(메모리에서만 씀·앱 암호 저장소 미변경)
     if not pw:
         raise SessionSkip("계정 파일에 비밀번호 없음")
@@ -468,7 +472,7 @@ def _run_accounts(accts, run, args) -> int:
         LOG.heartbeat("작동중", f"실행 중: {name}")   # 상태 화면에 '어느 계정 실행 중' 표시(정산일은 로그 줄에)
         log(f"== {name} {args.command} ==")
         try:
-            with session(a, args.hidden) as b:
+            with session(a, args.hidden, getattr(args, "until_at", None)) as b:
                 run(a, b, args, jobs)
             bad = 0
         except SessionSkip as exc:

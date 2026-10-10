@@ -203,7 +203,7 @@ def p12_watch_decide():
     from coupang_analytics import settlement_watch as W
     T = datetime
     # 한 바퀴 뒤 판단: 중단 > 새로 한 일 있음(곧 다음 바퀴) > 대기 남음(잠시 뒤·진전 없으면 미완료 종료) > 완료
-    assert W.plan_after_pass(True, 5, 3, 1, 0)[0] == "stop"                        # 연속 실패/차단 = 중단 종료
+    assert W.plan_after_pass(True, 5, 3, 1, 0)[0] == "later"                       # 연속 실패/차단 = 이번 바퀴만 멈춤(D-031)
     assert W.plan_after_pass(False, 4, 9, 0, 0)[0] == "again"                       # 받는 중(소급) = 곧 다음 바퀴
     assert W.plan_after_pass(False, 0, 2, 0, 1)[0] == "later"                       # 파일 생성 대기 = 잠시 뒤
     assert W.plan_after_pass(False, 0, 0, 1, 1)[0] == "later"                       # 서버 일시 오류 계정 = 잠시 뒤
@@ -417,7 +417,7 @@ def p17_server_busy():
             assert [r["결과"] for r in TD.LOG.rows] == [RLG.BLOCK]                 # 504 는 차단 기록 없음
 
             @contextlib.contextmanager
-            def fake_session(a, hidden):
+            def fake_session(a, hidden, until=None):
                 yield None
 
             def busy_run(a, b, args, jobs):
@@ -909,6 +909,23 @@ def p27_cycle():
     ok("회차=18:00~다음 날 17:55·①완료 전/지난 회차 기록=대기만 하다 17:55 종료·① 완료 후 받기·다 받으면 바로 종료")
 
 
+def p28_wait_app_profile():
+    print("[P28] 앱이 그 계정 Chrome 을 쓰는 중이면 건너뛰지 않고 끝날 때까지 대기 → 이어서 진행(D-031)")
+    import settlement_download as SD
+    from datetime import datetime, timedelta
+    seq = iter([True, True, True, False])
+    orig = (SD._profile_in_use, SD.time.sleep)
+    try:
+        SD._profile_in_use = lambda prof: next(seq)
+        SD.time.sleep = lambda s: None
+        assert SD._profile_busy("p", until=datetime.now() + timedelta(hours=1)) is False, "앱이 끝나면 진행"
+        SD._profile_in_use = lambda prof: True
+        assert SD._profile_busy("p", until=datetime.now() - timedelta(seconds=1)) is True, "회차 끝까지 사용 중이면 그때 건너뜀"
+    finally:
+        SD._profile_in_use, SD.time.sleep = orig
+    print("  ✓ 사용 중이면 대기·앱이 끝나면 진행·회차 끝이면 건너뜀")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -928,6 +945,7 @@ def main():
     p25_app_launch()
     p26_parent_watch()
     p27_cycle()
+    p28_wait_app_profile()
     print("정산 런타임 오프라인 검증 통과")
 
 

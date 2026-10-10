@@ -405,3 +405,10 @@ un_log_*.log`)로 확인 필요.
 - 영향 범위: `pipeline_ranks.py`(drive_rank·_run_on_egress(skip_blocked)·_rank_matcher·_SemiState·_semi_prep_product·_semi_on_miss·요약), `config.py`, `tools/pin_login_ranks.py`(J·K·L·R), `tools/test_proxy_patch.py`. 문서 CLAUDE.md·DESIGN.
 - 상태: ACTIVE
 
+### D-031 [STATS_AS_IS_SETTLE_RETRY_PUBLIC_PROXY] 판매지표 조회값 그대로·정산 연속 실패=다음 바퀴·앱 사용 중 대기·공개 검색 전부 프록시 (2026-10-10, R10)
+- 결정: (1) 판매량·방문자·노출량은 **합산하지 않고 조회값 그대로** — 블록 VID 중 판매분석에 잡힌 첫 VID 의 값(`_fill_product_metrics`; 지금은 블록당 VID 1개라 대부분 그 값). (2) 정산 자동 수집에서 연속 2계정 실패/차단이면 **종료하지 않고 이번 바퀴만 멈춘 뒤 잠시 뒤 다음 바퀴**(`settlement_watch.plan_after_pass` stopped→'later'·회차 끝 17:55 까지) — **프록시는 쓰지 않음**(소유자 선택 '정책 유지' — 🔒 로그인·판매수집 프록시 금지, 2차인증 위치 기반). (3) 앱이 그 계정 Chrome 을 쓰는 중이면 **건너뛰지 않고 끝날 때까지 기다렸다가 이어서**(`_profile_busy(until=회차 끝)`·직접 실행은 기존 60초). (4) 비로그인 쿠팡 공개 검색은 **전부** 노출순위 프록시 적용 — ② 쿠팡 자동완성(`select_keywords_stage`)·키워드 추천 탭·순위 조회 탭(`proxy_pool.public_search_proxy` = config.json 적용 + ③과 같은 선택). 프록시 오류면 직접연결로 우회하지 않고 ②는 자동완성 후보만 건너뜀·탭은 오류 안내.
+- 근거: 소유자 지시(2026-10-10 "판매량·방문자를 합계하면 안 되고 조회된 값 그대로", "앱이 그 계정 Chrome 을 쓰고 있으면 대기하다가 앱이 그 계정을 종료하면 다시 시작", "② 자동완성·키워드 탭·순위 조회 탭 프록시 적용") + 선택 답(정산 프록시: "정책 유지·프록시 안 씀"). 테스트: simulate 21(합계 14→7)·22(프록시 전달·오류 시 자동완성만 건너뜀)·정산 P12 정정('stop'→'later')·P28 신설(사용 중 대기) — 전부 실패→통과. 게이트 16종·복잡도 0·UI import.
+- 버린 대안: (a) 정산 로그인에 프록시(2차인증·계정 잠금 위험 — 소유자 미선택) (b) 앱 사용 중이면 건너뜀(누락) (c) 여러 VID 값 합산 유지(소유자 지시와 다름).
+- 영향 범위: `pipeline_process.py`, `settlement_watch.py`, `tools/settlement_download.py`(_profile_busy·session·_run_accounts), `proxy_pool.py`(public_search_proxy), `pipeline.py`(select_keywords_stage), `ui/app_qt.py`(do_recommend·do_rank), 테스트 simulate 21·22·verify_settlement_runtime P12·P28. CLAUDE.md 프록시 범위.
+- 상태: ACTIVE
+

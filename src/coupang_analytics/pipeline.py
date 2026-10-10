@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import random
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -728,8 +729,13 @@ def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = 
         log("== 키워드 선정: 결과 워크북이 없습니다 — 먼저 ①(판매데이터 수집)을 실행하세요 ==")
         return None
     log(f"== 키워드 선정 시작(순위 조회 없음) — {path.name} ==")
-    with WingBrowser(profile_dir=_PROFILE, offscreen=True) as browser:
-        warmup(browser)
+    from . import proxy_pool
+    px, ok = proxy_pool.public_search_proxy(log)   # 쿠팡 자동완성 = 비로그인 공개 검색 → 노출순위 프록시 적용(D-031)
+    if not ok:
+        log("  [키워드] 프록시 오류 → 쿠팡 자동완성 후보만 건너뜀(직접연결 안 함·네이버·AI 후보로 선정)")
+    with (WingBrowser(profile_dir=_PROFILE, offscreen=True, proxy=px) if ok else nullcontext(None)) as browser:
+        if browser is not None:
+            warmup(browser)
         for biz in wb.account_sheets():
             for pname in wb.products_of(biz):
                 _select_product_keywords(wb, biz, pname, naver, ai_key, browser, grow, log)

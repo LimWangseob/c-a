@@ -20,7 +20,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # ui/ 형제 모듈(registry_ui 등)
 
-from coupang_analytics import appconfig, config, keyword_store, power  # noqa: E402
+from coupang_analytics import appconfig, config, keyword_store, power, proxy_pool  # noqa: E402
 from coupang_analytics.apppaths import output_dir as app_output_dir, set_workdir  # noqa: E402
 from coupang_analytics.app_process import (mark_app_finished, prepare_auto_start,  # noqa: E402
                                            start_settlement_watch)
@@ -1416,7 +1416,10 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
 
         def task():
             api = NaverAdApi(self.naver_creds)
-            with WingBrowser(profile_dir=_PROFILE, offscreen=True) as wb:
+            px, ok = proxy_pool.public_search_proxy(self.log)   # 쿠팡 경쟁 조회 = 공개 검색 → 노출순위 프록시(D-031)
+            if not ok:
+                raise RuntimeError("노출순위 프록시 오류 — 직접연결로 검색하지 않음(설정 탭 프록시·proxies.txt 확인)")
+            with WingBrowser(profile_dir=_PROFILE, offscreen=True, proxy=px) as wb:
                 if seed:
                     return recommend(seed, api, wb)
                 return recommend_from_title(product, api, wb, ai_key=key)
@@ -1490,7 +1493,10 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self.log(f"[순위] '{kw}' 에서 '{name}' 오가닉 순위 조회 중…")
 
         def task():
-            with WingBrowser(profile_dir=_PROFILE, offscreen=True) as wb:
+            px, ok = proxy_pool.public_search_proxy(self.log)   # 공개 검색 → 노출순위 프록시(D-031)
+            if not ok:
+                raise RuntimeError("노출순위 프록시 오류 — 직접연결로 검색하지 않음(설정 탭 프록시·proxies.txt 확인)")
+            with WingBrowser(profile_dir=_PROFILE, offscreen=True, proxy=px) as wb:
                 warmup(wb)
                 return organic_rank(wb, kw, make_matcher(name_substr=name))
         self.run_bg(task, on_done=lambda r: self.log(
