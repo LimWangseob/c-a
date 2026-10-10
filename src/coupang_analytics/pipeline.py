@@ -105,8 +105,8 @@ def plan_run_mode(newall: bool, redo: bool, meta: dict | None, master: bool,
     master(master_exists())·date_from/to(기본 기간)·date_label(기본 날짜라벨). 반환 RunPlan:
     resume/carry/redo_today 플래그 + (meta 있으면 그 기간으로 덮은) date_from/to + 확인 팝업용 mode_desc +
     (재개면 meta 의 date_label 로 복원한) date_label. ⚠ grow 는 UI마다 달라 여기서 안 다룬다.
-    designated=True(사용자가 날짜 칸을 직접 지정·2026-10-10): 오늘 진행분(meta)의 날짜가 지정일과 다르면 그 진행분은
-    이어받지 않고 지정 칸을 채운다(빈 칸만 — 수집 완료 계정·채워진 순위는 건너뜀).
+    오늘 진행분(meta)의 날짜 칸이 이번 실행 칸(date_label)과 다르면 그 진행분은 이어받지 않는다(D-032 — 날짜 지정·당일·무인
+    공통). designated=True(사용자가 날짜 칸을 직접 지정)는 안내 문구만 '지정 날짜 칸 채우기(빈 칸만)'로 다르다.
     **date_label 복원은 양쪽 UI 공통**(예전엔 app.py 만 처리해 app_qt 재개 시 오늘 컬럼으로 어긋나는 버그)."""
     resume = carry = redo_today = False
     if newall:
@@ -117,11 +117,18 @@ def plan_run_mode(newall: bool, redo: bool, meta: dict | None, master: bool,
             mode_desc = f"오늘 것만 다시 수집 — 오늘({date_to}) 초기화 후 전 계정 재수집(어제까지 유지·키워드 동결)"
         else:
             mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음·구글시트 복원 불가), 기간 {date_from}~{date_to}"
-    elif designated and meta and meta.get("date_label") not in (None, "") and meta["date_label"] != date_label:
-        carry = master                       # 날짜 지정 실행 ≠ 오늘 진행분의 날짜 → 그 진행분은 이어받지 않음(2026-10-10)
-        mode_desc = (f"지정 날짜({date_label}) 칸 채우기 — 빈 칸만(이미 수집된 계정·순위는 건너뜀), "
-                     f"판매 {date_from}~{date_to}" if master else
-                     f"새 통계 시작(첫 실행 — 마스터 없음), 기간 {date_from}~{date_to}")
+    elif meta and meta.get("date_label") not in (None, "") and meta["date_label"] != date_label:
+        # 오늘 시작했어도 **다른 날짜 칸**의 진행분은 이어받지 않는다 — 날짜 지정(2026-10-10)뿐 아니라 '당일'·18:00 무인도
+        # (D-032 실측: 10-10 01:05 '10.09' 진행분을 같은 날 18:00 무인이 이어받아 10.10 칸이 안 생기고 수집도 안 됨)
+        carry = master
+        if not master:
+            mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음), 기간 {date_from}~{date_to}"
+        elif designated:
+            mode_desc = (f"지정 날짜({date_label}) 칸 채우기 — 빈 칸만(이미 수집된 계정·순위는 건너뜀), "
+                         f"판매 {date_from}~{date_to}")
+        else:
+            mode_desc = (f"오늘({date_label}) 칸 추가 — 다른 날짜 칸({meta['date_label']}) 진행분은 이어받지 않음, "
+                         f"판매 {date_from}~{date_to}")
     elif meta:
         resume = True
         carry = bool(meta.get("carry", False))

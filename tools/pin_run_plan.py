@@ -56,12 +56,12 @@ def pin_redo_no_master():
 def pin_resume():
     print("[핀 P4] 진행분(meta) 있음 — 이어서(완료 건너뜀), 기간=meta로 덮음")
     meta = {"date_from": "2026-09-19", "date_to": "2026-09-20", "done": ["a", "b"],
-            "carry": True, "date_label": "09.19"}
+            "carry": True, "date_label": DL}   # 같은 날짜 칸의 진행분(다른 칸이면 이어받지 않음 — P8·D-032)
     p = plan_run_mode(newall=False, redo=False, meta=meta, master=True, date_from=DF, date_to=DT, date_label=DL)
     _check(p.resume and p.carry, "resume·carry True")
     _check(p.date_from == "2026-09-19" and p.date_to == "2026-09-20", "기간=meta로 덮음")
     _check("이어서 하기" in p.mode_desc and "2개" in p.mode_desc, "완료 2개 건너뜀 안내")
-    _check(p.date_label == "09.19", "날짜라벨=meta로 복원(재개 시 시작일 기준·app_qt/app 공통)")
+    _check(p.date_label == DL, "날짜라벨=진행분 칸 그대로")
     # 재개인데 meta 에 date_label 없으면 기본 라벨로 폴백(옛 진행중 파일 호환)
     p2 = plan_run_mode(newall=False, redo=False, meta={k: v for k, v in meta.items() if k != "date_label"},
                        master=True, date_from=DF, date_to=DT, date_label=DL)
@@ -111,8 +111,12 @@ def pin_designated_date():
     p2 = plan_run_mode(False, False, dict(meta, date_label="2026-10-09"), True, "2026-10-08", "2026-10-08",
                        "2026-10-09", designated=True)
     _check(p2.resume and p2.date_label == "2026-10-09", "같은 지정 날짜 진행분이면 이어서")
-    p3 = plan_run_mode(False, False, meta, True, DF, DT, DL)
-    _check(p3.resume and p3.date_label == "2026-10-10", "날짜 지정 아니면 기존대로 진행분 이어서(라벨=진행분)")
+    # D-032: '당일'·무인 실행도 같은 규칙 — 오늘 시작했어도 **다른 날짜 칸**의 진행분은 이어받지 않음(10-10 실측:
+    # 01:05 시작 '10.09' 진행분을 18:00 무인 실행이 이어받아 10.10 칸이 안 생기고 수집도 안 됨)
+    p3 = plan_run_mode(False, False, meta, True, "2026-10-10", "2026-10-10", "2026-10-11")
+    _check(not p3.resume and p3.carry and p3.date_label == "2026-10-11", "당일 실행 ≠ 진행분 칸 → 오늘 칸 새로(이어받지 않음)")
+    p4 = plan_run_mode(False, False, meta, True, DF, DT, "2026-10-10")
+    _check(p4.resume and p4.date_label == "2026-10-10", "같은 칸 진행분이면 이어서")
 
 
 # ── 단계 조립(정리 B6 — 전체실행·무인 --auto·재부팅 복구 --resume 공통 run_stages) ─────────────
