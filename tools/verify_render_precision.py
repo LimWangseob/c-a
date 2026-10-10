@@ -126,9 +126,9 @@ def main() -> int:
     SIM._install_fakes()
     P._login_and_discover = _rich_discover   # 정밀 수집 대역으로 덮어씀
     d = Path(tempfile.mkdtemp())
-    final = P.run_full(_fixture(), naver=None, out_dir=str(d), ai_key="sim",
-                       date_from="2026-09-25", date_to="2026-09-25", date_label="2026-09-26",
-                       resume=False, on_log=lambda m: None)
+    # 운영 조합(①판매만→②키워드→③반자동 순위, D-022 B5) — ③ 이후 마스터를 검증한다
+    final = SIM._ops(_fixture(), d, date_from="2026-09-25", date_to="2026-09-25", date_label="2026-09-26",
+                     resume=False)
     wb = openpyxl.load_workbook(final)
     print("=" * 70)
     print("  정밀 렌더 검증 — 시트·항목·값 대조")

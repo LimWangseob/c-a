@@ -5,6 +5,9 @@
 
 시나리오: 1)정상 전체실행 2)크래시→이어서 3)로그인 실패 계정 건너뛰기 4)통계 이어쓰기(동결)+발굴추가
   … 10)새 전체실행 조합(①반자동 판매만→②키워드선정(노출측정 없음)→③반자동 순위 + 백필가드).
+모든 시나리오는 **운영 호출과 같은 조합**(D-022 B5)으로 돈다 — ①=_run1(run_full 운영 인자) · ②=_run2
+(select_keywords_stage) · ③=_run3(track_ranks_stage semi=True) · 전체=_ops(①→②→③). 운영에서 안 도는
+인자 조합(인라인 키워드·순위)은 쓰지 않는다(게이트가 운영 경로를 지키게).
 실행: python tools/simulate_pipeline.py
 """
 from __future__ import annotations
@@ -43,10 +46,10 @@ config.apply_proxy_override = lambda log=None: None
 _SERP_NAME = "쿠팡실제노출명"
 
 _LOGIN_FAIL_ID = "FAIL"
-_STATE = {"select_calls": 0, "crash_at": None, "error_at": None,
+_STATE = {"discover_calls": 0, "crash_at": None, "error_at": None,
           "need_login": set(), "block_login": set()}
-# crash_at = 프로세스 강제종료 프록시(KeyboardInterrupt=BaseException, 계정격리 안 됨 → resume 대상)
-# error_at = 한 계정 처리 오류 프록시(RuntimeError=일반 예외 → 그 계정만 건너뜀, 전체 완주)
+# crash_at = N번째 계정 발견에서 프로세스 강제종료 프록시(KeyboardInterrupt=BaseException, 계정격리 안 됨 → resume 대상)
+# error_at = N번째 계정 발견에서 처리 오류 프록시(RuntimeError=일반 예외 → 그 계정만 건너뜀, 전체 완주)
 # need_login = 세션 만료(1차 패스에서 NeedLogin→대기열, 2차 로그인 시 정상 수집)
 # block_login = Akamai 로그인 차단(2차 패스에서 LoginBlocked → 서킷브레이커 카운트)
 
@@ -60,6 +63,11 @@ class _FakeBrowser:
 
 def _fake_login_and_discover(a, date_from, date_to, get_password, log, login=True, semi=False,
                              ai_key=None, anchor_file=None):
+    _STATE["discover_calls"] += 1
+    if _STATE["crash_at"] is not None and _STATE["discover_calls"] == _STATE["crash_at"]:
+        raise KeyboardInterrupt("시뮬레이션 프로세스 강제종료(계정격리로 안 잡힘 → resume 대상)")
+    if _STATE["error_at"] is not None and _STATE["discover_calls"] == _STATE["error_at"]:
+        raise RuntimeError("시뮬레이션 계정 처리 오류(일반 예외 → 그 계정만 건너뜀)")
     if a.account_id in _STATE["block_login"]:      # Akamai 차단 계정
         if not login:
             raise P.NeedLogin()                    # 1차: 세션 없음 → 대기열
@@ -93,12 +101,7 @@ def _fake_login_and_discover(a, date_from, date_to, get_password, log, login=Tru
 
 def _fake_keywords(title, naver, ai_key=None, n=None, browser=None, log=None,
                    measure_ranks=None, exclude=None):
-    """가짜 선정 — TrackKeyword(exposure_best=순위3). exclude면 새 키워드만. crash_at 시점에 크래시."""
-    _STATE["select_calls"] += 1
-    if _STATE["crash_at"] is not None and _STATE["select_calls"] == _STATE["crash_at"]:
-        raise KeyboardInterrupt("시뮬레이션 프로세스 강제종료(계정격리로 안 잡힘 → resume 대상)")
-    if _STATE["error_at"] is not None and _STATE["select_calls"] == _STATE["error_at"]:
-        raise RuntimeError("시뮬레이션 계정 처리 오류(일반 예외 → 그 계정만 건너뜀)")
+    """가짜 선정 — TrackKeyword(exposure_best=순위3). exclude면 새 키워드만."""
     if exclude:
         extra = [("kw3", 1500, "낮음"), ("kw4", 800, "중간")]
         picks = [p for p in extra if p[0] not in exclude][:(n or 1)]
@@ -152,6 +155,37 @@ def _install_fakes():
     PR.warmup = lambda browser: None
     P.WingBrowser = _FakeBrowser        # 로그인·판매·키워드(pipeline)
     PR.WingBrowser = _FakeBrowser       # 순위(pipeline_ranks)
+    PR._track_ranks_semi = _fake_track_ranks_semi   # ③ 반자동 순위(track_ranks_stage semi=True 가 호출)
+
+
+# ── 운영 조합 실행 헬퍼(D-022 B5 — 운영 호출과 같은 인자) ──────────────────
+_OPS_RUN_FULL = dict(keywords_off=True, skip_ranks=True, sales_semi=True, grow_keywords=False)   # app_qt 운영 호출 고정값
+
+
+def _run1(il, d: Path, **kw) -> Path:
+    """① 판매수집 = 운영 run_full(키워드·순위 없음). 반환 = 그날 스냅샷."""
+    kw.setdefault("on_log", lambda m: None)
+    return P.run_full(il, naver=None, out_dir=str(d), ai_key="sim", **_OPS_RUN_FULL, **kw)
+
+
+def _run2(d: Path, grow: bool = False, on_log=None) -> Path:
+    """② 키워드 선정 = 운영 select_keywords_stage(노출측정 없음)."""
+    return P.select_keywords_stage(naver=None, ai_key="sim", out_dir=str(d), grow=grow,
+                                   on_log=on_log or (lambda m: None))
+
+
+def _run3(d: Path, date_label=None, on_log=None) -> Path:
+    """③ 반자동 순위 = 운영 track_ranks_stage(semi=True). 반환 = 마스터."""
+    return P.track_ranks_stage(out_dir=str(d), semi=True, on_log=on_log or (lambda m: None),
+                               date_label=date_label)
+
+
+def _ops(il, d: Path, grow: bool = False, **kw) -> Path:
+    """전체실행 = ①→②→③(운영 do_run_full 전체실행 분기와 같은 순서). 반환 = ③ 이후 마스터."""
+    log = kw.setdefault("on_log", lambda m: None)
+    _run1(il, d, **kw)
+    _run2(d, grow=grow, on_log=log)
+    return _run3(d, on_log=log)
 
 
 # ── 검증 헬퍼 ─────────────────────────────────────────────────
@@ -228,10 +262,9 @@ def _check(cond: bool, msg: str) -> None:
 # ── 시나리오 ──────────────────────────────────────────────────
 def scenario_normal():
     print("[시나리오 1] 정상 전체 실행 (3계정: 계약1·개인2)")
-    _STATE.update(select_calls=0, crash_at=None, error_at=None)
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None)
     d = Path(tempfile.mkdtemp())
-    final = P.run_full(_accounts(["a1", "b1", "c1"]), naver=None, out_dir=str(d), ai_key="sim",
-                       date_from="2026-09-02", date_to="2026-09-02", resume=False, on_log=lambda m: None)
+    final = _ops(_accounts(["a1", "b1", "c1"]), d, date_from="2026-09-02", date_to="2026-09-02", resume=False)
     _check(final.exists(), f"최종본 생성: {final.name}")
     _check(not P._partial_path(d).exists() and not P._progress_path(d).exists(), "진행 파일 정리됨")
     _check(_sheets(final) == {"비즈-a1", "비즈-b1", "비즈-c1"}, "계정별 시트 3개 존재")
@@ -250,12 +283,11 @@ def scenario_normal():
 def scenario_crash_resume():
     print("[시나리오 2] 크래시 후 이어서 하기")
     d = Path(tempfile.mkdtemp())
-    # 첫 실행: a1 선정(호출1) 완료, b1 선정(호출2)에서 크래시 → done=[a1]
-    _STATE.update(select_calls=0, crash_at=2, error_at=None)
+    # 첫 실행(①): a1 발견(호출1) 완료, b1 발견(호출2)에서 크래시 → done=[a1]
+    _STATE.update(discover_calls=0, crash_at=2, error_at=None)
     crashed = False
     try:
-        P.run_full(_accounts(["a1", "b1", "c1"]), naver=None, out_dir=str(d), ai_key="sim",
-                   date_from="2026-09-02", date_to="2026-09-02", resume=False, on_log=lambda m: None)
+        _run1(_accounts(["a1", "b1", "c1"]), d, date_from="2026-09-02", date_to="2026-09-02", resume=False)
     except KeyboardInterrupt:   # 프로세스 강제종료 프록시(BaseException) — 계정격리로 안 잡히고 런 중단
         crashed = True
     _check(crashed, "첫 실행이 크래시로 중단됨")
@@ -263,10 +295,10 @@ def scenario_crash_resume():
     meta = json.loads(P._progress_path(d).read_text(encoding="utf-8"))
     _check(meta["done"] == ["a1"], f"완료 계정=a1 (실제 {meta['done']})")
     # 이어서: a1 건너뛰고 b1·c1 완료
-    _STATE.update(select_calls=0, crash_at=None, error_at=None)
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None)
     logs: list[str] = []
-    final = P.run_full(_accounts(["a1", "b1", "c1"]), naver=None, out_dir=str(d), ai_key="sim",
-                       date_from="2026-09-02", date_to="2026-09-02", resume=True, on_log=logs.append)
+    final = _ops(_accounts(["a1", "b1", "c1"]), d, date_from="2026-09-02", date_to="2026-09-02", resume=True,
+                 on_log=logs.append)
     _check("이미 완료, 건너뜀" in "\n".join(logs), "완료 계정 a1 건너뜀 로그")
     _check(_sheets(final) == {"비즈-a1", "비즈-b1", "비즈-c1"}, "최종 3계정 시트 존재")
     _check(not P._partial_path(d).exists(), "진행 파일 정리됨")
@@ -274,34 +306,32 @@ def scenario_crash_resume():
 
 def scenario_login_fail():
     print("[시나리오 3] 로그인 실패 계정 건너뛰기")
-    _STATE.update(select_calls=0, crash_at=None, error_at=None)
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None)
     d = Path(tempfile.mkdtemp())
-    final = P.run_full(_accounts(["a1", _LOGIN_FAIL_ID, "c1"]), naver=None, out_dir=str(d), ai_key="sim",
-                       date_from="2026-09-02", date_to="2026-09-02", resume=False, on_log=lambda m: None)
+    final = _ops(_accounts(["a1", _LOGIN_FAIL_ID, "c1"]), d, date_from="2026-09-02", date_to="2026-09-02",
+                 resume=False)
     _check(_sheets(final) == {"비즈-a1", "비즈-c1"}, "정상 계정만 시트(a1,c1)")
     _check(f"비즈-{_LOGIN_FAIL_ID}" not in _sheets(final), "로그인 실패 계정 제외")
 
 
 def scenario_carry_forward():
     print("[시나리오 4] 통계 이어쓰기(동결) + 발굴 추가")
-    _STATE.update(select_calls=0, crash_at=None, error_at=None)
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None)
     d = Path(tempfile.mkdtemp())
     accts = _accounts(["a1"])
     master = P._master_path(d)
-    P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim",
-               date_from="2026-09-01", date_to="2026-09-01", resume=False, on_log=lambda m: None)
+    _ops(accts, d, date_from="2026-09-01", date_to="2026-09-01", resume=False)
     _check(master.exists() and _keywords_in(master) == {"kw1", "kw2"}, "day1: 마스터+키워드")
     # day2 동결
     logs2: list[str] = []
-    P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-09-02",
-               date_to="2026-09-02", carry_forward=True, on_log=logs2.append)
+    _ops(accts, d, date_from="2026-09-02", date_to="2026-09-02", carry_forward=True, on_log=logs2.append)
     _check("(동결)" in "\n".join(logs2), "day2: 키워드 동결 로그")
     _check(_date_headers(master) == {"09.01", "09.02"}, "day2: 2일치 날짜 누적")
     _check(_keywords_in(master) == {"kw1", "kw2"}, "day2: 키워드 변화 없음")
     # day3 발굴 추가
     logs3: list[str] = []
-    P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-09-03",
-               date_to="2026-09-03", carry_forward=True, grow_keywords=True, on_log=logs3.append)
+    _ops(accts, d, grow=True, date_from="2026-09-03", date_to="2026-09-03", carry_forward=True,
+         on_log=logs3.append)
     _check("발굴" in "\n".join(logs3), "day3: 발굴 추가 로그")
     kws3 = _keywords_in(master)
     _check({"kw1", "kw2"} <= kws3 and "kw3" in kws3, f"day3: 기존 유지+발굴 ({sorted(kws3)})")
@@ -311,10 +341,10 @@ def scenario_carry_forward():
 def scenario_account_error_isolated():
     print("[시나리오 5] 한 계정 처리 오류 → 격리(건너뜀), 나머지 완주(전체 안 막힘)")
     d = Path(tempfile.mkdtemp())
-    _STATE.update(select_calls=0, crash_at=None, error_at=2)   # b1(2번째) 처리 중 일반 예외
+    _STATE.update(discover_calls=0, crash_at=None, error_at=2)   # b1(2번째) 발견 중 일반 예외
     logs: list[str] = []
-    final = P.run_full(_accounts(["a1", "b1", "c1"]), naver=None, out_dir=str(d), ai_key="sim",
-                       date_from="2026-09-02", date_to="2026-09-02", resume=False, on_log=logs.append)
+    final = _ops(_accounts(["a1", "b1", "c1"]), d, date_from="2026-09-02", date_to="2026-09-02", resume=False,
+                 on_log=logs.append)
     joined = "\n".join(logs)
     _check(final is not None, "런이 크래시 없이 완주(최종본 반환)")
     _check("처리 오류" in joined and "건너뜀" in joined, "오류 계정 격리 로그(건너뜀)")
@@ -325,12 +355,11 @@ def scenario_account_error_isolated():
 def scenario_empty_business_name():
     print("[시나리오 6] 빈 사업자명 → 시트명 label 폴백(대표자명), KeyError 없음")
     d = Path(tempfile.mkdtemp())
-    _STATE.update(select_calls=0, crash_at=None, error_at=None)
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None)
     opt = Option(label="옵-x", vendor_item_ids=["vid-x"], product_ids=[])
     prod = Product(name="상품-x", options=[opt], kind=config.KIND_PERSONAL)
     ilist = InputList(accounts=[Account("acctX", "대표-X", "", [prod])], errors=[])   # 사업자명 빈값
-    final = P.run_full(ilist, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-09-02",
-                       date_to="2026-09-02", resume=False, keywords_off=True, on_log=lambda m: None)
+    final = _run1(ilist, d, date_from="2026-09-02", date_to="2026-09-02", resume=False)
     _check(final is not None, "빈 사업자명이어도 크래시 없이 완주")
     _check("대표-X" in _sheets(final), "시트명이 대표자명으로 폴백됨(빈 시트명 KeyError 방지)")
 
@@ -338,11 +367,11 @@ def scenario_empty_business_name():
 def scenario_session_first():
     print("[시나리오 7] 세션우선 — 세션 만료 계정은 뒤로 미루고 살아있는 계정 먼저 수집")
     d = Path(tempfile.mkdtemp())
-    _STATE.update(select_calls=0, crash_at=None, error_at=None,
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None,
                   need_login={"b1"}, block_login=set())
     logs: list[str] = []
-    final = P.run_full(_accounts(["a1", "b1", "c1"]), naver=None, out_dir=str(d), ai_key="sim",
-                       date_from="2026-09-02", date_to="2026-09-02", resume=False, on_log=logs.append)
+    final = _run1(_accounts(["a1", "b1", "c1"]), d, date_from="2026-09-02", date_to="2026-09-02", resume=False,
+                  on_log=logs.append)
     joined = "\n".join(logs)
     _check("로그인 대기열" in joined, "세션 만료 b1은 로그인 대기열로 미룸(자동제출 안 함)")
     _check("로그인 필요 계정 1개" in joined, "2차 패스에서 로그인 필요 계정 처리")
@@ -353,12 +382,11 @@ def scenario_circuit_breaker():
     print("[시나리오 8] 로그인 서킷브레이커 — 연속 Akamai 차단 K회 후 이후 로그인 생략")
     d = Path(tempfile.mkdtemp())
     blocked = {"x1", "x2", "x3", "x4"}
-    _STATE.update(select_calls=0, crash_at=None, error_at=None,
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None,
                   need_login=set(), block_login=blocked)
     logs: list[str] = []
-    final = P.run_full(_accounts(["a1", "x1", "x2", "x3", "x4", "c1"]), naver=None, out_dir=str(d),
-                       ai_key="sim", date_from="2026-09-02", date_to="2026-09-02",
-                       resume=False, on_log=logs.append)
+    final = _run1(_accounts(["a1", "x1", "x2", "x3", "x4", "c1"]), d, date_from="2026-09-02",
+                  date_to="2026-09-02", resume=False, on_log=logs.append)
     joined = "\n".join(logs)
     _check(final is not None, "차단 다발에도 크래시 없이 완주")
     _check({"비즈-a1", "비즈-c1"} <= _sheets(final), "세션 있는 a1·c1은 수집됨(세션우선)")
@@ -377,26 +405,22 @@ def _product_names(path: Path, sheet: str) -> list[str]:
 
 
 def scenario_display_name_rename():
-    print("[시나리오 9] 블록 이름=등록상품명 고정(노출명 교체 중단) + vid 앵커 + save/load 왕복")
-    _STATE.update(select_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    print("[시나리오 9] 블록 이름=등록상품명(①) + vid 앵커 + 키워드 동결 + save/load 왕복 + 개명 승계")
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
     d = Path(tempfile.mkdtemp())
     accts = _accounts(["a1"])                      # 계약 상품 1개(단일옵션·vid-a1) → 블록명=등록상품명 '상품-a1'
     master = P._master_path(d)
-    # day1: 새 상품 선정 → 블록명 = 등록상품명 '상품-a1'
-    P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim",
-               date_from="2026-09-01", date_to="2026-09-01", resume=False, on_log=lambda m: None)
+    # day1: 새 상품 → 블록명 = 등록상품명 '상품-a1'(노출명 없음)
+    _ops(accts, d, date_from="2026-09-01", date_to="2026-09-01", resume=False)
     _check("상품-a1" in _product_names(master, "비즈-a1"), "day1: 등록상품명 '상품-a1' 블록")
-    # day2: 동결 → 순위측정에서 노출명(_SERP_NAME)을 봐도 **블록명은 등록상품명으로 고정**(교체 중단)
-    P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-09-02",
-               date_to="2026-09-02", carry_forward=True, on_log=lambda m: None)
+    # day2: 같은 vid·같은 등록상품명 → 같은 블록 이어쓰기·키워드 동결
+    _ops(accts, d, date_from="2026-09-02", date_to="2026-09-02", carry_forward=True)
     names2 = _product_names(master, "비즈-a1")
-    _check(names2 == ["상품-a1"], f"day2: 블록명 등록상품명 유지(노출명 교체 안 함) — {names2}")
-    _check(_SERP_NAME not in names2, "day2: 노출명으로 안 바뀜(set_display_name 중단)")
+    _check(names2 == ["상품-a1"], f"day2: 같은 블록 이어쓰기(중복 없음) — {names2}")
     _check(_keywords_in(master) == {"kw1", "kw2"}, "day2: 키워드 동결 유지")
     _check(_date_headers(master) == {"09.01", "09.02"}, "day2: 날짜 2일 누적")
     # day3: 같은 vid·같은 등록상품명 → 같은 블록 재사용(중복 생성 없음)
-    P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-09-03",
-               date_to="2026-09-03", carry_forward=True, on_log=lambda m: None)
+    _ops(accts, d, date_from="2026-09-03", date_to="2026-09-03", carry_forward=True)
     names3 = _product_names(master, "비즈-a1")
     _check(names3 == ["상품-a1"], f"day3: 등록상품명 블록 재사용(중복 없음) — {names3}")
     _check(_date_headers(master) == {"09.01", "09.02", "09.03"}, "day3: 날짜 3일 누적")
@@ -411,8 +435,8 @@ def scenario_display_name_rename():
            "load 후에도 (사업자,등록상품명) 키로 키워드 조회됨(키 안정)")
     # day4: **상품조회 상품명이 바뀜(같은 vid)** → 같은 블록 이어받아 이름 갱신·이력(09.01~03) 유지·중복 없음
     #        (결과파일 상품명 = 상품조회 productName 을 매일 반영하되 vid 앵커로 시계열 안 끊김 검증)
-    P.run_full(_account_one_vid("vid-a1", "상품-a1-개명"), naver=None, out_dir=str(d), ai_key="sim",
-               date_from="2026-09-04", date_to="2026-09-04", carry_forward=True, on_log=lambda m: None)
+    _ops(_account_one_vid("vid-a1", "상품-a1-개명"), d, date_from="2026-09-04", date_to="2026-09-04",
+         carry_forward=True)
     names4 = _product_names(master, "비즈-a1")
     _check(names4 == ["상품-a1-개명"], f"day4: 상품조회명 변경 → 블록명 갱신·중복 없음 — {names4}")
     _check(_date_headers(master) == {"09.01", "09.02", "09.03", "09.04"}, "day4: 이력 유지(4일 누적)")
@@ -428,40 +452,30 @@ def scenario_full_composition():
     (노출측정 없음) → ③track_ranks_stage(semi=True)=반자동 순위. 각 단계가 워크북을 올바르게 진전시키는지 검증.
     (offscreen 순위백필 _backfill_ranks 는 2026-09-26 폐기·물리 삭제 — ③은 반자동만.)"""
     print("[시나리오 10] 새 전체실행 조합 — ①반자동(판매만)→②키워드선정→③반자동 순위")
-    _STATE.update(select_calls=0, crash_at=None, error_at=None)
-    orig_semi = PR._track_ranks_semi   # ③=track_ranks_stage(pipeline_ranks)가 호출→PR 패치
-    PR._track_ranks_semi = _fake_track_ranks_semi
-    try:
-        d = Path(tempfile.mkdtemp())
-        il = _accounts(["a1", "b1"])
-        # ① 반자동 판매수집만 — 키워드·순위 없음
-        snap = P.run_full(il, naver=None, out_dir=str(d), ai_key="sim",
-                          date_from="2026-09-14", date_to="2026-09-14", resume=False,
-                          carry_forward=False, grow_keywords=False, skip_ranks=True,
-                          redo_today=False, sales_semi=True, keywords_off=True, on_log=lambda m: None)
-        _check(snap.exists(), "① 최종본 생성")
-        _check(_has_value(snap, 7), "① 판매량(7) 기록됨")
-        _check(_keywords_in(snap) == set(), "① 단계엔 키워드 없음(키워드는 ②)")
-        _check(not _has_value(snap, "3위"), "① 단계엔 순위 없음(순위는 ③)")
-        # ② 키워드 선정 — 노출측정(measure_ranks) 없이 AI 선정만
-        p2 = P.select_keywords_stage(naver=None, ai_key="sim", out_dir=str(d),
-                                     grow=False, on_log=lambda m: None)
-        _check(_keywords_in(p2) == {"kw1", "kw2"}, "② 키워드 선정됨(kw1·kw2)")
-        _check(not _has_value(p2, "3위"), "② 단계엔 순위 없음(순위는 ③)")
-        # ③ 반자동 순위
-        p3 = P.track_ranks_stage(out_dir=str(d), semi=True, on_log=lambda m: None)
-        _check(_has_value(p3, "3위"), "③ 반자동 순위(3위) 기록됨")
-    finally:
-        PR._track_ranks_semi = orig_semi
-
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None)
+    d = Path(tempfile.mkdtemp())
+    il = _accounts(["a1", "b1"])
+    # ① 반자동 판매수집만 — 키워드·순위 없음
+    snap = _run1(il, d, date_from="2026-09-14", date_to="2026-09-14", resume=False,
+                 carry_forward=False, redo_today=False)
+    _check(snap.exists(), "① 최종본 생성")
+    _check(_has_value(snap, 7), "① 판매량(7) 기록됨")
+    _check(_keywords_in(snap) == set(), "① 단계엔 키워드 없음(키워드는 ②)")
+    _check(not _has_value(snap, "3위"), "① 단계엔 순위 없음(순위는 ③)")
+    # ② 키워드 선정 — 노출측정(measure_ranks) 없이 AI 선정만
+    p2 = _run2(d)
+    _check(_keywords_in(p2) == {"kw1", "kw2"}, "② 키워드 선정됨(kw1·kw2)")
+    _check(not _has_value(p2, "3위"), "② 단계엔 순위 없음(순위는 ③)")
+    # ③ 반자동 순위
+    p3 = _run3(d)
+    _check(_has_value(p3, "3위"), "③ 반자동 순위(3위) 기록됨")
 
 def scenario_option_split():
     print("[시나리오 11] 다중옵션 → 옵션별 블록 분리(대표=키워드/순위·2차=판매정보만)")
-    _STATE.update(select_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
     d = Path(tempfile.mkdtemp())
     master = P._master_path(d)
-    P.run_full(_account_multi_option(), naver=None, out_dir=str(d), ai_key="sim",
-               date_from="2026-09-01", date_to="2026-09-01", resume=False, on_log=lambda m: None)
+    _ops(_account_multi_option(), d, date_from="2026-09-01", date_to="2026-09-01", resume=False)
     names = _product_names(master, "비즈-m1")
     rep, sec = "캠핑타프 (베이지)", "캠핑타프 (그레이)"   # 다중옵션은 대표 포함 모든 옵션에 라벨(등록명+옵션라벨)
     _check(rep in names, f"대표 블록=등록명+첫옵션라벨 '{rep}' — {names}")
@@ -481,19 +495,17 @@ def scenario_option_split():
 
 def scenario_vid_change_reset():
     print("[시나리오 12] vid 변경 시 이전 데이터 삭제·새로 시작(첫 적용 마이그레이션)")
-    _STATE.update(select_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
     d = Path(tempfile.mkdtemp())
     master = P._master_path(d)
     from coupang_analytics.workbook import OutputWorkbook
     # day1: 상품-a1, vid=OLD → 09.01 이력 생성
-    P.run_full(_account_one_vid("vidOLD"), naver=None, out_dir=str(d), ai_key="sim",
-               date_from="2026-09-01", date_to="2026-09-01", resume=False, on_log=lambda m: None)
+    _ops(_account_one_vid("vidOLD"), d, date_from="2026-09-01", date_to="2026-09-01", resume=False)
     wb1 = OutputWorkbook.load(master)
     _check(wb1.product_vids("비즈-a1", "상품-a1") == ["vidOLD"], "day1: vid=OLD 저장")
     _check(wb1.product_keywords("비즈-a1", "상품-a1") == ["kw1", "kw2"], "day1: 키워드 있음")
     # day2: 같은 상품명, vid=NEW(다름) → 이전 데이터 삭제하고 새로 시작(09.01 이력 소멸)
-    P.run_full(_account_one_vid("vidNEW"), naver=None, out_dir=str(d), ai_key="sim",
-               date_from="2026-09-02", date_to="2026-09-02", carry_forward=True, on_log=lambda m: None)
+    _ops(_account_one_vid("vidNEW"), d, date_from="2026-09-02", date_to="2026-09-02", carry_forward=True)
     wb2 = OutputWorkbook.load(master)
     _check(wb2.product_vids("비즈-a1", "상품-a1") == ["vidNEW"], "day2: vid=NEW로 교체")
     names = _product_names(master, "비즈-a1")
@@ -503,7 +515,7 @@ def scenario_vid_change_reset():
 
 def scenario_restore_residue_cleanup():
     print("[시나리오 13] 복원 잔재 정리 — vid 없는 옛 블록(구글시트 복원분) + 옵션분리 = 중복 잔재 제거")
-    _STATE.update(select_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
     d = Path(tempfile.mkdtemp())
     master = P._master_path(d)
     from coupang_analytics.workbook import OutputWorkbook
@@ -514,8 +526,7 @@ def scenario_restore_residue_cleanup():
     wb0.save(master)
     _check(wb0.product_vids("비즈-m1", "캠핑타프") == [], "사전조건: 복원 블록은 vid 없음")
     # 옵션분리 ①판매수집: 같은 등록명 '캠핑타프'(옵션 beige/gray, vid 있음)
-    P.run_full(_account_multi_option(), naver=None, out_dir=str(d), ai_key="sim",
-               date_from="2026-09-02", date_to="2026-09-02", carry_forward=True, on_log=lambda m: None)
+    _run1(_account_multi_option(), d, date_from="2026-09-02", date_to="2026-09-02", carry_forward=True)
     names = _product_names(master, "비즈-m1")
     _check("캠핑타프" not in names, f"vid 없는 옛 블록 '캠핑타프' 삭제됨(잔재 없음) — {names}")
     _check("캠핑타프 (베이지)" in names and "캠핑타프 (그레이)" in names, f"새 옵션 블록 생성 — {names}")
@@ -538,26 +549,20 @@ def scenario_gsheet_index_tab_excluded():
 
 def scenario_designated_date():
     print("[시나리오 15] 날짜 지정(2026-10-10) — 10.10 실행 뒤 10.09 지정: 판매 재수집 없음(칸별 이력)·순위=10.09 칸만")
-    _STATE.update(select_calls=0, crash_at=None, error_at=None)
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None)
     d = Path(tempfile.mkdtemp())
     accts = _accounts(["a1", "b1"])
-    P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-10-08", date_to="2026-10-08",
-               date_label="2026-10-09", skip_ranks=True, on_log=lambda m: None)
-    P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-10-09", date_to="2026-10-09",
-               date_label="2026-10-10", carry_forward=True, skip_ranks=True, on_log=lambda m: None)
+    _run1(accts, d, date_from="2026-10-08", date_to="2026-10-08", date_label="2026-10-09")   # ①②(순위 없이)
+    _run2(d)
+    _run1(accts, d, date_from="2026-10-09", date_to="2026-10-09", date_label="2026-10-10", carry_forward=True)
+    _run2(d)
     logs: list = []
-    master = P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-10-08",
-                        date_to="2026-10-08", date_label="2026-10-09", carry_forward=True, skip_ranks=True,
-                        on_log=logs.append)
+    master = _run1(accts, d, date_from="2026-10-08", date_to="2026-10-08", date_label="2026-10-09",
+                   carry_forward=True, on_log=logs.append)
     skipped = [x for x in logs if "판매수집 완료됨" in x]
     _check(len(skipped) == 2, f"10.09 지정: 두 계정 모두 이미 수집 → 로그인·수집 생략({len(skipped)})")
     _check({"10.09", "10.10"} <= _date_headers(master), "날짜 칸 10.09·10.10 유지")
-    orig = PR._track_ranks_semi
-    PR._track_ranks_semi = _fake_track_ranks_semi
-    try:
-        p3 = P.track_ranks_stage(out_dir=str(d), semi=True, on_log=lambda m: None, date_label="2026-10-09")
-    finally:
-        PR._track_ranks_semi = orig
+    p3 = _run3(d, date_label="2026-10-09")
     from coupang_analytics.workbook import OutputWorkbook
     wb = OutputWorkbook.load(p3)
     _check(any(wb.product_keywords(b, p) for b in wb.account_sheets() for p in wb.products_of(b)), "키워드 있음(순위 대상)")
@@ -572,12 +577,11 @@ def scenario_designated_date():
 
 def scenario_designated_filled_no_stamp():
     print("[시나리오 16] 날짜 지정 + 칸별 이력 없는 옛 칸(D-019) — 그 칸에 판매값 있는 계정은 로그인 생략·빈 계정만 수집")
-    _STATE.update(select_calls=0, crash_at=None, error_at=None)
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None)
     from coupang_analytics.workbook import OutputWorkbook
     d = Path(tempfile.mkdtemp())
     accts = _accounts(["a1", _LOGIN_FAIL_ID])   # a1=수집 성공 · FAIL=로그인 미완료(그 칸 공란 — 실측 DW·플랜잇 모양)
-    P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-10-03",
-               date_to="2026-10-03", date_label="2026-10-04", skip_ranks=True, on_log=lambda m: None)
+    _run1(accts, d, date_from="2026-10-03", date_to="2026-10-03", date_label="2026-10-04")
     from coupang_analytics.pipeline_paths import _MASTER_XLSX
     master = d / _MASTER_XLSX                     # run_full 반환값은 날짜 스냅샷 — 이어쓰기는 마스터를 읽는다
     wb = OutputWorkbook.load(master)              # D-016 배포 전 칸 재현: 칸별 이력(_수집스탬프) 없음
@@ -588,9 +592,8 @@ def scenario_designated_filled_no_stamp():
 
     def _run(designated: bool) -> list:
         logs: list = []
-        P.run_full(accts, naver=None, out_dir=str(d), ai_key="sim", date_from="2026-10-03", date_to="2026-10-03",
-                   date_label="2026-10-04", carry_forward=True, skip_ranks=True, redo_today=False,
-                   designated=designated, on_log=logs.append)
+        _run1(accts, d, date_from="2026-10-03", date_to="2026-10-03", date_label="2026-10-04", carry_forward=True,
+              redo_today=False, designated=designated, on_log=logs.append)
         return logs
     logs = _run(designated=True)
     found = [x for x in logs if "발견(가짜)" in x]
