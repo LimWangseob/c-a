@@ -54,7 +54,7 @@ def load_manager() -> Optional[ProxyManager]:
     if not _enabled():
         return None
 
-    mgr = ProxyManager(strategy="round_robin")
+    mgr = ProxyManager()
     path = proxy_file_path()
     if path and os.path.isfile(path):
         mgr.load_from_file(path, strict=False)

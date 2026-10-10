@@ -143,22 +143,18 @@ def column_dates(label_iso: str) -> tuple[str, str, str]:
     return d1, d1, label.isoformat()
 
 
-def run_title(keywords_off: bool, sales_semi: bool) -> str:
+def run_title(keywords_off: bool) -> str:
     """확인 팝업/로그 제목(순수) — app_qt/app.do_run_full 공통. ①판매수집 vs 전체실행 × 반자동 여부."""
-    return (("① 판매수집(반자동)" if sales_semi else "① 판매수집") if keywords_off
-            else ("전체 실행(① 반자동 로그인)" if sales_semi else "전체 실행"))
+    return "① 판매수집(반자동)" if keywords_off else "전체 실행(① 반자동 로그인)"
 
 
-def run_log_labels(keywords_off: bool, resume: bool, redo_today: bool, carry: bool,
-                   skip_ranks: bool) -> tuple[str, str]:
+def run_log_labels(keywords_off: bool, resume: bool, redo_today: bool, carry: bool) -> tuple[str, str]:
     """실행 로그용 (모드표기, 단계표기) 문자열(순수) — app_qt/app.do_run_full 공통(중복 제거).
 
-    mode_txt=이어서/오늘다시/이어쓰기/새통계, stage_txt=①판매수집 단독 or 순위 제외 표기. 제어흐름은
-    분해 전 두 UI 의 ternary 와 완전히 동일(행동 불변)."""
+    mode_txt=이어서/오늘다시/이어쓰기/새통계, stage_txt=①판매수집 단독 표기(전체실행은 빈 문자열)."""
     mode_txt = ("오늘다시 " if redo_today else "이어서 ") if (resume or redo_today) else \
                ("통계이어쓰기 " if carry else "새통계 ")
-    stage_txt = " · ①판매수집(키워드·순위 없음)" if keywords_off else \
-        (" · 순위 제외(판매데이터만)" if skip_ranks and not resume else "")
+    stage_txt = " · ①판매수집(키워드·순위 없음)" if keywords_off else ""
     return mode_txt, stage_txt
 
 
@@ -464,7 +460,7 @@ def _collect_session_first(ctx: _RunCtx, accounts, get_password) -> list[tuple[i
     return login_needed
 
 
-def _collect_with_login(ctx: _RunCtx, login_needed, get_password, sales_semi: bool) -> None:
+def _collect_with_login(ctx: _RunCtx, login_needed, get_password) -> None:
     """2차 패스 — 로그인 필요 계정 처리. 서킷브레이커(연속 Akamai 차단 K회면 이후 로그인 생략)·
     로그인 사이 사람 간격(몰아치기=IP 플래그 방지)·비번오류는 재시도 금지(계정잠금 방지)."""
     log, done, total = ctx.log, ctx.done, ctx.total
@@ -487,7 +483,7 @@ def _collect_with_login(ctx: _RunCtx, login_needed, get_password, sales_semi: bo
         try:
             (report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids,
              vid_meta, pid_by_vid) = _login_and_discover(
-                a, ctx.date_from, ctx.date_to, get_password, log, login=True, semi=sales_semi, ai_key=ctx.ai_key,
+                a, ctx.date_from, ctx.date_to, get_password, log, login=True, semi=True, ai_key=ctx.ai_key,
                 anchor_file=anchor_path(ctx.out))
             blocks = 0                            # 로그인 성공 → 연속 차단 카운터 리셋
             _finish(ctx, a, report_acc, metrics, inv_by_vid, inv_status, upbundle_vids, live_vids,
@@ -612,7 +608,7 @@ def _finalize_run(ctx: _RunCtx, master: Path, prog: Path, now: datetime, gsheet_
 def run_full(input_list: InputList, out_dir: str = "output",
              ai_key: str | None = None, date_from: str | None = None, date_to: str | None = None,
              get_password=None, resume: bool = False, carry_forward: bool = False,
-             redo_today: bool = False, sales_semi: bool = False, date_label: str | None = None,
+             redo_today: bool = False, date_label: str | None = None,
              on_log=None, gsheet_output_url: str | None = None,
              registry_url: str | None = None, stock_url: str | None = None,
              designated: bool = False) -> Path:
@@ -681,7 +677,7 @@ def run_full(input_list: InputList, out_dir: str = "output",
 
     # 계정 수집 = 2패스(세션우선 → 로그인). Akamai IP 차단을 줄이려 로그인 없는 계정을 먼저 다 확보한다.
     login_needed = _collect_session_first(ctx, accounts, get_password)
-    _collect_with_login(ctx, login_needed, get_password, sales_semi)
+    _collect_with_login(ctx, login_needed, get_password)
 
     uncollected = [a for _, a in login_needed if a.account_id not in done]
     if uncollected:
@@ -701,7 +697,7 @@ def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = 
     """② 키워드 선정 전용 — 최신 워크북 로드, 상품별 키워드(**순위 조회 없음**) 선정·기록. 로그인 불필요.
 
     ①(판매수집)로 상품이 이미 워크북에 있어야 한다. 기존 키워드가 있으면 동결(grow=True면 상한 내 발굴
-    추가), 없으면 새로 선정한다. 쿠팡 순위는 조회하지 않는다(measure_ranks=None) — 순위는 ③에서.
+    추가), 없으면 새로 선정한다. 쿠팡 순위는 조회하지 않는다 — 순위는 ③에서.
     자동완성(쿠팡, 비로그인)만 쓰므로 로그인 브라우저는 열지 않는다.
     """
     log = on_log or (lambda m: None)
@@ -753,7 +749,7 @@ def _select_product_keywords(wb, biz: str, pname: str, naver, ai_key, browser, g
                 log(f"  [{biz}] {pname} → (동결·상한 {config.KW_MAX_TRACK}) {existing}")
                 return
             tracks = select_keywords_light(pname, naver, ai_key, browser=browser, log=log,
-                                           n=want, measure_ranks=None, exclude=set(existing))
+                                           n=want, exclude=set(existing))
             new = [t for t in tracks if t.keyword not in existing][:want]
             if new:
                 wb.add_product_keywords(biz, pname, [t.keyword for t in new])
@@ -764,7 +760,7 @@ def _select_product_keywords(wb, biz: str, pname: str, naver, ai_key, browser, g
                 log(f"  [{biz}] {pname} → (동결·추가 후보 없음) {existing}")
         else:                                  # 새 상품(키워드 0개) → AI 첫 선정(최대 KW_TRACK_N)
             tracks = select_keywords_light(pname, naver, ai_key, browser=browser,
-                                           log=log, measure_ranks=None)
+                                           log=log)
             wb.add_product_keywords(biz, pname, [t.keyword for t in tracks])
             for t in tracks:
                 wb.set_keyword_search(biz, pname, t.keyword, t.volume)

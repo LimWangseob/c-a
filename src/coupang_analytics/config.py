@@ -41,9 +41,6 @@ PRODUCT_ID_FETCH_ALL = True
 # 쿠팡 제목엔 이 제어문자가 절대 없으므로 내부 개행 상품명도 그대로 보존된다. workbook·검증도구 공용.
 NAME_ID_SEP = "⁣"
 
-# 모바일 노출순위 포함 여부 — 기본 제외(요청). rank._set_mobile/organic_ranks(mobile=) 모듈은 보존(재사용).
-RANK_INCLUDE_MOBILE = False
-
 # (구 서식 지표 상수 제거 — 셀독 새 서식은 위 SELDOC_*/M_*/CONTRACT·PERSONAL_METRICS 사용)
 RANK_GOOD_THRESHOLD = 20      # 이 순위 이내면 '양호'(상위 노출), 밖이면 마케팅 필요(diagnose_exposure)
 
@@ -82,10 +79,6 @@ RANK_SEMI_COOLDOWN_SEC = 1800  # 차단 감지 후 재개까지 대기(초). 30�
 RANK_SEMI_COOLDOWN_MAX = 4     # 쿨다운 후에도 진전 0이 이만큼 연속이면 당일 중단(그 IP는 회복 불가로 판단)
 RANK_PAGE_DELAY_MIN = 2.0     # 페이지 간 최소 지연(초). 스캔50=1페이지라 거의 미발동이나 2P+ 시 여유
 RANK_PAGE_DELAY_MAX = 5.0     # 페이지 간 최대 지연(초)
-# 병렬 fetch 순위조회(기본) — 검색 1회 네비로 Akamai 프라임 후 여러 키워드를 same-origin fetch로 동시에 받아
-# 렌더 없이 파싱(실측: 프라임 후 3키워드 병렬 ~1.3초, 현행 네비 15초/키워드 대비 대폭 가속).
-RANK_ORGANIC_PER_PAGE = 60   # 검색 1페이지 상품수(실측 60) → 스캔 50은 1페이지로 충분(페이지네이션 불필요)
-RANK_HUMAN_SERIAL = True      # (rank.organic_ranks_batch 전용 — 파이프라인 미사용) 직렬 fetch 여부
 # ⚠️ 키워드(검색) 사이 대기 — **반자동 순위조회**. 실제 대기 = MIN~MAX 무작위(사람처럼).
 # 이 한 세트가 **IP 상황과 무관하게 그대로** 쓰인다(상황별 자동 전환 로직 없음 — 값 조정은 **수동 편집**).
 # 정책(사용자 지정): **차단 방지 > 속도**("조금 느려도 좋으니 IP차단만은 막는다"). 그래서 기본을 넉넉히 잡는다.
@@ -97,12 +90,6 @@ RANK_HUMAN_SERIAL = True      # (rank.organic_ranks_batch 전용 — 파이프�
 # 초단축과 달리 실측 근거). 설정탭에서 실행 중에도 조정 가능(A/B).
 RANK_NAV_DELAY_MIN_SEC = 45   # 최소 대기(초) — 2026-09-28 output(9) 실측 차단·당일중단(측정192·쿨다운5·차단1)으로
 RANK_NAV_DELAY_MAX_SEC = 75   # 45~75 되돌림(35~55는 IP 태움). ⚠무차단 지속 확인 후에만 단계적 재하향(한번에 낮추면 즉시차단)
-RANK_FETCH_CONCURRENCY = 2   # 병렬(직렬모드 off) 시 동시 fetch 개수. RANK_HUMAN_SERIAL=True면 1로 강제(직렬)
-RANK_FETCH_JITTER_MIN_MS = 700  # 각 fetch 전 최소 지연(ms) — 직렬모드 사람 간격 하한(0이면 하한 없음)
-RANK_FETCH_JITTER_MS = 1800   # 각 fetch 전 최대 지연(ms) — 실제 지연은 MIN~MAX 무작위(사람처럼). 직렬이라 여전히 빠름(요청당 fetch ~0.3s)
-# 차단(Akamai) 감지 시: 즉시 공란 대신 잠시 쉬었다가 재시도한다(플래그가 수십 초~분 내 완화되는 특성 활용).
-RANK_BLOCK_BACKOFF_SEC = 30  # (구 병렬 fetch 경로 전용) 차단 감지 후 재시도까지 대기(초)
-RANK_BLOCK_RETRIES = 1       # (구 병렬 fetch 경로 전용) 차단 시 백오프 후 재시도 횟수(0이면 즉시 공란)
 # 순위 미처리분(차단 등으로 공란) **자동 재시도(미처리분 보완)** — 전체실행 종료 직전. vid 있는 상품의 공란 키워드만 재측정.
 # ⚠️ 차단 뒤 즉시 재시도는 IP만 태운다 → 라운드 사이 충분한 쿨다운(IP flag 완화 시간) + **진전 0이면 즉시 중단**.
 # 검색어·로그인 입력 = 사람처럼 한 글자씩 실제 키보드(붙여넣기 금지). 한글은 CDP IME 자모 단위 조합.
@@ -159,7 +146,7 @@ KW_W_ROCKET = 1.5          # 로켓비율 패널티(높을수록 판매자배송
 KW_W_AD = 0.5              # 광고수 패널티(경쟁 과열)
 # ⚠️ '키워드 추천' 탭의 쿠팡 1P 경쟁수집(page1_competition)은 **순위조회와 같은 쿠팡 검색(Akamai 면)** 을 때린다.
 # 최대 KW_CANDIDATE_LIMIT(=15)회 연속이라 짧은 간격이면 버스트 → 그 IP가 flag돼 직후 순위조회까지 막힌다.
-# 차단 방지 우선(사용자 지정)으로 넉넉히 잡는다. (배치 ② 노출측정은 measure_ranks=직렬 경로라 이미 RANK_NAV_DELAY로 안전.)
+# 차단 방지 우선(사용자 지정)으로 넉넉히 잡는다. (② 키워드 선정은 노출측정 안 함 — 쿠팡 검색 미사용.)
 KW_QUERY_DELAY_MIN = 8.0   # 키워드 간 쿠팡 조회 지연(초) — 순위와 같은 엔드포인트라 여유있게
 KW_QUERY_DELAY_MAX = 16.0
 

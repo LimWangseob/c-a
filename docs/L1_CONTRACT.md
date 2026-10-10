@@ -109,8 +109,6 @@
 | `warmup(browser)` | P:browser:0 |
 | `make_matcher(product_ids=None, vendor_item_ids=None, name_substr=None)` | P:product_ids:1 P:vendor_item_ids:1 P:name_substr:1 |
 | `human_type_query(page, text)` | P:page:0 P:text:0 |
-| `organic_ranks(browser, keyword, matchers, max_rank=…, mobile=…, log=None, matched_out=None)` | P:browser:0 P:keyword:0 P:matchers:0 P:max_rank:1 P:mobile:1 P:log:1 P:matched_out:1 |
-| `organic_ranks_batch(browser, keywords, matchers, max_rank=…, mobile=…, log=None)` | P:browser:0 P:keywords:0 P:matchers:0 P:max_rank:1 P:mobile:1 P:log:1 |
 | `organic_rank(browser, keyword, matches, max_rank=…)` | P:browser:0 P:keyword:0 P:matches:0 P:max_rank:1 |
 | `extract_items(page)` · `parse_serp_rank(page, matchers, max_rank=…)` | SERP 파싱 |
 - 데이터/예외 타입: `SearchItem`·`RankBlocked`.

@@ -9,7 +9,6 @@ collector/product_match 는 기존처럼 함수 내부 지연 import(교체 시 
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -17,12 +16,7 @@ from . import config
 from . import session_state
 from .browser import WING_URL, WingBrowser
 from .input_list import Account
-from .kw_ai import KeywordAIError, recommend_title
-from .kw_recommend import (attack_priority, comp_from_idx, diagnose_exposure,
-                           keyword_in_title, rank_label, select_keywords_light)
-from .kw_volume import NaverAdApi
-from .rank import make_matcher
-from .workbook import OutputWorkbook
+from .kw_ai import KeywordAIError
 from .pipeline_paths import _PROFILES_DIR
 
 

@@ -283,21 +283,14 @@ def _compress_pool(relevant: list, tiers: dict, matches: dict, core: str, exclud
     return pool
 
 
-def _measure_exposure(pool: list, tiers: dict, matches: dict, measure_ranks, log) -> dict:
-    """(3) 압축분 쿠팡 실노출 **일괄 측정**(measure_ranks=여러 키워드 병렬 fetch) → 노출점수·등급.
+def _score_pool(pool: list, tiers: dict, matches: dict) -> dict:
+    """(3) 압축분 점수·등급 — **노출측정 없음**(②는 쿠팡 검색을 안 함·2026-09-15 정책) → 노출 없이 부분점수만.
 
-    반환 {키워드: (점수, 등급, 최고순위, ranks_pc, ranks_mobile)}. measure_ranks None이면 노출 없이 부분점수만."""
-    batch: dict[str, tuple[dict, dict]] = {}
-    if measure_ranks is not None:
-        batch = measure_ranks([c.keyword for c in pool])   # {키워드: (ranks_pc, ranks_mobile)}
+    반환 {키워드: (점수, 등급, 최고순위=None, ranks_pc={}, ranks_mobile={})}(_final_select 가 쓰는 모양 유지)."""
     meta: dict[str, tuple[float, str, int | None, dict, dict]] = {}
     for c in pool:
-        ranks_pc, ranks_mobile = batch.get(c.keyword, ({}, {}))
-        best = min([v for v in (*ranks_pc.values(), *ranks_mobile.values()) if v], default=None)
-        if measure_ranks is not None and log:
-            log(f"  [노출측정] '{c.keyword}' 쿠팡 오가닉 노출순위: {rank_label(best)}")
-        s = _keyword_score(c, tiers.get(c.keyword, ""), matches.get(c.keyword, 1.0), best)
-        meta[c.keyword] = (round(s, 1), _grade(s), best, ranks_pc, ranks_mobile)
+        s = _keyword_score(c, tiers.get(c.keyword, ""), matches.get(c.keyword, 1.0), None)
+        meta[c.keyword] = (round(s, 1), _grade(s), None, {}, {})
     return meta
 
 
@@ -325,17 +318,14 @@ def _final_select(pool: list, meta: dict, tiers: dict, matches: dict, title: str
 
 def select_keywords_light(title: str, naver: NaverAdApi, ai_key: str | None,
                           n: int | None = None, browser=None, log=None,
-                          measure_ranks=None, exclude: set[str] | None = None) -> list[TrackKeyword]:
-    """배치 추적용 키워드 선정(페이즈 B — 점수 압축 + 쿠팡 실노출 승격 + AI 종합선정).
+                          exclude: set[str] | None = None) -> list[TrackKeyword]:
+    """② 추적 키워드 선정(점수 압축 + AI 종합선정 — 쿠팡 노출측정 없음).
 
     1) 후보 수집(앵커연관 + 쿠팡 자동완성 + AI 조합생성 + 네이버 2단계확장) → 핵심/연관 판정.
     2) **부분점수(관련성·구매의도·검색량)로 상위 KW_SCORE_POOL_N개 압축**(핵심 core는 항상 포함).
-    3) 압축분만 `measure_ranks`로 **쿠팡 실노출(오가닉 순위) 측정** → 노출점수 반영 → 전체 100점·등급.
-       (측정한 옵션별 순위는 TrackKeyword에 실어 호출부가 워크북 순위에 **재사용** — 재조회 없음.)
+    3) 압축분 점수·등급(노출측정 없음 — 순위는 ③ 반자동에서).
     4) **AI 최종선정**(select_keywords): 점수·등급·노출·클릭·경쟁도·관련도를 종합해 n개 우선순위 확정.
 
-    measure_ranks(keywords: list) -> {키워드: (ranks_pc, ranks_mobile)} 각 {옵션라벨: 순위 or None}.
-    여러 키워드를 **한 번에**(병렬 fetch) 측정한다. None이면 노출점수 없이 부분점수만으로 선정(예: 라이브 검증).
     exclude 는 통계 유지 중 **발굴 추가**용으로, 이미 추적 중인 키워드를 후보에서 빼 **새 키워드만** n개 뽑는다
     (기존은 호출부가 동결). AI 없으면 KeywordAIError.
     """
@@ -349,7 +339,7 @@ def select_keywords_light(title: str, naver: NaverAdApi, ai_key: str | None,
     if not relevant:
         return []
     pool = _compress_pool(relevant, tiers, matches, core, exclude, log)     # (2) 부분점수 압축
-    meta = _measure_exposure(pool, tiers, matches, measure_ranks, log)      # (3) 쿠팡 실노출 측정
+    meta = _score_pool(pool, tiers, matches)                                # (3) 점수·등급(노출측정 없음)
     return _final_select(pool, meta, tiers, matches, title, use, core, identities, n, ai_key, log)  # (4) AI 최종선정
 
 

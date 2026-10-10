@@ -94,8 +94,7 @@ def _fake_login_and_discover(a, date_from, date_to, get_password, log, login=Tru
             metrics, inventory, inv_status, set(), live, {}, pid_by_vid)
 
 
-def _fake_keywords(title, naver, ai_key=None, n=None, browser=None, log=None,
-                   measure_ranks=None, exclude=None):
+def _fake_keywords(title, naver, ai_key=None, n=None, browser=None, log=None, exclude=None):
     """가짜 선정 — TrackKeyword(exposure_best=순위3). exclude면 새 키워드만."""
     if exclude:
         extra = [("kw3", 1500, "낮음"), ("kw4", 800, "중간")]
@@ -132,13 +131,10 @@ def _install_fakes():
 
 
 # ── 운영 조합 실행 헬퍼(D-022 B5 — 운영 호출과 같은 인자) ──────────────────
-_OPS_RUN_FULL = dict(sales_semi=True)   # app_qt 운영 호출 고정값
-
-
 def _run1(il, d: Path, **kw) -> Path:
     """① 판매수집 = 운영 run_full(키워드·순위 없음). 반환 = 그날 스냅샷."""
     kw.setdefault("on_log", lambda m: None)
-    return P.run_full(il, out_dir=str(d), ai_key="sim", **_OPS_RUN_FULL, **kw)
+    return P.run_full(il, out_dir=str(d), ai_key="sim", **kw)
 
 
 def _run2(d: Path, grow: bool = False, on_log=None) -> Path:
@@ -421,7 +417,7 @@ def scenario_display_name_rename():
 def scenario_full_composition():
     """새 전체실행 = do_run_full 전체실행 분기의 3단계 조합(2026-09-15, offscreen 추방).
 
-    ①run_full(sales_semi=True)=판매만 → ②select_keywords_stage()=키워드
+    ①run_full=판매만(반자동 로그인) → ②select_keywords_stage()=키워드
     (노출측정 없음) → ③track_ranks_stage()=반자동 순위. 각 단계가 워크북을 올바르게 진전시키는지 검증.
     (offscreen 순위백필 _backfill_ranks 는 2026-09-26 폐기·물리 삭제 — ③은 반자동만.)"""
     print("[시나리오 10] 새 전체실행 조합 — ①반자동(판매만)→②키워드선정→③반자동 순위")
@@ -435,7 +431,7 @@ def scenario_full_composition():
     _check(_has_value(snap, 7), "① 판매량(7) 기록됨")
     _check(_keywords_in(snap) == set(), "① 단계엔 키워드 없음(키워드는 ②)")
     _check(not _has_value(snap, "3위"), "① 단계엔 순위 없음(순위는 ③)")
-    # ② 키워드 선정 — 노출측정(measure_ranks) 없이 AI 선정만
+    # ② 키워드 선정 — 노출측정 없이 AI 선정만
     p2 = _run2(d)
     _check(_keywords_in(p2) == {"kw1", "kw2"}, "② 키워드 선정됨(kw1·kw2)")
     _check(not _has_value(p2, "3위"), "② 단계엔 순위 없음(순위는 ③)")

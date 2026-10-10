@@ -1797,7 +1797,7 @@ def _t2_keywords_mocked():
         lines: list[str] = []
         picked = select_keywords_light("테스트상품 프리미엄 소형 30개입", _FakeNaver(),
                                        ai_key="__mock__", n=config.KW_MAX_TRACK,
-                                       browser=None, measure_ranks=None,
+                                       browser=None,
                                        log=lambda m: lines.append(m))
     finally:
         kw_ai._ask, kw_ai._client = orig_ask, orig_client
@@ -1833,7 +1833,7 @@ def t2_keywords(store, il):
     try:
         # browser=None → 쿠팡 자동완성/실노출 측정 건너뜀(순수 오프라인: 네이버+OpenAI만). Phase B 선정 경로 그대로 실행.
         picked = select_keywords_light(title, api, ak, n=config.KW_MAX_TRACK,
-                                       browser=None, measure_ranks=None,
+                                       browser=None,
                                        log=lambda m: lines.append(m))
     except Exception as exc:
         _skip(f"키워드 실행 실패({exc.__class__.__name__}: {str(exc)[:60]})")

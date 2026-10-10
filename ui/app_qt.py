@@ -799,7 +799,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self.sales_semi_btn.setToolTip(
             "보이는 Chrome 창을 띄우고 로그인(ID/비번 자동입력, 2차인증은 사람)한 뒤\n"
             "그 신뢰 창에서 판매수집합니다(반자동). 무인 오프스크린 자동로그인 차단을 피합니다.")
-        self.sales_semi_btn.clicked.connect(lambda: self.do_run_full(keywords_off=True, sales_semi=True))
+        self.sales_semi_btn.clicked.connect(lambda: self.do_run_full(keywords_off=True))
         top.addWidget(self.sales_semi_btn)
         self.kw_btn = QtWidgets.QPushButton("② 키워드 선정")
         self.kw_btn.clicked.connect(self.do_select_keywords)
@@ -809,7 +809,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self.track_semi_btn.setToolTip(
             "창이 뜨면 로그에 안내되는 키워드를 그 창의 쿠팡 검색창에 직접 입력·검색하세요.\n"
             "앱이 결과 화면을 읽어 순위를 기록합니다(우리가 자동검색을 안 해 차단이 안 생깁니다).")
-        self.track_semi_btn.clicked.connect(lambda: self.do_track_ranks(semi=True))
+        self.track_semi_btn.clicked.connect(self.do_track_ranks)
         top.addWidget(self.track_semi_btn)
         self.track_stop_btn = QtWidgets.QPushButton("반자동 중지")
         self.track_stop_btn.setEnabled(False)
@@ -819,7 +819,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self.pipeline_btn.setObjectName("accent")
         self.pipeline_btn.setToolTip("①판매수집(반자동 로그인) → ②키워드 선정(노출측정 없음) → ③순위(반자동 자동타이핑).\n"
                                      "오프스크린 공개검색을 안 써 차단을 피합니다. ③ 중 '반자동 중지'로 멈출 수 있습니다.")
-        self.pipeline_btn.clicked.connect(lambda: self.do_run_full(keywords_off=False, sales_semi=True))
+        self.pipeline_btn.clicked.connect(lambda: self.do_run_full(keywords_off=False))
         top.addWidget(self.pipeline_btn)
         top.addStretch(1)
         rv.addLayout(top)
@@ -1525,7 +1525,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             return False
         return True
 
-    def do_run_full(self, keywords_off: bool = False, sales_semi: bool = False):
+    def do_run_full(self, keywords_off: bool = False):
         if self._guard_busy():
             return
         if not self._require_run_inputs():
@@ -1535,9 +1535,8 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         except ValueError:
             QtWidgets.QMessageBox.warning(self, "날짜 형식", "날짜는 YYYY-MM-DD 로 입력하세요(예: 2026-10-09).")
             return
-        skip_ranks = False   # 날짜 지정도 순위 포함(지금 측정값을 그 칸에·소유자 2026-10-10)
         n = sum(len(a.products) for a in self.input_list.accounts)
-        title = run_title(keywords_off, sales_semi)
+        title = run_title(keywords_off)
         # 실행 모드 3택 → 여기선 예/아니오만 확인.
         #  · ① 이어서 하기: 오늘 진행분 있으면 이어서(완료 계정 건너뜀), 아니면 마스터에 오늘 컬럼 추가.
         #  · ② 오늘 처음(다시): carry_forward + redo_today → 오늘 컬럼·완료스탬프 초기화 후 전 계정 재수집(어제까지 유지).
@@ -1564,7 +1563,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             self.log(f"[{title}] 취소됨")
             return
         input_list, naver_creds, key = self.input_list, self.naver_creds, self.ai_key
-        mode_txt, stage_txt = run_log_labels(keywords_off, resume, redo_today, carry, skip_ranks)
+        mode_txt, stage_txt = run_log_labels(keywords_off, resume, redo_today, carry)
         self.log(f"[{'판매수집' if keywords_off else '전체실행'}] {mode_txt}시작 — 상품 {n}개, 기간 {df}~{dt}"
                  f"{' · 새 키워드 발굴 추가' if grow else ''}{stage_txt}")
         btn = self.sales_semi_btn if keywords_off else self.pipeline_btn
@@ -1737,7 +1736,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
                                          gsheet_output_url=gs_out, stock_url=stock_url)
         self.run_bg(task, on_done=self._pipeline_done, btn=self.kw_btn, exclusive=True, pipelinelock=True)
 
-    def do_track_ranks(self, semi: bool = True):
+    def do_track_ranks(self):
         """③ 노출순위 조회(반자동) — 로그인 불필요. 앱이 창을 띄우고 키워드를 안내, 사용자가 직접
         검색하면 그 화면을 읽어 기록한다(자동 검색을 안 해 차단이 안 생김). 자동 방식은 차단 위험으로 폐지.
         """

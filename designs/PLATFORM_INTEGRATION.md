@@ -65,7 +65,7 @@
 | 읽기 | `fetch_inventory(session)` | 재고 | `collector.fetch_inventory` | 커머스 재고 API |
 | 읽기 | `fetch_settlement(session, period)` | 정산·매출 | (2단계·collector 확장·`DOMAIN_D8 §2`) | 커머스 정산 API |
 | 읽기 | `fetch_inquiries(session, since)` | 문의(CS) | (미확인·`DOMAIN_D10 §2`) | 커머스 문의 API |
-| 읽기 | `organic_rank(...)` | 오가닉 순위 | `rank.organic_ranks`(비로그인·프록시) | 플랫폼 공개 검색(별도·미결) |
+| 읽기 | `organic_rank(...)` | 오가닉 순위 | `rank.parse_serp_rank`(③ 반자동·비로그인·프록시) | 플랫폼 공개 검색(별도·미결) |
 | 쓰기 | `register_product(session, spec)` | 상품 등록 | WING 등록 API(미확인)+`_POST_JSON_JS` | 커머스 상품 등록 API |
 | 쓰기 | `update_product(session, change)` | 가격·옵션·상태 변경 | WING 수정 API(미확인) | 커머스 상품 수정 API |
 | 쓰기 | `reply_inquiry(session, reply)` | CS 답변 | (미확인) | 커머스 문의 답변 API |
@@ -75,7 +75,7 @@
 ### 2.3 쿠팡 어댑터 — 기존 자산 100% 재사용 매핑 (확정 가능·코드 이동 없음)
 - `CoupangAdapter`는 **새 로직을 거의 안 만든다.** 기존 L0/L1을 조립·정규화하는 **얇은 파사드**다.
 - 세션 관문: `with WingBrowser(profile_dir=...) as wb:` → `wb.page`(로그인 세션 same-origin). `authenticated()`(윙 대시보드 URL + `KEYCLOAK_IDENTITY` 쿠키 둘 다)로 생존 확인. **런타임 브라우저는 항상 1개**(로그인·rank 동시 금지, [[login-policy-real-browser-only]]).
-- 읽기: `collector`의 `discover`·`fetch_sales_roster`·`fetch_vendor_inventory`·`fetch_inventory`·`fetch_product_ids`·`sale_status_by_vid`를 그대로 호출(L1 계약 §1). 호출 템플릿=`_POST_JSON_JS`/`_GET_JSON_JS`(cookie `XSRF-TOKEN`→`x-xsrf-token`·`credentials:include`). 순위=`rank.organic_ranks`(L1 계약 §7-b, 비로그인·프록시 뒤).
+- 읽기: `collector`의 `discover`·`fetch_sales_roster`·`fetch_vendor_inventory`·`fetch_inventory`·`fetch_product_ids`·`sale_status_by_vid`를 그대로 호출(L1 계약 §1). 호출 템플릿=`_POST_JSON_JS`/`_GET_JSON_JS`(cookie `XSRF-TOKEN`→`x-xsrf-token`·`credentials:include`). 순위=`rank.parse_serp_rank`(③ 반자동 화면 읽기·L1 계약 §7-b, 비로그인·프록시 뒤 — `organic_ranks`·`_batch` 는 B7 삭제).
 - 원문 보관: collector의 `_raw`(gzip 사이드카 `output/_raw/`·`SAVE_RAW_RESPONSES`) 패턴 유지(§3.4).
 - ⚠ **위탁계정 = 판매자 OpenAPI 키 발급 불가**([[coupang-openapi-not-available-consignment]]) → 쿠팡은 **WING 세션이 유일 경로**. 어댑터의 쿠팡 인증은 API 키가 아니라 브라우저 세션이다(스마트스토어와 비대칭).
 

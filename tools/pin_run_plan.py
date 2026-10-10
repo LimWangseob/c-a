@@ -84,22 +84,20 @@ def pin_first_run():
 
 def pin_labels():
     print("[핀 P7] run_title / run_log_labels — 제목·모드/단계 표기(UI 공통)")
-    _check(run_title(True, True) == "① 판매수집(반자동)", "①판매수집 반자동 제목")
-    _check(run_title(True, False) == "① 판매수집", "①판매수집 제목")
-    _check(run_title(False, True) == "전체 실행(① 반자동 로그인)", "전체실행 반자동 제목")
-    _check(run_title(False, False) == "전체 실행", "전체실행 제목")
-    m, s = run_log_labels(keywords_off=False, resume=True, redo_today=False, carry=True, skip_ranks=False)
+    _check(run_title(True) == "① 판매수집(반자동)", "①판매수집 반자동 제목")
+    _check(run_title(False) == "전체 실행(① 반자동 로그인)", "전체실행 반자동 제목")
+    m, s = run_log_labels(keywords_off=False, resume=True, redo_today=False, carry=True)
     _check(m == "이어서 " and s == "", "resume=이어서·전체실행 단계표기 없음")
-    m, s = run_log_labels(keywords_off=False, resume=False, redo_today=True, carry=True, skip_ranks=False)
+    m, s = run_log_labels(keywords_off=False, resume=False, redo_today=True, carry=True)
     _check(m == "오늘다시 ", "redo_today=오늘다시")
-    m, s = run_log_labels(keywords_off=False, resume=False, redo_today=False, carry=True, skip_ranks=False)
+    m, s = run_log_labels(keywords_off=False, resume=False, redo_today=False, carry=True)
     _check(m == "통계이어쓰기 ", "carry=통계이어쓰기")
-    m, s = run_log_labels(keywords_off=False, resume=False, redo_today=False, carry=False, skip_ranks=False)
+    m, s = run_log_labels(keywords_off=False, resume=False, redo_today=False, carry=False)
     _check(m == "새통계 ", "아무것도 없음=새통계")
-    m, s = run_log_labels(keywords_off=True, resume=False, redo_today=False, carry=False, skip_ranks=True)
+    m, s = run_log_labels(keywords_off=True, resume=False, redo_today=False, carry=False)
     _check(s == " · ①판매수집(키워드·순위 없음)", "keywords_off=①판매수집 단계표기")
-    m, s = run_log_labels(keywords_off=False, resume=False, redo_today=False, carry=True, skip_ranks=True)
-    _check(s == " · 순위 제외(판매데이터만)", "skip_ranks(재개 아님)=순위 제외 표기")
+    m, s = run_log_labels(keywords_off=False, resume=False, redo_today=False, carry=True)
+    _check(s == "", "전체실행=단계표기 없음")
 
 
 def pin_designated_date():

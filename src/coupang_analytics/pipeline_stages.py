@@ -66,7 +66,7 @@ def run_stages(input_list, plan: StagePlan, *, ai_key, naver, date_from: str, da
     def run_sales(resume: bool, redo_today: bool):
         return run_full(input_list, ai_key=ai_key, date_from=date_from, date_to=date_to,
                         get_password=get_password, resume=resume, carry_forward=carry,
-                        redo_today=redo_today, sales_semi=True, date_label=date_label, on_log=log,
+                        redo_today=redo_today, date_label=date_label, on_log=log,
                         gsheet_output_url=gsheet_output_url, registry_url=registry_url,
                         stock_url=stock_url, designated=designated)
 

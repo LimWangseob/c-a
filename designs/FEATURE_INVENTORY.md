@@ -73,7 +73,7 @@
 ### 3-1. 운영에서 실행되지 않는 분기 (✔ 핵심 사실 기반)
 - ✅ 삭제(B5): `run_full` 인라인 키워드·순위(`_finish` 인라인 drive_rank·역머지 호출[→E1 은 ① 시작에 재연결]·`_select_keywords_for_skipped`) + 그 인자 `naver`·`grow_keywords`·`skip_ranks`·`keywords_off` · `pipeline_process`(`_resolve_keywords`·`_frozen_keywords`·`_log_diagnose`·`_product_matcher`·대표 옵션 키워드/순위 분기) · wb `title_cache`(숨김 시트 4·5열은 '(미사용)' 표기로 위치만 유지).
 - ✅ 삭제(B5): 자동(offscreen) 순위 `track_ranks_stage(semi=False)`+`semi` 인자·`_measure_product_auto`·`_measure*`·`_rank_cooldown`·`RankHalt`·`_RANK_HALT`·`_best` · config `RANK_NAV_SERIAL`·`RANK_SLOW_ABS_SEC`·`RANK_COOLDOWN_SEC/MAX`.
-- ✅ 삭제(B5): 파이프라인의 `organic_ranks_batch` 병렬 경로 · 사람 Enter 대기 `_wait_user_search`·`RANK_SEMI_AUTOSUBMIT`(반자동은 자동제출만). `rank.organic_ranks/organic_ranks_batch` 자체는 L1 공개 API(L1_CONTRACT)라 유지 — 이제 호출처 없음(정리 후보).
+- ✅ 삭제(B5): 파이프라인의 `organic_ranks_batch` 병렬 경로 · 사람 Enter 대기 `_wait_user_search`·`RANK_SEMI_AUTOSUBMIT`(반자동은 자동제출만). `rank.organic_ranks/organic_ranks_batch` 는 **B7 에서 삭제**(D-026).
 - ⛔ 정정: `_semi_retry_login` 은 **운영에서 돈다** — 정산 다운로드 무인(`settlement_download --hidden` = 18:00 watch)이 `_ensure_login(semi=False)` → `unattended=True` 경로를 탄다. 삭제 안 함.
 - ✅ 게이트 이전(B5-1): simulate 1~16 전부 운영 조합(①→②→③) · verify_offline [23] 동결 규칙=② `_select_product_keywords` · 정밀 렌더=운영 조합 뒤 마스터 · 핀 N·O·O2(삭제 경로 전용)는 코드와 함께 삭제 · 인라인 `_rank_cooldown` 회전 핀 → ③ `_semi_on_miss` 회전 핀으로 이전.
 
@@ -126,3 +126,4 @@
   - ✅ B5 운영에서 안 도는 분기(§3-1): 게이트 시나리오 운영 조합 이전(B5-1) → 분기·인자 물리 삭제(B5-2, 순 −727줄) · `_semi_retry_login` 은 정산 무인 경로라 유지
   - ✅ B6 중복 통합(§3-4): 야간 조립 3벌→`pipeline_stages.run_stages`(+핀 P9~P11) · 절전 2벌→power · 정산 중지 2벌→stop_settlement(트리 종료) · 18:00 옛 예약작업 제거 삭제 · `정산_지금실행.bat` 삭제(D-024)
   - ✅ 오류 E1~E7 일괄 수정(§2, D-025) — E6 는 B2 로 해소
+  - ✅ B7 호출처 없는 잔여(D-026): `rank.organic_ranks`·`organic_ranks_batch`+전용 헬퍼 7개·config 8개 · `select_keywords_light(measure_ranks)` · `run_full`/`run_title`/`do_run_full` 의 `sales_semi` · `run_log_labels`/`do_run_full` 의 `skip_ranks` · `do_track_ranks(semi)` · `pipeline_sales` 미사용 import · `ProxyNode` 건강 필드 6개·`ProxyManager(max_failures, strategy, verify_url)` · DESIGN §4.4 킵얼라이브 문단

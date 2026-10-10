@@ -98,7 +98,7 @@ def _normalize_proxy_url(value: str) -> str:
 
 @dataclass
 class ProxyNode:
-    """Metadata and health state for a single proxy endpoint."""
+    """Metadata for a single proxy endpoint (``is_active`` = selectable by proxy_pool)."""
 
     raw_url: str = field(repr=False)
     protocol: str = field(init=False, default="")
@@ -108,12 +108,6 @@ class ProxyNode:
     password: Optional[str] = field(init=False, default=None, repr=False)
 
     is_active: bool = True
-    consecutive_failures: int = 0
-    latency_ms: Optional[float] = None
-    last_verified: float = 0.0
-    last_error: Optional[str] = None
-    success_count: int = 0
-    failure_count: int = 0
 
     def __post_init__(self) -> None:
         self.raw_url = _normalize_proxy_url(self.raw_url)
@@ -150,9 +144,7 @@ class ProxyNode:
         return (
             "ProxyNode("
             f"url='{self.redacted_url}', "
-            f"is_active={self.is_active}, "
-            f"consecutive_failures={self.consecutive_failures}, "
-            f"latency_ms={self.latency_ms}"
+            f"is_active={self.is_active}"
             ")"
         )
 
@@ -166,25 +158,8 @@ class ProxyManager:
     def __init__(
         self,
         proxy_list: Optional[Iterable[str]] = None,
-        max_failures: int = 3,
-        strategy: str = "round_robin",
-        verify_url: str = "https://httpbin.org/ip",
     ) -> None:
-        if max_failures < 1:
-            raise ProxyConfigurationError("max_failures must be >= 1.")
-        if strategy not in {"round_robin", "random"}:
-            raise ProxyConfigurationError(
-                "strategy must be either 'round_robin' or 'random'."
-            )
-        if not verify_url.startswith(("http://", "https://")):
-            raise ProxyConfigurationError("verify_url must be an HTTP(S) URL.")
-
-        self.max_failures = max_failures
-        self.strategy = strategy
-        self.verify_url = verify_url
-
         self._lock = threading.RLock()
-        self._index = 0
         self.proxies: List[ProxyNode] = []
         self._known_urls: set[str] = set()
 
