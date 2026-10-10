@@ -29,8 +29,15 @@ from openpyxl.styles import Font  # noqa: E402
 from coupang_analytics import config, gsheet_index as gi, gsheet_stats  # noqa: E402
 from coupang_analytics.gsheet_index import DATA_START0, ExistingRow, IndexRow  # noqa: E402
 from coupang_analytics.input_list import (Account, Product,  # noqa: E402
-                                          parse_input_list, parse_input_rows, parse_password_rows)
+                                          parse_input_list, parse_input_rows,
+                                          parse_password_candidates)
 from coupang_analytics.workbook import OutputWorkbook  # noqa: E402
+
+
+def _first_pw(rows) -> dict:
+    """로그인 첫 시도 비번 = 운영 parse_password_candidates 의 첫 후보(D-012)."""
+    return {aid: c[0].password for aid, c in parse_password_candidates(rows).items()}
+
 
 _HEAD = ["대표자", "사업자", "계정ID", "상품명(클릭 이동)",
          "체험단 시작일", "체험단 종료일", "모니터링 종료일", "상태"]   # 항목④(2026-09-25): 계정ID를 상품명 왼쪽으로
@@ -59,7 +66,7 @@ def t1_ledger_rows() -> None:
     assert il.ledger_account_ids >= {"id_a", "id_b", "id_c"}, il.ledger_account_ids
     assert il.accounts[0].products[0].mkt_mon == "2026-10-31"
     assert any("보온병" in s for s in il.struck) and any("id_c" in s for s in il.struck)
-    pw = parse_password_rows(rows)
+    pw = _first_pw(rows)
     assert pw["id_a"] == "pass1" and pw["id_b"] == "pass2"
     _ok("계정 2개(id_c 삭제·보온병 판매중지 제외), '판매중' 유지, 비번 추출")
 
@@ -120,7 +127,7 @@ def t1c_real_ledger_shape() -> None:
     assert got["unipang"] == ["불멍화로", "NMN정"], got["unipang"]
     assert il.accounts[0].business_name == "웰빙곳간" and il.accounts[0].representative == "송창호"
     assert any("커큐민플러스" in s for s in il.struck) and any("퀘르세틴" in s for s in il.struck)
-    pw = parse_password_rows(rows)
+    pw = _first_pw(rows)
     assert pw.get("wellbing") == "pw1" and pw.get("unipang") == "pw2", pw
     _ok("행2 헤더·세로병합 상속·취소선+판매상태 동시제외·계정식별·비번(우측 컬럼)까지 실구조 재현 통과")
 
@@ -906,9 +913,9 @@ def t15_password_candidates() -> None:
     assert [x.password for x in c["dalbong"]] == ["NEW", "OLD"] and c["dalbong"][0].rows == (4,), c["dalbong"]
     assert [x.password for x in c["mrc"]] == ["A57", "B60"], "같은 줄 수면 위쪽 행 먼저"
     assert [x.password for x in c["solo"]] == ["PW"] and "empty" not in c, "빈 칸은 후보 아님(저장값 유지는 앱)"
-    pw = parse_password_rows(rows)
+    pw = _first_pw(rows)
     assert pw == {"dalbong": "NEW", "mrc": "A57", "solo": "PW"}, f"단일 값 = 첫 후보(예전: 마지막 줄 값): {pw}"
-    _ok("후보 여럿(행 번호 포함)·적은 줄 먼저·같으면 위쪽 행·빈 칸 무시·parse_password_rows=첫 후보")
+    _ok("후보 여럿(행 번호 포함)·적은 줄 먼저·같으면 위쪽 행·빈 칸 무시·로그인 첫 시도=첫 후보")
 
 
 def t16_password_trim() -> None:

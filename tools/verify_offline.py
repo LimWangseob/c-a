@@ -45,6 +45,12 @@ def _skip(msg: str) -> None:
     print(f"    [건너뜀] {msg}")
 
 
+def _rule_scope(ledger, discovered):
+    """글자 규칙 매칭 경로(AI 장애 시 대체·D-009) = 운영 build_tracked(ledger, _assign(ledger, discovered))."""
+    from coupang_analytics.product_match import _assign, build_tracked
+    return build_tracked(ledger, _assign(ledger, discovered))
+
+
 # ── Tier1 ─────────────────────────────────────────────────────
 def t1_parse_input():
     print("[1] 입력 엑셀 파싱 (input_list.parse_input_list)")
@@ -237,11 +243,10 @@ def t1_sale_status_flag():
     assert _block_sale_status({"y": "판매중지"}, ["x"]) == ""     # 이 블록 vid 상태 없음 → 미상
     # ── #8(2026-09-27): 대장 판매중지/취소선도 **수집**(discontinued 이월)·순위만 제외(rank_suppressed) ──
     from coupang_analytics.input_list import Option as _O8, Product as _P8
-    from coupang_analytics.product_match import scope_to_ledger as _scope8
     _led8 = [_P8("살아있는상품", options=[_O8("", ["Vx"])]),
              _P8("중지상품", options=[_O8("", ["Vy"])], discontinued=True)]
-    _sc8, _ = _scope8(_led8, [])                                  # 발견 없음(미매칭 분기)에도 discontinued 이월돼야
-    assert _sc8[1].discontinued and not _sc8[0].discontinued, "scope_to_ledger discontinued 이월 실패"
+    _sc8, _ = _rule_scope(_led8, [])                                  # 발견 없음(미매칭 분기)에도 discontinued 이월돼야
+    assert _sc8[1].discontinued and not _sc8[0].discontinued, "build_tracked discontinued 이월 실패"
     wb8 = OutputWorkbook.empty()
     wb8.ensure_product_block("비즈8", "중지상품", config.KIND_CONTRACT, ["kw8"])
     wb8.set_discontinued("비즈8", "중지상품", True)
@@ -476,7 +481,6 @@ def t1_representative_column():
 def t1_product_match_precision():
     print("[11] 대장↔쿠팡 정밀 매칭 (product_match — 오매칭 차단·미달=미매칭 공란)")
     from coupang_analytics.input_list import Option, Product
-    from coupang_analytics.product_match import scope_to_ledger
 
     def disc(title, vid, kind=config.KIND_CONTRACT, sale_status=""):
         return Product(name=title, title=title, kind=kind, sale_status=sale_status,
@@ -496,7 +500,7 @@ def t1_product_match_precision():
         Product(name="웰빙곳간 동결건조 로얄제리 120정"),            # 핵심어(로얄제리) 발견에 없음 → 미매칭
         Product(name="블루투스 이어폰"),                            # A·B 동점 → 애매 → 미매칭
     ]
-    tracked, n = scope_to_ledger(ledger, discovered)
+    tracked, n = _rule_scope(ledger, discovered)
     vids = [sorted(v for o in tp.options for v in o.vendor_item_ids) for tp in tracked]
     assert vids[0] == ["v_maek"], f"맥문동 매칭 실패: {vids[0]}"
     assert vids[1] == ["v_beta"], f"베타글루칸 매칭 실패: {vids[1]}"
@@ -521,14 +525,14 @@ def t1_product_match_precision():
         Product(name="웰빙곳간 퀘르세틴 브로멜라인 MAX 120정"),        # → v_q120 (규격 120정)
         Product(name="웰빙곳간 퀘르세틴 브로멜라인 로얄 30포"),        # → v_q30  (규격 30포)
     ]
-    t2, n2 = scope_to_ledger(led2, disc2)
+    t2, n2 = _rule_scope(led2, disc2)
     v2 = [sorted(v for o in tp.options for v in o.vendor_item_ids) for tp in t2]
     assert v2[0] == ["v_120"], f"루바브 규격 타이브레이커 실패: {v2[0]}"
     assert v2[1] == ["v_q120"], f"퀘르세틴 120정 타이브레이커 실패: {v2[1]}"
     assert v2[2] == ["v_q30"], f"퀘르세틴 30포 타이브레이커 실패: {v2[2]}"
     # 규격이 서로를 못 가르면(둘 다 120정) 여전히 미매칭(오매칭 방지)
     disc3 = [disc("웰빙곳간 진세노사이드 홍삼 120정", "v_h1"), disc("웰빙곳간 진세노사이드 홍삼정 120정", "v_h2")]
-    t3, _ = scope_to_ledger([Product(name="웰빙곳간 진세노사이드 홍삼 120정")], disc3)
+    t3, _ = _rule_scope([Product(name="웰빙곳간 진세노사이드 홍삼 120정")], disc3)
     assert not any(o.vendor_item_ids for o in t3[0].options), "규격 동일 애매쌍이 매칭됨(오매칭)"
     _ok("규격 타이브레이커: 변형(120정/30포) vid 정확 확정·규격 동일 애매쌍은 미매칭 유지")
     # 모델코드 타이브레이커(원인①·2026-09-29): 한글접두가 중복이라 애매(마진 0)한데 구분 코드가
@@ -549,7 +553,7 @@ def t1_product_match_precision():
         Product(name="보냉백 BG002"),          # → v_bg2
         Product(name="무드등 CT0229"),         # → v_ct (긴 무드등 아님)
     ]
-    t4, n4 = scope_to_ledger(led4, disc4)
+    t4, n4 = _rule_scope(led4, disc4)
     v4 = [sorted(v for o in tp.options for v in o.vendor_item_ids) for tp in t4]
     assert v4[0] == ["v_st"], f"차량용청소기 모델코드 타이브레이커 실패: {v4[0]}"
     assert v4[1] == ["v_bg1"], f"보냉백 BG001 실패: {v4[1]}"
@@ -560,12 +564,12 @@ def t1_product_match_precision():
     # 판매중지 제외(소유자 2026-09-29): 같은 이름·코드 중복 리스팅 중 판매중지(재등록 죽은 것)를 빼고 live 유일→매칭.
     disc5 = [disc("트렁크정리함 YG0204", "v_live", sale_status="부분판매중"),
              disc("트렁크정리함 YG0204", "v_dead", sale_status="판매중지")]
-    t5, _ = scope_to_ledger([Product(name="트렁크정리함 YG0204")], disc5)
+    t5, _ = _rule_scope([Product(name="트렁크정리함 YG0204")], disc5)
     assert [v for o in t5[0].options for v in o.vendor_item_ids] == ["v_live"], "판매중지 제외 후 live 매칭 실패"
     # 같은 이름 별도 상품(둘 다 live·다른 vid/가격): 대장 한 줄 → 둘 다 별도 블록으로(옵션 분리) 병합(소유자 2026-09-29)
     disc5b = [disc("기저귀가방 CL01", "v_a", sale_status="판매중"),
               disc("기저귀가방 CL01", "v_b", sale_status="부분판매중")]
-    t5b, n5b = scope_to_ledger([Product(name="기저귀가방 CL01")], disc5b)
+    t5b, n5b = _rule_scope([Product(name="기저귀가방 CL01")], disc5b)
     v5b = sorted(v for o in t5b[0].options for v in o.vendor_item_ids)
     assert v5b == ["v_a", "v_b"], f"같은 이름 별도 상품 둘 다 추적 실패: {v5b}"
     assert len(t5b[0].options) == 2, "옵션 2개(별도 블록용)로 병합 안 됨"
@@ -583,7 +587,7 @@ def t1_product_match_precision():
         Product(name="문어발선풍기m10 (대체요망)"),    # 괄호=메모 → 본문으로 매칭
         Product(name="HB100 (웰빙곳간 프리미엄 무선 안마기 대형)"),  # 본문 코드뿐 → 괄호(노출제목) 폴백
     ]
-    t6, n6 = scope_to_ledger(led6, disc6)
+    t6, n6 = _rule_scope(led6, disc6)
     v6 = [sorted(v for o in tp.options for v in o.vendor_item_ids) for tp in t6]
     assert v6[0] == ["v_tarp"], f"신형타프(블랙) 본문 매칭 실패: {v6[0]}"
     assert v6[1] == ["v_fan"], f"문어발선풍기(대체요망) 본문 매칭 실패: {v6[1]}"
@@ -593,13 +597,13 @@ def t1_product_match_precision():
     # 색상별 대장 줄 분리(소유자 2026-09-29): 대장 (블랙)/(베이지) 2줄 → 쿠팡 1상품의 색상 옵션(vid)별 별도 블록.
     disc_c = [Product(name="신형타프 R008", title="신형타프 R008", kind=config.KIND_CONTRACT,
                       options=[Option("블랙 Free", ["v_black"], []), Option("베이지 Free", ["v_beige"], [])])]
-    tc, nc = scope_to_ledger([Product(name="신형타프 R008 (블랙)"), Product(name="신형타프 R008 (베이지)")], disc_c)
+    tc, nc = _rule_scope([Product(name="신형타프 R008 (블랙)"), Product(name="신형타프 R008 (베이지)")], disc_c)
     vc = {tp.name: sorted(v for o in tp.options for v in o.vendor_item_ids) for tp in tc}
     assert vc.get("신형타프 R008 (블랙 Free)") == ["v_black"], f"블랙 색상분리 실패: {vc}"
     assert vc.get("신형타프 R008 (베이지 Free)") == ["v_beige"], f"베이지 색상분리 실패: {vc}"
     assert nc == 2, f"색상분리 매칭 수 {nc} (기대 2)"
     # #2 없는 색상(초록)=미매칭(오매칭 방지). #3 단일 괄호(메모)·색상 지정 없는 줄은 기존 전체 매칭 유지(원인② 위에서 확인).
-    tc2, nc2 = scope_to_ledger([Product(name="신형타프 R008 (블랙)"), Product(name="신형타프 R008 (초록)")], disc_c)
+    tc2, nc2 = _rule_scope([Product(name="신형타프 R008 (블랙)"), Product(name="신형타프 R008 (초록)")], disc_c)
     green = next(tp for tp in tc2 if "초록" in tp.name)
     assert not [v for o in green.options for v in o.vendor_item_ids] and nc2 == 1, "없는 색상(초록)은 미매칭이어야(오매칭 방지)"
     _ok("색상별 대장 줄 → 색상 옵션(vid)별 별도 블록(계정목록 별도 줄)·없는 색상=미매칭·메모 괄호 불변")
@@ -1984,7 +1988,6 @@ def t1_no_vidless_blocks():
     print("[35] VID 없는 블록 금지(D-008) — 색상 괄호 오매칭 차단·미매칭 블록 미생성·VID 없는 잔재 정리")
     from coupang_analytics.input_list import Option, Product
     from coupang_analytics.pipeline_process import _purge_vidless_blocks, _skip_unmatched
-    from coupang_analytics.product_match import scope_to_ledger
 
     def disc(title, vids):
         return Product(name=title, title=title, kind=config.KIND_CONTRACT, options=[Option("", list(vids), [])])
@@ -1995,16 +1998,16 @@ def t1_no_vidless_blocks():
     # ① 실측(woolins 2026-10-06): 대장 '크리스마스트리 R060 (골드)'의 색상 괄호 '골드'가 쿠팡 '크리스마스풍선세트 (골드)'를
     #    괄호 일치로 가져가 진짜 풍선세트 줄이 미매칭(VID 없는 블록)이 됐다 → 색상 괄호는 다른 상품을 끌어오면 안 된다.
     d_w = [disc("크리스마스 미니트리", ["v_tree_g", "v_tree_s"]), disc("크리스마스풍선세트 (골드)", ["v_bal_g", "v_bal_s"])]
-    t, _ = scope_to_ledger([Product(name="크리스마스 풍선세트 (골드)"), Product(name="크리스마스트리 R060 (골드)")], d_w)
+    t, _ = _rule_scope([Product(name="크리스마스 풍선세트 (골드)"), Product(name="크리스마스트리 R060 (골드)")], d_w)
     assert vids_of(t[0]) == ["v_bal_g", "v_bal_s"], f"풍선세트 줄이 풍선세트에 매칭돼야 함: {vids_of(t[0])}"
     assert "v_bal_g" not in vids_of(t[1]), f"트리 줄이 색상 괄호로 풍선세트를 가져감(오매칭): {vids_of(t[1])}"
-    t1b, _ = scope_to_ledger([Product(name="크리스마스트리 R060 (골드)")], d_w)
+    t1b, _ = _rule_scope([Product(name="크리스마스트리 R060 (골드)")], d_w)
     assert "v_bal_g" not in vids_of(t1b[0]), "트리 줄 단독도 풍선세트에 붙으면 안 됨(괄호 '골드'만으로 매칭)"
     # 회귀: 괄호=실제 노출제목(정확일치·본문이 제목과 일치하는 포함)은 그대로 최우선 매칭
-    t2, _ = scope_to_ledger([Product(name="목견인기(의료용 경추 거북목 교정기 견인기 넥 스트레쳐 넥메딕스)")],
+    t2, _ = _rule_scope([Product(name="목견인기(의료용 경추 거북목 교정기 견인기 넥 스트레쳐 넥메딕스)")],
                             [disc("의료용 경추 거북목 교정기 견인기 넥 스트레쳐 넥메딕스", ["v_neck"]), disc("무지외반증 교정기", ["v_toe"])])
     assert vids_of(t2[0]) == ["v_neck"], f"괄호 노출제목 정확일치 매칭이 깨짐: {vids_of(t2[0])}"
-    t3, _ = scope_to_ledger([Product(name="LED 스탠드 HJ123(디프 듀얼 와이드 시력보호 LED 스탠드)")],
+    t3, _ = _rule_scope([Product(name="LED 스탠드 HJ123(디프 듀얼 와이드 시력보호 LED 스탠드)")],
                             [disc("디프 듀얼 와이드 시력보호 LED 스탠드 블랙", ["v_led"]), disc("너프건 P90", ["v_gun"])])
     assert vids_of(t3[0]) == ["v_led"], f"괄호 노출제목 포함 매칭이 깨짐: {vids_of(t3[0])}"
     _ok("색상 괄호(골드)로 다른 상품 매칭 차단·풍선세트 정매칭·괄호=노출제목 매칭 유지")

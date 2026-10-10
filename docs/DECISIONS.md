@@ -345,3 +345,10 @@
 - 버린 대안: (a) 전체 재작성(전역 규칙 금지·엣지케이스 폐기) (b) 목록만 두고 보류(소유자 선택 아님) (c) 신규 도메인 삭제(소유자 선택 아님).
 - 영향 범위: B1(ui/app.py·parse_password_file)·B2(tools 일회성 10개) 완료, B3~B6·E1~E7 은 FEATURE_INVENTORY §6 순서대로. 로컬 사본 폴더(git 밖)·reusable_coupang 은 소유자 확인 대상.
 - 상태: ACTIVE
+
+### D-023 [CLEANUP_KEEP_SETTLE2] 정리 B4 — `payout.estimate`·`registry.managed_between` 은 정산 ②층 설계 자산으로 유지 (2026-10-10, R5)
+- 결정: B4(테스트 전용 함수 삭제)에서 `payout.estimate`(미래 지급일·금액 추정)·`registry.managed_between`(기간 중 관리한 계정)은 **삭제하지 않고 유지**. D-022 의 '정산 ②층 설계 자산 유지'(`settlement_amount`·Insights 파서)와 같은 범주로 본다. 나머지 B4(`scope_to_ledger`·`parse_password_rows`·`proxy_manager` 미사용 메서드 12개+`active_count`)는 삭제.
+- 근거: 두 함수는 지금 테스트만 호출(호출처 grep: `verify_settlement_offline.py:145`·`verify_registry_offline.py` R12)이지만, 설계서가 ②층 입력으로 지정 — `designs/SETTLEMENT_MODEL.md` §92(관리 기간=`managed_between`)·§139(`estimate`)·`designs/DOMAIN_D8_SETTLEMENT_PHASE23.md` §131~132(예상 달성일=`estimate`·관리 기간=`managed_between`). 소유자 선택(2026-10-10 "둘 다 유지").
+- 버린 대안: (a) 둘 다 삭제(②층 구현 때 재작성 필요·설계서와 불일치) (b) `managed_between` 만 유지.
+- 영향 범위: `designs/FEATURE_INVENTORY.md` §3-3·§6 B4. 코드 변경 없음(두 함수와 테스트 그대로).
+- 상태: ACTIVE

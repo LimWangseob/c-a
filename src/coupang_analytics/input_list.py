@@ -572,15 +572,6 @@ def parse_input_rows(rows: list, strike_grid: list | None = None) -> InputList:
                        strike_fn=(strike_fn if strike_grid else None), emit_strike_warning=False)
 
 
-def parse_password_rows(rows: list) -> dict[str, str]:
-    """구글시트 값 격자에서 {계정아이디: 비밀번호(첫 후보)} 추출(관리대장 rows 재사용, 파일 재조회 없음).
-    한 계정 여러 줄의 값이 다르면 `parse_password_candidates` 순서의 첫 값(로그인은 후보를 차례로 시도).
-
-    비번은 관리대장(입력)에만 존재 → 읽는 즉시 DPAPI 저장·메모리 폐기가 호출부 책임(결과시트엔 저장 안 함).
-    """
-    return {aid: c[0].password for aid, c in parse_password_candidates(rows).items()}
-
-
 def read_ledger_rows(url_or_id: str, *, store=None, sa_path=None) -> tuple[str, list, list]:
     """관리대장(구글시트)을 서비스계정으로 열어 **본체 시트의 (값 격자, 취소선 격자)** 를 (시트명, rows, strike_grid)로 반환.
 

@@ -34,7 +34,6 @@
 |---|---|
 | `parse_input_list(path)` | P:path:0 |
 | `parse_input_rows(rows, strike_grid=None)` | P:rows:0 P:strike_grid:1 |
-| `parse_password_file(path)` · `parse_password_rows(rows)` | 비밀번호 파싱 |
 | `read_ledger_rows(url_or_id, *, store=None, sa_path=None)` | P:url_or_id:0 K:store:1 K:sa_path:1 |
 | `write_ledger_inventory(client, wb, on_log=None, *, sheet='셀독리스트')` | P:client:0 P:wb:0 P:on_log:1 K:sheet:1 |
 | `validate_input_list(il)` | P:il:0 |

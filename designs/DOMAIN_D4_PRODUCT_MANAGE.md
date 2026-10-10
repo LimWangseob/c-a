@@ -14,7 +14,7 @@
   - **조회 프리미티브(기존·D1과 공유·L1 계약)**: `collector.fetch_vendor_inventory`(전 상품·전 옵션·vid·판매상태 productStatus)·`fetch_inventory`(로켓그로스 재고 `orderableQuantity`·판매중지여부 `isSaleSuspended`·productId)·`sale_status_by_vid`/`sale_status_of`(판매상태 문자열화)·`vid_meta_of`(판매가 `salePrice`·판매시작일). 전부 **읽기 전용**.
   - **역기록(기존·D4 영역)**: `input_list.write_ledger_inventory`(관리대장 AD열 그로스 재고 역기록·매칭키=계정+상품명 유사도 `_best_inventory_match`)·`company_stock.run_company_stock`(회사보유재고 역기록). ⚠이는 **우리 원장(관리대장)에 쓰는 것**이지 쿠팡/스마트스토어 **플랫폼에 쓰는 것이 아님**(혼동 금지).
   - **쓰기(플랫폼 반영)=전무**: 현재 전 코드가 읽기 전용(DOMAIN_DESIGN §5.4). 가격/재고/판매상태를 쿠팡·스마트스토어에 **실제 변경**하는 경로는 **엔드포인트 미확인**(PLATFORM_INTEGRATION §8 G3).
-- **매칭(기존)**: `product_match.scope_to_ledger`·`augment_unmatched`·`augment_ai`(대장↔쿠팡 상품 정밀매칭·vid 앵커·[[ledger-scoped-tracking]]) — D4 조회·쓰기 대상 식별에 그대로 재사용.
+- **매칭(기존)**: `product_match_ai.match_ledger`(AI 중심+VID 고정·D-009)→`product_match.build_tracked`(색상 필터·대장 이월)([[ledger-scoped-tracking]]) — D4 조회·쓰기 대상 식별에 그대로 재사용.
 - **판매상태 enum(라이브 실측 확정)**: `ON_SALE`=판매중·`PARTIAL_ON_SALE`=부분판매중·`SUSPENDED`=판매중지·`DRAFT`=임시저장·`REJECTED`=승인반려·`UNDER_REVIEW`=검토중([[feature-sale-status-mismatch-flag]]). 관리대장 관리상태(판매중/판매중지/대체/삭제)와 **별개 축** → 불일치 경고(기구현).
 - **계층 규칙(불변)**: L2 도메인은 L0/L1만 의존·**도메인끼리·도메인→어댑터 직접 import 금지**(PLATFORM_INTEGRATION §7). D4는 어댑터(§2·§3 경유)·collector·workbook·product_match(L1)만 호출.
 

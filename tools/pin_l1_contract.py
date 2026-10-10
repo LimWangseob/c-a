@@ -71,7 +71,6 @@ FUNC_CONTRACTS: dict = {
     input_list: [
         ("parse_input_list", "P:path:0"),
         ("parse_input_rows", "P:rows:0 P:strike_grid:1"),
-        ("parse_password_rows", "P:rows:0"),
         ("read_ledger_rows", "P:url_or_id:0 K:store:1 K:sa_path:1"),
         ("write_ledger_inventory", "P:client:0 P:wb:0 P:on_log:1 K:sheet:1"),
         ("validate_input_list", "P:il:0"),

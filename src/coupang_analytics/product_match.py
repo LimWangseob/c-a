@@ -334,16 +334,6 @@ def _color_overrides(ledger: list[Product], discovered: list[Product],
     return overrides
 
 
-def scope_to_ledger(ledger: list[Product], discovered: list[Product]) -> tuple[list[Product], int]:
-    """대장 상품만 추적 대상으로. 반환: (추적 Product 목록, 매칭된 개수).
-
-    매칭 상품 = 발견 노출제목/vid/구분 부여(시트 표시=노출제목). 미매칭 = 대장명·VID 없음(호출부 블록 미생성·D-008).
-    **색상별 대장 줄**(신형타프 (블랙)/(베이지))은 그 색상 옵션(vid)만 배정해 별도 블록·별도 계정목록 줄이
-    되게 한다(소유자 2026-09-29·재고관리상 색상 분리). 색상 지정 없는 줄은 기존대로 전체 옵션.
-    """
-    return build_tracked(ledger, _assign(ledger, discovered))
-
-
 def build_tracked(ledger: list[Product], res: dict[int, Product]) -> tuple[list[Product], int]:
     """매칭 결과 {대장i: 발견 Product} → 추적 Product 목록(대장 1:1·정렬 유지)과 매칭 수.
 

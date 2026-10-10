@@ -1,57 +1,25 @@
 """proxy_manager.py
 
-Thread-safe proxy pool manager for legitimate outbound routing, QA, and test automation.
+Thread-safe proxy pool (URL normalization + load) for the rank-only proxy.
 
 Supported proxy URL schemes:
     http://
     https://
     socks5://
-    socks5h://  (Requests/HTTPX; Playwright support may vary by browser/runtime)
+    socks5h://
 
-Examples:
-    manager = ProxyManager([
-        "http://user:pass@127.0.0.1:8080",
-        "socks5://127.0.0.1:1080",
-    ])
-
-    node = manager.get_proxy()
-    if node:
-        requests.get(
-            "https://example.com",
-            proxies=manager.to_requests(node),
-            timeout=10,
-        )
-
-HTTPX (current API):
-    import httpx
-    node = manager.get_proxy()
-    if node:
-        with httpx.Client(**manager.to_httpx(node)) as client:
-            response = client.get("https://example.com")
-
-Playwright:
-    browser = playwright.chromium.launch(
-        proxy=manager.to_playwright(node)
-    )
-
-Notes:
-- For Requests SOCKS support:  pip install "requests[socks]"
-- For HTTPX SOCKS support:     pip install "httpx[socks]"
+Usage (proxy_pool.load_manager): ``ProxyManager().load_from_file(path)`` / ``load_proxies([...])``
+→ ``manager.proxies`` (``ProxyNode``: endpoint·redacted_url·is_active). Node selection = proxy_pool.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import random
 import threading
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Iterable, List, Optional
 from urllib.parse import unquote, urlparse, urlunparse
-
-import requests
 
 
 logger = logging.getLogger("ProxyManager")
@@ -192,8 +160,7 @@ class ProxyNode:
 class ProxyManager:
     """Thread-safe proxy pool manager.
 
-    The manager selects active proxies, tracks health, and emits library-specific
-    configuration structures for Requests, HTTPX, and Playwright.
+    The manager normalizes and de-duplicates proxy URLs into ``ProxyNode`` objects.
     """
 
     def __init__(
@@ -227,11 +194,6 @@ class ProxyManager:
     def __len__(self) -> int:
         with self._lock:
             return len(self.proxies)
-
-    @property
-    def active_count(self) -> int:
-        with self._lock:
-            return sum(1 for p in self.proxies if p.is_active)
 
     def load_proxies(self, proxy_list: Iterable[str], *, strict: bool = False) -> int:
         """Add proxy URLs to the pool.
@@ -288,276 +250,6 @@ class ProxyManager:
                 if line.strip() and not line.lstrip().startswith("#")
             ]
         return self.load_proxies(lines, strict=strict)
-
-    def get_proxy(self) -> Optional[ProxyNode]:
-        """Return one active proxy according to the configured strategy."""
-        with self._lock:
-            active_pool = [p for p in self.proxies if p.is_active]
-            if not active_pool:
-                logger.warning("No active proxies available in pool.")
-                return None
-
-            if self.strategy == "random":
-                return random.choice(active_pool)
-
-            node = active_pool[self._index % len(active_pool)]
-            self._index = (self._index + 1) % max(len(active_pool), 1)
-            return node
-
-    def report_status(
-        self,
-        proxy_node: ProxyNode,
-        success: bool,
-        *,
-        latency_ms: Optional[float] = None,
-        error: Optional[str] = None,
-    ) -> None:
-        """Update a node's health state from the result of a real request."""
-        with self._lock:
-            if success:
-                proxy_node.consecutive_failures = 0
-                proxy_node.is_active = True
-                proxy_node.success_count += 1
-                proxy_node.last_error = None
-                if latency_ms is not None:
-                    proxy_node.latency_ms = round(float(latency_ms), 2)
-            else:
-                proxy_node.consecutive_failures += 1
-                proxy_node.failure_count += 1
-                proxy_node.last_error = error
-                if proxy_node.consecutive_failures >= self.max_failures:
-                    if proxy_node.is_active:
-                        logger.warning(
-                            "Proxy deactivated after %d consecutive failures: %s",
-                            proxy_node.consecutive_failures,
-                            proxy_node.endpoint,
-                        )
-                    proxy_node.is_active = False
-
-    def verify_proxy(
-        self,
-        node: ProxyNode,
-        timeout: float = 5.0,
-        *,
-        verify_tls: bool = True,
-    ) -> bool:
-        """Health-check one proxy and record its request latency.
-
-        The check uses an explicit per-request proxy configuration and disables
-        Requests' environment-proxy inheritance to avoid accidental interference
-        from HTTP_PROXY/HTTPS_PROXY settings on the host machine.
-        """
-        if timeout <= 0:
-            raise ValueError("timeout must be > 0.")
-
-        start = time.perf_counter()
-        try:
-            with requests.Session() as session:
-                session.trust_env = False
-                response = session.get(
-                    self.verify_url,
-                    proxies=self.to_requests(node),
-                    timeout=timeout,
-                    verify=verify_tls,
-                )
-                response.raise_for_status()
-
-            latency_ms = (time.perf_counter() - start) * 1000.0
-            now = time.time()
-            with self._lock:
-                node.last_verified = now
-            self.report_status(node, True, latency_ms=latency_ms)
-            return True
-
-        except requests.RequestException as exc:
-            with self._lock:
-                node.last_verified = time.time()
-            self.report_status(
-                node,
-                False,
-                error=f"{exc.__class__.__name__}: {exc}",
-            )
-            logger.debug("Proxy verification failed for %s: %s", node.endpoint, exc)
-            return False
-
-        except Exception as exc:  # Defensive: optional SOCKS dependency, adapters, etc.
-            with self._lock:
-                node.last_verified = time.time()
-            self.report_status(
-                node,
-                False,
-                error=f"{exc.__class__.__name__}: {exc}",
-            )
-            logger.debug("Unexpected proxy verification error for %s: %s", node.endpoint, exc)
-            return False
-
-    def check_all(
-        self,
-        timeout: float = 5.0,
-        *,
-        max_workers: int = 8,
-        include_inactive: bool = True,
-        verify_tls: bool = True,
-    ) -> Dict[str, int]:
-        """Verify the pool, optionally in parallel.
-
-        Inactive nodes are included by default so a recovered proxy can become
-        active again after a successful check.
-
-        Returns: ``{"checked": N, "healthy": N, "unhealthy": N, "active": N}``
-        """
-        if max_workers < 1:
-            raise ValueError("max_workers must be >= 1.")
-
-        with self._lock:
-            nodes = [
-                p for p in self.proxies if include_inactive or p.is_active
-            ]
-
-        if not nodes:
-            return {"checked": 0, "healthy": 0, "unhealthy": 0, "active": self.active_count}
-
-        healthy = 0
-        worker_count = min(max_workers, len(nodes))
-        logger.info("Starting proxy health check: nodes=%d, workers=%d", len(nodes), worker_count)
-
-        if worker_count == 1:
-            results = [
-                self.verify_proxy(node, timeout=timeout, verify_tls=verify_tls)
-                for node in nodes
-            ]
-            healthy = sum(results)
-        else:
-            with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="proxy-check") as pool:
-                futures = {
-                    pool.submit(
-                        self.verify_proxy,
-                        node,
-                        timeout,
-                        verify_tls=verify_tls,
-                    ): node
-                    for node in nodes
-                }
-                for future in as_completed(futures):
-                    try:
-                        if future.result():
-                            healthy += 1
-                    except Exception as exc:  # verify_proxy should absorb request errors
-                        node = futures[future]
-                        logger.error("Health-check worker failed for %s: %s", node.endpoint, exc)
-
-        result = {
-            "checked": len(nodes),
-            "healthy": healthy,
-            "unhealthy": len(nodes) - healthy,
-            "active": self.active_count,
-        }
-        logger.info("Proxy health check complete: %s", result)
-        return result
-
-    def prune_unhealthy(
-        self,
-        timeout: float = 5.0,
-        *,
-        max_workers: int = 8,
-    ) -> Dict[str, int]:
-        """Backward-compatible alias for ``check_all``.
-
-        Note that nodes are deactivated only after ``max_failures`` consecutive
-        failures; this method does not physically remove nodes from the list.
-        """
-        return self.check_all(
-            timeout=timeout,
-            max_workers=max_workers,
-            include_inactive=True,
-        )
-
-    def remove_inactive(self) -> int:
-        """Physically remove currently inactive nodes from the pool."""
-        with self._lock:
-            before = len(self.proxies)
-            self.proxies = [p for p in self.proxies if p.is_active]
-            self._known_urls = {p.raw_url for p in self.proxies}
-            self._index = 0
-            return before - len(self.proxies)
-
-    def reset_health(self, *, activate_all: bool = True) -> None:
-        """Reset health counters, optionally reactivating every node."""
-        with self._lock:
-            for node in self.proxies:
-                node.consecutive_failures = 0
-                node.last_error = None
-                if activate_all:
-                    node.is_active = True
-
-    def snapshot(self) -> List[Dict[str, Any]]:
-        """Return a credential-safe health snapshot for UI/logging/metrics."""
-        with self._lock:
-            return [
-                {
-                    "proxy": node.redacted_url,
-                    "protocol": node.protocol,
-                    "host": node.host,
-                    "port": node.port,
-                    "is_active": node.is_active,
-                    "consecutive_failures": node.consecutive_failures,
-                    "latency_ms": node.latency_ms,
-                    "last_verified": node.last_verified,
-                    "last_error": node.last_error,
-                    "success_count": node.success_count,
-                    "failure_count": node.failure_count,
-                }
-                for node in self.proxies
-            ]
-
-    # ------------------------------------------------------------------
-    # Library adapters
-    # ------------------------------------------------------------------
-    @staticmethod
-    def to_requests(node: ProxyNode) -> Dict[str, str]:
-        """Return Requests-compatible ``proxies=...`` mapping."""
-        return {
-            "http": node.raw_url,
-            "https": node.raw_url,
-        }
-
-    @staticmethod
-    def to_httpx(node: ProxyNode) -> Dict[str, str]:
-        """Return kwargs for current HTTPX ``Client``/top-level APIs.
-
-        Usage::
-
-            with httpx.Client(**ProxyManager.to_httpx(node)) as client:
-                ...
-
-        For advanced per-scheme/domain routing, construct HTTPX ``mounts`` with
-        ``httpx.HTTPTransport(proxy=node.raw_url)`` in application code.
-        """
-        return {"proxy": node.raw_url}
-
-    @staticmethod
-    def httpx_proxy_url(node: ProxyNode) -> str:
-        """Return only the raw proxy URL for ``httpx.Client(proxy=...)``."""
-        return node.raw_url
-
-    @staticmethod
-    def to_playwright(
-        node: ProxyNode,
-        *,
-        bypass: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Return Playwright-compatible proxy configuration."""
-        server = f"{node.protocol}://{_format_host_for_url(node.host)}:{node.port}"
-        payload: Dict[str, Any] = {"server": server}
-
-        if node.username is not None:
-            payload["username"] = node.username
-        if node.password is not None:
-            payload["password"] = node.password
-        if bypass:
-            payload["bypass"] = bypass
-
-        return payload
 
 
 __all__ = [
