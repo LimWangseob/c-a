@@ -338,3 +338,10 @@
 - 버린 대안: (a) D-010 유지(① 뒤 앱이 기동 — 소유자 요구와 기동 시점 다름) (b) 다 받아도 17:55 까지 상주(소유자 선택 아님) (c) 정산 전용 예약작업 부활(D-010 에서 폐지·실행 경로 둘).
 - 영향 범위: `settlement_watch.py`(CYCLE_START·cycle_window·sales_done_in_cycle), `tools/settlement_download.py`(cmd_watch 재작성·_watch_wait_reason·_sleep_until), `app_process.py`(시작 로그·설명), `ui/app_qt.py`(main 에서 auto/resume 시 start_settlement_watch·① 뒤 기동 삭제).
 - 상태: ACTIVE
+
+### D-022 [CLEANUP_SCOPE] 기능 전수 목록 기반 정리 — 유지 범위·삭제 순서·오류 일괄 수정 (2026-10-10, R5)
+- 결정: 기능 SSOT = `designs/FEATURE_INVENTORY.md`(무엇이 있고·운영에서 쓰이고·게이트가 지키는가). 유지 = 수동 탭 4개(판매 분석·키워드 추천·순위 조회·상세 이미지)·신규 도메인(통합앱 셸·계약·채권자·업무일지·CS·소싱 — 나중 연결)·정산 ②층 설계 자산(`settlement_amount`·Insights 파서). 정리 = 배포 안 되는 Tk 앱·일회성 도구·쓰기만 하는 저장소·테스트 전용 함수·운영에서 안 도는 분기·중복 구현을 **묶음 단위(B1~B6)로 호출처 재확인 → 물리 삭제 → 게이트 → 커밋**. 운영에서 안 도는 분기는 **게이트 시나리오를 운영 조합으로 먼저 이전**한 뒤 삭제. 확인된 오류 E1~E7 은 정리 뒤 일괄 수정.
+- 근거: 소유자 지시(2026-10-10 "모든 기능을 나열 → 불필요·유사중복 통합·영구 삭제 → 소스 단순화로 고칠 때마다 다른 기능이 깨지는 오류 반복을 끊자") + 선택 답(탭 4개 유지·신규 도메인 유지·정리 진행·오류는 나중에 동시 수정). 조사 근거: 운영 run_full 호출은 전부 keywords_off=True·skip_ranks=True·③ semi=True 고정 ✔ → 게이트 시나리오 다수가 **운영에서 안 도는 경로**를 검증(회귀가 게이트를 빠져나가는 구조적 원인).
+- 버린 대안: (a) 전체 재작성(전역 규칙 금지·엣지케이스 폐기) (b) 목록만 두고 보류(소유자 선택 아님) (c) 신규 도메인 삭제(소유자 선택 아님).
+- 영향 범위: B1(ui/app.py·parse_password_file)·B2(tools 일회성 10개) 완료, B3~B6·E1~E7 은 FEATURE_INVENTORY §6 순서대로. 로컬 사본 폴더(git 밖)·reusable_coupang 은 소유자 확인 대상.
+- 상태: ACTIVE
