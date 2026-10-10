@@ -32,7 +32,7 @@ from coupang_analytics.registry import RegistryGuardError, RegistryIntegrityErro
 
 
 def _shared_setting(key: str) -> str:
-    """config.json 우선·레지스트리(app_qt QSettings) 폴백 — tools/relink_index.py 와 같은 방식."""
+    """config.json 우선·레지스트리(app_qt QSettings) 폴백."""
     v = appconfig.get(key, "")
     if v:
         return v

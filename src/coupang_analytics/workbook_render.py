@@ -28,7 +28,7 @@ class _RenderMixin:
 
         v4에서 `_display_name`이 상품명만 반환하므로, 아직 메타 col3 에 없는 인메모리 vid(이름칸 꼬리에서
         복원된 것)를 렌더 전에 col3 로 옮긴다. 이미 col3 값이 있으면 미접촉(멱등). set_product_vids/pipeline
-        경로는 이미 col3 를 쓰므로 이 마이그레이션은 load+style+save(무 파이프라인, 예: normalize_dates)만 커버."""
+        경로는 이미 col3 를 쓰므로 이 마이그레이션은 load+style+save(무 파이프라인)만 커버."""
         if not self._block_vids:
             return
         ws = self._meta_ws()
