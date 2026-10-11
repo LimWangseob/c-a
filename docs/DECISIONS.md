@@ -427,3 +427,10 @@ un_log_*.log`)로 확인 필요.
 - 영향 범위: `kw_metrics.py`, `manual_keywords.py`(신규), `keyword_store.py`(삭제), `ui/app_qt.py`(_kw_tab·save_keywords), 테스트 verify_offline(F1)·simulate 23. 문서 FEATURE_INVENTORY·PARALLEL_DEV.
 - 상태: ACTIVE
 
+### D-034 [TEXT_TRUTH_F3467] 안내 문구·설명을 실제 동작에 맞춤 — 키워드 상한·프록시 기본값·③ 안내·낡은 주석 (2026-10-11, R10)
+- 결정: (F3) '새 키워드 발굴 추가' 체크박스·툴팁의 상한·하루 개수를 **config 실제 값**(`KW_MAX_TRACK`=10·`KW_ADD_PER_DAY`=2)으로 표시(고정 문구 '7개' 폐지)·CLAUDE.md 도 10. (F4) 프록시 기본값 설명을 실제(config.json `proxy/enabled` 키 없으면 ON — 소유자 2026-10-01 '2번'·설정 탭과 같은 해석)에 맞춤: config 모듈 값 False 는 '적용 전 값'임을 명시, ON 로그에 '(설정 없음 → 기본 ON)' 표시, **ON 인데 쓸 프록시가 없으면 ❌ 로그**(그 검색 건너뜀·칸 공란·proxies.txt 또는 설정 탭에서 끄기 안내 — `proxy_pool._SKIP_MSG`). 동작(키 없으면 ON·fail-closed)은 바꾸지 않음. (F6) ③ 버튼 툴팁·시작 로그·docstring 을 '앱이 자동 타이핑·Enter'로(예전 '직접 검색하세요'). (F7) `app_qt.main` 의 '옛 정산 예약작업 제거' 주석 삭제(그 코드는 B6·D-024 에서 삭제됨).
+- 근거: 소유자 지시(2026-10-11 "F3, F4, F6, F7도 수정해줘"). F3 값 출처 = 2026-09-20 커밋 69e7561('상한 10')·설계서 DESIGN/KEYWORD_SELECTION=10. F4 = 프록시 ON·프록시 없음 상태에서 실행해 ❌ 문구·'(설정 없음 → 기본 ON)' 확인. 게이트 16종·test_proxy_patch 11·복잡도 0·UI import.
+- 버린 대안: (a) F3 상한을 7 로 되돌림(09-20 결정과 다름) (b) F4 기본값을 OFF 로 변경(소유자 10-01 결정과 다름·운용 PC 순위가 직접 IP 로 나감).
+- 영향 범위: `ui/app_qt.py`, `config.py`(주석·ON 로그), `proxy_pool.py`(❌ 문구), CLAUDE.md.
+- 상태: ACTIVE
+

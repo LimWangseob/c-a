@@ -310,13 +310,16 @@ def apply_proxy_override(log=None) -> None:
     _emit = log or (lambda m: None)
     if PROXY_ENABLED:
         where = proxy_pool.redacted(PROXY_RANK_URL) if PROXY_RANK_URL else "proxies.txt 풀에서 선택"
-        _emit(f"  [프록시] 노출순위 프록시 ON — {where}")
+        _emit(f"  [프록시] 노출순위 프록시 ON{'(설정 없음 → 기본 ON)' if not en else ''} — {where}")
     else:
         _emit("  [프록시] 노출순위 프록시 OFF (config.json proxy/enabled=false) — 순위는 직접 IP")
 
 
-# ── 프록시: 노출순위(rank) 검색 전용 (2026-10-01 소유자 결정) ──────────────────
-# 기본 OFF. PROXY_ENABLED=True 면 **노출순위(③) 검색 브라우저만** 프록시 IP 뒤에서 연다
+# ── 프록시: 비로그인 공개 검색 전용 (2026-10-01 소유자 결정·D-031 범위 확대) ──────────────────
+# ⚠ 아래 PROXY_ENABLED=False 는 **config.json 적용 전 모듈 값**일 뿐이다. 실제 값은 ③순위·②자동완성·키워드/순위 탭 진입 시
+# apply_proxy_override 가 config.json `proxy/enabled` 로 정하며 **키가 없으면 ON**(소유자 2026-10-01 '2번'·설정 탭과 같은
+# 해석). ON 인데 쓸 프록시(proxies.txt·rank_url)가 없으면 그 검색을 ❌로 알리고 건너뛴다(F4).
+# PROXY_ENABLED=True 면 **비로그인 공개 검색 브라우저만** 프록시 IP 뒤에서 연다
 #   (자동·반자동 rank 조회 + _process_account 의 rank_browser, 전부 비로그인 공개검색 _PROFILE).
 #   ⛔ 로그인·판매수집(위탁계정)에는 적용하지 않는다 — 비로그인 공개검색이라 계정 밴 위험이 없고,
 #   Akamai 차단·쿨다운 완화에 도움(소유자 판단). 프록시 1개를 rank 전역 egress 로 쓴다(계정별 아님).
@@ -324,7 +327,7 @@ def apply_proxy_override(log=None) -> None:
 # 지원: HTTP/HTTPS, SOCKS5. ``socks5h`` 입력은 Chrome 에서 ``socks5`` 로 정규화된다.
 # Chrome SOCKS5 는 user:password 인증을 쓰지 않으므로 SOCKS 인증 URL 은 거부한다.
 # HTTP(S) user:password 프록시는 PROXY_ALLOW_AUTH=True 일 때만 허용하며 Proxy 인증 challenge 에만 응답한다.
-PROXY_ENABLED = False       # True=노출순위 검색에 프록시 적용(기본 OFF)
+PROXY_ENABLED = False       # 모듈 값 — 실제는 apply_proxy_override 가 config.json 으로 덮어씀(키 없으면 ON)
 PROXY_FILE = "proxies.txt"  # data_root 기준·한 줄에 프록시 URL 하나(scheme://[user:pass@]host:port)
 PROXY_RANK_URL = ""         # 노출순위용 프록시 URL 명시(비면 proxies.txt 풀에서 결정적 선택)
 PROXY_ALLOW_AUTH = False    # HTTP(S) user:pass 프록시 인증을 명시적으로 허용할 때만 True(기본 금지=IP 화이트리스트만)

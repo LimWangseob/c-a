@@ -808,8 +808,8 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         # ③ 순위(자동, 비로그인 검색)은 차단 위험이 커 현실성이 없어 제거(사용자 요청). 반자동만 유지.
         self.track_semi_btn = QtWidgets.QPushButton("③ 순위(반자동)")
         self.track_semi_btn.setToolTip(
-            "창이 뜨면 로그에 안내되는 키워드를 그 창의 쿠팡 검색창에 직접 입력·검색하세요.\n"
-            "앱이 결과 화면을 읽어 순위를 기록합니다(우리가 자동검색을 안 해 차단이 안 생깁니다).")
+            "보이는 창에서 앱이 키워드를 한 글자씩 타이핑하고 Enter 까지 자동으로 검색합니다(손 안 대도 됨).\n"
+            "결과 화면을 읽어 순위를 기록하고, 차단되면 프록시 새 IP 로 그 키워드부터 다시 합니다(중지: '반자동 중지').")
         self.track_semi_btn.clicked.connect(self.do_track_ranks)
         top.addWidget(self.track_semi_btn)
         self.track_stop_btn = QtWidgets.QPushButton("반자동 중지")
@@ -852,10 +852,12 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         moderow.addStretch(1)
         rv.addLayout(moderow)
         optrow = QtWidgets.QHBoxLayout()
-        self.cb_grow = QtWidgets.QCheckBox("새 키워드 발굴 추가 (통계 이어쓰기 시, 상한 7개·하루 2개)")
+        self.cb_grow = QtWidgets.QCheckBox(   # 상한·하루 개수는 config 실제 값(F3 — 예전 '7개' 고정 문구가 실제 10과 달랐음)
+            f"새 키워드 발굴 추가 (통계 이어쓰기 시, 상한 {config.KW_MAX_TRACK}개·하루 {config.KW_ADD_PER_DAY}개)")
         self.cb_grow.setToolTip(
             "매일 실행은 첫날 정한 키워드를 그대로 유지합니다(통계 안정 — 시계열 비교가 가능).\n"
-            "이 옵션을 켜면 기존 키워드는 그대로 두고, 상한(7개) 안에서 하루 최대 2개까지\n"
+            f"이 옵션을 켜면 기존 키워드는 그대로 두고, 상한({config.KW_MAX_TRACK}개) 안에서 하루 최대 "
+            f"{config.KW_ADD_PER_DAY}개까지\n"
             "새 키워드를 발굴해 추가합니다(기존 키워드는 어떤 경우도 제거되지 않습니다).")
         optrow.addWidget(self.cb_grow)
         optrow.addStretch(1)
@@ -1763,9 +1765,8 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self.run_bg(task, on_done=self._pipeline_done, btn=self.kw_btn, exclusive=True, pipelinelock=True)
 
     def do_track_ranks(self):
-        """③ 노출순위 조회(반자동) — 로그인 불필요. 앱이 창을 띄우고 키워드를 안내, 사용자가 직접
-        검색하면 그 화면을 읽어 기록한다(자동 검색을 안 해 차단이 안 생김). 자동 방식은 차단 위험으로 폐지.
-        """
+        """③ 노출순위 조회(반자동) — 로그인 불필요. 보이는 창에서 앱이 키워드를 타이핑+Enter 하고 그 화면을 읽어
+        기록한다(offscreen 직접 조회는 폐지). '날짜 지정'이면 그 칸(빈 칸만), '당일'이면 가장 최근 칸."""
         if self._guard_busy():
             return
         if not (master_exists() or resumable_progress()):
@@ -1779,7 +1780,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             return
         self._semi_stop = threading.Event()
         self.track_stop_btn.setEnabled(True)
-        self.log("[반자동 순위] 시작 — 뜬 창에서 로그에 안내되는 키워드를 직접 검색하세요(중지: '반자동 중지')"
+        self.log("[반자동 순위] 시작 — 보이는 창에서 앱이 키워드를 자동 타이핑·검색합니다(손 안 대도 됨·중지: '반자동 중지')"
                  + (f" · 기록 칸 {rank_label}(지정)" if rank_label else ""))
         should_stop = self._semi_stop.is_set
         gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
@@ -2056,7 +2057,7 @@ def main():
                 "Chrome 을 설치한 뒤 다시 실행하세요.")
         sys.exit(1)
     pre_logs: list[str] = []
-    if auto:                        # D-010: 18:00 무인 = 이전 앱·정산 프로그램 종료 + 옛 정산 예약작업 제거(그 Chrome 은 아래 reap)
+    if auto:                        # 18:00 무인 = 이전 앱·정산 프로그램 종료(트리째·D-024) — 남은 Chrome 은 아래 reap
         prepare_auto_start(pre_logs.append)
     reaped = reap_orphan_chrome()   # 이전 실행이 강제종료·크래시로 남긴 좀비 Chrome 정리(누적 원천 차단)
     if reaped:

@@ -119,8 +119,12 @@ def rank_proxy_or_skip(log=None) -> tuple[Optional[str], bool]:
         return rank_proxy_url(), True
     except ProxyConfigurationError as exc:
         if log:
-            log(f"  [프록시] 노출순위 프록시 오류 → 순위 조회 건너뜀(직접연결 안 함): {exc}")
+            log(_SKIP_MSG.format(exc=exc))
         return None, False
+
+
+_SKIP_MSG = ("  ❌ [프록시] 노출순위 프록시가 켜져 있는데 쓸 프록시가 없음 → 이 검색 건너뜀(직접연결 안 함·그 칸 공란). "
+             "proxies.txt 를 넣거나 설정 탭 '노출순위 프록시'를 끄세요 — {exc}")
 
 
 def public_search_proxy(log=None) -> tuple[Optional[str], bool]:
@@ -178,7 +182,7 @@ def pick_rank_proxy(tried=None, log=None) -> tuple[Optional[str], bool, str]:
         urls = rank_proxy_pool_urls()
     except ProxyConfigurationError as exc:
         if log:
-            log(f"  [프록시] 노출순위 프록시 오류 → 순위 조회 건너뜀(직접연결 안 함): {exc}")
+            log(_SKIP_MSG.format(exc=exc))
         return None, False, "error"
     if not urls:
         return None, False, "error"
