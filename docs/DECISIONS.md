@@ -454,3 +454,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 두 곳에 사본 유지(어긋남 — D-004 가 이미 버림).
 - 영향 범위: R0 게이트 구성(원장 4종 제거)·`CLAUDE.md`·`designs/FEATURE_INVENTORY.md`·`docs/PARALLEL_DEV.md`·`STATE.md`. 운영 앱 동작 변화 없음.
 - 상태: ACTIVE
+
+### D-038 [CLEANUP_REUSABLE_PKG] `reusable_coupang/` 물리 삭제 · 옛 R0 도메인 작업 폴더 13개 정리 (2026-10-11, R10)
+- 결정: (1) `reusable_coupang/`(git 8파일 — 예전에 뽑은 로그인·순위 독립 패키지)을 물리 삭제한다. 다른 쇼핑몰에서 재사용할 로그인·프록시·순위 모듈은 HQ 공통 엔진(`hq/web`·HQ D-007)으로 R0 최신 코드에서 새로 나눠 만든다. (2) 옛 R0 도메인 작업 폴더(worktree) 13개와 그 브랜치(`domain/d1-analysis`~`d9-stats`·`worktree-*` 4개)를 정리한다. `domain/h-ui` 는 **master 미병합 커밋 54172b7(통합앱 홈 변동 추이·공용 위젯 732줄)** 이 있어 HQ D0 가 가져갈 때까지 유지.
+- 근거: 소유자 지시(2026-10-11 "둘 다 삭제해"). 실측: `reusable_coupang` 을 import·참조하는 코드 0건(문서 3곳만) · HQ `docs/COUPANG_ACCESS.md` §6 이 이미 '뒤처진 추출본이라 쓰지 않음'으로 정함. 13개 작업 폴더 = master 대비 미병합 커밋 0·미커밋 변경 0(`git rev-list --count master..<branch>`·`git status`).
+- 버린 대안: 남겨 둠(뒤처진 사본이 HQ 이관 때 잘못 참조될 위험).
+- 영향 범위: `designs/FEATURE_INVENTORY.md`·`STATE.md` · 운영 앱 동작 변화 없음.
+- 상태: ACTIVE
