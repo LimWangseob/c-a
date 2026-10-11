@@ -11,7 +11,7 @@
 |---|---|
 | 배포 exe 3개 | `쿠팡애널리틱스.exe`(=`ui/app_qt.py`) · `정산다운로드.exe`(=`tools/settlement_download.py`) · `쿠팡진단.exe`(=`tools/verify_login_discover_live.py`) — `coupang_analytics.spec` |
 | 예약작업 2개 | 18:00 `--auto`(무인) · 로그온 `--resume`(재부팅 복구) — `deploy/install.ps1` |
-| **배포 안 됨** | `ui/app.py`(Tk 폴백, spec 이 tkinter 제외) · `ui/app_integrated.py`(통합앱 셸, 어디서도 참조 없음) |
+| **배포 안 됨** | `ui/app.py`(Tk 폴백, spec 이 tkinter 제외) · ~~`ui/app_integrated.py`~~(HQ 로 이전·삭제 D-037) |
 | 핵심 사실 ✔ | 운영의 모든 `run_full` 호출(①버튼·전체실행·`--auto`·`--resume`)은 **`keywords_off=True, skip_ranks=True, sales_semi=True`** 고정, ③은 **`semi=True`** 고정이었음 → `run_full` 안의 키워드·순위 분기와 자동(offscreen) 순위 분기는 운영에서 실행되지 않음 → **B5 에서 삭제**(`run_full`·`track_ranks_stage` 에서 그 인자들도 제거) |
 
 ## 1. 운영 기능 (app_qt) — 목표 결과 · 진입점 · 게이트
@@ -103,7 +103,7 @@
 보류 결정(2026-10-10, D-027): `test_rank_images_live` **삭제** · `diag_inv_hidden`·`probe_proxy_pool`·`migrate_to_operation_ledger`·`build_*` 4종·`install_schedule_py.*` **유지**(소유자 선택).
 
 ## 4. 배포 안 된 신규 도메인 (죽은 코드 아님 — 연결 여부 결정 필요)
-- `app_integrated.py` + 계약(`contract_store`)·채권자(`creditor_store`)·업무일지(`worklog_store`)·CS(`cs_*`) — 로컬 JSON 으로만 동작, 운영 앱에서 접근 불가. 게이트 4종이 검증.
+- ~~`app_integrated.py` + 계약·채권자·업무일지·CS~~ — **2026-10-11 HQ(`D:\commerce-hq`)로 이전·R0 에서 물리 삭제(D-037)**.
 - 소싱(`sourcing*`) — UI 없음(테스트만).
 - 정산 '계약자 정산' 시트 — 계약금액 입력 기능이 없어 늘 빈칸(설계상 '나중에 입력' = 정산 ②층 미구현).
 

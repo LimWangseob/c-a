@@ -448,3 +448,9 @@ un_log_*.log`)로 확인 필요.
 - 영향 범위: R0 `CLAUDE.md`(분리 안내)·`STATE.md`(포팅 필요 목록) · D-035 의 '자산 이전 후 삭제'·'공유 잠금'은 그대로 유효.
 - 상태: ACTIVE
 
+### D-037 [HQ_ASSET_REMOVED] HQ 로 옮긴 통합앱 자산 18개를 R0 에서 물리 삭제 (2026-10-11, R10)
+- 결정: HQ D0 가 이전을 마친 통합앱 자산을 R0 에서 물리 삭제한다 — `ui/app_integrated.py`·`theme_qt.py`·`panel_kit.py`·`local_sheet_client.py`·`contract/worklog/cs/creditor_panel_qt.py` · `src/coupang_analytics/contract_store.py`·`worklog_store.py`·`cs_model.py`·`cs_store.py`·`cs_gsheet.py`·`creditor_store.py` · `tools/verify_{contract,worklog,cs,creditor}_offline.py` + `run_checks.CHECKS` 의 그 4줄. 유지 = `registry_lock.py`·`registry_model.py`·`apppaths.py`(R0 운영이 씀).
+- 근거: 소유자 지시(2026-10-11 "모두 이관했으면 삭제해") · HQ 커밋 2fa6717(D-008)·HQ STATE '다음 작업 1'. 실측: 18개 모두 HQ 짝 파일 존재, import·`sys.path` 줄 제외 본문 비교 = 15개 차이 0줄, `app_integrated`↔`shell.py`·`theme_qt`↔`theme.py` 는 파일 이름을 가리키는 주석 3줄만 다름. R0 운영 코드(파이프라인·app_qt·spec) 참조 0건(grep — 자산끼리 참조와 게이트 4줄뿐).
+- 버린 대안: 두 곳에 사본 유지(어긋남 — D-004 가 이미 버림).
+- 영향 범위: R0 게이트 구성(원장 4종 제거)·`CLAUDE.md`·`designs/FEATURE_INVENTORY.md`·`docs/PARALLEL_DEV.md`·`STATE.md`. 운영 앱 동작 변화 없음.
+- 상태: ACTIVE
