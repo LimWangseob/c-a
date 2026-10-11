@@ -27,6 +27,7 @@
 - 검증: 매 묶음 재현 실패→수정→통과 + 게이트 16종 + 복잡도 0 + UI offscreen import. **실운용 검증 없음**.
 
 ## 다음 작업 (우선순위)
+0. **HQ 분리(D-035) 후속 — HQ 요청이 오면**: (a) HQ D0 가 통합앱 자산 이전 완료를 알리면 R0 에서 물리 삭제 — `ui/app_integrated.py`·`theme_qt`·`panel_kit`·`local_sheet_client`·`contract/worklog/cs/creditor` 패널·`contract_store`·`worklog_store`·`creditor_store`·`cs_model/store/gsheet`·`tools/verify_{contract,worklog,creditor,cs}_offline.py`(게이트 목록·문서 정리 포함) (b) 쿠팡 공유 잠금(HQ `docs/COUPANG_ACCESS.md` §2)을 HQ 와 같은 규칙으로 R0 에 구현 (c) R0 데이터 형식을 바꾸면 HQ 에 알림.
 1. (확인용) 운용 PC 의 **10-10 18:00 실행 로그**(zip 에 없음) — D-032 추정(그 실행이 10.09 진행분을 이어받음) 최종 확인. 10-09 18:00 로그가 20:33 에 종료 메시지 없이 끊긴 원인(창 닫힘/강제 종료) — Windows 이벤트 로그.
 2. **운용 PC 재배포**(사람): 작업 관리자에서 `정산다운로드.exe` 종료 → 새 zip 덮어쓰기 → **설치.bat 실행·자동실행 등록 Y**(E3) → 옛 `정산_지금실행.bat` 직접 삭제.
 3. 재배포 후 첫 실행 확인: `[키워드칸] … 추가` 로그(빔프로젝터·원룸 등) → ② 키워드 채움 → ③ 순위 기록 · `이어서 실행 … 기준 쿠팡데이타분석_통계.xlsx` · `① 끝 — 미완료 계정 N개 즉시 1회 재시도` · `[순위요약] … VID 없음 N`.
@@ -48,7 +49,7 @@
 - 런타임 병렬 금지(단일 브라우저·위탁계정·Akamai). master 병합·빌드=통제 직렬.
 - 재배포 = 폴더 덮어쓰기→앱 재시작. output·data·config.json·proxies.txt 보존. 배포 zip 에 키·프록시 자격증명 평문 → 외부 공유 금지.
 - 결과시트·관리대장 분석은 앱 서비스계정으로 읽기만(비번 값 출력 금지).
-- DECISIONS: 현재 **D-034**까지(이번 세션 D-028~D-034). 🔒 로그인·판매수집·정산 = 프록시 금지 유지(D-031 에서 재확인).
+- DECISIONS: 현재 **D-035**까지(이번 세션 D-028~D-035). HQ 저장소 = `D:\commerce-hq`(자체 DECISIONS D-001~). 🔒 로그인·판매수집·정산 = 프록시 금지 유지(D-031 에서 재확인).
 - 단계 조립 수정은 `pipeline_stages.run_stages` 한 곳 + `pin_run_plan` P9~P10. ① 재시도는 `pipeline.run_full`(simulate 8).
 - Python 으로 파일 쓸 때 `open(p,'wb')`+utf-8 바이트(텍스트 모드 'w' 는 Windows 에서 CRLF 로 바꿔 파일 전체가 diff 됨 — 이번 세션 1회 발생·커밋 수정). bat/ps1 은 CRLF·BOM 유지.
 - pre-commit 훅이 `docs/memory` 미러를 자동 동기화 — 커밋 후 `git show --stat` 확인.
