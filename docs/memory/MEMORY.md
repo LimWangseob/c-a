@@ -1,4 +1,5 @@
 ## 진입점 (최신 먼저)
+- ⭐⭐[2026-10-11 본부 앱 분리: HQ=D:\commerce-hq · 이 저장소(R0)=앱+정산 전용 독립 세션(D-035)](project-hq-split-261011.md)
 - ⭐⭐**현재 핸드오프 SSOT = repo `STATE.md`**(2026-10-08 session-kit 전역 전환부터). 아래 handoff-* 메모리는 **아카이브**(recall만·새로 만들지 않음). 세션 종료=`/session-close`.
 - [기록용: 구현 Wave1 통합 2026-10-06](handoff-session-261006.md) — 도메인 전용 세션 정책·master 통합·게이트15
 - [⭐화면 시안 2026-10-06: 메뉴 v3.3 대13·중84·정의서137칸](handoff-design-mockup-261006.md) · [시안 승격1(공용위젯+홈추이)](impl-home-trend-widgets-261006.md)
