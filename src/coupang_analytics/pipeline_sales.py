@@ -350,9 +350,22 @@ def _match_to_ledger(b, a: Account, products, metrics, inv_names: dict, date_to,
             save_anchors(a.account_id, out.anchors, anchor_file)
         except OSError as exc:                          # 고정 저장 실패 = 다음 실행이 다시 매칭(비치명·명시)
             log(f"  [{a.label}] ⚠ 매칭 고정 저장 실패: {exc}")
+        _save_match_result(a, tracked, anchor_file, log)
     hows = Counter(pk.how for pk in out.picks.values())
     log(f"  [{a.label}] 매칭 경로: " + " · ".join(f"{k} {v}" for k, v in sorted(hows.items())) + f" (고정 {len(out.anchors)}줄)")
     return tracked, n_match
+
+
+def _save_match_result(a: Account, tracked, anchor_file, log) -> None:
+    """① 매칭 결과 전부(대장 첫 줄 키 → VID·색상 필터 후) 저장 — 관리대장 그로스 재고 역기록이 이름 유사도 대신 이 AI
+    매칭 결과로 블록을 찾는다(소유자 2026-10-12 'AI 로 유사도 포함 매칭'). 실패 = 비치명·명시(역기록은 기존값 보존)."""
+    from .match_anchor import MATCH_RESULT_FILE, key_of, save_match_result
+    mapping = {key_of(tp.ledger_name or tp.name): [v for o in tp.options for v in o.vendor_item_ids]
+               for tp in tracked if any(o.vendor_item_ids for o in tp.options)}
+    try:
+        save_match_result(a.account_id, mapping, Path(anchor_file).with_name(MATCH_RESULT_FILE))
+    except OSError as exc:
+        log(f"  [{a.label}] ⚠ 매칭 결과 저장 실패(그로스 재고 역기록은 기존값 유지): {exc}")
 
 
 def _fill_exposed_names(b, a: Account, tracked, metrics, date_to, log) -> None:

@@ -1741,8 +1741,7 @@ def t1_multiline_product_name():
 def t1_ledger_account_label():
     print("[B4·3] 대장 계정 라벨 — 사업자명 줄바꿈=한 줄 · 역기록(그로스·회사재고)도 파싱과 같은 라벨(사업자명 빈 계정)")
     from coupang_analytics import company_stock as CS
-    from coupang_analytics.input_list import (_find_growth_column, _growth_col_values, _growth_idf,
-                                              parse_input_rows)
+    from coupang_analytics.input_list import _find_growth_column, _growth_col_values, parse_input_rows
     # 실측(관리대장 10-12): 봄날의햇살 사업자명 셀 = '봄날의햇살⏎주식회사' → 결과 시트 이름에 줄바꿈 그대로(B4).
     # 최문석(swmall255)·하성진(lslfgh)은 사업자명 칸이 비어 라벨=대표자명인데, 역기록은 계정ID+사업자명 둘 다 있는
     # 줄에서만 사업자를 바꿔 바로 위 계정(브릿지웍스·비엔케이미디어)으로 찾음 → 최문석 그로스 재고 역기록 0건(항목 3).
@@ -1757,9 +1756,10 @@ def t1_ledger_account_label():
     assert labels["woolins"] == "봄날의햇살 주식회사", f"사업자명 줄바꿈이 라벨(시트명)에 남음: {labels['woolins']!r}"
     assert labels["swmall255"] == "최문석", f"사업자명 빈 계정 라벨 = 대표자명이어야: {labels['swmall255']!r}"
     header = rows[0]
-    inv_by_biz = {"최문석": [("전동눈썹정리기 HS0030", 69)], "주식회사 브릿지웍스": [("스타냉동밀키트", 7)]}
-    col_out, updated, _m = _growth_col_values(rows, 1, 1, 2, 3, _find_growth_column(header), inv_by_biz,
-                                              _growth_idf(rows, 1, 3, inv_by_biz))
+    inv = {("최문석", "v30"): 69, ("주식회사 브릿지웍스", "v_kit"): 7}      # (결과 시트, VID) → 재고
+    matches = {"swmall255": {"전동눈썹정리기 HS0030": ["v30"]}, "bws247": {"스타냉동밀키트": ["v_kit"]}}
+    col_out, updated, _m, _u = _growth_col_values(rows, 1, 1, 2, 3, _find_growth_column(header),
+                                                  lambda biz, vids: inv.get((biz, vids[0])), matches)
     assert col_out[2] == [69], f"사업자명 빈 계정(최문석) 그로스 재고가 역기록 안 됨: {col_out}"
     assert col_out[1] == [7] and updated == 2, f"다른 계정 역기록이 깨짐: {col_out} {updated}"
     _h, _c, prods = CS._ledger_rows(rows)
@@ -1767,6 +1767,81 @@ def t1_ledger_account_label():
     assert by_prod["전동눈썹정리기 HS0030"] == "최문석", f"회사재고 로그 사업자 오표기: {by_prod}"
     assert by_prod["크리스마스 풍선세트 (골드)"] == "봄날의햇살 주식회사", f"회사재고 라벨 줄바꿈: {by_prod}"
     _ok("사업자명 줄바꿈=한 줄 라벨 · 사업자명 빈 계정=대표자명 라벨로 그로스 역기록·회사재고 표기")
+
+
+def t1_ledger_full_text_match():
+    print("[괄호] 대장 칸 전체 문구(둘째 줄 '(노출명)' 포함)로 매칭 — 블록 기준은 첫 줄·괄호 용도는 AI 판단(2026-10-12)")
+    from coupang_analytics import product_match_ai as PMA
+    from coupang_analytics.input_list import Option, Product, parse_input_rows
+    # 소유자(10-12): '전동눈썹정리기 HS0300'=내부관리명, 줄바꿈 뒤 '(모노노모 …)'=쿠팡 노출명. 괄호는 옵션 또는 노출명
+    # (2개일 수도) → AI 가 판단. 예전엔 여러 줄 칸의 첫 줄만 남겨 노출명이 매칭에 전달되지 않았다.
+    rows = [["대표자명", "사업자명", "계정아이디", "상품명"],
+            ["최문석", "", "swmall255", "전동눈썹정리기 HS0300\n(모노노모 휴대용 눈썹 얼굴 잔털 정리 전동 눈썹 정리기)"],
+            ["", "", "", "신형타프 R008 (블랙 Free)\n\n(캠핑 타프 아웃도어 OUTDOOR)"]]
+    a = parse_input_rows(rows).accounts[0]
+    assert [p.name for p in a.products] == ["전동눈썹정리기 HS0300", "신형타프 R008 (블랙 Free)"], "블록 기준=첫 줄 유지"
+    assert a.products[0].ledger_text == "전동눈썹정리기 HS0300 (모노노모 휴대용 눈썹 얼굴 잔털 정리 전동 눈썹 정리기)", \
+        f"대장 칸 전체 문구 보존 안 됨: {a.products[0].ledger_text!r}"
+    # 상품명 동일(D-011 ①): 둘째 줄 괄호 = 쿠팡 노출명 → AI 없이 확정
+    cands = [Product(name="전동눈썹정리기 HS0030", title="전동눈썹정리기 HS0030", options=[Option("", ["v30"], [])]),
+             Product(name="자동센서 디스펜서 600ml", title="자동센서 디스펜서 600ml", options=[Option("", ["v53"], [])])]
+    expo = {"v30": "모노노모 휴대용 눈썹 얼굴 잔털 정리 전동 눈썹 정리기"}
+    asked: list = []
+    out = PMA.match_ledger([a.products[0]], cands, anchors={}, vendor_ok=True, expo=expo,
+                           ask=lambda s, u: asked.append(u) or {"matches": []}, today="2026-10-12")
+    assert 0 in out.picks and out.picks[0].di == 0 and out.picks[0].how == "exact", \
+        f"둘째 줄 노출명으로 상품명 동일 매칭 실패: {out.picks}"
+    # AI 질문: 줄의 전체 문구(괄호 전부)를 보여 줘야 AI 가 괄호 용도를 판단
+    lp = Product(name="자동손세정기 HB153(젤타입손세정기 HB153)",
+                 ledger_text="자동손세정기 HB153(젤타입손세정기 HB153) (대용량 비접촉 자동센서 디스펜서)")
+    PMA.match_ledger([lp], cands, anchors={}, vendor_ok=True, expo={},
+                     ask=lambda s, u: asked.append(u) or {"matches": []}, today="2026-10-12")
+    assert asked and "대용량 비접촉 자동센서 디스펜서" in asked[-1], f"AI 질문에 대장 둘째 줄이 없음: {asked[-1:]}"
+    _ok("대장 전체 문구 보존(블록 기준=첫 줄)·둘째 줄 노출명으로 상품명 동일·AI 질문에 괄호 전부 전달")
+
+
+def t1_growth_by_ai_match():
+    print("[역기록] 그로스 재고 = ① AI 매칭 결과(대장 줄→VID)로 블록 재고 — 이름 유사도 없음·매칭 없으면 기존값 보존")
+    from coupang_analytics import input_list as IL
+    from coupang_analytics import match_anchor as MA
+    from coupang_analytics.input_list import _find_growth_column, _growth_col_values
+    rows = [["대표자명", "사업자명", "계정아이디", "상품명", "그로스 재고 (8.26 기준)"],
+            ["최문석", "", "swmall255", "전동눈썹정리기 HS0300\n(모노노모 휴대용 눈썹 얼굴 잔털 정리 전동 눈썹 정리기)", "5"],
+            ["", "", "", "자동손세정기 HB153(젤타입손세정기 HB153)\n(대용량 비접촉 디스펜서)", "3"],
+            ["", "", "", "없는상품 Z1", "9"]]
+    matches = {"swmall255": {"전동눈썹정리기 HS0300": ["v30"], "자동손세정기 HB153(젤타입손세정기 HB153)": ["v53"]}}
+    inv = {"v30": 69, "v53": 0}
+    col_out, n, _m, unmatched = _growth_col_values(rows, 1, 1, 2, 3, _find_growth_column(rows[0]),
+                                                   lambda biz, vids: inv.get(vids[0]) if biz == "최문석" else None,
+                                                   matches)
+    assert col_out == [[69], [0], ["9"]] and n == 2, f"AI 매칭 결과로 역기록 안 됨: {col_out} {n}"
+    assert unmatched == ["없는상품 Z1"], f"매칭 없는 줄 보고 누락: {unmatched}"
+    # ① 저장 ↔ 역기록 읽기 왕복 + write_ledger_inventory(실제 워크북 블록 재고)
+    d = Path(tempfile.mkdtemp())
+    MA.save_match_result("swmall255", matches["swmall255"], d / MA.MATCH_RESULT_FILE)
+    assert MA.load_match_results(d / MA.MATCH_RESULT_FILE) == matches, "매칭 결과 저장/읽기 불일치"
+    wb = OutputWorkbook.empty()
+    wb.ensure_product_block("최문석", "모노노모 휴대용 눈썹 얼굴 잔털 정리 전동 눈썹 정리기", config.KIND_CONTRACT, [])
+    wb.set_product_vids("최문석", "모노노모 휴대용 눈썹 얼굴 잔털 정리 전동 눈썹 정리기", ["v30"])
+    wb.set_product_metric("최문석", "모노노모 휴대용 눈썹 얼굴 잔털 정리 전동 눈썹 정리기", config.M_INVENTORY,
+                          "2026-10-12", 69)
+
+    class _Client:
+        wrote: list = []
+
+        def read_grid(self, sheet):
+            return rows, None
+
+        def write_values(self, sheet, values, start):
+            self.wrote.append((start, values))
+    orig = MA.load_match_results
+    MA.load_match_results = lambda path=None: matches
+    try:
+        n2 = IL.write_ledger_inventory(_Client(), wb, sheet="셀독리스트")
+    finally:
+        MA.load_match_results = orig
+    assert n2 == 1 and _Client.wrote[0][1][0] == [69], f"워크북 블록 재고 역기록 실패: {n2} {_Client.wrote[:1]}"
+    _ok("① AI 매칭 결과로 그로스 재고 역기록(최문석 HS0300→69)·매칭 없는 줄 보존·결과 파일 왕복")
 
 
 # ── [6] 키워드 Phase B 선정 로직 ───────────────────────────────
@@ -2207,6 +2282,8 @@ def main():
     t1_twin_vid_purge()
     t1_shared_exposed_option_label()
     t1_ledger_account_label()
+    t1_ledger_full_text_match()
+    t1_growth_by_ai_match()
     t1_vid_source_option_split()
     t1_ledger_dedup()
     t1_date_columns()

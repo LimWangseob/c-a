@@ -15,6 +15,7 @@ import tempfile
 from pathlib import Path
 
 ANCHOR_FILE = "_매칭고정.json"
+MATCH_RESULT_FILE = "_매칭결과.json"   # ① 매칭 결과 전부(대장 줄 → VID) — 그로스 재고 역기록용(2026-10-12)
 
 
 def anchor_path(out_dir: str | Path | None = None) -> Path:
@@ -52,12 +53,32 @@ def load_anchors(account_id: str, path: Path | None = None) -> dict[str, dict]:
 
 def save_anchors(account_id: str, anchors: dict[str, dict], path: Path | None = None) -> None:
     """그 계정 앵커를 통째 교체 저장(다른 계정은 보존). 원자적 쓰기."""
-    p = path or anchor_path()
+    _save_account(account_id, anchors, path or anchor_path())
+
+
+def match_result_path(out_dir: str | Path | None = None) -> Path:
+    """① 매칭 결과(전부) 파일 경로 — 매칭 고정 파일과 같은 폴더."""
+    return anchor_path(out_dir).with_name(MATCH_RESULT_FILE)
+
+
+def save_match_result(account_id: str, mapping: dict[str, list[str]], path: Path | None = None) -> None:
+    """① 매칭 결과 **전부**(고정 여부 무관 — AI 낮은 확신·규칙 대체 포함) {대장명키: [VID…]} 를 계정별로 교체 저장.
+    관리대장 그로스 재고 역기록이 대장 줄 → VID 블록을 찾는 데 쓴다(이름 유사도 대신 AI 매칭 결과·2026-10-12)."""
+    _save_account(account_id, mapping, path or match_result_path())
+
+
+def load_match_results(path: Path | None = None) -> dict[str, dict[str, list[str]]]:
+    """{계정ID: {대장명키: [VID…]}} — 파일 없으면 빈 dict. 손상이면 AnchorFileError(호출부가 로그)."""
+    return {a: {k: list(v) for k, v in m.items() if isinstance(v, list) and v}
+            for a, m in _load_all(path or match_result_path()).items() if isinstance(m, dict)}
+
+
+def _save_account(account_id: str, value: dict, p: Path) -> None:
     try:
         data = _load_all(p)
     except AnchorFileError:
         data = {}                                   # 손상 파일은 이번 저장으로 재생성(호출부가 이미 로그)
-    data[account_id] = anchors
+    data[account_id] = value
     p.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
     try:

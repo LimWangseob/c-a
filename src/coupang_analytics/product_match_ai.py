@@ -22,7 +22,7 @@ from datetime import date
 
 from .input_list import Option, Product
 from .match_anchor import key_of
-from .product_match import _assign, _base_name, _merge_same_name, _norm, _paren, _title
+from .product_match import _assign, _base_name, _merge_same_name, _norm, _title
 
 SHORTLIST_K = 15          # 줄당 AI 에 보낼 의미 유사 후보 수(대형 계정 2천여 상품 → 의미가 가까운 것만)
 BIGRAM_EXTRA = 5          # 의미 추리기에 더해 넣는 글자 유사 후보 수(보조 — 모델코드 같은 것 놓침 방지)
@@ -37,6 +37,8 @@ MATCH_SYSTEM = (
     "후보 중 같은 상품이 하나도 없을 때만 null.\n"
     "- 대장명 = 담당자가 쓴 약칭 + 모델코드 + (괄호). 괄호에는 ①쿠팡 등록명/노출명 ②색상·옵션(골드·블랙) "
     "③메모(대체요망·판매부진) 중 하나가 들어간다. 이름이 두 개 적혀 있으면(본문 + 괄호) 둘 다 본다.\n"
+    "  괄호가 두 개일 수도 있다(예: '신형타프 R008 (블랙 Free) (캠핑 타프 아웃도어 …)' = 옵션 + 노출명). "
+    "본문은 보통 내부 관리용 이름이다. 괄호마다 무엇인지 의미로 판단한다.\n"
     "- 후보 = 등록명(판매자가 WING 에 입력한 이름) | 노출명(고객이 보는 제목, 있으면) | 옵션 | 판매상태.\n"
     "판단 순서:\n"
     "1. **상품명이 같은지 먼저 본다** — 대장 본문이나 괄호 속 이름이 후보 등록명·노출명과 띄어쓰기·대소문자만 다르고 "
@@ -86,9 +88,16 @@ def _codes(s: str) -> set[str]:
     return {m.lower() for m in re.findall(r"[A-Za-z]{1,5}-?\d{2,}[A-Za-z0-9]*", str(s))}
 
 
+def _full(lp: Product) -> str:
+    """대장 칸 전체 문구(둘째 줄 '(노출명)'·괄호 전부) — 없으면 첫 줄(name). 블록 기준은 name 그대로(2026-10-12)."""
+    return getattr(lp, "ledger_text", "") or lp.name
+
+
 def _line_texts(lp: Product) -> list[str]:
+    """이름 후보 = 첫 줄 → 첫 줄 본문(괄호 뺌) → **칸 전체의 괄호 속 이름 전부**(옵션·노출명·메모 — 용도는 AI 판단)."""
     body = re.sub(r"[（(][^)）]*[)）]?", " ", lp.name).strip()
-    return [t for t in (lp.name, body, _paren(lp.name)) if t]
+    parens = [m.strip() for m in re.findall(r"[（(]([^)）]+)[)）]", _full(lp))]
+    return [t for t in (lp.name, body, *parens) if t]
 
 
 def _cand_text(d: Product, expo: dict) -> str:
@@ -124,7 +133,7 @@ def build_request(ledger: list[Product], lines: list[int], cand_ids: list[int], 
     """AI 사용자 메시지 — 대장 줄(번호 L)과 후보(번호 C, 계정 내 위치 di). 글자 규칙 결과는 보여 주지 않는다
     (의미 판단이 글자 비교로 쏠리지 않게·소유자 2026-10-09)."""
     cno = {di: f"C{di}" for di in cand_ids}
-    lines_txt = [f"L{li}. {ledger[li].name}" for li in lines]
+    lines_txt = [f"L{li}. {_full(ledger[li])}" for li in lines]   # 칸 전체(괄호 전부·AI 가 용도 판단)
     cand_txt = []
     for di in cand_ids:
         d = discovered[di]
@@ -332,7 +341,7 @@ def _meaning_shortlist(ledger, rest, pool, discovered, expo, embed, out: MatchOu
     if embed is None:
         return None
     try:
-        vecs = embed([ledger[li].name for li in rest] + [_cand_text(discovered[di], expo)[:300] for di in pool])
+        vecs = embed([_full(ledger[li]) for li in rest] + [_cand_text(discovered[di], expo)[:300] for di in pool])
     except Exception as exc:                              # 비치명 — 글자 추리기로 대체(로그 명시)
         out.notes.append(f"[매칭] ⚠ 의미 추리기(임베딩) 실패 → 글자 추리기로 대체: {exc.__class__.__name__}: {str(exc)[:60]}")
         return None

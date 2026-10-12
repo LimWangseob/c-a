@@ -37,6 +37,7 @@ class Product:
     discontinued: bool = False      # 대장 판매중지/취소선(#8 2026-09-27): 수집은 하되 ③순위만 제외
     sale_status: str = ""           # 발견 상품의 쿠팡 판매상태(판매중/부분판매중/판매중지 등) — 중복 리스팅 중 판매중지 제외용(2026-09-29)
     ledger_name: str = ""           # 추적 상품이 대응하는 **관리대장 상품명**(매칭 후 name=쿠팡명이 되므로 대장 키 보존·D-009)
+    ledger_text: str = ""           # 관리대장 상품명 칸 **전체 문구**(여러 줄=한 줄로·괄호 전부). name=첫 줄(블록 기준). ① 매칭 근거
     exposed_name: str = ""          # 쿠팡 **노출상품명**(판매분석 productName·현행) — 결과 블록 이름(상품명 현행화·D-013). 모르면 ""
 
     @property
@@ -321,6 +322,8 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
         acct, prod = _norm(_cell(row, i_acct)), _norm(_cell(row, i_prod))
         # #C(2026-09-27): 담당자가 상품명 칸에 "담당자명\n\n(노출명 전체)" 처럼 **여러 줄**로 입력하면 정체성 키가
         # 오염돼 대장명 블록 + 노출명 블록이 중복 생성됨(실측: 비엔케이·브릿지웍스). → **첫 줄(담당자 상품명)만** 채택.
+        # 칸 전체 문구(둘째 줄 '(노출명)' 포함)는 ledger_text 로 따로 보존 → ① 매칭 근거(괄호 용도=AI 판단·2026-10-12).
+        full = " ".join(prod.split())
         if "\n" in prod:
             prod = prod.split("\n")[0].strip()
         status_disc = _status_discontinued(_cell(row, i_status)) if i_status is not None else False
@@ -332,6 +335,8 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
             continue
         if prod:
             _handle_product_row(st, prod, acct, row, row_no, idx, status_disc, _struck_cell(row_no, i_prod))
+            if st.current_prod is not None:
+                st.current_prod.ledger_text = full
     _finalize(st.current_prod)
 
     if emit_strike_warning:   # 파일인데 취소선을 못 읽었음을 알림(수동 확인 유도). 값 파싱은 정상.
@@ -445,36 +450,6 @@ def build_idf(names: list):
     return lambda t: math.log((n + 1) / (df.get(t, 1) + 0.5))
 
 
-def _best_inventory_match(prod: str, cands: list, w) -> tuple:
-    """상품명 `prod`를 **사업자 내 후보** [(상품명, 재고), …]에 매칭. (재고, 매칭명, 방식) 또는 (None,None,None).
-
-    `w`=IDF 가중함수(전체 상품명 corpus 기반). ①정확(공백제거) → ②**대장상품의 최고가중(핵심) 토큰**(예 '베타글루칸')
-    을 덮는 후보만 후보군으로 좁힌 뒤(공통 규격어만 겹치는 '알부민' 오매칭 배제), **대장상품 토큰 가중 재현율**
-    최고를 고른다(후보의 여분 토큰은 감점 안 함=노출명이 짧아도 OK). 임계·2등 마진 미달이면 미매칭(오기록 방지·보존).
-    """
-    def dz(s: str) -> str:
-        return _norm(s).replace(" ", "")
-    pn = dz(prod)
-    ptok = set(_tok(prod))
-    if not pn or not ptok or not cands:
-        return None, None, None
-    for name, inv in cands:                          # ① 정확(공백제거 완전일치)
-        if dz(name) == pn:
-            return inv, name, "정확"
-    pden = sum(w(t) for t in ptok) or 1.0
-    top = max(ptok, key=w)                               # prod 최고가중(가장 희소=핵심) 토큰
-    elig = [(name, inv) for name, inv in cands if top in set(_tok(name))]
-    pool, strict = (elig, False) if elig else (cands, True)
-    scored = sorted(((sum(w(t) for t in (ptok & set(_tok(name)))) / pden, name, inv)
-                     for name, inv in pool), key=lambda x: x[0], reverse=True)
-    best = scored[0]
-    second = scored[1][0] if len(scored) > 1 else 0.0
-    margin = 0.15 if strict else 0.05                    # 핵심어 덮은 후보군이면 마진 완화
-    if best[0] >= 0.55 and (best[0] - second) >= margin:
-        return best[2], best[1], f"재현{best[0]:.2f}{'' if strict else '·핵심'}"
-    return None, None, None
-
-
 def _find_growth_column(header: list) -> int | None:
     """AD '그로스 재고 (…기준/자동갱신…)' 컬럼 — 괄호 딸린 것만(BW '그로스재고'·BV '그로스재고최소수량'과 구분).
     첫 갱신 후 헤더가 '(자동갱신 MM.DD)'로 바뀌므로 '기준' 또는 '갱신' 하나만 있으면 그 컬럼으로 인식."""
@@ -485,38 +460,35 @@ def _find_growth_column(header: list) -> int | None:
                  and ("기준" in _nz(c) or "갱신" in _nz(c))), None)
 
 
-def _growth_idf(values: list, first: int, i_prod: int, inv_by_biz: dict):
-    """IDF corpus = 모든 대장 상품명 + 워크북 후보명 → 규격·브랜드어(120정·프리미엄·MAX)를 눌러 상품 핵심어 부각
-    (작은 재고후보 집합만으로 계산하면 df 동률로 오매칭)."""
-    corpus = [_norm(_cell(values[r], i_prod)) for r in range(first, len(values))
-              if _norm(_cell(values[r], i_prod))]
-    for items in inv_by_biz.values():
-        corpus += [nm for nm, _ in items]
-    return build_idf(corpus)
-
-
-def _growth_col_values(values, first, i_biz, i_acct, i_prod, ad, inv_by_biz, w):
-    """AD 열 새 값 열 생성 — 계정(사업자) 내 상품명 유사도 매칭으로 최신 재고, **미매칭·개인상품·비상품은 기존값
-    보존**(공란으로 안 덮음). 반환 (col_out, 갱신 수, 매칭 로그)."""
+def _growth_col_values(values, first, i_biz, i_acct, i_prod, ad, inv_of, matches):
+    """AD 열 새 값 열 생성 — 대장 줄 → **① AI 매칭 결과(VID)** → 그 블록 최신 재고(소유자 2026-10-12: 이름 유사도 대신 AI 매칭·
+    대장 'HS0300'=내부관리명처럼 쿠팡 이름과 달라도 정확). inv_of(결과 시트, [vid…]) → 재고|None, matches={계정ID:{대장명키:[vid]}}.
+    **매칭 결과 없음·재고 없음(개인상품)·비상품 행은 기존값 보존**. 반환 (col_out, 갱신 수, 매칭 로그, 매칭 결과 없는 상품명)."""
+    from .match_anchor import key_of
     col_out: list[list] = []
-    cur_biz = ""
+    cur_biz = cur_acct = ""
     updated = 0
-    matches: list[str] = []                              # 로그용(대장상품 → 매칭 → 재고·방식)
+    logs: list[str] = []
+    unmatched: list[str] = []
     labels = account_labels(values)                      # 파싱과 같은 계정 라벨(사업자명 빈 계정=대표자명)
     for r in range(first, len(values)):
         row = values[r]
         acct, prod = _norm(_cell(row, i_acct)), _norm(_cell(row, i_prod))
-        if acct:                                         # 계정 행 → 이후 상품의 소속 사업자(=결과 시트 이름)
-            cur_biz = labels.get(acct) or _one_line(_cell(row, i_biz)) or acct
+        if acct:                                         # 계정 행 → 이후 상품의 소속 계정·사업자(=결과 시트 이름)
+            cur_acct, cur_biz = acct, labels.get(acct) or _one_line(_cell(row, i_biz)) or acct
         new = _cell(row, ad)
-        if prod:                                         # 계정(사업자) 내 등록/노출 상품명 유사도 매칭
-            inv, mname, how = _best_inventory_match(prod, inv_by_biz.get(_norm(cur_biz), []), w)
+        name = prod.split("\n")[0].strip()              # 대장 줄 키 = 첫 줄(① 매칭 결과 키와 같음)
+        if name and _is_real_product_name(name):
+            vids = matches.get(cur_acct, {}).get(key_of(name))
+            inv = inv_of(cur_biz, vids) if vids else None
             if inv is not None:
                 new = inv
                 updated += 1
-                matches.append(f"{prod[:22]} → {str(mname)[:22]} = {inv} ({how})")
+                logs.append(f"{name[:22]} → VID {vids[0]} = {inv}")
+            elif not vids:
+                unmatched.append(name)
         col_out.append([new if new not in (None,) else ""])
-    return col_out, updated, matches
+    return col_out, updated, logs, unmatched
 
 
 def write_ledger_inventory(client, wb, on_log=None, *, sheet: str = "셀독리스트") -> int:
@@ -524,7 +496,7 @@ def write_ledger_inventory(client, wb, on_log=None, *, sheet: str = "셀독리�
 
     - 대상 컬럼 = 헤더에 '그로스'+'재고'+'기준' 인 컬럼(‘그로스재고최소수량’·BW ‘그로스재고’와 구분). 사용자 확정.
     - `parse_input_rows` 와 **동일 규칙**으로 행을 훑어(계정아이디 행에서 사업자 추적, 상품명 행=상품),
-      (현재 사업자, 상품명)→워크북 최신 재고 매칭 → 그 상품 행의 AD 셀만 갱신.
+      대장 줄 → ① AI 매칭 결과(`_매칭결과.json` VID) → 그 블록 최신 재고 → 그 상품 행의 AD 셀만 갱신.
     - **미매칭·재고 없음(개인상품·미수집)·비상품 행은 기존값 보존**(공란으로 안 덮음, 직원 다른 컬럼 미접촉).
     - 헤더 라벨을 '그로스 재고 (자동갱신 MM.DD)'로 갱신(‘8.26 기준’ 정적문구 제거). AD 데이터열 + 헤더 = 쓰기 2회.
     - ⚠ 서비스계정(SA)에 이 관리대장 **편집 권한**이 있어야 씀(없으면 403 → 호출부가 비치명 처리).
@@ -548,17 +520,28 @@ def write_ledger_inventory(client, wb, on_log=None, *, sheet: str = "셀독리�
         log("  [관리대장] '그로스 재고 (…기준/자동갱신)' 컬럼을 못 찾아 역기록 생략")
         return 0
 
-    inv_by_biz = wb.inventory_by_biz()                   # {사업자: [(상품명, 재고)]} — 사업자 내 유사도 매칭
+    from . import match_anchor
+    try:
+        matches = match_anchor.load_match_results()      # ① AI 매칭 결과 전부(대장 줄 → VID)
+    except match_anchor.AnchorFileError as exc:
+        log(f"  [관리대장] ❌ {exc} — 그로스 재고 역기록 생략(기존값 유지)")
+        return 0
+
+    def inv_of(biz, vids):                               # 대표 VID(첫 VID) 블록의 최신 재고(숫자만)
+        blk = wb.resolve_block_name(biz, vids[:1])
+        return wb.product_inventory(biz, blk) if blk else None
     first = hrow + 1                                      # 0-based 첫 데이터행
-    w = _growth_idf(values, first, i_prod, inv_by_biz)
-    col_out, updated, matches = _growth_col_values(values, first, i_biz, i_acct, i_prod, ad, inv_by_biz, w)
+    col_out, updated, logs, unmatched = _growth_col_values(values, first, i_biz, i_acct, i_prod, ad, inv_of, matches)
     letter = get_column_letter(ad + 1)                   # 0-based → 열문자
     client.write_values(sheet, col_out, start=f"{letter}{first + 1}")     # 첫 데이터행(1-based)
     client.write_values(sheet, [[f"그로스 재고 (자동갱신 {datetime.now():%m.%d})"]],
                         start=f"{letter}{hrow + 1}")     # 헤더 라벨 = 갱신일자
-    for m in matches[:60]:                               # 매칭 내역(사용자 검증용, 특히 유사도 매칭 확인)
+    for m in logs[:60]:                                  # 매칭 내역(사용자 검증용)
         log(f"    [재고매칭] {m}")
-    log(f"  [관리대장] '그로스 재고'({letter}열) 갱신 — {updated}개 상품 재고 기록(미매칭·개인상품은 기존값 보존)")
+    if unmatched:
+        log(f"  [관리대장] ⚠ ① 매칭 결과 없는 대장 상품 {len(unmatched)}개 — 그로스 재고 기존값 유지: "
+            f"{unmatched[:5]}{'…' if len(unmatched) > 5 else ''}")
+    log(f"  [관리대장] '그로스 재고'({letter}열) 갱신 — {updated}개 상품 재고 기록(매칭 없음·개인상품은 기존값 보존)")
     return updated
 
 
