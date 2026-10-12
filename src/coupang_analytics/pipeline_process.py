@@ -414,8 +414,22 @@ def _process_account(report_acc, wb, metrics, inv_by_vid, date_iso, log, save_pa
             # #8(2026-09-27): 대장 판매중지/취소선도 수집(위에서 지표·재고·판매가·판매상태 채움)하되 ③순위만 제외.
             # rank_suppressed(is_discontinued) 가 순위를 건너뛴다. 재판매(취소선 해제)면 False 로 해제.
             wb.set_discontinued(biz, bname, product.discontinued)
+        _carry_rep_keywords(wb, biz, names, log)
     _finish_account(wb, biz, report_acc, seen_products, unmatched, live_vids, log)
     wb.save(save_path)
+
+
+def _carry_rep_keywords(wb, biz: str, names: list[str], log) -> None:
+    """대표 옵션이 바뀌면(쿠팡 옵션 순서 변경) 옛 대표 블록의 키워드·순위 이력을 새 대표(names[0])로 옮긴다(C1,
+    소유자 2026-10-12). 실측 최문석 팔찌경보기: 대표 '(1개 #2)'→'(1개)' — 새 대표 키워드 0개·옛 대표만 계속 ③ 검색."""
+    if len(names) < 2 or wb.product_keywords(biz, names[0]):
+        return
+    for old in names[1:]:
+        moved = wb.move_keywords(biz, old, names[0])
+        if moved:
+            log(f"  [키워드칸] 대표 옵션 변경 '{old}' → '{names[0]}' — 키워드 {len(moved)}개·순위 이력 이동"
+                f"(옛 블록은 판매정보만)")
+            return
 
 
 def _finish_account(wb, biz: str, report_acc, seen_products, unmatched, live_vids, log) -> None:

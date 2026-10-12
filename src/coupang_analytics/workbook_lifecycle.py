@@ -223,3 +223,42 @@ class _LifecycleMixin:
                     mws.delete_rows(r)
         self._reindex()
         return True
+
+    def move_keywords(self, biz: str, src: str, dst: str) -> list[str]:
+        """같은 상품의 **옛 대표 옵션 블록(src)** 키워드·검색량·일자별 순위를 **새 대표(dst)** 로 옮기고 src 의 키워드
+        칸(소헤더·순위행)을 지운다 → src 는 판매정보만 남는 2차 옵션 블록(③ 중복 검색 방지·계정목록 1줄).
+        쿠팡 옵션 순서가 바뀌어 대표가 바뀐 경우(C1, 소유자 2026-10-12 '새 대표로 키워드 복사'). dst 에 키워드가 이미
+        있거나 키워드 칸이 없으면 무변경. 반환=옮긴 키워드."""
+        biz, src, dst = _norm(biz), _key(src), _key(dst)
+        kws = self.product_keywords(biz, src)
+        if not kws or self.product_keywords(biz, dst) or not self.has_keyword_section(biz, dst):
+            return []
+        vols = {kw: self.keyword_search(biz, src, kw) for kw in kws}
+        self.add_product_keywords(biz, dst, kws)           # 재인덱스 포함(src 행 번호도 갱신됨)
+        ws = self.wb[biz]
+        for kw in kws:
+            self.set_keyword_search(biz, dst, kw, vols[kw])
+            srow, drow = self._kw_row.get((biz, src, kw)), self._kw_row.get((biz, dst, kw))
+            if srow is None or drow is None:
+                continue
+            for dcol in self._date_col.get(biz, {}).values():   # 같은 시트 = 같은 날짜 칸
+                v = ws.cell(srow, dcol).value
+                if v not in (None, ""):
+                    ws.cell(drow, dcol, v)
+        self._drop_keyword_section(biz, src)
+        return kws
+
+    def _drop_keyword_section(self, biz: str, product: str) -> None:
+        """블록의 키워드 소헤더~마지막 순위행을 삭제(지표행은 유지). move_keywords 전용."""
+        metric_rows = [self._metric_row[(biz, product, m)] for m in _ALL_METRICS
+                       if (biz, product, m) in self._metric_row]
+        if not metric_rows:
+            return
+        ws = self.wb[biz]
+        sub = max(metric_rows) + 1
+        if _key(ws.cell(sub, _COL_KW).value) != _LABEL_KEYWORD:   # 소헤더는 지표행 바로 아래(ensure_* 공통)
+            return
+        last = max((r for r, _ in self._kw_block_rows(biz, product)), default=sub)
+        _unmerge_all(ws)                                   # 병합 해제 후 삭제(데이터 손상 방지, 이후 apply_style 재병합)
+        ws.delete_rows(sub, last - sub + 1)
+        self._reindex()

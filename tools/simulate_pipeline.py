@@ -660,6 +660,25 @@ def scenario_option_change_keeps_keyword_section():
     _check(all(v == "3위" for v in _ranks_of(wb, "비즈-a1", blocks[0][0], "09.02").values()), "③ 순위 기록")
 
 
+def scenario_rep_swap_moves_keywords():
+    print("[시나리오 24] 쿠팡 옵션 순서가 바뀌어 대표가 바뀌면 옛 대표의 키워드·순위 이력이 새 대표로 옮겨짐(C1)")
+    # 실측(최문석 팔찌경보기 10-10): 대표가 '(1개 #2)'→'(1개)'로 바뀌어 새 대표 키워드 0개·옛 대표만 계속 ③ 검색.
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    d = Path(tempfile.mkdtemp())
+    from coupang_analytics.workbook import OutputWorkbook
+    _ops(_one_product([("화이트", "vA"), ("블랙", "vB")]), d, date_from="2026-09-01", date_to="2026-09-01")
+    _ops(_one_product([("블랙", "vB"), ("화이트", "vA")]), d, date_from="2026-09-02", date_to="2026-09-02",
+         carry_forward=True)
+    wb = OutputWorkbook.load(P._master_path(d))
+    biz = "비즈-a1"
+    rep, old = "상품-P (블랙)", "상품-P (화이트)"
+    _check(wb.product_keywords(biz, rep) == ["kw1", "kw2"], f"새 대표 키워드 {wb.product_keywords(biz, rep)}")
+    _check(all(v == "3위" for v in _ranks_of(wb, biz, rep, "09.01").values()) and _ranks_of(wb, biz, rep, "09.01"),
+           f"옛 대표의 09.01 순위 이력이 새 대표로 {_ranks_of(wb, biz, rep, '09.01')}")
+    _check(not wb.has_keyword_section(biz, old) and not wb.product_keywords(biz, old),
+           f"옛 대표는 판매정보만(키워드 칸 없음 — ③ 중복 검색 방지) {wb.product_keywords(biz, old)}")
+
+
 def scenario_rank_label_matches_sales_column():
     print("[시나리오 20] ③에 '2026-09-02'(ISO)가 넘어와도 ①과 같은 '09.02' 칸에 기록·채운 칸은 다시 안 잼")
     _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
@@ -775,6 +794,7 @@ def main():
     scenario_staff_keywords_pulled()
     scenario_same_day_resume_keeps_stage23()
     scenario_option_change_keeps_keyword_section()
+    scenario_rep_swap_moves_keywords()
     scenario_rank_label_matches_sales_column()
     scenario_metrics_not_summed()
     scenario_keyword_stage_proxy()
