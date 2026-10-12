@@ -28,7 +28,7 @@
 - [OpenAPI 불가→WING 세션](coupang-openapi-not-available-consignment.md) · [샵마인=WebView2](shopmine-architecture.md)
 
 ## 입력·수집
-- [입력=셀독 관리대장(헤더2행·여러줄=첫줄)](input-ledger-format.md) · [대장 스코핑·AI 매칭+VID 고정(D-009)](ledger-scoped-tracking.md) · [판매 API vi-detail-search](sales-data-api-vi-detail-search.md) · [재고 API orderableQuantity](inventory-api-rfm-search.md)
+- [입력=셀독 관리대장(헤더2행·블록키=첫줄·괄호=AI판단·재고역기록=AI매칭)](input-ledger-format.md) · [대장 스코핑·AI 매칭+VID 고정(D-009)](ledger-scoped-tracking.md) · [판매 API vi-detail-search](sales-data-api-vi-detail-search.md) · [재고 API orderableQuantity](inventory-api-rfm-search.md)
 - [판매데이터 익일반영](coupang-sales-data-lag.md) · [productId 소스 API](api-productid-source-vendor-items-with-vendoritems.md) · [상품명 규약(대장=담당자·결과=노출명)](product-name-convention-ledger-vs-result.md)
 
 ## 키워드·순위
