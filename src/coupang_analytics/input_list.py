@@ -491,6 +491,21 @@ def _growth_col_values(values, first, i_biz, i_acct, i_prod, ad, inv_of, matches
     return col_out, updated, logs, unmatched
 
 
+def _inventory_text(wb, biz: str, vids: list):
+    """대장 한 줄의 그로스 재고 값 — VID 블록이 하나면 최신 **숫자** 재고(숫자 아니면 None=기존값 보존), 옵션 블록이
+    여럿이면 결과 시트처럼 **옵션별로 함께** '핑크 S 0 / 그레이 S 미입고 / 블루 S 0'(합산 안 함·소유자 2026-10-12 1번).
+    재고행 없는 옵션(개인상품)은 '-'. 모든 옵션이 비면 None."""
+    from .product_naming import _label_of
+    blocks = list(dict.fromkeys(b for b in (wb.resolve_block_name(biz, [v]) for v in vids) if b))
+    if len(blocks) <= 1:
+        return wb.product_inventory(biz, blocks[0]) if blocks else None
+    order = {p: i for i, p in enumerate(wb.products_of(biz))}   # 결과 시트 블록 순서(1개·2개·3개)
+    parts = [(_label_of(b) or b, wb.inventory_cell(biz, b)) for b in sorted(blocks, key=lambda b: order.get(b, 0))]
+    if all(v is None for _, v in parts):
+        return None
+    return " / ".join(f"{lbl} {'-' if v is None else v}" for lbl, v in parts)
+
+
 def write_ledger_inventory(client, wb, on_log=None, *, sheet: str = "셀독리스트") -> int:
     """관리대장(입력 구글시트)의 **'그로스 재고 (…기준)' 컬럼(AD)** 을 워크북 최신 재고로 역기록. 갱신 상품 수 반환.
 
@@ -527,11 +542,9 @@ def write_ledger_inventory(client, wb, on_log=None, *, sheet: str = "셀독리�
         log(f"  [관리대장] ❌ {exc} — 그로스 재고 역기록 생략(기존값 유지)")
         return 0
 
-    def inv_of(biz, vids):                               # 대표 VID(첫 VID) 블록의 최신 재고(숫자만)
-        blk = wb.resolve_block_name(biz, vids[:1])
-        return wb.product_inventory(biz, blk) if blk else None
     first = hrow + 1                                      # 0-based 첫 데이터행
-    col_out, updated, logs, unmatched = _growth_col_values(values, first, i_biz, i_acct, i_prod, ad, inv_of, matches)
+    col_out, updated, logs, unmatched = _growth_col_values(
+        values, first, i_biz, i_acct, i_prod, ad, lambda biz, vids: _inventory_text(wb, biz, vids), matches)
     letter = get_column_letter(ad + 1)                   # 0-based → 열문자
     client.write_values(sheet, col_out, start=f"{letter}{first + 1}")     # 첫 데이터행(1-based)
     client.write_values(sheet, [[f"그로스 재고 (자동갱신 {datetime.now():%m.%d})"]],

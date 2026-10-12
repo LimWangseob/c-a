@@ -303,15 +303,19 @@ class _MetaMixin:
         return n
 
     def product_inventory(self, biz: str, product: str):
-        """이 상품의 **최신 일자 재고현황**(로켓그로스). 재고행 없거나(개인상품)·값 없으면 None. 관리대장 역기록용."""
+        """이 상품의 **최신 일자 재고현황**(로켓그로스) 숫자. 재고행 없거나(개인상품)·숫자 아니면 None."""
+        v = self.inventory_cell(biz, product)
+        return v if isinstance(v, (int, float)) else None
+
+    def inventory_cell(self, biz: str, product: str):
+        """최신 일자 재고현황 칸 값 그대로(숫자·'미입고'·None) — 관리대장 옵션별 표기('핑크 S 0 / 그레이 S 미입고')용."""
         date = self.latest_date(biz)
         row = self._metric_row.get((biz, product, config.M_INVENTORY))
         col = self._date_col.get(biz, {}).get(date) if date else None
         if row is None or col is None:
             return None
         v = self.wb[biz].cell(row, col).value
-        # 관리대장 '그로스 재고' 역기록은 **숫자 재고만** — '미입고'(문자열)·공란은 대상 아님(대장값 보존).
-        return v if isinstance(v, (int, float)) else None
+        return None if v in (None, "") else v
 
     def set_company_stock(self, biz: str, product: str, text: str) -> None:
         """계정목록 표기용 **회사보유재고**(판매자배송 자체재고) 텍스트 저장 — 매 실행 재고현황에서 주입.

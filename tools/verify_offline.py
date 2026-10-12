@@ -1834,13 +1834,21 @@ def t1_growth_by_ai_match():
 
         def write_values(self, sheet, values, start):
             self.wrote.append((start, values))
+    # 대장 한 줄 = 옵션 여러 개(실측 속싸개 핑크 0·그레이 미입고 / 웰빙곳간 알파CD 첫 옵션 '3개'=미입고) →
+    # 옵션별로 함께 표기 '라벨 값 / 라벨 값'(소유자 2026-10-12 1번 — 결과 시트처럼 옵션마다·합산 안 함)
+    for blk, vid, val in (("손세정기 (3개)", "v53x", "미입고"), ("손세정기 (1개)", "v53", 0)):
+        wb.ensure_product_block("최문석", blk, config.KIND_CONTRACT, [])
+        wb.set_product_vids("최문석", blk, [vid])
+        wb.set_product_metric("최문석", blk, config.M_INVENTORY, "2026-10-12", val)
+    m2 = {"swmall255": {"전동눈썹정리기 HS0300": ["v30"], "자동손세정기 HB153(젤타입손세정기 HB153)": ["v53x", "v53"]}}
     orig = MA.load_match_results
-    MA.load_match_results = lambda path=None: matches
+    MA.load_match_results = lambda path=None: m2
     try:
         n2 = IL.write_ledger_inventory(_Client(), wb, sheet="셀독리스트")
     finally:
         MA.load_match_results = orig
-    assert n2 == 1 and _Client.wrote[0][1][0] == [69], f"워크북 블록 재고 역기록 실패: {n2} {_Client.wrote[:1]}"
+    assert n2 == 2 and _Client.wrote[0][1][:2] == [[69], ["3개 미입고 / 1개 0"]], \
+        f"워크북 블록 재고 역기록 실패(단일=숫자·다중옵션=옵션별 표기): {n2} {_Client.wrote[:1]}"
     _ok("① AI 매칭 결과로 그로스 재고 역기록(최문석 HS0300→69)·매칭 없는 줄 보존·결과 파일 왕복")
 
 
