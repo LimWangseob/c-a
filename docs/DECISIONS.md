@@ -546,3 +546,10 @@ un_log_*.log`)로 확인 필요.
 - 근거: 결과시트 점검(10-12) '상품 76개' ≠ 88줄 — 원인 = 제목은 `_full_build_requests`(최초 생성)에서만 써서 첫 생성 값 고정(운용 마스터로 다시 계산하면 84). 재현 verify_gsheet_offline [3b] 실패→통과.
 - 영향 범위: `gsheet_index.py`·`tools/verify_gsheet_offline.py`.
 - 상태: ACTIVE
+
+### D-051 [EXPOSED_NAME_WING_MODIFY] 노출명 출처에 윙 상품수정 화면 노출상품명 추가 — 판매 여부 무관 (2026-10-12, R12)
+- 결정: D-015 출처 순서 = 당일 판매분석 → 최근 30일 판매분석 → **윙 상품수정 화면 `displayProductName`**(`/tenants/seller-web/vendor-inventory/modify?vendorInventoryId=` GET·읽기만·appData 에서 추출 `collector.fetch_display_names`) → 그래도 없으면 ❌ + ③ 검색 노출명. 상품조회의 vid→등록상품ID(`live_all_vids`)로 판매분석에 없는 추적 상품만, 등록상품당 GET 1회(약 170KB·3초). 실패 상품은 로그·다음 상품 진행.
+- 근거: 소유자 지시(2026-10-12 "로그인해 상품조회하면 판매 여부와 관계없이 모든 상품 조회 가능 — 다시 적용·직접 접속 진단 허용"). 라이브 진단(반달컴퍼니 로그인은 소유자가 직접·Claude 는 읽기만): 상품조회 목록 열=‘등록상품명’·`vendor-inventory/search` productName=등록상품명·펼치기(옵션) API `items-with-vendorItems`·당일출고·속성보완 응답엔 상품 이름 없음(옵션명·노출상품ID만) → 상품수정 화면 appData 에 `sellerProductName`='허리보호대 LN112'·`displayProductName`='디프 허리 교정 보호대 헬스 벨트'(판매 1개·대장 괄호 노출명과 일치). 대상 = 10-11 로그 ❌ 21블록(웰빙곳간 16·스타냉동밀키트·DYM046·w200·허리보호대·BG002 — 모두 30일 판매 없음). 재현 verify_offline [노출명] 실패→통과·[38] 유지·`_fill_exposed_names` 분해(복잡도 경고 0).
+- 버린 대안: (a) 대장 괄호 노출명 사용(담당자 입력·낡을 수 있음) (b) 공개 상품 페이지(비로그인 Akamai·프록시 정책).
+- 영향 범위: `collector.py`(fetch_display_names·parse_display_name)·`pipeline_sales.py`(_match_to_ledger vinv_by_vid·_fill_exposed_names·_fill_from_roster·_fill_from_modify_page)·`tools/verify_offline.py`. **HQ 포팅 필요**.
+- 상태: ACTIVE
