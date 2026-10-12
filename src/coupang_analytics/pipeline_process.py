@@ -296,10 +296,34 @@ def _sweep_dead_duplicates(wb, biz: str, live_vids, log) -> None:
             # 🔒 정책(소유자 2026-09-24): **판매자배송(NORMAL) twin 은 삭제하지 않고 보존**한다.
             # 같은 상품을 로켓그로스+판매자배송 둘 다 등록하면 vid 가 2개(RFM/NORMAL) 생기고, 추적은 RFM 만
             # 하지만 NORMAL twin 도 **코팡 상품조회에 살아있는 vid** 라 아래 'vid 전부 소멸' 조건에 안 걸린다
-            # → 판매중지 표기로 남겨 보존(데이터 유실 방지). 완전 제거는 registrationType 배선이 필요한 별도 후속.
+            # → 여기선 보존. 추적에서 빠진 같은 옵션 twin 의 삭제는 _purge_twin_blocks(2026-10-12)가 맡는다.
             if vids and all(v not in live_vids for v in vids):   # 코팡서 완전 소멸한 vid만(=죽은 재등록)
                 if wb.delete_product_block(biz, b):
                     log(f"  [정체성] '{b}' 죽은 중복 블록 삭제(vid {vids} 상품조회에 없음·live 형제 존재)")
+
+
+def _purge_twin_blocks(wb, biz: str, report_acc, live_vids, log) -> list[str]:
+    """추적 VID 와 **같은 리스팅·같은 옵션**의 다른 배송방식 VID(판매자배송↔로켓그로스 twin) 블록 중 이번 추적에서 빠진
+    것을 이력과 함께 삭제(소유자 2026-10-12 — 2026-09-24 'NORMAL twin 보존·완전 제거는 registrationType 배선 후속'의 후속).
+    실측 (DW) 'PHARMIZEN…' 블록(NORMAL …361·10.03 이후 공란)이 추적 RFM …358 블록의 노출명을 차지해 현행화 실패·③ 낭비.
+    live_vids = {vid: (리스팅ID, 옵션명)}(상품조회) — 옛 형식(집합)·상품조회 실패(빈 값)면 정리 안 함. 다계정ID 스코핑.
+    블록 VID 가 **전부** 추적 VID 의 twin 일 때만(추적 VID 를 하나라도 가진 블록·다른 옵션·다른 리스팅은 미접촉)."""
+    if not isinstance(live_vids, dict) or not live_vids:
+        return []
+    tracked = {v for p in report_acc.products for o in p.options for v in o.vendor_item_ids}
+    slots = {live_vids[v] for v in tracked if v in live_vids}
+    acct = (report_acc.account_id or "").strip()
+    removed: list[str] = []
+    for b in list(wb.products_of(biz)):
+        vids = wb.product_vids(biz, b)
+        if not vids or any(v in tracked for v in vids) or not all(live_vids.get(v) in slots for v in vids):
+            continue
+        if acct and wb.product_account_id(biz, b) not in ("", acct):
+            continue
+        if wb.delete_product_block(biz, b):
+            removed.append(b)
+            log(f"  [정체성] '{b}' 추적 상품과 같은 옵션의 다른 배송방식 VID {vids} 블록(추적 안 됨) → 이력과 함께 삭제")
+    return removed
 
 
 def _skip_unmatched(wb, biz: str, product, seen_products: list, unmatched: list) -> bool:
@@ -380,6 +404,7 @@ def _process_account(report_acc, wb, metrics, inv_by_vid, date_iso, log, save_pa
     biz = report_acc.label   # 시트명 = 사업자명, 없으면 대표자명·계정ID(빈 시트명 KeyError 방지)
     wb.ensure_account(biz)
     _purge_upbundle_blocks(wb, biz, upbundle_vids, log)   # 옛 업번들 잔재 정리(reconcile 판매중지 표기 전)
+    _purge_twin_blocks(wb, biz, report_acc, live_vids, log)   # 추적 안 되는 배송방식 twin(이름 충돌 전에 정리·B3)
     seen_products: list[str] = []          # 이번 대장에 존재한 옵션 블록명 — 대조로 판매중지 감지
     unmatched: list[str] = []              # 쿠팡 상품과 매칭 안 된 대장 상품명(D-008: 블록 미생성)
     for product in report_acc.products:

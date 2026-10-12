@@ -297,8 +297,10 @@ def _discover_products(b, a: Account, date_from, date_to, log, ai_key: str | Non
     upbundle_vids = {o.vendor_item_id for lst in listings for o in lst.options
                      if getattr(o, "is_upbundle", False) and o.vendor_item_id}
     # 이번 상품조회에 **실제로 존재하는 전체 vid**(NORMAL·RFM·업번들 모두 = 코팡 현재 보유분). 죽은 중복 블록
-    # 정리(_sweep_dead_duplicates)의 기준 — 이 집합에 없는 vid = 코팡서 사라짐. 상품조회 실패면 빈 집합(정리 skip).
-    live_all_vids = {o.vendor_item_id for lst in listings for o in lst.options if o.vendor_item_id}
+    # 정리(_sweep_dead_duplicates)의 기준 — 여기 없는 vid = 코팡서 사라짐. 상품조회 실패면 비어 있음(정리 skip).
+    # 값 = (리스팅ID, 옵션명) — 같은 옵션의 다른 배송방식 VID(twin) 판정용(_purge_twin_blocks·B3). `in`·빈값 판정은 집합과 같음.
+    live_all_vids = {o.vendor_item_id: (lst.vendor_inventory_id, o.item_name)
+                     for lst in listings for o in lst.options if o.vendor_item_id}
     vid_meta = vid_meta_of(listings)   # {vid: (판매가, 판매시작일)} — 헤더 표시(상품판매가·입고일 근사)
     # 추적 범위 = 입력 대장 상품(위탁 관리분)만. 대장 ↔ 쿠팡 = AI 중심 매칭 + VID 고정(D-009·지표는 당일 것).
     tracked, n_match = _match_to_ledger(b, a, products, metrics, inv_names, date_to, ai_key,

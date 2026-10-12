@@ -2101,6 +2101,31 @@ def t1_vidless_uncollected():
     _ok("미수집 계정 잔재 3개 삭제·대장 상품·VID 블록·메타 없는 복원 블록·다른 계정ID 보존")
 
 
+def t1_twin_vid_purge():
+    print("[B3] 추적 VID 와 같은 리스팅·같은 옵션의 다른 배송방식 VID 블록(추적 안 됨) = 정리 → 노출명 현행화")
+    from coupang_analytics.input_list import Account, Option, Product
+    from coupang_analytics.pipeline_process import _purge_twin_blocks
+    # 실측((DW)커머스 10-11 원문): 'PHARMIZEN…기능성 영양제' 블록 = VID 96075356361(NORMAL)·10.03 이후 공란,
+    # 추적은 같은 리스팅(16389437656)·같은 옵션('1개 60정')의 RFM 96075356358 → 옛 블록이 노출명을 차지해 이름 충돌·③ 4회 낭비.
+    BIZ = "(DW)커머스"
+    wb = OutputWorkbook.empty()
+    for name, vid, acct in (("파미젠 60정", "v358", "dal"), ("PHARMIZEN 기능성 영양제", "v361", "dal"),
+                            ("다른 옵션 블록", "v900", "dal"), ("다른계정 twin", "v362", "other")):
+        wb.ensure_product_block(BIZ, name, config.KIND_CONTRACT, ["kw"], registered=name)
+        wb.set_product_vids(BIZ, name, [vid])
+        wb.set_product_account_id(BIZ, name, acct)
+    acc = Account("dal", "서달원", BIZ, products=[Product(name="파미젠 60정", options=[Option("", ["v358"], [])])])
+    live = {"v358": ("16389437656", "1개 60정"), "v361": ("16389437656", "1개 60정"),
+            "v362": ("16389437656", "1개 60정"), "v900": ("16389437656", "2개 120정")}
+    assert _purge_twin_blocks(wb, BIZ, acc, {"v358", "v361"}, lambda m: None) == [], "옛 형식(VID 집합)이면 정리 안 함"
+    removed = _purge_twin_blocks(wb, BIZ, acc, live, lambda m: None)
+    assert removed == ["PHARMIZEN 기능성 영양제"], f"같은 옵션 다른 배송방식 VID 블록 정리 실패: {removed}"
+    left = wb.products_of(BIZ)
+    for keep in ("파미젠 60정", "다른 옵션 블록", "다른계정 twin"):
+        assert keep in left, f"지우면 안 되는 블록이 지워짐: {keep}"
+    _ok("추적 VID 의 다른 배송방식 twin 블록 삭제·다른 옵션·다른 계정ID·옛 형식 입력 보존")
+
+
 def t1_kw_competition_query() -> None:
     print("[F1] 키워드 추천 탭 쿠팡 1페이지 경쟁 조회 — 검색창에 **검색어 그대로** 입력(URL 문자열 아님)")
     from types import SimpleNamespace
@@ -2150,6 +2175,7 @@ def main():
     t1_exposed_name_current()
     t1_no_vidless_blocks()
     t1_vidless_uncollected()
+    t1_twin_vid_purge()
     t1_ledger_account_label()
     t1_vid_source_option_split()
     t1_ledger_dedup()
