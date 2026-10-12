@@ -2209,6 +2209,36 @@ def t1_twin_vid_purge():
     _ok("추적 VID 의 다른 배송방식 twin 블록 삭제·다른 옵션·다른 계정ID·옛 형식 입력 보존")
 
 
+def t1_rep_swap_merge_keywords():
+    print("[C1+] 대표 옵션이 바뀐 뒤 두 블록 모두 키워드가 있으면 옛 대표 키워드·이력을 새 대표로 합치고 옛 칸 삭제")
+    from coupang_analytics.pipeline_process import _carry_rep_keywords
+    # 실측(운용 마스터 10-11): 에벤에셀 CL01 옛 대표(베이지) 4키워드 8일·새 대표(베이비) 4키워드 2일(겹침 3) /
+    # 고로켓 팜픽 옛 대표(60개) 10일·새 대표(30개) 2일 → 같은 상품 ③ 2번 검색·계정목록 2줄.
+    BIZ, NEW, OLD = "에벤에셀", "가방 (베이비)", "가방 (베이지)"
+    wb = OutputWorkbook.empty()
+    for b, kws in ((OLD, ["기저귀가방", "피닉키기저귀가방"]), (NEW, ["기저귀가방", "백팩기저귀가방"])):
+        wb.ensure_product_block(BIZ, b, config.KIND_CONTRACT, kws, registered="기저귀가방 CL01")
+    for d in ("2026-10-01", "2026-10-10"):
+        wb.ensure_date(BIZ, d)
+    cols = wb._date_col[BIZ]
+    d1, d2 = sorted(cols)[0], sorted(cols)[-1]       # 사이 날짜는 자동 갭필
+    ws = wb.wb[BIZ]
+    ws.cell(wb._kw_row[(BIZ, OLD, "기저귀가방")], cols[d1], "7위")
+    ws.cell(wb._kw_row[(BIZ, OLD, "피닉키기저귀가방")], cols[d1], "3위")
+    ws.cell(wb._kw_row[(BIZ, OLD, "기저귀가방")], cols[d2], "9위")      # 같은 날 새 대표도 측정 → 새 대표 값 유지
+    ws.cell(wb._kw_row[(BIZ, NEW, "기저귀가방")], cols[d2], "8위")
+    _carry_rep_keywords(wb, BIZ, [NEW, OLD], lambda m: None)
+    assert wb.product_keywords(BIZ, NEW) == ["기저귀가방", "백팩기저귀가방", "피닉키기저귀가방"], \
+        f"옛 대표 키워드가 새 대표로 합쳐지지 않음: {wb.product_keywords(BIZ, NEW)}"
+
+    def val(kw, d):
+        return wb.wb[BIZ].cell(wb._kw_row[(BIZ, NEW, kw)], wb._date_col[BIZ][d]).value
+    assert (val("기저귀가방", d1), val("기저귀가방", d2), val("피닉키기저귀가방", d1)) == ("7위", "8위", "3위"), \
+        "이력 합치기 오류(빈 칸만 옛 값·같은 날은 새 대표 값)"
+    assert not wb.has_keyword_section(BIZ, OLD), "옛 대표 키워드 칸이 남음(③ 중복 검색·계정목록 중복 줄)"
+    _ok("두 블록 모두 키워드 = 새 대표로 합침(없는 키워드 추가·빈 날짜만 채움)·옛 칸 삭제")
+
+
 def t1_shared_exposed_option_label():
     print("[타프] 대장 여러 줄이 같은 노출명(한 상품의 다른 옵션)이면 다중옵션처럼 '노출명 (옵션)' — ①·③ 모두 유지")
     import tempfile as _tf
@@ -2288,6 +2318,7 @@ def main():
     t1_no_vidless_blocks()
     t1_vidless_uncollected()
     t1_twin_vid_purge()
+    t1_rep_swap_merge_keywords()
     t1_shared_exposed_option_label()
     t1_ledger_account_label()
     t1_ledger_full_text_match()

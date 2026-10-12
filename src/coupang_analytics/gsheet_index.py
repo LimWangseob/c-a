@@ -350,6 +350,17 @@ _PROMO_UP_FILL = {"red": 0.788, "green": 0.902, "blue": 0.788}     # C9E6C9 연�
 _PROMO_DOWN_FILL = {"red": 0.957, "green": 0.800, "blue": 0.800}   # F4CCCC 연적색
 
 
+def _title_request(sheet_id: int, desired: list[IndexRow]) -> dict:
+    """제목(A1) '계정목록 · 상품 N개'(판매중지 제외) — 최초 생성·증분 동기화 공통(예전엔 최초만 써서 N 이 낡음·2026-10-12)."""
+    n_prod = sum(1 for d in desired if d.status != DISCONTINUED)
+    return {"updateCells": {
+        "start": {"sheetId": sheet_id, "rowIndex": 0, "columnIndex": 0},
+        "rows": [{"values": [{**_s(f"계정목록 · 상품 {n_prod}개"),
+                              "userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 14},
+                                                    "horizontalAlignment": "CENTER"}}]}],
+        "fields": "userEnteredValue,userEnteredFormat"}}
+
+
 def _full_build_requests(sheet_id: int, desired: list[IndexRow], growth_asof: str = "") -> list[dict]:
     """빈 계정목록 최초 생성 — 제목·헤더·전체 행·서식(틀고정·마케팅색·열너비)."""
     reqs: list[dict] = []
@@ -357,13 +368,7 @@ def _full_build_requests(sheet_id: int, desired: list[IndexRow], growth_asof: st
     reqs.append({"mergeCells": {"range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1,
                                           "startColumnIndex": 0, "endColumnIndex": N_COLS},
                                 "mergeType": "MERGE_ALL"}})   # 제목 A1:K1 한 칸으로(‘MERGE_ROW’는 무효값)
-    n_prod = sum(1 for d in desired if d.status != DISCONTINUED)
-    reqs.append({"updateCells": {
-        "start": {"sheetId": sheet_id, "rowIndex": 0, "columnIndex": 0},
-        "rows": [{"values": [{**_s(f"계정목록 · 상품 {n_prod}개"),
-                              "userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 14},
-                                                    "horizontalAlignment": "CENTER"}}]}],
-        "fields": "userEnteredValue,userEnteredFormat"}})
+    reqs.append(_title_request(sheet_id, desired))
     reqs.append(_header_request(sheet_id, growth_asof))    # 헤더(2행) 라벨·서식
     # 데이터 행
     for i, row in enumerate(desired):
@@ -760,5 +765,6 @@ def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME
     rep_by_acct = {r.account_id: r.representative for r in desired if r.representative}  # 판매중지 행 대표자 채움
     grow = _grid_grow_requests(client, sheet, sheet_id, plan.total_rows)
     width = _col_width_requests(sheet_id, desired)   # 항목④: 증분도 내용 길이 기반 폭 갱신(신규 상품 반영)
-    client.batch_update(grow + _build_requests_for_plan(sheet_id, plan, band_by_acct, rep_by_acct, growth_asof) + width)
+    client.batch_update(grow + [_title_request(sheet_id, desired)]   # 제목 상품 수도 매번 최신(행 0 = 삽입 대상 밖)
+                        + _build_requests_for_plan(sheet_id, plan, band_by_acct, rep_by_acct, growth_asof) + width)
     return plan

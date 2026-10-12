@@ -459,16 +459,17 @@ def _process_account(report_acc, wb, metrics, inv_by_vid, date_iso, log, save_pa
 
 
 def _carry_rep_keywords(wb, biz: str, names: list[str], log) -> None:
-    """대표 옵션이 바뀌면(쿠팡 옵션 순서 변경) 옛 대표 블록의 키워드·순위 이력을 새 대표(names[0])로 옮긴다(C1,
-    소유자 2026-10-12). 실측 최문석 팔찌경보기: 대표 '(1개 #2)'→'(1개)' — 새 대표 키워드 0개·옛 대표만 계속 ③ 검색."""
-    if len(names) < 2 or wb.product_keywords(biz, names[0]):
-        return
+    """대표 옵션이 바뀌면(쿠팡 옵션 순서 변경) 대표 아닌 옵션 블록에 남은 키워드 칸의 키워드·순위 이력을 새 대표(names[0])로
+    옮기거나 합치고 그 칸을 지운다(C1, 소유자 2026-10-12 '새 대표로 키워드 복사' — 모든 다중옵션 상품 공통 규칙).
+    실측: 최문석 팔찌경보기(새 대표 키워드 0개) · 에벤에셀 CL01·고로켓 팜픽(두 블록 모두 키워드 → ③ 같은 상품 2번 검색·계정목록 2줄)."""
     for old in names[1:]:
-        moved = wb.move_keywords(biz, old, names[0])
-        if moved:
-            log(f"  [키워드칸] 대표 옵션 변경 '{old}' → '{names[0]}' — 키워드 {len(moved)}개·순위 이력 이동"
-                f"(옛 블록은 판매정보만)")
-            return
+        if not wb.has_keyword_section(biz, old):
+            continue
+        n_old = len(wb.product_keywords(biz, old))
+        added = wb.move_keywords(biz, old, names[0])
+        if not wb.has_keyword_section(biz, old):
+            log(f"  [키워드칸] 대표 옵션 변경 '{old}' → '{names[0]}' — 키워드 {n_old}개·순위 이력 합침"
+                f"(새로 더한 키워드 {len(added)}개·옛 블록은 판매정보만)")
 
 
 def _finish_account(wb, biz: str, report_acc, seen_products, unmatched, live_vids, log) -> None:

@@ -310,7 +310,12 @@ def t3b_full_and_incremental() -> None:
     p2 = gi.sync_index(fc2, desired)
     assert len(p2.inserts) == 1 and p2.inserts[0][1].product == "상품4"
     assert len(p2.discontinue) == 1                          # 상품2 사라짐
-    _ok("기존 시트(8열) → 증분(상품4 신규 삽입, 상품2 판매중지)")
+    # 제목 '상품 N개'도 증분마다 현재 수로(실측 10-12: 첫 생성 때 76 그대로·실제 88줄 — 증분이 제목을 안 씀)
+    titles = [c.get("userEnteredValue", {}).get("stringValue", "") for b in fc2.batches for r in b
+              if "updateCells" in r and r["updateCells"]["start"].get("rowIndex") == 0
+              for row in r["updateCells"]["rows"] for c in row["values"]]
+    assert "계정목록 · 상품 3개" in titles, f"증분 동기화가 제목 상품 수를 갱신 안 함: {titles}"
+    _ok("기존 시트(8열) → 증분(상품4 신규 삽입, 상품2 판매중지)·제목 상품 수 갱신")
 
     # 옛 7열 시트 → 대표자 컬럼 자동 마이그레이션(A에 빈 열 삽입 후 증분)
     old_vals = [
