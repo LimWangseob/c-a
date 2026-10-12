@@ -16,7 +16,8 @@ from dataclasses import dataclass, field
 from openpyxl.utils import get_column_letter
 
 from . import config
-from .input_list import _REQUIRED, _cell, _find_header_row, _is_real_product_name, _norm
+from .input_list import (_REQUIRED, _cell, _find_header_row, _is_real_product_name, _norm, _one_line,
+                         account_labels)
 
 STOCK_COL = "회사보유재고"            # 관리대장 대상 열(헤더 이름으로 찾음)
 _HEADER_SCAN = 15
@@ -108,10 +109,12 @@ def _ledger_rows(values: list) -> tuple[int, int, list]:
     i_biz, i_acct, i_prod = (header.index(c) for c in
                              (config.IN_COL_BUSINESS, config.IN_COL_ACCOUNT_ID, config.IN_COL_PRODUCT))
     out, biz = [], ""
+    labels = account_labels(values)                    # 파싱과 같은 계정 라벨(사업자명 빈 계정=대표자명·로그 표기용)
     for r in range(hrow + 1, len(values)):
         row = values[r]
-        if _norm(_cell(row, i_acct)) and _norm(_cell(row, i_biz)):
-            biz = _norm(_cell(row, i_biz))
+        acct = _norm(_cell(row, i_acct))
+        if acct:
+            biz = labels.get(acct) or _one_line(_cell(row, i_biz)) or acct
         prod = _norm(_cell(row, i_prod)).split("\n")[0].strip()
         if prod and _is_real_product_name(prod):
             out.append((r, biz, prod))

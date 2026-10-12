@@ -74,6 +74,19 @@ def _norm(value) -> str:
     return str(value).strip() if value is not None else ""
 
 
+def _one_line(value) -> str:
+    """사업자명·대표자명 셀 → 한 줄 이름(셀 안 줄바꿈·연속 공백 → 공백 하나). 계정 라벨=결과 시트 이름이라
+    셀 줄바꿈이 시트명에 그대로 들어가던 문제(실측 '봄날의햇살⏎주식회사', 2026-10-12) 방지."""
+    return " ".join(_norm(value).split())
+
+
+def account_labels(rows: list) -> dict[str, str]:
+    """관리대장 격자 → {계정ID: 계정 라벨(=결과 시트 이름)}. 역기록(그로스 재고·회사재고)이 파싱과 **같은 라벨 규칙**
+    (사업자명 → 대표자명 → 계정ID)으로 사업자를 찾게 한다 — 사업자명 칸이 빈 계정(최문석·하성진)을 바로 위 계정
+    이름으로 찾아 재고 역기록이 빠지던 문제(2026-10-12) 방지. 제외(판매중지/취소선) 계정은 없음 → 호출부가 대체."""
+    return {a.account_id: a.label for a in parse_input_rows(rows).accounts}
+
+
 # 헤더가 1행이 아닐 수 있음(예: 셀독 관리대장은 1행=예시값, 2행=실제 헤더). 상단 몇 행을 스캔.
 _HEADER_SCAN_ROWS = 8
 
@@ -304,7 +317,7 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
         return bool(strike_fn(row_no, col0)) if strike_fn is not None else False
 
     for row_no, row in enumerate(rows[hrow + 1:], start=hrow + 2):
-        rep, biz = _norm(_cell(row, i_rep)), _norm(_cell(row, i_biz))
+        rep, biz = _one_line(_cell(row, i_rep)), _one_line(_cell(row, i_biz))
         acct, prod = _norm(_cell(row, i_acct)), _norm(_cell(row, i_prod))
         # #C(2026-09-27): 담당자가 상품명 칸에 "담당자명\n\n(노출명 전체)" 처럼 **여러 줄**로 입력하면 정체성 키가
         # 오염돼 대장명 블록 + 노출명 블록이 중복 생성됨(실측: 비엔케이·브릿지웍스). → **첫 줄(담당자 상품명)만** 채택.
@@ -489,11 +502,12 @@ def _growth_col_values(values, first, i_biz, i_acct, i_prod, ad, inv_by_biz, w):
     cur_biz = ""
     updated = 0
     matches: list[str] = []                              # 로그용(대장상품 → 매칭 → 재고·방식)
+    labels = account_labels(values)                      # 파싱과 같은 계정 라벨(사업자명 빈 계정=대표자명)
     for r in range(first, len(values)):
         row = values[r]
-        biz, acct, prod = _norm(_cell(row, i_biz)), _norm(_cell(row, i_acct)), _norm(_cell(row, i_prod))
-        if acct and biz:                                 # 계정 행 → 이후 상품의 소속 사업자
-            cur_biz = biz
+        acct, prod = _norm(_cell(row, i_acct)), _norm(_cell(row, i_prod))
+        if acct:                                         # 계정 행 → 이후 상품의 소속 사업자(=결과 시트 이름)
+            cur_biz = labels.get(acct) or _one_line(_cell(row, i_biz)) or acct
         new = _cell(row, ad)
         if prod:                                         # 계정(사업자) 내 등록/노출 상품명 유사도 매칭
             inv, mname, how = _best_inventory_match(prod, inv_by_biz.get(_norm(cur_biz), []), w)

@@ -1738,6 +1738,37 @@ def t1_multiline_product_name():
     _ok("여러 줄 대장 상품명 = 첫 줄(담당자명)만 채택 · 노출명 꼬리 폐기(중복 블록 방지)")
 
 
+def t1_ledger_account_label():
+    print("[B4·3] 대장 계정 라벨 — 사업자명 줄바꿈=한 줄 · 역기록(그로스·회사재고)도 파싱과 같은 라벨(사업자명 빈 계정)")
+    from coupang_analytics import company_stock as CS
+    from coupang_analytics.input_list import (_find_growth_column, _growth_col_values, _growth_idf,
+                                              parse_input_rows)
+    # 실측(관리대장 10-12): 봄날의햇살 사업자명 셀 = '봄날의햇살⏎주식회사' → 결과 시트 이름에 줄바꿈 그대로(B4).
+    # 최문석(swmall255)·하성진(lslfgh)은 사업자명 칸이 비어 라벨=대표자명인데, 역기록은 계정ID+사업자명 둘 다 있는
+    # 줄에서만 사업자를 바꿔 바로 위 계정(브릿지웍스·비엔케이미디어)으로 찾음 → 최문석 그로스 재고 역기록 0건(항목 3).
+    rows = [
+        ["대표자명", "사업자명", "계정아이디", "상품명", "그로스 재고 (8.26 기준)", "회사보유재고"],
+        ["최진하\n(최서린)", "봄날의햇살\n주식회사", "woolins", "크리스마스 풍선세트 (골드)", "", ""],
+        ["백민기", "주식회사 브릿지웍스", "bws247", "스타냉동밀키트", "", ""],
+        ["최문석", "", "swmall255", "전동눈썹정리기 HS0030", "5", ""],
+    ]
+    il = parse_input_rows(rows)
+    labels = {a.account_id: a.label for a in il.accounts}
+    assert labels["woolins"] == "봄날의햇살 주식회사", f"사업자명 줄바꿈이 라벨(시트명)에 남음: {labels['woolins']!r}"
+    assert labels["swmall255"] == "최문석", f"사업자명 빈 계정 라벨 = 대표자명이어야: {labels['swmall255']!r}"
+    header = rows[0]
+    inv_by_biz = {"최문석": [("전동눈썹정리기 HS0030", 69)], "주식회사 브릿지웍스": [("스타냉동밀키트", 7)]}
+    col_out, updated, _m = _growth_col_values(rows, 1, 1, 2, 3, _find_growth_column(header), inv_by_biz,
+                                              _growth_idf(rows, 1, 3, inv_by_biz))
+    assert col_out[2] == [69], f"사업자명 빈 계정(최문석) 그로스 재고가 역기록 안 됨: {col_out}"
+    assert col_out[1] == [7] and updated == 2, f"다른 계정 역기록이 깨짐: {col_out} {updated}"
+    _h, _c, prods = CS._ledger_rows(rows)
+    by_prod = {p: b for _r, b, p in prods}
+    assert by_prod["전동눈썹정리기 HS0030"] == "최문석", f"회사재고 로그 사업자 오표기: {by_prod}"
+    assert by_prod["크리스마스 풍선세트 (골드)"] == "봄날의햇살 주식회사", f"회사재고 라벨 줄바꿈: {by_prod}"
+    _ok("사업자명 줄바꿈=한 줄 라벨 · 사업자명 빈 계정=대표자명 라벨로 그로스 역기록·회사재고 표기")
+
+
 # ── [6] 키워드 Phase B 선정 로직 ───────────────────────────────
 # 기본 = **결정적 모킹**(네이버·OpenAI 경계만 페이크, 실제 select_keywords_light 로직 그대로 실행).
 #        회귀 게이트가 빠르고(<2s) 결정적이려면 실 API 호출 금지(비용·네트워크·비결정성 제거).
@@ -2119,6 +2150,7 @@ def main():
     t1_exposed_name_current()
     t1_no_vidless_blocks()
     t1_vidless_uncollected()
+    t1_ledger_account_label()
     t1_vid_source_option_split()
     t1_ledger_dedup()
     t1_date_columns()
