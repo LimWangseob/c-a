@@ -13,6 +13,7 @@ page 는 **실제 로그인 세션의 페이지**여야 한다(쿠키 주입 세
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import time
 from dataclasses import dataclass, field
@@ -550,6 +551,40 @@ def fetch_vendor_inventory(page, log=None) -> list[VendorInventoryListing]:
             break
         page_num += 1
     return all_listings
+
+
+_VI_MODIFY_URL = "https://wing.coupang.com/tenants/seller-web/vendor-inventory/modify?vendorInventoryId={vinv}"
+_DISPLAY_NAME_RE = re.compile(r'"displayProductName"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def parse_display_name(html: str) -> str:
+    """윙 상품수정 화면 HTML 의 appData 에서 노출상품명(`displayProductName`) — 없으면 ''."""
+    m = _DISPLAY_NAME_RE.search(html or "")
+    if not m:
+        return ""
+    try:
+        return " ".join(json.loads(f'"{m.group(1)}"').split())
+    except json.JSONDecodeError:
+        return ""
+
+
+def fetch_display_names(page, vendor_inventory_ids, log=None) -> dict[str, str]:
+    """등록상품ID(vendorInventoryId)마다 윙 **상품수정 화면**(GET·읽기만) → {vendorInventoryId: 노출상품명}.
+
+    상품조회(search)·상세(items-with-vendorItems)엔 노출상품명이 없고, 판매분석은 판매·조회 있는 상품만 나온다.
+    상품수정 화면 appData 의 `displayProductName` 은 **판매 여부와 무관**하게 등록된 노출상품명(라이브 진단
+    2026-10-12 반달컴퍼니 '허리보호대 LN112' → '디프 허리 교정 보호대 헬스 벨트'). 상품마다 GET 1회(약 170KB·3초).
+    한 상품 실패는 로그로 명시하고 다음 상품 진행(그 상품만 노출명 미확보 → 호출부가 ❌ 기록)."""
+    log = log or (lambda m: None)
+    out: dict[str, str] = {}
+    for vinv in [str(i).strip() for i in dict.fromkeys(vendor_inventory_ids) if str(i).strip()]:
+        res = page.evaluate(_GET_JSON_JS, _VI_MODIFY_URL.format(vinv=vinv))
+        name = parse_display_name(res.get("body", "")) if res.get("status") == 200 else ""
+        if name:
+            out[vinv] = name
+        else:
+            log(f"  [노출명] ⚠ 상품수정 화면 노출상품명 조회 실패(status={res.get('status')}) vendorInventoryId={vinv}")
+    return out
 
 
 def fetch_product_ids(page, vendor_inventory_ids, log=None) -> dict[str, str]:

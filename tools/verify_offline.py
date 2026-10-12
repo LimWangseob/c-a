@@ -2090,6 +2090,39 @@ def t1_power_keep_awake():
     print("  ✓ keep_awake 정상(윈도우=True·타OS=no-op False)·예외 없음")
 
 
+def t1_exposed_name_wing_modify():
+    print("[노출명] 판매분석에 없는 상품 = 윙 상품수정 화면 노출상품명(displayProductName)으로 현행화 — 판매 여부 무관")
+    from types import SimpleNamespace as NS
+    from coupang_analytics import collector as COL
+    from coupang_analytics.input_list import Option, Product
+    from coupang_analytics.pipeline_sales import _fill_exposed_names
+    # 실측(2026-10-12 반달컴퍼니 로그인 진단): 상품수정 화면 /tenants/seller-web/vendor-inventory/modify?vendorInventoryId=
+    # 16398213235 의 appData = sellerProductName '허리보호대 LN112'·displayProductName '디프 허리 교정 보호대 헬스 벨트'.
+    # 판매분석(당일·30일)엔 판매 없는 상품이 안 나와 21개 블록이 '노출명 확인 실패'(웰빙곳간 16 등).
+    html = ('<script>var appData = {"mode": "UPDATE", "sellerProductName": "허리보호대 LN112", '
+            '"displayProductName": "디프 허리 교정 보호대 \\"헬스\\" 벨트", "productName": ""};</script>')
+    calls: list = []
+
+    class _Page:
+        def evaluate(self, js, url):
+            calls.append(url)
+            return {"status": 200, "body": html} if "16398213235" in url else {"status": 500, "body": ""}
+    tp = Product(name="허리보호대 LN112", options=[Option("1개 XXL", ["v992"]), Option("1개 L", ["v993"])])
+    tp2 = Product(name="다른상품", options=[Option("", ["v777"])])
+    orig = COL.fetch_sales_roster
+    COL.fetch_sales_roster = lambda *a, **k: []
+    logs: list = []
+    try:
+        _fill_exposed_names(NS(page=_Page()), NS(label="반달컴퍼니"), [tp, tp2], {}, "2026-10-12", logs.append,
+                            vinv_by_vid={"v992": "16398213235", "v993": "16398213235", "v777": "999"})
+    finally:
+        COL.fetch_sales_roster = orig
+    assert tp.exposed_name == '디프 허리 교정 보호대 "헬스" 벨트', f"상품수정 화면 노출상품명으로 못 채움: {tp.exposed_name!r}"
+    assert len([u for u in calls if "16398213235" in u]) == 1, f"같은 등록상품은 GET 1회여야: {calls}"
+    assert tp2.exposed_name == "" and any("노출명 확인 실패" in m and "다른상품" in m for m in logs),         "모든 출처 실패 상품은 ❌ 기록"
+    _ok("판매 없는 상품 노출명 = 윙 상품수정 displayProductName(등록상품당 GET 1회)·실패 상품만 ❌")
+
+
 def t1_no_vidless_blocks():
     print("[35] VID 없는 블록 금지(D-008) — 색상 괄호 오매칭 차단·미매칭 블록 미생성·VID 없는 잔재 정리")
     from coupang_analytics.input_list import Option, Product
@@ -2315,6 +2348,7 @@ def main():
     t1_ai_match_d009()
     t1_login_pw_candidates()
     t1_exposed_name_current()
+    t1_exposed_name_wing_modify()
     t1_no_vidless_blocks()
     t1_vidless_uncollected()
     t1_twin_vid_purge()

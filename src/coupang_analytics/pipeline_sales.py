@@ -304,7 +304,8 @@ def _discover_products(b, a: Account, date_from, date_to, log, ai_key: str | Non
     vid_meta = vid_meta_of(listings)   # {vid: (판매가, 판매시작일)} — 헤더 표시(상품판매가·입고일 근사)
     # 추적 범위 = 입력 대장 상품(위탁 관리분)만. 대장 ↔ 쿠팡 = AI 중심 매칭 + VID 고정(D-009·지표는 당일 것).
     tracked, n_match = _match_to_ledger(b, a, products, metrics, inv_names, date_to, ai_key,
-                                        vendor_products is not None, anchor_file, log)
+                                        vendor_products is not None, anchor_file, log,
+                                        vinv_by_vid={v: slot[0] for v, slot in live_all_vids.items()})
     # 노출상품ID(productId) = vendor-inventory-items-with-vendorItems GET(판매방식·판매여부 무관·라이브 실측 2026-09-28)
     # — **추적(대장 매칭) 상품이 든 등록상품만** 조회(2026-10-09: 전 상품 조회가 와이에이치 3,146건·55마켓 2,236건에
     # 하루 약 58분·추적 상품은 계정당 1~3개). 재고/판매분석 pid 보다 완전 → 우선 병합.
@@ -318,7 +319,7 @@ def _discover_products(b, a: Account, date_from, date_to, log, ai_key: str | Non
 
 
 def _match_to_ledger(b, a: Account, products, metrics, inv_names: dict, date_to, ai_key,
-                     vendor_ok: bool, anchor_file, log):
+                     vendor_ok: bool, anchor_file, log, vinv_by_vid=None):
     """대장 ↔ 쿠팡 매칭(D-009·소유자 2026-10-09) → (tracked, n_match).
 
     ①VID 고정 ②상품명 동일 ③의미 매칭(AI·후보 많으면 임베딩으로 추림) ④AI 실패 시 규칙 대체 → 색상 필터 공통 적용
@@ -344,7 +345,7 @@ def _match_to_ledger(b, a: Account, products, metrics, inv_names: dict, date_to,
     for note in out.notes:
         log(f"  [{a.label}] {note}")
     tracked, n_match = build_tracked(a.products, PMA.resolved(out))
-    _fill_exposed_names(b, a, tracked, metrics, date_to, log)   # 결과 블록 이름 = 현행 노출상품명(D-013)
+    _fill_exposed_names(b, a, tracked, metrics, date_to, log, vinv_by_vid)   # 결과 블록 이름 = 현행 노출상품명(D-013)
     if anchor_file is not None:
         try:
             save_anchors(a.account_id, out.anchors, anchor_file)
@@ -368,10 +369,36 @@ def _save_match_result(a: Account, tracked, anchor_file, log) -> None:
         log(f"  [{a.label}] ⚠ 매칭 결과 저장 실패(그로스 재고 역기록은 기존값 유지): {exc}")
 
 
-def _fill_exposed_names(b, a: Account, tracked, metrics, date_to, log) -> None:
+def _fill_from_roster(b, a: Account, names: dict, date_to, log) -> None:
+    """최근 N일 판매분석 roster 1회로 노출명 보충(_fill_exposed_names 분해 — 행동 불변)."""
+    from .collector import fetch_sales_roster, SalesFetchError
+    try:
+        d0 = (date.fromisoformat(date_to) - timedelta(days=config.SALES_VID_WINDOW_DAYS)).isoformat()
+        for p in fetch_sales_roster(b.page, d0, date_to, log):
+            for o in p.options:
+                for v in o.vendor_item_ids:
+                    names.setdefault(v, " ".join((p.title or p.name).split()))
+    except SalesFetchError as exc:
+        log(f"  [{a.label}] ❌ 노출상품명 보충({config.SALES_VID_WINDOW_DAYS}일) 조회 실패 — {str(exc)[:100]}")
+
+
+def _fill_from_modify_page(b, missing, names: dict, vinv_by_vid, log) -> None:
+    """판매분석(당일·30일)에 없는 추적 상품의 노출명 = 윙 상품수정 화면 `displayProductName`(등록상품당 GET 1회)."""
+    if not missing or not vinv_by_vid:
+        return
+    from .collector import fetch_display_names
+    vinv_of = {v: vinv_by_vid[v] for tp in missing for o in tp.options for v in o.vendor_item_ids if v in vinv_by_vid}
+    got = fetch_display_names(b.page, list(dict.fromkeys(vinv_of.values())), log)
+    for v, vinv in vinv_of.items():
+        if vinv in got:
+            names.setdefault(v, got[vinv])
+
+
+def _fill_exposed_names(b, a: Account, tracked, metrics, date_to, log, vinv_by_vid=None) -> None:
     """추적 상품마다 **현행 쿠팡 노출상품명**을 `exposed_name` 에 채운다(상품명 현행화·D-013).
     출처 = 당일 판매분석(productName 이 잘려 오면 옵션명 앞부분으로 복원 `_display_title`) → 없으면 최근 N일 판매분석
-    roster 1회 보충. 그래도 없으면 **오류(❌)로 기록**하고 ③순위 검색 노출명으로 그날 현행화(product_naming)한다
+    roster 1회 보충 → 그래도 없으면 **윙 상품수정 화면 노출상품명**(판매 여부 무관·`vinv_by_vid` 로 등록상품ID·2026-10-12).
+    그래도 없으면 **오류(❌)로 기록**하고 ③순위 검색 노출명으로 그날 현행화(product_naming)한다
     (소유자 2026-10-09 "노출명이 매칭 안 되면 오류·반드시 현행화")."""
     from .collector import _display_title
     names = {vid: " ".join(_display_title(m.product_name, [m]).split())
@@ -381,21 +408,14 @@ def _fill_exposed_names(b, a: Account, tracked, metrics, date_to, log) -> None:
         return next((names[v] for o in tp.options for v in o.vendor_item_ids if v in names), "")
     want = [tp for tp in tracked if any(o.vendor_item_ids for o in tp.options)]
     if any(not _pick(tp) for tp in want):
-        from .collector import fetch_sales_roster, SalesFetchError
-        try:
-            d0 = (date.fromisoformat(date_to) - timedelta(days=config.SALES_VID_WINDOW_DAYS)).isoformat()
-            for p in fetch_sales_roster(b.page, d0, date_to, log):
-                for o in p.options:
-                    for v in o.vendor_item_ids:
-                        names.setdefault(v, " ".join((p.title or p.name).split()))
-        except SalesFetchError as exc:
-            log(f"  [{a.label}] ❌ 노출상품명 보충({config.SALES_VID_WINDOW_DAYS}일) 조회 실패 — {str(exc)[:100]}")
+        _fill_from_roster(b, a, names, date_to, log)
+    _fill_from_modify_page(b, [tp for tp in want if not _pick(tp)], names, vinv_by_vid, log)
     for tp in want:
         tp.exposed_name = _pick(tp)
         if not tp.exposed_name:
             vids = [v for o in tp.options for v in o.vendor_item_ids][:3]
             log(f"  [{a.label}] ❌ [상품명] 노출명 확인 실패: '{tp.ledger_name or tp.name}' VID {vids} — "
-                f"최근 {config.SALES_VID_WINDOW_DAYS}일 판매분석에 없음 → ③순위 검색 노출명으로 현행화 예정"
+                f"최근 {config.SALES_VID_WINDOW_DAYS}일 판매분석·윙 상품수정 화면에 없음 → ③순위 검색 노출명으로 현행화 예정"
                 "(판매중지·검색 미노출이면 현행화 불가)")
 
 
