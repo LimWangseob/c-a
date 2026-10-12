@@ -5,7 +5,8 @@
 
 집계 규칙:
 - 주문 단위 집계는 **주정산 파일만**(윙 최종액 파일은 같은 주문이 다시 들어 있어 이중 집계 → 제외, 함정 1).
-- 같은 파일(계정·채널·리포트·기간)이 두 번 있어도 한 번만. 같은 줄(주문·옵션·유형·날짜·금액)이 겹치면 한 번만(경고).
+- 같은 파일(계정·채널·리포트·기간)이 두 번 있어도 한 번만. 같은 줄(주문·옵션·유형·날짜·금액)이 **여러 파일에** 겹치면
+  한 번만(경고) — **한 파일 안의 반복 줄은 진짜 거래**(로켓그로스 개당 취소 줄)라 전부 넣는다.
 - 월 = 매출인식일 기준(윙=구매확정일, 로켓그로스=매출인식일). 날짜 없는 금액 줄(윙 배송비 등)은 그 파일 정산 기간
   끝의 달로 넣고 **건수를 경고로 남긴다**.
 - 상품 = 계정 + 등록상품ID(윙 '상품 ID'·로켓그로스 '등록상품 ID'). 배송비 줄은 '배송비' 묶음.
@@ -16,6 +17,7 @@
 """
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -87,21 +89,36 @@ def _order_files(files: list[SettleFile], warns: list) -> list[SettleFile]:
     return keep
 
 
+def _row_key(r) -> tuple:
+    return (r.channel, r.account, r.order_id, r.option_id, r.kind, r.recognized, r.settle, r.qty)
+
+
 def _order_rows(files: list[SettleFile], warns: list):
     """집계할 (파일, 줄). 윙 최종액 파일은 같은 주문이 주정산 파일에 다시 들어 있어(이중 집계·함정 1)
-    **주정산 파일이 없는 정산예정일의 줄만** 쓴다(주정산 파일을 아직 못 받은 주를 빠뜨리지 않게)."""
+    **주정산 파일이 없는 정산예정일의 줄만** 쓴다(주정산 파일을 아직 못 받은 주를 빠뜨리지 않게).
+    같은 줄이 **여러 파일에** 있으면 한 번만 쓴다(한 파일에 가장 많이 나온 횟수까지). **한 파일 안의 반복 줄은
+    진짜 거래**라 전부 쓴다 — 로켓그로스 개당 취소 줄(실측 2026-10-12: 반복 줄 있는 9개 파일 모두 전부 합계만 쿠팡과 일치)."""
     files = _order_files(files, warns)
     covered = {(f.account, f.settle_date) for f in files if f.channel == CH_WING and f.kind != "최종액"}
-    filled = 0
-    for f in files:
-        final = f.channel == CH_WING and f.kind == "최종액"
-        for r in f.rows:
-            if final and (r.account, r.due) in covered:
-                continue
-            filled += final
-            yield f, r
+    chosen = [(f, r) for f in files for r in f.rows
+              if not (f.channel == CH_WING and f.kind == "최종액" and (r.account, r.due) in covered)]
+    most: dict = {}
+    for (_, k), n in Counter((id(f), _row_key(r)) for f, r in chosen).items():
+        most[k] = max(most.get(k, 0), n)
+    used: Counter = Counter()
+    dup = 0
+    for f, r in chosen:
+        k = _row_key(r)
+        if used[k] >= most[k]:
+            dup += 1
+            continue
+        used[k] += 1
+        yield f, r
+    filled = sum(1 for f, _ in chosen if f.channel == CH_WING and f.kind == "최종액")
     if filled:
         warns.append(f"윙 최종액 파일에서 주정산 파일이 없는 주의 줄 {filled}건을 집계에 넣음")
+    if dup:
+        warns.append(f"여러 파일에 겹친 같은 줄 {dup}건 — 한 번만 집계")
 
 
 def _add(p: ProductMonth, r) -> None:
@@ -124,14 +141,8 @@ def aggregate(files: list[SettleFile], cost_lines=()) -> StatsResult:
     (정렬: 계정 → 월 → 상품)."""
     res = StatsResult()
     table: dict = {}
-    seen_rows: set = set()
-    undated = dup = 0
+    undated = 0
     for f, r in _order_rows(files, res.warnings):
-        rk = (r.channel, r.account, r.order_id, r.option_id, r.kind, r.recognized, r.settle, r.qty)
-        if rk in seen_rows:
-            dup += 1
-            continue
-        seen_rows.add(rk)
         day = r.recognized or f.period_end
         undated += r.recognized is None
         pid = r.product_id or (SHIPPING_KEY if r.option_id.startswith("<") else r.option_id)
@@ -139,8 +150,6 @@ def aggregate(files: list[SettleFile], cost_lines=()) -> StatsResult:
         _add(table.setdefault(key, ProductMonth(r.account, f"{day:%Y-%m}", pid)), r)
     if undated:
         res.warnings.append(f"날짜 없는 금액 줄 {undated}건 — 각 파일 정산 기간 끝의 달로 집계")
-    if dup:
-        res.warnings.append(f"여러 파일에 겹친 같은 줄 {dup}건 — 한 번만 집계")
     _add_costs(table, list(cost_lines), files, res.warnings)
     res.products = [table[k] for k in sorted(table)]
     return res

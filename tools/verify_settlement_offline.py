@@ -575,6 +575,35 @@ def p9_settle_stats():
     ok("최종액=주정산 없는 주만·중복 파일 1회·배송비 묶음·월 귀속·지급액 검산(윙 최종액 30% 주별)·계약자 정산금액·엑셀 5시트")
 
 
+def p10_settle_dup_rows():
+    print("[P10] 같은 줄 1회 반영 — 한 파일 안 반복 줄은 진짜 거래(전부)·여러 파일에 겹친 줄만 1회(집계·검증 공통)")
+    from coupang_analytics import settlement_files as SF
+    from coupang_analytics import settlement_stats as ST
+    from coupang_analytics import settlement_verify as SV
+    # 실측(운용 PC 2026-10-12): 로켓그로스 한 파일에 '주문 정산취소 수량 -1' 같은 줄이 개당 1줄씩 반복(ski1121 한 주문 40줄)
+    # — 9개 파일 모두 '전부 합계'만 쿠팡 정산현황(판매액+환불−수수료)과 일치. 반복 줄을 지우면 정산금액이 부풀려짐.
+    grid = _rg_grid()
+    grid.append(list(grid[3]))                                                         # 2002 취소 줄과 똑같은 줄 1개 더
+    g = SF.parse_rg_fee(grid, account="A", period_start=D("2026-08-03"), period_end=D("2026-08-09"))
+    g.kind, g.report = "주정산", "판매수수료"
+    assert g.settle_total == 8205 - 8205 - 8205
+    res = ST.aggregate([g])
+    assert res.account_totals() == {"A": g.settle_total}, res.account_totals()        # 반복 줄 전부 반영
+    assert not any("겹친 같은 줄" in x for x in res.warnings), res.warnings
+    # 실측(wellbing1107 2025-12): 윙 주정산 파일 줄이 월별 최종액 파일에 정산예정일만 다르게 다시 들어 있음 → 한 번만
+    w = SF.parse_wing_detail(_wing_grid(), account="A", period_start=D("2026-08-24"), period_end=D("2026-08-30"))
+    w.kind, w.settle_date = "주정산", D("2026-09-18")
+    m = SF.parse_wing_detail([WING_HDR, *[r[:-1] + ["2026-09-25"] for r in _wing_grid()[1:]]],
+                             account="A", period_start=D("2026-08-03"), period_end=D("2026-08-30"))
+    m.kind = "최종액"
+    res2 = ST.aggregate([w, m])
+    assert res2.account_totals() == {"A": w.settle_total}, (res2.account_totals(), w.settle_total)
+    assert any("겹친 같은 줄 4건" in x for x in res2.warnings), res2.warnings
+    wing, _rg = SV.month_sums([w, m], ST._order_rows)
+    assert wing["A"]["202608"]["정산대상"] == w.settle_total, wing["A"]["202608"]   # 검증 월합도 1회(두 번이면 2배)
+    ok("한 파일 반복 취소 줄 전부 반영·주정산↔월별 겹친 줄 1회(집계·검증 월합 같은 규칙)")
+
+
 def main():
     g1_payout_dates()
     g2_amounts()
@@ -588,6 +617,7 @@ def main():
     p7_settle_files()
     p8_settle_jobs()
     p9_settle_stats()
+    p10_settle_dup_rows()
     print("정산 계산 모듈 오프라인 검증 통과(골든 payout 12·amount 2·불변식 4행/3식 100%)")
 
 
