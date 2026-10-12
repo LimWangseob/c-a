@@ -339,6 +339,32 @@ def _purge_vidless_blocks(wb, biz: str, seen_products, account_id: str, live_vid
     return removed
 
 
+def purge_uncollected_vidless(wb, acc, log) -> list[str]:
+    """미수집(로그인 실패) 계정의 VID 없는 잔재 정리(D-008 보완) — `_purge_vidless_blocks` 는 수집 성공 계정만 돌아
+    매번 로그인 실패하는 계정엔 잔재가 계속 남는다(실측 하성진 lslfgh: 벅스 상품명 블록 3개·VID 없음·대장에 없음).
+    상품조회가 없어 이름으로만 판정하므로 범위를 좁힌다: **숨김 메타 행 있음(등록명 기록) + VID 없음 + 대장 줄
+    (ledger_products)에 블록명·등록명 둘 다 없음**. 메타 행 없는 블록(구글시트 복원 마스터)은 VID 를 알 수 없어
+    미접촉. 다계정ID 스코핑: 그 계정ID 소속(또는 미태깅)만. 반환=삭제한 블록명."""
+    biz = acc.label
+    if biz not in wb.account_sheets():
+        return []
+    ledger = {str(n).strip() for n in acc.ledger_products}
+    acct = (acc.account_id or "").strip()
+    removed: list[str] = []
+    for p in list(wb.products_of(biz)):
+        reg = wb.registered_name(biz, p)
+        if not reg or wb.product_vids(biz, p) or p in ledger or reg in ledger:
+            continue
+        if acct and wb.product_account_id(biz, p) not in ("", acct):
+            continue
+        if wb.delete_product_block(biz, p):
+            removed.append(p)
+    if removed:
+        log(f"  [정체성] [{biz}] 미수집 계정의 VID 없는 잔재 {len(removed)}개 삭제(대장에 없음·D-008): "
+            f"{removed[:3]}{'…' if len(removed) > 3 else ''}")
+    return removed
+
+
 def _process_account(report_acc, wb, metrics, inv_by_vid, date_iso, log, save_path, sale_status=None,
                      upbundle_vids=None, live_vids=None, vid_meta=None, pid_by_vid=None) -> None:
     """계정(시트) 하나(① 판매수집): 상품마다 **옵션 블록**을 만들고 판매정보(지표·재고·vid)를 기록·저장.

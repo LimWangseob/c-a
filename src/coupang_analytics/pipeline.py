@@ -53,7 +53,7 @@ from .pipeline_process import (  # noqa: E402,F401
     _ProcCtx, _apply_pid, _apply_vid_meta, _block_name, _block_sale_status,
     _fill_frozen_search_volumes, _fill_product_metrics,
     _migrate_product_blocks, _process_account, _process_option,
-    _purge_upbundle_blocks, _sweep_dead_duplicates)
+    _purge_upbundle_blocks, _sweep_dead_duplicates, purge_uncollected_vidless)
 from .pipeline_ranks import (  # noqa: E402,F401
     _all_pages, _interruptible_sleep, _live_url, _looks_blocked,
     _prefill_search, _rank_matcher, _search_q,
@@ -301,6 +301,8 @@ def _reconcile_ledger_accounts(wb, input_list: InputList, uncollected, log
     active_biz = {a.label for a in input_list.accounts}
     active_ids = input_list.ledger_account_ids            # 대장에 줄이 존재하는 계정ID(판매중지 포함)
     uncollected_biz = {a.label for a in uncollected}
+    for a in uncollected:                                 # 미수집 계정은 _finish_account 를 안 거쳐 잔재가 남음(B1)
+        purge_uncollected_vidless(wb, a, log)
     removed_accounts: list[tuple[str, str]] = []          # (사업자, 계정ID) — 결과에서 완전 삭제한 계정
     for biz in list(wb.account_sheets()):
         if biz in active_biz or biz in uncollected_biz:

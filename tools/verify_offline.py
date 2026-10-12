@@ -2036,6 +2036,40 @@ def t1_no_vidless_blocks():
     _ok("VID 없는 잔재 정리·VID 블록 보존·상품조회 실패 시 미정리·다른 계정ID 미접촉")
 
 
+def t1_vidless_uncollected():
+    print("[B1] 미수집(로그인 실패) 계정도 VID 없는 잔재 정리 — 대장에 없는 블록만·메타 없는 복원 블록 보존")
+    from coupang_analytics.input_list import Account, InputList, Product
+    from coupang_analytics.pipeline import _reconcile_ledger_accounts
+    # 실측(운용 PC 마스터 10-11 23:38): 하성진(lslfgh·매번 로그인 실패) 시트에 다른 계정(벅스) 상품명 블록 3개가
+    # VID 없이 남음(보냉백 BG001·YG0209(판매부진)·변신큐브 A003). 정리는 수집 성공 계정(_finish_account)만이라 계속 잔존.
+    BIZ = "하성진"
+    wb = OutputWorkbook.empty()
+    for name, vids, acct in (("토탈사이언스", [], ""), ("보냉백 BG001", [], ""), ("보냉백 YG0209(판매부진)", [], ""),
+                             ("변신큐브 A003", [], ""), ("토탈사이언스 노출명 긴 제목", ["v_ts"], "lslfgh"),
+                             ("복원 블록(메타 없음)", [], ""), ("다른계정 잔재", [], "other_id")):
+        wb.ensure_product_block(BIZ, name, config.KIND_PERSONAL, ["kw"], registered=name)
+        if vids:
+            wb.set_product_vids(BIZ, name, vids)
+        if acct:
+            wb.set_product_account_id(BIZ, name, acct)
+    wb.set_account_id(BIZ, "lslfgh")
+    mws = wb.wb["_상품ID"]                                  # 구글시트 복원 마스터 흉내: 숨김 메타 행이 없는 블록
+    for r in range(mws.max_row, 1, -1):
+        if mws.cell(r, 2).value == "복원 블록(메타 없음)":
+            mws.delete_rows(r)
+    wb._reindex()
+    acc = Account("lslfgh", BIZ, BIZ, products=[Product(name="토탈사이언스")], ledger_products={"토탈사이언스"})
+    il = InputList(accounts=[acc], errors=[], ledger_account_ids={"lslfgh"})
+    logs: list[str] = []
+    _reconcile_ledger_accounts(wb, il, [acc], logs.append)
+    left = wb.products_of(BIZ)
+    for gone in ("보냉백 BG001", "보냉백 YG0209(판매부진)", "변신큐브 A003"):
+        assert gone not in left, f"미수집 계정의 VID 없는·대장에 없는 잔재가 남음: {gone} (남은 블록 {left})"
+    for keep in ("토탈사이언스", "토탈사이언스 노출명 긴 제목", "복원 블록(메타 없음)", "다른계정 잔재"):
+        assert keep in left, f"지우면 안 되는 블록이 지워짐: {keep}"
+    _ok("미수집 계정 잔재 3개 삭제·대장 상품·VID 블록·메타 없는 복원 블록·다른 계정ID 보존")
+
+
 def t1_kw_competition_query() -> None:
     print("[F1] 키워드 추천 탭 쿠팡 1페이지 경쟁 조회 — 검색창에 **검색어 그대로** 입력(URL 문자열 아님)")
     from types import SimpleNamespace
@@ -2084,6 +2118,7 @@ def main():
     t1_login_pw_candidates()
     t1_exposed_name_current()
     t1_no_vidless_blocks()
+    t1_vidless_uncollected()
     t1_vid_source_option_split()
     t1_ledger_dedup()
     t1_date_columns()
