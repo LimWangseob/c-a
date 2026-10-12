@@ -223,6 +223,19 @@ def _block_names(wb, biz: str, product, base: str, opts, multi: bool, log) -> li
     return out
 
 
+def _exposed(product) -> str:
+    return " ".join((getattr(product, "exposed_name", "") or "").split())
+
+
+def _shared_exposed(products) -> set[str]:
+    """한 계정에서 **대장 여러 줄이 같은 노출명**을 가진 경우의 노출명들 — 쿠팡 한 상품의 다른 옵션을 대장이 줄마다 따로
+    적은 것(실측 휴라엘 '신형타프 R008 (블랙 Free)'·'(베이지 Free)'). 블록 이름을 다중옵션처럼 '노출명 (옵션)'으로
+    해야 서로 이름이 겹치지 않는다(소유자 2026-10-12 '다른 상품과 동일하게 기본+옵션')."""
+    from collections import Counter
+    cnt = Counter(_exposed(p) for p in products if _exposed(p))
+    return {name for name, n in cnt.items() if n > 1}
+
+
 def _migrate_product_blocks(wb, biz: str, base: str, rep_name: str, vids_all, opts, multi: bool,
                             log, names: list[str] | None = None) -> None:
     """정체성/마이그레이션(소유자 2026-09-20: vid=상품당 1개).
@@ -407,6 +420,7 @@ def _process_account(report_acc, wb, metrics, inv_by_vid, date_iso, log, save_pa
     _purge_twin_blocks(wb, biz, report_acc, live_vids, log)   # 추적 안 되는 배송방식 twin(이름 충돌 전에 정리·B3)
     seen_products: list[str] = []          # 이번 대장에 존재한 옵션 블록명 — 대조로 판매중지 감지
     unmatched: list[str] = []              # 쿠팡 상품과 매칭 안 된 대장 상품명(D-008: 블록 미생성)
+    shared = _shared_exposed(report_acc.products)   # 대장 여러 줄이 나눈 노출명 → '노출명 (옵션)'(타프·2026-10-12)
     for product in report_acc.products:
         if _skip_unmatched(wb, biz, product, seen_products, unmatched):
             continue
@@ -416,7 +430,7 @@ def _process_account(report_acc, wb, metrics, inv_by_vid, date_iso, log, save_pa
         multi = len(opts) > 1                           # 옵션 라벨은 **다중옵션에만** 붙인다(단일옵션=등록상품명 그대로)
         base = product.name                            # 등록상품명(vendor-inventory) = 블록 기준명
         vids_all = [oid for o in opts for oid in o.vendor_item_ids]
-        names = _block_names(wb, biz, product, base, opts, multi, log)   # 노출상품명 현행화(D-013)
+        names = _block_names(wb, biz, product, base, opts, multi or _exposed(product) in shared, log)   # 노출명 현행화(D-013)
         rep_name = names[0]
         _migrate_product_blocks(wb, biz, base, rep_name, vids_all, opts, multi, log, names)
         # 수집 주기·마케팅은 상품(대표) 단위. 오늘 대상 아니면 이 상품의 모든 옵션 블록을 오늘치 생략.

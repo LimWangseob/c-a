@@ -2126,6 +2126,35 @@ def t1_twin_vid_purge():
     _ok("추적 VID 의 다른 배송방식 twin 블록 삭제·다른 옵션·다른 계정ID·옛 형식 입력 보존")
 
 
+def t1_shared_exposed_option_label():
+    print("[타프] 대장 여러 줄이 같은 노출명(한 상품의 다른 옵션)이면 다중옵션처럼 '노출명 (옵션)' — ①·③ 모두 유지")
+    import tempfile as _tf
+    from coupang_analytics.input_list import Account, Option, Product
+    from coupang_analytics.pipeline_process import _process_account
+    from coupang_analytics.product_naming import rename_to_exposed
+    # 실측(휴라엘 10-11): 대장 '신형타프 R008 (블랙 Free)'·'(베이지 Free)' = 쿠팡 한 리스팅(16337885026)의 두 옵션 →
+    # 블랙만 노출명 '캠핑 타프 … OUTDOOR', 베이지는 '이미 다른 상품 블록 이름'으로 등록명 유지(소유자: 다른 상품처럼 기본+옵션).
+    BIZ, T = "휴라엘", "캠핑 타프 아웃도어 대형 중형 코팅 방수 그늘막 OUTDOOR"
+    wb = OutputWorkbook.empty()
+    for name, vid, reg in ((T, "v451", "신형타프 R008 (블랙 Free)"),
+                           ("신형타프 R008 (베이지 Free)", "v448", "신형타프 R008 (베이지 Free)")):
+        wb.ensure_product_block(BIZ, name, config.KIND_CONTRACT, ["타프"], registered=reg)
+        wb.set_product_vids(BIZ, name, [vid])
+    prods = [Product(name="신형타프 R008 (블랙 Free)", options=[Option("블랙 Free", ["v451"])], exposed_name=T,
+                     kind=config.KIND_CONTRACT),
+             Product(name="신형타프 R008 (베이지 Free)", options=[Option("베이지 Free", ["v448"])], exposed_name=T,
+                     kind=config.KIND_CONTRACT)]
+    acc = Account("sg0141n", "안재영", BIZ, products=prods)
+    _process_account(acc, wb, {}, {}, "2026-10-12", lambda m: None, Path(_tf.mkdtemp()) / "t.xlsx")
+    want = {f"{T} (블랙 Free)", f"{T} (베이지 Free)"}
+    assert want <= set(wb.products_of(BIZ)), f"① 이름이 '노출명 (옵션)'이 아님: {wb.products_of(BIZ)}"
+    assert wb.product_vids(BIZ, f"{T} (블랙 Free)") == ["v451"], "같은 VID 블록 이름 변경(이력 승계)이 아님"
+    assert wb.product_keywords(BIZ, f"{T} (베이지 Free)") == ["타프"], "베이지 블록 키워드(이력) 유실"
+    assert rename_to_exposed(wb, BIZ, f"{T} (블랙 Free)", f"{T}, 블랙 Free", lambda m: None) == f"{T} (블랙 Free)", \
+        "③ 검색 노출명 현행화가 옵션 라벨을 떼어 ①과 이름이 번갈아 바뀜"
+    _ok("같은 노출명을 나눈 대장 줄 = '노출명 (옵션)'·이력 승계·③ 현행화도 라벨 유지")
+
+
 def t1_kw_competition_query() -> None:
     print("[F1] 키워드 추천 탭 쿠팡 1페이지 경쟁 조회 — 검색창에 **검색어 그대로** 입력(URL 문자열 아님)")
     from types import SimpleNamespace
@@ -2176,6 +2205,7 @@ def main():
     t1_no_vidless_blocks()
     t1_vidless_uncollected()
     t1_twin_vid_purge()
+    t1_shared_exposed_option_label()
     t1_ledger_account_label()
     t1_vid_source_option_split()
     t1_ledger_dedup()

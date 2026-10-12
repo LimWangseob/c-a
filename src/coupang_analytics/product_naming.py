@@ -20,6 +20,15 @@ def _label_of(block: str) -> str:
     return block.rsplit(" (", 1)[1][:-1] if " (" in block and block.endswith(")") else ""
 
 
+def _shares_title(wb, biz: str, pname: str) -> bool:
+    """pname 이 '제목 (라벨)' 이고 같은 제목의 다른 라벨 블록이 있음 = 대장 여러 줄이 한 상품의 옵션을 나눠 가진 경우
+    (①이 '노출명 (옵션)'으로 붙인 이름·실측 휴라엘 타프). 이때 라벨을 떼면 ①과 이름이 번갈아 바뀐다(2026-10-12)."""
+    if not _label_of(pname):
+        return False
+    prefix = pname.rsplit(" (", 1)[0]
+    return any(b != pname and _label_of(b) and b.rsplit(" (", 1)[0] == prefix for b in wb.products_of(biz))
+
+
 def rename_to_exposed(wb, biz: str, pname: str, serp_name: str, log) -> str:
     """대표 블록 pname 과 같은 상품(같은 등록상품명)의 옵션 블록들을 검색 노출명 제목으로 바꾼다. 반환=대표 블록의 새 이름.
     다른 상품 블록이 이미 그 이름이면 바꾸지 않고 경고(병합 방지)."""
@@ -30,7 +39,7 @@ def rename_to_exposed(wb, biz: str, pname: str, serp_name: str, log) -> str:
     blocks = wb.blocks_with_registered_name(biz, reg) if reg else []
     if pname not in blocks:
         blocks = [pname]
-    multi = len(blocks) > 1
+    multi = len(blocks) > 1 or _shares_title(wb, biz, pname)
     new_rep = pname
     for blk in blocks:
         label = _label_of(blk) if multi else ""
