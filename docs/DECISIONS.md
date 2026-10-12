@@ -553,3 +553,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: (a) 대장 괄호 노출명 사용(담당자 입력·낡을 수 있음) (b) 공개 상품 페이지(비로그인 Akamai·프록시 정책).
 - 영향 범위: `collector.py`(fetch_display_names·parse_display_name)·`pipeline_sales.py`(_match_to_ledger vinv_by_vid·_fill_exposed_names·_fill_from_roster·_fill_from_modify_page)·`tools/verify_offline.py`. **HQ 포팅 필요**.
 - 상태: ACTIVE
+
+### D-052 [SETTLE_MONTHLY_FAILED_COMMENT] 정산 — 로켓그로스 월정산 줄 건너뜀 · 완료 표시에 실패 계정 수 · 계정 파일 # 주석 줄 (2026-10-12, R12)
+- 결정: (1) 로켓그로스 정산현황 `settlementCycle='MONTHLY'` 줄은 윙 'M'(D-010)과 같게 **그 줄만 건너뛰고** 처리기록 '확인 필요'(`_RG_UNSUPPORTED`·`unsupported_cycles` 가 윙·로켓그로스 공통) — 모르는 다른 주기는 그대로 중단. 월정산 파일 받기 기능은 별도 결정. (2) 한 바퀴 뒤 '완료' 판정 때 이번 실행에서 **실패로 끝난 계정**(실패·차단 뒤 정상 기록 없음·`RunLog.unresolved_failures`)이 있으면 문구 = '✅ 받을 수 있는 정산 파일 다운로드 완료 — 실패 N계정(단계별) 확인 필요', 상태 카드 = **'완료·실패 확인'**(앱 배지 주황 '받을 수 있는 것은 받음 — 실패 계정 확인 필요'), `_완료.json` 에 failed 수 저장(다음 '이미 끝남' 실행도 같은 표시). (3) 정산 계정 파일에서 `#` 으로 시작하는 줄은 주석(건너뜀).
+- 근거: 소유자 선택(2026-10-12 정산 수정 1·2·3 전부). 실측 운용 PC 10-12 01:38~05:56 정산: 노바네스트 `SiteChangedError: 로켓그로스 모르는 정산주기: 'MONTHLY' (A01371646-2026-07-01-2026-07-31)` → 계정 실패(정상 18·대기 4) · 로그인 실패 10(사용 안 함 8계정·비번 바뀐 2계정)인데 '✅ 모든 정산 파일 다운로드 완료'·상태 '완료 · 이미 모두 받음'. 실제 처리기록 747줄 재생 = 실패로 끝난 계정 11(로그인 10·계정 1) 정확히 산출. 계정 파일 '#' 미지원 = '#id' 로그인 시도(STATE R11). 재현 verify_settlement_runtime P29 실패→통과·P12·P14·P27 유지.
+- 버린 대안: (a) 월정산 줄 오류 유지(나머지 정산 파일까지 막힘) (b) 실패 계정 있으면 '미완료' 종료(받을 것은 다 받았는데 다음 회차까지 재시도만 반복·로그인 실패 반복은 잠금 위험).
+- 영향 범위: `settlement_wing_api.py`·`settlement_accounts.py`·`settlement_runlog.py`·`settlement_watch.py`·`tools/settlement_download.py`·`ui/settlement_status_panel_qt.py`·`tools/verify_settlement_runtime_offline.py`. **HQ 포팅 필요**.
+- 상태: ACTIVE
