@@ -84,6 +84,18 @@ class RunLog:
             f.write("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
             f.write("\n")
 
+    def unresolved_failures(self) -> dict[str, str]:
+        """이번 실행에서 **실패로 끝난 계정** {계정: 마지막 실패 단계} — 실패·차단 뒤 정상 기록이 없는 계정만(다음 바퀴에
+        다시 받아 해소된 계정은 제외). 완료 표시에 '실패 N계정 확인 필요'를 넣는 데 쓴다(2026-10-12)."""
+        last_fail: dict[str, tuple[int, str]] = {}
+        last_ok: dict[str, int] = {}
+        for i, r in enumerate(self.rows):
+            if r["결과"] in (FAIL, BLOCK):
+                last_fail[r["계정"]] = (i, r["단계"])
+            elif r["결과"] == OK:
+                last_ok[r["계정"]] = i
+        return {a: step for a, (i, step) in last_fail.items() if last_ok.get(a, -1) < i}
+
     def summary(self) -> list[str]:
         """계정별·결과별 건수 + 단계별 비정상 건수(끝에 출력·로그에도 남김)."""
         by_acct: dict = {}

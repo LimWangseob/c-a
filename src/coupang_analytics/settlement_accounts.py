@@ -29,14 +29,14 @@ class SettleAccount:
 
 
 def parse_accounts_text(text: str) -> tuple[list[SettleAccount], list[str]]:
-    """계정 파일 글자 → (계정 목록, 경고). 빈 줄 무시. 2열(비번) 없는 줄·중복 계정ID = AccountsFileError."""
+    """계정 파일 글자 → (계정 목록, 경고). 빈 줄·'#'으로 시작하는 주석 줄 무시. 2열(비번) 없는 줄·중복 계정ID = AccountsFileError."""
     out: list[SettleAccount] = []
     warns: list[str] = []
     seen: dict[str, int] = {}
     for n, line in enumerate(text.splitlines(), start=1):
         tok = line.split()
-        if not tok:
-            continue
+        if not tok or tok[0].startswith("#"):
+            continue                                 # 빈 줄·'#' 주석 줄(사용 안 함 계정 막아 두기·2026-10-12)
         if len(tok) < 2:
             raise AccountsFileError(f"{n}번째 줄({tok[0]}): 비밀번호 칸이 없음")
         aid, pw, name = tok[0], tok[1], " ".join(tok[2:])

@@ -926,6 +926,49 @@ def p28_wait_app_profile():
     print("  ✓ 사용 중이면 대기·앱이 끝나면 진행·회차 끝이면 건너뜀")
 
 
+def p29_monthly_failed_comment():
+    print("[P29] 로켓그로스 월정산 줄 건너뜀·완료 표시에 실패 계정 수·계정 파일 # 주석 줄 (2026-10-12)")
+    from datetime import datetime
+    from coupang_analytics import settlement_accounts as SA
+    from coupang_analytics import settlement_runlog as RLG
+    from coupang_analytics import settlement_wing_api as API
+    from coupang_analytics import settlement_watch as W
+    # ① 실측(10-12 01:38 정산 오류 로그): 노바네스트 로켓그로스 'MONTHLY'(A01371646-2026-07-01-2026-07-31) →
+    #    SiteChangedError 로 계정 전체 실패(정상 18·대기 4·실패 1). 윙 'M' 처럼 그 줄만 건너뛰고 '확인 필요'.
+    week = {"settlementDate": "2026-09-06T15:00:00.000Z", "settlementPeriodStartDate": "2026-07-26T15:00:00.000Z",
+            "settlementPeriodEndDate": "2026-07-30T15:00:00.000Z", "settlementRatio": 70, "settlementCycle": "WEEKLY",
+            "settlementGroupKey": "V1-2026-07-27-2026-07-31"}
+    month = {**week, "settlementCycle": "MONTHLY", "settlementGroupKey": "A01371646-2026-07-01-2026-07-31"}
+    resp = {"settlementStatusReports": [week, month]}
+    ev = API.rg_events(resp, "노바네스트")
+    assert [e.ref for e in ev] == ["V1-2026-07-27-2026-07-31"], f"월정산 줄 건너뛰고 주정산은 그대로: {ev}"
+    un = API.unsupported_cycles(resp)
+    assert len(un) == 1 and "A01371646-2026-07-01-2026-07-31" in un[0], f"월정산 '확인 필요' 기록: {un}"
+    expect(API.SiteChangedError, lambda: API.rg_events({"settlementStatusReports": [
+        {**week, "settlementCycle": "DAILY"}]}, "a"), "모르는 RG 주기는 여전히 중단")
+    ok("로켓그로스 MONTHLY = 그 줄만 건너뜀·확인 필요 기록·모르는 다른 주기는 중단")
+    # ② 실측(10-12 05:56): 로그인 실패 10·계정 실패 1 인데 '✅ 모든 정산 파일 다운로드 완료'·상태 '완료 · 이미 모두 받음'.
+    with tempfile.TemporaryDirectory() as tmp:
+        lg = RLG.RunLog(tmp, now=datetime(2026, 10, 12, 1, 38, 0), echo=lambda m: None)
+        lg.record("A-1", "로그인", RLG.FAIL, "비밀번호 오류")
+        lg.record("A-1", "계정", RLG.SKIP, "로그인 실패 — 건너뜀")
+        lg.record("B-2", "계정", RLG.OK, "정상")
+        lg.record("B-2", "계정", RLG.FAIL, "SiteChangedError")
+        lg.record("C-3", "차단감지", RLG.BLOCK, "차단")
+        lg.record("C-3", "요청", RLG.OK, "다음 바퀴 정상")       # 실패 뒤 정상 = 해소(세지 않음)
+        fails = lg.unresolved_failures()
+        assert fails == {"A-1": "로그인", "B-2": "계정"}, f"해소 안 된 실패 계정: {fails}"
+    a, r = W.plan_after_pass(False, 0, 0, 0, 1, failed=fails)
+    assert a == "done" and "실패 2계정" in r and "로그인 1" in r and "계정 1" in r and "확인 필요" in r, r
+    a0, r0 = W.plan_after_pass(False, 0, 0, 0, 1)
+    assert a0 == "done" and "실패" not in r0, r0
+    ok("완료 문구 = '실패 N계정(로그인·계정) 확인 필요'·실패 뒤 정상 해소는 제외·실패 없으면 그대로")
+    # ③ 계정 파일 '#' 주석 줄(사용 안 함 계정을 막아 두기) = 건너뜀 — 예전엔 '#id' 로 로그인 시도
+    accts, _w = SA.parse_accounts_text("acc1 pw1 홍길동-가나\n# bandu11 pw2 연다인-반두\n  #plan_it pw3\nacc2 pw4\n")
+    assert [a.account_id for a in accts] == ["acc1", "acc2"], f"# 주석 줄을 계정으로 읽음: {[a.account_id for a in accts]}"
+    ok("계정 파일 # 주석 줄 건너뜀")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -946,6 +989,7 @@ def main():
     p26_parent_watch()
     p27_cycle()
     p28_wait_app_profile()
+    p29_monthly_failed_comment()
     print("정산 런타임 오프라인 검증 통과")
 
 

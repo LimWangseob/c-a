@@ -19,6 +19,8 @@
 """
 from __future__ import annotations
 
+from collections import Counter
+
 import json
 import os
 import tempfile
@@ -80,11 +82,11 @@ def read_done(path) -> dict | None:
         return None                     # 손상 = 기록 없음(한 바퀴 더 돌 뿐 — 안전한 쪽)
 
 
-def write_done(path, key: str, action: str, reason: str, now: datetime | None = None) -> None:
+def write_done(path, key: str, action: str, reason: str, now: datetime | None = None, failed: int = 0) -> None:
     """완료/중단/미완료 기록(원자적 쓰기)."""
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    rec = {"key": key, "result": RESULT[action], "reason": reason,
+    rec = {"key": key, "result": RESULT[action], "reason": reason, "failed": failed,
            "at": (now or datetime.now()).isoformat(timespec="seconds")}
     fd, tmp = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -92,10 +94,11 @@ def write_done(path, key: str, action: str, reason: str, now: datetime | None = 
     os.replace(tmp, p)
 
 
-def plan_after_pass(stopped: bool, work: int, pending: int, waits: int, idle_passes: int) -> tuple[str, str]:
+def plan_after_pass(stopped: bool, work: int, pending: int, waits: int, idle_passes: int,
+                    failed: dict | None = None) -> tuple[str, str]:
     """한 바퀴 뒤 다음 행동(순수). stopped=연속 실패/차단 중단 · work=이번에 새로 요청/받은 수 ·
     pending=요청예정/요청됨(파일 생성 대기) 작업 수 · waits=일시 오류·브라우저 닫힘으로 '대기'된 계정 수 ·
-    idle_passes=새로 한 일 없이 끝난 연속 바퀴 수.
+    idle_passes=새로 한 일 없이 끝난 연속 바퀴 수 · failed={계정: 실패 단계}(실패로 끝난 계정 — 완료 문구에 표시).
       → 'again'(곧 다음 바퀴) · 'later'(5분 뒤 다음 바퀴) · 'done'(다 받음·종료) · 'stop'(중단·종료) · 'giveup'(미완료·종료)"""
     if stopped:   # D-031: 종료하지 않고 이번 바퀴만 멈춤 → 잠시 뒤 같은 사무실 IP 로 다음 바퀴(프록시 안 씀·🔒 로그인 정책)
         return "later", "연속 실패/차단 — 이번 바퀴만 멈춤, 잠시 뒤 다음 바퀴에 다시 시도"
@@ -106,7 +109,16 @@ def plan_after_pass(stopped: bool, work: int, pending: int, waits: int, idle_pas
         if idle_passes >= MAX_IDLE_PASSES:
             return "giveup", f"{left} 남음({idle_passes}바퀴 진전 없음) — 다음 ①판매수집 완료 후 이어서"
         return "later", f"{left} — 잠시 뒤 다시 확인"
+    if failed:   # 실패 계정이 있으면 '모든 파일 완료'가 아님(실측 10-12: 로그인 실패 10·계정 실패 1 인데 '모두 완료')
+        what = "·".join(f"{step} {n}" for step, n in sorted(Counter(failed.values()).items()))
+        return "done", (f"✅ 받을 수 있는 정산 파일 다운로드 완료 — 실패 {len(failed)}계정({what}) 확인 필요"
+                        "(처리기록·오류 로그) · 정상 종료")
     return "done", "✅ 모든 정산 파일 다운로드 완료 — 정상 종료"
+
+
+def done_status(failed: int) -> str:
+    """완료 상태 카드 글자 — 실패 계정이 있으면 '완료·실패 확인'(앱 배지: 받을 수 있는 것은 받음·실패 확인 필요)."""
+    return "완료·실패 확인" if failed else "완료"
 
 
 def sales_in_progress(progress_path, *, now: datetime | None = None,

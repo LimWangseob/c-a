@@ -35,6 +35,8 @@ _WING_KIND = {"W": "주정산", "R": "최종액"}        # transactionCycleCode(
 # 아는데 아직 받기 방법을 확인 못 한 주기 — 그 줄만 건너뛰고 처리기록에 '확인 필요'(계정 전체 실패 금지·D-010).
 # 실측 2026-10-08·09 노바네스트(novanest1284) 지급일 2026-01-22 'M' → 매 실행 계정 실패·연속실패 중단 원인.
 _WING_UNSUPPORTED = {"M": "월정산(추정)"}
+# 로켓그로스도 같은 규칙(2026-10-12): 실측 노바네스트 settlementCycle 'MONTHLY' → 계정 전체 실패(정상 18·대기 4·실패 1).
+_RG_UNSUPPORTED = {"MONTHLY": "월정산"}
 _RG_REPORT = {"판매수수료": "CATEGORY_TR", "입출고/배송비": "WAREHOUSING_SHIPPING", "보관비": "STORAGE_FEE",
               "재고 손실 보상": "INVENTORY_COMPENSATION", "부가서비스비": "BARCODE_LABELING_FEE",
               "반품 회수/재입고 비용": "CRETURN_PICKUP_RESTOCKING", "반출비": "VRETURN_HANDLING",
@@ -104,6 +106,8 @@ def rg_events(resp: dict, account: str) -> list[SettleEvent]:
         sd, ps, pe, ratio, cycle, key = _need(
             r, "settlementDate", "settlementPeriodStartDate", "settlementPeriodEndDate", "settlementRatio",
             "settlementCycle", "settlementGroupKey", where="로켓그로스 정산현황 줄")
+        if cycle in _RG_UNSUPPORTED:
+            continue                                   # 받기 방법 미확인 주기 — unsupported_cycles 로 기록
         if cycle != "WEEKLY":
             raise SiteChangedError(f"로켓그로스 모르는 정산주기: {cycle!r} ({key})")
         kind = "최종액" if int(float(ratio)) == 30 else "주정산"
@@ -118,9 +122,12 @@ def cost_reports(detail: dict) -> tuple:
 
 
 def unsupported_cycles(resp: dict) -> list[str]:
-    """윙 정산현황에서 받기 방법을 아직 모르는 주기 줄(예 'M') — 처리기록에 '확인 필요'로 남긴다."""
-    return [f"{_WING_UNSUPPORTED[c]} 코드 {c!r} 지급일 {r.get('payDate')} ({r.get('recognitionFrom')}~{r.get('recognitionTo')})"
+    """정산현황에서 받기 방법을 아직 모르는 주기 줄(윙 'M'·로켓그로스 'MONTHLY') — 처리기록에 '확인 필요'로 남긴다."""
+    wing = [f"{_WING_UNSUPPORTED[c]} 코드 {c!r} 지급일 {r.get('payDate')} ({r.get('recognitionFrom')}~{r.get('recognitionTo')})"
             for r in resp.get("paymentReports", []) if (c := r.get("transactionCycleCode")) in _WING_UNSUPPORTED]
+    rg = [f"{_RG_UNSUPPORTED[c]} 주기 {c!r} 정산일 {r.get('settlementDate')} ({r.get('settlementGroupKey')})"
+          for r in resp.get("settlementStatusReports", []) if (c := r.get("settlementCycle")) in _RG_UNSUPPORTED]
+    return wing + rg
 
 
 def unmapped_costs(resp: dict) -> list[str]:

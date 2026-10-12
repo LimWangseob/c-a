@@ -250,7 +250,7 @@ def read_events(b, name: str, start: date, end: date) -> list:
                        channel=ch, period=f"{ws}~{we}")
             for n in API.unmapped_costs(resp):
                 LOG.record(name, "조회", RL.WAIT, f"받을 리포트 미확인 비용 — {n}", channel=ch)
-            for n in (API.unsupported_cycles(resp) if ch == "윙" else []):
+            for n in API.unsupported_cycles(resp):
                 LOG.record(name, "조회", RL.WAIT, f"확인 필요 — 받기 방법 미확인 정산주기 {n} · 그 줄만 건너뜀", channel=ch)
             found += evs
     return found
@@ -587,20 +587,22 @@ def cmd_watch(args) -> int:
                     continue
                 last_state = ""
                 key = W.sales_key(marker, datetime.now())
-                if W.already_done(W.read_done(DONE_FILE), key):
-                    log(f"[자동] 이번 ①판매수집({key}) 기준 정산 파일은 이미 모두 받음 — 종료")
-                    LOG.heartbeat("완료", "이미 모두 받음")
+                done = W.read_done(DONE_FILE)
+                if W.already_done(done, key):
+                    log(f"[자동] 이번 ①판매수집({key}) 기준 정산은 이미 끝남 — {done.get('reason', '')} — 종료")
+                    LOG.heartbeat(W.done_status(int(done.get("failed") or 0)), f"이미 끝남 — {done.get('reason', '')}")
                     return 0
                 stopped, work = _one_pass(args)
                 idle = 0 if work else idle + 1
-                action, reason = W.plan_after_pass(stopped, work, _pending_jobs(), _wait_accounts(LOG), idle)
+                fails = LOG.unresolved_failures()
+                action, reason = W.plan_after_pass(stopped, work, _pending_jobs(), _wait_accounts(LOG), idle, failed=fails)
                 log(f"[자동] {reason}")
                 if action in ("again", "later"):
                     LOG.heartbeat("대기중", reason)
                     _sleep_until(WATCH_CATCHUP_REST_SEC if action == "again" else WATCH_POLL_SEC, cycle_end)
                     continue
-                W.write_done(DONE_FILE, key, action, reason)
-                LOG.heartbeat("완료" if action == "done" else "종료", reason)
+                W.write_done(DONE_FILE, key, action, reason, failed=len(fails))
+                LOG.heartbeat(W.done_status(len(fails)) if action == "done" else "종료", reason)
                 return 0 if action == "done" else 1
             reason = f"회차 종료 시각({cycle_end:%m-%d %H:%M}) — 정산 종료(남은 건 18:00 다음 회차에서 이어서 받음)"
             log(f"[자동] {reason}")
