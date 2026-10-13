@@ -572,6 +572,8 @@ def cmd_watch(args) -> int:
     try:
         with registry_lock(BASE / "_잠금" / "_watch.lock", wait_sec=0, on_log=log):
             cycle_start, cycle_end = W.cycle_window(datetime.now())
+            if getattr(args, "since", ""):    # 사람이 누른 전체실행 — 그 실행 뒤에 끝난 ①만 기다림(2026-10-13)
+                cycle_start = max(cycle_start, datetime.fromisoformat(args.since))
             args.until, args.until_at, args.hidden = f"{cycle_end:%H:%M}", cycle_end, True   # 17:55 뒤 새 요청·새 계정 안 함
             if args.parent:
                 _watch_app(args.parent)
@@ -627,6 +629,7 @@ def main() -> int:
     ap.add_argument("--src", default="", help="merge: 합칠 정산 폴더(예: output\정산\정산 — 노트북에서 옮겨 온 것)")
     ap.add_argument("--until", default="", help="HH:MM 이후엔 새 요청·새 계정 시작 안 함(앱 18:00 무인 실행 전 멈춤)")
     ap.add_argument("--parent", type=int, default=0, help="watch: 앱 PID — 사람이 앱을 끄면 정산도 종료(D-020)")
+    ap.add_argument("--since", default="", help="watch: 이 시각(ISO) 뒤에 끝난 ①판매수집만 기다림(앱 전체실행 버튼)")
     args = ap.parse_args()
     global CHANNELS
     CHANNELS = (args.channel,) if args.channel else ()

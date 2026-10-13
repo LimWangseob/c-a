@@ -39,4 +39,4 @@
 
 ## 출력·배포·참조
 - [출력=셀독 서식](seldoc-output-format.md) · [날짜컬럼=실행날짜](date-column-run-date-rule.md) · [구글시트 통합 스펙](gsheet-unified-spec.md) · [상세 이미지 추출(CDP)](detail-image-extraction.md)
-- [exe 배포·Defender 제외](exe-packaging-deploy.md) · [쿠팡 공식 운영지식](coupang-official-reference.md) · [정산 실행흐름(18:00 동시 기동·①대기·17:55 종료 D-021·사람이 끄면 함께 종료 D-020)·상태 카드](feature-settlement-status-monitoring.md)
+- [exe 배포·Defender 제외](exe-packaging-deploy.md) · [쿠팡 공식 운영지식](coupang-official-reference.md) · [정산 실행흐름(18:00·전체실행 버튼 D-055 동시 기동·①대기·17:55 종료 D-021·사람이 끄면 함께 종료 D-020)·상태 카드](feature-settlement-status-monitoring.md)

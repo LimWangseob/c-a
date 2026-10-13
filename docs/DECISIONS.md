@@ -575,3 +575,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: (a) 집계 단계에서 이름 중복을 걸러냄(원인 파일이 남아 다른 소비처도 계속 오염) (b) 금액처럼 키 병합(스냅샷이라 합칠 단위 없음·옛 수집본 섞임 — 실측 예전 이름 쪽이 윙 지급 등 빠진 옛 수집본).
 - 영향 범위: `src/coupang_analytics/settlement_store.py`(migrate_names·_keep_newer_verify), `tools/verify_settlement_runtime_offline.py` P24(e). 운용 PC 는 재배포 후 첫 정산 실행(load_accounts) 때 자동 정리. **HQ 포팅 필요**.
 - 상태: ACTIVE
+
+### D-055 [SETTLE_WITH_MANUAL_FULL_RUN] 사람이 누른 전체실행도 정산 함께 기동 — 그 실행의 ①판매수집 완료 뒤 받기 · 순위는 1페이지 유지 (2026-10-13, R12)
+- 결정: (1) 앱 '전체실행' 버튼(①②③)을 누르면 18:00 무인과 같은 정산 자동 수집(watch)을 함께 띄운다(`start_settlement_watch(since=누른 시각)`). 정산은 `--since` 시각 **뒤에 끝난 ①판매수집**(단계 기록 sales/done)만 기다렸다가 받는다 — 같은 회차의 앞선 ① 기록으로 바로 받거나 '이미 끝남'으로 종료하지 않음. 끝 = 다 받으면·17:55(D-021)·사람이 앱을 끄면 함께(D-020). '판매수집'(① 단독) 버튼은 ① 완료 기록을 남기지 않아(run_stages) 띄우지 않음. 18:00 무인·재부팅 복구·정산 탭 버튼은 그대로(`--since` 없음). 이미 정산이 떠 있으면 정산 쪽 잠금이 둘째를 끝냄. (2) 노출순위는 지금처럼 **1페이지만** 읽고, 못 찾으면 그 페이지에서 실제로 센 개수로 'N위밖'(변경 없음).
+- 근거: 소유자 지시(2026-10-13 "정산 다운로드 무인 실행 가능하게·전체실행 시 동시에 실행·판매수집 대기 후 자동 실행", 순위 질문 답 "지금처럼 1페이지만"). 코드 확인: 정산은 `--auto`/`--resume` 때만 기동(app_qt main)·전체실행 버튼 경로엔 없음. 재현 verify_settlement_runtime P30(14:00 수동 실행·새벽 ① 완료 기록 → --since 없으면 바로 '이미 끝남' 종료) 실패→통과·P25~P29 유지·게이트 12종·복잡도 0. 순위: 운용 마스터(output 20) '위밖' 칸 = 50위밖 다수(1페이지 광고 제외 상품 보통 50개)·10-12 로그 미발견 16건 중 '50위밖' 15·'60위밖' 1 = 실제 센 개수(고정값 아님).
+- 버린 대안: (a) ① 단독 실행에도 기동(① 완료 기록이 없어 17:55 까지 대기만) (b) 회차 시작(18:00) 기준 대기 유지(낮 수동 실행 때 새벽 ① 기준으로 판정) (c) 순위 2페이지까지 읽기(소유자 미선택·요청 증가).
+- 영향 범위: `app_process.py`(settlement_watch_cmd·start_settlement_watch since), `tools/settlement_download.py`(--since·cmd_watch), `ui/app_qt.py`(do_run_full), `tools/verify_settlement_runtime_offline.py` P30. **HQ 포팅 필요**.
+- 상태: ACTIVE

@@ -986,6 +986,71 @@ def p29_monthly_failed_comment():
     ok("계정 파일 # 주석 줄 건너뜀")
 
 
+def p30_manual_full_run():
+    print("[P30] 사람이 누른 전체실행도 정산 함께 기동 — 그 실행의 ①완료(--since 이후)까지 대기 후 받기(2026-10-13)")
+    import json as _json
+    import os
+    from datetime import datetime as RealDT, timedelta
+    from types import SimpleNamespace
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    from coupang_analytics import app_process as AP
+    from coupang_analytics import settlement_runlog as RLG
+    from coupang_analytics import settlement_watch as W
+    D = RealDT
+    cmd, _ = AP.settlement_watch_cmd(4321, since=D(2026, 10, 13, 14, 0))
+    assert cmd[-5:] == ["watch", "--parent", "4321", "--since", "2026-10-13T14:00:00"], cmd
+    assert AP.settlement_watch_cmd(4321)[0][-3:] == ["watch", "--parent", "4321"], "무인(18:00)은 그대로"
+
+    def run(since):
+        """14:00 수동 전체실행 — 같은 회차 새벽 02:00 ① 기록 + 그 기준 '완료' 기록이 이미 있음. 15:00 에 새 ① 완료."""
+        clock = {"now": D(2026, 10, 13, 14, 0, 5)}
+        passes = []
+        stage = Path("output") / "쿠팡데이타분석_실행단계.json"
+
+        def write_marker(at):
+            stage.write_text(_json.dumps({"date": f"{at:%Y-%m-%d}", "stage": "sales", "at": at.isoformat()}),
+                             encoding="utf-8")
+        write_marker(D(2026, 10, 13, 2, 0))
+        W.write_done(TD.DONE_FILE, D(2026, 10, 13, 2, 0).isoformat(timespec="seconds"), "done", "다 받음")
+
+        class FakeDT(RealDT):
+            @classmethod
+            def now(cls, tz=None):
+                return clock["now"]
+
+        def fake_sleep(sec):
+            clock["now"] += timedelta(seconds=max(sec, 1))
+            if clock["now"] >= D(2026, 10, 13, 15, 0) and not passes and "새①" not in clock:
+                clock["새①"] = True
+                write_marker(clock["now"])                          # 이번 전체실행의 ①판매수집이 끝남
+        olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG)
+        args = SimpleNamespace(parent=0, until="", until_at=None, hidden=False, since=since)
+        try:
+            TD.datetime, TD.time.sleep = FakeDT, fake_sleep
+            TD._one_pass = lambda a: (passes.append(clock["now"]), (False, 0))[1]
+            TD._pending_jobs, TD._wait_accounts = (lambda: 0), (lambda lg: 0)
+            TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
+            TD.LOG.heartbeat = lambda st, msg: None
+            TD.cmd_watch(args)
+        finally:
+            TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG = olds
+            stage.unlink(missing_ok=True)
+        return passes
+
+    old_cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            (Path(tmp) / "output").mkdir()
+            assert run("") == [], "--since 없음 = 새벽 ① 기준 '이미 끝남'으로 바로 종료(지금 무인 동작)"
+            passes = run("2026-10-13T14:00:00")
+            assert passes and passes[0] >= D(2026, 10, 13, 15, 0), f"이번 실행 ① 완료(15:00) 뒤에 받기: {passes}"
+        finally:
+            os.chdir(old_cwd)
+    ok("수동 전체실행 = 실행 시각 이후 ① 완료까지 대기 후 받기·무인 명령 불변")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -1007,6 +1072,7 @@ def main():
     p27_cycle()
     p28_wait_app_profile()
     p29_monthly_failed_comment()
+    p30_manual_full_run()
     print("정산 런타임 오프라인 검증 통과")
 
 

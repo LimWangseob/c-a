@@ -1604,6 +1604,8 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             self.track_stop_btn.setEnabled(True)
             stop = self._semi_stop
 
+        if not keywords_off:   # 전체실행 = 정산도 함께 기동 → 이번 ①판매수집 완료까지 기다렸다가 받음(2026-10-13)
+            start_settlement_watch(self.log, since=datetime.now())
         gs_in = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/input_url", "", type=str).strip()
         designated = not self.cb_today.isChecked()   # 날짜 지정(D-016) — 이력 없는 옛 칸은 판매값으로 수집 판정(D-019)
 
