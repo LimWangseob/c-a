@@ -111,10 +111,22 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
             return None, {}, {}, {}, set(), set(), {}, {}
         (products, tracked, metrics, inventory, sale_status, upbundle_vids, live_all_vids,
          vid_meta, pid_by_vid) = found
+        _record_sales_history(a.account_id, date_from, date_to, metrics, log)   # 판매금액 날짜별 누적
         session_state.observe_collection_done(a.account_id)         # 관측: 이 계정 수집 완료 시각
     report = Account(a.account_id, a.representative, a.business_name, tracked)
     report.ledger_products = set(a.ledger_products)   # ⑥: 줄 존재 전체(활성+판매중지/취소선) 전파 — 완전삭제 판정용
     return (report, metrics, inventory, sale_status, upbundle_vids, live_all_vids, vid_meta, pid_by_vid)
+
+
+def _record_sales_history(account_id: str, date_from, date_to, metrics: dict, log) -> None:
+    """판매분석 판매금액을 날짜별로 쌓음(output/판매분석_일별/{계정}.json). 실패는 비치명(로그만·수집은 계속)."""
+    from . import sales_history
+    try:
+        res = sales_history.record("output", account_id, date_from, date_to, metrics)
+    except OSError as exc:
+        log(f"  [판매금액 기록] ⚠ {account_id} 저장 실패(비치명) — {exc.__class__.__name__}: {str(exc)[:80]}")
+        return
+    log(f"  [판매금액 기록] {account_id} {date_to}: {res}")
 
 
 PW_MAX_TRIES = 2   # 관리대장 한 계정 여러 줄의 비번이 서로 다를 때 실행당 시도할 최대 값 수(D-012·잠금 5회 대비)

@@ -153,7 +153,7 @@ def _install_collector_fakes(*, vendor_ok=True, discover_behavior="ok"):
             raise Exception("Failed to fetch")   # 신선 로그인 직후 페이지 미안착 프록시
         metrics = {_VID: OptionMetric(option_id=_VID, product_name=_LEDGER_NAME, option_name="",
                                       item_id="item1", views=100, sales=7, visitors=50,
-                                      registration_type="RFM")}
+                                      registration_type="RFM", gmv=125000, orders=6)}
         opt = Option(label="", vendor_item_ids=[_VID], product_ids=[])
         return [Product(name=_LEDGER_NAME, options=[opt], kind=config.KIND_CONTRACT)], metrics
 
@@ -277,6 +277,28 @@ def pin_discover_empty_uses_vendor():
     _check(acct is not None and len(acct.products) == 1, "상품조회 vid로 상품 추적(건너뛰지 않음)")
     _check(metrics == {}, "판매분석 지표는 비어 있음(당일 판매 0)")
     _check(sale_status.get(_VID) == "판매중", "판매상태는 상품조회에서 확보")
+
+
+def pin_sales_history_wiring():
+    print("[핀 S] 하루 단위 ① 수집 직후 판매분석 금액을 날짜별로 기록(output/판매분석_일별/{계정}.json)")
+    import json
+    _SPEC.clear(); _COUNT.clear()
+    _SPEC["authenticated"] = [True]
+    _install_collector_fakes()
+    old = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            acct, metrics, *_ = P._login_and_discover(_ledger_account(), "2026-09-20", "2026-09-20",
+                                                      lambda aid: "pw", lambda m: None)
+            path = Path(tmp) / "output" / "판매분석_일별" / "pin1.json"
+            _check(acct is not None and path.exists(), "수집 성공 뒤 날짜별 기록 파일 생성")
+            day = json.loads(path.read_text(encoding="utf-8")).get("2026-09-20", {})
+            _check(day.get("옵션", {}).get(_VID, {}).get("판매금액") == 125000, "그날 옵션 판매금액 = 판매분석 값")
+            P._login_and_discover(_ledger_account(), "2026-09-19", "2026-09-20", lambda aid: "pw", lambda m: None)
+            _check(list(json.loads(path.read_text(encoding="utf-8"))) == ["2026-09-20"], "기간 조회는 쌓지 않음")
+        finally:
+            os.chdir(old)
 
 
 def pin_discover_failed_then_ok():
@@ -661,6 +683,7 @@ def main() -> int:
         pin_otp_skip()
         pin_semi_retry_recover()
         pin_discover_empty_uses_vendor()
+        pin_sales_history_wiring()
         pin_discover_failed_then_ok()
         pin_vendor_fallback_to_discover()
         pin_rank_success()

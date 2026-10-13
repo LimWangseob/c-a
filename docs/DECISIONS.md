@@ -582,3 +582,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: (a) ① 단독 실행에도 기동(① 완료 기록이 없어 17:55 까지 대기만) (b) 회차 시작(18:00) 기준 대기 유지(낮 수동 실행 때 새벽 ① 기준으로 판정) (c) 순위 2페이지까지 읽기(소유자 미선택·요청 증가).
 - 영향 범위: `app_process.py`(settlement_watch_cmd·start_settlement_watch since), `tools/settlement_download.py`(--since·cmd_watch), `ui/app_qt.py`(do_run_full), `tools/verify_settlement_runtime_offline.py` P30. **HQ 포팅 필요**.
 - 상태: ACTIVE
+
+### D-056 [SALES_GMV_DAILY] 판매분석 판매금액(totalGmv) 날짜별 누적 — output/판매분석_일별/{계정ID}.json (2026-10-13, R12)
+- 결정: ① 판매수집이 계정마다 판매분석(vi-detail-search) 하루치(D-1) 조회를 마치면 옵션별 판매금액·판매수량·주문·구분(윙/로켓그로스)·상품명을 날짜 키로 쌓는다(`sales_history.record`). 하루 단위 조회만(넓은 기간 vid 보강 조회 제외)·판매금액 모르는 출처(엑셀 폴백=gmv None) 제외·같은 날 재실행=그날 교체·판매 0인 날도 빈 기록·원자적 저장·저장 실패는 비치명(로그). `OptionMetric` 에 gmv(없으면 None)·orders 추가(기존 지표 불변).
+- 근거: 소유자 요청(2026-10-13 "판매분석 금액 날짜별로 쌓도록") — 쿠팡 정산이 판매보다 늦어 사업자별 정산내역의 로켓그로스 미정산을 부가세×비율로 추정(8월 백테스트 합계 −2.5%·소규모 계정 최대 +82%)해야 했음. 응답의 totalGmv 를 버리고 원문(_raw)도 매번 덮어써 하루치만 남던 상태. 실측: 운용 PC output (20) 원문은 하루치 조회와 30일 보강 조회가 한 파일 묶음에 섞임(계정 24/27) → 하루치 조회 결과만 기록해야 함. 재현·검증: verify_sales_history_offline(S1~S3)·핀 S(실제 `_login_and_discover`) 실패→통과 · 실원문 하루치 27계정 판매금액·옵션 수 원 단위 일치(합 4,875,640원) · 게이트 13종·복잡도 경고 0.
+- 버린 대안: (a) 원문(_raw) 파일을 날짜별로 보관(조회 두 종류가 섞여 하루치 구분 불가·용량) (b) 판매수량×판매가로 금액 계산(쿠폰·할인 반영 안 됨) (c) 결과 통계 마스터에 금액 칸 추가(결과시트 서식·HQ 계약 변경 범위 큼).
+- 영향 범위: `report.OptionMetric`(gmv·orders), `collector._parse_vendor_items`, `pipeline_sales._login_and_discover`·`_record_sales_history`, 신규 `sales_history.py`, `tools/verify_sales_history_offline.py`(게이트 등록)·`tools/pin_login_ranks.py` 핀 S. 운용 PC 재배포 후 첫 18:00 부터 쌓임(과거 날짜 소급 없음). **HQ 포팅 필요**(새 출력 파일).
+- 상태: ACTIVE

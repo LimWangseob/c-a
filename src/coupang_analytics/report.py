@@ -47,6 +47,8 @@ class OptionMetric:
     visitors: int         # 방문자 → 방문자건수
     registration_type: str = ""   # NORMAL(개인/판매자배송) / RFM(계약/로켓그로스) — 상품구분 판별
     product_id: str = ""  # 노출상품ID(productId) — 상품명 하이퍼링크(쿠팡 노출페이지)용. 판매분석 응답서 확보(항목2)
+    gmv: int | None = None   # 판매금액(totalGmv) — 판매분석 API 만 채움, 엑셀 폴백 등 모르면 None(0 과 구분)·날짜별 누적용
+    orders: int = 0          # 주문수(totalOrders)
 
 
 def parse_by_option(path: str | Path) -> dict[str, OptionMetric]:
