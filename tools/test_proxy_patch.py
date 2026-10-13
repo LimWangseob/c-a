@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 import sys
 from pathlib import Path
 
@@ -493,6 +494,55 @@ def test_drive_rank_profile_per_ip() -> None:
         proxy_pool.reset_cache()
 
 
+def test_rank_identity_follows_ip() -> None:
+    """D-058(2026-10-13): 순위 프로필 흔적(쿠키·저장소)은 같은 IP 동안만 유지 — 그 프로필이 지난번과 다른 IP 로 나가면
+    쿠팡 접속 전에 비우고 시작(새 프로필도 비움). 같은 IP 면 그대로(누적=신용)."""
+    import tempfile
+    from coupang_analytics import pipeline_ranks as PR
+    from coupang_analytics import proxy_blocklist as bl
+
+    saved = config.RANK_PROXY_PRECHECK_EGRESS
+    orig = (PR.WingBrowser, bl.resolve_egress_ip, bl.is_blocked, PR._RANK_PROFILE_ROOT)
+    cleared: list = []
+    sent: list = []
+
+    class _Ctx:
+        def clear_cookies(self):
+            cleared.append("cookies")
+
+        def new_cdp_session(self, page):
+            return SimpleNamespace(send=lambda m, p=None: sent.append((m, (p or {}).get("origin"))), detach=lambda: None)
+
+    class _CM:
+        def __init__(self, *a, **k):
+            self.profile, self.context, self.page = k.get("profile_dir"), _Ctx(), object()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+    egress = {"ip": "1.1.1.1"}
+    try:
+        config.RANK_PROXY_PRECHECK_EGRESS = True
+        PR._RANK_PROFILE_ROOT = tempfile.mkdtemp()
+        PR.WingBrowser = _CM
+        bl.resolve_egress_ip = lambda browser, log=None: egress["ip"]
+        bl.is_blocked = lambda ip, data=None: False
+        px = "http://u;sessid.s01:p@gw:10000"
+        ran = lambda b, e: False
+        PR._run_on_egress(False, px, ran, lambda m: None)            # 새 프로필 → 비우고 시작
+        assert cleared == ["cookies"] and ("Storage.clearDataForOrigin", "https://www.coupang.com") in sent, (cleared, sent)
+        PR._run_on_egress(False, px, ran, lambda m: None)            # 같은 IP → 흔적 유지
+        assert cleared == ["cookies"], f"같은 IP 면 비우지 않음: {cleared}"
+        egress["ip"] = "2.2.2.2"
+        PR._run_on_egress(False, px, ran, lambda m: None)            # 업체가 IP 를 바꿈 → 비움
+        assert cleared == ["cookies", "cookies"], f"IP 바뀌면 비움: {cleared}"
+    finally:
+        config.RANK_PROXY_PRECHECK_EGRESS = saved
+        (PR.WingBrowser, bl.resolve_egress_ip, bl.is_blocked, PR._RANK_PROFILE_ROOT) = orig
+
+
 def main() -> None:
     tests = [
         test_fail_closed,
@@ -508,6 +558,7 @@ def main() -> None:
         test_semi_block_rotate_signal,
         test_drive_rank_conn_not_block,
         test_drive_rank_profile_per_ip,
+        test_rank_identity_follows_ip,
     ]
     for test in tests:
         test()

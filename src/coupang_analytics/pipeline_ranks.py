@@ -48,6 +48,35 @@ def _rank_profile(px) -> str:
     return f"{_RANK_PROFILE_ROOT}/{m.group(1) if m else hashlib.sha1(px.encode()).hexdigest()[:10]}"
 
 
+_EGRESS_MARK = "_rank_egress.txt"          # 프로필 폴더 안 — 그 프로필이 마지막으로 쓴 egress IP
+_CLEAR_ORIGINS = ("https://www.coupang.com", "https://coupang.com")
+
+
+def _identity_follows_ip(browser, profile: str, egress: str, log) -> None:
+    """흔적(쿠키·저장소)은 **같은 IP 동안만** 유지(D-058): 프로필이 지난번과 다른 IP 로 나가면 쿠팡 접속 전에 비운다.
+    같은 IP = 누적(신용), IP 바뀜 = 비움(흔적이 IP 를 따라다니면 'IP 를 바꿔 가며 숨는 봇' 신호·10-13 실측 77/87 즉시 차단).
+    IP 확인은 ipify(쿠팡 아님)라 이 시점엔 아직 쿠팡에 안 들어감. 비우기 실패 = ⚠ 로그 후 진행(기록 안 남겨 다음에 다시)."""
+    mark = Path(profile) / _EGRESS_MARK
+    try:
+        last = mark.read_text(encoding="utf-8").strip()
+    except OSError:
+        last = ""
+    if last == egress:
+        return
+    try:
+        browser.context.clear_cookies()
+        cdp = browser.context.new_cdp_session(browser.page)
+        for origin in _CLEAR_ORIGINS:
+            cdp.send("Storage.clearDataForOrigin", {"origin": origin, "storageTypes": "all"})
+        cdp.detach()
+    except Exception as exc:
+        log(f"  [프록시] ⚠ 흔적 비우기 실패({exc.__class__.__name__}: {str(exc)[:80]}) — 그대로 진행·다음에 다시 시도")
+        return
+    mark.parent.mkdir(parents=True, exist_ok=True)
+    mark.write_text(egress, encoding="utf-8")
+    log(f"  [프록시] 🧹 이 프로필의 IP 가 바뀜({last or '처음'} → {egress}) — 쿠팡 흔적(쿠키·저장소) 비우고 시작")
+
+
 def rotation_can_rotate() -> bool:
     """지금 차단되면 쿨다운 대신 새 egress 로 회전할 수 있는가(drive_rank 가동 중 + 다음 egress 존재)."""
     try:
@@ -101,6 +130,8 @@ def _run_on_egress(offscreen: bool, px, run_once, log, skip_blocked: bool = True
             return egress, "skip", False
         if px:
             log(f"  [프록시] ✅ egress {egress or '(미확인)'} — 순위 진행")
+            if egress:
+                _identity_follows_ip(browser, _rank_profile(px), egress, log)
         return egress, "ran", bool(run_once(browser, egress))
 
 
