@@ -431,6 +431,68 @@ def test_drive_rank_conn_not_block() -> None:
         proxy_pool.reset_cache()
 
 
+def test_drive_rank_profile_per_ip() -> None:
+    """drive_rank(2026-10-13 · 10-13 밤 실측: 막힌 IP 재사용 55번 중 53번 즉시 차단·같은 IP 를 다른 프로필로는 통과):
+    프록시 주소(sessid)마다 순위 프로필 따로(data/chrome-rank/<sessid>)·이번 실행에 막힌 (주소, IP)는 그 주소의 IP 가
+    바뀔 때까지 건너뜀·주소가 전부 막힌 IP 면 새 IP 를 기다림(헛 검색 없음)."""
+    from coupang_analytics import pipeline_ranks as PR
+    from coupang_analytics import proxy_blocklist as bl
+
+    saved = (config.PROXY_ENABLED, config.RANK_PROXY_ROTATE_ON_BLOCK, config.RANK_PROXY_PRECHECK_EGRESS)
+    orig = (PR.WingBrowser, proxy_pool.rank_proxy_pool_urls, bl.resolve_egress_ip, bl.is_blocked, bl.record,
+            PR._interruptible_sleep)
+    proxy_pool.reset_cache()
+    urls = ["http://u;sessid.s01:p@gw:10000", "http://u;sessid.s02:p@gw:10000"]
+    sticky = {urls[0]: "1.1.1.1", urls[1]: "2.2.2.2"}     # 업체가 주소마다 일정 시간 같은 IP 를 줌
+    opened: list = []
+
+    class _CM:
+        def __init__(self, *a, **k):
+            self.proxy, self.profile = k.get("proxy"), k.get("profile_dir")
+            opened.append(self.profile)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+    try:
+        config.PROXY_ENABLED = True
+        config.RANK_PROXY_ROTATE_ON_BLOCK = True
+        config.RANK_PROXY_PRECHECK_EGRESS = True
+        PR.WingBrowser = _CM
+        proxy_pool.rank_proxy_pool_urls = lambda: list(urls)
+        bl.is_blocked = lambda ip, data=None: False
+        bl.record = lambda ip, reason="": None
+        bl.resolve_egress_ip = lambda browser, log=None: sticky[browser.proxy]
+        slept: list = []
+
+        def _sleep(sec, *a, **k):                         # 기다리는 동안 업체가 IP 를 새로 줌
+            slept.append(sec)
+            sticky[urls[0]], sticky[urls[1]] = "3.3.3.3", "4.4.4.4"
+        PR._interruptible_sleep = _sleep
+        runs: list = []
+
+        def _always_blocked(b, e) -> bool:
+            runs.append((b.profile, e))
+            return True
+
+        PR.drive_rank(offscreen=False, run_once=_always_blocked, log=lambda m: None,
+                      should_stop=lambda: len(runs) >= 4, halt_reason=lambda: "block")
+        ips = [e for _, e in runs]
+        assert set(ips[:2]) == {"1.1.1.1", "2.2.2.2"} and set(ips[2:]) == {"3.3.3.3", "4.4.4.4"}, f"막힌 IP 재검색 없음: {runs}"
+        assert slept == [PR._FRESH_IP_WAIT_SEC], f"주소가 전부 막힌 IP 면 새 IP 대기 1번: {slept}"
+        profs = {p for p, _ in runs}
+        assert profs == {"data/chrome-rank/s01", "data/chrome-rank/s02"}, f"주소마다 프로필 따로: {profs}"
+        assert PR._rank_profile(None) == PR._PROFILE, "프록시 없으면 기존 프로필"
+        assert "p@" not in PR._rank_profile("http://u:secret@gw:1") and "secret" not in PR._rank_profile("http://u:secret@gw:1")
+    finally:
+        (config.PROXY_ENABLED, config.RANK_PROXY_ROTATE_ON_BLOCK, config.RANK_PROXY_PRECHECK_EGRESS) = saved
+        (PR.WingBrowser, proxy_pool.rank_proxy_pool_urls, bl.resolve_egress_ip, bl.is_blocked, bl.record,
+         PR._interruptible_sleep) = orig
+        proxy_pool.reset_cache()
+
+
 def main() -> None:
     tests = [
         test_fail_closed,
@@ -445,6 +507,7 @@ def main() -> None:
         test_rank_block_images,
         test_semi_block_rotate_signal,
         test_drive_rank_conn_not_block,
+        test_drive_rank_profile_per_ip,
     ]
     for test in tests:
         test()

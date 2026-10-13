@@ -6,6 +6,7 @@ pipeline.py 가 이 심볼들을 다시 import 해 `pipeline.X` 공개 API(UI·�
 """
 from __future__ import annotations
 
+import hashlib
 import random
 import re
 import time
@@ -30,7 +31,21 @@ from .pipeline_paths import _PROFILE, _load_latest_wb, column_label
 # ⑤차단(blocked=True)이면 그 egress 를 차단목록에 기록하고 **새 egress 로 다음 키워드부터**(막힌 키워드는 다음 바퀴·
 # 2026-10-13, 횟수 제한 없이 풀을 돌려 씀). 30분 쿨다운·당일 중단은 폐지(D-030). RANK_PROXY_ROTATE_ON_BLOCK=False 거나 프록시 OFF 면
 # 1회 open(차단되면 다음 키워드 계속).
+# **IP 하나 = 기기 하나(2026-10-13)**: 프록시 주소(sessid)마다 순위 프로필을 따로 두고(_rank_profile), 이번 실행에서 막힌
+# (주소, IP)는 그 주소의 IP 가 바뀔 때까지 다시 쓰지 않는다 — 주소가 전부 막힌 IP 면 새 IP 를 기다림(_next_round).
 _ROT = {"active": False, "can": (lambda: False)}
+_RANK_PROFILE_ROOT = "data/chrome-rank"
+_FRESH_IP_WAIT_SEC = 300
+
+
+def _rank_profile(px) -> str:
+    """순위 브라우저 프로필 — 프록시 주소(sessid)마다 따로(쿠키·식별 정보가 IP 하나에만 묶이게). 프록시 없으면 기존 프로필.
+    10-13 실측: 한 프로필로 IP 수십 개를 옮겨 다니자 새 IP 도 첫 검색에서 막힘·같은 IP 를 다른 프로필로는 통과.
+    폴더 이름 = sessid(없으면 주소 해시) — 자격증명은 경로에 안 넣음."""
+    if not px:
+        return _PROFILE
+    m = re.search(r"sessid[._]([A-Za-z0-9]+)", px)
+    return f"{_RANK_PROFILE_ROOT}/{m.group(1) if m else hashlib.sha1(px.encode()).hexdigest()[:10]}"
 
 
 def rotation_can_rotate() -> bool:
@@ -55,25 +70,30 @@ def _rank_single_open(offscreen: bool, run_once, log) -> None:
     px, ok = proxy_pool.rank_proxy_or_skip(log)
     if not ok:
         return
-    with WingBrowser(profile_dir=_PROFILE, offscreen=offscreen, proxy=px,
+    with WingBrowser(profile_dir=_rank_profile(px), offscreen=offscreen, proxy=px,
                      block_images=getattr(config, "RANK_BLOCK_IMAGES", False)) as browser:
         run_once(browser, None)
 
 
-def _run_on_egress(offscreen: bool, px, run_once, log, skip_blocked: bool = True, force: bool = False):
+def _run_on_egress(offscreen: bool, px, run_once, log, skip_blocked: bool = True, force: bool = False,
+                   skip_pairs=frozenset()):
     """한 egress 로 브라우저를 열어 실행. 반환 (egress_ip, outcome, blocked).
 
     outcome="skip" = egress 가 차단이력이라 선제 skip(실행 안 함·skip_blocked=True 일 때만) · "ran" = run_once 실행 ·
     "conn" = **IP 확인(에코) 경로가 모두 실패 = 프록시 연결 장애**(2026-10-13 — 쿠팡 검색 없이 넘김·차단 기록 안 함).
     force=True 면 에코 실패여도 실행(에코 서비스 쪽 장애일 수 있어 연속 실패 뒤엔 실제 검색 화면으로 판정).
+    skip_pairs = 이번 실행에 막힌 (주소, IP) — 그 주소가 아직 같은 IP 면 검색 없이 "skip"(10-13: 53/55 즉시 차단).
     """
-    with WingBrowser(profile_dir=_PROFILE, offscreen=offscreen, proxy=px,
+    with WingBrowser(profile_dir=_rank_profile(px), offscreen=offscreen, proxy=px,
                      block_images=getattr(config, "RANK_BLOCK_IMAGES", False)) as browser:
         egress = _echo_egress(browser, px, log)
         if (px and egress is None and not force
                 and getattr(config, "RANK_PROXY_PRECHECK_EGRESS", True)):
             log("  [프록시] ⚠ 연결 장애 — IP 확인 실패(쿠팡 차단 아님) → 이 IP 로 검색 안 하고 다음 IP")
             return None, "conn", False
+        if px and egress and (px, egress) in skip_pairs:
+            log(f"  [프록시] egress {egress} = 이번 실행에 막힌 IP(이 주소의 IP 가 아직 안 바뀜) → 검색 없이 다음 주소")
+            return egress, "skip", False
         if skip_blocked and px and egress and proxy_blocklist.is_blocked(egress):
             e = proxy_blocklist.entry(egress) or {}
             log(f"  [프록시] ⚠ egress {egress} = 차단이력({e.get('last', '?')}, "
@@ -89,7 +109,8 @@ def drive_rank(offscreen: bool, run_once, log, should_stop=None, halt_reason=Non
 
     blocked=True(=IP 차단으로 중단)면 egress 를 기록하고 **새 egress 로 이어서** 한다(run_once 는 채운 키워드·이번 바퀴에
     미룬 키워드를 건너뜀 — 막힌 키워드는 다음 바퀴에 다시·2026-10-13). **회전 횟수 제한 없이 프록시 풀을 돌려 쓴다**(D-030 — 30분 쿨다운·당일 중단 폐지): 한 바퀴를 다
-    쓰면 처음부터 다시 돌고, 그때부터는 차단 이력 IP 도 다시 쓴다. 끝 = 남은 키워드 없음·중지 요청·프록시 설정 오류.
+    쓰면 처음부터 다시 돈다. 단 이번 실행에 막힌 (주소, IP)는 그 주소의 IP 가 바뀔 때까지 건너뛰고, 주소가 전부 그렇다면
+    새 IP 를 기다린다(2026-10-13 _next_round). 프로필은 주소마다 따로(_rank_profile). 끝 = 남은 키워드 없음·중지 요청·프록시 설정 오류.
     프록시 OFF/회전 플래그 OFF면 기존처럼 1회 open 만 한다.
     **연결 장애는 차단과 구분(2026-10-13)**: IP 확인 실패(outcome "conn")·halt_reason()=="conn"(검색 중 크롬 연결
     오류 화면)이면 차단 목록에 기록하지 않는다. 연결 장애가 _CONN_STREAK_WAIT 번 이어지면 _CONN_WAIT_SEC 쉬고 다음 IP 는
@@ -102,7 +123,7 @@ def drive_rank(offscreen: bool, run_once, log, should_stop=None, halt_reason=Non
         _rank_single_open(offscreen, run_once, log)
         return
 
-    prog = {"tried": set(), "round": 1, "rotations": 0, "conn": 0}
+    prog = {"tried": set(), "round": 1, "rotations": 0, "conn": 0, "pairs": set(), "ran": False}
     _ROT["active"], _ROT["can"] = True, (lambda: True)   # 프록시 풀을 돌려 쓰므로 항상 회전 가능
     try:
         while not should_stop():
@@ -110,28 +131,40 @@ def drive_rank(offscreen: bool, run_once, log, should_stop=None, halt_reason=Non
             if not ok:
                 if status != "exhausted":
                     return   # 설정 오류 — pick_rank_proxy 가 이미 로그·순위 스킵(직접연결 안 함)
-                prog["tried"], prog["round"] = set(), prog["round"] + 1
-                log(f"  [프록시] 풀 한 바퀴 다 씀 → {prog['round']}바퀴째(차단 이력 IP 도 다시 사용)")
+                _next_round(prog, log, should_stop)
                 continue
             egress, outcome, blocked = _run_on_egress(offscreen, px, run_once, log,
                                                       skip_blocked=prog["round"] == 1,
-                                                      force=prog["conn"] >= _CONN_STREAK_WAIT)
+                                                      force=prog["conn"] >= _CONN_STREAK_WAIT,
+                                                      skip_pairs=prog["pairs"])
             prog["tried"].add(px)
             if outcome == "skip":
                 continue   # 차단 이력 IP — 첫 바퀴에선 다른 IP 먼저
             if outcome == "conn" or (blocked and halt_reason() == "conn"):
                 _conn_trouble(prog, log, should_stop)
                 continue
-            prog["conn"] = 0
+            prog["conn"], prog["ran"] = 0, True
             if not blocked or px is None:
                 return
             if egress and halt_reason() == "block":
+                prog["pairs"].add((px, egress))
                 proxy_blocklist.record(egress, "Akamai 검색차단")
                 log(f"  [프록시] ⛔ 차단 감지 — egress {egress} 차단목록 등록")
             prog["rotations"] += 1
             log(f"  [프록시] 🔄 새 IP로 전환({prog['rotations']}번째) — 다음 키워드부터(막힌 키워드는 다음 바퀴)")
     finally:
         _ROT["active"], _ROT["can"] = False, (lambda: False)
+
+
+def _next_round(prog: dict, log, should_stop) -> None:
+    """프록시 주소를 한 바퀴 다 씀 → 다음 바퀴. 이번 바퀴에 검색한 주소가 하나도 없으면(전부 막힌 IP·연결 장애)
+    업체가 IP 를 바꿔 줄 때까지 _FRESH_IP_WAIT_SEC 기다린다 — 막힌 IP 로 헛 검색하지 않음(비용·신분 보호·2026-10-13)."""
+    if prog["round"] > 1 and not prog["ran"]:
+        log(f"  [프록시] ⏳ 주소 {len(prog['tried'])}개가 모두 이번 실행에 막힌 IP — 업체가 새 IP 를 줄 때까지 "
+            f"{_FRESH_IP_WAIT_SEC // 60}분 대기(막힌 IP 로 검색 안 함)")
+        _interruptible_sleep(_FRESH_IP_WAIT_SEC, should_stop)
+    prog["tried"], prog["round"], prog["ran"] = set(), prog["round"] + 1, False
+    log(f"  [프록시] 풀 한 바퀴 다 씀 → {prog['round']}바퀴째(이번 실행에 막힌 IP 는 건너뜀)")
 
 
 _CONN_STREAK_WAIT = 3     # 연결 장애가 이만큼 이어지면 쉬었다가(프록시 업체 쪽 장애) 다음 IP 는 실제 화면으로 판정

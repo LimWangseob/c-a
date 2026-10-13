@@ -33,7 +33,7 @@
 
 ## 키워드·순위
 - [키워드 방법론(AI앵커)·띄어쓰기=별개](keyword-methodology-ai-anchor.md) · [매일 통계·키워드 동결](daily-stats-keyword-freeze.md) · [네이버쇼핑 API 종료](naver-shopping-api-terminated.md) · [Wing 키워드 구독게이팅](wing-keyword-data-subscription-gated.md)
-- [파이프라인 3단계](pipeline-3stage-separation.md) · [핵심=정확 등수 매일](session-handoff-exact-rank-required.md) · [반자동 순위+노출명](semi-auto-rank-and-exposed-name.md) · [안티차단·간격45~75s·바퀴반복D-053](rank-antiblock-circuit-breaker.md)
+- [파이프라인 3단계](pipeline-3stage-separation.md) · [핵심=정확 등수 매일](session-handoff-exact-rank-required.md) · [반자동 순위+노출명](semi-auto-rank-and-exposed-name.md) · [안티차단·간격45~75s·바퀴반복D-053·프로필IP별D-057](rank-antiblock-circuit-breaker.md)
 - [붙여넣기 차단·타이핑만](coupang-blocks-paste-requires-typing.md) · [프라임 후 fetch](coupang-search-prime-then-fetch.md) · [50위 placeholder](rank-blocked-placeholder-50.md) · [지문 정합1·2](fingerprint-consistency.md)
 - [⚠IP 정책 맥락별 반대](proxy-ip-policy-by-context.md) · [프록시 라이브 실측](proxy-live-test-261002.md) · [egress 회전+차단IP](proxy-rotation-design-261002.md) · [프록시 통합 초기](proxy-integration-off-261001.md)
 
