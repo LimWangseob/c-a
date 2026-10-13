@@ -765,6 +765,23 @@ def p24_local_store():
             TD._migrate_names(accts)
             assert (TD.AMOUNTS / "남의이름-zzz_윙.json").exists()
             assert not list(TD.AMOUNTS.glob("*.tmp"))
+            # (e) 검증 자료(스냅샷) — 예전 이름 파일도 지금 이름으로. 둘 다 있으면 수집일 최근 것 하나(같으면 지금 이름)
+            #     2026-10-13 실측: 계정 파일 이름 칸이 바뀐 뒤 예전 이름 검증 자료가 남아 '계좌 입금'에 계정이 두 번 들어감
+            wjson(TD.VERIFY / f"{told}.json", {"수집일": "2026-10-12", "wallet": ["옛"]})
+            wjson(TD.VERIFY / f"{tnew}.json", {"수집일": "2026-10-12", "wallet": ["새"]})
+            TD._migrate_names(accts)
+            assert sorted(p.name for p in TD.VERIFY.glob("*.json")) == [f"{tnew}.json"]
+            assert rjson(TD.VERIFY / f"{tnew}.json")["wallet"] == ["새"]                        # 수집일 같음 = 지금 이름
+            wjson(TD.VERIFY / f"{told}.json", {"수집일": "2026-10-13", "wallet": ["더 최근"]})
+            TD._migrate_names(accts)
+            assert sorted(p.name for p in TD.VERIFY.glob("*.json")) == [f"{tnew}.json"]
+            assert rjson(TD.VERIFY / f"{tnew}.json")["wallet"] == ["더 최근"]                    # 수집일 최근 = 그것
+            (TD.VERIFY / f"{tnew}.json").unlink()
+            wjson(TD.VERIFY / f"{told}.json", {"수집일": "2026-10-11", "wallet": ["옛만"]})
+            wjson(TD.VERIFY / "남의이름-zzz.json", {"수집일": "2026-10-11"})                    # 계정 파일에 없는 계정 = 그대로
+            TD._migrate_names(accts)
+            assert sorted(p.name for p in TD.VERIFY.glob("*.json")) == sorted([f"{tnew}.json", "남의이름-zzz.json"])
+            assert rjson(TD.VERIFY / f"{tnew}.json")["wallet"] == ["옛만"]
         finally:
             os.chdir(old_cwd)
             TD.LOG, TD.load_accounts = old_log, old_load

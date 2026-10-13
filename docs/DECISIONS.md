@@ -568,3 +568,10 @@ un_log_*.log`)로 확인 필요.
 - 위험: 모든 IP 가 계속 막히면 ③이 끝나지 않음(D-030 과 같음 — 다음 날 18:00 시작 정리가 끝냄). 연결 장애 연속이면 5분씩 쉼.
 - 영향 범위: `pipeline_ranks.py`(drive_rank halt_reason·_run_on_egress conn·_conn_trouble·_block_marker·_save_block_evidence·_connection_down·_SemiState·_track_ranks_semi 바퀴·_semi_one_pass·_semi_next_pass·_rank_todo·_unfilled·_semi_on_miss·LAST_RANK·요약), `pipeline_stages.py`(LAST_RANK 비움), `ui/app_qt.py`(끝 문구), `tools/pin_login_ranks.py`·`tools/test_proxy_patch.py`·`tools/simulate_pipeline.py`. **HQ 포팅 필요**.
 - 상태: ACTIVE
+
+### D-054 [SETTLE_VERIFY_RENAME] 정산 계정명 맞춤에 검증 자료 포함 — 예전 이름 검증 자료 = 수집일 최근 것 하나만 (2026-10-13, R12)
+- 결정: `settlement_store.migrate_names` 가 `output/정산/검증자료/{계정명}.json` 의 계정명도 바꿈표에 넣고 지금 이름으로 옮긴다. 검증 자료는 매번 전체 기간을 다시 담는 스냅샷이라 합치지 않고, 두 이름이 다 있으면 **수집일이 최근인 쪽 하나**(같으면 지금 이름 쪽)만 남긴다. 계정 파일에 없는 계정 파일은 그대로.
+- 근거: 운용 PC output (20)(10-13) 실측 — 10-12 19:56 정산 계정 파일 `aehee5505`·`hk66597582` 줄 3열이 비밀번호와 같아 이름 없음 처리 → 받은 파일·금액은 새 이름으로 맞춰졌으나("[계정명 맞춤] … 파일 계정명 3개") 검증 자료는 예전 이름(`손애희-55마켓-…`·`강혁-디케이유니버스-…`)이 남아 정산집계 '계좌 입금'에 두 계정이 두 번(13줄·RG 월렛 입금 +37,290,705원)·'검증'에도 중복. 재현: 핀 P24(e) 실패→통과 · 실자료 사본에 적용 후 재집계 = 계좌 입금 307→294줄·중복 이름 0·RG 월렛 입금 2,835,839,299→2,798,548,594 · 게이트 12종·복잡도 경고 0.
+- 버린 대안: (a) 집계 단계에서 이름 중복을 걸러냄(원인 파일이 남아 다른 소비처도 계속 오염) (b) 금액처럼 키 병합(스냅샷이라 합칠 단위 없음·옛 수집본 섞임 — 실측 예전 이름 쪽이 윙 지급 등 빠진 옛 수집본).
+- 영향 범위: `src/coupang_analytics/settlement_store.py`(migrate_names·_keep_newer_verify), `tools/verify_settlement_runtime_offline.py` P24(e). 운용 PC 는 재배포 후 첫 정산 실행(load_accounts) 때 자동 정리. **HQ 포팅 필요**.
+- 상태: ACTIVE

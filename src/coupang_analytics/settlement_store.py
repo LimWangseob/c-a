@@ -72,13 +72,26 @@ def rename_jobs(jobs, accts, file_accounts=()) -> tuple[dict, dict]:
     return m, mt
 
 
+def _keep_newer_verify(src: Path, dst: Path) -> None:
+    """검증 자료 src(예전 이름) → dst(지금 이름). dst 가 있으면 수집일이 더 최근인 쪽만 남김(같으면 dst)."""
+    if dst.exists():
+        day = lambda p: json.loads(p.read_text(encoding="utf-8")).get("수집일") or ""   # noqa: E731
+        if day(src) <= day(dst):
+            src.unlink()
+            return
+    os.replace(src, dst)
+
+
 def migrate_names(accts, log) -> None:
     """요청 기록(_요청기록.json)·받은 파일·쿠팡 지급 내역 파일의 예전 계정명 → 지금 계정명(멱등).
     금액 기록 파일 이름의 계정명도 바꿈표에 넣는다 — 합치기로 옮겨 온 금액 기록만 예전 이름일 때(파일·요청 기록은
-    이미 새 이름) 바꿈표가 비어 계정이 둘로 갈리던 결함(2026-10-08 재현·수정)."""
+    이미 새 이름) 바꿈표가 비어 계정이 둘로 갈리던 결함(2026-10-08 재현·수정).
+    검증 자료(검증자료/{계정명}.json)도 맞춘다 — 예전 이름 파일이 남아 집계 '계좌 입금'·'검증'에 계정이 두 번 들어가던
+    결함(2026-10-13 운용 PC 실측: aehee5505·hk66597582). 스냅샷이라 합치지 않고 수집일 최근 것 하나만 남김."""
     jobs = SJ.load_jobs(JOBS)
     names = [SF.parse_file_name(p.name)["account"] for d in (FILES, COSTS) for p in d.glob("*.xlsx")]
     names += [p.stem.rpartition("_")[0] for p in AMOUNTS.glob("*.json")]
+    names += [p.stem for p in VERIFY.glob("*.json")]
     m, mt = rename_jobs(jobs, accts, names)
     if m or mt:
         SJ.save_jobs(JOBS, jobs)
@@ -91,6 +104,9 @@ def migrate_names(accts, log) -> None:
         acct, _, ch = p.stem.rpartition("_")
         if acct in mt:
             merge_amount_file(p, p.with_name(f"{mt[acct]}_{ch}.json"))
+    for p in list(VERIFY.glob("*.json")):
+        if p.stem in mt:
+            _keep_newer_verify(p, p.with_name(f"{mt[p.stem]}.json"))
     if m or mt:
         log(f"  [계정명 맞춤] 요청 기록 {len(m)}개·파일 계정명 {len(mt)}개를 지금 계정 파일 이름으로 바꿈")
 
