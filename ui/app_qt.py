@@ -43,6 +43,7 @@ from coupang_analytics.pipeline import (column_dates, backup_sources,  # noqa: E
                                         select_keywords_stage,
                                         track_ranks_stage)
 from coupang_analytics.pipeline_stages import StagePlan, plan_resume_stages, run_stages  # noqa: E402
+from coupang_analytics.pipeline_ranks import LAST_RANK  # noqa: E402
 from coupang_analytics.rank import make_matcher, organic_rank, warmup  # noqa: E402
 import registry_ui  # noqa: E402
 from proxy_panel_qt import ProxyPanelMixin  # noqa: E402
@@ -1684,7 +1685,9 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self.run_bg(task, on_done=self._auto_done, btn=None, pipelinelock=True)
 
     def _auto_done(self, _result=None):
-        self.log("== [무인 자동 실행] 완료 — 종료 ==")
+        left = LAST_RANK.get("unfilled")
+        self.log(f"== [무인 자동 실행] 끝 — ⚠ 순위 빈 칸 {left}개 남음(로그 ❌·[순위요약] 확인) — 종료 =="
+                 if left else "== [무인 자동 실행] 완료 — 종료 ==")
         self._auto_quit()
 
     def _auto_quit(self):
@@ -1888,7 +1891,11 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
 
     def _pipeline_done(self, path):
         self.log("=" * 50)
-        if path:
+        if path and LAST_RANK.get("unfilled"):   # ③ 순위 빈 칸이 남았으면 '완료'라 하지 않음(2026-10-13)
+            self.log(f"[전체실행] ⚠ 끝났지만 순위 빈 칸 {LAST_RANK['unfilled']}개 남음"
+                     f"{'(중지 요청)' if LAST_RANK.get('stopped') else ''} — 로그의 ❌·[순위요약] 확인")
+            self.log(f"[전체실행] 파일: {path}")
+        elif path:
             self.log("[전체실행] ✅ 완료 — 통합 엑셀 생성됨")
             self.log(f"[전체실행] 파일: {path}")
         else:

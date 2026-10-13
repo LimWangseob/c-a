@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from .pipeline import run_full, select_keywords_stage
 from .pipeline_gsheet import push_company_stock, push_ledger_inventory
 from .pipeline_paths import write_run_stage
-from .pipeline_ranks import track_ranks_stage
+from .pipeline_ranks import LAST_RANK, track_ranks_stage
 
 
 @dataclass
@@ -47,6 +47,7 @@ def run_stages(input_list, plan: StagePlan, *, ai_key, naver, date_from: str, da
     rank_date_label: ③이 기록할 날짜 칸(None = 최신 칸). 전체실행은 ①과 같은 칸을 넘긴다(날짜 지정·재개 라벨 일치)."""
     log = on_log
     result = None
+    LAST_RANK.clear()                       # 이번 실행의 ③ 요약만 남게(③ 안 돌면 UI 가 지난 요약을 읽지 않음)
 
     if plan.sales:                          # ① 반자동 판매수집(미완료 계정 즉시 재시도는 run_full 안에서·D-029)
         result = run_full(input_list, ai_key=ai_key, date_from=date_from, date_to=date_to,

@@ -110,10 +110,10 @@ def _fake_keywords(title, naver, ai_key=None, n=None, browser=None, log=None, ex
             TrackKeyword("kw2", 2000, 55.0, comp_idx="높음", exposure_best=3)]
 
 
-def _fake_track_ranks_semi(wb, path, log, should_stop, date_label=None):
+def _fake_track_ranks_semi(wb, path, log, should_stop, date_label=None, on_pass=None):
     """③ 반자동 순위 대체 — 실제 브라우저 타이핑 없이 미기입 키워드에 순위 3 기록.
 
-    _track_ranks_semi(wb, path, log, should_stop, date_label) 시그니처와 동일. 계정별 최신 일자(지정 시 그 칸)에 채운다."""
+    _track_ranks_semi(wb, path, log, should_stop, date_label, on_pass) 시그니처와 동일. 계정별 최신 일자(지정 시 그 칸)에 채운다."""
     for biz in wb.account_sheets():
         date = PR._rank_date(wb, biz, date_label)
         if not date:

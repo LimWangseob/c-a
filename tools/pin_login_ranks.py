@@ -320,11 +320,12 @@ def _rank_wb(path: Path, *, keywords=("kw1", "kw2"), second_optionless=False, vi
 def _install_rank_fakes(wait_results, serp=None):
     """반자동 순위 헬퍼 경계 페이크. wait_results=키워드마다 (page, blocked) 반환할 리스트(순서 소비).
     serp=(parse_serp_rank 반환 result, scanned) — 기본은 3위 발견. 미발견은 ({'제품':(None,None)}, 개수)."""
-    state = {"i": 0}
+    state = {"i": 0, "kws": []}
 
     def fake_wait(browser, kw, should_stop, timeout):
         i = state["i"]
         state["i"] += 1
+        state["kws"].append(kw)
         return wait_results[min(i, len(wait_results) - 1)]
 
     serp = serp if serp is not None else ({"제품": (3, None)}, 3)
@@ -375,39 +376,125 @@ def pin_rank_not_found():
 
 
 def pin_rank_block_then_recover():
-    print("[핀 K] 차단 감지(프록시 없음) → 쉬지 않고 다음 키워드 계속 — 30분 쿨다운 없음(D-030)")
+    print("[핀 K] 차단(프록시 없음) → 다음 키워드 계속 → 한 바퀴 뒤 빈 칸 다시 = 공란 없이 완주(2026-10-13)")
     _SPEC.clear(); _COUNT.clear()
     config.RANK_SEMI_AUTO_MAX_MISS = 1     # 1회 미로딩이면 곧장 차단 판정(빠른 시험)
     d = Path(tempfile.mkdtemp()); path = d / "m.xlsx"
     wb = _rank_wb(path)
     pg = object()
     logs: list[str] = []
-    _install_rank_fakes([(None, True), (pg, False)])   # kw1 차단, kw2 성공
-    P._track_ranks_semi(wb, path, logs.append, lambda: False)
+    passes: list = []
+    state = _install_rank_fakes([(None, True), (pg, False)])   # kw1 차단, 그 뒤는 모두 정상
+    P._track_ranks_semi(wb, path, logs.append, lambda: False, on_pass=lambda: passes.append(1))
     joined = "\n".join(logs)
     dt = wb.latest_date("비즈R")
-    _check(not wb.is_rank_filled("비즈R", "상품R", "kw1", dt), "kw1 차단 → 공란(다음 실행이 다시 잼)")
+    _check(state["kws"] == ["kw1", "kw2", "kw1"], f"kw1 막힘 → kw2 → 다음 바퀴에 kw1 다시: {state['kws']}")
+    _check(wb.is_rank_filled("비즈R", "상품R", "kw1", dt), "kw1 다음 바퀴에 채워짐(공란 없음)")
     _check(wb.is_rank_filled("비즈R", "상품R", "kw2", dt), "kw2 바로 이어서 측정됨")
+    _check("2바퀴째" in joined, "빈 칸 다시 도는 바퀴 로그")
+    _check(passes, "바퀴가 끝날 때 결과 반영(on_pass) 호출")
     _check("쿨다운" not in joined, "30분 쿨다운 없음")
-    _check("[순위요약]" in joined and "차단감지 1회" in joined, "요약에 차단 누적 집계")
+    _check("[순위요약]" in joined and "차단감지 1회" in joined and "빈 칸 0" in joined, "요약에 차단·빈 칸 집계")
     _check("RANK_NAV_DELAY" in joined, "차단 발생 시 간격 상향 검토 안내")
 
 
 def pin_rank_halt():
-    print("[핀 L] 연속 차단이어도 당일 중단 없음 — 남은 키워드 전부 시도(D-030)")
+    print("[핀 L] 계속 차단이어도 한 키워드에 갇히지 않고 키워드를 돌아가며 시도 — 당일 중단 없음(중지 요청까지)")
     _SPEC.clear(); _COUNT.clear()
     config.RANK_SEMI_AUTO_MAX_MISS = 1
     d = Path(tempfile.mkdtemp()); path = d / "m.xlsx"
     wb = _rank_wb(path)
     logs: list[str] = []
-    state = _install_rank_fakes([(None, True), (None, True)])   # 연속 차단
-    P._track_ranks_semi(wb, path, logs.append, lambda: False)
+    state = _install_rank_fakes([(None, True)])   # 계속 차단(실측 10-12 밤 '밀키트' 569회)
+    P._track_ranks_semi(wb, path, logs.append, lambda: state["i"] >= 6)
     joined = "\n".join(logs)
     dt = wb.latest_date("비즈R")
-    _check(state["i"] == 2, f"두 키워드 모두 검색 시도({state['i']}회)")
+    _check(state["kws"][:4] == ["kw1", "kw2", "kw1", "kw2"], f"한 키워드에 갇히지 않고 번갈아 시도: {state['kws']}")
     _check("IP 회복 불가" not in joined and "당일 중단" not in joined, "당일 중단 없음")
-    _check(not wb.is_rank_filled("비즈R", "상품R", "kw1", dt), "kw1 공란")
-    _check(not wb.is_rank_filled("비즈R", "상품R", "kw2", dt), "kw2 공란")
+    _check(not wb.is_rank_filled("비즈R", "상품R", "kw1", dt), "kw1 공란(중지)")
+    _check(PR.LAST_RANK.get("unfilled") == 2, f"끝 요약 빈 칸 수 {PR.LAST_RANK}")
+
+
+def pin_rank_rotate_next_keyword():
+    print("[핀 K2] 프록시 회전 시 막힌 키워드는 뒤로 — 새 IP 는 다음 키워드부터, 막힌 키워드는 다음 바퀴(10-12 밤 '밀키트' 13시간 갇힘 재현)")
+    _SPEC.clear(); _COUNT.clear()
+    config.RANK_SEMI_AUTO_MAX_MISS = 3
+    d = Path(tempfile.mkdtemp()); path = d / "m.xlsx"
+    wb = _rank_wb(path, keywords=("kw1", "kw2", "kw3"))
+    pg = object()
+    _install_rank_fakes([(pg, False)])
+    seen: list = []
+
+    def wait(browser, kw, should_stop, timeout):
+        seen.append(kw)
+        return (None, True) if seen.count("kw1") == 1 and kw == "kw1" else (pg, False)
+    orig = (PR._wait_results_loaded, PR.drive_rank, PR.rotation_can_rotate)
+    egresses: list = []
+
+    def fake_drive(offscreen, run_once, log, should_stop=None, halt_reason=None):
+        n = 0
+        while run_once(_FakeWing(), f"ip{n}") and n < 10:
+            egresses.append(n)
+            n += 1
+    try:
+        PR._wait_results_loaded, PR.drive_rank, PR.rotation_can_rotate = wait, fake_drive, (lambda: True)
+        P._track_ranks_semi(wb, path, lambda m: None, lambda: False)
+    finally:
+        PR._wait_results_loaded, PR.drive_rank, PR.rotation_can_rotate = orig
+    dt = wb.latest_date("비즈R")
+    _check(seen == ["kw1", "kw2", "kw3", "kw1"], f"새 IP 는 kw2 부터·kw1 은 다음 바퀴: {seen}")
+    _check(egresses == [0], f"IP 전환 1번: {egresses}")
+    _check(all(wb.is_rank_filled("비즈R", "상품R", k, dt) for k in ("kw1", "kw2", "kw3")), "세 칸 모두 채워짐")
+
+
+def pin_rank_unmeasurable_ends():
+    print("[핀 K3] 차단·연결 장애 없이 화면만 계속 빈 키워드(검색결과 0개 등) = 한 바퀴 진전 없으면 ❌ 기록하고 ③ 마침(무한 반복 방지)")
+    _SPEC.clear(); _COUNT.clear()
+    config.RANK_SEMI_AUTO_MAX_MISS = 3
+    d = Path(tempfile.mkdtemp()); path = d / "m.xlsx"
+    wb = _rank_wb(path)
+    pg = object()
+    _install_rank_fakes([(pg, False)])
+    orig = PR._wait_results_loaded
+    PR._wait_results_loaded = lambda b, kw, s, t: (pg, False) if kw == "kw1" else (None, False)
+    logs: list[str] = []
+    try:
+        P._track_ranks_semi(wb, path, logs.append, lambda: False)
+    finally:
+        PR._wait_results_loaded = orig
+    joined = "\n".join(logs)
+    _check(PR.LAST_RANK.get("unfilled") == 1, f"측정 불가 1칸만 남고 끝남: {PR.LAST_RANK}")
+    _check("❌" in joined and "kw2" in joined, "측정 불가 키워드 ❌ 기록")
+
+
+def pin_rank_block_evidence():
+    print("[핀 K4] 차단 판정 증거 저장 — 판정 단어·주소·본문 앞부분·화면 캡처, 최근 20건만")
+    _SPEC.clear(); _COUNT.clear()
+    d = Path(tempfile.mkdtemp())
+
+    class _Pg:
+        def inner_text(self, sel):
+            return "Access Denied — 요청하신 페이지의 사용권한이 없습니다"
+
+        def title(self):
+            return "Access Denied"
+
+        def evaluate(self, js):
+            return "https://www.coupang.com/np/search?q=x"
+
+        def screenshot(self, path):
+            Path(path).write_bytes(b"png")
+    orig = PR._EVIDENCE_DIR
+    try:
+        PR._EVIDENCE_DIR = d
+        _check(PR._block_marker(_Pg()) == "사용권한", "판정 단어 = 사용권한")
+        infos = [PR._save_block_evidence(_Pg(), f"키워드{i}", "사용권한") for i in range(25)]
+    finally:
+        PR._EVIDENCE_DIR = orig
+    _check(all(i.get("file") for i in infos), f"증거 파일 이름 반환: {infos[-1]}")
+    txts = sorted(d.glob("*.txt"))
+    _check(len(txts) == 20 and len(list(d.glob("*.png"))) == 20, f"최근 20건만 보관: {len(txts)}")
+    _check("판정 단어: 사용권한" in txts[-1].read_text(encoding="utf-8"), "판정 단어 기록")
 
 
 def pin_rank_no_vid_error():
@@ -580,6 +667,9 @@ def main() -> int:
         pin_rank_not_found()
         pin_rank_block_then_recover()
         pin_rank_halt()
+        pin_rank_rotate_next_keyword()
+        pin_rank_unmeasurable_ends()
+        pin_rank_block_evidence()
         pin_rank_no_vid_error()
         pin_rank_skip_optionless()
         pin_rank_skip_suspended()

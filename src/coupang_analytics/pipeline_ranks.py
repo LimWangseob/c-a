@@ -7,8 +7,10 @@ pipeline.py 가 이 심볼들을 다시 import 해 `pipeline.X` 공개 API(UI·�
 from __future__ import annotations
 
 import random
+import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from . import config
@@ -25,8 +27,8 @@ from .pipeline_paths import _PROFILE, _load_latest_wb, column_label
 
 # ── egress 재회전 드라이버 (2026-10-02 · D-030 2026-10-10) ────────────────
 # drive_rank 가 ①프록시 선택 ②브라우저 열기 ③egress IP 에코+차단이력 선제 skip(첫 바퀴) ④run_once 실행
-# ⑤차단(blocked=True)이면 그 egress 를 차단목록에 기록하고 **새 egress 로 막힌 키워드부터 다시**(횟수 제한 없이
-# 풀을 돌려 씀). 30분 쿨다운·당일 중단은 폐지(D-030). RANK_PROXY_ROTATE_ON_BLOCK=False 거나 프록시 OFF 면
+# ⑤차단(blocked=True)이면 그 egress 를 차단목록에 기록하고 **새 egress 로 다음 키워드부터**(막힌 키워드는 다음 바퀴·
+# 2026-10-13, 횟수 제한 없이 풀을 돌려 씀). 30분 쿨다운·당일 중단은 폐지(D-030). RANK_PROXY_ROTATE_ON_BLOCK=False 거나 프록시 OFF 면
 # 1회 open(차단되면 다음 키워드 계속).
 _ROT = {"active": False, "can": (lambda: False)}
 
@@ -58,14 +60,20 @@ def _rank_single_open(offscreen: bool, run_once, log) -> None:
         run_once(browser, None)
 
 
-def _run_on_egress(offscreen: bool, px, run_once, log, skip_blocked: bool = True):
+def _run_on_egress(offscreen: bool, px, run_once, log, skip_blocked: bool = True, force: bool = False):
     """한 egress 로 브라우저를 열어 실행. 반환 (egress_ip, outcome, blocked).
 
-    outcome="skip" = egress 가 차단이력이라 선제 skip(실행 안 함·skip_blocked=True 일 때만) · "ran" = run_once 실행.
+    outcome="skip" = egress 가 차단이력이라 선제 skip(실행 안 함·skip_blocked=True 일 때만) · "ran" = run_once 실행 ·
+    "conn" = **IP 확인(에코) 경로가 모두 실패 = 프록시 연결 장애**(2026-10-13 — 쿠팡 검색 없이 넘김·차단 기록 안 함).
+    force=True 면 에코 실패여도 실행(에코 서비스 쪽 장애일 수 있어 연속 실패 뒤엔 실제 검색 화면으로 판정).
     """
     with WingBrowser(profile_dir=_PROFILE, offscreen=offscreen, proxy=px,
                      block_images=getattr(config, "RANK_BLOCK_IMAGES", False)) as browser:
         egress = _echo_egress(browser, px, log)
+        if (px and egress is None and not force
+                and getattr(config, "RANK_PROXY_PRECHECK_EGRESS", True)):
+            log("  [프록시] ⚠ 연결 장애 — IP 확인 실패(쿠팡 차단 아님) → 이 IP 로 검색 안 하고 다음 IP")
+            return None, "conn", False
         if skip_blocked and px and egress and proxy_blocklist.is_blocked(egress):
             e = proxy_blocklist.entry(egress) or {}
             log(f"  [프록시] ⚠ egress {egress} = 차단이력({e.get('last', '?')}, "
@@ -76,21 +84,25 @@ def _run_on_egress(offscreen: bool, px, run_once, log, skip_blocked: bool = True
         return egress, "ran", bool(run_once(browser, egress))
 
 
-def drive_rank(offscreen: bool, run_once, log, should_stop=None) -> None:
+def drive_rank(offscreen: bool, run_once, log, should_stop=None, halt_reason=None) -> None:
     """순위 브라우저 수명 + egress 회전/차단목록. run_once(browser, egress_ip) -> blocked(bool).
 
-    blocked=True(=IP 차단으로 중단)면 egress 를 기록하고 **새 egress 로 막힌 키워드부터 다시** 한다(run_once 는 채운
-    키워드를 건너뜀). **회전 횟수 제한 없이 프록시 풀을 돌려 쓴다**(D-030 — 30분 쿨다운·당일 중단 폐지): 한 바퀴를 다
+    blocked=True(=IP 차단으로 중단)면 egress 를 기록하고 **새 egress 로 이어서** 한다(run_once 는 채운 키워드·이번 바퀴에
+    미룬 키워드를 건너뜀 — 막힌 키워드는 다음 바퀴에 다시·2026-10-13). **회전 횟수 제한 없이 프록시 풀을 돌려 쓴다**(D-030 — 30분 쿨다운·당일 중단 폐지): 한 바퀴를 다
     쓰면 처음부터 다시 돌고, 그때부터는 차단 이력 IP 도 다시 쓴다. 끝 = 남은 키워드 없음·중지 요청·프록시 설정 오류.
     프록시 OFF/회전 플래그 OFF면 기존처럼 1회 open 만 한다.
+    **연결 장애는 차단과 구분(2026-10-13)**: IP 확인 실패(outcome "conn")·halt_reason()=="conn"(검색 중 크롬 연결
+    오류 화면)이면 차단 목록에 기록하지 않는다. 연결 장애가 _CONN_STREAK_WAIT 번 이어지면 _CONN_WAIT_SEC 쉬고 다음 IP 는
+    IP 확인 실패여도 실제 검색 화면으로 판정한다(에코 서비스 쪽 장애로 영영 못 도는 것 방지).
     """
     should_stop = should_stop or (lambda: False)
+    halt_reason = halt_reason or (lambda: "block")
     log = log or (lambda m: None)
     if not getattr(config, "RANK_PROXY_ROTATE_ON_BLOCK", True) or not getattr(config, "PROXY_ENABLED", False):
         _rank_single_open(offscreen, run_once, log)
         return
 
-    prog = {"tried": set(), "round": 1, "rotations": 0}
+    prog = {"tried": set(), "round": 1, "rotations": 0, "conn": 0}
     _ROT["active"], _ROT["can"] = True, (lambda: True)   # 프록시 풀을 돌려 쓰므로 항상 회전 가능
     try:
         while not should_stop():
@@ -102,19 +114,39 @@ def drive_rank(offscreen: bool, run_once, log, should_stop=None) -> None:
                 log(f"  [프록시] 풀 한 바퀴 다 씀 → {prog['round']}바퀴째(차단 이력 IP 도 다시 사용)")
                 continue
             egress, outcome, blocked = _run_on_egress(offscreen, px, run_once, log,
-                                                      skip_blocked=prog["round"] == 1)
+                                                      skip_blocked=prog["round"] == 1,
+                                                      force=prog["conn"] >= _CONN_STREAK_WAIT)
             prog["tried"].add(px)
             if outcome == "skip":
                 continue   # 차단 이력 IP — 첫 바퀴에선 다른 IP 먼저
+            if outcome == "conn" or (blocked and halt_reason() == "conn"):
+                _conn_trouble(prog, log, should_stop)
+                continue
+            prog["conn"] = 0
             if not blocked or px is None:
                 return
-            if egress:
+            if egress and halt_reason() == "block":
                 proxy_blocklist.record(egress, "Akamai 검색차단")
                 log(f"  [프록시] ⛔ 차단 감지 — egress {egress} 차단목록 등록")
             prog["rotations"] += 1
-            log(f"  [프록시] 🔄 새 IP로 전환({prog['rotations']}번째) — 막힌 키워드부터 다시")
+            log(f"  [프록시] 🔄 새 IP로 전환({prog['rotations']}번째) — 다음 키워드부터(막힌 키워드는 다음 바퀴)")
     finally:
         _ROT["active"], _ROT["can"] = False, (lambda: False)
+
+
+_CONN_STREAK_WAIT = 3     # 연결 장애가 이만큼 이어지면 쉬었다가(프록시 업체 쪽 장애) 다음 IP 는 실제 화면으로 판정
+_CONN_WAIT_SEC = 300
+
+
+def _conn_trouble(prog: dict, log, should_stop) -> None:
+    """프록시 연결 장애 1건 — 차단 목록엔 안 남김. 연속 _CONN_STREAK_WAIT 번이면 _CONN_WAIT_SEC 쉼(중지 즉시 반응)."""
+    prog["conn"] += 1
+    if prog["conn"] < _CONN_STREAK_WAIT:
+        log(f"  [프록시] 🔌 연결 장애 {prog['conn']}회 연속 — 차단 아님(차단 목록에 안 남김) → 다음 IP")
+        return
+    log(f"  [프록시] 🔌 연결 장애 {prog['conn']}회 연속 — 프록시 업체 쪽 장애 추정 → {_CONN_WAIT_SEC // 60}분 쉬고 "
+        "다음 IP 는 실제 검색 화면으로 판정")
+    _interruptible_sleep(_CONN_WAIT_SEC, should_stop)
 
 
 def _rank_matcher(vids):
@@ -162,6 +194,7 @@ def track_ranks_stage(out_dir: str = "output", on_log=None,
     매칭 시 블록 이름을 검색결과의 **노출명**으로 현행화한다. should_stop() 이 참이면 중도 중단.
     """
     log = on_log or (lambda m: None)
+    LAST_RANK.clear()
     config.apply_rank_nav_delay_override(log)   # 설정 탭 순위 간격(config.json)으로 덮어씀 — 없으면 기본 유지
     config.apply_proxy_override(log)            # 노출순위 프록시 설정(config.json proxy/*) 런타임 적용 — 미설정=기본 ON
     config.apply_rank_images_override(log)      # 노출순위 이미지 로드 여부(config.json rank/block_images) — 미설정=기본(이미지 유지)
@@ -171,7 +204,12 @@ def track_ranks_stage(out_dir: str = "output", on_log=None,
         log("== 순위 조회: 결과 워크북이 없습니다 — 먼저 ①②를 실행하세요 ==")
         return None
     inject_company_stock(wb, stock_url, log)   # 회사보유재고 → 워크북(계정목록 5열) · apply_style 전
-    result = _track_ranks_semi(wb, path, log, should_stop or (lambda: False), date_label)
+    def _on_pass():   # 진전 있는 바퀴 끝마다 결과 반영 — 밤새 빈 칸을 다시 돌아도 시트가 따라옴(2026-10-13)
+        wb.apply_style()
+        wb.save(path)
+        push_gsheet(wb, gsheet_output_url, log)
+
+    result = _track_ranks_semi(wb, path, log, should_stop or (lambda: False), date_label, on_pass=_on_pass)
     push_gsheet(wb, gsheet_output_url, log)   # ③ 반자동 순위 채운 뒤 결과 구글시트에도 반영
     _log_quality_summary(wb, log)   # 데이터 품질 자가점검(완료가 가리는 불완전 가시화·③ 최종 시점)
     return result
@@ -191,16 +229,53 @@ def _search_q(url: str) -> str | None:
 _BLOCK_PAGE_MARKERS = ("사용권한", "제한된", "Access Denied", "Denied", "죄송")
 
 
-def _looks_blocked(pg) -> bool:
-    """현재 페이지가 쿠팡 차단/권한없음 안내 페이지로 보이는가(사람이 그 창에서 봤을 화면)."""
+def _block_marker(pg) -> str:
+    """현재 페이지가 쿠팡 차단/권한없음 안내 페이지면 **맞은 판정 단어**, 아니면 ''(사람이 그 창에서 봤을 화면)."""
     try:
         txt = pg.inner_text("body")[:400]
     except Exception:
         try:
             txt = pg.title() or ""
         except Exception:
-            return False
-    return any(m in txt for m in _BLOCK_PAGE_MARKERS)
+            return ""
+    return next((m for m in _BLOCK_PAGE_MARKERS if m in txt), "")
+
+
+def _looks_blocked(pg) -> bool:
+    return bool(_block_marker(pg))
+
+
+# 차단 판정 증거(2026-10-13): 판정 단어만으론 원인 확정이 안 됐다(10-12 밤 '밀키트' 569회 — 통제 실험이 따로 필요했음).
+_EVIDENCE_DIR = Path("output") / "_순위차단"
+_EVIDENCE_KEEP = 20
+
+
+def _save_block_evidence(pg, kw: str, marker: str) -> dict:
+    """차단 판정 순간의 화면 증거(판정 단어·주소·제목·본문 앞부분 txt + 캡처 png)를 최근 _EVIDENCE_KEEP 건만 남긴다.
+    반환 {marker, file} — 저장 실패는 {marker, error}(호출부가 로그에 그대로 남김·검색 흐름은 계속)."""
+    info = {"marker": marker}
+    try:
+        _EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+        stem = f"{datetime.now():%m%d_%H%M%S_%f}_{re.sub(r'[^0-9A-Za-z가-힣]', '_', kw)[:20]}"
+        body = pg.inner_text("body")[:1500]
+        (_EVIDENCE_DIR / f"{stem}.txt").write_text(
+            f"키워드: {kw}\n판정 단어: {marker}\n주소: {_live_url(pg)}\n제목: {pg.title()}\n\n{body}", encoding="utf-8")
+        pg.screenshot(path=str(_EVIDENCE_DIR / f"{stem}.png"))
+        info["file"] = stem
+        for old in sorted(_EVIDENCE_DIR.glob("*.txt"))[:-_EVIDENCE_KEEP]:
+            old.unlink()
+            old.with_suffix(".png").unlink(missing_ok=True)
+    except Exception as exc:
+        info["error"] = f"{exc.__class__.__name__}: {str(exc)[:80]}"
+    return info
+
+
+def _connection_down(browser) -> bool:
+    """창이 크롬 연결 오류 페이지(chrome-error://)면 True — 프록시 경로 장애(쿠팡 차단 아님·2026-10-13 구분)."""
+    try:
+        return any(_live_url(pg).startswith("chrome-error://") for pg in _all_pages(browser))
+    except Exception:
+        return False   # 창 상태를 못 읽음 = 판정 불가 → 일반 미로딩으로 처리(연결 장애로 단정 안 함)
 
 
 def _live_url(pg) -> str:
@@ -316,8 +391,9 @@ def _wait_results_loaded(browser, kw: str, should_stop, timeout: float):
                 items = []
             if items:
                 return pg, False
-            if _looks_blocked(pg):
-                return None, True     # 확정 차단 페이지 → 데드라인(40s) 안 기다리고 즉시 반환(빠른 반응)
+            marker = _block_marker(pg)
+            if marker:                # 확정 차단 페이지 → 증거 남기고 데드라인(40s) 안 기다리고 즉시 반환(빠른 반응)
+                return None, _save_block_evidence(pg, kw, marker)
         time.sleep(1.0)
     return None, blocked
 
@@ -387,48 +463,129 @@ class _SemiState:
     searched: int = 0           # 실제 측정(순위 기록)된 검색 건수
     blocked_total: int = 0      # 차단 판정 총 횟수(차단 페이지 또는 연속 미로딩)
     rotations: int = 0          # 차단으로 새 IP 로 바꾼 횟수
+    conn_fail: int = 0          # 프록시 연결 장애(chrome-error 페이지) 횟수 — 차단과 구분(2026-10-13)
+    # ── 바퀴(pass) 단위 완주(2026-10-13): 막힌 키워드는 이번 바퀴에서 뒤로 미루고 다음 바퀴에 다시 ──
+    deferred: set = field(default_factory=set)   # 이번 바퀴에 미룬 (사업자, 상품, 키워드)
+    novid: set = field(default_factory=set)      # VID 없어 ❌ 기록한 (사업자, 상품) — 바퀴마다 중복 기록 방지
+    pass_no: int = 1
+    pass_mark: int = 0          # 이번 바퀴 시작 때의 searched(진전 판정)
+    pass_trouble: bool = False  # 이번 바퀴에 차단/연결 장애가 있었나(없는데 진전도 없으면 측정 불가로 마침)
+    halt_reason: str = ""       # 'block' | 'conn' | 'miss' — drive_rank 가 차단 IP 기록 여부 판단(conn 은 기록 안 함)
+    unfilled: list = field(default_factory=list)   # 끝날 때 남은 빈 칸 (사업자, 상품, 키워드)
 
 
-def _track_ranks_semi(wb, path, log, should_stop, date_label: str | None = None) -> Path:
+# 끝난 ③ 순위의 요약(UI 완료 문구·도구가 읽음 — 빈 칸이 남으면 '완료' 대신 ⚠·2026-10-13). run_stages 가 시작 때 비움.
+LAST_RANK: dict = {}
+
+
+def _track_ranks_semi(wb, path, log, should_stop, date_label: str | None = None, on_pass=None) -> Path:
     """반자동 순위조회 — 보이는 창에서 앱이 키워드를 사람처럼 타이핑+Enter, 검색결과 화면만 읽어 순위 산출·기록.
 
     offscreen 네비게이션·직접 fetch 없음(차단 회피·DESIGN §5.2). 상품마다 저장 → 중단해도 이어서.
+    **바퀴 단위 완주(2026-10-13)**: 막힌 키워드는 이번 바퀴에서 뒤로 미루고 다음 키워드로 간다(한 키워드에 갇히지
+    않음). 한 바퀴가 끝나면 남은 빈 칸만 다시 돈다 — 빈 칸이 0 이 되거나 중지 요청까지. 차단·연결 장애 없이 한 바퀴
+    진전이 없으면(검색결과가 안 나오는 키워드) ❌ 로 남기고 마친다. on_pass() = 진전 있는 바퀴 끝마다 결과 반영.
     """
     st = _SemiState()
+    LAST_RANK.clear()
     _semi_start_log(log)
 
     def _run_semi(browser, egress) -> bool:
-        st.halted = False      # 새 egress → 다시 시작(누적 카운터는 유지)
-        st.miss_streak = 0
+        st.halted, st.halt_reason, st.miss_streak = False, "", 0   # 새 egress → 이어서(누적 카운터·미룬 키워드 유지)
         _semi_browser_prep(browser)
-        for biz in wb.account_sheets():
+        while not should_stop():
+            _semi_one_pass(st, browser, wb, path, date_label, should_stop, log)
             if should_stop() or st.halted:
                 break
-            date = _rank_date(wb, biz, date_label)
-            if not date:
-                continue
-            for pname in wb.products_of(biz):
-                if should_stop() or st.halted:
-                    break
-                _semi_track_product(st, browser, wb, biz, pname, date, path, should_stop, log)
-        return st.halted and not should_stop()   # 차단 중단 → drive_rank 가 새 egress 로 재개
+            if not _semi_next_pass(st, wb, date_label, on_pass, log):
+                break
+        return st.halted and not should_stop()   # 차단 중단 → drive_rank 가 새 egress 로 이어서
 
-    drive_rank(offscreen=False, run_once=_run_semi, log=log, should_stop=should_stop)
+    drive_rank(offscreen=False, run_once=_run_semi, log=log, should_stop=should_stop,
+               halt_reason=lambda: st.halt_reason)
     wb.apply_style()
     wb.save(path)
+    st.unfilled = _unfilled(wb, date_label)
     if st.novid_products:
         log(f"  ❌ [순위] VID 없는 상품 {st.novid_products}개 — 매칭 실패(①판매수집에서 VID 를 못 찾음) 확인 필요·순위 공란")
-    log("== 반자동 노출순위 종료 — 진행분 저장됨(빈 칸은 다음 실행이 이어서 채움) ==")
+    log("== 반자동 노출순위 종료 — 진행분 저장됨" + (f" · ⚠ 빈 칸 {len(st.unfilled)}개 남음 ==" if st.unfilled else " ==="))
+    LAST_RANK.update(searched=st.searched, blocked=st.blocked_total, conn=st.conn_fail,
+                     unfilled=len(st.unfilled), novid=st.novid_products, stopped=bool(should_stop()))
     _semi_summary_log(st, log)
     return path
 
 
+def _semi_one_pass(st: _SemiState, browser, wb, path, date_label, should_stop, log) -> None:
+    """한 바퀴 — 모든 사업자·상품의 빈 칸(이번 바퀴에 미룬 것 제외)을 차례로 검색."""
+    for biz in wb.account_sheets():
+        if should_stop() or st.halted:
+            return
+        date = _rank_date(wb, biz, date_label)
+        if not date:
+            continue
+        for pname in wb.products_of(biz):
+            if should_stop() or st.halted:
+                return
+            _semi_track_product(st, browser, wb, biz, pname, date, path, should_stop, log)
+
+
+def _semi_next_pass(st: _SemiState, wb, date_label, on_pass, log) -> bool:
+    """바퀴 끝 — 남은 빈 칸이 있으면 다음 바퀴 준비(True). 빈 칸 0 또는 '진전·차단·연결 장애 모두 없음'이면 False."""
+    left = _unfilled(wb, date_label)
+    progressed = st.searched > st.pass_mark
+    if progressed and on_pass:
+        on_pass()                          # 진전 있는 바퀴마다 결과 반영(밤새 돌아도 시트가 따라옴)
+    if not left:
+        return False
+    if not progressed and not st.pass_trouble:
+        for biz, pname, kw in left:        # 차단도 연결 장애도 아닌데 화면이 계속 안 나옴 = 측정 불가 → 무한 반복 대신 마침
+            log(f"  ❌ [순위] {biz} · {pname} 「{kw}」 — 검색결과가 두 바퀴 연속 안 나옴(차단·연결 장애 아님) → 공란, 확인 필요")
+        return False
+    st.pass_no += 1
+    st.pass_mark, st.pass_trouble = st.searched, False
+    st.deferred.clear()
+    log(f"== [순위] {st.pass_no}바퀴째 — 남은 빈 칸 {len(left)}개 다시(막혔던 키워드) ==")
+    return True
+
+
+def _rank_todo(wb, biz, pname, date):
+    """순위를 채울 대상이면 (vids, 빈 키워드 목록), 아니면 None.
+    생략: 수집주기 밖·판매중지(rank_suppressed)·키워드 없음(2차 옵션)·다 채움. vids = sibling_vids(전 옵션·아이템위너)."""
+    if wb.has_marketing() and not wb.product_due(biz, pname, date)[0]:
+        return None                        # 상품 수집 주기(마케팅 상품만 매일) — 오늘 대상 아니면 순위도 생략
+    if wb.rank_suppressed(biz, pname):     # 판매중지·임시저장·승인반려·대장취소선 → 순위 제외(소유자 2026-09-22)
+        return None
+    keywords = wb.product_keywords(biz, pname)
+    if not keywords:                       # 2차 옵션 블록(키워드 없음)은 순위 대상 아님
+        return None
+    todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
+    if not todo:
+        return None
+    return wb.sibling_vids(biz, pname), todo
+
+
+def _unfilled(wb, date_label) -> list:
+    """아직 빈 순위 칸 (사업자, 상품, 키워드) — VID 없는 상품(❌ 따로 집계)은 뺀다."""
+    out = []
+    for biz in wb.account_sheets():
+        date = _rank_date(wb, biz, date_label)
+        if not date:
+            continue
+        for pname in wb.products_of(biz):
+            t = _rank_todo(wb, biz, pname, date)
+            if t and t[0]:
+                out += [(biz, pname, kw) for kw in t[1]]
+    return out
+
+
 def _semi_summary_log(st: _SemiState, log) -> None:
-    """순위 단계 종료 요약 — 측정·차단·IP 전환·VID 없음 누적 + 검색간격. 차단이 있으면 간격 상향 검토를 안내."""
-    log(f"== [순위요약] 측정 {st.searched}건 · 차단감지 {st.blocked_total}회 · IP 전환 {st.rotations}회 "
-        f"· VID 없음 {st.novid_products} · 검색간격 {config.RANK_NAV_DELAY_MIN_SEC}~{config.RANK_NAV_DELAY_MAX_SEC}s ==")
+    """순위 단계 종료 요약 — 측정·차단·연결 장애·IP 전환·빈 칸·VID 없음 누적 + 검색간격. 차단이 있으면 간격 상향 검토를 안내."""
+    log(f"== [순위요약] 측정 {st.searched}건 · 빈 칸 {len(st.unfilled)} · 차단감지 {st.blocked_total}회 · "
+        f"연결 장애 {st.conn_fail}회 · IP 전환 {st.rotations}회 · {st.pass_no}바퀴 · VID 없음 {st.novid_products} · "
+        f"검색간격 {config.RANK_NAV_DELAY_MIN_SEC}~{config.RANK_NAV_DELAY_MAX_SEC}s ==")
     if st.blocked_total:
-        log("== [순위요약] ⚠ 차단 발생 — 검색간격(설정 탭 '순위 간격' · config RANK_NAV_DELAY) 상향 검토 ==")
+        log("== [순위요약] ⚠ 차단 발생 — 검색간격(설정 탭 '순위 간격' · config RANK_NAV_DELAY) 상향 검토 · "
+            f"증거 화면 = {_EVIDENCE_DIR} ==")
     else:
         log("== [순위요약] 차단 0 — 현재 검색간격 유지 ==")
 
@@ -436,7 +593,7 @@ def _semi_summary_log(st: _SemiState, log) -> None:
 def _semi_start_log(log) -> None:
     log("== 반자동(자동검색) 노출순위 시작 — 앱이 키워드 자동입력+Enter까지 수행(손 안 대도 됨). "
         f"키워드 간 {config.RANK_NAV_DELAY_MIN_SEC}~{config.RANK_NAV_DELAY_MAX_SEC}s 간격, "
-        f"차단되면 프록시 새 IP 로 그 키워드부터 다시(프록시 없으면 다음 키워드 계속) ==")
+        "막힌 키워드는 뒤로 미루고 다음 키워드 계속(프록시면 새 IP), 한 바퀴 끝나면 빈 칸만 다시 — 다 채울 때까지 ==")
 
 
 def _semi_browser_prep(browser) -> None:
@@ -460,28 +617,26 @@ def _semi_browser_prep(browser) -> None:
 def _semi_prep_product(st: _SemiState, wb, biz, pname, date, log):
     """반자동 순위 추적 전 가드/준비 — 대상 아니면 None, 대상이면 (matcher, todo).
 
-    생략: 수집주기 밖·판매중지(rank_suppressed)·키워드 없음(2차 옵션)·미기입 todo 없음·**VID 없음(❌오류·D-030)**.
-    matcher = sibling_vids(전 옵션 vid 합집합·아이템위너 놓침 방지)."""
-    if wb.has_marketing() and not wb.product_due(biz, pname, date)[0]:
-        return None                        # 상품 수집 주기(마케팅 상품만 매일) — 오늘 대상 아니면 순위도 생략
-    if wb.rank_suppressed(biz, pname):     # 판매중지·임시저장·승인반려·대장취소선 → 순위 제외(소유자 2026-09-22)
+    생략: _rank_todo 생략분·**이번 바퀴에 미룬 키워드**·**VID 없음(❌오류·D-030 — 바퀴마다 중복 기록 안 함)**."""
+    t = _rank_todo(wb, biz, pname, date)
+    if t is None:
         return None
-    vids = wb.sibling_vids(biz, pname)     # 리스팅 전 옵션 vid 합집합(아이템위너 놓침 방지)
-    keywords = wb.product_keywords(biz, pname)
-    if not keywords:                       # 2차 옵션 블록(키워드 없음)은 순위 대상 아님
-        return None
-    todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
+    vids, todo = t
+    todo = [kw for kw in todo if (biz, pname, kw) not in st.deferred]
     if not todo:
         return None
     if not vids:   # 쿠팡 상품은 VID 가 반드시 있다 → 없음 = ①매칭 실패 오류(상품명으로 찾지 않음·D-030)
-        st.novid_products += 1
-        log(f"  ❌ [순위] {biz} · {pname} — VID 없음(매칭 실패 오류) → 순위 검색 안 함")
+        if (biz, pname) not in st.novid:
+            st.novid.add((biz, pname))
+            st.novid_products += 1
+            log(f"  ❌ [순위] {biz} · {pname} — VID 없음(매칭 실패 오류) → 순위 검색 안 함")
         return None
     return _rank_matcher(vids), todo
 
 
 def _semi_track_product(st: _SemiState, browser, wb, biz, pname, date, path, should_stop, log) -> None:
-    """한 상품의 미기입 키워드를 순회하며 반자동 검색·순위 기록(상태기계는 st 로 공유)."""
+    """한 상품의 미기입 키워드를 순회하며 반자동 검색·순위 기록(상태기계는 st 로 공유).
+    못 잡은 키워드는 이번 바퀴에서 뒤로 미룬다(st.deferred) — 다음 키워드로 가고 다음 바퀴에 다시."""
     prep = _semi_prep_product(st, wb, biz, pname, date, log)
     if prep is None:
         return
@@ -498,12 +653,13 @@ def _semi_track_product(st: _SemiState, browser, wb, biz, pname, date, path, sho
             if should_stop() or st.halted:
                 break
         browser.to_front()   # 키워드마다 창을 앞으로(다른 창에 가려 못 찾는 것 방지)
-        log(f"  🔎 [{biz}] {pname}  ({idx}/{len(todo)})")
+        log(f"  🔎 [{biz}] {pname}  ({idx}/{len(todo)}){f' · {st.pass_no}바퀴째' if st.pass_no > 1 else ''}")
         pg, blocked, aborted = _semi_search_one(st, browser, kw, should_stop, log)
         if aborted:          # 검색 직전 pause 중 중지/halt → 키워드 루프 종료
             break
         if pg is None:
-            _semi_on_miss(st, kw, blocked, should_stop, log)
+            st.deferred.add((biz, pname, kw))
+            _semi_on_miss(st, kw, blocked, _connection_down(browser), log)
             continue
         st.miss_streak = 0   # 성공 → 연속 실패 리셋
         st.searched += 1     # 종료 요약용 누적(리셋 안 함)
@@ -516,7 +672,8 @@ def _semi_track_product(st: _SemiState, browser, wb, biz, pname, date, path, sho
 def _semi_search_one(st: _SemiState, browser, kw, should_stop, log):
     """키워드 1건 검색 — 자동제출(사람처럼 타이핑 → 짧은 멈춤 → Enter → 결과 대기).
 
-    반환: (pg, blocked, aborted). aborted=True 면 pause 중 중지/halt(호출부가 키워드 루프 종료)."""
+    반환: (pg, blocked, aborted). blocked = 차단 증거 dict(판정 단어·증거 파일) 또는 False.
+    aborted=True 면 pause 중 중지/halt(호출부가 키워드 루프 종료)."""
     filled = _prefill_search(browser, kw)   # 사람처럼 한 글자씩 타이핑(붙여넣기 아님)
     # 타이핑이 이미 사람 리듬(글자별 미세 랜덤)을 재현 → 다 치고 **짧게 멈춘 뒤** 검색(사람 패턴).
     pause = random.uniform(0.5, 1.4)
@@ -531,27 +688,37 @@ def _semi_search_one(st: _SemiState, browser, kw, should_stop, log):
     return pg, blocked, False
 
 
-def _semi_on_miss(st: _SemiState, kw, blocked: bool, should_stop, log) -> None:
-    """검색 결과 미감지(pg=None) 처리 — 차단 판정 시 프록시 새 IP 로 전환(없으면 다음 키워드 계속).
-    30분 쿨다운·당일 중단 없음(D-030)."""
+def _semi_on_miss(st: _SemiState, kw, blocked, conn: bool, log) -> None:
+    """검색 결과 미감지(pg=None) 처리 — 키워드는 호출부가 이미 뒤로 미룸. 원인을 셋으로 나눠 기록한다(2026-10-13):
+    연결 장애(크롬 연결 오류 화면=프록시 경로·쿠팡 차단 아님) · 차단(판정 단어+증거 화면) · 미로딩(연속 N회면 IP 의심).
+    연결 장애·차단은 즉시, 미로딩은 연속 N회면 프록시 새 IP 로 전환(없으면 다음 키워드 계속). 쿨다운·당일 중단 없음(D-030)."""
     st.miss_streak += 1
-    if blocked:   # 확정 차단 페이지(사용권한 없음)=IP 막힘 → 3회 안 기다리고 즉시 판정
-        st.blocked_total += 1     # 종료 요약용 누적
+    reason = "miss"
+    if conn:
+        st.conn_fail += 1
+        st.pass_trouble, reason = True, "conn"
         st.miss_streak = config.RANK_SEMI_AUTO_MAX_MISS
-        log(f"  [반자동] 「{kw}」 쿠팡 접근차단(사용권한 없음) 감지 — **이 IP가 막혔습니다**. "
-            "휴대폰 핫스팟 등 **새 IP**에서 재실행하면 남은 것부터 이어서 조회됩니다")
+        log(f"  [반자동] 「{kw}」 연결 장애(크롬 연결 오류 화면 — 프록시 경로 끊김·쿠팡 차단 아님) → 뒤로 미룸")
+    elif blocked:   # 확정 차단 페이지(사용권한 없음)=IP 막힘 → 3회 안 기다리고 즉시 판정
+        st.blocked_total += 1     # 종료 요약용 누적
+        st.pass_trouble, reason = True, "block"
+        st.miss_streak = config.RANK_SEMI_AUTO_MAX_MISS
+        ev = blocked if isinstance(blocked, dict) else {}
+        log(f"  [반자동] 「{kw}」 쿠팡 접근차단 감지(판정 단어 '{ev.get('marker', '?')}' · 증거 "
+            f"{ev.get('file') or ev.get('error', '없음')}) → 뒤로 미루고 다음 키워드")
     else:
-        log(f"  [반자동] 「{kw}」 결과 미로딩(차단 추정) — 공란. "
+        log(f"  [반자동] 「{kw}」 결과 미로딩 → 뒤로 미룸(다음 바퀴 다시). "
             f"연속 {st.miss_streak}/{config.RANK_SEMI_AUTO_MAX_MISS}")
     if st.miss_streak < config.RANK_SEMI_AUTO_MAX_MISS:
         return
     st.miss_streak = 0
     if rotation_can_rotate():
         st.rotations += 1
-        st.halted = True         # drive_rank 가 차단 egress 기록 후 새 IP 로 이 키워드부터 다시
-        log("  ⟳ 차단 — 프록시 새 IP 로 전환해 이 키워드부터 다시")
+        st.halted, st.halt_reason = True, reason   # drive_rank 가 (차단이면) egress 기록 후 새 IP 로 다음 키워드부터
+        log("  ⟳ 프록시 새 IP 로 전환 — 다음 키워드부터(막힌 키워드는 다음 바퀴에 다시)")
         return
-    log("  ⚠ 차단 — 바꿀 프록시 IP 없음 → 쉬지 않고 다음 키워드 계속(막힌 칸은 공란·다음 실행이 채움)")
+    log("  ⚠ 바꿀 프록시 IP 없음 → 쉬지 않고 다음 키워드 계속(막힌 키워드는 다음 바퀴에 다시)")
+
 
 def _semi_record(wb, pg, matcher, biz, pname, kw, date, path, idx, total, log) -> str:
     """검색결과 페이지에서 순위를 파싱해 워크북에 기록·저장(상품마다 저장 → 중단해도 이어서).

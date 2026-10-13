@@ -403,7 +403,7 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: (a) 쿨다운 유지(소유자 지시와 다름) (b) 프록시 없을 때 무한 재시도(같은 IP 로 같은 키워드 반복 = 차단만 연장) (c) VID 없으면 상품명 폴백 유지(다른 상품을 내 상품으로 오인 가능·소유자 판단 '소스 오류').
 - 위험(소유자 감수): 모든 egress 가 막혀 있으면 ③이 끝나지 않고 계속 돈다(다음 날 18:00 시작 정리가 끝냄). 차단 IP 재사용으로 그 IP 평판이 더 나빠질 수 있다.
 - 영향 범위: `pipeline_ranks.py`(drive_rank·_run_on_egress(skip_blocked)·_rank_matcher·_SemiState·_semi_prep_product·_semi_on_miss·요약), `config.py`, `tools/pin_login_ranks.py`(J·K·L·R), `tools/test_proxy_patch.py`. 문서 CLAUDE.md·DESIGN.
-- 상태: ACTIVE
+- 상태: ACTIVE (부분 SUPERSEDED by D-053 — '새 egress 로 막힌 키워드부터 다시' → 다음 키워드부터·막힌 키워드는 다음 바퀴)
 
 ### D-031 [STATS_AS_IS_SETTLE_RETRY_PUBLIC_PROXY] 판매지표 조회값 그대로·정산 연속 실패=다음 바퀴·앱 사용 중 대기·공개 검색 전부 프록시 (2026-10-10, R10)
 - 결정: (1) 판매량·방문자·노출량은 **합산하지 않고 조회값 그대로** — 블록 VID 중 판매분석에 잡힌 첫 VID 의 값(`_fill_product_metrics`; 지금은 블록당 VID 1개라 대부분 그 값). (2) 정산 자동 수집에서 연속 2계정 실패/차단이면 **종료하지 않고 이번 바퀴만 멈춘 뒤 잠시 뒤 다음 바퀴**(`settlement_watch.plan_after_pass` stopped→'later'·회차 끝 17:55 까지) — **프록시는 쓰지 않음**(소유자 선택 '정책 유지' — 🔒 로그인·판매수집 프록시 금지, 2차인증 위치 기반). (3) 앱이 그 계정 Chrome 을 쓰는 중이면 **건너뛰지 않고 끝날 때까지 기다렸다가 이어서**(`_profile_busy(until=회차 끝)`·직접 실행은 기존 60초). (4) 비로그인 쿠팡 공개 검색은 **전부** 노출순위 프록시 적용 — ② 쿠팡 자동완성(`select_keywords_stage`)·키워드 추천 탭·순위 조회 탭(`proxy_pool.public_search_proxy` = config.json 적용 + ③과 같은 선택). 프록시 오류면 직접연결로 우회하지 않고 ②는 자동완성 후보만 건너뜀·탭은 오류 안내.
@@ -559,4 +559,12 @@ un_log_*.log`)로 확인 필요.
 - 근거: 소유자 선택(2026-10-12 정산 수정 1·2·3 전부). 실측 운용 PC 10-12 01:38~05:56 정산: 노바네스트 `SiteChangedError: 로켓그로스 모르는 정산주기: 'MONTHLY' (A01371646-2026-07-01-2026-07-31)` → 계정 실패(정상 18·대기 4) · 로그인 실패 10(사용 안 함 8계정·비번 바뀐 2계정)인데 '✅ 모든 정산 파일 다운로드 완료'·상태 '완료 · 이미 모두 받음'. 실제 처리기록 747줄 재생 = 실패로 끝난 계정 11(로그인 10·계정 1) 정확히 산출. 계정 파일 '#' 미지원 = '#id' 로그인 시도(STATE R11). 재현 verify_settlement_runtime P29 실패→통과·P12·P14·P27 유지.
 - 버린 대안: (a) 월정산 줄 오류 유지(나머지 정산 파일까지 막힘) (b) 실패 계정 있으면 '미완료' 종료(받을 것은 다 받았는데 다음 회차까지 재시도만 반복·로그인 실패 반복은 잠금 위험).
 - 영향 범위: `settlement_wing_api.py`·`settlement_accounts.py`·`settlement_runlog.py`·`settlement_watch.py`·`tools/settlement_download.py`·`ui/settlement_status_panel_qt.py`·`tools/verify_settlement_runtime_offline.py`. **HQ 포팅 필요**.
+- 상태: ACTIVE
+
+### D-053 [RANK_PASSES_CONN_EVIDENCE] ③ 순위 — 막힌 키워드는 뒤로 미루고 바퀴 반복으로 빈 칸 0 까지 · 프록시 연결 장애 ≠ 차단 · 차단 증거 저장 · 빈 칸 남으면 '완료' 아님 (2026-10-13, R12)
+- 결정: (1) 차단·미로딩된 키워드는 **이번 바퀴에서 뒤로 미루고 다음 키워드로**(프록시면 새 IP 도 다음 키워드부터). 한 바퀴가 끝나면 **남은 빈 칸만 다시 도는 바퀴**를 빈 칸 0 또는 중지 요청까지 반복(쿨다운·당일 중단 없음 = D-030 유지). 진전 있는 바퀴 끝마다 결과 저장+구글시트 반영(`track_ranks_stage` on_pass). 차단도 연결 장애도 없는데 한 바퀴 진전이 없으면(검색결과가 안 나오는 키워드) 남은 칸을 ❌ 로 기록하고 마침(무한 반복 방지). (2) **프록시 연결 장애는 차단과 구분**: IP 확인(에코 2곳) 모두 실패 = 그 IP 로 검색하지 않고 다음 IP·차단 목록에 안 남김, 검색 중 크롬 연결 오류 화면(chrome-error://)도 '연결 장애'(차단 집계·차단 목록 제외). 연속 3번이면 5분 쉬고 다음 IP 는 확인 실패여도 실제 검색 화면으로 판정(에코 서비스 장애로 영영 못 도는 것 방지). 연속 미로딩 회전은 IP 를 바꾸되 차단 목록엔 안 남김(증거 없음). (3) 차단 판정마다 **증거**(판정 단어·주소·제목·본문 앞 1500자 txt + 화면 png)를 `output/_순위차단/` 에 최근 20건 보관·로그에 판정 단어와 파일명. (4) 끝 요약 = 측정·**빈 칸**·차단·**연결 장애**·IP 전환·바퀴 수, 빈 칸이 남으면 전체실행/무인 끝 문구 = '⚠ 순위 빈 칸 N개 남음'(`pipeline_ranks.LAST_RANK`)·'✅ 완료' 아님.
+- 근거: 소유자 목표(2026-10-13 "공란, 종료 안됨, 모두 정상 수행이 목표" + 선택 "프록시 연결 장애는 차단과 구분"·"코드에서 확인된 문제 수정"). 실측(운용 PC 10-12 18:33 시작 ③ 로그·output (19)(20)): 19:51~20:55 IP 확인 실패·페이지 미로딩(프록시 연결 장애)을 차단으로 집계·차단 목록 등록 · 21:01~22:06 진짜 차단은 막힌 키워드마다 다른 IP 에서 결국 성공 · 22:06~다음 날 11:14 '밀키트' 한 키워드만 차단 569회·IP 198개(그 키워드부터 다시 규칙에 갇힘 → 뒤 45상품 미검색·IP 전환 614회) · 기록 37/약 220칸인데 '✅ 완료' 표시 · 증거 없어 원인 확정에 별도 통제 실험(노트북 같은 프록시로 타프·밀키트 정상, 소유자 운용 PC 밀키트 정상 확인) 필요했음. 재현: 핀 K(차단 뒤 다음 키워드·다음 바퀴)·L(번갈아 시도·빈 칸 집계)·K2(새 IP 는 다음 키워드부터)·K3(측정 불가 ❌ 종료)·K4(증거 20건) 실패→통과, test_proxy_patch 연결 장애 2종(12 PASS), 게이트 12종·복잡도 경고 0.
+- 버린 대안: (a) D-030 '막힌 키워드부터 다시' 유지(실측 13시간 갇힘) (b) 막힌 키워드 N번 뒤 공란 확정(소유자 목표 '공란 없음'과 다름) (c) 연결 장애도 차단으로 집계(건강한 IP 를 차단 목록에 올리고 원인 판단을 흐림) (d) 차단 시 쿨다운(소유자 거부·D-030).
+- 위험: 모든 IP 가 계속 막히면 ③이 끝나지 않음(D-030 과 같음 — 다음 날 18:00 시작 정리가 끝냄). 연결 장애 연속이면 5분씩 쉼.
+- 영향 범위: `pipeline_ranks.py`(drive_rank halt_reason·_run_on_egress conn·_conn_trouble·_block_marker·_save_block_evidence·_connection_down·_SemiState·_track_ranks_semi 바퀴·_semi_one_pass·_semi_next_pass·_rank_todo·_unfilled·_semi_on_miss·LAST_RANK·요약), `pipeline_stages.py`(LAST_RANK 비움), `ui/app_qt.py`(끝 문구), `tools/pin_login_ranks.py`·`tools/test_proxy_patch.py`·`tools/simulate_pipeline.py`. **HQ 포팅 필요**.
 - 상태: ACTIVE

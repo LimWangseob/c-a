@@ -358,8 +358,8 @@ def test_rank_block_images() -> None:
 
 
 def test_semi_block_rotate_signal() -> None:
-    """③ 반자동 _semi_on_miss(D-030): 차단 시 회전 가능하면 halted(새 IP 로 그 키워드부터)·회전 불가면 halted 아님
-    (다음 키워드 계속) — 둘 다 30분 쿨다운 sleep 없음."""
+    """③ 반자동 _semi_on_miss(D-030·2026-10-13): 차단 시 회전 가능하면 halted(새 IP 로 다음 키워드부터)·회전 불가면
+    halted 아님(다음 키워드 계속) — 둘 다 쿨다운 sleep 없음. 연결 장애는 차단 집계에 안 넣고 halt_reason='conn'."""
     from coupang_analytics import pipeline_ranks as PR
     orig_can, orig_sleep = PR.rotation_can_rotate, PR._interruptible_sleep
     slept: list = []
@@ -367,14 +367,69 @@ def test_semi_block_rotate_signal() -> None:
         PR._interruptible_sleep = lambda *a, **k: slept.append(a)
         PR.rotation_can_rotate = lambda: True
         st = PR._SemiState()
-        PR._semi_on_miss(st, "kw", True, lambda: False, lambda m: None)
-        assert st.halted is True and st.rotations == 1 and not slept, (st, slept)
+        PR._semi_on_miss(st, "kw", {"marker": "사용권한", "file": "x"}, False, lambda m: None)
+        assert st.halted is True and st.rotations == 1 and st.halt_reason == "block" and not slept, (st, slept)
+        st = PR._SemiState()
+        PR._semi_on_miss(st, "kw", False, True, lambda m: None)
+        assert st.halted and st.halt_reason == "conn" and st.conn_fail == 1 and st.blocked_total == 0, st
         PR.rotation_can_rotate = lambda: False
         st = PR._SemiState()
-        PR._semi_on_miss(st, "kw", True, lambda: False, lambda m: None)
-        assert st.halted is False and st.blocked_total == 1 and not slept, (st, slept)
+        PR._semi_on_miss(st, "kw", {"marker": "사용권한"}, False, lambda m: None)
+        assert st.halted is False and st.blocked_total == 1 and st.pass_trouble and not slept, (st, slept)
     finally:
         PR.rotation_can_rotate, PR._interruptible_sleep = orig_can, orig_sleep
+
+
+def test_drive_rank_conn_not_block() -> None:
+    """drive_rank(2026-10-13): IP 확인 실패 = 연결 장애 → 검색 안 하고 다음 IP·차단 목록 기록 없음. 3번 연속이면
+    쉬고(sleep) 다음 IP 는 확인 실패여도 실행. 검색 중 연결 장애(halt_reason 'conn')도 차단 기록 없음."""
+    from coupang_analytics import pipeline_ranks as PR
+    from coupang_analytics import proxy_blocklist as bl
+
+    saved = (config.PROXY_ENABLED, config.RANK_PROXY_ROTATE_ON_BLOCK, config.RANK_PROXY_PRECHECK_EGRESS)
+    orig = (PR.WingBrowser, proxy_pool.rank_proxy_pool_urls, bl.resolve_egress_ip, bl.is_blocked, bl.record,
+            PR._interruptible_sleep)
+    proxy_pool.reset_cache()
+    try:
+        config.PROXY_ENABLED = True
+        config.RANK_PROXY_ROTATE_ON_BLOCK = True
+        config.RANK_PROXY_PRECHECK_EGRESS = True
+        PR.WingBrowser = _FakeCM
+        proxy_pool.rank_proxy_pool_urls = lambda: ["http://a:1", "http://b:1", "http://c:1"]
+        bl.is_blocked = lambda ip, data=None: False
+        recorded: list = []
+        bl.record = lambda ip, reason="": recorded.append(ip)
+        slept: list = []
+        PR._interruptible_sleep = lambda sec, *a, **k: slept.append(sec)
+        bl.resolve_egress_ip = lambda browser, log=None: None    # 에코 전부 실패(프록시 끊김)
+        runs: list = []
+
+        def _ok(b, e) -> bool:
+            runs.append(e)
+            return False
+
+        PR.drive_rank(offscreen=False, run_once=_ok, log=lambda m: None)
+        assert runs == [None], f"확인 실패 3번 뒤 4번째 IP 는 실제 실행: {runs}"
+        assert slept == [PR._CONN_WAIT_SEC], f"3번 연속 장애 뒤 1번 쉼: {slept}"
+        assert recorded == [], f"연결 장애는 차단 목록에 안 남김: {recorded}"
+
+        ips = iter(["9.9.9.1", "9.9.9.2"])
+        bl.resolve_egress_ip = lambda browser, log=None: next(ips)
+        reasons = iter(["conn", ""])
+        cur: dict = {}
+
+        def _conn_then_ok(b, e) -> bool:
+            cur["r"] = next(reasons)
+            return cur["r"] == "conn"
+
+        PR.drive_rank(offscreen=False, run_once=_conn_then_ok, log=lambda m: None, halt_reason=lambda: cur["r"])
+        assert recorded == [], f"검색 중 연결 장애도 차단 기록 없음: {recorded}"
+    finally:
+        (config.PROXY_ENABLED, config.RANK_PROXY_ROTATE_ON_BLOCK, config.RANK_PROXY_PRECHECK_EGRESS) = saved
+        (PR.WingBrowser, proxy_pool.rank_proxy_pool_urls, bl.resolve_egress_ip, bl.is_blocked, bl.record,
+         PR._interruptible_sleep) = orig
+        proxy_pool.reset_cache()
+
 
 def main() -> None:
     tests = [
@@ -389,6 +444,7 @@ def main() -> None:
         test_drive_rank_rotation,
         test_rank_block_images,
         test_semi_block_rotate_signal,
+        test_drive_rank_conn_not_block,
     ]
     for test in tests:
         test()
