@@ -1,7 +1,7 @@
 """판매분석 상품별 리포트 자동 다운로드 + 파싱 (Q1).
 
 로그인된 실제 Chrome(browser.WingBrowser 또는 CDP 연결 page)에서 판매분석을 열고
-'엑셀 다운로드 > 상품별 판매 리포트'를 눌러 리포트를 받는다.
+'엑셀 다운로드 > 상품별 판매'를 눌러 리포트를 받는다.
 날짜는 URL 파라미터: ?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD.
 다운로드는 비동기(서버 생성→폴링) blob 방식이라 Playwright download 이벤트로 안 잡힌다.
 → CDP로 다운로드 폴더를 지정하고 폴더에 새 xlsx 가 생기는지 감시한다.
@@ -687,8 +687,9 @@ def _wait_new_xlsx(dl_dir: Path, timeout: float, log, events, page) -> Path:
 
 
 def download_report(page, date_from: str, date_to: str,
-                    out_dir: str | Path = "data/reports", log=None) -> Path:
-    """판매분석 상품별 리포트 다운로드 → 저장 파일 경로. 각 단계 로그."""
+                    out_dir: str | Path = "data/reports", log=None, menu: str = "상품별 판매") -> Path:
+    """판매분석 엑셀 다운로드 → 저장 파일 경로. 각 단계 로그. menu = 드롭다운 항목('상품별 판매'·'기간별 판매' —
+    실측 2026-10-14, 예전 이름 '상품별 판매 리포트'는 화면에 없음)."""
     log = log or (lambda m: None)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -738,12 +739,12 @@ def download_report(page, date_from: str, date_to: str,
     log("  [수집] '엑셀 다운로드' 클릭 완료 → 드롭다운 메뉴 대기")
 
     try:
-        item = page.get_by_text("상품별 판매 리포트").first
+        item = page.get_by_text(menu).first
         item.wait_for(state="visible", timeout=10000)
     except PWTimeout:
-        log(f"  [수집] ✖ '상품별 판매 리포트' 메뉴 10s 내 못 찾음(드롭다운 미노출?). 본문: {_body_head(page)}")
+        log(f"  [수집] ✖ '{menu}' 메뉴 10s 내 못 찾음(드롭다운 미노출?). 본문: {_body_head(page)}")
         raise
-    log("  [수집] '상품별 판매 리포트' 메뉴 발견 → 클릭(다운로드 트리거)")
+    log(f"  [수집] '{menu}' 메뉴 발견 → 클릭(다운로드 트리거)")
     item.click(no_wait_after=True)                    # 비동기 다운로드 트리거
     return _wait_new_xlsx(dl_dir, _DOWNLOAD_WAIT_S, log, events, page)
 

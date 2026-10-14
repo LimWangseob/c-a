@@ -659,6 +659,58 @@ def pin_rank_delay_override():
     print("  ✅ pin_rank_delay_override — 설정 순위 간격 오버라이드(적용·미설정·무효·범위밖)")
 
 
+class _FakeSalesPage:
+    """판매분석 화면 페이크 — 실측(2026-10-14 wavetech) 메뉴: '엑셀 다운로드' → '기간별 판매'·'상품별 판매'.
+    get_by_text 는 Playwright 기본처럼 부분 일치 — 화면에 없는 글자면 wait_for 가 PWTimeout."""
+    LABELS = ("엑셀 다운로드", "기간별 판매", "상품별 판매")
+
+    def __init__(self):
+        self.clicked: list = []
+        self.url = ""
+        self.context = SimpleNamespace(new_cdp_session=lambda pg: SimpleNamespace(send=lambda *a, **k: None,
+                                                                                    on=lambda *a, **k: None))
+
+    def expect_response(self, pred, timeout=0):
+        from contextlib import nullcontext
+        return nullcontext()
+
+    def goto(self, url, **kw):
+        self.url = url
+
+    def wait_for_timeout(self, ms):
+        pass
+
+    def get_by_text(self, text):
+        page, hit = self, next((x for x in self.LABELS if text in x), None)
+
+        class _Loc:
+            def wait_for(self, **kw):
+                if hit is None:
+                    raise PWTimeout(f"'{text}' 화면에 없음")
+
+            def click(self, **kw):
+                page.clicked.append(hit)
+        return SimpleNamespace(first=_Loc())
+
+
+def pin_sales_excel_menu():
+    print("[핀 X] 판매분석 엑셀 받기 — 메뉴 이름 실측('상품별 판매'·'기간별 판매')·menu 인자로 둘 다 받음")
+    orig_wait = C._wait_new_xlsx
+    try:
+        C._wait_new_xlsx = lambda d, t, log, ev, page: Path(d) / "x.xlsx"
+        with tempfile.TemporaryDirectory() as tmp:
+            pg = _FakeSalesPage()
+            C.download_report(pg, "2026-09-01", "2026-09-30", out_dir=tmp)
+            _check(pg.clicked == ["엑셀 다운로드", "상품별 판매"], f"기본 = 상품별 판매 클릭: {pg.clicked}")
+            _check("start_date=2026-09-01&end_date=2026-09-30" in pg.url, "조회 기간 주소")
+            pg = _FakeSalesPage()
+            C.download_report(pg, "2026-09-01", "2026-09-30", out_dir=tmp, menu="기간별 판매")
+            _check(pg.clicked == ["엑셀 다운로드", "기간별 판매"], f"menu=기간별 판매 클릭: {pg.clicked}")
+    finally:
+        C._wait_new_xlsx = orig_wait
+    print("  ✅ pin_sales_excel_menu — 상품별(기본)·기간별 메뉴 클릭")
+
+
 def main() -> int:
     config.SESSION_STATE_DB = os.path.join(tempfile.gettempdir(), "pin_session_state.db")
     config.LOGIN_PACE_MIN_SEC = 0
@@ -699,6 +751,7 @@ def main() -> int:
         pin_submit_no_double_on_nav()
         pin_submit_fallback_on_no_nav()
         pin_rank_delay_override()
+        pin_sales_excel_menu()
     finally:
         for k, v in saved.items():   # 순위 config 원복(다른 검증 오염 방지 — 별 프로세스지만 방어적)
             setattr(config, k, v)
