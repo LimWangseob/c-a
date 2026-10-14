@@ -9,6 +9,7 @@
   python tools/settlement_download.py watch                             # 운용 PC 상시: 앱 ①판매수집 완료 후 재개·17:40 멈춤
   python tools/settlement_download.py stats                             # 받은 파일 집계 엑셀
   python tools/settlement_download.py merge --src output\정산\정산          # 다른 PC 정산 폴더 합치기(자동 실행 중지 후)
+  (request·download·run 에 --originals <폴더> = 받은 쿠팡 원본을 그대로 증빙 폴더에 복사 — D-062)
 
 규칙(차단 위험 완화·소유자 2026-10-06): 정산현황 '정산확정' 줄만 · 윙은 월별(최종액) 파일이 나온 달이면 주정산 생략 ·
 로켓그로스는 같은 매출 주 1회·비용 리포트는 그 주 금액이 있는 종류만 · 계정당 실행 상한(--cap) · 요청 사이 45~75초
@@ -52,6 +53,7 @@ GAP_SEC = (45, 75)                                      # 요청 사이 = 앱 �
 LOOKUP_GAP_SEC = (3, 8)                                 # 조회·받기 사이(화면에서 넘겨 보는 정도)
 LOG: RL.RunLog = None  # type: ignore[assignment]   # main() 에서 실행 시작 시 생성
 CHANNELS: tuple = ()                                    # --channel 로 제한(비우면 윙·로켓그로스 둘 다)
+ORIGINALS: Path | None = None                           # --originals: 받은 쿠팡 원본 그대로 복사할 증빙 폴더(D-062)
 
 
 def log(m: str) -> None:
@@ -338,6 +340,9 @@ def _fetch_one(b, j, row, name: str) -> None:
     raw = BASE / "_받는중" / fname
     raw.parent.mkdir(parents=True, exist_ok=True)
     raw.write_bytes(data)
+    if ORIGINALS is not None:                              # 증빙용 원본(구매자명 포함·받은 그대로) — 아래 처리와 별개
+        ORIGINALS.mkdir(parents=True, exist_ok=True)
+        (ORIGINALS / fname).write_bytes(data)
     if j.channel == "로켓그로스" and j.report != "판매수수료":
         _keep_cost(raw, j, name, fname)
         return
@@ -629,10 +634,12 @@ def main() -> int:
     ap.add_argument("--src", default="", help="merge: 합칠 정산 폴더(예: output\정산\정산 — 노트북에서 옮겨 온 것)")
     ap.add_argument("--until", default="", help="HH:MM 이후엔 새 요청·새 계정 시작 안 함(앱 18:00 무인 실행 전 멈춤)")
     ap.add_argument("--parent", type=int, default=0, help="watch: 앱 PID — 사람이 앱을 끄면 정산도 종료(D-020)")
+    ap.add_argument("--originals", default="", help="받은 쿠팡 원본(구매자명 포함)을 그대로 복사해 둘 폴더(증빙용·D-062)")
     ap.add_argument("--since", default="", help="watch: 이 시각(ISO) 뒤에 끝난 ①판매수집만 기다림(앱 전체실행 버튼)")
     args = ap.parse_args()
-    global CHANNELS
+    global CHANNELS, ORIGINALS
     CHANNELS = (args.channel,) if args.channel else ()
+    ORIGINALS = Path(args.originals).resolve() if args.originals else None   # set_workdir(작업 폴더 이동) 전에 고정
     apppaths.set_workdir()
     LOG = RL.RunLog(BASE)
     log(f"실행 {LOG.run_id} · 명령 {args.command} · 기간 {args.start}~{args.end} · 데이터 폴더 {Path.cwd()}")

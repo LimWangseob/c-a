@@ -1051,6 +1051,58 @@ def p30_manual_full_run():
     ok("수동 전체실행 = 실행 시각 이후 ① 완료까지 대기 후 받기·무인 명령 불변")
 
 
+def p31_keep_originals():
+    print("[P31] --originals = 받은 쿠팡 원본을 받은 그대로 증빙 폴더에 복사(D-062) · 지정 안 하면 지금 동작 그대로")
+    import os
+    from types import SimpleNamespace
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    from coupang_analytics import settlement_jobs as SJ
+    from coupang_analytics import settlement_runlog as RLG
+    data = b"PK\x03\x04-coupang-original-with-buyer-name"
+
+    def fake_scrub(src, dst, columns=None):
+        Path(dst).parent.mkdir(parents=True, exist_ok=True)
+        Path(dst).write_bytes(b"PK-scrubbed")
+    olds = (TD._get_bytes, TD.SF.scrub_pii, TD.SF.load_settle_file, TD.SF.read_sheets, TD.SF.assert_no_pii,
+            TD.SF.rg_cost_totals, TD.LOG, TD.ORIGINALS, TD.api)
+    old_cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            TD._get_bytes = lambda b, url: data
+            TD.SF.scrub_pii, TD.SF.load_settle_file = fake_scrub, lambda p: SimpleNamespace(rows=[], settle_total=0,
+                                                                                             warnings=[])
+            TD.SF.read_sheets, TD.SF.assert_no_pii, TD.SF.rg_cost_totals = (lambda p: {}), (lambda s: None), \
+                (lambda s, d: {})
+            TD.LOG = RLG.RunLog(TD.BASE, echo=lambda m: None)
+
+            def fetch(report="주문상세"):
+                ch = "윙" if report == "주문상세" else "로켓그로스"
+                j = SJ.Job("홍길동-가나-acc1", ch, "주정산", report, "2026-01-05", "2026-01-11", "2026-01-30")
+                if ch == "로켓그로스":
+                    TD.api = lambda b, who, m, p, body=None: {"url": "u"}
+                TD._fetch_one(None, j, SimpleNamespace(handle="u"), "홍길동-가나-acc1")
+                return j
+            TD.ORIGINALS = None
+            j = fetch()
+            assert j.status == SJ.ST_DONE and (TD.FILES / j.file).read_bytes() == b"PK-scrubbed"
+            assert not (Path(tmp) / "원본").exists(), "지정 안 하면 원본 폴더 안 만듦(지금 동작)"
+            TD.ORIGINALS = Path(tmp) / "원본"
+            j = fetch()
+            assert (TD.ORIGINALS / j.file).read_bytes() == data, "원본 = 받은 바이트 그대로(구매자명 포함)"
+            assert (TD.FILES / j.file).read_bytes() == b"PK-scrubbed", "집계용 사본은 그대로 구매자명 지운 것"
+            assert not (TD.BASE / "_받는중" / j.file).exists()
+            jc = fetch("보관비")
+            name = jc.file.split("/", 1)[1]
+            assert (TD.ORIGINALS / name).read_bytes() == data and (TD.COSTS / name).read_bytes() == data
+        finally:
+            (TD._get_bytes, TD.SF.scrub_pii, TD.SF.load_settle_file, TD.SF.read_sheets, TD.SF.assert_no_pii,
+             TD.SF.rg_cost_totals, TD.LOG, TD.ORIGINALS, TD.api) = olds
+            os.chdir(old_cwd)
+    ok("윙·판매수수료·비용 리포트 원본 바이트 그대로 복사 · 집계 사본(구매자명 제거)·비용 폴더 불변 · 미지정=폴더 없음")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -1073,6 +1125,7 @@ def main():
     p28_wait_app_profile()
     p29_monthly_failed_comment()
     p30_manual_full_run()
+    p31_keep_originals()
     print("정산 런타임 오프라인 검증 통과")
 
 
