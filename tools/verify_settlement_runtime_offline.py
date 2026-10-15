@@ -1103,6 +1103,49 @@ def p31_keep_originals():
     ok("윙·판매수수료·비용 리포트 원본 바이트 그대로 복사 · 집계 사본(구매자명 제거)·비용 폴더 불변 · 미지정=폴더 없음")
 
 
+def p32_evidence_rules():
+    print("[P32] 증빙 원본 전체 받기(D-067) — 사업자 폴더·월 구간·정산 줄 없는 주·판매분석 누락 검사·환급 이름·완료 표시")
+    import json
+    from coupang_analytics import settlement_evidence as EV
+    assert EV.business_of("한상현-니코에이블-nicoable") == "니코에이블"
+    assert EV.business_of("김현창-주식회사-로움-kimhc") == "주식회사-로움"          # 사업자 이름 안의 '-' 보존
+    assert EV.business_of("aehee5505") == "aehee5505"                               # 이름 없는 계정 = 계정ID
+    assert EV.account_folder(Path("X"), "서달원-(DW)커머스-dalbong1849") == Path("X") / "증빙_(DW)커머스_쿠팡원본"
+    assert EV.month_windows(date(2026, 4, 15), date(2026, 6, 3)) == [
+        ("202604", date(2026, 4, 15), date(2026, 4, 30)), ("202605", date(2026, 5, 1), date(2026, 5, 31)),
+        ("202606", date(2026, 6, 1), date(2026, 6, 3))]
+    det = lambda s, e: {"cfsDeductionDetails": [{"settlementPeriodStartDate": s, "settlementPeriodEndDate": e,  # noqa: E731
+                                                 "lastSettlementUnpaidCfsDeductionAmount": 13200.0}]}
+    reports = [{"settlementGroupKey": "A01684473-2026-05-25-2026-05-31",            # 실측 니코에이블: 5/11~17 주 = 정산 줄 없음
+                "settlementStatusReportDetail": det("2026-05-10T15:00:00Z", "2026-05-16T15:00:00Z")},
+               {"settlementGroupKey": "A01684473-2026-08-03-2026-08-09",            # 미납 CFS 가 정산 줄 있는 주 → 대상 아님
+                "settlementStatusReportDetail": det("2026-07-12T15:00:00Z", "2026-07-18T15:00:00Z")},
+               {"settlementGroupKey": "A01684473-2026-07-13-2026-07-19", "settlementStatusReportDetail": {}}]
+    assert EV.missing_cost_weeks(reports) == ["A01684473-2026-05-11-2026-05-17"], EV.missing_cost_weeks(reports)
+    head = ["날짜", "판매량", "매출(원)"]
+    daily = [head, ["2026-05-01", 1, 100], ["2026-05-02", 2, 300], ["", 3, 400]]
+    assert EV.check_daily(daily, date(2026, 5, 1), date(2026, 5, 2))[:2] == (True, "2일 전부")
+    assert not EV.check_daily(daily[:2] + daily[3:], date(2026, 5, 1), date(2026, 5, 2))[0]   # 하루 빠짐
+    assert EV.check_items([["상품", "판매량", "매출(원)"], ["a", 3, 400]], 3, 400)[0]
+    assert not EV.check_items([["상품", "판매량", "매출(원)"], ["a", 2, 400]], 3, 400)[0]
+    items = json.dumps([{"key": "지급일", "value": "2026-09-01 ~ 2026-09-30"}], ensure_ascii=False)
+    assert EV.refund_file_name(items, "2026-10-15 12:11:05") == "쿠팡_우대수수료환급_2026-09-01-2026-09-30.xlsx"
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / "증빙_x_쿠팡원본"
+        (f / EV.MENU).mkdir(parents=True)
+        (f / EV.MENU / "쿠팡_a.pdf").write_bytes(b"%PDF")
+        (f / EV.MENU / "~$잠금.xlsx").write_bytes(b"x")
+        (f / EV.MENU / "_실패화면.png").write_bytes(b"x")
+        assert not EV.write_results(f, {"a": {"결과": EV.OK}, "b": {"결과": EV.FAIL}}) and not (f / EV.DONE).exists()
+        assert EV.write_results(f, {"a": {"결과": EV.OK}, "b": {"결과": EV.NONE}}) and (f / EV.DONE).exists()
+        assert EV.previous_steps(f) == {"a": {"결과": EV.OK}, "b": {"결과": EV.NONE}}          # 이어받기: 정상/없음 단계만
+        EV.write_results(f, {"a": {"결과": EV.OK}, "b": {"결과": EV.FAIL}})
+        assert list(EV.previous_steps(f)) == ["a"] and EV.previous_steps(Path(tmp) / "없음") == {}
+        rows = (f / EV.LISTING).read_text(encoding="utf-8-sig").splitlines()
+        assert len(rows) == 2 and "쿠팡_a.pdf" in rows[1]                               # 잠금·작업 파일 제외
+    ok("사업자 폴더('-' 보존)·월 구간·정산 줄 없는 주(니코에이블 5/11~17)·누락 검사·환급 이름·완료 표시·목록 제외 규칙")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -1126,6 +1169,7 @@ def main():
     p29_monthly_failed_comment()
     p30_manual_full_run()
     p31_keep_originals()
+    p32_evidence_rules()
     print("정산 런타임 오프라인 검증 통과")
 
 

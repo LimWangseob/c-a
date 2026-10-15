@@ -10,6 +10,8 @@
   python tools/settlement_download.py stats                             # 받은 파일 집계 엑셀
   python tools/settlement_download.py merge --src output\정산\정산          # 다른 PC 정산 폴더 합치기(자동 실행 중지 후)
   (request·download·run 에 --originals <폴더> = 받은 쿠팡 원본을 그대로 증빙 폴더에 복사 — D-062)
+  python tools/settlement_download.py evidence --out <증빙 상위 폴더> [--from 2026-01-01] [--accounts …] [--until 17:30] [--redo]
+      # 계정마다 증빙 원본 전체(정산 원본·판매분석 월별·지급 증빙 메뉴 — D-067). 끝난 계정(_수집완료.json)은 건너뜀
 
 규칙(차단 위험 완화·소유자 2026-10-06): 정산현황 '정산확정' 줄만 · 윙은 월별(최종액) 파일이 나온 달이면 주정산 생략 ·
 로켓그로스는 같은 매출 주 1회·비용 리포트는 그 주 금액이 있는 종류만 · 계정당 실행 상한(--cap) · 요청 사이 45~75초
@@ -438,6 +440,81 @@ def cmd_probe(a, b, args, jobs: list) -> None:
             LOG.error(name, "probe", exc)
 
 
+EVIDENCE_JOBS = BASE / "증빙" / "_요청기록.json"      # 증빙 전용 요청 기록 — 앱 기록에 '받음'인 파일도 원본을 다시 받게
+
+
+def _evidence_step(name: str, label: str, fn) -> dict:
+    """증빙 한 단계 — 차단은 그 계정 중단(올림), 그 밖의 실패는 기록하고 다음 단계(무음 아님)."""
+    from coupang_analytics import settlement_evidence as EV
+    try:
+        res = fn()
+    except BlockDetected:
+        raise
+    except Exception as exc:
+        LOG.error(name, f"증빙 {label}", exc)
+        res = {"결과": EV.FAIL, "내용": f"{exc.__class__.__name__}: {str(exc)[:200]}", "파일": 0}
+    LOG.record(name, f"증빙 {label}", RL.OK if res["결과"] != EV.FAIL else RL.FAIL, f"{res['결과']} — {res['내용']}")
+    return res
+
+
+def cmd_evidence(a, b, args, jobs: list) -> None:
+    """계정 하나의 증빙 원본 전체(D-067): 정산 원본 → 정산 줄 없는 주 비용 → 판매분석 월별 → 지급 증빙 메뉴 → 목록·결과."""
+    global ORIGINALS
+    from coupang_analytics import settlement_evidence as EV
+    from coupang_analytics import settlement_evidence_web as EW
+    name, mod = name_of(a), sys.modules[__name__]
+    folder = EV.account_folder(Path(args.out), name)
+    ORIGINALS = folder / EV.ORIG
+    steps: dict = {}
+    prev = {} if args.redo else EV.previous_steps(folder)   # 지난 실행에서 정상/없음인 단계는 건너뜀(이어받기)
+
+    def settle() -> dict:
+        cmd_run(a, b, args, jobs)
+        if any(j.account == name and j.status == SJ.ST_REQUESTED for j in jobs):   # 생성이 늦은 파일 — 2분 뒤 한 번 더
+            time.sleep(120)
+            cmd_download(a, b, args, jobs)
+        left = sum(1 for j in jobs if j.account == name and j.status == SJ.ST_REQUESTED)
+        n = len(list(ORIGINALS.glob("*.xlsx"))) if ORIGINALS.exists() else 0
+        return {"결과": EV.FAIL if left else EV.OK, "내용": f"원본 {n}개" + (f" · 아직 생성 안 됨 {left}건(다시 실행)" if left else ""), "파일": n}
+    menu, end = folder / EV.MENU, args.end
+    plan = [("정산 원본", settle),
+            ("정산 줄 없는 주 비용", lambda: EW.missing_week_costs(mod, b, name, args.start, end, folder / EV.ORIG)),
+            ("우대수수료 환급 요청", lambda: EW.refund_request(mod, b, name, args.start, end)),
+            ("판매분석 월별", lambda: EW.sales_originals(mod, b, args.start, end, folder / EV.SALES)),
+            ("윙 지급 명세", lambda: EW.wing_statements(mod, b, name, args.start, end, menu)),
+            ("로켓그로스 월렛", lambda: EW.wallet(mod, b, name, menu)),
+            ("로켓그로스 광고비·밀크런", lambda: EW.rg_ad_milkrun(mod, b, name, args.start, end, menu)),
+            ("광고센터 월별 광고비", lambda: EW.adcenter_monthly(mod, b, name, args.start, end, menu)),
+            ("우대수수료 환급 받기", lambda: EW.refund_fetch(mod, b, name, steps.get("우대수수료 환급 요청", {}), menu))]
+    for label, fn in plan:
+        if past_until(args):
+            steps[label] = {"결과": EV.FAIL, "내용": f"멈춤 시각 {args.until} — 다음 실행에서", "파일": 0}
+            continue
+        if label in prev and not (label == "우대수수료 환급 요청" and prev.get("우대수수료 환급 받기", {}).get("결과") == EV.FAIL):
+            steps[label] = {**prev[label], "내용": "지난 실행 결과 그대로 — " + str(prev[label].get("내용", ""))}
+            continue
+        steps[label] = _evidence_step(name, label, fn)
+    if steps["정산 원본"]["결과"] == EV.FAIL and not past_until(args):   # 윙 파일은 생성이 늦음(실측 5분+) — 메뉴 뒤 마저 받기
+        def rest() -> dict:
+            cmd_download(a, b, args, jobs)
+            left = sum(1 for j in jobs if j.account == name and j.status == SJ.ST_REQUESTED)
+            n = len(list(ORIGINALS.glob("*.xlsx"))) if ORIGINALS.exists() else 0
+            return {"결과": EV.FAIL if left else EV.OK, "내용": f"원본 {n}개" + (f" · 아직 생성 안 됨 {left}건(다시 실행)" if left else ""), "파일": n}
+        steps["정산 원본"] = _evidence_step(name, "정산 원본(마저 받기)", rest)
+    done = EV.write_results(folder, steps)
+    LOG.record(name, "증빙", RL.OK if done else RL.FAIL, f"{'완료' if done else '미완(다시 실행하면 이어서)'} · {folder}")
+
+
+def _evidence_targets(accts, args) -> list:
+    """증빙 대상 = 아직 _수집완료.json 이 없는 계정(--redo 면 전부)."""
+    from coupang_analytics import settlement_evidence as EV
+    if args.redo:
+        return accts
+    left = [a for a in accts if not (EV.account_folder(Path(args.out), name_of(a)) / EV.DONE).exists()]
+    log(f"증빙 대상 {len(left)}계정(완료 {len(accts) - len(left)}계정 건너뜀) → {args.out}")
+    return left
+
+
 def load_holidays(amounts: list):
     return STORE.load_holidays(amounts, log)
 
@@ -623,7 +700,7 @@ def cmd_watch(args) -> int:
 def main() -> int:
     global LOG
     ap = argparse.ArgumentParser(description="쿠팡 정산 파일 배치 다운로드")
-    ap.add_argument("command", choices=("probe", "request", "download", "run", "watch", "stats", "merge"))
+    ap.add_argument("command", choices=("probe", "request", "download", "run", "watch", "stats", "merge", "evidence"))
     ap.add_argument("--accounts", default="", help="계정ID 쉼표 구분(비우면 관리대장 전체)")
     ap.add_argument("--from", dest="start", type=date.fromisoformat, default=date(2026, 1, 1))
     ap.add_argument("--to", dest="end", type=date.fromisoformat, default=date.today())
@@ -636,9 +713,12 @@ def main() -> int:
     ap.add_argument("--parent", type=int, default=0, help="watch: 앱 PID — 사람이 앱을 끄면 정산도 종료(D-020)")
     ap.add_argument("--originals", default="", help="받은 쿠팡 원본(구매자명 포함)을 그대로 복사해 둘 폴더(증빙용·D-062)")
     ap.add_argument("--since", default="", help="watch: 이 시각(ISO) 뒤에 끝난 ①판매수집만 기다림(앱 전체실행 버튼)")
+    ap.add_argument("--out", default="", help="evidence: 증빙 상위 폴더(계정마다 증빙_{사업자}_쿠팡원본 — D-067)")
+    ap.add_argument("--redo", action="store_true", help="evidence: 끝난 계정도 다시 받기")
     args = ap.parse_args()
-    global CHANNELS, ORIGINALS
+    global CHANNELS, ORIGINALS, JOBS
     CHANNELS = (args.channel,) if args.channel else ()
+    args.out = str(Path(args.out).resolve()) if args.out else ""     # set_workdir(작업 폴더 이동) 전에 고정
     ORIGINALS = Path(args.originals).resolve() if args.originals else None   # set_workdir(작업 폴더 이동) 전에 고정
     apppaths.set_workdir()
     LOG = RL.RunLog(BASE)
@@ -656,7 +736,15 @@ def main() -> int:
     accts = load_accounts({x.strip() for x in args.accounts.split(",") if x.strip()})
     if args.command == "probe":
         accts = accts[:1]
-    run = {"probe": cmd_probe, "request": cmd_request, "download": cmd_download, "run": cmd_run}[args.command]
+    if args.command == "evidence":
+        if not args.out:
+            log("evidence 는 --out <증빙 상위 폴더> 가 필요합니다")
+            return 2
+        JOBS = EVIDENCE_JOBS
+        JOBS.parent.mkdir(parents=True, exist_ok=True)
+        accts = _evidence_targets(accts, args)
+    run = {"probe": cmd_probe, "request": cmd_request, "download": cmd_download, "run": cmd_run,
+           "evidence": cmd_evidence}[args.command]
     rc = _run_accounts(accts, run, args)
     LOG.summary()
     log(f"기록: {LOG.csv} · 오류 추적: {LOG.errors if LOG.errors.exists() else '없음'}")
