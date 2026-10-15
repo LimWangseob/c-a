@@ -121,7 +121,8 @@ _ACCT_SHEET = "_계정정보"  # 숨김 시트: (사업자)→계정ID **집합*
 _STAMP_SHEET = "_수집스탬프"  # 숨김 시트: (계정ID)→판매수집일. **계정 단위**(항목5: 다계정ID 사업자에서 계정마다 따로 수집 판정, 소유자 2026-09-25)
 _MKT_SHEET = "_마케팅"     # 숨김 시트: (사업자,상품)→마케팅 시작·종료·모니터링종료. 계정목록 입력을 보존(재생성돼도 유지)
 _DISC_SHEET = "_중단"      # 숨김 시트: (사업자,상품) 판매중지/삭제(대장에서 사라짐) 표기. 데이터는 보존, 표시만 구분
-_SPECIAL_SHEETS = (_META_SHEET, _INDEX_SHEET, _ACCT_SHEET, _STAMP_SHEET, _MKT_SHEET, _DISC_SHEET)
+_SALES_SHEET = "통합판매현황"  # 첫 시트: 위탁계정 전체 계정·상품별 판매(전일·주간·월별) — 매번 통째 재생성(workbook_sales·2026-10-15)
+_SPECIAL_SHEETS = (_META_SHEET, _INDEX_SHEET, _ACCT_SHEET, _STAMP_SHEET, _MKT_SHEET, _DISC_SHEET, _SALES_SHEET)
 _MKT_COLS = ("체험단 시작일", "체험단 종료일", "모니터링 종료일")   # 계정목록 편집 열(직원 입력 = 체험단 기간)
 _MKT_COLS_LEGACY0 = "마케팅 시작일"   # 옛 라벨('마케팅 시작일') — 기존 마스터 계정목록에서 값 회수 시 인식용
 
@@ -243,6 +244,7 @@ __all__ = [
     '_MKT_SHEET',
     '_DISC_SHEET',
     '_SPECIAL_SHEETS',
+    '_SALES_SHEET',
     '_MKT_COLS',
     '_MKT_COLS_LEGACY0',
     '_norm',

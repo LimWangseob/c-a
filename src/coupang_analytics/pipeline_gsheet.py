@@ -299,6 +299,9 @@ def push_gsheet(wb, output_url: str | None, log, removed_accounts=None, renamed_
         _phase = "통계 시트 미러링"
         log("== [구글시트] 통계 시트 미러링 중… ==")
         gids = gsheet_stats.push_statistics(client, wb, on_log=log)          # 사업자별 통계 시트 전체 미러링
+        _phase = "통합판매현황"
+        from .workbook_sales import push_sales_sheet
+        push_sales_sheet(client, wb, log)                                   # 첫 시트(맨 앞) — designs/SALES_SUMMARY.md
         _phase = "계정목록 동기화"
         log(f"== [구글시트] 통계 {len(gids)}시트 미러링 완료 → 계정목록 동기화 중… ==")
         roster = gsheet_index.roster_from_workbook(wb, gids)                 # 계정목록 로스터(등록명 기반 안정키)

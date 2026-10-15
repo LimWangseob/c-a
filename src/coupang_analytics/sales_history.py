@@ -25,16 +25,56 @@ def record(out_dir, account_id: str, date_from: str, date_to: str, metrics: dict
         return f"건너뜀 — 하루 단위 조회만 기록({date_from}~{date_to})"
     if any(m.gmv is None for m in metrics.values()):
         return "건너뜀 — 판매금액 없는 출처(엑셀 폴백)"
+    opts, total = _options(metrics)
+    path = Path(out_dir) / DIRNAME / f"{account_id}.json"
+    _put(path, date_to, {"수집": datetime.now().isoformat(timespec="seconds"), "합계": total, "옵션": opts})
+    return f"기록 — 옵션 {len(opts)}개·판매금액 {total['판매금액']:,}원"
+
+
+# ── 기간별(월·주) 합계 — 통합 판매현황(designs/SALES_SUMMARY.md·2026-10-15) ──────────────────────
+# 키 = 'M:YYYY-MM'(달) · 'W:YYYY-MM-DD'(그 주 월요일). 쿠팡이 준 기간 합계를 그대로 저장(일별을 더해 만들지 않음 —
+# 로그인 실패한 날이 있어도 다음 날 기간 조회가 메움). 조회기간 = [시작, 끝](이번 달·주는 끝이 어제라 매일 다시 받음).
+PERIOD_DIRNAME = "판매분석_기간"
+
+
+def record_period(out_dir, account_id: str, key: str, date_from: str, date_to: str, metrics: dict) -> str:
+    """기간 합계 1건 저장(같은 키는 교체). 판매금액 모르는 출처(gmv None)는 저장 안 함."""
+    if any(m.gmv is None for m in metrics.values()):
+        return "건너뜀 — 판매금액 없는 출처"
+    opts, total = _options(metrics)
+    path = Path(out_dir) / PERIOD_DIRNAME / f"{account_id}.json"
+    _put(path, key, {"수집": datetime.now().isoformat(timespec="seconds"), "조회기간": [date_from, date_to],
+                     "합계": total, "옵션": opts})
+    return f"기록 — {key} 옵션 {len(opts)}개·판매금액 {total['판매금액']:,}원"
+
+
+def load_daily(out_dir) -> dict:
+    """{계정ID: {'YYYY-MM-DD': 기록}} — 일별 저장 전체."""
+    return _load_dir(Path(out_dir) / DIRNAME)
+
+
+def load_periods(out_dir) -> dict:
+    """{계정ID: {'M:…'|'W:…': 기록}} — 기간별 저장 전체."""
+    return _load_dir(Path(out_dir) / PERIOD_DIRNAME)
+
+
+def _options(metrics: dict) -> tuple[dict, dict]:
     opts = {vid: {"상품": m.product_name, "옵션": m.option_name,
                   "구분": _KIND.get(m.registration_type, m.registration_type or "-"),
                   "판매금액": m.gmv, "판매수량": m.sales, "주문": m.orders}
             for vid, m in sorted(metrics.items())}
-    total = {k: sum(o[k] for o in opts.values()) for k in ("판매금액", "판매수량", "주문")}
-    path = Path(out_dir) / DIRNAME / f"{account_id}.json"
+    return opts, {k: sum(o[k] for o in opts.values()) for k in ("판매금액", "판매수량", "주문")}
+
+
+def _put(path: Path, key: str, rec: dict) -> None:
+    """그 키만 교체해 임시 파일에 쓰고 바꿔 끼움(반쯤 쓴 파일 없음)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    data[date_to] = {"수집": datetime.now().isoformat(timespec="seconds"), "합계": total, "옵션": opts}
+    data[key] = rec
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(dict(sorted(data.items())), ensure_ascii=False, indent=1), encoding="utf-8")
     os.replace(tmp, path)
-    return f"기록 — 옵션 {len(opts)}개·판매금액 {total['판매금액']:,}원"
+
+
+def _load_dir(d: Path) -> dict:
+    return {p.stem: json.loads(p.read_text(encoding="utf-8")) for p in sorted(d.glob("*.json"))} if d.is_dir() else {}

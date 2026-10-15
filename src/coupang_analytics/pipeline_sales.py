@@ -9,6 +9,9 @@ collector/product_match 는 기존처럼 함수 내부 지연 import(교체 시 
 """
 from __future__ import annotations
 
+import random
+import time
+
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -107,6 +110,7 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
         collector.reset_raw()                # 계정별 응답 원문 버퍼 초기화(파일 분리)
         found = _discover_products(b, a, date_from, date_to, log, ai_key=ai_key, anchor_file=anchor_file)
         _dump_raw(a.account_id, log)         # 3 API 응답 원문 저장(가공 없음·분석용). found None(데이터없음)이어도 남김
+        _record_sales_periods(b.page, a.account_id, "output", log)   # 통합 판매현황 월·주 합계(같은 세션·조회만)
         if found is None:                    # 판매분석·상품조회 모두 데이터 없음 → 건너뜀
             return None, {}, {}, {}, set(), set(), {}, {}
         (products, tracked, metrics, inventory, sale_status, upbundle_vids, live_all_vids,
@@ -127,6 +131,35 @@ def _record_sales_history(account_id: str, date_from, date_to, metrics: dict, lo
         log(f"  [판매금액 기록] ⚠ {account_id} 저장 실패(비치명) — {exc.__class__.__name__}: {str(exc)[:80]}")
         return
     log(f"  [판매금액 기록] {account_id} {date_to}: {res}")
+
+
+_PERIOD_GAP_SEC = (1.0, 2.5)   # 기간 조회 사이 쉼(같은 세션 API 조회 — 몰아치기 방지)
+
+
+def _record_sales_periods(page, account_id: str, out_dir, log, yesterday: date | None = None) -> None:
+    """통합 판매현황(designs/SALES_SUMMARY.md) 월·주 판매 합계 조회·저장 — 처음엔 1월~이번 달·최근 8주 소급, 그 뒤엔
+    이번 달·이번 주 누계와 막 끝난 기간만. 조회 실패면 이 계정 남은 기간은 멈춤(다음 실행이 이어서·비치명·로그)."""
+    from . import collector, sales_history, sales_summary
+    y = yesterday or (date.today() - timedelta(days=1))
+    try:
+        plan = sales_summary.plan_periods(sales_history.load_periods(out_dir).get(account_id, {}), y)
+    except (OSError, ValueError) as exc:
+        log(f"  [판매현황] ⚠ {account_id} 기간 기록 읽기 실패(비치명) — {exc.__class__.__name__}: {str(exc)[:80]}")
+        return
+    done = 0
+    for key, d_from, d_to in plan:
+        if done:
+            time.sleep(random.uniform(*_PERIOD_GAP_SEC))
+        try:
+            metrics = collector.fetch_sales_details(page, d_from, d_to)
+            sales_history.record_period(out_dir, account_id, key, d_from, d_to, metrics)
+        except Exception as exc:   # 부가 기능 — 어떤 실패도 ① 수집을 막지 않음(브라우저 오류 포함·로그로 명시)
+            log(f"  [판매현황] ⚠ {account_id} {key} 조회 실패 — 이 계정 남은 기간 조회 중단(다음 실행이 이어서) · "
+                f"{exc.__class__.__name__}: {str(exc)[:80]}")
+            break
+        done += 1
+    if plan:
+        log(f"  [판매현황] {account_id} 월·주 판매 합계 {done}/{len(plan)}건 기록")
 
 
 PW_MAX_TRIES = 2   # 관리대장 한 계정 여러 줄의 비번이 서로 다를 때 실행당 시도할 최대 값 수(D-012·잠금 5회 대비)

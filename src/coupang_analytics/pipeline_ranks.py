@@ -24,6 +24,7 @@ from .product_naming import rename_to_exposed
 from .rank import human_type_query, make_matcher
 from .pipeline_gsheet import push_gsheet, inject_company_stock   # track_ranks_stage 종료 시 결과 반영·회사재고 주입(한 방향·순환 없음)
 from .pipeline_paths import _PROFILE, _load_latest_wb, column_label
+from .workbook_sales import refresh_sales_sheet
 
 
 # ── egress 재회전 드라이버 (2026-10-02 · D-030 2026-10-10) ────────────────
@@ -268,6 +269,8 @@ def track_ranks_stage(out_dir: str = "output", on_log=None,
         log("== 순위 조회: 결과 워크북이 없습니다 — 먼저 ①②를 실행하세요 ==")
         return None
     inject_company_stock(wb, stock_url, log)   # 회사보유재고 → 워크북(계정목록 5열) · apply_style 전
+    refresh_sales_sheet(wb, out, log)          # 첫 시트 통합판매현황(① 뒤 쌓인 판매 기록 반영)
+
     def _on_pass():   # 진전 있는 바퀴 끝마다 결과 반영 — 밤새 빈 칸을 다시 돌아도 시트가 따라옴(2026-10-13)
         wb.apply_style()
         wb.save(path)

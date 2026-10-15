@@ -24,6 +24,7 @@ from .kw_recommend import select_keywords_light
 from .kw_volume import NaverAdApi
 from .rank import warmup   # ② 키워드-스테이지(자동완성용 쿠팡 오리진 로드)
 from .workbook import OutputWorkbook
+from .workbook_sales import refresh_sales_sheet
 
 # 경로/단계 헬퍼·상수는 leaf 모듈 pipeline_paths 로 분리(순환 import 방지). 여기서 다시 import 해
 # `pipeline.X` 공개 API(UI·도구·핀)를 그대로 유지한다.
@@ -607,6 +608,7 @@ def _finalize_run(ctx: _RunCtx, master: Path, prog: Path, now: datetime, gsheet_
     wb, log = ctx.wb, ctx.log
     snapshot = _snapshot_path(ctx.out, now)
     inject_company_stock(wb, stock_url, log)   # 회사보유재고 → 워크북(계정목록 5열) · apply_style 전
+    refresh_sales_sheet(wb, ctx.out, log)      # 첫 시트 통합판매현황 다시 그림(designs/SALES_SUMMARY.md)
     wb.apply_style()         # 가독성 서식(헤더 고정·상품 구분·정렬) — 최종본에만
     wb.save(master)          # 다음 날 이어쓸 마스터
     wb.save(snapshot)        # 그날 백업본(감사용)

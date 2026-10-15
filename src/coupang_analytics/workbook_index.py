@@ -158,7 +158,8 @@ class _IndexMixin:
             if legacy in self.wb.sheetnames:
                 del self.wb[legacy]
         rows = self._product_rows()   # (사업자, 상품, 헤더행|None, 시트有無) — 상품 단위
-        ws = self.wb.create_sheet(_INDEX_SHEET, 0)       # 맨 앞
+        # 맨 앞(통합판매현황이 있으면 그 다음 — 첫 시트는 통합판매현황·2026-10-15)
+        ws = self.wb.create_sheet(_INDEX_SHEET, 1 if _SALES_SHEET in self.wb.sheetnames else 0)
         bold = Font(name=self._FN, size=11, bold=True)
         title_font = Font(name=self._FN, size=14, bold=True)
         thin = Side(style="thin", color="BFBFBF")
@@ -206,11 +207,12 @@ class _IndexMixin:
             ws.column_dimensions[get_column_letter(c)].width = min(_wmax[c], max(_wmin[c], longest + 2))
         ws.row_dimensions[1].height = 21
         ws.freeze_panes = "E3"                            # 제목·헤더 + 대표자/사업자/상품/계정ID 고정(가로 스크롤 시)
-        # '항상 고정': 첫 탭(index 0) + **파일 열면 항상 목차가 선택된 채로 열리게** 활성 시트로 지정.
+        # '항상 고정': **파일 열면 첫 시트가 선택된 채로 열리게** 활성 시트로 지정 — 통합판매현황이 있으면 그것, 없으면 목차.
+        act = self.wb[_SALES_SHEET] if _SALES_SHEET in self.wb.sheetnames else ws
         try:
-            self.wb.active = self.wb.index(ws)
-            for other in self.wb.worksheets:             # 다른 시트 탭 선택 해제(목차만 활성)
-                other.sheet_view.tabSelected = (other is ws)
+            self.wb.active = self.wb.index(act)
+            for other in self.wb.worksheets:             # 다른 시트 탭 선택 해제(첫 시트만 활성)
+                other.sheet_view.tabSelected = (other is act)
         except Exception:
             pass
 
