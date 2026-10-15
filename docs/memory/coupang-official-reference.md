@@ -1,17 +1,17 @@
 ---
 name: coupang-official-reference
-description: 쿠팡 공식 운영지식 압축참조(상품등록·주문·배송반품·수수료정산·SEO/ID). 핵심기능 밖 배경지식 — 필요 시 상세 재수집
-metadata: 
-  node_type: memory
+description: 쿠팡 WING 도움말 133편 전부 학습(2026-10-15) — 상세 SSOT=repo docs/COUPANG_WING_HELP_KB.md. 재학습 금지·수정일 바뀐 글만 갱신
+metadata:
   type: reference
-  originSessionId: fd9529df-6f22-4998-bfda-be5db28b97c5
-  modified: 2026-09-11T00:09:45.667Z
 ---
 
-핵심 기능(로그인·판매수집·키워드·순위·서식) 밖의 **쿠팡 공식 운영지식 압축**. 상세가 필요하면 그때 WING/공식문서로 재수집.
+**쿠팡 공식 운영지식의 SSOT = repo `docs/COUPANG_WING_HELP_KB.md`** (2026-10-15 WING 도움말 133편 전부 읽고 우리 말로 요약 — 정산13·주문배송16·상품관리36·로켓그로스23·이용안내25·판매자정보5·기타15). 같은 내용을 **다시 학습하지 말 것** — 문서 §0-2 '읽은 글 목록'의 수정일과 비교해 바뀐 글만 다시 읽고 해당 절만 고친다(읽기 API·분류번호는 §0).
 
-- **상품등록**: WING 14단계. 규격=상품명 100자·옵션 200·이미지 500×500 흰배경·searchTags 20개. 엑셀 일괄등록 가능. 판매불가 품목 존재. Open API 스키마=골격(위탁은 UI 경로).
-- **주문관리**: 발주서(shipmentBox) 단위. 상태 ACCEPT→INSTRUCT→DEPARTURE→DELIVERING→FINAL_DELIVERY. 취소는 결제완료/상품준비중만. 정산=구매확정 기준.
-- **배송/반품**: 출고소요일 기준. 판매자점수(정시출고 99·배송 95). 로켓그로스 입고=바코드/낱개포장/회송 80%. 반품비=사유 제공자 부담.
-- **수수료/정산**: 판매수수료 4~10.9%(할인가 기준). 주정산 70/30·월정산 15영업일. 로켓그로스 요금·서비스료 55,000. (수치는 시점 변동)
-- **SEO·ID모델**: 검색=카테고리+상품명+검색어+옵션(중복어 금지). 랭킹=실적+선호+경쟁력+정확도(SEO만 아님). **productId 가변 / vendorItemId 불변** → 변경추적은 vendorItemId 기준. [[ledger-scoped-tracking]] [[seldoc-output-format]]
+자주 쓰는 결론(상세·근거는 문서):
+- 통장 입금 4갈래: 윙 정산 / 로켓그로스 월렛 인출 / **우대수수료 환급(쿠팡페이, ≈17일·≈2일)** / 재고 손실 보상(월 단위·CFS와 상계). 대사 때 메뉴 4곳 모두 확인.
+- 판매자서비스이용료 5만+VAT는 **주정산이면 최종액(30%) 때 차감**. 광고비·밀크런·CFS·정산차감은 각 메뉴 엑셀이 증빙. 정산 > **지급내역** 엑셀 = 지급분 주문별 상세.
+- 원본에 구매자 개인정보 → 암호화 보관·캡처 금지.
+- 옛 메모 수치 정정: 상품명 **최대 120자**(2026-09-14 정책), 대표이미지 최소 1000×1000, 판매자점수 우수 기준 정시출고 98·정시배송 95·주문이행 98·24h답변 95. 2차 인증 2026-03-19부터 SMS만.
+- ID 모델: 옵션ID=vendorItemId(변경추적 기준) · 등록상품ID=sellerProductId · 노출상품ID=productId. 노출상품명은 쿠팡이 바꿀 수 있음([[product-name-convention-ledger-vs-result]]).
+
+관련: [[settlement-domain-knowledge]] [[settlement-batch-download-decisions]] [[settlement-statement-rules]]
