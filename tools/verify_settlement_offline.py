@@ -133,9 +133,11 @@ def p2_payout_rules():
     expect(ValueError, lambda: P.payout_date(P.PAYOUT_MP_WEEKLY_1ST, holidays=HOL), "week_end 누락")
     expect(ValueError, lambda: P.payout_date(P.PAYOUT_MP_MONTHLY, holidays=HOL), "revenue_month 누락")
     expect(ValueError, lambda: P.payout_date(P.PAYOUT_MP_MONTHLY, revenue_month="2026/08", holidays=HOL), "월 형식")
-    # 실측 규칙(2026-10-06): 윙 70%=전체×70% · 로켓그로스 70%=줄별 70% 사사오입 합 · 30%=전체−70%
-    assert P.payout_amount(P.PAYOUT_MP_WEEKLY_1ST, [15, 25]) == 28             # 40×0.7 (줄별이면 29)
-    assert P.payout_amount(P.PAYOUT_MP_WEEKLY_FINAL, [15, 25]) == 40 - (11 + 18)  # 윙 최종액=주별 합계마다 70% 뺀 나머지
+    # 실측 규칙(D-066·2026-10-15): 윙 70%=구매확정일 하루 합마다 70% 사사오입 합(입력=하루 합 목록) ·
+    # 로켓그로스 70%=줄(주문)마다 70% 사사오입 합 · 30%=전체−70%  (옛 '윙=기간 전체×70%'는 76건 중 56건만 맞아 폐기)
+    assert P.payout_amount(P.PAYOUT_MP_WEEKLY_1ST, [15, 25]) == 11 + 18        # 하루 합마다 10.5→11·17.5→18
+    assert P.payout_amount(P.PAYOUT_MP_WEEKLY_1ST, [17622, 222411, 148185, 70755]) == 321282   # 실측 니코에이블 9/18(기간 합이면 321,281)
+    assert P.payout_amount(P.PAYOUT_MP_WEEKLY_FINAL, [15, 25]) == 40 - (11 + 18)  # 윙 최종액=하루 합마다 70% 뺀 나머지
     assert P.payout_amount(P.PAYOUT_MP_WEEKLY_FINAL, [49721, 16364, 11191, 337770]) == 124513   # 실측 8월 최종액 화면값
     assert P.payout_amount(P.PAYOUT_RG_WEEKLY_1ST, [15, 25]) == 11 + 18        # 10.5→11·17.5→18(줄별)
     assert P.payout_amount(P.PAYOUT_RG_WEEKLY_FINAL, [15, 25]) == 40 - 29      # 나머지(줄별 30% 합 5+8=13 아님)

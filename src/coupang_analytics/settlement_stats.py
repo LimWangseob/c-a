@@ -198,24 +198,33 @@ def payout_lines(files: list[SettleFile], warns: list | None = None) -> list[tup
         if f.channel == CH_WING and f.kind == "최종액":
             out += _final_lines(f, covered, warns)
         elif f.channel == CH_WING:
-            out.append((f, "주정산 70%", P.payout_amount(P.PAYOUT_MP_WEEKLY_1ST, [sum(amounts)])))
+            out.append((f, "주정산 70%", P.payout_amount(P.PAYOUT_MP_WEEKLY_1ST, _day_sums(f.rows))))
         else:
             out.append((f, "주정산 70%", P.payout_amount(P.PAYOUT_RG_WEEKLY_1ST, amounts)))
             out.append((f, "2차 30%", P.payout_amount(P.PAYOUT_RG_WEEKLY_FINAL, amounts)))
     return out
 
 
+def _day_sums(rows) -> list[int]:
+    """윙 70% 묶음 = 구매확정일 하루 합(D-066 실측). 날짜 없는 줄(배송비 등)은 따로 한 묶음."""
+    days: dict = {}
+    for r in rows:
+        days[r.recognized] = days.get(r.recognized, 0) + r.settle
+    return list(days.values())
+
+
 def _final_lines(f: SettleFile, covered: set, warns: list) -> list[tuple]:
     weeks: dict = {}
     for r in f.rows:
-        weeks[r.due] = weeks.get(r.due, 0) + r.settle
+        weeks.setdefault(r.due, []).append(r)
     if None in weeks:
         warns.append(f"{f.account} 윙 최종액 {f.period_start}~{f.period_end}: 정산예정일 없는 금액 줄 — "
                      "30% 계산이 화면과 다를 수 있음")
-    lines = [(f, f"주정산 70%(정산예정 {due}·월별 파일에서 계산)", P.payout_amount(P.PAYOUT_MP_WEEKLY_1ST, [amt]))
-             for due, amt in sorted(weeks.items(), key=lambda kv: str(kv[0]))
+    lines = [(f, f"주정산 70%(정산예정 {due}·월별 파일에서 계산)", P.payout_amount(P.PAYOUT_MP_WEEKLY_1ST, _day_sums(rows)))
+             for due, rows in sorted(weeks.items(), key=lambda kv: str(kv[0]))
              if due is not None and (f.account, due) not in covered]
-    lines.append((f, "최종액 30%", P.payout_amount(P.PAYOUT_MP_WEEKLY_FINAL, list(weeks.values()))))
+    lines.append((f, "최종액 30%", P.payout_amount(P.PAYOUT_MP_WEEKLY_FINAL,
+                                                  [a for rows in weeks.values() for a in _day_sums(rows)])))
     return lines
 
 
