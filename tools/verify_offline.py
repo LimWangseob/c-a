@@ -1221,6 +1221,27 @@ def t1_date_columns():
     assert wb3.product_latest_date("정렬", "상품") == "09.03", "product_latest_date 날짜기준 아님"
     _ok("최신 날짜=맨 왼쪽(H열)·오래된=오른쪽(내림차순)·latest_date/product_latest_date 날짜기준")
 
+    # (D) 1행 순위 안내(H1)는 날짜 값이 아님 — 날짜 칸 재정렬 때 날짜를 따라 오른쪽으로 밀리면 안 됨.
+    #     라이브 output(22) 2026-10-15: 하루 한 칸씩 밀려 H1~N1 에 안내 7개 반복(D-014 도입 10-09 이후).
+    d4 = Path(tempfile.mkdtemp())
+    wb4 = OutputWorkbook.empty()
+    wb4.ensure_product_block("안내", "상품", config.KIND_CONTRACT, ["kw"])
+    for i, lbl in enumerate(("10.13", "10.14", "10.15")):   # 매일 저장·다시 읽기(마스터 이어쓰기)
+        wb4.set_keyword_rank("안내", "상품", "kw", lbl, i + 1)
+        wb4.apply_style()
+        wb4.save(d4 / "m.xlsx")
+        wb4 = OutputWorkbook.load(d4 / "m.xlsx")
+    ws4 = wb4.wb["안내"]
+    notes = [c.coordinate for c in ws4[1] if c.value == config.RANK_NOTE_TEXT]
+    assert notes == ["H1"], f"1행 순위 안내가 날짜 칸마다 반복: {notes}"
+    for c in (9, 10):   # 이미 밀려 쌓인 마스터(운용 파일) → 다음 날짜 재정렬 때 저절로 정리
+        ws4.cell(1, c, config.RANK_NOTE_TEXT)
+    wb4.set_keyword_rank("안내", "상품", "kw", "10.16", 4)
+    wb4.apply_style()
+    notes = [c.coordinate for c in wb4.wb["안내"][1] if c.value == config.RANK_NOTE_TEXT]
+    assert notes == ["H1"], f"이미 쌓인 1행 안내가 다음 날짜에 정리 안 됨: {notes}"
+    _ok("1행 순위 안내 = H1 하나(날짜 칸 재정렬에 따라 밀려 반복되지 않음·쌓인 것도 다음 날짜에 정리)")
+
 
 def t1_inventory_missing_error():
     print("[15] 재고 표기 규칙 (재고현황 값/0=품절/**판매중지 무관 미입고**·재고=재고현황 API만·소유자 2026-09-24 개정)")

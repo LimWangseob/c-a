@@ -177,7 +177,28 @@ def t5_gsheet():
              and r["updateSheetProperties"]["properties"].get("index") == 0]
     assert moves and moves[-1]["updateSheetProperties"]["properties"]["sheetId"] == 99, moves
     assert any("updateCells" in r for r in c.reqs)
-    ok("ensure_sheet → 값·서식 교체 → index 0 이동 · 사업자 미러링 목록엔 없음")
+    bad = _merges_across_freeze(c.reqs)   # 라이브 2026-10-15 400 "You can't merge frozen and non-frozen columns"
+    assert not bad, f"틀고정 경계를 가로지르는 병합(구글시트 400): {bad[:3]}"
+    ok("ensure_sheet → 값·서식 교체 → index 0 이동 · 사업자 미러링 목록엔 없음 · 틀고정 경계 넘는 병합 없음")
+
+
+def _merges_across_freeze(reqs: list) -> list:
+    """구글시트는 고정/비고정 행·열에 걸친 병합을 거부(400) — 같은 시트의 틀고정 값으로 병합 범위 검사."""
+    frozen = {}
+    for r in reqs:
+        g = r.get("updateSheetProperties", {}).get("properties", {})
+        if "gridProperties" in g:
+            gp = g["gridProperties"]
+            frozen[g["sheetId"]] = (gp.get("frozenRowCount", 0), gp.get("frozenColumnCount", 0))
+    bad = []
+    for r in reqs:
+        m = r.get("mergeCells", {}).get("range")
+        if not m:
+            continue
+        fr, fc = frozen.get(m["sheetId"], (0, 0))
+        if m["startColumnIndex"] < fc < m["endColumnIndex"] or m["startRowIndex"] < fr < m["endRowIndex"]:
+            bad.append(m)
+    return bad
 
 
 def t6_collect():

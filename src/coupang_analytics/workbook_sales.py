@@ -82,7 +82,11 @@ def _write_section(ws, r: int, sec) -> int:
     """구역 하나(제목·머리 2줄·전체 합계·계정 소계·상품 줄) — 마지막으로 쓴 행 번호 반환."""
     last = 3 + 2 * len(sec.cols)
     _cell(ws, r, 1, sec.title, font=Font(name=_FN, size=12, bold=True), fill=_FILL_SEC)
-    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=last)
+    # 제목 병합 = 고정 열 A:C 안에서만(freeze D3) — 구글시트는 고정·비고정 열에 걸친 병합을 400 으로 거부하고
+    # 그 뒤 계정목록 동기화까지 막음(라이브 2026-10-15 "You can't merge frozen and non-frozen columns").
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=3)
+    for c in range(4, last + 1):
+        _cell(ws, r, c, None, fill=_FILL_SEC)   # 오른쪽은 같은 색만(병합 없이 한 띠로 보이게)
     h1, h2 = r + 1, r + 2
     for c, h in enumerate(("계정", "상품", "구분"), 1):
         _cell(ws, h1, c, h, bold=True, fill=_FILL_HEAD, box=True, center=True)

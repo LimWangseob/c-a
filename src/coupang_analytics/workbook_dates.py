@@ -219,9 +219,11 @@ class _DateMixin:
         (첫 컬럼만 보던 옛 로직은 오늘 새로 쓴 둘째 컬럼 값을 유실했음)."""
         ws = self.wb[biz]
         max_row = ws.max_row
-        # 스냅샷: 같은 날짜의 여러 컬럼 중 오름차순으로 훑어 마지막(최신) 비어있지 않은 값을 (행,날짜)로 보존
+        # 스냅샷: 같은 날짜의 여러 컬럼 중 오름차순으로 훑어 마지막(최신) 비어있지 않은 값을 (행,날짜)로 보존.
+        # 1행(제목·순위 안내 H1)은 날짜 값이 아님 → 옮기지 않고 아래에서 비움(서식이 H1 에 다시 씀). 옮기면
+        # 안내가 날짜를 따라 하루 한 칸씩 밀려 1행에 반복됨(라이브 output(22) 2026-10-15 H1~N1 7개).
         snap: dict[tuple[int, object], object] = {}
-        for r in range(1, max_row + 1):
+        for r in range(2, max_row + 1):
             for dd, cs in date2cols.items():
                 for c in sorted(cs):
                     v = ws.cell(r, c).value
