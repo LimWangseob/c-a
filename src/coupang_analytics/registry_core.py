@@ -97,6 +97,7 @@ class _Run:
         self.events: list[HistRow] = []
         self.warnings: list[str] = list(snap.warnings)
         self.state = _replay_status(reg.history)
+        self.judge = None   # 상품명 변경 자동 판단(registry_judge.make_judge·D-070) — 없으면 사람 승인(확인필요)
 
     def biz_of(self, aid: str) -> str:
         sa = self.snap.accounts.get(aid)

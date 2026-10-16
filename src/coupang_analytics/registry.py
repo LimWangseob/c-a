@@ -59,12 +59,13 @@ def _summary(ctx: _Run) -> dict:
     }
 
 
-def sync(reg: Registry, snap: LedgerSnapshot, *, now: datetime) -> SyncResult:
+def sync(reg: Registry, snap: LedgerSnapshot, *, now: datetime, judge=None) -> SyncResult:
     """대장 스냅샷을 원장에 반영하고 이번 실행의 이력 줄을 돌려준다(reg 를 제자리 갱신).
 
     원장이 비어 있으면 최초 구축(변동유형=최초등록). 급감이면 RegistryGuardError(아무것도 안 바꿈).
     """
     ctx = _Run(reg, snap, now)
+    ctx.judge = judge   # 상품명 변경 자동 판단(D-070) — None 이면 확인필요(사람 승인)
     initial = not reg.rows
     if not initial:
         _guard_drop(ctx)

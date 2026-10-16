@@ -99,14 +99,35 @@ def _auto_rename_spacing(ctx: _Run, sa: SnapAccount, removed: list, added: list)
         news = [x for x in added if same(x, o)]
         if len(news) != 1 or sum(1 for x in removed if same(x, o)) != 1:
             continue                                   # 1:1 이 아니면 자동 판단하지 않음(일반 규칙으로)
-        new = news[0]
-        row = ctx.reg.rows.pop((sa.account_id, o))
-        row.product = new
-        ctx.reg.rows[row.key] = row
-        ctx.emit(SHEET_PROD, K_CONFIRMED, sa.account_id, product=new, item=ITEM_PROD_NAME, old=o, new=new,
-                 source=ctx.snap.ref("상품명", sa.products[new].row_no), note="자동 — 띄어쓰기·대소문자만 다름")
+        _rename_row(ctx, sa, o, news[0], "자동 — 띄어쓰기·대소문자만 다름")
         n += 1
     return n
+
+
+def _rename_row(ctx: _Run, sa: SnapAccount, old: str, new: str, note: str) -> None:
+    """원장 줄 이름만 바꿈(등록일·이력 이어짐) + 이력 확인완료(확인상태=자동반영) 1줄."""
+    row = ctx.reg.rows.pop((sa.account_id, old))
+    row.product = new
+    ctx.reg.rows[row.key] = row
+    ctx.emit(SHEET_PROD, K_CONFIRMED, sa.account_id, product=new, item=ITEM_PROD_NAME, old=old, new=new,
+             source=ctx.snap.ref("상품명", sa.products[new].row_no), note=note)
+
+
+def _judge_pairs(ctx: _Run, sa: SnapAccount, pairs: list) -> list:
+    """이름 변경 의심 쌍 자동 판단(D-070) — 같은 상품=즉시 이름 변경 · 다른 상품=보류 없이 신규+관리중단 ·
+    판단 불가(AI 장애 등)만 확인필요로 남김(다음 실행에서 다시 판단). 반환 = 남길 쌍."""
+    from .registry_judge import DIFFERENT, SAME
+    verdicts = ctx.judge(sa.account_id, pairs)
+    keep = []
+    for o, n in pairs:
+        v, why = verdicts.get((o, n), ("unsure", ""))
+        if v == SAME:
+            _rename_row(ctx, sa, o, n, f"자동 — 같은 상품({why})")
+        elif v == DIFFERENT:
+            ctx.warnings.append(f"상품명 '{o}' → '{n}' = 다른 상품으로 자동 판단({why}) — 옛 줄 관리중단·새 줄 신규")
+        else:
+            keep.append((o, n))
+    return keep
 
 
 def _variant_pairs(aid: str, removed: list, added: list) -> set:
@@ -125,6 +146,9 @@ def _update_account(ctx: _Run, sa: SnapAccount) -> None:
         existing, removed, added = _removed_added(ctx, sa)
     skip = _rejected_pairs(ctx.reg, SHEET_PROD) | _variant_pairs(aid, removed, added)
     pairs = _pair_by_similarity(removed, added, skip, aid)
+    if ctx.judge and pairs:
+        pairs = _judge_pairs(ctx, sa, pairs)
+        existing, removed, added = _removed_added(ctx, sa)
     held_old, held_new = _hold_renames(ctx, SHEET_PROD, K_RENAME_PROD, ITEM_PROD_NAME, aid, pairs,
                                        lambda n: ctx.snap.ref("상품명", sa.products[n].row_no))
     for name, sp in sa.products.items():

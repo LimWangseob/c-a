@@ -107,14 +107,14 @@ FUNC_CONTRACTS: dict = {
          "P:stock_url:0 P:input_url:0 K:dry_run:1 K:on_log:1 K:stock_client:1 K:ledger_client:1"),
     ],
     registry: [
-        ("sync", "P:reg:0 P:snap:0 K:now:0"),
+        ("sync", "P:reg:0 P:snap:0 K:now:0 K:judge:1"),   # judge 선택 인자 = D-070 상품명 변경 자동 판단(기존 호출 호환)
         # 2단계(§10-1): 원장→앱 입력 변환·직전 비번(registry_input, registry 재수출)
         ("previous_password", "P:reg:0 P:account_id:0"),
         ("to_input_list", "P:reg:0 P:as_of:1 K:on_log:1"),
         ("password_map", "P:reg:0"),
     ],
     registry_gsheet: [
-        ("run_sync", "P:client:0 P:read_ledger:0 K:now:1 K:log:1 K:dry_run:1 K:backup_dir:1 K:lock_path:1"),
+        ("run_sync", "P:client:0 P:read_ledger:0 K:now:1 K:log:1 K:dry_run:1 K:backup_dir:1 K:lock_path:1 K:judge:1"),   # judge = D-070
         ("run_backfill", "P:client:0 P:snapshots:0 K:log:1 K:dry_run:1 K:backup_dir:1 K:lock_path:1"),
         ("load_registry", "P:client:0"),
         ("save_registry", "P:client:0 P:reg:0 P:res:0 P:now:0"),

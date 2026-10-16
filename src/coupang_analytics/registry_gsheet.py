@@ -381,7 +381,8 @@ def _backfill_locked(client, snapshots: list, log, dry_run: bool, backup_dir) ->
 
 
 def run_sync(client, read_ledger, *, now: datetime | None = None, log=None, dry_run: bool = False,
-             backup_dir: str | Path | None = "output/백업", lock_path: str | Path = DEFAULT_LOCK_PATH) -> SyncResult:
+             backup_dir: str | Path | None = "output/백업", lock_path: str | Path = DEFAULT_LOCK_PATH,
+             judge=None) -> SyncResult:
     """대장 → 원장 동기화 1회. read_ledger() → (시트명, 값격자, 취소선격자). 실패는 예외로 전파(쓰기 없음).
     원장 읽기부터 쓰기까지 원장 잠금(lock_path) 안에서(미리보기 제외) — 못 얻으면 RegistryLockError."""
     log = log or (lambda m: None)
@@ -389,19 +390,40 @@ def run_sync(client, read_ledger, *, now: datetime | None = None, log=None, dry_
     title, rows, strike = read_ledger()                       # 실패 = 여기서 중단(원장 미접촉)
     snap = parse_ledger(rows, strike, title)
     with _write_lock(dry_run, lock_path, log):
-        return _sync_locked(client, snap, now, log, dry_run, backup_dir)
+        return _sync_locked(client, snap, now, log, dry_run, backup_dir, judge)
 
 
-def _sync_locked(client, snap, now: datetime, log, dry_run: bool, backup_dir) -> SyncResult:
+def _sync_locked(client, snap, now: datetime, log, dry_run: bool, backup_dir, judge=None) -> SyncResult:
     exists, raws, reg = _load_existing(client)
     check_integrity(reg)
     if backup_dir and exists and not dry_run:
         backup_local(raws, backup_dir, now, log)
-    res = sync(reg, snap, now=now)
+    res = sync(reg, snap, now=now, judge=judge)
     _log_result(res, log, dry_run)
     if dry_run:
         return res
     if not exists:
         init_sheets(client, log)
     save_registry(client, reg, res, now)
+    _mark_auto_resolved(client, res, now)
     return res
+
+
+_AUTO_NOTE = re.compile(r"^#(\d+) 자동 (승인|반려)")
+
+
+def _mark_auto_resolved(client, res: SyncResult, now: datetime) -> None:
+    """자동 승인·반려(D-070)한 '확인필요' 원래 줄의 확인상태·확인자·확인일 칸을 채움 — 시트에 확인필요가 남아 사람이
+    처리할 일로 보이지 않게. 처리 근거는 새 이력 줄 비고(#번호 자동 승인/반려 — 근거)."""
+    for h in res.events:
+        m = _AUTO_NOTE.match(h.note or "")
+        if not m:
+            continue
+        rows = client.read_values(h.sheet)
+        head = [str(x) for x in rows[0]]
+        i_no, i_c = head.index("번호"), head.index("확인상태")
+        for r_i, r in enumerate(rows[1:], start=2):
+            if r and str(r[i_no]).strip() == m.group(1):
+                client.write_values(h.sheet, [[m.group(2), "AI 자동", now.strftime("%Y-%m-%d")]],
+                                    start=f"{get_column_letter(i_c + 1)}{r_i}", raw=True)
+                break

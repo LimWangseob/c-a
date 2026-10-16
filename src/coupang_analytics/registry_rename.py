@@ -31,6 +31,27 @@ def _resolve_confirmations(ctx: _Run) -> None:
             _apply_rename(ctx, h)
         elif h.confirm == C_REJECT:
             _close_rename(ctx, h, K_REJECTED, f"#{h.no} 반려")
+    _auto_resolve_pending(ctx, done)
+
+
+def _auto_resolve_pending(ctx: _Run, done: set) -> None:
+    """사람이 손대지 않은 상품명 변경 '확인필요'를 자동 판단(D-070) — 같은 상품=자동 승인 · 다른 상품=자동 반려 ·
+    판단 불가=그대로(다음 실행에서 다시). 비고 '#번호 자동 승인/반려 — 근거'(원래 줄 확인상태는 저장 때 함께 표시)."""
+    if not ctx.judge:
+        return
+    from .registry_judge import DIFFERENT, SAME
+    pend: dict[str, list[HistRow]] = {}
+    for h in ctx.reg.history:
+        if h.kind == K_RENAME_PROD and h.confirm == C_PENDING and (h.sheet, h.no) not in done:
+            pend.setdefault(h.account_id, []).append(h)
+    for aid, hs in pend.items():
+        verdicts = ctx.judge(aid, [(h.old, h.new) for h in hs])
+        for h in hs:
+            v, why = verdicts.get((h.old, h.new), ("unsure", ""))
+            if v == SAME:
+                _apply_rename(ctx, h, f"#{h.no} 자동 승인 — {why}")
+            elif v == DIFFERENT:
+                _close_rename(ctx, h, K_REJECTED, f"#{h.no} 자동 반려 — {why}")
 
 
 def _close_rename(ctx: _Run, h: HistRow, kind: str, note: str) -> None:
@@ -38,7 +59,7 @@ def _close_rename(ctx: _Run, h: HistRow, kind: str, note: str) -> None:
              source=h.source, note=note)
 
 
-def _apply_rename(ctx: _Run, h: HistRow) -> None:
+def _apply_rename(ctx: _Run, h: HistRow, note: str = "") -> None:
     reg, snap = ctx.reg, ctx.snap
     if h.kind == K_RENAME_PROD:
         new_in_ledger = h.new in getattr(snap.accounts.get(h.account_id), "products", {})
@@ -58,7 +79,7 @@ def _apply_rename(ctx: _Run, h: HistRow) -> None:
             del reg.rows[row.key]
             row.account_id = h.new
             reg.rows[row.key] = row
-    _close_rename(ctx, h, K_CONFIRMED, f"#{h.no} 승인")
+    _close_rename(ctx, h, K_CONFIRMED, note or f"#{h.no} 승인")
 
 
 # ── 이름 변경 의심(보류) ─────────────────────────────────────────

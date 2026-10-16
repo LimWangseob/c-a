@@ -683,3 +683,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 확인필요를 자동 승인(다른 상품끼리 이력 섞일 위험 — §6 원칙 위배) · 새 이름 줄을 임시로 추가(승인 전 중복 줄·무결성 깨짐).
 - 영향 범위: `src/coupang_analytics/registry_gsheet.py`(write_coupang_check·_plan_checks·_pending_renames) · `tools/verify_registry_offline.py` R17b. ⚠ 사람 조치: 원장 상품이력 #92·#105 승인/반려(승인 전엔 원장 상품명이 옛 이름). HQ 포팅 대상.
 - 상태: ACTIVE
+
+### D-070 [REGISTRY_AUTO_RENAME_JUDGE] 원장 상품명 변경 의심 = 사람 승인 대신 자동 판단(글자 규칙 → 쿠팡 상품번호 → AI) · 남은 확인필요도 자동 처리 (2026-10-16, R13)
+- 결정: 대장 상품명이 바뀐 것으로 보이는 쌍(유사도 쌍·기존 `확인필요`)을 앱이 자동 판단해 바로 반영한다 — ①띄어쓰기·대소문자·괄호·문장부호만 다름 = 같은 상품 ②앱 매칭 고정 기록에서 두 이름의 VID 겹침 = 같음/안 겹침 = 다름 ③AI(OpenAI) 같음/다름/모름. 같음 = 이름변경(이력·등록일 이어짐·이력 비고에 근거) · 다름 = 옛 줄 관리중단 + 새 줄 신규 · 모름·AI 장애만 `확인필요`로 남기고 다음 실행에서 다시 판단. 자동 처리한 기존 `확인필요` 줄은 확인상태(승인/반려)·확인자 `AI 자동`·확인일을 채운다. 사람이 넣은 승인/반려가 있으면 그게 우선. 계정아이디 변경 의심은 사람 승인 유지. LEDGER_REGISTRY §6 '자동 병합 금지'를 이 범위에서 대체(근거를 남기는 판단 병합).
+- 근거: 소유자 2026-10-16 "이런 유사건은 AI 가 판단해서 보정하고 자동 진행하도록 — 내가 승인과 보류를 인지하지 못해". 실측: #92('코골이 방지 기구'→'코골이 방지 기구(')·#105('팔찌경보기'→'팔찌경보기 JN104')가 9-30부터 16일간 미처리 → 쿠팡확인 매일 누락(D-069). 두 쌍 모두 이름 변경 전후 VID 동일(94632081597·96117125727) = 같은 상품이었음. 시험 R17c: 글자 규칙 무보류(AI 호출 없음)·AI 같음 이름 이어짐·AI 다름 관리중단+신규·AI 장애만 확인필요 → 다음 실행 자동 승인·원래 줄 표시·재처리 없음·무결성.
+- 버린 대안: 확인필요 유지 + 알림(소유자가 승인 흐름 자체를 원치 않음) · 무조건 같은 상품으로 병합(다른 용량·색상 상품 이력 섞임) · 무조건 다른 상품(이름 오타 수정마다 이력 끊김).
+- 영향 범위: 신규 `src/coupang_analytics/registry_judge.py` · `registry.py`(sync judge) · `registry_core.py`(_Run.judge) · `registry_apply.py`(_rename_row·_judge_pairs) · `registry_rename.py`(_auto_resolve_pending·_apply_rename note) · `registry_gsheet.py`(run_sync judge·_mark_auto_resolved) · `ui/registry_ui.py`(rename_judge — OpenAI 키·매칭 고정 기록) · `tools/verify_registry_offline.py` R17c · `designs/LEDGER_REGISTRY.md` §4 표·§6-1. HQ 포팅 대상.
+- 상태: ACTIVE

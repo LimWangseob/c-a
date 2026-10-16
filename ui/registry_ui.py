@@ -26,7 +26,21 @@ def sync(registry_url: str, input_url: str, store, log, *, dry_run: bool = False
     """대장 → 원장 동기화 1회(dry_run=True 면 미리보기·쓰기 없음). 실패는 예외로 올린다(호출부가 판단)."""
     client = gsheet_api.GSheetClient(registry_url, store=store, on_log=log)
     return registry_gsheet.run_sync(client, lambda: read_ledger_rows(input_url, store=store),
-                                    log=log, dry_run=dry_run)
+                                    log=log, dry_run=dry_run, judge=rename_judge(store, log))
+
+
+def rename_judge(store, log):
+    """상품명 변경 자동 판단(D-070) — 글자 규칙 → 앱 매칭 고정 기록(VID) → AI(OpenAI). 키·기록이 없으면 그 단계만 생략."""
+    from coupang_analytics import match_anchor, product_match_ai, registry_judge
+    key = store.get_password("__openai__") if store is not None else None
+    if not key:
+        log("[원장] OpenAI 키 없음 — 상품명 변경은 글자 규칙·상품번호로만 자동 판단(나머지는 다음 실행에서 다시)")
+    try:
+        anchors = registry_judge.load_anchor_file(match_anchor.anchor_path())
+    except (OSError, ValueError) as exc:
+        log(f"[원장] ⚠ 매칭 고정 기록 읽기 실패 — 상품번호 판단 생략 · {exc.__class__.__name__}")
+        anchors = {}
+    return registry_judge.make_judge(product_match_ai.openai_ask(key) if key else None, anchors, log)
 
 
 def presync(registry_url: str, input_url: str, store, log) -> bool:

@@ -617,6 +617,80 @@ def t17b_check_during_pending_rename():
     ok("확인필요 중 새 이름 쿠팡확인 → 옛 이름 줄에 기록·'원장에 없음' 없음·무결성 유지")
 
 
+def t17c_auto_rename_judge():
+    print("[R17c] 상품명 변경 자동 판단(D-070) — 글자 규칙·AI 같음/다름 자동 처리·AI 장애만 확인필요·기존 확인필요 자동 처리")
+    from coupang_analytics import registry_judge as J
+    ix = None
+
+    def hist(cli):
+        rows = cli.grids[M.SHEET_PROD]
+        h = rows[0]
+        return [dict(zip(h, r + [""] * (len(h) - len(r)))) for r in rows[1:]]
+
+    def names(cli):
+        g = cli.grids[M.SHEET_MAIN]
+        i = g[0].index("상품명")
+        return {r[i] for r in g[1:]}
+
+    def rename(acc, old, new):
+        acc = copy.deepcopy(acc)
+        for pr in acc[0]["products"]:
+            if pr["name"] == old:
+                pr["name"] = new
+        return acc
+    calls = []
+
+    def ask_same(system, user):
+        calls.append(user)
+        return {"items": [{"id": 1, "verdict": "same", "reason": "용량 표기 덧붙임"}]}
+
+    def ask_diff(system, user):
+        calls.append(user)
+        return {"items": [{"id": 1, "verdict": "different", "reason": "다른 용량 상품"}]}
+
+    def ask_fail(system, user):
+        raise RuntimeError("openai down")
+    cli = FakeClient()
+    acc = base()
+    with tempfile.TemporaryDirectory() as tmp:
+        RG.run_sync(cli, reader(acc), now=day(1), backup_dir=tmp, lock_path=LOCK)
+        # (1) 글자 규칙 — 괄호만 다름(실측 '코골이 방지 기구(') → AI 호출 없이 이름 변경·확인필요 없음
+        acc = rename(acc, "예시 오메가3 60캡슐", "예시 오메가3 60캡슐(")
+        RG.run_sync(cli, reader(acc), now=day(2), backup_dir=tmp, lock_path=LOCK, judge=J.make_judge(ask_same))
+        assert "예시 오메가3 60캡슐(" in names(cli) and "예시 오메가3 60캡슐" not in names(cli), names(cli)
+        assert not calls and not any(r["확인상태"] == M.C_PENDING for r in hist(cli)), "글자 규칙 = AI 없이·보류 없음"
+        # (2) AI 같음 → 자동 이름 변경(이력 이어짐)
+        acc = rename(acc, "예시 비타민C 120정", "예시 비타민C 120정 대용량")
+        RG.run_sync(cli, reader(acc), now=day(3), backup_dir=tmp, lock_path=LOCK, judge=J.make_judge(ask_same))
+        reg = RG.load_registry(cli)
+        assert ("example01", "예시 비타민C 120정 대용량") in reg.rows and ("example01", "예시 비타민C 120정") not in reg.rows
+        assert reg.rows[("example01", "예시 비타민C 120정 대용량")].registered == "2026-10-01", "이력 이어짐"
+        assert calls and not any(r["확인상태"] == M.C_PENDING for r in hist(cli))
+        # (3) AI 다름 → 옛 줄 관리중단 + 새 줄 신규(보류 없음)
+        acc = rename(acc, "예시 비타민C 120정 대용량", "예시 비타민C 120정 대용량 2개")
+        RG.run_sync(cli, reader(acc), now=day(4), backup_dir=tmp, lock_path=LOCK, judge=J.make_judge(ask_diff))
+        reg = RG.load_registry(cli)
+        assert ("example01", "예시 비타민C 120정 대용량 2개") in reg.rows
+        assert status(reg, "example01", "예시 비타민C 120정 대용량")[0] == M.ST_STOPPED
+        assert not any(r["확인상태"] == M.C_PENDING for r in hist(cli))
+        # (4) AI 장애 → 이번만 확인필요 → 다음 실행(AI 정상) 자동 승인 + 원래 줄 확인상태 '승인'·확인자 'AI 자동'
+        acc = rename(acc, "예시 오메가3 60캡슐(", "예시 오메가3 60캡슐 리뉴얼")
+        RG.run_sync(cli, reader(acc), now=day(5), backup_dir=tmp, lock_path=LOCK, judge=J.make_judge(ask_fail))
+        pend = [r for r in hist(cli) if r["확인상태"] == M.C_PENDING]
+        assert len(pend) == 1 and pend[0]["변경값"] == "예시 오메가3 60캡슐 리뉴얼", pend
+        RG.run_sync(cli, reader(acc), now=day(6), backup_dir=tmp, lock_path=LOCK, judge=J.make_judge(ask_same))
+        reg = RG.load_registry(cli)
+        assert ("example01", "예시 오메가3 60캡슐 리뉴얼") in reg.rows and ("example01", "예시 오메가3 60캡슐(") not in reg.rows
+        orig = next(r for r in hist(cli) if r["번호"] == pend[0]["번호"])
+        assert (orig["확인상태"], orig["확인자"]) == (M.C_APPROVE, "AI 자동"), orig
+        assert any(r["비고"].startswith(f"#{pend[0]['번호']} 자동 승인") for r in hist(cli))
+        assert not any(r["확인상태"] == M.C_PENDING for r in hist(cli))
+        R.check_integrity(reg)
+        again = RG.run_sync(cli, reader(acc), now=day(7), backup_dir=tmp, lock_path=LOCK, judge=J.make_judge(ask_same))
+        assert again.events == [], kinds(again.events)                       # 다시 처리하지 않음
+    ok("글자 규칙 무보류·AI 같음=이름 이어짐·AI 다름=관리중단+신규·AI 장애만 확인필요→다음 실행 자동 승인·원래 줄 표시")
+
+
 def t18_previous_password():
     print("[R18] 직전 비밀번호 — 변경 없음=None·직전값·계정아이디 변경 추적")
     reg = R.Registry()
@@ -875,6 +949,7 @@ def main():
     t14_ledger_read_fail_and_dry_run()
     t17_write_coupang_check()
     t17b_check_during_pending_rename()
+    t17c_auto_rename_judge()
     t18_previous_password()
     t19_to_input_list()
     t20_write_lock()
