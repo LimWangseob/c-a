@@ -584,6 +584,15 @@ def p21_bank_inflows():
     assert (a["RG 월렛 입금"], a["RG 월렛 인출"], a["재고 손실 보상"]) == (359852, 359852, 53057)
     assert a["쿠팡 지급 합계"] == 359852 + 53057 and a["대표계좌 입금 합계"] == 359852 + 53057
     assert "2026-10" not in rows                                                         # 지급 전 회차 제외
+    # 자동 인출(AUTO_WITHDRAWAL)도 대표계좌로 나간 돈 — 실측 output(23) 2026-10-16: 효성 자동 인출 113건 101,654,006원이
+    # 인출 0 으로 집계돼 대표계좌 입금·월렛장부가 틀림(자동 인출 포함 시 22계정 입금−인출=잔액 원 단위 일치).
+    va = {"수집일": "2026-10-08", "wallet": [
+        {"walletEventType": "DEPOSIT", "paymentDate": "20260803000729", "amount": 359852},
+        {"walletEventType": "AUTO_WITHDRAWAL", "paymentDate": "20260804103634", "amount": 359852}], "wallet_balance": 0.0}
+    auto = {r["지급월"]: r for r in SV.inflows("A", wing, rg, va, today=D("2026-10-08"))}["2026-08"]
+    assert auto["RG 월렛 인출"] == 359852 and auto["대표계좌 입금 합계"] == 359852 + 53057, auto
+    led = [r for r in SV.rg_wallet("A", rg, va) if r["대조"] == "월렛장부"][0]
+    assert (led["우리(계산)"], led["판정"]) == (0, "일치"), led
     none = SV.inflows("A", wing, rg, None, today=D("2026-10-08"))
     assert all(r["RG 월렛 입금"] is None for r in none) and "월렛 자료 없음" in none[0]["비고"]
     import openpyxl

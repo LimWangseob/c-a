@@ -52,6 +52,11 @@ def rg_formula(acct: str, amounts: list) -> list[dict]:
     return [_row(acct, "RG계산식", f"{same + len(out)}줄", "일치 줄 수", same, same + len(out))] + out
 
 
+# 월렛 인출 = 수동(WITHDRAWAL)·자동(AUTO_WITHDRAWAL) 둘 다 대표계좌로 이체(실측 output(23) 2026-10-16 — 자동 인출을 빼면
+# 효성 101,654,006원 등이 '인출 0'으로 잡혀 대표계좌 입금·월렛장부가 틀림. 둘 다 세면 22계정 입금−인출=잔액 원 단위 일치).
+_WITHDRAW = ("WITHDRAWAL", "AUTO_WITHDRAWAL")
+
+
 def _deposits(wallet: list) -> dict:
     out: dict = defaultdict(float)
     for h in wallet:
@@ -79,7 +84,7 @@ def rg_wallet(acct: str, amounts: list, vdata: dict | None) -> list[dict]:
         out.append(_row(acct, "RG입금", f"지급일 {d}", "최종−보상 ↔ 월렛 입금", fin - comp, dep.get(d, 0.0),
                         f"보상 {comp:,.0f} 제외" if comp else ""))
     total_in = sum(dep.values())
-    total_out = sum(h.get("amount") or 0 for h in vdata["wallet"] if h.get("walletEventType") == "WITHDRAWAL")
+    total_out = sum(h.get("amount") or 0 for h in vdata["wallet"] if h.get("walletEventType") in _WITHDRAW)
     out.append(_row(acct, "월렛장부", f"~{collected}", "입금−인출 ↔ 잔액", total_in - total_out, vdata.get("wallet_balance"),
                     "다르면 조회 시작(2025-01) 전 내역 영향 가능"))
     comp_all = sum(r.get("totalCfsInventoryCompensationAmount") or 0 for r in amounts)
@@ -307,7 +312,7 @@ def _inflow_amounts(m: dict, notes: dict, amounts_wing: list, amounts_rg: list, 
 def _inflow_wallet(m: dict, wallet: list) -> None:
     for h in wallet:
         d = str(h.get("paymentDate") or "")
-        kind = {"DEPOSIT": "RG 월렛 입금", "WITHDRAWAL": "RG 월렛 인출"}.get(h.get("walletEventType"))
+        kind = {"DEPOSIT": "RG 월렛 입금", **{w: "RG 월렛 인출" for w in _WITHDRAW}}.get(h.get("walletEventType"))
         if kind:
             m[f"{d[:4]}-{d[4:6]}"][kind] += h.get("amount") or 0
 

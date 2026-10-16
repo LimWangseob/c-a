@@ -704,3 +704,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 이름 유사도 최고값 채택(번호 다른 모델 오매칭) · 대장 상품명 정리 요청(담당자 입력 습관·괄호=노출명 규칙 D-046) · 재고현황 쪽 이름 바꾸기(회사 재고 시트는 읽기 전용).
 - 영향 범위: 신규 `src/coupang_analytics/company_stock_match.py` · `company_stock.py`(_ledger_rows 계정ID·apply_to_workbook·_match_rows·write_company_stock·run_company_stock 선택 인자) · `pipeline_gsheet.py`(push_company_stock·inject_company_stock — 쿠팡 상품명·OpenAI 키·저장 결과) · `tools/verify_registry_offline.py` R21b · `tools/pin_l1_contract.py` · `designs/DESIGN.md` 회사보유재고. HQ 포팅 대상.
 - 상태: ACTIVE
+
+### D-073 [SETTLE_WALLET_AUTO_WITHDRAWAL] 로켓그로스 월렛 인출 = 수동(WITHDRAWAL)·자동(AUTO_WITHDRAWAL) 둘 다 (2026-10-16, R13)
+- 결정: 정산 집계의 '계좌 입금'(RG 월렛 인출·대표계좌 입금 합계)과 검증 '월렛장부'(입금−인출 ↔ 잔액)에서 월렛 이벤트 `AUTO_WITHDRAWAL`(자동 인출)도 인출로 센다(`settlement_verify._WITHDRAW`).
+- 근거: 소유자 2026-10-16 "정산파일 모두 내려받았음 — 계정별 정산 내역 분석·정리" 중 발견. 실측 output(23) 검증자료 27계정 월렛 내역: 자동 인출을 빼면 효성 101,654,006·웰빙곳간 290,571,027·에벤에셀 299,077,259·디프 1,323,333,867 등 14계정이 '인출 0/부족'으로 월렛장부 '다름'·대표계좌 입금 과소. 자동 인출 포함 시 26계정 입금−인출=쿠팡 잔액 원 단위 일치(벅스만 −19,950 — 미확인). 재현: P21 자동 인출 시험 옛 코드 실패(인출 0) → 수정 → 통과.
+- 버린 대안: 잔액으로 역산(인출 시점·월별 대표계좌 입금을 알 수 없음).
+- 영향 범위: `src/coupang_analytics/settlement_verify.py`(_WITHDRAW·rg_wallet·_inflow_wallet) · `tools/verify_settlement_runtime_offline.py` P21 · `designs/SETTLEMENT_MODULE.md` §13. 정산 원본·지급 계산 불변(통장 대사 표시만). HQ 포팅 대상.
+- 상태: ACTIVE
