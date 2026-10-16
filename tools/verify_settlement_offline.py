@@ -621,7 +621,14 @@ def p10_settle_dup_rows():
     assert wing3["A"]["202608"]["정산대상"] == 11890, wing3["A"]                             # 검증 월합도 같은 규칙
     l3 = {label: amt for f, label, amt in ST.payout_lines([sep, aug]) if f is aug}
     assert l3["주정산 70%(정산예정 2026-09-29·월별 파일에서 계산)"] == 8323, l3               # 쿠팡 9/29 '8/31' 줄 지급액
-    ok("한 파일 반복 취소 줄 전부 반영·주정산↔월별 겹친 줄 1회(집계·검증 월합 같은 규칙)·월 경계 주(8/31) 누락 없음")
+    # D-075 월정산(노바네스트 실측 2026-10-16 화면: 8월 GMV 397,500·수수료 47,225·정산 350,275·지급 100%)
+    mon = SF.parse_wing_detail([WING_HDR, _wing_row("3001", "99", "가습기", "96000000001", 397500, 1, 0, 47225, 350275,
+                                                    conf="2026-08-20", due="2026-09-21")],
+                               account="N", period_start=D("2026-08-01"), period_end=D("2026-08-31"))
+    mon.kind, mon.settle_date = "월정산", D("2026-09-21")
+    assert ST.aggregate([mon]).account_totals() == {"N": 350275}
+    assert [(label, amt) for _f, label, amt in ST.payout_lines([mon])] == [("월정산 100%", 350275)]
+    ok("한 파일 반복 취소 줄 전부 반영·주정산↔월별 겹친 줄 1회(집계·검증 월합 같은 규칙)·월 경계 주(8/31) 누락 없음·월정산 100%")
 
 
 def main():

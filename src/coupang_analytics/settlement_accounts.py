@@ -65,6 +65,25 @@ def read_accounts_file(path) -> tuple[list[SettleAccount], list[str]]:
     return parse_accounts_text(text)
 
 
+def login_passwords(a: SettleAccount, store=None) -> tuple[list[str], str]:
+    """정산 로그인에 넣을 비밀번호 후보·출처 설명(값은 설명에 안 씀). 소유자 2026-10-16: **앱처럼 관리대장 비밀번호로** —
+    앱이 관리대장을 읽을 때마다 이 PC 암호 저장소(credstore·DPAPI)에 계정ID별로 저장한 값을 먼저 쓴다. 관리대장에 없는
+    계정(정산만 하는 계정)은 정산 계정 파일 값. 두 값이 다르면 대장 → 파일 순서로 최대 2개(D-012 와 같은 상한·그날 거부된
+    값은 D-068 이 다시 넣지 않음)."""
+    if store is None:
+        from .credstore import CredStore
+        store = CredStore()
+    ledger, file_pw = store.get_password(a.account_id) or "", a.password or ""
+    pws = list(dict.fromkeys(p for p in (ledger, file_pw) if p))
+    if not pws:
+        return [], "비밀번호 없음"
+    if not ledger:
+        return pws, "관리대장에 없음 — 정산 계정 파일 값"
+    if file_pw and file_pw != ledger:
+        return pws, "관리대장·정산 계정 파일 값이 다름 — 관리대장 먼저(거부되면 파일 값 1회)"
+    return pws, "관리대장"
+
+
 def display_name(a: SettleAccount) -> str:
     """파일 이름·기록의 계정명 = '대표자-사업자-계정ID'(계정ID 로 끝나 이름이 바뀌어도 같은 계정을 찾을 수 있음)."""
     return f"{a.label}-{a.account_id}"

@@ -162,12 +162,13 @@ def _profile_busy(profile: str, wait_sec: int = 60, until: datetime | None = Non
     return False
 
 
-def _login(b, a, pw, hidden: bool) -> None:
-    """로그인 + 판정 코드 기록. 차단은 '차단', 비번 오류·미완료는 SessionSkip(재시도 안 함)."""
-    from coupang_analytics.pipeline_sales import LoginBlocked, LoginCredentialError, _ensure_login
+def _login(b, a, pws: list, hidden: bool) -> None:
+    """로그인 + 판정 코드 기록. 차단은 '차단', 비번 오류·미완료는 SessionSkip(재시도 안 함). pws = 관리대장 값 먼저
+    (SA.login_passwords) — 첫 값이 '비밀번호가 다릅니다'일 때만 다음 값 1회(앱 ①과 같은 _login_with_candidates·D-012)."""
+    from coupang_analytics.pipeline_sales import LoginBlocked, LoginCredentialError, _login_with_candidates
     name = name_of(a)
     try:
-        ok = _ensure_login(b, a, pw, log, login=True, semi=not hidden)
+        ok = _login_with_candidates(b, a, pws, log, login=True, semi=not hidden)
     except LoginBlocked as exc:
         LOG.record(name, "로그인", RL.BLOCK, f"로그인 차단 — {exc}")
         raise SessionSkip("로그인 차단(재시도 안 함)") from exc
@@ -190,13 +191,14 @@ def session(a, hidden: bool, until: datetime | None = None):
     prof = account_profile(a.account_id)
     if _profile_busy(prof, until=until):
         raise SessionSkip("이 계정 Chrome 이 계속 실행 중(①판매수집 등) — 회차 끝/대기 시간 초과")
-    pw = a.password                                       # 정산 계정 파일 값(메모리에서만 씀·앱 암호 저장소 미변경)
-    if not pw:
-        raise SessionSkip("계정 파일에 비밀번호 없음")
+    pws, src = SA.login_passwords(a)                      # 관리대장(앱 저장) 값 먼저 · 대장에 없으면 계정 파일 값
+    if not pws:
+        raise SessionSkip("비밀번호 없음(관리대장·정산 계정 파일 모두)")
+    log(f"  [비번] {name_of(a)}: {src}")
     try:
         with registry_lock(BASE / "_잠금" / f"{a.account_id}.lock", wait_sec=5, on_log=log):
             with WingBrowser(profile_dir=prof, offscreen=hidden) as b:
-                _login(b, a, pw, hidden)
+                _login(b, a, pws, hidden)
                 yield b
     except RegistryLockError as exc:
         raise SessionSkip("다른 정산 다운로드가 이 계정을 쓰는 중") from exc

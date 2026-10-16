@@ -718,3 +718,17 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 8/31 주정산 파일도 받기(다운로드 계획 변경 — 같은 주문 두 파일·이중 집계 위험 증가) · 최종액 파일만 쓰기(주정산 파일이 있는 최근 주의 70% 지급 검산 불가).
 - 영향 범위: `src/coupang_analytics/settlement_stats.py` · `tools/verify_settlement_offline.py` P10 · `designs/SETTLEMENT_MODULE.md` §13. 위탁정산서·계약자 정산금액(정산 집계 기반)이 그 계정 8/31 몫만큼 늘어남. HQ 포팅 대상.
 - 상태: ACTIVE
+
+### D-075 [SETTLE_MONTHLY_CYCLE] 월정산 계정 정산 파일 받기 — 윙 'M'·로켓그로스 'MONTHLY' = 주정산과 같은 요청(그 달 전체) (2026-10-16, R13)
+- 결정: 윙 정산주기 `M` = '월정산'(100%) — 주정산과 같은 엑셀 요청(revenue-detail·구매확정일 그 달 1일~말일), 로켓그로스 `MONTHLY` = '월정산' — 같은 request-download(settlementGroupKey·리포트 9종). 지급액 검산 = 윙 PAYOUT_MP_MONTHLY·로켓그로스 PAYOUT_RG_MONTHLY(100%). 'M'·'MONTHLY' 를 건너뛰고 '확인 필요'로 남기던 D-010/D-052 의 해당 부분을 대체.
+- 근거: 소유자 2026-10-16 "노바네스트 로그인 했어"(소유자 Chrome 로그인 → Claude 화면 확인). 실측: 윙 정산현황 '월정산' 줄(정산일 2026-09-21·지급비율 100%·구매확정기간 2026-08-01~08-31·최종지급액 350,275 = 쿠팡 매출내역 8월 397,500−47,225)의 '엑셀 다운로드 요청' = 같은 주소 `/tenants/msf/wing/api/common/excel/revenue-detail/request` → 다운로드 목록 '[중개] 정산현황 주문 상세 내역'·'구매확정일:2026-08-01 - 2026-08-31'·FINISHED. 로켓그로스 정산현황 '월정' 줄(정산일 2026-09-30·매출인식 08-01~08-31·100%·9,263)의 엑셀 다운로드 = 리포트 9종 같은 메뉴·`/tenants/rfm/v2/settlements/request-download/api` → 목록 '판매수수료 리포트' 생성 중. 시험 P1·P29 기대 갱신·P10 월정산 100%.
+- 버린 대안: 계속 건너뜀(노바네스트 윙 매출 14건 '다름'·정산 파일 0) · 월정산 전용 별도 다운로더(같은 요청이라 불필요).
+- 영향 범위: `src/coupang_analytics/settlement_wing_api.py`(_WING_KIND·_RG_KIND) · `settlement_stats.py`(payout_lines 월정산) · `tools/verify_settlement_runtime_offline.py` P1·P29 · `tools/verify_settlement_offline.py` P10. 운용 PC 재배포 후 노바네스트 대기 6건 → 다운로드. HQ 포팅 대상.
+- 상태: ACTIVE
+
+### D-076 [SETTLE_LOGIN_LEDGER_PW] 정산 로그인 비밀번호 = 앱과 같은 관리대장 값 먼저 · 관리대장에 없는 계정만 정산 계정 파일 (2026-10-16, R13)
+- 결정: 정산 프로그램(watch·run·evidence 공통 `session`)의 로그인 비밀번호를 `settlement_accounts.login_passwords` 로 정한다 — ①앱이 관리대장을 읽을 때마다 이 PC 암호 저장소(credstore·DPAPI)에 계정ID별로 저장한 값(관리대장 값) ②정산 계정 파일 값. 둘 다 있고 다르면 관리대장 → 파일 순서로 최대 2개(앱 ①과 같은 `_login_with_candidates` — '비밀번호가 다릅니다'일 때만 다음 값·D-012 상한·그날 거부된 값은 D-068 이 다시 안 넣음). 관리대장에 없는 계정(정산만 하는 계정)은 파일 값. 로그에 출처만 표기(값 없음). 정산 대상 계정 목록은 그대로 정산 계정 파일.
+- 근거: 소유자 2026-10-16 "정산 파일 다운로드시 로그인은 앱에서처럼 관리대장의 계정과 비번을 이용해서 로그인". 실측: 정산 계정 파일과 관리대장 비번이 따로 관리돼 정산만 실패하는 계정이 생김(gyi0101 정산 거부 8회 — 앱과 별개 제출). 시험 P33(대장 우선·다르면 대장→파일·대장에 없으면 파일·값 노출 없음).
+- 버린 대안: 정산 계정 목록도 관리대장으로(디프·디프픽 등 대장에 없는 정산 계정이 빠짐) · 계정 파일만(소유자 요청과 다름).
+- 영향 범위: `src/coupang_analytics/settlement_accounts.py`(login_passwords) · `tools/settlement_download.py`(session·_login) · P33. ⚠ 운용 PC 는 앱이 관리대장을 한 번 읽어야 저장소에 값이 생김(18:00 실행·앱 시작 자동 로드). HQ 포팅 대상.
+- 상태: ACTIVE

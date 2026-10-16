@@ -218,8 +218,12 @@ def payout_lines(files: list[SettleFile], warns: list | None = None) -> list[tup
         amounts = [r.settle for r in f.rows]
         if f.channel == CH_WING and f.kind == "최종액":
             out += _final_lines(f, windows, warns)
+        elif f.channel == CH_WING and f.kind == "월정산":      # D-075 월정산 100%
+            out.append((f, "월정산 100%", P.payout_amount(P.PAYOUT_MP_MONTHLY, _day_sums(f.rows))))
         elif f.channel == CH_WING:
             out.append((f, "주정산 70%", P.payout_amount(P.PAYOUT_MP_WEEKLY_1ST, _day_sums(f.rows))))
+        elif f.kind == "월정산":
+            out.append((f, "월정산 100%", P.payout_amount(P.PAYOUT_RG_MONTHLY, amounts)))
         else:
             out.append((f, "주정산 70%", P.payout_amount(P.PAYOUT_RG_WEEKLY_1ST, amounts)))
             out.append((f, "2차 30%", P.payout_amount(P.PAYOUT_RG_WEEKLY_FINAL, amounts)))

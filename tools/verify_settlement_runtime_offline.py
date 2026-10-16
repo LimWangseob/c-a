@@ -50,11 +50,13 @@ def p10_wing_api_parse():
         ("주정산", D("2026-01-23"), D("2026-01-01"), D("2026-01-04"))], ev
     expect(API.SiteChangedError, lambda: API.wing_events(
         {"paymentReports": [{**wresp["paymentReports"][0], "transactionCycleCode": "X"}]}, "a"), "모르는 주기 코드")
-    # D-010: 'M'(월정산 추정·받기 방법 미확인)은 계정 실패 대신 그 줄만 건너뛰고 '확인 필요'로 기록(실측 novanest1284)
+    # D-075(실측 2026-10-16 노바네스트 화면): 'M' = 월정산 — 같은 '엑셀 다운로드 요청'(revenue-detail)·구매확정일 그 달 전체.
     mresp = {"paymentReports": [wresp["paymentReports"][1], {**wresp["paymentReports"][0], "transactionCycleCode": "M",
-                                                            "payDate": "2026-01-22"}]}
-    assert [e.kind for e in API.wing_events(mresp, "a")] == ["주정산"], "M 줄은 건너뛰고 나머지는 그대로"
-    assert len(API.unsupported_cycles(mresp)) == 1 and "2026-01-22" in API.unsupported_cycles(mresp)[0]
+                                                            "payDate": "2026-09-21", "recognitionFrom": "2026-08-01",
+                                                            "recognitionTo": "2026-08-31"}]}
+    assert [(e.kind, e.period_start, e.period_end) for e in API.wing_events(mresp, "a")] == [
+        ("주정산", D("2026-01-01"), D("2026-01-04")), ("월정산", D("2026-08-01"), D("2026-08-31"))], "M = 월정산 일정"
+    assert API.unsupported_cycles(mresp) == [], "월정산은 더 이상 '확인 필요' 아님"
     expect(API.SiteChangedError, lambda: API.wing_events({"reports": []}, "a"), "응답 칸 없음")
     rresp = {"settlementStatusReports": [
         {"settlementDate": "2026-09-06T15:00:00.000Z", "settlementPeriodStartDate": "2026-07-26T15:00:00.000Z",
@@ -966,13 +968,13 @@ def p29_monthly_failed_comment():
             "settlementGroupKey": "V1-2026-07-27-2026-07-31"}
     month = {**week, "settlementCycle": "MONTHLY", "settlementGroupKey": "A01371646-2026-07-01-2026-07-31"}
     resp = {"settlementStatusReports": [week, month]}
-    ev = API.rg_events(resp, "노바네스트")
-    assert [e.ref for e in ev] == ["V1-2026-07-27-2026-07-31"], f"월정산 줄 건너뛰고 주정산은 그대로: {ev}"
-    un = API.unsupported_cycles(resp)
-    assert len(un) == 1 and "A01371646-2026-07-01-2026-07-31" in un[0], f"월정산 '확인 필요' 기록: {un}"
+    ev = API.rg_events(resp, "노바네스트")    # D-075: MONTHLY = 월정산(같은 request-download·리포트 9종 — 실측 10-16)
+    assert [(e.kind, e.ref) for e in ev] == [("주정산", "V1-2026-07-27-2026-07-31"),
+                                            ("월정산", "A01371646-2026-07-01-2026-07-31")], ev
+    assert API.unsupported_cycles(resp) == [], "월정산은 더 이상 '확인 필요' 아님"
     expect(API.SiteChangedError, lambda: API.rg_events({"settlementStatusReports": [
         {**week, "settlementCycle": "DAILY"}]}, "a"), "모르는 RG 주기는 여전히 중단")
-    ok("로켓그로스 MONTHLY = 그 줄만 건너뜀·확인 필요 기록·모르는 다른 주기는 중단")
+    ok("로켓그로스 MONTHLY = 월정산 일정(D-075)·모르는 다른 주기는 중단")
     # ② 실측(10-12 05:56): 로그인 실패 10·계정 실패 1 인데 '✅ 모든 정산 파일 다운로드 완료'·상태 '완료 · 이미 모두 받음'.
     with tempfile.TemporaryDirectory() as tmp:
         lg = RLG.RunLog(tmp, now=datetime(2026, 10, 12, 1, 38, 0), echo=lambda m: None)
@@ -1112,6 +1114,29 @@ def p31_keep_originals():
     ok("윙·판매수수료·비용 리포트 원본 바이트 그대로 복사 · 집계 사본(구매자명 제거)·비용 폴더 불변 · 미지정=폴더 없음")
 
 
+def p33_login_password_source():
+    print("[P33] 정산 로그인 비밀번호 = 앱과 같은 관리대장 값 먼저(소유자 2026-10-16) · 대장에 없는 계정만 정산 계정 파일 · 값이 다르면 둘 다(최대 2·D-012)")
+    from coupang_analytics import settlement_accounts as SA
+
+    class Store:
+        def __init__(self, d):
+            self.d = d
+
+        def get_password(self, aid):
+            return self.d.get(aid)
+    st = Store({"same": "pw-a", "diff": "pw-new", "only": "pw-l"})
+    acc = lambda aid, pw: SA.SettleAccount(aid, f"대표-사업자-{aid}", pw)   # noqa: E731
+    assert SA.login_passwords(acc("same", "pw-a"), st) == (["pw-a"], "관리대장")
+    pws, note = SA.login_passwords(acc("diff", "pw-old"), st)
+    assert pws == ["pw-new", "pw-old"] and "다름" in note, (pws, note)                       # 대장 값 먼저
+    assert SA.login_passwords(acc("only", ""), st) == (["pw-l"], "관리대장")                    # 계정 파일 비번 빈 칸
+    pws, note = SA.login_passwords(acc("nofile", "pw-f"), st)
+    assert pws == ["pw-f"] and "관리대장에 없음" in note, note                                   # 대장에 없는 계정(디프 등)
+    assert SA.login_passwords(acc("none", ""), st) == ([], "비밀번호 없음")
+    assert "pw" not in note                                                                   # 값은 설명에 안 씀
+    ok("관리대장 값 우선·다르면 대장→파일 순서(최대 2)·대장에 없는 계정은 파일 값·값 노출 없음")
+
+
 def p32_evidence_rules():
     print("[P32] 증빙 원본 전체 받기(D-067) — 사업자 폴더·월 구간·정산 줄 없는 주·판매분석 누락 검사·환급 이름·완료 표시")
     import json
@@ -1179,6 +1204,7 @@ def main():
     p30_manual_full_run()
     p31_keep_originals()
     p32_evidence_rules()
+    p33_login_password_source()
     print("정산 런타임 오프라인 검증 통과")
 
 
