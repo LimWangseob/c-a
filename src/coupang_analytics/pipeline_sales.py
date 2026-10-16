@@ -16,7 +16,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from . import config
-from . import session_state
+from . import login_today, session_state
 from .browser import WING_URL, WingBrowser
 from .input_list import Account
 from .kw_ai import KeywordAIError
@@ -207,6 +207,7 @@ def _ensure_login(b, a: Account, pw, log, *, login: bool = True, semi: bool = Fa
     if b.authenticated():
         log(f"  [{a.label}] 세션 재사용 → 이미 로그인됨" + (" (보이는 창)" if semi else " (창 안 뜸)"))
         session_state.observe_session_ok(a.account_id, final_url=b.page.url)   # 관측(제어흐름 불변)
+        _note_login(log, login_today.record_success, a.account_id)
         return True
     if not login:                  # 세션우선 1차 패스 — 자동제출 안 하고 로그인 대기열로 미룸
         session_state.observe_reauth_required(a.account_id, final_url=b.page.url)
@@ -219,6 +220,10 @@ def _fresh_login(b, a: Account, pw, log, unattended: bool) -> bool:
     """신선 로그인(세션 없음) — 자동입력·대기·반자동 1회 재시도·실패분류·성공 안착.
 
     반환 True/False, 예외 LoginBlocked/LoginCredentialError 는 _ensure_login 규약과 동일."""
+    if pw and _refused_today(a, pw, log):   # D-068: 오늘 거부된 값은 그날 다시 넣지 않음
+        log(f"  [{a.label}] ⛔ 이 비밀번호는 오늘 이미 쿠팡에서 거부됨 — 오늘은 다시 넣지 않음(계정 잠금 방지·D-068). "
+            "관리대장(정산은 계정 파일) 비밀번호를 고치면 바로 다시 시도합니다")
+        raise LoginCredentialError(a.account_id)
     shown = {"v": False}
 
     def _need_user():   # 2차인증·봇챌린지 등 사람이 꼭 필요할 때
@@ -252,8 +257,9 @@ def _fresh_login(b, a: Account, pw, log, unattended: bool) -> bool:
     if not ok and not cred_fail and not otp_seen and unattended and pw and config.LOGIN_SEMI_ON_BLOCK:
         ok, cred_fail = _semi_retry_login(b, a, pw, log, _grace)
     if not ok:
-        return _resolve_login_failure(b, a, log, cred_fail)   # False 반환 또는 LoginBlocked/CredentialError raise
+        return _resolve_login_failure(b, a, log, cred_fail, pw)   # False 반환 또는 LoginBlocked/CredentialError raise
     session_state.observe_auth_success(a.account_id, final_url=b.page.url)
+    _note_login(log, login_today.record_success, a.account_id)
     b.goto(WING_URL)                     # 신선 로그인 후 wing 안착(인증 리다이렉트 완료 대기)
     b.page.wait_for_timeout(1500)        # 페이지 안정 — discover fetch 가 진행중 네비에 중단(Failed to fetch)되는 것 방지
     b.hide()   # 로그인 끝나면 다시 숨김
@@ -283,13 +289,17 @@ def _semi_retry_login(b, a: Account, pw, log, grace) -> tuple[bool, bool]:
     return ok, cred_fail
 
 
-def _resolve_login_failure(b, a: Account, log, cred_fail: bool) -> bool:
+def _resolve_login_failure(b, a: Account, log, cred_fail: bool, pw=None) -> bool:
     """로그인 미완료(not ok) 뒤처리 — 실패 유형 관측 후 제어흐름 분기(분해 전과 동일).
+    그날 실패 사유·거부된 비밀번호 지문을 남김(D-068 — 결과 파일 사유 표시·그날 같은 값 재제출 금지).
 
     반환 False(otp·일반 미완료=이 계정 건너뜀). raise LoginBlocked(Akamai)·LoginCredentialError(비번오류)."""
     code, detail = b.classify_login()
     ftype = session_state.failure_type_of(code, detail)   # 세분 실패분류(탐지코드는 불변)
     session_state.observe_auth_failure(a.account_id, ftype, final_url=b.page.url)
+    reason = (login_today.BLOCKED if code == "blocked" else login_today.PW_WRONG if cred_fail
+              else login_today.OTP if code == "otp" else login_today.UNFINISHED)
+    _note_login(log, login_today.record_failure, a.account_id, reason, pw)
     if code == "blocked":   # Akamai 차단 → 서킷브레이커가 세도록 신호
         log(f"  [{a.label}] Akamai 로그인 차단 — 이 계정 건너뜀")
         raise LoginBlocked()
@@ -303,6 +313,23 @@ def _resolve_login_failure(b, a: Account, log, cred_fail: bool) -> bool:
         return False
     log(f"  [{a.label}] 로그인 미완료 — 이 계정 건너뜀")
     return False
+
+
+def _refused_today(a: Account, pw: str, log) -> bool:
+    """오늘 거부된 비밀번호인가(D-068). 기록을 못 읽으면 로그로 알리고 '아님'(평소대로 1회 시도)."""
+    try:
+        return login_today.refused_today(a.account_id, pw)
+    except (OSError, ValueError) as exc:
+        log(f"  [로그인기록] ⚠ 그날 로그인 기록 읽기 실패 — 평소대로 시도 · {exc.__class__.__name__}: {str(exc)[:80]}")
+        return False
+
+
+def _note_login(log, fn, *args) -> None:
+    """그날 로그인 기록(login_today) 쓰기 — 실패해도 로그인 흐름은 그대로(로그로 명시·비치명)."""
+    try:
+        fn(*args)
+    except (OSError, ValueError) as exc:
+        log(f"  [로그인기록] ⚠ 그날 로그인 기록 실패(비치명) — {exc.__class__.__name__}: {str(exc)[:80]}")
 
 
 def _discover_products(b, a: Account, date_from, date_to, log, ai_key: str | None = None, anchor_file=None):

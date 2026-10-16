@@ -165,9 +165,33 @@ def _split_checks(checks: dict) -> dict:
     return {((k[0], " ".join(str(k[1]).split())) if isinstance(k, tuple) else k): v for k, v in checks.items()}
 
 
-def _plan_checks(main: list, checks: dict, log) -> tuple[list[list[str]], int, int, int]:
+def _pending_renames(client, log) -> dict:
+    """{(계정, 옛 상품명): (계정, 새 상품명)} — 상품이력의 '상품명변경' 중 아직 승인·반려 안 된(확인필요) 것.
+    승인 전엔 원장 줄이 옛 이름 그대로라, 대장(새 이름) 기준 쿠팡확인을 옛 이름 줄에 적기 위함(D-069)."""
+    from types import SimpleNamespace
+    from .registry_model import K_RENAME_PROD, SHEET_PROD
+    from .registry_rename import _pending_pairs
+    if SHEET_PROD not in client.sheet_titles():
+        return {}
+    raw = client.read_values(SHEET_PROD)
+    if not raw:
+        return {}
+    head = [str(h) for h in raw[0]]
+    hist = [_hist_row(SHEET_PROD, _cellmap(head, r)) for r in raw[1:] if any(str(c).strip() for c in r)]
+    pend = _pending_pairs(SimpleNamespace(history=hist), K_RENAME_PROD)
+    out = {}
+    for aid, old, new in pend:
+        out[(aid, " ".join(old.split()))] = (aid, " ".join(new.split()))
+        log(f"  [원장] 상품명 변경 확인필요 '{old}' → '{new}'({aid}) — 승인 전이라 쿠팡확인은 옛 이름 줄에 기록"
+            "(원장 상품이력에서 승인하면 새 이름으로 이어짐)")
+    return out
+
+
+def _plan_checks(main: list, checks: dict, log, aliases: dict | None = None) -> tuple[list[list[str]], int, int, int]:
     """셀독원장 값 격자 → (쿠팡확인·확인일 두 열의 새 값 격자, 쿠팡확인 열 위치, 갱신 줄 수, 원장에 없는 키 수).
-    줄 키 (계정, 상품명) 이 계정 키보다 우선. 상품명은 공백 정규화로 대조."""
+    줄 키 (계정, 상품명) 이 계정 키보다 우선. 상품명은 공백 정규화로 대조. aliases = {원장 줄 키: 대장 새 이름 키}
+    (이름 변경 확인필요 중 — 그 줄은 새 이름 키 값도 받음)."""
+    aliases = aliases or {}
     header = [str(h) for h in main[0]]
     i_chk = _check_column(header)
     keyed = _split_checks(checks)
@@ -176,7 +200,7 @@ def _plan_checks(main: list, checks: dict, log) -> tuple[list[list[str]], int, i
     for row in main[1:]:
         d = _cellmap(header, row)
         aid, prod = str(d["계정아이디"]), " ".join(str(d["상품명"]).split())
-        hit = [k for k in ((aid, prod), aid) if k in keyed]            # 줄 키 먼저 = 우선
+        hit = [k for k in ((aid, prod), aliases.get((aid, prod)), aid) if k in keyed]   # 줄 키 먼저 = 우선
         seen.update(hit)
         cur = [str(d["쿠팡확인"]), str(d["쿠팡확인일"])]
         new = list(keyed[hit[0]]) if hit else cur
@@ -204,7 +228,7 @@ def write_coupang_check(client, checks: dict, *, dry_run: bool = False, on_log=N
         main = client.read_values(SHEET_MAIN)
         if not main:
             raise RegistryIntegrityError(f"원장 시트 '{SHEET_MAIN}' 가 비어 있음(헤더 없음)")
-        grid, i_chk, changed, unknown = _plan_checks(main, checks, log)
+        grid, i_chk, changed, unknown = _plan_checks(main, checks, log, _pending_renames(client, log))
         if changed and not dry_run:
             client.write_values(SHEET_MAIN, grid, start=f"{get_column_letter(i_chk + 1)}2", raw=True)
     log(f"== [원장] 쿠팡확인 {'미리보기(저장 안 함) ' if dry_run else ''}— 갱신 {changed}줄"

@@ -623,8 +623,33 @@ def _finalize_run(ctx: _RunCtx, master: Path, prog: Path, now: datetime, gsheet_
         for p in (ctx.partial, prog):
             if p.exists():
                 p.unlink()
-    log(f"== 완료: 마스터 {master.name} · 스냅샷 {snapshot.name} (성공 {len(ctx.done)}/{ctx.total} 계정) ==")
+    n_pw = len(_pw_failed(ctx))   # 비밀번호 오류 계정은 '처리됨'(done)이지만 수집은 못 함 → 성공에서 뺌
+    log(f"== 완료: 마스터 {master.name} · 스냅샷 {snapshot.name} (수집 성공 {len(ctx.done) - n_pw}/{ctx.total} 계정"
+        + (f" · 비밀번호 오류 {n_pw}" if n_pw else "") + ") ==")
     return snapshot
+
+
+def _pw_failed(ctx: _RunCtx) -> set:
+    return {k for k, v in ctx.coupang_checks.items() if isinstance(k, str) and v[0] == _CC_PWFAIL}
+
+
+def _log_login_failures(ctx: _RunCtx, accounts, uncollected) -> None:
+    """① 끝 — 수집 못한 계정을 사유와 함께(그날 로그인 기록 login_today·D-068). 옛 문구 '세션만료+Akamai차단'은
+    2단계 인증·비밀번호 오류까지 한데 묶어 사실과 달랐음(output(22) 2026-10-16)."""
+    from . import login_today
+    try:
+        why = login_today.reasons_today(out_dir=ctx.out)
+    except (OSError, ValueError) as exc:
+        ctx.log(f"  [로그인기록] ⚠ 그날 로그인 기록 읽기 실패 — 사유 없이 표시 · {exc.__class__.__name__}")
+        why = {}
+    pw = [a for a in accounts if a.account_id in _pw_failed(ctx)]
+    if uncollected:
+        ctx.log(f"== ⚠ 로그인 못한 계정 {len(uncollected)}개: "
+                + ", ".join(f"{a.label}({why.get(a.account_id, login_today.UNFINISHED)})" for a in uncollected)
+                + " — 다음 실행에서 다시 시도 ==")
+    if pw:
+        ctx.log(f"== ⚠ 비밀번호 오류로 수집 못한 계정 {len(pw)}개: {', '.join(a.label for a in pw)} — 관리대장 비밀번호 "
+                "수정 필요(오늘은 같은 값을 다시 넣지 않음·D-068) ==")
 
 
 def run_full(input_list: InputList, out_dir: str = "output",
@@ -710,9 +735,7 @@ def run_full(input_list: InputList, out_dir: str = "output",
         _collect_with_login(ctx, retry, get_password, pace_first=bool(login_needed))
 
     uncollected = [a for _, a in _not_done(accounts, done)]
-    if uncollected:
-        log(f"== ⚠ 로그인 못한 계정 {len(uncollected)}개(세션만료+Akamai차단): "
-            f"{', '.join(a.label for a in uncollected)} — 쉰 IP(내일 등)에 재실행 시 수집됨 ==")
+    _log_login_failures(ctx, accounts, uncollected)
 
     removed_accounts, renamed_accounts = _reconcile_ledger_accounts(wb, input_list, uncollected, log)
 

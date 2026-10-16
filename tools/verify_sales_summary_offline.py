@@ -124,6 +124,8 @@ def t4_sheet():
         path = Path(d) / "m.xlsx"
         wb = _wb_with_accounts(path)
         before = wb.account_sheets()
+        from coupang_analytics import login_today as LT
+        LT.record_failure("a2", LT.PW_WRONG, out_dir=d)                  # 오늘 a2 로그인 비밀번호 오류(D-068)
         msg = WS.refresh_sales_sheet(wb, d, today=date(2026, 10, 15))
         wb.apply_style()
         WS.refresh_sales_sheet(wb, d, today=date(2026, 10, 15))           # 두 번 그려도 시트 1개
@@ -141,9 +143,11 @@ def t4_sheet():
         tot = next(r for r in cells if r[0] == "전체 합계")
         assert tot[3] == 4 and tot[4] == 35000, tot
         assert any(r[0] == "니코에이블 (a2)" and r[3] == "미수집" for r in cells), "미수집 계정 표시"
+        subs = {r[0]: r[1] for r in cells if r[1] and str(r[1]).startswith("소계")}
+        assert subs == {"니코에이블 (a2)": "소계 — ⚠ 로그인 비밀번호 오류", "에벤에셀 (a1)": "소계"}, subs   # 소유자 2026-10-16
         assert any(r[1] == "캠핑테이블" and r[2] == "로켓그로스" and r[4] == 30000 for r in cells)
         assert "기록" in msg or "갱신" in msg, msg
-    ok("첫 시트·계정 목록 두 번째·활성 시트·사업자 시트 목록 불변·전체 합계 4개 35,000원·미수집 표시")
+    ok("첫 시트·계정 목록 두 번째·활성 시트·사업자 시트 목록 불변·전체 합계 4개 35,000원·미수집 표시·미수집 사유(로그인 비밀번호 오류)")
 
 
 def t5_gsheet():

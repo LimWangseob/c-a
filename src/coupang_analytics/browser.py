@@ -32,6 +32,9 @@ _AUTH_COOKIES = ("KEYCLOAK_IDENTITY",)
 # 실제 2차 인증(인증번호 입력)일 때만 나타나는 입력칸. (참고: 로그인 폼 JS 의 "인증번호를 5번…"
 # 문자열은 입력칸이 아니라 #input-error 로 뜨는 '잠금' 오류 메시지 → OTP 단계와 구분해야 함)
 _OTP_SELECTORS = ("input[name='otp']", "#otp", "input[autocomplete='one-time-code']")
+# 2단계 인증 '방법 선택' 화면(휴대폰번호로 인증하기 + 취소) — 인증번호 입력칸이 아직 없어 위 칸으로는 못 잡는다.
+# 실측(capture.zip 2026-10-16): lslfgh 59회·nihaoha 16회가 이 화면에서 매번 시간초과 → 'Akamai 차단'으로 잘못 보고됨.
+_TWO_STEP_MARKERS = ("2단계 인증",)
 # 로그인 폼에 깔린 Akamai 봇 챌린지 오버레이(평소 display:none, 챌린지 시 노출).
 _AKAMAI_OVERLAY = "#sec-overlay"
 # Akamai 전면 차단 페이지 마커(자동입력·자동제출이 봇으로 탐지돼 authenticate 요청이 거부될 때).
@@ -462,6 +465,8 @@ class WingBrowser:
                 return "otp", "2차 인증(인증번호) 입력칸 — 열린 창에 휴대폰 인증번호를 직접 입력하세요"
             if self.page.query_selector("#username"):
                 return "form", "ID/비번 폼(#username) — 자동입력 대기 또는 제출 거부로 폼 재렌더"
+            if "xauth" in url and any(m in (self.page.inner_text("body")[:600] or "") for m in _TWO_STEP_MARKERS):
+                return "otp", "2단계 인증(휴대폰 인증) 화면 — 사람이 열린 창에서 휴대폰 인증을 해야 함"
             if "xauth" in url or "/sso/" in url:
                 return "transition", f"인증 전환 중: {url[:60]}"
             return "unknown", f"현재: {url[:60]}"

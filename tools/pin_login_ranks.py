@@ -179,6 +179,8 @@ def _ledger_account() -> Account:
 
 
 def _run_login(*, login=True, semi=False):
+    from coupang_analytics import login_today as LT
+    LT._path(None).unlink(missing_ok=True)   # 시나리오마다 새 날(앞 시나리오의 '오늘 거부된 비번' 기록이 섞이지 않게)
     return P._login_and_discover(_ledger_account(), "2026-09-19", "2026-09-20",
                                  lambda aid: "pw", lambda m: None, login=login, semi=semi)
 
@@ -253,6 +255,76 @@ def pin_otp_skip():
     _check(acct is None and metrics == {} and inv == {} and status == {} and _ub == set() and _lv == set() and _vm == {},
            "(None,{},{},{},set(),set()) 반환 — 다음 계정 진행(다음 실행에서 재시도)")
     _check(_COUNT.get("wait_for_login", 0) == 1, "otp는 재시도 없이 1회 후 건너뜀")
+
+
+def _run_login_pw(pw: str):
+    return P._login_and_discover(_ledger_account(), "2026-09-19", "2026-09-20",
+                                 lambda aid: pw, lambda m: None, login=True, semi=True)
+
+
+def pin_pw_refused_same_day():
+    print("[핀 D2] 거부된 비밀번호는 그날 다시 넣지 않음·고친 값은 바로 시도·다음 날 다시(D-068)")
+    from datetime import date, timedelta
+    from coupang_analytics import login_today as LT
+    LT._path(None).unlink(missing_ok=True)
+    _SPEC.clear(); _COUNT.clear()
+    _SPEC["authenticated"] = [False]
+    _SPEC["wait_for_login"] = [False]
+    _SPEC["classify"] = ("error", "아이디 또는 비밀번호가 다릅니다.")
+    _install_collector_fakes()
+    for k in (1, 2):   # 1회차 = 제출 후 거부 · 2회차(같은 날 재실행) = 제출 없이 바로 비밀번호 오류
+        raised = False
+        try:
+            _run_login_pw("pw")
+        except P.LoginCredentialError:
+            raised = True
+        _check(raised, f"{k}회차 LoginCredentialError(그 계정 처리됨·수집 안 함)")
+    _check(_COUNT.get("autofill", 0) == 1 and _COUNT.get("wait_for_login", 0) == 1,
+           "같은 날 2회차는 비밀번호를 다시 넣지 않음(자동입력 1회뿐 — 실측 plan_it 24회·gyi0101 13회 재제출 차단)")
+    _check(LT.reasons_today() == {"pin1": LT.PW_WRONG}, "그날 사유 = 로그인 비밀번호 오류")
+    _SPEC["wait_for_login"] = [True]
+    acct = _run_login_pw("pw-고친값")[0]
+    _check(acct is not None and _COUNT.get("autofill", 0) == 2, "대장에서 고친 값은 같은 날 바로 시도·로그인되면 수집")
+    _check(LT.reasons_today() == {} and LT.refused_today("pin1", "pw"), "로그인 되면 사유 지움·거부된 옛 값은 그날 계속 막음")
+    data = LT._load(None)
+    data["pin1"]["date"] = (date.today() - timedelta(days=1)).isoformat()
+    LT._save(None, data)
+    _check(not LT.refused_today("pin1", "pw"), "다음 날엔 다시 시도")
+
+
+def pin_login_reason_otp():
+    print("[핀 E2] 2단계 인증 화면 — 사유 '2단계 인증 필요' 기록 + 실제 classify_login 이 '2단계 인증' 화면을 otp 로 봄")
+    from coupang_analytics import login_today as LT
+    from coupang_analytics.browser import WingBrowser
+    LT._path(None).unlink(missing_ok=True)
+    _SPEC.clear(); _COUNT.clear()
+    _SPEC["authenticated"] = [False]
+    _SPEC["wait_for_login"] = [False]
+    _SPEC["classify"] = ("otp", "2단계 인증")
+    _install_collector_fakes()
+    _run_login_pw("pw")
+    _check(LT.reasons_today() == {"pin1": LT.OTP}, "사유 = 2단계 인증 필요")
+
+    class _Pg:   # capture.zip 실측 화면 글자(lslfgh 2026-10-15 19:54) — 인증번호 칸 없는 '방법 선택' 단계
+        def __init__(self, url, body):
+            self.url, self._body = url, body
+
+        def title(self):
+            return "쿠팡 윙"
+
+        def inner_text(self, sel):
+            return self._body
+
+        def query_selector(self, sel):
+            return None
+    xauth = "https://xauth.coupang.com/auth/realms/seller/login-actions/authenticate?execution=x"
+    wb = object.__new__(WingBrowser)
+    wb.authenticated = lambda: False
+    for body, want in (("2단계 인증 계정 보호를 위해 추가 인증을 진행해주세요. 휴대폰번호로 인증하기 취소", "otp"),
+                       ("", "transition"),
+                       ("Access Denied You don't have permission Reference #18.1d", "blocked")):
+        wb.page = _Pg(xauth, body)
+        _check(wb.classify_login()[0] == want, f"화면 '{body[:12] or '(빈 화면)'}' → {want}")
 
 
 def pin_semi_retry_recover():
@@ -713,6 +785,9 @@ def pin_sales_excel_menu():
 
 def main() -> int:
     config.SESSION_STATE_DB = os.path.join(tempfile.gettempdir(), "pin_session_state.db")
+    from coupang_analytics import login_today as LT
+    LT.DEFAULT_DIR = tempfile.mkdtemp(prefix="pin_login_today_")   # 그날 로그인 기록 = 임시 폴더(운용 output 미접촉)
+    LT._key = lambda: b"pin-key"                                    # 실 credstore(DPAPI) 미접촉
     config.LOGIN_PACE_MIN_SEC = 0
     config.LOGIN_PACE_MAX_SEC = 0
     config.RANK_NAV_DELAY_MIN_SEC = 0
@@ -733,6 +808,8 @@ def main() -> int:
         pin_login_blocked()
         pin_credential_error()
         pin_otp_skip()
+        pin_pw_refused_same_day()
+        pin_login_reason_otp()
         pin_semi_retry_recover()
         pin_discover_empty_uses_vendor()
         pin_sales_history_wiring()

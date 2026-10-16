@@ -589,6 +589,34 @@ def t17_write_coupang_check():
     ok("미리보기 무변경·줄키 우선·다른 열/이력 불변·S2 RAW·재로드·열 이동 탐지·검증 예외")
 
 
+def t17b_check_during_pending_rename():
+    print("[R17b] 상품명 변경 확인필요 중 — 대장 새 이름의 쿠팡확인을 원장 옛 이름 줄에 기록(D-069)")
+    # 라이브 output(22) 2026-10-16: 상품이력 #92 '코골이 방지 기구'→'코골이 방지 기구(' · #105 '팔찌경보기'→'팔찌경보기 JN104'
+    # 가 9-30부터 확인필요 → 새 이름 줄이 원장에 없어 쿠팡확인이 매일 '원장에 없는 대상 2건'으로 빠짐.
+    cli = FakeClient()
+    acc = base()
+    with tempfile.TemporaryDirectory() as tmp:
+        RG.run_sync(cli, reader(acc), now=day(1), backup_dir=tmp, lock_path=LOCK)
+        acc = copy.deepcopy(acc)
+        for pr in acc[0]["products"]:
+            if pr["name"] == "예시 오메가3 60캡슐":
+                pr["name"] = "예시 오메가3 60캡슐 2개"
+        RG.run_sync(cli, reader(acc), now=day(2), backup_dir=tmp, lock_path=LOCK)
+    ix = {h: i for i, h in enumerate(cli.grids[M.SHEET_MAIN][0])}
+    names = [r[ix["상품명"]] for r in cli.grids[M.SHEET_MAIN][1:] if r[ix["계정아이디"]] == "example01"]
+    assert "예시 오메가3 60캡슐" in names and "예시 오메가3 60캡슐 2개" not in names, names   # 전제: 보류 중
+    logs: list = []
+    n = RG.write_coupang_check(cli, {("example01", "예시 오메가3 60캡슐 2개"): ("확인됨", "2026-10-16")},
+                               on_log=logs.append, lock_path=LOCK)
+    assert n == 1, n
+    row = next(r for r in cli.grids[M.SHEET_MAIN][1:] if r[ix["상품명"]] == "예시 오메가3 60캡슐")
+    assert (row[ix["쿠팡확인"]], row[ix["쿠팡확인일"]]) == ("확인됨", "2026-10-16"), row
+    assert not any("원장에 없음" in m for m in logs), logs
+    assert any("확인필요" in m for m in logs), logs
+    R.check_integrity(RG.load_registry(cli))
+    ok("확인필요 중 새 이름 쿠팡확인 → 옛 이름 줄에 기록·'원장에 없음' 없음·무결성 유지")
+
+
 def t18_previous_password():
     print("[R18] 직전 비밀번호 — 변경 없음=None·직전값·계정아이디 변경 추적")
     reg = R.Registry()
@@ -846,6 +874,7 @@ def main():
     t13_io_roundtrip()
     t14_ledger_read_fail_and_dry_run()
     t17_write_coupang_check()
+    t17b_check_during_pending_rename()
     t18_previous_password()
     t19_to_input_list()
     t20_write_lock()

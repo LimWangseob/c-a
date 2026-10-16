@@ -669,3 +669,17 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 매일 정산(watch)에 증빙 단계 끼워 넣기(야간 시간·차단 위험 증가 — 1회성 전체 받기 + 이어받기로 충분) · 앱 정산 기록 재사용(이미 '받음'이라 원본 재요청 불가) · 화면 캡처 PNG(쿠팡 화면 인쇄 PDF 로 대체).
 - 영향 범위: 신규 `src/coupang_analytics/settlement_evidence.py`·`settlement_evidence_web.py` · `tools/settlement_download.py`(evidence 명령·`--out`·`--redo`) · `tools/verify_settlement_runtime_offline.py` P32 · `deploy/정산증빙_전체받기.bat`·`build.bat` · `designs/SETTLEMENT_MODULE.md` §14. 매일 정산·앱 동작 불변. 계정당 약 1~1.5시간(요청 간격 45~75초). HQ 포팅 대상.
 - 상태: ACTIVE
+
+### D-068 [LOGIN_PW_REFUSED_SAME_DAY] 쿠팡이 거부한 비밀번호 = 그날 다시 넣지 않음(앱·정산 공통) · 2단계 인증 화면 인식 · 로그인 실패 사유를 통합판매현황·실행 요약에 표시 (2026-10-16, R13)
+- 결정: (1) 로그인에서 '아이디 또는 비밀번호가 다릅니다' 등으로 거부된(classify 'error') 비밀번호 값은 **그날 다시 넣지 않는다** — 앱 재실행·'오늘 처음(다시)'·재부팅 복구·정산 프로그램 모두(`pipeline_sales._fresh_login` 한 경로). 다음 날 다시 시도. 관리대장(정산은 계정 파일)에서 **고친 값**은 거부된 값이 아니므로 그날 바로 시도. 대장 줄마다 비번이 다른 계정(D-012)은 거부된 값을 건너뛰고 다음 값만 넣음. 기록 = `output/_로그인실패.json`(계정·날짜·사유·거부된 값의 **HMAC 지문** — 키는 이 PC credstore(DPAPI)·비밀번호 원문 저장 없음). (2) 2단계 인증 '방법 선택' 화면(xauth·'2단계 인증' 글자, 인증번호 칸 없음)을 `classify_login` 이 `otp` 로 판정 → 기다리지 않고 바로 건너뜀(위탁계정은 사람 인증 불가). (3) 그날 실패 사유(로그인 비밀번호 오류·2단계 인증 필요·로그인 차단·로그인 미완료)를 결과 파일 통합판매현황 계정 소계 줄에 `소계 — ⚠ 사유`로, ① 끝 로그에 계정별 사유로 표시하고 완료 줄은 '수집 성공 N/M · 비밀번호 오류 K'(비밀번호 오류 계정을 성공에서 뺌).
+- 근거: 소유자 2026-10-16 "로그인 재시도후 오류이면 해당일 재시도 하지 않음", "결과시트 판매현황에 '로그인 비밀번호 오류'와 같이 간단히 사유 명시". 실측 output(22)·capture.zip: 같은 틀린 값 재제출 plan_it 26회(09-28~)·gyi0101 13회(10-13~·앱 5+정산 8)·dalbong1849 첫 값 14회 — 실행 안 재시도만 막혀 있었음. 캡처 259건 분류: lslfgh 59건·nihaoha 16건·nicoable 2건 = 전부 '2단계 인증(휴대폰번호로 인증하기)' 화면인데 앱은 '인증 전환 중'으로 보고 매번 시간초과 후 '세션만료+Akamai차단'으로 보고(사실과 다름). 10-15 요약 '성공 27/28·실패 하성진 1'인데 플랜잇·유라이프도 미수집. 재현: 핀 D2(같은 날 2회차 자동입력 1회 기대) 옛 코드 실패 → 수정 → 통과 · 핀 E2(실측 화면 글자 → otp) · 판매현황 T4 사유 표시.
+- 버린 대안: 같은 값만 영구 금지(다음 날 계정 상태가 풀려도 시도 안 함 — 소유자 '해당일'과 다름) · 그날 계정 전체 금지(대장 비번을 고쳐도 다음 날까지 못 받음) · 비밀번호 sha256 저장(output 폴더가 분석용으로 밖에 보내짐 — 약한 비번 역산 위험 → PC 전용 키 HMAC).
+- 영향 범위: 신규 `src/coupang_analytics/login_today.py` · `pipeline_sales.py`(_fresh_login·_ensure_login·_resolve_login_failure) · `browser.py`(classify_login 2단계 화면) · `pipeline.py`(① 끝 사유 로그·완료 줄) · `workbook_sales.py`(소계 사유) · `tools/pin_login_ranks.py` 핀 D2·E2 · `tools/verify_sales_summary_offline.py` T4. 정산 프로그램은 같은 `_ensure_login` 을 써서 자동 적용. HQ 포팅 대상.
+- 상태: ACTIVE
+
+### D-069 [REGISTRY_CHECK_PENDING_RENAME] 원장 상품명 변경 '확인필요' 중 = 쿠팡확인을 옛 이름 줄에 기록 (2026-10-16, R13)
+- 결정: 원장 상품이력에 승인·반려 안 된 '상품명변경'(확인필요)이 있으면, 대장 새 이름으로 계산한 쿠팡확인·확인일을 **원장 옛 이름 줄**에 쓴다(`registry_gsheet._pending_renames` → `_plan_checks` 별칭). 이름 변경 보류·승인 규칙(LEDGER_REGISTRY §6)은 그대로 — 승인하면 그 줄이 새 이름으로 이어진다.
+- 근거: 소유자 2026-10-16 "원장 쿠팡확인 매일 2건 빠짐 — 원인 분석해서 수정". 실측(원장 백업 261015_191049): 상품이력 #92 '코골이 방지 기구'→'코골이 방지 기구('·#105 '팔찌경보기'→'팔찌경보기 JN104' 가 2026-09-30부터 '확인필요' → 새 이름 줄이 원장에 없어 매 실행 '원장에 없는 대상 2건'·쿠팡확인 미기록. 앱 파싱·원장 파싱 모두 대장 이름을 같게 읽음(파서 차이 아님). 재현: R17b 옛 코드 0줄 → 수정 → 1줄·무결성 유지.
+- 버린 대안: 확인필요를 자동 승인(다른 상품끼리 이력 섞일 위험 — §6 원칙 위배) · 새 이름 줄을 임시로 추가(승인 전 중복 줄·무결성 깨짐).
+- 영향 범위: `src/coupang_analytics/registry_gsheet.py`(write_coupang_check·_plan_checks·_pending_renames) · `tools/verify_registry_offline.py` R17b. ⚠ 사람 조치: 원장 상품이력 #92·#105 승인/반려(승인 전엔 원장 상품명이 옛 이름). HQ 포팅 대상.
+- 상태: ACTIVE

@@ -48,7 +48,7 @@ def refresh_sales_sheet(owb, out_dir="output", log=None, today: date | None = No
         log(f"  {msg}")
         return msg
     summary = sales_summary.build(daily, periods, account_labels(owb), yesterday)
-    write_sales_sheet(owb.wb, summary)
+    write_sales_sheet(owb.wb, summary, _login_reasons(out_dir, log))
     day = summary.sections[0]
     key = day.cols[0].key
     q, a = day.total[key]
@@ -58,8 +58,19 @@ def refresh_sales_sheet(owb, out_dir="output", log=None, today: date | None = No
     return msg
 
 
-def write_sales_sheet(xwb, summary) -> None:
-    """openpyxl 워크북 맨 앞에 통합판매현황을 새로 그림(있으면 지우고 다시)."""
+def _login_reasons(out_dir, log) -> dict:
+    """{계정ID: 오늘 로그인 실패 사유}(login_today·D-068) — 못 읽으면 로그 후 사유 없이 그림(비치명)."""
+    from . import login_today
+    try:
+        return login_today.reasons_today(out_dir=out_dir)
+    except (OSError, ValueError) as exc:
+        log(f"  [통합판매현황] ⚠ 로그인 실패 사유 읽기 실패 — 사유 없이 표시 · {exc.__class__.__name__}")
+        return {}
+
+
+def write_sales_sheet(xwb, summary, reasons: dict | None = None) -> None:
+    """openpyxl 워크북 맨 앞에 통합판매현황을 새로 그림(있으면 지우고 다시). reasons = {계정ID: 로그인 실패 사유} —
+    미수집 칸이 있는 계정 소계 줄에 '소계 — ⚠ 로그인 비밀번호 오류'처럼 간단히 적음(소유자 2026-10-16)."""
     if SALES_SHEET in xwb.sheetnames:
         del xwb[SALES_SHEET]
     ws = xwb.create_sheet(SALES_SHEET, 0)
@@ -71,14 +82,14 @@ def write_sales_sheet(xwb, summary) -> None:
           font=Font(name=_FN, size=10, color="595959"))
     r = 4
     for sec in summary.sections:
-        r = _write_section(ws, r, sec) + 2
+        r = _write_section(ws, r, sec, reasons or {}) + 2
     widths = {1: 28, 2: 46, 3: 11}
     for c in range(1, ncol + 1):
         ws.column_dimensions[get_column_letter(c)].width = widths.get(c, 7 if c % 2 == 0 else 13)
     ws.freeze_panes = "D3"
 
 
-def _write_section(ws, r: int, sec) -> int:
+def _write_section(ws, r: int, sec, reasons: dict) -> int:
     """구역 하나(제목·머리 2줄·전체 합계·계정 소계·상품 줄) — 마지막으로 쓴 행 번호 반환."""
     last = 3 + 2 * len(sec.cols)
     _cell(ws, r, 1, sec.title, font=Font(name=_FN, size=12, bold=True), fill=_FILL_SEC)
@@ -111,7 +122,9 @@ def _write_section(ws, r: int, sec) -> int:
             _cell(ws, r, 5 + 2 * i, None, fill=_FILL_TOTAL, box=True)
     for blk in sec.accounts:
         r += 1
-        _values_row(ws, r, (blk.label, "소계", ""), sec.cols, blk.total, bold=True, fill=_FILL_SUB)
+        why = reasons.get(blk.aid) if any(v is None for v in blk.total.values()) else None
+        _values_row(ws, r, (blk.label, f"소계 — ⚠ {why}" if why else "소계", ""), sec.cols, blk.total,
+                    bold=True, fill=_FILL_SUB)
         for row in blk.rows:   # 상품 줄: 그 칸 기록 없음 = 계정이 받은 기간이면 0, 계정 미수집이면 미수집
             r += 1
             vals = {c.key: row.values.get(c.key, (0, 0) if blk.total.get(c.key) is not None else None)
