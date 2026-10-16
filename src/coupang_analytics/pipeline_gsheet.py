@@ -6,6 +6,8 @@ pipeline.py 가 이 심볼들을 다시 import 해 `pipeline.X` 공개 API(UI·�
 """
 from __future__ import annotations
 
+import json
+
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -215,10 +217,49 @@ def push_company_stock(stock_url: str | None, input_url: str | None, log) -> Non
         if not gsheet_api.load_sa_info():
             log("== [회사재고] 구글 서비스계정 키 미등록 — 회사보유재고 반영 생략 ==")
             return
-        company_stock.run_company_stock(stock_url, input_url, on_log=log)
+        title_of, out_dir = _stock_match_aids(log)
+        company_stock.run_company_stock(stock_url, input_url, on_log=log, title_of=title_of,
+                                        ask=_openai_ask(log), out_dir=out_dir)
     except Exception as exc:
         log(f"== [회사재고] 실패(진행 — SA 권한·링크 확인): "
             f"{exc.__class__.__name__}: {str(exc)[:120]} ==")
+
+
+def _stock_match_aids(log):
+    """회사재고 매칭 보조(D-072) — (title_of(계정ID, 대장명)=① 매칭된 쿠팡 상품명, AI 결과 저장 폴더=output).
+    매칭 고정 기록을 못 읽으면 로그 후 쿠팡 상품명 없이(모델번호는 대장 이름에서만)."""
+    from . import match_anchor
+    path = match_anchor.anchor_path()
+    try:
+        anchors = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    except (OSError, ValueError) as exc:
+        log(f"  [회사재고] ⚠ 매칭 고정 기록 읽기 실패 — 쿠팡 상품명 없이 매칭 · {exc.__class__.__name__}")
+        anchors = {}
+
+    def title_of(aid: str, name: str) -> str:
+        rec = (anchors.get(aid) or {}).get(match_anchor.key_of(name)) or {}
+        return str(rec.get("title") or "") if isinstance(rec, dict) else ""
+    return title_of, str(path.parent)
+
+
+def _stock_cache(out_dir: str, log) -> dict:
+    from . import company_stock_match
+    try:
+        return company_stock_match.load_cache(out_dir)
+    except (OSError, ValueError) as exc:
+        log(f"  [회사재고] ⚠ AI 매칭 기록 읽기 실패 — 규칙 매칭만 · {exc.__class__.__name__}")
+        return {}
+
+
+def _openai_ask(log):
+    """회사재고 AI 매칭용 OpenAI 호출(키 없으면 None — 규칙 단계만)."""
+    from .credstore import CredStore
+    from .product_match_ai import openai_ask
+    key = CredStore().get_password("__openai__")
+    if not key:
+        log("  [회사재고] OpenAI 키 없음 — 규칙(이름·모델번호)으로만 매칭")
+        return None
+    return openai_ask(key)
 
 
 def inject_company_stock(wb, stock_url: str | None, log) -> None:
@@ -238,7 +279,8 @@ def inject_company_stock(wb, stock_url: str | None, log) -> None:
         client = gsheet_api.GSheetClient(stock_url, on_log=log)
         tab = company_stock.resolve_tab(client, stock_url)
         stock, _warnings = company_stock.read_stock(client.read_values(tab))
-        n = company_stock.apply_to_workbook(wb, stock)
+        title_of, out_dir = _stock_match_aids(log)
+        n = company_stock.apply_to_workbook(wb, stock, cache=_stock_cache(out_dir, log), title_of=title_of)
         log(f"== [회사재고] 계정목록 표기 — 재고현황 '{tab}' {len(stock)}품목 → {n}개 상품 주입 ==")
     except Exception as exc:
         log(f"== [회사재고] ⚠ 계정목록 표기 생략(진행): {exc.__class__.__name__}: {str(exc)[:120]} ==")

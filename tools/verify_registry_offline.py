@@ -894,6 +894,49 @@ def t21_company_stock():
     ok("탭 선택·창고별 표기(같은 창고 합산)·'-'=0·음수/비숫자 경고·공백/대소문자/첫 줄 매칭·계정 공통값·미매칭 보존·그 열만·미리보기 0")
 
 
+def t21b_company_stock_match():
+    print("[R21b] 회사재고 매칭(D-072) — 괄호 앞/안·색상별 줄·모델번호(R20=R020·쿠팡 상품명)·번호 다른 함정·AI·저장 결과")
+    from coupang_analytics import company_stock as CS, company_stock_match as M
+    rows = [["창고", "상품명", "현재고"]] + [[w, n, q] for w, n, q in (
+        ("검단", "보냉백 BG001", "4"), ("검단", "신형타프 R008 (블랙)", "1,476"), ("검단", "신형타프 R008 (베이지)", "208"),
+        ("검단", "속싸개 (그레이)", "599"), ("검단", "속싸개 (핑크)", "299"), ("검단", "와이어빨래줄 R020", "1,020"),
+        ("검단", "전동눈썹정리기 HS0030", "48"), ("검단", "젤타입손세정기 HB153", "7"), ("검단", "HB153 바닥청소솔", "3"),
+        ("검단", "인덕션 A003", "2"), ("김포2", "변신큐브 A003", "162"), ("검단", "미니가습기 JK8601", "5"),
+        ("검단", "파미젠 스트레스 엔 테아닌 프리미엄 60정", "1,008"))]
+    stock, _w = CS.read_stock(rows)
+    idx = M.build_index(stock)
+    txt = lambda name, title="": M.text_of(stock, M.match_rules(stock, idx, name, title)[0], CS.stock_text)         if M.match_rules(stock, idx, name, title)[0] else None   # noqa: E731
+    assert txt("보냉백 BG001(벅스 3중 다용도 보온 보냉백)") == "검단 , 4개"                   # 괄호 앞(실측)
+    assert txt("자동손세정기 HB153(젤타입손세정기 HB153)") == "검단 , 7개"                    # 괄호 안 = 재고 이름(바닥청소솔 아님)
+    assert txt("신형타프 R008 (블랙 Free)") == "검단 , 1,476개"                              # 색상 맞춤
+    assert txt("속싸개") == "(그레이) 검단 , 599개 / (핑크) 검단 , 299개"                      # 색상별 전부
+    assert txt("와이어 빨래줄 R20") == "검단 , 1,020개"                                       # 모델번호 앞 0 무시
+    assert txt("전동눈썹정리기 HS0300") is None                                               # 대장 오타만으론 안 맞춤
+    assert txt("전동눈썹정리기 HS0300", "전동눈썹정리기 HS0030") == "검단 , 48개"               # 쿠팡 상품명 번호로
+    assert txt("변신큐브 A003(이큐나라 6 in 1)") == "김포2 , 162개" and txt("A003 장난감") is None   # 번호 겹침 = 판단 안 함
+    assert txt("미니가습기 JK8602") is None                                                   # 번호 한 글자 다름 = 다른 상품
+    seen = []
+
+    def ask(system, user):
+        seen.append(user)
+        assert "L1." in user and "JK8601" in user
+        return {"items": [{"id": 1, "pick": None, "reason": "모델번호 다름"},
+                          {"id": 2, "pick": 1, "reason": "PHARMIZEN=파미젠"}]}
+    cache: dict = {}
+    got = M.ask_ai(ask, [(1, "미니가습기 JK8602", ""), (2, "PHARMIZEN 스트레스 엔 테아닌 기능성 영양제", "")],
+                   stock, idx, cache, print)
+    assert list(got) == [2] and stock[got[2][0][0]][0] == "파미젠 스트레스 엔 테아닌 프리미엄 60정", got
+    assert M.from_cache(cache, stock, "PHARMIZEN 스트레스 엔 테아닌 기능성 영양제")[0] == got[2][0]   # 저장 결과 재사용
+    assert M.from_cache(cache, stock, "미니가습기 JK8602") == ([], "")                              # '없음'은 그날만
+    logs: list = []
+    assert M.ask_ai(lambda s, u: (_ for _ in ()).throw(RuntimeError("down")), [(1, "x", "")], stock, idx, {}, logs.append) == {}
+    assert any("AI 매칭 실패" in m for m in logs), logs
+    with tempfile.TemporaryDirectory() as d:
+        M.save_cache(cache, d)
+        assert M.load_cache(d) == cache
+    ok("괄호 앞/안·색상·모델번호(0 무시·쿠팡 상품명)·번호 겹침/한 글자 다름 = 안 맞춤·AI 고름/없음·장애 로그·저장 재사용")
+
+
 def t22_name_rules():
     print("[R22] 이름 규칙 — 띄어쓰기·대소문자만 변경=자동 이름변경 · 색상 분리=옛 줄 중단+색상 신규 · 진짜 변경=보류 유지")
     g = ("100", "80", "3", "", "", "")
@@ -992,6 +1035,7 @@ def main():
     t19_to_input_list()
     t20_write_lock()
     t21_company_stock()
+    t21b_company_stock_match()
     t22_name_rules()
     t23_company_stock_skip_logged()
     print("셀독등록원장 오프라인 검증 통과")

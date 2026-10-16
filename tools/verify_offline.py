@@ -1784,7 +1784,7 @@ def t1_ledger_account_label():
     assert col_out[2] == [69], f"사업자명 빈 계정(최문석) 그로스 재고가 역기록 안 됨: {col_out}"
     assert col_out[1] == [7] and updated == 2, f"다른 계정 역기록이 깨짐: {col_out} {updated}"
     _h, _c, prods = CS._ledger_rows(rows)
-    by_prod = {p: b for _r, b, p in prods}
+    by_prod = {p: b for _r, b, p, _aid in prods}   # 4번째 = 계정ID(D-072 쿠팡 상품명 매칭용)
     assert by_prod["전동눈썹정리기 HS0030"] == "최문석", f"회사재고 로그 사업자 오표기: {by_prod}"
     assert by_prod["크리스마스 풍선세트 (골드)"] == "봄날의햇살 주식회사", f"회사재고 라벨 줄바꿈: {by_prod}"
     _ok("사업자명 줄바꿈=한 줄 라벨 · 사업자명 빈 계정=대표자명 라벨로 그로스 역기록·회사재고 표기")

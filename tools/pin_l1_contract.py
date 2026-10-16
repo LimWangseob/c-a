@@ -104,7 +104,8 @@ FUNC_CONTRACTS: dict = {
     # 회사보유재고(2026-09-29·소유자): 재고현황 시트→대장 '회사보유재고' 역기록. UI 버튼·야간 배치 공용 진입점.
     company_stock: [
         ("run_company_stock",
-         "P:stock_url:0 P:input_url:0 K:dry_run:1 K:on_log:1 K:stock_client:1 K:ledger_client:1"),
+         "P:stock_url:0 P:input_url:0 K:dry_run:1 K:on_log:1 K:stock_client:1 K:ledger_client:1"
+         " K:title_of:1 K:ask:1 K:out_dir:1"),   # D-072 매칭 보조(선택 인자·기존 호출 호환)
     ],
     registry: [
         ("sync", "P:reg:0 P:snap:0 K:now:0 K:judge:1"),   # judge 선택 인자 = D-070 상품명 변경 자동 판단(기존 호출 호환)

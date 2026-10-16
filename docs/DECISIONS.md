@@ -697,3 +697,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 사람 승인 유지(소유자가 대기열을 인지 못함 — D-070 근거) · AI 판단(아이디 문자열만으로는 근거 없음) · 비밀번호만으로 같은 계정 판정(담당자가 여러 계정에 같은 비번을 씀).
 - 영향 범위: `src/coupang_analytics/registry_judge.py`(judge_account) · `registry_rename.py`(_judge_account_pairs·_move_account·_auto_resolve_pending 계정 분기) · `tools/verify_registry_offline.py` R9b · `designs/LEDGER_REGISTRY.md` §4 표·§6-1. 앱 경로(registry_ui.sync — judge 있을 때)만 자동, 수동 도구는 기존 보류. HQ 포팅 대상.
 - 상태: ACTIVE
+
+### D-072 [COMPANY_STOCK_MATCH] 회사보유재고 매칭 = 상품명 일치 → 괄호 앞/안·색상별 줄 → 모델번호 → AI (2026-10-16, R13)
+- 결정: 재고현황 → 관리대장 '회사보유재고'·계정목록 표기 매칭을 '동일 상품명(공백·대소문자 무시)'에서 단계 판단으로 넓힌다 — ①상품명 일치 ②대장 이름의 괄호 앞·괄호 안 각각이 재고현황 이름(또는 재고현황 괄호 앞 이름)과 일치 — 재고현황에 색상별 줄이 있으면 대장 괄호 안 색상과 같은 줄, 없으면 그 상품 줄 전부를 '(색상) 창고 , 수량개 / …'로 ③모델번호(영문+숫자·숫자 앞 0 무시) — 대장 이름, 없으면 ① 매칭된 쿠팡 상품명에서 — 재고현황에 그 번호 상품이 **하나뿐일 때만** ④AI(OpenAI) — 이름 비슷한 후보 6개 중 **같은 모델·같은 용량**만(번호 한 글자 달라도 다른 상품·브랜드 표기 차이는 같음), 결과는 `output/_회사재고매칭.json`에 저장(고른 이름이 재고현황에 있는 동안 재사용·'없음'은 그날만). 계정목록 표기(apply_to_workbook)는 규칙+저장 결과만(AI 호출 없음). AI 장애 = 로그 후 그 상품 기존값 유지.
+- 근거: 소유자 2026-10-16 "재고현황에 대해서는 수정을 안 했어"(10-16 로그 분석 후). 실측: 10-16 05:10 회사재고 미매칭 40줄 중 21줄이 재고현황에 있음(괄호 설명 18·모델번호 표기 3) — 9-30 기능 도입 후 매칭 47~49줄에 머묾. 함정 실측: JK8602↔JK8601·M28↔M10·BG002↔BG001(유사도 0.78~0.91 이지만 다른 모델) → 유사도 매칭 금지·번호 일치만. 대장 오타 'HS0300' = 쿠팡 상품명·재고 'HS0030'. 미리보기(실데이터·쓰기 없음): 규칙만 74줄(미매칭 19) → AI 포함 76줄(테아닌·마시는 알부민 추가, 함정 3개 미선택)·미매칭 17 = 재고현황에 없음. 공용 openai_ask 가 'L번호' 줄 수로 응답 한도를 정해 처음엔 잘림 → 같은 형식으로 맞춤.
+- 버린 대안: 이름 유사도 최고값 채택(번호 다른 모델 오매칭) · 대장 상품명 정리 요청(담당자 입력 습관·괄호=노출명 규칙 D-046) · 재고현황 쪽 이름 바꾸기(회사 재고 시트는 읽기 전용).
+- 영향 범위: 신규 `src/coupang_analytics/company_stock_match.py` · `company_stock.py`(_ledger_rows 계정ID·apply_to_workbook·_match_rows·write_company_stock·run_company_stock 선택 인자) · `pipeline_gsheet.py`(push_company_stock·inject_company_stock — 쿠팡 상품명·OpenAI 키·저장 결과) · `tools/verify_registry_offline.py` R21b · `tools/pin_l1_contract.py` · `designs/DESIGN.md` 회사보유재고. HQ 포팅 대상.
+- 상태: ACTIVE

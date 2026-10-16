@@ -6,6 +6,7 @@
 - 대장 표기 = **'창고 , 수량개'**(예 '김포2 , 150개'). 여러 창고면 ' / ' 로 이어 씀(파일 순서), 같은 창고가 여러
   줄이면 그 창고 안에서 합산. '-' = 0, 음수는 그대로 쓰고 경고.
 - 매칭 = **동일 상품명**(띄어쓰기·대소문자 무시). 관리대장 상품명이 여러 줄이면 첫 줄(대장 규칙).
+  → D-072(2026-10-16): 괄호 앞/안·색상별 줄·모델번호·AI 단계 추가(`company_stock_match`).
 - 미매칭 줄은 기존값 보존(공란으로 덮지 않음). 같은 상품이 여러 계정에 있으면 모두 같은 값(회사 전체 재고).
 """
 from __future__ import annotations
@@ -29,6 +30,7 @@ class StockResult:
     matched: int = 0                               # 값을 쓴 대장 상품 줄 수
     changed: int = 0                               # 그중 값이 바뀐 줄 수
     unmatched: list = field(default_factory=list)  # (사업자명, 상품명) — 재고현황에 없음
+    how: list = field(default_factory=list)        # (사업자명, 상품명, 근거) — 상품명 일치가 아닌 매칭(로그용)
     warnings: list = field(default_factory=list)
     stock_sheet: str = ""
     items: int = 0                                 # 재고현황 상품 수(창고 합산 후)
@@ -99,7 +101,7 @@ def read_stock(rows: list) -> tuple[dict, list]:
 
 
 def _ledger_rows(values: list) -> tuple[int, int, list]:
-    """관리대장 → (헤더 행, 회사보유재고 열, [(행 0-based, 사업자명, 상품명)]). 헤더·열 없으면 ValueError."""
+    """관리대장 → (헤더 행, 회사보유재고 열, [(행 0-based, 사업자명, 상품명, 계정ID)]). 헤더·열 없으면 ValueError."""
     header, hrow = _find_header_row(values, lambda h: all(n in h for n in _REQUIRED))
     if hrow < 0:
         raise ValueError("관리대장 헤더(사업자명·계정아이디·상품명)를 찾지 못함")
@@ -108,51 +110,84 @@ def _ledger_rows(values: list) -> tuple[int, int, list]:
         raise ValueError(f"관리대장에 '{STOCK_COL}' 열이 없음")
     i_biz, i_acct, i_prod = (header.index(c) for c in
                              (config.IN_COL_BUSINESS, config.IN_COL_ACCOUNT_ID, config.IN_COL_PRODUCT))
-    out, biz = [], ""
+    out, biz, cur = [], "", ""
     labels = account_labels(values)                    # 파싱과 같은 계정 라벨(사업자명 빈 계정=대표자명·로그 표기용)
     for r in range(hrow + 1, len(values)):
         row = values[r]
         acct = _norm(_cell(row, i_acct))
         if acct:
             biz = labels.get(acct) or _one_line(_cell(row, i_biz)) or acct
+            cur = acct
         prod = _norm(_cell(row, i_prod)).split("\n")[0].strip()
         if prod and _is_real_product_name(prod):
-            out.append((r, biz, prod))
+            out.append((r, biz, prod, cur))
     return hrow, nz.index(STOCK_COL), out
 
 
-def apply_to_workbook(wb, stock: dict) -> int:
-    """재고현황 값(`read_stock` 결과)을 워크북 상품에 **동일 상품명 매칭**해 회사보유재고로 주입. 주입 상품 수 반환.
+def apply_to_workbook(wb, stock: dict, cache: dict | None = None, title_of=None) -> int:
+    """재고현황 값(`read_stock` 결과)을 워크북 상품에 매칭(D-072 규칙 1~3 + 저장된 AI 결과)해 회사보유재고로 주입.
 
-    계정목록(엑셀·구글시트) 5열 표기용(계정목록 렌더 전에 호출). 매칭키 = 등록명(있으면·대장 원본명) name_key.
-    미매칭·재고현황에 없는 상품은 주입 안 함(계정목록에서 공란). 값 = 관리대장 역기록과 동일한 '창고 , 수량개'."""
-    n = 0
+    계정목록(엑셀·구글시트) 5열 표기용(계정목록 렌더 전에 호출). 매칭 이름 = 등록명(있으면·대장 원본명).
+    미매칭·재고현황에 없는 상품은 주입 안 함(계정목록에서 공란). 값 = 관리대장 역기록과 동일한 표기. AI 는 부르지 않음
+    (관리대장 역기록이 묻고 저장한 결과만 사용)."""
+    from . import company_stock_match as M
+    idx, n = M.build_index(stock), 0
     for biz in wb.account_sheets():
+        aids = wb.account_ids_of(biz)
         for prod in wb.products_of(biz):
-            hit = stock.get(name_key(wb.registered_name(biz, prod) or prod))
-            if hit:
-                wb.set_company_stock(biz, prod, stock_text(hit[1]))
+            name = wb.registered_name(biz, prod) or prod
+            title = next((t for t in ((title_of or (lambda a, p: ""))(a, name) for a in aids) if t), "")
+            keys, _how = M.match_rules(stock, idx, name, title)
+            if not keys and cache is not None:
+                keys = (M.from_cache(cache, stock, name, title) or ([], ""))[0]
+            if keys:
+                wb.set_company_stock(biz, prod, M.text_of(stock, keys, stock_text))
                 n += 1
     return n
 
 
+def _match_rows(prods: list, stock: dict, title_of, ask, cache: dict, log) -> dict:
+    """{행: ([재고현황 키], 근거)} — 규칙 1~3 → 저장된 AI 결과 → AI(남은 것만 한 번에·D-072)."""
+    from . import company_stock_match as M
+    idx, found, todo = M.build_index(stock), {}, []
+    for r, _biz, prod, aid in prods:
+        title = (title_of or (lambda a, p: ""))(aid, prod)
+        keys, how = M.match_rules(stock, idx, prod, title)
+        if not keys:
+            cached = M.from_cache(cache, stock, prod, title)
+            if cached is None:
+                todo.append((r, prod, title))
+                continue
+            keys, how = cached
+        if keys:
+            found[r] = (keys, how)
+    found.update(M.ask_ai(ask, todo, stock, idx, cache, log))
+    return found
+
+
 def write_company_stock(client, stock: dict, *, dry_run: bool = False,
-                        sheet: str = "셀독리스트") -> StockResult:
+                        sheet: str = "셀독리스트", title_of=None, ask=None, cache: dict | None = None,
+                        log=None) -> StockResult:
     """관리대장 '회사보유재고' 열에 재고현황 '창고 , 수량개'를 기록(매칭 줄만·미매칭은 기존값 보존).
 
-    다른 열은 건드리지 않는다(이 열의 데이터 구간만 한 번에 씀). 값이 바뀌는 줄이 없거나 dry_run 이면 쓰지 않음."""
+    다른 열은 건드리지 않는다(이 열의 데이터 구간만 한 번에 씀). 값이 바뀌는 줄이 없거나 dry_run 이면 쓰지 않음.
+    title_of(계정ID, 대장명) = ① 매칭된 쿠팡 상품명(모델번호 단계) · ask = AI 호출 · cache = AI 결과 저장소(D-072)."""
+    from . import company_stock_match as M
     values, _ = client.read_grid(sheet)
     hrow, col, prods = _ledger_rows(values)
     res = StockResult()
     col_out = [[_cell(values[r], col) if _cell(values[r], col) is not None else ""]
                for r in range(hrow + 1, len(values))]
-    for r, biz, prod in prods:
-        hit = stock.get(name_key(prod))
-        if hit is None:
+    found = _match_rows(prods, stock, title_of, ask, {} if cache is None else cache, log or (lambda m: None))
+    for r, biz, prod, _aid in prods:
+        if r not in found:
             res.unmatched.append((biz, prod))
             continue
+        keys, how = found[r]
+        if how != "상품명 일치":
+            res.how.append((biz, prod, how))
         res.matched += 1
-        text = stock_text(hit[1])
+        text = M.text_of(stock, keys, stock_text)
         if str(col_out[r - hrow - 1][0]).strip() != text:
             res.changed += 1
             col_out[r - hrow - 1] = [text]
@@ -162,7 +197,8 @@ def write_company_stock(client, stock: dict, *, dry_run: bool = False,
 
 
 def run_company_stock(stock_url: str, input_url: str, *, dry_run: bool = False, on_log=None,
-                      stock_client=None, ledger_client=None) -> StockResult:
+                      stock_client=None, ledger_client=None, title_of=None, ask=None,
+                      out_dir: str | None = None) -> StockResult:
     """재고현황(stock_url) → 관리대장(input_url) '회사보유재고' 역기록 1회. UI 버튼·야간 배치 공용 진입점.
 
     실패(링크·권한·헤더 없음)는 예외로 올린다(폴백 없음) — 호출부가 비치명 처리(로그). 클라이언트는 테스트 주입용."""
@@ -173,10 +209,16 @@ def run_company_stock(stock_url: str, input_url: str, *, dry_run: bool = False, 
         ledger_client = ledger_client or GSheetClient(input_url, on_log=log)
     tab = resolve_tab(stock_client, stock_url)
     stock, warnings = read_stock(stock_client.read_values(tab))
-    res = write_company_stock(ledger_client, stock, dry_run=dry_run)
+    from . import company_stock_match as M
+    cache = M.load_cache(out_dir) if out_dir else {}
+    res = write_company_stock(ledger_client, stock, dry_run=dry_run, title_of=title_of, ask=ask, cache=cache, log=log)
+    if out_dir and not dry_run:
+        M.save_cache(cache, out_dir)
     res.stock_sheet, res.items, res.warnings = tab, len(stock), warnings
     for w in warnings[:30]:
         log(f"  [회사재고] ⚠ {w}")
+    for biz, prod, how in res.how:
+        log(f"  [회사재고] 매칭 — {biz} / {prod[:40]} ← {how}")
     for biz, prod in res.unmatched:
         log(f"  [회사재고] 미매칭(기존값 유지) — {biz or '(사업자명 없음)'} / {prod}")
     log(f"== [회사재고] {'미리보기(저장 안 함) ' if dry_run else ''}재고현황 '{tab}' {len(stock)}품목 → "
