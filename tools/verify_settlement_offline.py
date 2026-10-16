@@ -603,7 +603,25 @@ def p10_settle_dup_rows():
     assert any("겹친 같은 줄 4건" in x for x in res2.warnings), res2.warnings
     wing, _rg = SV.month_sums([w, m], ST._order_rows)
     assert wing["A"]["202608"]["정산대상"] == w.settle_total, wing["A"]["202608"]   # 검증 월합도 1회(두 번이면 2배)
-    ok("한 파일 반복 취소 줄 전부 반영·주정산↔월별 겹친 줄 1회(집계·검증 월합 같은 규칙)")
+    # 실측(output(23) 2026-10-16): 9/29 정산일에 쿠팡이 월 경계로 '8/31~8/31'·'9/1~9/6' 두 줄 → 받은 주정산 파일은 9/1~9/6 뿐.
+    # 옛 규칙(정산예정일만 비교)은 8월 최종액 파일의 8/31 줄(정산예정 9/29)도 '주정산에 있음'으로 빼서 8/31 매출이 사라짐
+    # (웰빙곳간 13,460·로움 38,460·hk 6,000·휴라엘 13,900·유라이프 29,360 = 쿠팡 매출내역 차이와 원 단위 일치).
+    sep = SF.parse_wing_detail([WING_HDR, _wing_row("2001", "88", "타프", "95893113451", 50000, 1, 0, 5000, 45000,
+                                                    conf="2026-09-02", due="2026-09-29")],
+                               account="A", period_start=D("2026-09-01"), period_end=D("2026-09-06"))
+    sep.kind, sep.settle_date = "주정산", D("2026-09-29")
+    aug = SF.parse_wing_detail([WING_HDR, _wing_row("1031", "77", "보냉백", "95467404277", 13460, 1, 0, 1570, 11890,
+                                                    conf="2026-08-31", due="2026-09-29")],
+                               account="A", period_start=D("2026-08-24"), period_end=D("2026-08-31"))
+    aug.kind = "최종액"
+    res3 = ST.aggregate([sep, aug])
+    assert res3.account_totals() == {"A": sep.settle_total + 11890}, res3.account_totals()     # 8/31 줄 살아 있음
+    assert {p.month for p in res3.products if p.wing_settle == 11890} == {"2026-08"}
+    wing3, _rg = SV.month_sums([sep, aug], ST._order_rows)
+    assert wing3["A"]["202608"]["정산대상"] == 11890, wing3["A"]                             # 검증 월합도 같은 규칙
+    l3 = {label: amt for f, label, amt in ST.payout_lines([sep, aug]) if f is aug}
+    assert l3["주정산 70%(정산예정 2026-09-29·월별 파일에서 계산)"] == 8323, l3               # 쿠팡 9/29 '8/31' 줄 지급액
+    ok("한 파일 반복 취소 줄 전부 반영·주정산↔월별 겹친 줄 1회(집계·검증 월합 같은 규칙)·월 경계 주(8/31) 누락 없음")
 
 
 def main():

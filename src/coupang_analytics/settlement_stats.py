@@ -89,6 +89,27 @@ def _order_files(files: list[SettleFile], warns: list) -> list[SettleFile]:
     return keep
 
 
+def _weekly_windows(files: list[SettleFile]) -> dict:
+    """{(계정, 정산일): [(기간 시작, 기간 끝)…]} — 받은 윙 주정산 파일. 같은 정산일에 쿠팡이 월 경계로 나눈 두 줄
+    (예 9/29 = '8/31~8/31'·'9/1~9/6')이 있어 정산일만으로는 어느 줄의 파일인지 모른다(D-074)."""
+    out: dict = {}
+    for f in files:
+        if f.channel == CH_WING and f.kind != "최종액":
+            out.setdefault((f.account, f.settle_date), []).append((f.period_start, f.period_end))
+    return out
+
+
+def _in_weekly(r, account: str, windows: dict) -> bool:
+    """윙 최종액 줄이 받은 주정산 파일에 이미 있나 — 정산예정일이 같고 **구매확정일이 그 파일 기간 안**일 때만.
+    정산예정일만 같고 기간 밖(월 경계 8/31 줄)은 주정산 파일에 없음 → 최종액 줄을 써야 함(실측 2026-10-16 5계정 누락)."""
+    spans = windows.get((account, r.due))
+    if not spans:
+        return False
+    if r.recognized is None:          # 날짜 없는 줄(배송비 등) — 옛 규칙(정산예정일 같으면 주정산 쪽)
+        return True
+    return any(s <= r.recognized <= e for s, e in spans)
+
+
 def _row_key(r) -> tuple:
     return (r.channel, r.account, r.order_id, r.option_id, r.kind, r.recognized, r.settle, r.qty)
 
@@ -99,9 +120,9 @@ def _order_rows(files: list[SettleFile], warns: list):
     같은 줄이 **여러 파일에** 있으면 한 번만 쓴다(한 파일에 가장 많이 나온 횟수까지). **한 파일 안의 반복 줄은
     진짜 거래**라 전부 쓴다 — 로켓그로스 개당 취소 줄(실측 2026-10-12: 반복 줄 있는 9개 파일 모두 전부 합계만 쿠팡과 일치)."""
     files = _order_files(files, warns)
-    covered = {(f.account, f.settle_date) for f in files if f.channel == CH_WING and f.kind != "최종액"}
+    windows = _weekly_windows(files)
     chosen = [(f, r) for f in files for r in f.rows
-              if not (f.channel == CH_WING and f.kind == "최종액" and (r.account, r.due) in covered)]
+              if not (f.channel == CH_WING and f.kind == "최종액" and _in_weekly(r, r.account, windows))]
     most: dict = {}
     for (_, k), n in Counter((id(f), _row_key(r)) for f, r in chosen).items():
         most[k] = max(most.get(k, 0), n)
@@ -191,12 +212,12 @@ def payout_lines(files: list[SettleFile], warns: list | None = None) -> list[tup
     윙 주정산=70% · 윙 최종액=30%(정산예정일별 주 합계로 계산) + 주정산 파일이 없는 주의 70%(월별 파일에서 계산,
     과거 달은 월별 파일만 받으므로) · 로켓그로스=같은 파일이 70%·30% 두 지급에 쓰임."""
     warns = warns if warns is not None else []
-    covered = {(f.account, f.settle_date) for f in files if f.channel == CH_WING and f.kind != "최종액"}
+    windows = _weekly_windows(files)
     out = []
     for f in files:
         amounts = [r.settle for r in f.rows]
         if f.channel == CH_WING and f.kind == "최종액":
-            out += _final_lines(f, covered, warns)
+            out += _final_lines(f, windows, warns)
         elif f.channel == CH_WING:
             out.append((f, "주정산 70%", P.payout_amount(P.PAYOUT_MP_WEEKLY_1ST, _day_sums(f.rows))))
         else:
@@ -213,16 +234,16 @@ def _day_sums(rows) -> list[int]:
     return list(days.values())
 
 
-def _final_lines(f: SettleFile, covered: set, warns: list) -> list[tuple]:
+def _final_lines(f: SettleFile, windows: dict, warns: list) -> list[tuple]:
     weeks: dict = {}
     for r in f.rows:
         weeks.setdefault(r.due, []).append(r)
     if None in weeks:
         warns.append(f"{f.account} 윙 최종액 {f.period_start}~{f.period_end}: 정산예정일 없는 금액 줄 — "
                      "30% 계산이 화면과 다를 수 있음")
+    own = {due: [r for r in rows if not _in_weekly(r, f.account, windows)] for due, rows in weeks.items()}
     lines = [(f, f"주정산 70%(정산예정 {due}·월별 파일에서 계산)", P.payout_amount(P.PAYOUT_MP_WEEKLY_1ST, _day_sums(rows)))
-             for due, rows in sorted(weeks.items(), key=lambda kv: str(kv[0]))
-             if due is not None and (f.account, due) not in covered]
+             for due, rows in sorted(own.items(), key=lambda kv: str(kv[0])) if due is not None and rows]
     lines.append((f, "최종액 30%", P.payout_amount(P.PAYOUT_MP_WEEKLY_FINAL,
                                                   [a for rows in weeks.values() for a in _day_sums(rows)])))
     return lines
