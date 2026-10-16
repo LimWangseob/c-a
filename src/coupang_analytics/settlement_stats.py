@@ -273,7 +273,7 @@ _A_HEAD = ["계정", "쿠팡 정산금액 합계(부가비용 차감 전)", "계
 
 def write_stats(path, res: StatsResult, contracts: dict | None = None, files: list | None = None,
                 amounts: list | None = None, costs: list | None = None, verify: list | None = None,
-                inflows: list | None = None) -> Path:
+                inflows: list | None = None, forecast: list | None = None) -> Path:
     """집계 엑셀: '상품별 월별'·'계정별 월별'·'계약자 정산'·'지급액 검산'(files 주면)·'쿠팡 지급 내역'(amounts)·
     '로켓그로스 비용'(costs)·'경고' 시트. contracts={계정: 계약금액}(없는 계정은 빈칸).
     amounts = [{'계정','채널','정산일','기간 시작','기간 끝','지급비율','최종지급액', 쿠팡 금액 칸…}],
@@ -312,6 +312,10 @@ def write_stats(path, res: StatsResult, contracts: dict | None = None, files: li
             ws_in.append([r[h] for h in INFLOW_HEAD])
     if amounts:
         _table_sheet(wb, "쿠팡 지급 내역", amounts, _AMOUNT_FIRST)
+    if forecast:                                      # D-078 정산 예정 ↔ 실제(정산일 지난 줄)
+        from .settlement_forecast import summary
+        _table_sheet(wb, "예정 정확도 요약", summary(forecast), ["채널", "미리 본 일수"])
+        _table_sheet(wb, "예정 정확도", forecast, ["계정", "채널", "정산일", "기간", "지급비율", "수집일", "미리 본 일수", "판정"])
     if costs:
         cs2 = wb.create_sheet("로켓그로스 비용")
         cs2.append(["계정", "정산일", "기간 시작", "기간 끝", "리포트", "시트", "최종비용(VAT 포함)"])

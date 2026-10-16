@@ -45,6 +45,7 @@ except AttributeError:
 from coupang_analytics import apppaths  # noqa: E402
 from coupang_analytics import settlement_accounts as SA  # noqa: E402
 from coupang_analytics import settlement_files as SF  # noqa: E402
+from coupang_analytics import settlement_forecast as FC  # noqa: E402
 from coupang_analytics import settlement_jobs as SJ  # noqa: E402
 from coupang_analytics import settlement_runlog as RL  # noqa: E402
 from coupang_analytics import settlement_store as STORE  # noqa: E402
@@ -259,11 +260,29 @@ def read_events(b, name: str, start: date, end: date) -> list:
             for n in API.unsupported_cycles(resp):
                 LOG.record(name, "조회", RL.WAIT, f"확인 필요 — 받기 방법 미확인 정산주기 {n} · 그 줄만 건너뜀", channel=ch)
             found += evs
+        _read_forecast(b, name, ch, path, body, end)
     return found
 
 
+def _read_forecast(b, name: str, ch: str, path: str, body, end: date) -> None:
+    """오늘 뒤 AHEAD_DAYS 까지 정산현황 조회 → 쿠팡이 미리 만든 정산 줄을 예정 기록에만(D-078). 받을 파일 계획엔 안 씀.
+    쿠팡이 미래 날짜를 거부하는 등 실패해도 그 계정 정산은 계속(차단 신호만 그대로 올림)."""
+    for ws, we in API.month_windows(end + timedelta(days=1), end + timedelta(days=FC.AHEAD_DAYS)):
+        time.sleep(random.uniform(*LOOKUP_GAP_SEC))
+        try:
+            resp = api(b, name, "POST", path, body(ws, we))
+        except (API.SiteChangedError, API.ServerBusy) as exc:
+            LOG.record(name, "조회", RL.WAIT, f"정산 예정 조회 실패(진행) — {str(exc)[:120]}", channel=ch, period=f"{ws}~{we}")
+            continue
+        _save_amounts(name, ch, resp)
+        LOG.record(name, "조회", RL.OK, "정산 예정(쿠팡 미리 계산) 조회", channel=ch, period=f"{ws}~{we}")
+
+
 def _save_amounts(name: str, ch: str, resp: dict) -> None:
-    STORE.save_amounts(name, ch, API.amount_rows(resp, ch))
+    """정산일 지난 줄 = 지급 내역 · 오늘 뒤 줄 = 예정 기록(수집일별·D-078)."""
+    past, future = FC.split_future(API.amount_rows(resp, ch), date.today())
+    STORE.save_amounts(name, ch, past)
+    FC.record(STORE.FORECAST, SF._token(name, "계정명"), ch, future, date.today())
 
 
 def past_until(args) -> bool:
@@ -539,8 +558,10 @@ def cmd_stats() -> None:
     vdatas = {p.stem: json.loads(p.read_text(encoding="utf-8")) for p in sorted(VERIFY.glob("*.json"))}
     res = ST.aggregate(files, lines)
     verify = SV.build_all(files, amounts, vdatas, ST._order_rows, holidays=load_holidays(amounts))
+    acc = FC.accuracy(FC.load(STORE.FORECAST), amounts, date.today())
     out = ST.write_stats(BASE / f"정산집계_{datetime.now():%y%m%d_%H%M%S}.xlsx", res, files=files, amounts=amounts,
-                         costs=costs, verify=verify, inflows=SV.inflows_all(amounts, vdatas, today=date.today()))
+                         costs=costs, verify=verify, inflows=SV.inflows_all(amounts, vdatas, today=date.today()),
+                         forecast=acc)
     log(f"집계 정산 파일 {len(files)}개·비용 리포트 {len(costs)}시트·쿠팡 지급 내역 {len(amounts)}줄 → {out} "
         f"(경고 {len(res.warnings)}건)")
 

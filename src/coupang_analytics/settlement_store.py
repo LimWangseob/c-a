@@ -19,6 +19,7 @@ JOBS = BASE / "_요청기록.json"
 FILES = BASE / "파일"
 COSTS = FILES / "비용"                                   # 로켓그로스 비용 리포트(집계 파일 목록과 분리)
 AMOUNTS = BASE / "쿠팡지급내역"                           # 정산현황 금액(계정별 JSON) — 집계 대조용
+FORECAST = BASE / "정산예정기록.jsonl"                     # 앞으로의 정산 줄(수집일별·D-078) — 지급 내역과 분리
 VERIFY = BASE / "검증자료"                                # 월렛·매출내역·부가세·보류·추가지급(계정별 JSON·하루 1회)
 
 

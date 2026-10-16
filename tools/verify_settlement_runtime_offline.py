@@ -1114,6 +1114,38 @@ def p31_keep_originals():
     ok("윙·판매수수료·비용 리포트 원본 바이트 그대로 복사 · 집계 사본(구매자명 제거)·비용 폴더 불변 · 미지정=폴더 없음")
 
 
+def p34_forecast_accuracy():
+    print("[P34] 정산 예정 기록(D-078) — 오늘 뒤 줄은 예정 기록에만·같은 날 다시 보면 마지막 값·정산일 지나면 실제와 칸별 대조")
+    from datetime import date
+    from coupang_analytics import settlement_forecast as FC
+    from coupang_analytics import settlement_stats as ST
+    rows = [{"정산일": "2026-10-15", "기간 시작": "2026-09-07", "기간 끝": "2026-09-13", "지급비율": 70, "최종지급액": 75036},
+            {"정산일": "2026-10-22", "기간 시작": "2026-09-14", "기간 끝": "2026-09-20", "지급비율": 70, "최종지급액": 1000,
+             "totalPayableAmount": 5000, "totalAdSalesDeductionAmount": 4000}]
+    past, fut = FC.split_future(rows, date(2026, 10, 16))
+    assert [r["정산일"] for r in past] == ["2026-10-15"] and [r["정산일"] for r in fut] == ["2026-10-22"]
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / "예정.jsonl"
+        FC.record(f, "A", "로켓그로스", fut, date(2026, 10, 16))
+        FC.record(f, "A", "로켓그로스", [{**fut[0], "최종지급액": 1200}], date(2026, 10, 16))       # 같은 날 다시 → 마지막
+        FC.record(f, "A", "로켓그로스", [{**fut[0], "최종지급액": 1300}], date(2026, 10, 20))
+        fc = FC.load(f)
+        assert sorted((r["수집일"], r["최종지급액"]) for r in fc) == [("2026-10-16", 1200), ("2026-10-20", 1300)], fc
+        assert FC.accuracy(fc, [], date(2026, 10, 21)) == []                                    # 정산일 전 = 비교 안 함
+        actual = [{"계정": "A", "채널": "로켓그로스", **fut[0], "지급비율": 70.0, "최종지급액": 1300}]
+        acc = FC.accuracy(fc, actual, date(2026, 10, 22))
+        assert [(r["수집일"], r["미리 본 일수"], r["판정"]) for r in acc] == [("2026-10-16", 6, "다름"), ("2026-10-20", 2, "일치")], acc
+        assert "최종지급액 +100" in acc[0]["차이(실제−예정)"] and acc[0]["예정 광고비(RG)"] == 4000
+        assert FC.accuracy(fc, [], date(2026, 10, 22))[0]["판정"] == "실제 없음"
+        summ = FC.summary(acc)
+        assert [(s["미리 본 일수"], s["비교 줄"], s["최종지급액 일치"]) for s in summ] == [("0~3일", 1, 1), ("4~7일", 1, 0)], summ
+        import openpyxl
+        out = ST.write_stats(Path(tmp) / "s.xlsx", ST.aggregate([]), forecast=acc)
+        names = openpyxl.load_workbook(out).sheetnames
+        assert "예정 정확도" in names and "예정 정확도 요약" in names, names
+    ok("오늘 뒤 줄만 예정 기록·같은 날 마지막 값·정산일 지나면 칸별 대조(며칠 전 예정)·실제 없음·요약·집계 시트")
+
+
 def p33_login_password_source():
     print("[P33] 정산 로그인 비밀번호 = 앱과 같은 관리대장 값 먼저(소유자 2026-10-16) · 대장에 없는 계정만 정산 계정 파일 · 값이 다르면 둘 다(최대 2·D-012)")
     from coupang_analytics import settlement_accounts as SA
@@ -1205,6 +1237,7 @@ def main():
     p31_keep_originals()
     p32_evidence_rules()
     p33_login_password_source()
+    p34_forecast_accuracy()
     print("정산 런타임 오프라인 검증 통과")
 
 
