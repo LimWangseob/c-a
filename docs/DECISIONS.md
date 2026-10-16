@@ -690,3 +690,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 확인필요 유지 + 알림(소유자가 승인 흐름 자체를 원치 않음) · 무조건 같은 상품으로 병합(다른 용량·색상 상품 이력 섞임) · 무조건 다른 상품(이름 오타 수정마다 이력 끊김).
 - 영향 범위: 신규 `src/coupang_analytics/registry_judge.py` · `registry.py`(sync judge) · `registry_core.py`(_Run.judge) · `registry_apply.py`(_rename_row·_judge_pairs) · `registry_rename.py`(_auto_resolve_pending·_apply_rename note) · `registry_gsheet.py`(run_sync judge·_mark_auto_resolved) · `ui/registry_ui.py`(rename_judge — OpenAI 키·매칭 고정 기록) · `tools/verify_registry_offline.py` R17c · `designs/LEDGER_REGISTRY.md` §4 표·§6-1. HQ 포팅 대상.
 - 상태: ACTIVE
+
+### D-071 [REGISTRY_AUTO_ACCOUNT_JUDGE] 원장 계정아이디 변경 의심도 자동 판단(원장·대장 자료) — 사람 승인 대기열 0 (2026-10-16, R13)
+- 결정: 사업자명·대표자명이 같은 1:1 계정아이디 변경 의심 쌍(새 쌍·기존 `확인필요`)을 앱이 판단해 바로 반영 — ①대소문자·기호만 다름 = 같은 계정 ②두 계정 상품이 절반 이상 같음 = 같은 계정·상품이 다름 = 다른 계정 ③한 쪽이 상품 없음 → 비밀번호 같고 아이디 비슷(유사도 ≥0.75·오타 수정) = 같은 계정, 그 밖 = 다른 계정. 같은 계정 = 원장 줄 전부 새 아이디로 이동(등록일·이력 이어짐·이력 비고 근거) · 다른 계정 = 옛 계정 관리중단 + 새 계정 신규(근거가 부족할 때 이력을 섞지 않는 쪽). 판단 불가 경우가 없어 보류 0. 기존 확인필요는 원래 줄 확인상태·확인자 `AI 자동`·확인일 채움(D-070 과 같은 표시). D-070 의 '계정아이디는 사람 승인 유지'를 대체.
+- 근거: 소유자 2026-10-16 "계정아이디 변경 의심도 자동으로 — 반영해줘"(D-070 보고에 이어). AI 는 계정아이디 판단 재료가 없어 원장(상품·비밀번호)·대장 자료로 판단. 실측: 원장 계정이력 확인필요 0건(사례 없음). 시험 R9b: 상품 같음=줄 이동·상품 다름=관리중단+신규·판단 없이 생긴 확인필요(오타·비번 같음) → 다음 실행 자동 승인·무결성.
+- 버린 대안: 사람 승인 유지(소유자가 대기열을 인지 못함 — D-070 근거) · AI 판단(아이디 문자열만으로는 근거 없음) · 비밀번호만으로 같은 계정 판정(담당자가 여러 계정에 같은 비번을 씀).
+- 영향 범위: `src/coupang_analytics/registry_judge.py`(judge_account) · `registry_rename.py`(_judge_account_pairs·_move_account·_auto_resolve_pending 계정 분기) · `tools/verify_registry_offline.py` R9b · `designs/LEDGER_REGISTRY.md` §4 표·§6-1. 앱 경로(registry_ui.sync — judge 있을 때)만 자동, 수동 도구는 기존 보류. HQ 포팅 대상.
+- 상태: ACTIVE

@@ -39,11 +39,19 @@ def _auto_resolve_pending(ctx: _Run, done: set) -> None:
     판단 불가=그대로(다음 실행에서 다시). 비고 '#번호 자동 승인/반려 — 근거'(원래 줄 확인상태는 저장 때 함께 표시)."""
     if not ctx.judge:
         return
-    from .registry_judge import DIFFERENT, SAME
+    from .registry_judge import DIFFERENT, SAME, judge_account
     pend: dict[str, list[HistRow]] = {}
-    for h in ctx.reg.history:
-        if h.kind == K_RENAME_PROD and h.confirm == C_PENDING and (h.sheet, h.no) not in done:
+    for h in list(ctx.reg.history):
+        if h.confirm != C_PENDING or (h.sheet, h.no) in done:
+            continue
+        if h.kind == K_RENAME_PROD:
             pend.setdefault(h.account_id, []).append(h)
+        elif h.kind == K_RENAME_ACCT and h.new in ctx.snap.accounts and ctx.reg.account_rows(h.old):
+            v, why = judge_account(ctx.reg, ctx.snap, h.old, h.new)
+            if v == SAME:
+                _apply_rename(ctx, h, f"#{h.no} 자동 승인 — {why}")
+            else:
+                _close_rename(ctx, h, K_REJECTED, f"#{h.no} 자동 반려 — {why}")
     for aid, hs in pend.items():
         verdicts = ctx.judge(aid, [(h.old, h.new) for h in hs])
         for h in hs:
@@ -75,11 +83,16 @@ def _apply_rename(ctx: _Run, h: HistRow, note: str = "") -> None:
         row.product = h.new
         reg.rows[row.key] = row
     else:
-        for row in reg.account_rows(h.old):
-            del reg.rows[row.key]
-            row.account_id = h.new
-            reg.rows[row.key] = row
+        _move_account(reg, h.old, h.new)
     _close_rename(ctx, h, K_CONFIRMED, note or f"#{h.no} 승인")
+
+
+def _move_account(reg: Registry, old: str, new: str) -> None:
+    """원장 그 계정의 모든 줄을 새 계정아이디로(줄·등록일·이력 이어짐)."""
+    for row in reg.account_rows(old):
+        del reg.rows[row.key]
+        row.account_id = new
+        reg.rows[row.key] = row
 
 
 # ── 이름 변경 의심(보류) ─────────────────────────────────────────
@@ -140,5 +153,22 @@ def _hold_account_renames(ctx: _Run) -> tuple[set, set]:
     removed = [a for a in reg.account_ids() if a not in snap.accounts and not ctx.acct_stopped(a)]
     added = [a for a in snap.accounts if not reg.account_rows(a)]
     pairs = _account_rename_pairs(reg, snap, removed, added)
+    if ctx.judge:
+        pairs = _judge_account_pairs(ctx, pairs)
     return _hold_renames(ctx, SHEET_ACCT, K_RENAME_ACCT, ITEM_ACCT_ID, "", pairs,
                          lambda n: snap.ref("계정아이디", snap.accounts[n].row_no))
+
+
+def _judge_account_pairs(ctx: _Run, pairs: list) -> list:
+    """계정아이디 변경 의심 자동 판단(D-071) — 같은 계정=즉시 줄 이동(이력 이어짐) · 다른 계정=보류 없이 옛 계정
+    관리중단 + 새 계정 신규(호출부 일반 흐름). 반환 = 남길 쌍(없음 — 판단 불가 경우 없음)."""
+    from .registry_judge import SAME, judge_account
+    for o, n in pairs:
+        v, why = judge_account(ctx.reg, ctx.snap, o, n)
+        if v == SAME:
+            _move_account(ctx.reg, o, n)
+            ctx.emit(SHEET_ACCT, K_CONFIRMED, n, item=ITEM_ACCT_ID, old=o, new=n,
+                     source=ctx.snap.ref("계정아이디", ctx.snap.accounts[n].row_no), note=f"자동 — 같은 계정({why})")
+        else:
+            ctx.warnings.append(f"계정아이디 '{o}' → '{n}' = 다른 계정으로 자동 판단({why}) — 옛 계정 관리중단·새 계정 신규")
+    return []

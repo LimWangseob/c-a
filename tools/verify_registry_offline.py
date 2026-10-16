@@ -281,6 +281,43 @@ def t9_account_rename(reg, acc):
     return acc
 
 
+def t9b_account_rename_judge():
+    print("[R9b] 계정아이디 변경 의심 자동 판단(D-071) — 같은 계정=줄 이동·다른 계정=관리중단+신규·기존 확인필요 자동 처리")
+    from coupang_analytics import registry_judge as J
+    judge = J.make_judge(None)
+
+    def accs(aid1, aid2, prods2, pw2="pw!1"):
+        return [A(aid1, "가대표", "가상사", "pw!1", products=[P("가 텀블러"), P("가 머그컵")]),
+                A(aid2, "나대표", "나상사", pw2, products=[P(x) for x in prods2]),
+                *[A(f"keep{i}", f"대표{i}", f"상사{i}", "pw", products=[P(f"상품{i}")]) for i in range(4)]]
+    pend = lambda reg: [h for h in reg.history if h.confirm == M.C_PENDING]   # noqa: E731
+    # (1) 상품이 같음 = 같은 계정 → 줄 이동(이력 이어짐)·보류 없음
+    reg = R.Registry()
+    R.sync(reg, snap_of(accs("ga1", "na1", ["나 우산"])), now=day(1))
+    res = R.sync(reg, snap_of(accs("ga2", "na1", ["나 우산"])), now=day(2), judge=judge)
+    assert ("ga2", "가 텀블러") in reg.rows and not reg.account_rows("ga1") and not pend(reg), kinds(res.events)
+    assert reg.rows[("ga2", "가 텀블러")].registered == "2026-10-01"
+    assert (M.SHEET_ACCT, M.K_CONFIRMED, "ga2", "", "계정아이디") in kinds(res.events)
+    # (2) 상품이 다름 = 같은 사업자의 다른 계정 → 옛 계정 관리중단 + 새 계정 신규·보류 없음
+    a = accs("ga2", "na1", ["나 우산"])
+    a[0]["aid"] = "ga3"
+    a[0]["products"] = [P("다른 선풍기")]
+    res = R.sync(reg, snap_of(a), now=day(3), judge=judge)
+    assert reg.account_rows("ga3") and status(reg, "ga2", "가 텀블러")[0] == M.ST_STOPPED and not pend(reg), kinds(res.events)
+    # (3) 판단 없이(수동 도구) 생긴 확인필요 → 다음 앱 실행에서 자동 처리(오타 수정 = 비밀번호 같고 아이디 비슷·상품 없음)
+    reg2 = R.Registry()
+    R.sync(reg2, snap_of(accs("ga1", "nabong01", [])), now=day(1))
+    R.sync(reg2, snap_of(accs("ga1", "nabong1", [])), now=day(2))
+    assert len(pend(reg2)) == 1, kinds(reg2.history)
+    no = pend(reg2)[0].no
+    res = R.sync(reg2, snap_of(accs("ga1", "nabong1", [])), now=day(3), judge=judge)
+    assert reg2.account_rows("nabong1") and not reg2.account_rows("nabong01"), kinds(res.events)
+    assert any(h.note.startswith(f"#{no} 자동 승인") for h in res.events), [h.note for h in res.events]
+    R.check_integrity(reg)
+    R.check_integrity(reg2)
+    ok("상품 같음=줄 이동·상품 다름=관리중단+신규·오타(비번 같음)=기존 확인필요 자동 승인·보류 0")
+
+
 def t10_guard():
     print("[R10] 대장 계정 급감 = 반영 중단(원장 불변)")
     accs = [A(f"g{i}", f"대표{i}", f"상사{i}", "pw", products=[P(f"상품{i}")]) for i in range(6)]
@@ -942,6 +979,7 @@ def main():
     acc = t7_resume(reg, acc)
     acc = t8_product_rename(reg, acc)
     t9_account_rename(reg, acc)
+    t9b_account_rename_judge()
     t10_guard()
     t11_as_of_and_integrity(reg)
     t12_managed_between(reg)

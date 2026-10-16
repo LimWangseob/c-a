@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+from difflib import SequenceMatcher
 from pathlib import Path
 
 SAME, DIFFERENT, UNSURE = "same", "different", "unsure"
@@ -84,3 +85,24 @@ def _ask_ai(ask, aid: str, items: list, log) -> dict:
         v = x.get("verdict") if x.get("verdict") in (SAME, DIFFERENT, UNSURE) else UNSURE
         out[k] = (v, "AI — " + str(x.get("reason") or "근거 없음")[:80])
     return out
+
+
+def judge_account(reg, snap, old: str, new: str) -> tuple[str, str]:
+    """계정아이디 변경 의심 쌍(사업자명·대표자명이 같은 1:1) 판단 — 원장·대장 자료만(AI 재료 없음·D-071).
+    ① 대소문자·기호만 다름 = 같은 계정 ② 두 쪽 상품이 절반 이상 같음 = 같은 계정·상품이 다름 = 다른 계정
+    ③ 한 쪽이 상품 없음 → 비밀번호 같고 아이디가 비슷(오타 수정) = 같은 계정, 아니면 다른 계정(같은 사업자의 새 계정).
+    다른 계정 = 옛 계정 관리중단 + 새 계정 신규(이력 섞이지 않음 — 근거가 부족할 때의 안전한 쪽)."""
+    if loose_key(old) == loose_key(new):
+        return SAME, "계정아이디 대소문자·기호만 다름"
+    olds = {loose_key(r.product) for r in reg.account_rows(old) if r.product}
+    news = {loose_key(p) for p in snap.accounts[new].products}
+    if olds and news:
+        both = olds & news
+        if len(both) * 2 >= min(len(olds), len(news)):
+            return SAME, f"상품 {len(both)}개 같음"
+        return DIFFERENT, "상품이 다름 — 같은 사업자의 다른 계정"
+    rows = reg.account_rows(old)
+    same_pw = bool(rows) and str(rows[0].acct.get("비밀번호", "")).strip() ==         str(snap.accounts[new].fields.get("비밀번호", "")).strip() != ""
+    if same_pw and SequenceMatcher(None, old.lower(), new.lower()).ratio() >= 0.75:
+        return SAME, "비밀번호 같고 아이디 비슷(오타 수정)"
+    return DIFFERENT, "같은 계정이라는 근거 부족 — 같은 사업자의 다른 계정으로 처리"

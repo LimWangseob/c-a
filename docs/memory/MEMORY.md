@@ -17,6 +17,7 @@
 ## 작업 원칙(피드백·정책)
 - [⛔불변·전역: 메모리30~50줄·CLAUDE.md<200·핸드오프=STATE.md·DECISIONS D-번호 append-only·종료=/session-close·커밋[R{n}]](policy-memory-to-claudemd-200line.md) — session-kit 전역 일원화. SSOT=전역 CLAUDE.md
 - [⭐정확도 우선·레인 간 요청 규칙](feedback-accuracy-over-speed-and-lane-handoff.md) · [⭐도메인별=전용 세션(worktree)](policy-per-domain-sessions.md) · [통합 전 기존 앱 무중단](keep-existing-app-running-until-integrated.md)
+- [⭐사람 승인 대기열 금지 — 근거 남기는 자동 판단(규칙→데이터→AI)·D-070](feedback-no-human-approval-queues.md)
 - [⭐무거운 작업(게이트·빌드·에이전트)은 하나씩 — 10-10 BSOD](feedback-heavy-tasks-sequential.md) · [기능 목록 SSOT=designs/FEATURE_INVENTORY.md(D-022)]
 - [시안 적용=더하기(재작성 금지)](feedback-design-extend-not-redo.md) · [분석 요청=수정 금지](analysis-request-no-code-change.md) · [실측 근거 수정](fix-from-real-evidence.md) · [데이터로 검증](verify-by-data-not-status.md)
 - [폴백 최소화](no-silent-fallback-principle.md) · [코드 건강 게이트](code-health-regression-gate.md) · [괴물함수 전멸](monster-functions-extinct-260929.md) · [판단 흐려지면 새 세션](recommend-new-session-when-degraded.md)
