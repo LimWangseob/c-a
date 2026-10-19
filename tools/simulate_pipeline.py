@@ -764,6 +764,26 @@ def scenario_manual_keywords_saved():
         MK.push_gsheet = orig
 
 
+def scenario_business_rename_keeps_history():
+    print("[시나리오 24] 대장 사업자명 변경(계정ID 동일) = 같은 시트로 이력·키워드 유지(D-080, 실측 10-16 최문석→셀와니)")
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    from coupang_analytics.workbook import OutputWorkbook
+    d = Path(tempfile.mkdtemp())
+    master = P._master_path(d)
+    _ops(_accounts(["a1"]), d, date_from="2026-09-01", date_to="2026-09-01", resume=False)
+    renamed = _accounts(["a1"])
+    renamed.accounts[0].business_name = "새상호"              # 담당자가 대장 사업자명만 바꿈
+    logs: list[str] = []
+    _ops(renamed, d, date_from="2026-09-02", date_to="2026-09-02", carry_forward=True, on_log=logs.append)
+    _check(_sheets(master) == {"새상호"}, f"옛 이름 시트 없이 새 이름 시트 하나 ({_sheets(master)})")
+    wb = OutputWorkbook.load(master)
+    _check({"09.01", "09.02"} <= set(wb._date_col.get("새상호", {})), f"이틀치 이력 유지 {sorted(wb._date_col.get('새상호', {}))}")
+    _check(_keywords_in(master) == {"kw1", "kw2"} and "(동결)" in "\n".join(logs), "키워드 동결 유지(AI 재선정 없음)")
+    row = wb._kw_row.get(("새상호", "상품-a1", "kw1"))
+    col = wb._date_col.get("새상호", {}).get("09.01")
+    _check(bool(row and col) and wb.wb["새상호"].cell(row, col).value == "3위", "첫날 순위 이력이 새 이름 시트에 남음")
+
+
 def main():
     _install_fakes()
     config.LOGIN_PACE_MIN_SEC = 0   # 시뮬은 로그인 페이싱 sleep 없이(즉시)
@@ -799,6 +819,7 @@ def main():
     scenario_metrics_not_summed()
     scenario_keyword_stage_proxy()
     scenario_manual_keywords_saved()
+    scenario_business_rename_keeps_history()
     print("=" * 60)
     print("  [완료] 모든 시나리오 통과")
     print("=" * 60)

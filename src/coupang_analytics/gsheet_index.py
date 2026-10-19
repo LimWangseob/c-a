@@ -691,6 +691,38 @@ def delete_renamed_accounts(client, renamed, *, sheet: str = INDEX_SHEET_NAME, o
     return n
 
 
+def find_renamed_orphans(client, master_sheets, master_account_ids, *, skip=(), sheet: str = INDEX_SHEET_NAME,
+                         on_log=None) -> list[tuple[str, str]]:
+    """결과 구글시트에만 남은 **옛 이름 통계 시트**(마스터엔 없음)를 찾는다 — D-080.
+
+    통계 시트는 마스터 미러라, 마스터에 없는 사업자 시트 = 이름 변경 잔재(실측 10-19: 최문석·안재현·원더폴리·
+    봄날의햇살⏎주식회사가 새 이름 시트와 함께 남음). 계정목록(B=사업자·C=계정ID, 줄바꿈·공백 무시)에서 그 이름의
+    계정ID 를 찾아 **그 계정ID 가 마스터에 있으면** [(옛 이름, 계정ID)…] 반환(delete_renamed_accounts 가 정리).
+    계정ID 를 못 찾거나 마스터에 없는 계정이면 지우지 않고 로그로 알린다(계정 통째 삭제는 delete_accounts 담당)."""
+    log = on_log or (lambda m: None)
+
+    def _nz(s) -> str:
+        return " ".join(str(s or "").split())
+
+    keep = {*master_sheets, sheet, *skip}
+    orphans = [t for t in client.sheet_titles() if t not in keep]
+    if not orphans:
+        return []
+    values, _ = client.read_grid(sheet) if sheet in client.sheet_titles() else ([], None)
+    aid_of: dict[str, str] = {}
+    for row in values[DATA_START0:]:
+        if len(row) > COL_ACCOUNT and str(row[COL_ACCOUNT]).strip():
+            aid_of.setdefault(_nz(row[COL_BUSINESS]), str(row[COL_ACCOUNT]).strip())
+    out = []
+    for t in orphans:
+        aid = aid_of.get(_nz(t), "")
+        if aid and aid in set(master_account_ids):
+            out.append((t, aid))
+        else:
+            log(f"  [구글시트] ⚠ 마스터에 없는 통계 시트 '{t}' — 계정을 확인하지 못해 그대로 둠(계정ID '{aid}')")
+    return out
+
+
 def _delete_missing_product_rows(client, sheet: str, desired: list[IndexRow], on_log=None) -> int:
     """마스터 로스터에 **없는 상품 행**을 계정목록에서 삭제 — 유령(옛 노출명·옛 옵션) 행 정리(소유자 2026-09-29).
 

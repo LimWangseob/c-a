@@ -694,14 +694,20 @@ def run_full(input_list: InputList, out_dir: str = "output",
     wb, date_from, date_to = st.wb, st.date_from, st.date_to
     started_at, done, date_label, carry = st.started_at, st.done, st.date_label, st.carry
 
+    # 직원이 결과 통계 시트에 직접 넣은 키워드를 역머지(시트 값 기준 동기화 → 그 상품은 ②에서 동결). ①은 끝날 때 결과시트를
+    # **전체 교체**하므로 그 전에 워크북에 들어가야 보존된다(E1: 예전엔 키워드 단계가 있는 실행만 호출 → 운영 ①에선 안 돌아 소실).
+    # 구글시트는 아직 옛 사업자명 시트라 일원화보다 먼저.
+    pull_gsheet_keywords(wb, gsheet_output_url, log)
+
+    # D-080: 대장 사업자명이 바뀐 계정(계정ID 동일)은 ① 수집 **전에** 옛 시트를 새 이름으로 일원화한다. 예전엔 실행 끝에서만
+    # 해 ①이 새 이름 빈 시트를 먼저 만들고 ②가 키워드를 새로 고른 뒤, 병합이 같은 상품을 건너뛰어 옛 이력·동결 키워드가
+    # 지워졌다(실측 10-16 최문석→셀와니 29일·안재현→피에스이·원더폴리→원더풀리). 목차 로스터(새 이름 행)보다 먼저.
+    early_renamed = _consolidate_renamed_accounts(wb, input_list, log)
+
     # 목차 로스터 — 입력 전체 계정(계정ID·대표자명)을 등록해 **미수집 계정도 목차에 표시**(수집 현황 파악)
     for _a in input_list.accounts:
         wb.set_account_id(_a.label, _a.account_id)
         wb.set_representative(_a.label, _a.representative)   # 계정목록 대표자 컬럼 표시용(관리대장 대표자명)
-
-    # 직원이 결과 통계 시트에 직접 넣은 키워드를 역머지(시트 값 기준 동기화 → 그 상품은 ②에서 동결). ①은 끝날 때 결과시트를
-    # **전체 교체**하므로 그 전에 워크북에 들어가야 보존된다(E1: 예전엔 키워드 단계가 있는 실행만 호출 → 운영 ①에선 안 돌아 소실).
-    pull_gsheet_keywords(wb, gsheet_output_url, log)
 
     # 일자 컬럼 라벨 = **작업 실행날짜**(date_label). 순위(③)는 같은 실행날짜 컬럼(latest_date)에 기록돼
     # '오늘 순위 + 전일 판매'가 한 컬럼에 나란히 쌓인다.
@@ -738,6 +744,7 @@ def run_full(input_list: InputList, out_dir: str = "output",
     _log_login_failures(ctx, accounts, uncollected)
 
     removed_accounts, renamed_accounts = _reconcile_ledger_accounts(wb, input_list, uncollected, log)
+    renamed_accounts = early_renamed + renamed_accounts   # 구글시트 옛 이름 시트·계정목록 행 정리 대상
 
     # 통계 마스터/스냅샷 저장 + 결과 구글시트 반영 + 진행파일 정리
     return _finalize_run(ctx, master, prog, now, gsheet_output_url, removed_accounts, uncollected,

@@ -412,6 +412,25 @@ def t3e_delete_renamed() -> None:
     _ok("계정ID(oopean) 공유해도 사업자명(B)로 옛 이름 '이종훈' 행·통계 시트만 삭제·원더폴리 보존")
 
 
+def t3f_find_renamed_orphans() -> None:
+    print("[3f] 구글에만 남은 옛 이름 통계 시트 찾기(find_renamed_orphans) — D-080 실측 10-19 최문석·봄날의햇살⏎주식회사")
+    vals = [
+        ["계정목록 · 상품 3개"], list(_HEAD),
+        ["최문석", "최문석", "swmall255", "눈썹정리기", "", "", "", "예정"],             # 옛 이름 행(마스터엔 셀와니)
+        ["최진하", "봄날의햇살 주식회사", "woolins", "풍선", "", "", "", "예정"],          # 줄바꿈 옛 시트 = 공백 무시로 계정 확인
+        ["대표X", "유령상호", "nobody", "상품", "", "", "", "예정"],                     # 마스터에 없는 계정 → 건드리지 않음
+    ]
+    titles = ["계정목록", "통합판매현황", "셀와니", "최문석", "봄날의햇살 주식회사", "봄날의햇살\n주식회사", "유령상호"]
+    fc = _FakeClient(vals, titles=titles)
+    logs: list[str] = []
+    got = gi.find_renamed_orphans(fc, ["셀와니", "봄날의햇살 주식회사"], {"swmall255", "woolins"},
+                                  skip=("통합판매현황",), on_log=logs.append)
+    assert got == [("최문석", "swmall255"), ("봄날의햇살\n주식회사", "woolins")], got
+    assert any("유령상호" in m for m in logs), "계정 확인 못 한 시트는 로그로 알려야"
+    assert not fc.batches, "찾기만 — 삭제는 delete_renamed_accounts 담당"
+    _ok("마스터에 없는 옛 이름 시트 = 계정목록 계정ID가 마스터에 있을 때만 정리 대상 · 모르는 시트는 로그만")
+
+
 def t3c_delete_accounts() -> None:
     print("[3c] 삭제된 계정 완전 제거(delete_accounts) — 계정목록 행 + 통계 시트")
     vals = [
@@ -496,6 +515,17 @@ def t5_stats_mirror() -> None:
     flat2 = str(next(r for r in reqs2 if "updateCells" in r))
     assert 'HYPERLINK("https://www.coupang.com/vp/products/98765' in flat2, "상품명 외부 쿠팡 링크 미러링 실패"
     _ok("전체교체 요청(병합해제·틀고정 H2·복귀 HYPERLINK) + 등록명 보존 + 상품명 쿠팡 외부링크 미러링(항목3)")
+    # D-080(실측 10-16~10-19 반영 실패 8회): 상품 블록 0개 시트(꿈꾸는아재 = 1행·틀고정 H2) → rowCount 1 = 고정 1행 →
+    # Google 400 "You can't freeze all visible rows" 로 그 뒤 시트·계정목록 반영이 전부 멈췄다. 고정보다 한 줄·한 칸 크게.
+    import openpyxl
+    empty = openpyxl.Workbook().active
+    empty.cell(1, 1, "계정목록으로 이동")
+    empty.freeze_panes = "H2"
+    gp0 = next(r for r in gsheet_stats.worksheet_to_requests(empty, 43)
+               if "updateSheetProperties" in r)["updateSheetProperties"]["properties"]["gridProperties"]
+    assert gp0["rowCount"] > gp0["frozenRowCount"] and gp0["columnCount"] > gp0["frozenColumnCount"], \
+        f"빈 시트 = 모든 행/열 고정(400): {gp0}"
+    _ok("상품 0개 시트(1행·틀고정 H2) = 고정보다 한 줄·한 칸 큰 그리드(Google 400 방지)")
 
 
 def t6_roster_from_workbook() -> None:
@@ -993,7 +1023,7 @@ def t17_restore_master_via_sa() -> None:
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
     for fn in (t1_ledger_rows, t1b_ledger_strike, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
-               t3d_grid_autogrow, t3c_delete_accounts, t3e_delete_renamed, t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook,
+               t3d_grid_autogrow, t3c_delete_accounts, t3e_delete_renamed, t3f_find_renamed_orphans, t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook,
                t6b_multi_account_roster, t6c_content_col_widths, t7_staff_keywords_merge,
                t8_exec_retry, t9_legacy_format_mismatch, t10_stats_full_replace_mismatch,
                t11_move_across_title_merge, t11b_merge_failure_nonfatal, t11c_stock_migration_frozen_cols,

@@ -332,6 +332,12 @@ def push_gsheet(wb, output_url: str | None, log, removed_accounts=None, renamed_
             d = gsheet_index.delete_accounts(client, removed_accounts, on_log=log)
             if d:
                 log(f"== [구글시트] 삭제된 계정 정리 — {len(removed_accounts)}개(계정목록 행·통계 시트 제거) ==")
+        _phase = "옛 이름 잔재 찾기"   # D-080: 지난 실행에서 정리 못 한 옛 이름 통계 시트(마스터엔 없음)도 함께 정리
+        from .workbook_sales import SALES_SHEET
+        masters = wb.account_sheets()
+        orphans = gsheet_index.find_renamed_orphans(
+            client, masters, {a for b in masters for a in wb.account_ids_of(b)}, skip=(SALES_SHEET,), on_log=log)
+        renamed_accounts = list(renamed_accounts or []) + [o for o in orphans if o not in (renamed_accounts or [])]
         if renamed_accounts:   # 일원화된 옛 이름 잔재 제거(이름 기준) → 새 이름은 아래 미러링/동기화
             _phase = "일원화 옛이름 정리"
             r = gsheet_index.delete_renamed_accounts(client, renamed_accounts, on_log=log)

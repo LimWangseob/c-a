@@ -1357,18 +1357,48 @@ def t1_merge_account():
     assert "이종훈" not in wb.account_sheets(), "src 미삭제"
     prods = set(wb.products_of("원더폴리"))
     assert {"신A", "공통상품", "옛A"} <= prods, prods          # 옛A 이관·신A 유지·공통 1개
-    assert moved == 1, f"이관 수 {moved}(옛A만)"
+    assert moved == 2, f"합친 상품 수 {moved}(옛A 이관 + 공통상품 이력 합침)"
     assert wb.is_discontinued("원더폴리", "옛A") is True, "판매중지 이력 유실"
     assert _kwcell(wb, "원더폴리", "옛A", "k1", "2026-09-10") == "12위", "순위 이력 유실"
     assert _mcell(wb, "원더폴리", "옛A", config.M_SALES, "2026-09-10") == 7, "판매 이력 유실"
     assert wb.keyword_search("원더폴리", "옛A", "k1") == 3300, "검색량 이력 유실"
-    assert wb.product_keywords("원더폴리", "공통상품") == ["new"], "dst 상품이 src로 덮임(스킵 실패)"
+    # D-080(실측 10-16 최문석→셀와니): 같은 상품이 양쪽에 있으면 건너뛰면 옛 이력·동결 키워드가 통째로 사라졌다
+    # → dst 키워드 유지 + 옛 키워드 추가(동결 복원), dst 값은 그대로.
+    assert wb.product_keywords("원더폴리", "공통상품") == ["new", "old"], \
+        f"같은 상품 키워드 합침(dst 먼저): {wb.product_keywords('원더폴리', '공통상품')}"
+
+    # (C) dst 에 같은 상품이 이미 있음(① 이 새 이름으로 먼저 수집) → 날짜별 이력 합침(dst 빈 칸만) · VID 같은 다른 이름도 합침
+    wbC = OutputWorkbook.empty()
+    wbC.set_account_id("최문석", "swmall255")
+    wbC.ensure_product_block("최문석", "눈썹정리기", config.KIND_CONTRACT, ["전동눈썹정리기", "눈썹정리기"])
+    wbC.set_product_vids("최문석", "눈썹정리기", ["v1"])
+    wbC.set_product_metric("최문석", "눈썹정리기", config.M_SALES, "09.20", 5)
+    wbC.set_product_metric("최문석", "눈썹정리기", config.M_SALES, "10.16", 99)      # 같은 날짜 = dst 값 우선
+    wbC.set_keyword_rank("최문석", "눈썹정리기", "전동눈썹정리기", "09.20", 8)
+    wbC.ensure_product_block("최문석", "손세정기 옛이름", config.KIND_CONTRACT, ["손세정기"])
+    wbC.set_product_vids("최문석", "손세정기 옛이름", ["v2"])
+    wbC.set_keyword_rank("최문석", "손세정기 옛이름", "손세정기", "09.20", 4)
+    wbC.set_account_id("셀와니", "swmall255")
+    wbC.ensure_product_block("셀와니", "눈썹정리기", config.KIND_CONTRACT, ["전동눈썹정리기"])
+    wbC.set_product_vids("셀와니", "눈썹정리기", ["v1"])
+    wbC.set_product_metric("셀와니", "눈썹정리기", config.M_SALES, "10.16", 3)
+    wbC.ensure_product_block("셀와니", "손세정기 새이름", config.KIND_CONTRACT, ["주방세제디스펜서"])
+    wbC.set_product_vids("셀와니", "손세정기 새이름", ["v2"])
+    moved = wbC.merge_account("최문석", "셀와니")
+    assert "최문석" not in wbC.account_sheets() and moved == 2, (wbC.account_sheets(), moved)
+    assert set(wbC.products_of("셀와니")) == {"눈썹정리기", "손세정기 새이름"}, f"VID 같은 옛 이름 블록 중복: {wbC.products_of('셀와니')}"
+    assert _mcell(wbC, "셀와니", "눈썹정리기", config.M_SALES, "09.20") == 5, "옛 날짜 판매 이력 유실"
+    assert _mcell(wbC, "셀와니", "눈썹정리기", config.M_SALES, "10.16") == 3, "dst 최신 값이 옛 값으로 덮임"
+    assert _kwcell(wbC, "셀와니", "눈썹정리기", "전동눈썹정리기", "09.20") == "8위", "옛 순위 이력 유실"
+    assert wbC.product_keywords("셀와니", "눈썹정리기") == ["전동눈썹정리기", "눈썹정리기"], "동결 키워드 복원 안 됨"
+    assert wbC.product_keywords("셀와니", "손세정기 새이름") == ["주방세제디스펜서", "손세정기"], "VID 합침 키워드"
+    assert _kwcell(wbC, "셀와니", "손세정기 새이름", "손세정기", "09.20") == "4위", "VID 합침 순위 이력"
     # 저장/재로드 왕복
     d = Path(tempfile.mkdtemp()); path = d / "일원화.xlsx"
     wb.apply_style(); wb.save(path)
     wb2 = OutputWorkbook.load(path)
     assert "이종훈" not in wb2.account_sheets() and set(wb2.products_of("원더폴리")) >= {"신A", "공통상품", "옛A"}
-    _ok("rename 분기·병합 분기(없는 상품만 이관·이력[순위/검색량/판매중지/판매] 보존·src 삭제·왕복 정합)")
+    _ok("rename 분기·병합 분기(같은 상품=빈 칸만 합침·옛 키워드 복원·VID 같은 이름 합침·이력 보존·src 삭제·왕복 정합)")
 
 
 def t1_validate_multi_account():

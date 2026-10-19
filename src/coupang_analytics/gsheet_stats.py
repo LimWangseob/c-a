@@ -174,9 +174,11 @@ def worksheet_to_requests(ws: Worksheet, sheet_id: int, index_gid: int | None = 
     reqs.append({"unmergeCells": {"range": {"sheetId": sheet_id}}})
     # 2) 그리드 크기(데이터에 맞춤·초과분 제거) + 틀고정
     fr, fc = _freeze(ws)
+    # 그리드는 고정보다 한 줄·한 칸 커야 함 — 상품 0개 시트(1행·고정 H2)에서 Google 400 "You can't freeze all
+    # visible rows" 로 그 뒤 시트·계정목록 반영이 전부 멈췄다(D-080, 실측 10-16~10-19).
     reqs.append({"updateSheetProperties": {
         "properties": {"sheetId": sheet_id, "gridProperties": {
-            "rowCount": max(maxr, 1), "columnCount": max(maxc, 1),
+            "rowCount": max(maxr, fr + 1), "columnCount": max(maxc, fc + 1),
             "frozenRowCount": fr, "frozenColumnCount": fc}},
         "fields": ("gridProperties.rowCount,gridProperties.columnCount,"
                    "gridProperties.frozenRowCount,gridProperties.frozenColumnCount")}})
