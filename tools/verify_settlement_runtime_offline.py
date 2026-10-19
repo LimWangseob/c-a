@@ -1143,7 +1143,17 @@ def p34_forecast_accuracy():
         out = ST.write_stats(Path(tmp) / "s.xlsx", ST.aggregate([]), forecast=acc)
         names = openpyxl.load_workbook(out).sheetnames
         assert "예정 정확도" in names and "예정 정확도 요약" in names, names
-    ok("오늘 뒤 줄만 예정 기록·같은 날 마지막 값·정산일 지나면 칸별 대조(며칠 전 예정)·실제 없음·요약·집계 시트")
+        # 로켓그로스 정산대상 100% = 판매액 + 환불 − 수수료(VAT 포함) − 판매자할인(쿠팡 칸 그대로 — 실측 737/737, D-080)
+        rg = {"정산일": "2026-10-20", "기간 시작": "2026-08-17", "기간 끝": "2026-08-23", "지급비율": 70, "최종지급액": 15421,
+              "totalPayableAmount": 15421, "totalSalesAmount": 25000, "totalRefundedAmount": 0,
+              "totalTakeRateAmountWithVat": 2970, "totalSellerDiscount": 0}
+        f2 = Path(tmp) / "예정2.jsonl"
+        FC.record(f2, "B", "로켓그로스", [rg], date(2026, 10, 18))
+        kept = FC.load(f2)[0]
+        assert FC.rg_target(kept) == 22030 and FC.rg_sales(kept) == 25000, kept           # 정산 파일 정산대상 22,030
+        assert FC.rg_target({k: v for k, v in kept.items() if k != "totalSellerDiscount"}) is None   # 칸 없으면 계산 안 함
+    ok("오늘 뒤 줄만 예정 기록·같은 날 마지막 값·정산일 지나면 칸별 대조(며칠 전 예정)·실제 없음·요약·집계 시트"
+       "·로켓그로스 정산대상 칸 저장(판매액+환불−수수료−할인)")
 
 
 def p33_login_password_source():

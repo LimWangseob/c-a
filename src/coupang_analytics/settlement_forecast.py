@@ -21,13 +21,32 @@ _KEEP = ("정산일", "기간 시작", "기간 끝", "지급비율", "최종지�
          "totalPayableAmount", "totalAdSalesDeductionAmount", "totalMilkRunDeductionAmount",
          "totalArFactoringDeductionAmount", "totalAdditionalDeductionAmount", "totalFinalCfsFeeDeductionAmount",
          "totalNegativeDeductionAmount", "totalCarryOverSettlementDeductionAmount", "totalCfsInventoryCompensationAmount",
-         "totalSalesAdjustment", "totalFinalSettlementAmount")
+         "totalSalesAdjustment", "totalFinalSettlementAmount",
+         # 로켓그로스 정산대상 100% 를 쿠팡 칸 그대로 만드는 칸(D-081 — 70% 줄만 있어도 ÷0.7 없이)
+         "totalSalesAmount", "totalRefundedAmount", "totalTakeRateAmountWithVat", "totalSellerDiscount")
+_RG_TARGET = ("totalSalesAmount", "totalRefundedAmount", "totalTakeRateAmountWithVat", "totalSellerDiscount")
 # 정확도 비교 칸: (보여 줄 이름, 쿠팡 칸) — 채널마다 있는 칸만
 COMPARE = (("정산대상(윙)", "targetAmount"), ("공제(윙)", "totalDeductionAmount"),
            ("지급대상(RG)", "totalPayableAmount"), ("광고비(RG)", "totalAdSalesDeductionAmount"),
            ("밀크런(RG)", "totalMilkRunDeductionAmount"), ("빠른정산(RG)", "totalArFactoringDeductionAmount"),
            ("물류비(RG)", "totalFinalCfsFeeDeductionAmount"), ("보상(RG)", "totalCfsInventoryCompensationAmount"),
            ("판매조정(RG)", "totalSalesAdjustment"), ("최종지급액", "최종지급액"))
+
+
+def rg_target(r: dict) -> int | None:
+    """로켓그로스 정산 줄의 그 판매 기간 정산대상 100% = 판매액 + 환불액(음수) − 판매수수료(VAT 포함) − 판매자할인.
+    쿠팡 칸만 더하고 뺀다(실측: 정산 파일 있는 70% 줄 737/737 원 단위 = 판매수수료 리포트 정산대상). 칸이 없으면 None."""
+    if not all(k in r for k in _RG_TARGET):
+        return None
+    s, rf, t, d = (_num(r[k]) for k in _RG_TARGET)
+    return int(round(s + rf - t - d))
+
+
+def rg_sales(r: dict) -> int | None:
+    """로켓그로스 정산 줄의 판매액 − 환불(쿠팡 칸). 칸이 없으면 None."""
+    if "totalSalesAmount" not in r or "totalRefundedAmount" not in r:
+        return None
+    return int(round(_num(r["totalSalesAmount"]) + _num(r["totalRefundedAmount"])))
 
 
 def split_future(rows: list, today: date) -> tuple[list, list]:
