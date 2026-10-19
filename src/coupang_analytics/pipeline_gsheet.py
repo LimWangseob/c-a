@@ -336,7 +336,8 @@ def push_gsheet(wb, output_url: str | None, log, removed_accounts=None, renamed_
         from .workbook_sales import SALES_SHEET
         masters = wb.account_sheets()
         orphans = gsheet_index.find_renamed_orphans(
-            client, masters, {a for b in masters for a in wb.account_ids_of(b)}, skip=(SALES_SHEET,), on_log=log)
+            client, masters, {a for b in masters for a in wb.account_ids_of(b)},
+            skip=(SALES_SHEET, *(nm for nm, _a in (removed_accounts or []))), on_log=log)   # 방금 삭제한 시트 = 잔재 아님
         renamed_accounts = list(renamed_accounts or []) + [o for o in orphans if o not in (renamed_accounts or [])]
         if renamed_accounts:   # 일원화된 옛 이름 잔재 제거(이름 기준) → 새 이름은 아래 미러링/동기화
             _phase = "일원화 옛이름 정리"

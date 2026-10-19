@@ -428,6 +428,11 @@ def t3f_find_renamed_orphans() -> None:
     assert got == [("최문석", "swmall255"), ("봄날의햇살\n주식회사", "woolins")], got
     assert any("유령상호" in m for m in logs), "계정 확인 못 한 시트는 로그로 알려야"
     assert not fc.batches, "찾기만 — 삭제는 delete_renamed_accounts 담당"
+    # 같은 반영에서 삭제하는 계정 시트(removed_accounts)는 skip → 잘못된 '그대로 둠' 경고 없음(실측 10-19 플랜잇·lslfgh)
+    logs2: list[str] = []
+    gi.find_renamed_orphans(fc, ["셀와니", "봄날의햇살 주식회사"], {"swmall255", "woolins"},
+                            skip=("통합판매현황", "유령상호"), on_log=logs2.append)
+    assert not any("유령상호" in m for m in logs2), logs2
     _ok("마스터에 없는 옛 이름 시트 = 계정목록 계정ID가 마스터에 있을 때만 정리 대상 · 모르는 시트는 로그만")
 
 
