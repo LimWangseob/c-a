@@ -1790,6 +1790,36 @@ def t1_ledger_account_label():
     _ok("사업자명 줄바꿈=한 줄 라벨 · 사업자명 빈 계정=대표자명 라벨로 그로스 역기록·회사재고 표기")
 
 
+def t1_ledger_header_variants():
+    print("[헤더] 관리대장 헤더 '대표자 (사업자)'·'상품명(관리상품명, 노출상품명)' — 소유자 2026-10-19 대장 개편")
+    from coupang_analytics import company_stock as CS
+    from coupang_analytics import registry_model as RM
+    from coupang_analytics.input_list import parse_input_rows
+    # 실측(관리대장 10-19): 헤더 '대표자명'→'대표자 (사업자)'(값 '송창호⏎(웰빙곳간)') · '상품명'→'상품명(관리상품명, 노출상품명)'
+    # (값 '관리상품명⏎(노출상품명)'). 예전 코드는 헤더를 못 찾아 대장 전체를 읽지 못했다(필수 컬럼 상품명 누락).
+    rows = [["", "", "", "", "그로스 재고 (자동갱신 10.19)", "회사보유재고"],
+            ["대표자 (사업자)", "상품명(관리상품명, 노출상품명)", "사업자명", "계정아이디",
+             "그로스 재고 (자동갱신 10.19)", "회사보유재고"],
+            ["송창호\n(웰빙곳간)", "알부민 맥스\n(웰빙곳간 알부민 프리미엄 맥스 120정)", "(주)웰빙곳간", "wellbing1107", "", ""],
+            ["하성진\n(lslfgh)", "토퍼 매트리스 Q", "", "lslfgh", "", ""]]
+    il = parse_input_rows(rows)
+    by = {a.account_id: a for a in il.accounts}
+    assert set(by) == {"wellbing1107", "lslfgh"}, f"새 헤더 대장 파싱 실패: {list(by)} {il.errors}"
+    assert by["wellbing1107"].representative == "송창호", f"대표자 = 괄호(사업자) 앞 이름: {by['wellbing1107'].representative!r}"
+    assert by["lslfgh"].label == "하성진", f"사업자명 빈 계정 라벨 = 대표자 이름: {by['lslfgh'].label!r}"
+    p = by["wellbing1107"].products[0]
+    assert p.name == "알부민 맥스", f"블록 기준 = 첫 줄(관리상품명): {p.name!r}"
+    assert "웰빙곳간 알부민 프리미엄 맥스 120정" in p.ledger_text, f"노출상품명이 칸 전체 문구에 없음: {p.ledger_text!r}"
+    _h, _c, prods = CS._ledger_rows(rows)
+    assert {(b, n) for _r, b, n, _a in prods} == {("(주)웰빙곳간", "알부민 맥스"), ("하성진", "토퍼 매트리스 Q")}, \
+        f"회사재고 대장 읽기: {prods}"
+    snap = RM.parse_ledger(rows, None, "셀독리스트")
+    assert snap.accounts["wellbing1107"].fields["대표자명"] == "송창호", \
+        f"원장 대표자명: {snap.accounts['wellbing1107'].fields['대표자명']!r}"
+    assert "알부민 맥스" in snap.accounts["wellbing1107"].products, f"원장 상품: {list(snap.accounts['wellbing1107'].products)}"
+    _ok("새 헤더 '대표자 (사업자)'·'상품명(관리상품명, 노출상품명)' — 앱·회사재고·원장 모두 읽음 · 대표자=괄호 앞 이름")
+
+
 def t1_ledger_full_text_match():
     print("[괄호] 대장 칸 전체 문구(둘째 줄 '(노출명)' 포함)로 매칭 — 블록 기준은 첫 줄·괄호 용도는 AI 판단(2026-10-12)")
     from coupang_analytics import product_match_ai as PMA
@@ -2376,6 +2406,7 @@ def main():
     t1_rep_swap_merge_keywords()
     t1_shared_exposed_option_label()
     t1_ledger_account_label()
+    t1_ledger_header_variants()
     t1_ledger_full_text_match()
     t1_growth_by_ai_match()
     t1_vid_source_option_split()

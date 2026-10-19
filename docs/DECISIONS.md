@@ -746,3 +746,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 추정식 보정(계정별 오차 큼·공제 반영 불가) · 바로 정산서 적용(정확도 미검증).
 - 영향 범위: 신규 `src/coupang_analytics/settlement_forecast.py` · `settlement_store.py`(FORECAST) · `settlement_stats.py`(write_stats forecast 시트) · `tools/settlement_download.py`(_read_forecast·_save_amounts·cmd_stats) · P34. 계정당 조회 약 +6회(윙·로켓그로스 각 미래 3달). 다음 단계 = 정산일이 지나며 쌓인 '예정 정확도'로 공제 반영 규칙 확정 → 정산서 적용(D-번호 새로). HQ 포팅 대상.
 - 상태: ACTIVE
+
+### D-079 [LEDGER_HEADER_VARIANTS] 관리대장 개편 헤더 '대표자 (사업자)'·'상품명(관리상품명, 노출상품명)' 수용 · 대표자 = 괄호 앞 이름 · 플랜잇 삭제 (2026-10-19, R15)
+- 결정: 대장 헤더 비교 이름을 `input_list._header_name` 한 곳에서 맞춘다 — 괄호 앞이 '상품명'이면 '상품명', '대표자'면 '대표자명'(그 밖 헤더는 그대로). 공통 헤더 탐색 `_find_header_row` 가 쓰므로 앱 파싱·그로스 재고 역기록·회사보유재고·원장이 함께 읽는다. 대표자 값은 `_rep_name` = 한 줄 → 괄호 앞 이름('송창호⏎(웰빙곳간)' → '송창호', 괄호 앞이 비면 한 줄 전체) — 앱(`_parse_grid`)·원장(`registry_model.parse_ledger`) 공통. 상품명 칸 = '관리상품명⏎(노출상품명)' → 블록 기준 = 첫 줄(관리상품명), 칸 전체 문구 = AI 매칭 근거(D-046 그대로). 플랜잇(plan_it) 대장 줄 삭제 = 소유자 의도 → 기존 규칙대로 다음 실행에 완전 삭제.
+- 근거: 소유자 2026-10-19 "대표자 헤더는 대표자(사업자)로 구성됨 → 수정", "상품명 → 상품명(관리상품명, 노출상품명) 변경", "플렌잇은 삭제". 실측(관리대장 10-19 읽기): 옛 코드 = '누락 필수 컬럼: 상품명'으로 대장 전체 읽기 실패(18:00 무인 중단 원인) · 헤더만 '대표자 (사업자)'였을 때 대표자 28계정 전부 빈칸·lslfgh 시트 이름 '하성진'→'lslfgh'. 수정 후 실제 대장 = 계정 28·상품 89·오류 0·대표자 빈칸 0·lslfgh='하성진'·회사재고 Y열·그로스 재고 Z열 인식. 핀 `t1_ledger_header_variants` 재현 실패 → 수정 → 통과 · 게이트 14종 초록.
+- 버린 대안: 담당자에게 헤더 되돌리기 요청(소유자가 새 구성 확정) · 헤더 전부 괄호 제거 비교(그로스 재고 (…) 등 각자 규칙과 충돌 위험 — 상품명·대표자만).
+- 영향 범위: `src/coupang_analytics/input_list.py`(`_header_name`·`_rep_name`·`_find_header_row`·`_parse_grid`) · `src/coupang_analytics/registry_model.py`(대표자 값) · `tools/verify_offline.py` 핀. HQ 포팅 대상(대장 헤더 형식). 옛 '대표자명'·'상품명' 헤더도 그대로 동작.
+- 상태: ACTIVE

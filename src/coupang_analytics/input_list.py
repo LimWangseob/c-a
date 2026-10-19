@@ -81,6 +81,23 @@ def _one_line(value) -> str:
     return " ".join(_norm(value).split())
 
 
+def _rep_name(value) -> str:
+    """대표자 칸 → 이름만. 대장 헤더 '대표자 (사업자)'(2026-10-19 개편)의 값은 '송창호⏎(웰빙곳간)' → 괄호 앞 '송창호'
+    (괄호 앞이 비면 한 줄 전체)."""
+    line = _one_line(value)
+    return line.split("(", 1)[0].strip() or line
+
+
+# 괄호 설명이 붙은 헤더(대장 2026-10-19 개편 '상품명(관리상품명, 노출상품명)'·'대표자 (사업자)') → 표준 이름.
+_HEADER_BASES = {config.IN_COL_PRODUCT: config.IN_COL_PRODUCT, "대표자": config.IN_COL_REPRESENTATIVE}
+
+
+def _header_name(value) -> str:
+    """헤더 셀 → 비교용 이름. 괄호 앞 이름이 상품명·대표자면 표준 이름, 그 밖은 그대로(그로스 재고 (…) 등은 각자 규칙)."""
+    h = _norm(value)
+    return _HEADER_BASES.get(h.split("(", 1)[0].strip(), h)
+
+
 def account_labels(rows: list) -> dict[str, str]:
     """관리대장 격자 → {계정ID: 계정 라벨(=결과 시트 이름)}. 역기록(그로스 재고·회사재고)이 파싱과 **같은 라벨 규칙**
     (사업자명 → 대표자명 → 계정ID)으로 사업자를 찾게 한다 — 사업자명 칸이 빈 계정(최문석·하성진)을 바로 위 계정
@@ -96,7 +113,7 @@ def _find_header_row(rows: list, match) -> tuple[list[str], int]:
     """상단 _HEADER_SCAN_ROWS 행 중 match(정규화헤더)가 참인 첫 행을 헤더로 반환.
     반환: (정규화 헤더 셀 리스트, 0-based 행 인덱스). 못 찾으면 ([], -1)."""
     for r in range(min(len(rows), _HEADER_SCAN_ROWS)):
-        header = [_norm(c) for c in rows[r]]
+        header = [_header_name(c) for c in rows[r]]
         if match(header):
             return header, r
     return [], -1
@@ -303,7 +320,7 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
     """
     header, hrow = _find_header_row(rows, lambda h: all(name in h for name in _REQUIRED))
     if hrow < 0:
-        missing = [n for n in _REQUIRED if not any(n in [_norm(c) for c in r] for r in rows[:_HEADER_SCAN_ROWS])]
+        missing = [n for n in _REQUIRED if not any(n in [_header_name(c) for c in r] for r in rows[:_HEADER_SCAN_ROWS])]
         raise ValueError(f"입력 상단 {_HEADER_SCAN_ROWS}행에서 헤더를 찾지 못했습니다. "
                          f"누락 필수 컬럼: {', '.join(missing) or '(부분 일치)'}")
     idx = _column_index(header)
@@ -318,7 +335,7 @@ def _parse_grid(rows: list, *, strike_fn=None, emit_strike_warning: bool = False
         return bool(strike_fn(row_no, col0)) if strike_fn is not None else False
 
     for row_no, row in enumerate(rows[hrow + 1:], start=hrow + 2):
-        rep, biz = _one_line(_cell(row, i_rep)), _one_line(_cell(row, i_biz))
+        rep, biz = _rep_name(_cell(row, i_rep)), _one_line(_cell(row, i_biz))
         acct, prod = _norm(_cell(row, i_acct)), _norm(_cell(row, i_prod))
         # #C(2026-09-27): 담당자가 상품명 칸에 "담당자명\n\n(노출명 전체)" 처럼 **여러 줄**로 입력하면 정체성 키가
         # 오염돼 대장명 블록 + 노출명 블록이 중복 생성됨(실측: 비엔케이·브릿지웍스). → **첫 줄(담당자 상품명)만** 채택.

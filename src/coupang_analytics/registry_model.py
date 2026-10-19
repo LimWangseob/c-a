@@ -14,7 +14,7 @@ from openpyxl.utils import get_column_letter
 
 from . import config
 from .input_list import (_PW_ALIASES, _REQUIRED, _alias_index, _cell, _find_header_row, _is_discontinued,
-                         _is_real_product_name, _norm, _status_discontinued)
+                         _is_real_product_name, _norm, _rep_name, _status_discontinued)
 
 # ── 시트·열 ──────────────────────────────────────────────────────
 SHEET_MAIN = "셀독원장"
@@ -295,7 +295,7 @@ def parse_ledger(rows: list, strike_grid: list | None = None, sheet: str = "셀�
     cur: SnapAccount | None = None
     cur_rep = ""
     for row_no, row in enumerate(rows[hrow + 1:], start=hrow + 2):
-        rep = canon(_cell(row, cols.get("대표자명")))
+        rep = canon(_rep_name(_cell(row, cols.get("대표자명"))))
         cur_rep = rep or cur_rep
         status_disc = _status_discontinued(_cell(row, cols.get("상태"))) if "상태" in cols else False
         aid = _norm(_cell(row, cols["계정아이디"]))
