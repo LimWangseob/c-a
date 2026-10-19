@@ -267,9 +267,17 @@ class _MetaMixin:
 
         소유자 요구(2026-09-22): 쿠팡에서 **판매중/부분판매중** 인 상품만 순위검색(판매중지·임시저장·승인반려는
         검색 안 함 → 차단 예산 절약·정확). **미상('')은 억제하지 않는다**(판매자배송·미로그인 등 legit 상품
-        누락 방지 — 확정 미판매만 제외). 대장에서 빠진 상품(is_discontinued)도 순위 제외."""
-        return (self.is_discontinued(biz, product)
-                or self.sale_status(biz, product) in _NOT_SELLING_STATUSES)
+        누락 방지 — 확정 미판매만 제외). 대장에서 빠진 상품(is_discontinued)도 순위 제외.
+        D-084: 다중옵션 상품은 키워드가 대표 블록에만 있으므로, 대표가 판매중지여도 **같은 등록명의 다른 옵션이 판매
+        중이면** 순위를 잰다(실측 10-18 에벤에셀 기저귀 백팩 — 대표 판매중지·옵션 부분판매중 → 어디서도 순위 없음)."""
+        if self.is_discontinued(biz, product):
+            return True
+        if self.sale_status(biz, product) not in _NOT_SELLING_STATUSES:
+            return False
+        reg = self.registered_name(biz, product)
+        return not (reg and any(p != product and self.registered_name(biz, p) == reg
+                                and not self.is_discontinued(biz, p) and self.sale_active(biz, p)
+                                for p in self.products_of(biz)))
 
     def apply_sale_status(self, biz: str, status_by_vid: dict) -> int:
         """쿠팡 판매상태맵을 그 사업자 **마스터 전체 상품(블록)** 에 vid로 대조해 저장.

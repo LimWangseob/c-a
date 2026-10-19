@@ -276,6 +276,18 @@ def _consolidate_renamed_accounts(wb, input_list: InputList, log) -> list[tuple[
     return renamed
 
 
+def _ensure_today_columns(wb, uncollected, col_label: str, log) -> None:
+    """로그인 실패(미수집) 계정 시트에도 그날 날짜 칸을 만든다(D-084) — 판매 칸은 공란(미수집)으로 두고 ③ 순위(로그인
+    불필요)가 그 칸에 측정되게. 예전엔 칸이 없어 ③ 이 직전 날짜(이미 채운 칸)를 보고 건너뛰어 그날 순위가 통째로
+    빠졌다(실측 10-17·18 반달컴퍼니·와이에이치·유라이프 — 검색 0건)."""
+    sheets = set(wb.account_sheets())
+    targets = [a.label for a in uncollected if a.label in sheets]
+    for biz in targets:
+        wb.ensure_date(biz, col_label)
+    if targets:
+        log(f"  [미수집] 날짜 칸 {col_label} 추가(판매 공란·순위는 ③ 에서 측정): {', '.join(targets)}")
+
+
 def _match_results(out: Path, log) -> dict:
     """① 매칭 결과(대장명 → VID, 계정별) — 판매중지 동기화의 VID 대조용(D-082). 손상이면 로그 후 이름으로만 대조."""
     try:
@@ -753,6 +765,7 @@ def run_full(input_list: InputList, out_dir: str = "output",
 
     uncollected = [a for _, a in _not_done(accounts, done)]
     _log_login_failures(ctx, accounts, uncollected)
+    _ensure_today_columns(wb, uncollected, col_label, log)   # D-084 미수집 계정도 그날 칸(③ 순위 측정용)
 
     removed_accounts, renamed_accounts = _reconcile_ledger_accounts(wb, input_list, uncollected, log,
                                                                     _match_results(out, log))

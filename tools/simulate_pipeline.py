@@ -764,6 +764,27 @@ def scenario_manual_keywords_saved():
         MK.push_gsheet = orig
 
 
+def scenario_uncollected_still_ranked():
+    print("[시나리오 25] 로그인 실패(미수집) 계정도 그날 날짜 칸 생성 → ③ 순위는 측정·판매는 공란(D-084, 실측 10-17·18 반달컴퍼니·와이에이치)")
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    from coupang_analytics.workbook import OutputWorkbook
+    d = Path(tempfile.mkdtemp())
+    master = P._master_path(d)
+    accts = _accounts(["a1", "b1"])
+    _ops(accts, d, date_from="2026-09-01", date_to="2026-09-01", resume=False)
+    _STATE.update(block_login={"b1"})                     # 다음 날 b1 만 로그인 차단(비번 오류 등) → 미수집
+    try:
+        _ops(accts, d, date_from="2026-09-02", date_to="2026-09-02", carry_forward=True)
+    finally:
+        _STATE.update(block_login=set())
+    wb = OutputWorkbook.load(master)
+    _check("09.02" in wb._date_col.get("비즈-b1", {}), f"미수집 계정에도 그날 칸 {sorted(wb._date_col.get('비즈-b1', {}))}")
+    _check(wb.is_rank_filled("비즈-b1", "상품-b1", "kw1", "09.02"), "미수집 계정 순위는 그날 칸에 측정됨(로그인 불필요)")
+    srow = wb._metric_row.get(("비즈-b1", "상품-b1", config.M_SALES))
+    col = wb._date_col.get("비즈-b1", {}).get("09.02")
+    _check(bool(srow and col) and wb.wb["비즈-b1"].cell(srow, col).value in (None, ""), "미수집 계정 그날 판매는 공란(0 아님)")
+
+
 def scenario_business_rename_keeps_history():
     print("[시나리오 24] 대장 사업자명 변경(계정ID 동일) = 같은 시트로 이력·키워드 유지(D-080, 실측 10-16 최문석→셀와니)")
     _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
@@ -820,6 +841,7 @@ def main():
     scenario_keyword_stage_proxy()
     scenario_manual_keywords_saved()
     scenario_business_rename_keeps_history()
+    scenario_uncollected_still_ranked()
     print("=" * 60)
     print("  [완료] 모든 시나리오 통과")
     print("=" * 60)

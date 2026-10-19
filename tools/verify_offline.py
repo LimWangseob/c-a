@@ -254,6 +254,24 @@ def t1_sale_status_flag():
     wb8.set_product_metric("비즈8", "중지상품", config.M_SALES, "2026-09-27", 5)   # 판매정보는 채움
     assert wb8.rank_suppressed("비즈8", "중지상품"), "지표 채워도 순위는 계속 제외"
     _ok("#8 판매중지/취소선 수집(discontinued 이월)·지표 채움·순위만 제외")
+    # D-084(실측 10-18 에벤에셀 기저귀 백팩): 대표 블록(키워드 있음)=쿠팡 판매중지·2차 옵션 블록(키워드 없음)=부분판매중
+    # → 대표가 순위 제외되면 판매 중인 상품인데 순위를 아무 데서도 안 잼. 같은 등록명 옵션이 판매 중이면 대표도 측정.
+    wbO = OutputWorkbook.empty()
+    bzO = "옵션비즈"
+    wbO.ensure_product_block(bzO, "기저귀 백팩 (베이지)", config.KIND_CONTRACT, [], rank_rows=False, registered="기저귀가방 CL01")
+    wbO.ensure_product_block(bzO, "기저귀 백팩 (베이비)", config.KIND_CONTRACT, ["기저귀가방"], registered="기저귀가방 CL01")
+    wbO.set_sale_status(bzO, "기저귀 백팩 (베이지)", "부분판매중")
+    wbO.set_sale_status(bzO, "기저귀 백팩 (베이비)", "판매중지")
+    assert not wbO.rank_suppressed(bzO, "기저귀 백팩 (베이비)"), "같은 상품 옵션이 판매 중이면 대표 블록 순위 측정"
+    wbO.set_sale_status(bzO, "기저귀 백팩 (베이지)", "판매중지")
+    assert wbO.rank_suppressed(bzO, "기저귀 백팩 (베이비)"), "옵션 전부 판매중지면 순위 제외(기존 동작)"
+    wbO.set_sale_status(bzO, "기저귀 백팩 (베이지)", "판매중")
+    wbO.set_discontinued(bzO, "기저귀 백팩 (베이비)", True)
+    assert wbO.rank_suppressed(bzO, "기저귀 백팩 (베이비)"), "대장 판매중지(취소선·숨김)는 옵션과 무관하게 순위 제외"
+    wbO.ensure_product_block(bzO, "다른 상품", config.KIND_CONTRACT, ["kw"], registered="다른상품 X1")
+    wbO.set_sale_status(bzO, "다른 상품", "판매중지")
+    assert wbO.rank_suppressed(bzO, "다른 상품"), "다른 등록명 상품은 영향 없음"
+    _ok("다중옵션: 대표 블록 판매중지여도 같은 상품 옵션이 판매 중이면 순위 측정 · 전부 중지/대장 중지/타 상품은 제외 유지")
     wbI = OutputWorkbook.empty()
     bzI = "재고비즈"
     for nm in ("입고품", "품절품", "미입고품", "중지품"):
