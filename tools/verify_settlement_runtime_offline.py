@@ -773,6 +773,24 @@ def p24_local_store():
             TD._save_amounts(new, "윙", resp)
             got = rjson(TD.AMOUNTS / f"{tnew}_윙.json")
             assert [(r["정산일"], r["최종지급액"]) for r in got] == [("2026-01-30", 100), ("2026-02-06", 7), ("2026-02-13", 4)]
+            # (c2) 같은 지급일·기간·비율 줄이 여러 개(보류 해제 100% — 실측 2026-10-19 디프 5/12 23줄·5/4 42줄, 줄 번호 없음)
+            #      = 전부 보관 · 같은 지급일을 다시 조회하면 그날 줄 묶음을 통째로 바꿈(늘어나지 않음)
+            rel = lambda amt: {"payDate": "2026-05-12", "recognitionFrom": "2026-04-29", "recognitionTo": "2026-04-29",  # noqa: E731
+                               "ratio": 100, "finalPaidAmount": amt, "detail": {}}
+            TD._save_amounts(new, "윙", {"paymentReports": [rel(219232), rel(63428)]})
+            TD._save_amounts(new, "윙", {"paymentReports": [rel(219232), rel(63428)]})
+            got = [r["최종지급액"] for r in rjson(TD.AMOUNTS / f"{tnew}_윙.json") if r["정산일"] == "2026-05-12"]
+            assert sorted(got) == [63428, 219232], got
+            TD._save_amounts(new, "윙", {"paymentReports": [rel(5)]})
+            assert [r["최종지급액"] for r in rjson(TD.AMOUNTS / f"{tnew}_윙.json") if r["정산일"] == "2026-05-12"] == [5]
+            assert len(rjson(TD.AMOUNTS / f"{tnew}_윙.json")) == 4                            # 다른 지급일 줄은 그대로
+            # (c3) 다른 PC 기록 합치기 — 같은 지급일은 이 PC 줄 묶음 우선·없는 지급일은 옮겨 온 줄 묶음 전부
+            o = Path(tmp) / "옮김.json"
+            wjson(o, [{**amt("2026-05-12", 1)}, {**amt("2026-05-12", 2)}, {**amt("2026-06-16", 3)}, {**amt("2026-06-16", 4)}])
+            TD.STORE.merge_amount_file(o, TD.AMOUNTS / f"{tnew}_윙.json")
+            m = rjson(TD.AMOUNTS / f"{tnew}_윙.json")
+            assert [r["최종지급액"] for r in m if r["정산일"] == "2026-05-12"] == [5]
+            assert sorted(r["최종지급액"] for r in m if r["정산일"] == "2026-06-16") == [3, 4]
             # (d) 이 PC 에 예전 이름 금액 기록만 남은 경우(받은 파일·요청 기록엔 예전 이름 없음)도 다음 실행 때 맞춰짐
             wjson(TD.AMOUNTS / f"{told}_로켓그로스.json", [amt("2026-03-03", 11)])
             TD._migrate_names(accts)
@@ -1193,6 +1211,13 @@ def p34_forecast_accuracy():
         kept = FC.load(f2)[0]
         assert FC.rg_target(kept) == 22030 and FC.rg_sales(kept) == 25000, kept           # 정산 파일 정산대상 22,030
         assert FC.rg_target({k: v for k, v in kept.items() if k != "totalSellerDiscount"}) is None   # 칸 없으면 계산 안 함
+        # 같은 정산 줄 키가 여러 개(보류 해제 100%) = 한 번 조회의 줄 묶음 전부 · 같은 날 다시 조회하면 마지막 조회 묶음만
+        f3 = Path(tmp) / "예정3.jsonl"
+        rel = {"정산일": "2026-11-02", "기간 시작": "2026-09-21", "기간 끝": "2026-09-21", "지급비율": 100}
+        FC.record(f3, "C", "윙", [{**rel, "최종지급액": 7}, {**rel, "최종지급액": 9}], date(2026, 10, 18))
+        assert sorted(r["최종지급액"] for r in FC.load(f3)) == [7, 9]
+        FC.record(f3, "C", "윙", [{**rel, "최종지급액": 11}], date(2026, 10, 18))
+        assert [r["최종지급액"] for r in FC.load(f3)] == [11]
     ok("오늘 뒤 줄만 예정 기록·같은 날 마지막 값·정산일 지나면 칸별 대조(며칠 전 예정)·실제 없음·요약·집계 시트"
        "·로켓그로스 정산대상 칸 저장(판매액+환불−수수료−할인)")
 

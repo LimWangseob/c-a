@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import date
 from pathlib import Path
 
@@ -61,29 +62,41 @@ def _key(acct: str, ch: str, r: dict) -> tuple:
 
 
 def record(path, acct: str, ch: str, rows: list, today: date) -> int:
-    """오늘 본 예정 줄을 추가(같은 날 다시 조회하면 읽을 때 마지막 값이 남음). 반환 = 기록한 줄 수."""
+    """오늘 본 예정 줄을 추가 — 한 번 조회의 줄 묶음에 같은 '묶음' 번호. 같은 날 다시 조회하면 읽을 때 정산일마다 마지막
+    묶음만 남음(같은 정산 줄 키가 여러 개인 보류 해제 100% 줄도 전부 · D-085). 반환 = 기록한 줄 수."""
     if not rows:
         return 0
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
+    batch = str(time.time_ns())
     with p.open("a", encoding="utf-8") as f:
         for r in rows:
-            f.write(json.dumps({"수집일": today.isoformat(), "계정": acct, "채널": ch,
+            f.write(json.dumps({"수집일": today.isoformat(), "계정": acct, "채널": ch, "묶음": batch,
                                 **{k: r[k] for k in _KEEP if k in r}}, ensure_ascii=False) + "\n")
     return len(rows)
 
 
 def load(path) -> list[dict]:
-    """예정 기록 — (수집일·계정·채널·정산 줄) 마다 마지막 값 하나."""
+    """예정 기록 — (수집일·계정·채널·정산일) 마다 마지막 조회 묶음의 줄 전부. 묶음 없는 옛 기록 = 정산 줄마다 마지막 값."""
     p = Path(path)
     if not p.is_file():
         return []
-    last: dict = {}
+    groups: dict = {}
     for line in p.read_text(encoding="utf-8").splitlines():
         if line.strip():
             r = json.loads(line)
-            last[(r["수집일"], *_key(r["계정"], r["채널"], r))] = r
-    return list(last.values())
+            g = groups.setdefault((r["수집일"], r["계정"], r["채널"], str(r["정산일"])[:10]), {})
+            g.setdefault(r.get("묶음", ""), {"old": {}, "rows": []})
+            b = g[r.get("묶음", "")]
+            if r.get("묶음"):
+                b["rows"].append(r)
+            else:
+                b["old"][_key(r["계정"], r["채널"], r)] = r
+    out: list = []
+    for g in groups.values():
+        newest = max(g)                                   # 묶음 번호 = 조회 시각(ns) · 옛 기록('') 보다 큼
+        out += g[newest]["rows"] or list(g[newest]["old"].values())
+    return out
 
 
 def _num(v) -> float:

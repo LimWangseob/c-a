@@ -27,6 +27,15 @@ def _amount_key(r: dict) -> tuple:
     return r["정산일"], r["기간 시작"], r["기간 끝"], r["지급비율"]
 
 
+def _by_paydate(rows: list) -> dict:
+    """정산일 → 그날 줄 묶음. 한 정산일을 조회하면 그날 줄이 전부 오므로 정산일 단위로 바꿔 끼움 — 같은 (정산일·기간·비율)
+    줄이 여러 개인 보류 해제 지급(100%)도 전부 보관(실측 2026-10-19 디프 5/12 23줄·5/4 42줄 — 쿠팡 줄 번호 없음, D-085)."""
+    out: dict = {}
+    for r in rows:
+        out.setdefault(r["정산일"], []).append(r)
+    return out
+
+
 def write_json_atomic(path: Path, data, indent: int | None = None) -> None:
     """임시 파일에 쓰고 바꿔 끼움(중간에 끊겨도 반쯤 쓴 파일이 남지 않음)."""
     tmp = path.with_suffix(".tmp")
@@ -34,27 +43,28 @@ def write_json_atomic(path: Path, data, indent: int | None = None) -> None:
     os.replace(tmp, path)
 
 
-def _write_amounts(path: Path, rows: dict) -> None:
-    write_json_atomic(path, sorted(rows.values(), key=lambda r: (r["정산일"], r["기간 시작"])), indent=1)
+def _write_amounts(path: Path, days: dict) -> None:
+    rows = [r for g in days.values() for r in g]
+    write_json_atomic(path, sorted(rows, key=lambda r: (r["정산일"], r["기간 시작"])), indent=1)
 
 
 def merge_amount_file(src: Path, dst: Path) -> None:
-    """금액 기록 JSON 을 dst 로 옮김. dst 가 이미 있으면 (정산일·기간·비율) 키로 합침(dst 값 우선) 후 src 삭제."""
+    """금액 기록 JSON 을 dst 로 옮김. dst 가 이미 있으면 정산일 단위로 합침(같은 정산일은 dst 줄 묶음 우선) 후 src 삭제."""
     if not dst.exists():
         os.replace(src, dst)
         return
-    rows = {_amount_key(r): r for r in json.loads(src.read_text(encoding="utf-8"))}
-    rows.update({_amount_key(r): r for r in json.loads(dst.read_text(encoding="utf-8"))})
-    _write_amounts(dst, rows)
+    days = _by_paydate(json.loads(src.read_text(encoding="utf-8")))
+    days.update(_by_paydate(json.loads(dst.read_text(encoding="utf-8"))))
+    _write_amounts(dst, days)
     src.unlink()
 
 
 def save_amounts(name: str, ch: str, new_rows: list) -> None:
-    """쿠팡 정산현황 금액(amount_rows 결과)을 계정·채널별 JSON 에 (정산일·기간·비율) 키로 덮어 모아 둔다(원자적 저장)."""
+    """쿠팡 정산현황 금액(amount_rows 결과)을 계정·채널별 JSON 에 정산일 단위로 바꿔 끼워 모아 둔다(원자적 저장)."""
     path = AMOUNTS / f"{SF._token(name, '계정명')}_{ch}.json"
     old = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
-    merged = {_amount_key(r): r for r in old}
-    merged.update({_amount_key(r): r for r in new_rows})
+    merged = _by_paydate(old)
+    merged.update(_by_paydate(new_rows))
     path.parent.mkdir(parents=True, exist_ok=True)
     _write_amounts(path, merged)
 

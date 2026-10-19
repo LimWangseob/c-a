@@ -53,8 +53,8 @@ from coupang_analytics.settlement_store import AMOUNTS, BASE, COSTS, FILES, JOBS
 from coupang_analytics import settlement_wing_api as API  # noqa: E402
 
 GAP_SEC = (45, 75)                                      # 요청 사이 = 앱 반자동 순위 간격과 같게(소유자 2026-10-06)
-LOOKUP_GAP_SEC = (3, 8)
-AMOUNTS_FROM = date(2025, 11, 1)                        # 지급 내역 기록 시작 — 2026 첫 30% 줄의 70% 몫(2025-11·12 판매)·2025 보류(D-083)                                 # 조회·받기 사이(화면에서 넘겨 보는 정도)
+LOOKUP_GAP_SEC = (3, 8)                                 # 조회·받기 사이(화면에서 넘겨 보는 정도)
+AMOUNTS_FROM = date(2025, 11, 1)                        # 지급 내역 기록 시작 — 2026 첫 30% 줄의 70% 몫(2025-11·12 판매)·2025 보류(D-083)
 LOG: RL.RunLog = None  # type: ignore[assignment]   # main() 에서 실행 시작 시 생성
 CHANNELS: tuple = ()                                    # --channel 로 제한(비우면 윙·로켓그로스 둘 다)
 ORIGINALS: Path | None = None                           # --originals: 받은 쿠팡 원본 그대로 복사할 증빙 폴더(D-062)
