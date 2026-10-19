@@ -29,7 +29,7 @@
 - [OpenAPI 불가→WING 세션](coupang-openapi-not-available-consignment.md) · [샵마인=WebView2](shopmine-architecture.md)
 
 ## 입력·수집
-- [입력=셀독 관리대장(헤더2행·블록키=첫줄·괄호=AI판단·재고역기록=AI매칭)](input-ledger-format.md) · [대장 스코핑·AI 매칭+VID 고정(D-009)](ledger-scoped-tracking.md) · [판매 API vi-detail-search](sales-data-api-vi-detail-search.md) · [재고 API orderableQuantity](inventory-api-rfm-search.md)
+- [입력=셀독 관리대장(헤더2행·첫줄·괄호=AI판단·10-19 개편 헤더·숨긴 행=판매중지·체험단 시트=시작일)](input-ledger-format.md) · [대장 스코핑·AI 매칭+VID 고정(D-009)](ledger-scoped-tracking.md) · [판매 API vi-detail-search](sales-data-api-vi-detail-search.md) · [재고 API orderableQuantity](inventory-api-rfm-search.md)
 - [⭐통합 판매현황=결과 첫 시트·계정상품 수량금액·전일/주/월·기간합계 조회(D-064)](feature-sales-summary-first-sheet.md)
 - [판매데이터 익일반영](coupang-sales-data-lag.md) · [productId 소스 API](api-productid-source-vendor-items-with-vendoritems.md) · [상품명 규약(대장=담당자·결과=노출명)](product-name-convention-ledger-vs-result.md)
 
