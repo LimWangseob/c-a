@@ -133,7 +133,8 @@ class _IndexMixin:
             prod = _key(ws.cell(r, c_prod).value)
             if not biz:
                 continue
-            start = _norm(ws.cell(r, c_start).value)
+            # D-087: 시작일 칸 = 체험단 시트 자동값 표시 → 회수하지 않고 기존 숨김값 유지(되읽으면 3일 주기 수집이 켜짐)
+            start = self.marketing_of(biz, prod)[0]
             end = _norm(ws.cell(r, c_end).value) if c_end else ""
             mon = _norm(ws.cell(r, c_mon).value) if c_mon else ""
             if start or end or mon:
@@ -229,7 +230,8 @@ class _IndexMixin:
         self._idx_stock_cells(ws, r, biz, prod, has_sheet, sty)   # 5 회사보유재고 · 6 그로스재고(상품명 오른쪽)
         start, end, mon = self.marketing_of(biz, prod)
         status = self._idx_status(biz, prod, has_sheet, start, end, mon)
-        for c, v in ((7, start), (8, end), (9, mon)):   # 마케팅(관리대장 값 표시) — 회사재고·그로스재고 뒤로 밀림
+        shown_start = start or (self.promo_start_of(biz, prod) if prod else "")   # D-087 체험단 시트 자동 시작일
+        for c, v in ((7, shown_start), (8, end), (9, mon)):   # 마케팅(관리대장 값 표시) — 회사재고·그로스재고 뒤로 밀림
             x = ws.cell(r, c, v)
             x.font = sty.font; x.alignment = sty.center; x.border = sty.box; x.fill = sty.mkt_fill
         st = ws.cell(r, 10, status); st.alignment = sty.center; st.border = sty.box

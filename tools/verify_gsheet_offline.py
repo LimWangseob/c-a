@@ -194,7 +194,7 @@ def _touched_data_mkt(req) -> set:
     if not uc or uc["start"].get("rowIndex", 0) < DATA_START0:
         return set()
     start = uc["start"]["columnIndex"]; ncol = len(uc["rows"][0]["values"])
-    mkt = (gi.COL_MKT_START, gi.COL_MKT_END, gi.COL_MKT_MON)   # 마케팅(체험단) 직원 입력 열
+    mkt = (gi.COL_MKT_END, gi.COL_MKT_MON)   # 직원 입력 열(체험단 종료·모니터링 종료) — 시작일은 D-087 부터 자동(체험단 시트)
     return {c for c in range(start, start + ncol) if c in mkt}
 
 
@@ -219,6 +219,14 @@ def t3_index_sync() -> None:
     ins = [r["insertDimension"]["range"]["startIndex"] for r in reqs if "insertDimension" in r]
     assert ins == sorted(ins) == [DATA_START0 + 2, DATA_START0 + 4], ins
     assert not [c for r in reqs for c in _touched_data_mkt(r)], "마케팅열 값 기록 침범"
+    # D-087(소유자 2026-10-19 '체험단 시트 요청일 = 계정목록 체험단 시작일'): 시작일 칸은 자동 칸 — 값 기록
+    rq = gi._auto_cells_request(99, DATA_START0, IndexRow(business="b", product="p", account_id="a", status="",
+                                                          key="k", promo_start="2026-09-15"))
+    starts = [r["updateCells"] for r in rq if "updateCells" in r and r["updateCells"]["start"]["columnIndex"] == gi.COL_MKT_START]
+    assert starts and starts[0]["rows"][0]["values"][0]["userEnteredValue"]["stringValue"] == "2026-09-15", starts
+    rq0 = gi._auto_cells_request(99, DATA_START0, IndexRow(business="b", product="p", account_id="a", status="", key="k"))
+    s0 = [r["updateCells"] for r in rq0 if "updateCells" in r and r["updateCells"]["start"]["columnIndex"] == gi.COL_MKT_START]
+    assert s0 and "userEnteredValue" not in s0[0]["rows"][0]["values"][0], "체험단 없으면 시작일 칸 비움(자동 칸)"
     # 판매중지 행(kA2, DATA_START0+1)도 계정 밴드색으로 행 전체(A~H) 배경만 칠함(값 보존)
     disc_row = DATA_START0 + 1
     fullrow_bg = [r for r in reqs if "repeatCell" in r
@@ -508,11 +516,12 @@ def t4_marketing_merge() -> None:
     accts = [Account("idA", "대표A", "가게A", products=[Product("텀블러"), Product("보온병")]),
              Account("idB", "대표B", "가게B", products=[Product("우산")])]
     n = gi.apply_marketing(accts, m)
-    assert n == 2
-    assert accts[0].products[0].mkt_start == "2026-09-01" and accts[0].products[0].mkt_mon == "2026-10-31"
-    assert accts[0].products[1].mkt_start == "" and accts[1].products[0].mkt_start == "2026-09-10"
+    # D-087: 시작일 칸은 체험단 시트 자동값이라 되읽지 않음(되읽으면 마케팅 시작일 → 3일 주기 수집이 켜짐)
+    assert n == 1, n                                          # 우산(시작일만 있음) = 직원 입력 없음
+    assert accts[0].products[0].mkt_start == "" and accts[0].products[0].mkt_mon == "2026-10-31"
+    assert accts[0].products[0].mkt_end == "2026-09-30" and accts[1].products[0].mkt_start == ""
     assert gi.read_marketing(_FakeClient([])) == {}          # 시트 없으면 빈 dict
-    _ok("직원 입력 우선 반영(2개), 미입력 스킵, 시트 없으면 빈 dict")
+    _ok("직원 입력(종료·모니터링) 반영·시작일 칸(자동) 되읽지 않음·미입력 스킵·시트 없으면 빈 dict")
 
 
 def _sample_workbook() -> OutputWorkbook:
@@ -578,6 +587,9 @@ def t6_roster_from_workbook() -> None:
     assert r0.product == "스텐 텀블러 500ml"                              # C=노출명(표시)
     assert r0.key == gi.marketing_key("idA", "텀블러")                    # 안정키=계정ID+등록명(노출명 아님)
     assert r0.link_gid == 42 and r0.link_row is not None
+    assert r0.promo_start == "", "체험단 없으면 시작일 공란"
+    wb.set_promo_start("가게A", "스텐 텀블러 500ml", "2026-09-15")                 # D-087 체험단 시트 자동 시작일
+    assert next(r for r in gi.roster_from_workbook(wb, {"가게A": 42}) if r.product).promo_start == "2026-09-15"
     # 상품 링크 수식 = 사업자 통계시트(#gid)+블록 헤더행. ⚠ '계정목록!A1' 자가참조 아님(어제 gsheet 버그).
     _cell = gi._product_cell(r0)
     _fml = _cell["userEnteredValue"]["formulaValue"]

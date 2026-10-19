@@ -1758,6 +1758,19 @@ def t1_promo_sheet_start():
     wb.set_marketing("가게P", "상품P", "2026-09-05", "", "")                                # 직원 입력이 있으면 우선
     wb.set_product_metric("가게P", "상품P", config.M_SALES, "2026-09-04", 120)
     assert wb.promo_effect("가게P", "상품P")[0] == "판매 +25%", "직원 입력 시작일(09.05) 우선"
+    # D-087: 로컬 계정 목록 '체험단 시작일' 칸 = 자동값 표시 · 저장/재로드(계정 목록 회수) 뒤에도 수집 주기 안 켜짐
+    import tempfile as _tf
+    from coupang_analytics.workbook_common import _INDEX_SHEET
+    wb.set_marketing("가게P", "상품P", "", "", "")
+    wb.apply_style()
+    ws = wb.wb[_INDEX_SHEET]
+    hdr = {str(ws.cell(2, c).value or "").strip(): c for c in range(1, ws.max_column + 1)}
+    shown = {str(ws.cell(r, hdr["체험단 시작일"]).value or "") for r in range(3, ws.max_row + 1)}
+    assert "2026-09-01" in shown and "2026-09-15" in shown, shown
+    _p = Path(_tf.mkdtemp()) / "promo.xlsx"; wb.save(_p)
+    wb2 = OutputWorkbook.load(_p); wb2.apply_style()
+    assert not wb2.has_marketing() and wb2.marketing_of("가게P", "상품P")[0] == "", "계정 목록 시작일이 마케팅으로 되읽힘"
+    assert wb2.promo_start_of("가게P", "상품P") == "2026-09-01"
     PS.apply_promo_starts(wb, [], lambda m: None)                                            # 체험단 시트 비면 자동값 지움
     assert wb.promo_start_of("가게P", "상품P") == "" and wb.promo_start_of("가게P", "기저귀 백팩 (베이비)") == ""
     _ok("체험단 시트: 요청일·링크 VID/상품번호 해석 · 옵션→대표 블록 · 최근 회차 · 직원 입력 우선 · 수집 주기 불변")

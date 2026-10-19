@@ -68,6 +68,7 @@ class IndexRow:
     promo_verdict: str = ""  # 판정: 'up'(개선=초록)·'down'(악화=적색)·''(혼조/무변화=밴드색)
     company_stock: str = ""  # E 회사보유재고(판매자배송 자체재고 '창고 , 수량개'). 없으면 공란
     growth_inv: object = ""  # F 그로스재고(로켓그로스 최신 숫자). 없으면 공란
+    promo_start: str = ""    # G 체험단 시작일(자동 — 관리대장 '체험단' 시트 요청일·D-087). 없으면 공란
 
 
 @dataclass
@@ -170,7 +171,8 @@ def _growth_cell(v, bg: dict) -> dict:
 
 
 def _auto_cells_request(sheet_id: int, grid_row: int, row: IndexRow) -> list[dict]:
-    """A·B·C·D·E·F(+B열=사업자 셀에 키 메모)와 J(상태)·K(체험단효과)만 쓰는 updateCells(마케팅 G~I는 미접촉)."""
+    """A·B·C·D·E·F(+B열=사업자 셀에 키 메모)·G(체험단 시작일·자동 D-087)와 J(상태)·K(체험단효과)를 쓰는 updateCells
+    (직원 입력 H 체험단 종료일·I 모니터링 종료일은 미접촉)."""
     bg = {"backgroundColor": _band_fill(row.band)}   # 사업자별 밴드색(자동열만 — G~I 마케팅색 불변)
     abcd = {
         "updateCells": {
@@ -204,7 +206,14 @@ def _auto_cells_request(sheet_id: int, grid_row: int, row: IndexRow) -> list[dic
             "fields": "userEnteredValue,userEnteredFormat.backgroundColor,userEnteredFormat.horizontalAlignment",
         }
     }
-    return [abcd, h, promo]
+    start = {                                    # G 체험단 시작일(자동 — 체험단 시트 요청일·없으면 비움, D-087)
+        "updateCells": {
+            "start": {"sheetId": sheet_id, "rowIndex": grid_row, "columnIndex": COL_MKT_START},
+            "rows": [{"values": [_s(row.promo_start) if row.promo_start else {}]}],
+            "fields": "userEnteredValue",
+        }
+    }
+    return [abcd, start, h, promo]
 
 
 def _status_only_request(sheet_id: int, grid_row: int, status: str) -> dict:
@@ -439,8 +448,9 @@ def read_marketing(client, *, sheet: str = INDEX_SHEET_NAME) -> dict[str, tuple[
     out: dict[str, tuple[str, str, str]] = {}
     for gi in range(DATA_START0, len(values)):
         row = values[gi]
-        start, end, mon = _cell(row, c_start), _cell(row, c_end), _cell(row, c_mon)
-        if not (start or end or mon):
+        # D-087: 시작일 칸은 체험단 시트 자동값 → 되읽지 않음(되읽으면 마케팅 시작일이 돼 3일 주기 수집이 켜짐)
+        start, end, mon = "", _cell(row, c_end), _cell(row, c_mon)
+        if not (end or mon):
             continue
         note = (notes[gi][c_biz] if (c_biz is not None and gi < len(notes)
                                      and len(notes[gi]) > c_biz) else None)
@@ -483,6 +493,7 @@ def roster_from_workbook(wb, stats_gids: dict[str, int]) -> list[IndexRow]:
         gid = stats_gids.get(biz) if linkable else None
         band = band_by_biz.setdefault(biz, len(band_by_biz))   # 사업자명 기준(항목5: 같은 사업자 다계정ID=한 밴드색)
         effect, verdict = wb.promo_effect(biz, prod) if has_sheet else ("", "")   # 체험단효과(시작일 직전→최신)
+        promo_start = (wb.marketing_of(biz, prod)[0] or wb.promo_start_of(biz, prod)) if prod else ""   # G(D-087)
         stock = wb.company_stock_of(biz, prod) if (has_sheet and prod) else ""   # E 회사보유재고(주입값)
         inv = wb.product_inventory(biz, prod) if (has_sheet and prod) else None  # F 그로스재고(최신 숫자)
         disp = wb.index_display_name(biz, prod) if prod else prod   # 표시명=옵션 접미 정리(정체성/키는 불변)
@@ -491,7 +502,8 @@ def roster_from_workbook(wb, stats_gids: dict[str, int]) -> list[IndexRow]:
                              link_gid=gid, link_row=(hdr if (linkable and gid is not None) else None),
                              band=band, representative=wb.representative_of(biz),
                              promo_effect=effect, promo_verdict=verdict,
-                             company_stock=stock, growth_inv=(inv if inv is not None else "")))
+                             company_stock=stock, growth_inv=(inv if inv is not None else ""),
+                             promo_start=promo_start))
     return rows
 
 
