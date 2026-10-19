@@ -785,6 +785,28 @@ def scenario_uncollected_still_ranked():
     _check(bool(srow and col) and wb.wb["비즈-b1"].cell(srow, col).value in (None, ""), "미수집 계정 그날 판매는 공란(0 아님)")
 
 
+def scenario_promo_start_keeps_daily():
+    print("[시나리오 26] 관리대장 체험단 시트 → 체험단 시작일 연결 · 다음 날도 매일 수집 유지(3일 주기 안 켜짐, D-086)")
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    from coupang_analytics.promo_sheet import PromoRow
+    from coupang_analytics.workbook import OutputWorkbook
+    d = Path(tempfile.mkdtemp())
+    master = P._master_path(d)
+    accts = _accounts(["a1", "b1"])
+    _ops(accts, d, date_from="2026-09-01", date_to="2026-09-01", resume=False)
+    accts.promo = [PromoRow("2026-09-01", "vid-a1", "", "비즈-a1", "상품-a1")]
+    _ops(accts, d, date_from="2026-09-02", date_to="2026-09-02", carry_forward=True)
+    wb = OutputWorkbook.load(master)
+    _check(wb.promo_start_of("비즈-a1", "상품-a1") == "2026-09-01", "체험단 시작일이 링크 VID 블록에 연결")
+    _check(not wb.has_marketing(), "체험단 자동 시작일이 수집 주기 게이팅을 켜지 않음")
+    _ops(accts, d, date_from="2026-09-03", date_to="2026-09-03", carry_forward=True)
+    wb = OutputWorkbook.load(master)
+    for biz, prod in (("비즈-a1", "상품-a1"), ("비즈-b1", "상품-b1")):
+        row = wb._metric_row.get((biz, prod, config.M_SALES))
+        col = wb._date_col.get(biz, {}).get("09.03")
+        _check(bool(row and col) and wb.wb[biz].cell(row, col).value == 7, f"{biz} 다음 날(09.03)도 판매 수집(3일 주기로 안 빠짐)")
+
+
 def scenario_business_rename_keeps_history():
     print("[시나리오 24] 대장 사업자명 변경(계정ID 동일) = 같은 시트로 이력·키워드 유지(D-080, 실측 10-16 최문석→셀와니)")
     _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
@@ -842,6 +864,7 @@ def main():
     scenario_manual_keywords_saved()
     scenario_business_rename_keeps_history()
     scenario_uncollected_still_ranked()
+    scenario_promo_start_keeps_daily()
     print("=" * 60)
     print("  [완료] 모든 시나리오 통과")
     print("=" * 60)

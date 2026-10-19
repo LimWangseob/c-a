@@ -793,3 +793,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 줄 내용(금액)까지 키에 넣기(같은 금액 두 줄이면 다시 사라짐·금액이 바뀌면 옛 줄이 남음) · 쿠팡 내부 번호(없음).
 - 영향 범위: `src/coupang_analytics/settlement_store.py`(_by_paydate·_write_amounts·save_amounts·merge_amount_file) · `src/coupang_analytics/settlement_forecast.py`(record·load) · P24·P34. 운용 PC 재배포 후 다음 조회부터 바로 잡힘(정산일 단위 교체라 옛 1줄짜리 정산일도 다시 조회되면 전부로). 지급액 합(검증 '윙지급'·'RG입금'·계좌 입금)이 보류 해제 지급만큼 늘어 쿠팡 화면과 같아짐. HQ 포팅 대상.
 - 상태: ACTIVE
+
+### D-086 [PROMO_START_FROM_LEDGER] 체험단 시작일 = 관리대장 '체험단' 시트 요청일 자동 연결(링크 VID → 대표 블록·최근 회차) · 수집 주기와 분리 저장 · 직원 입력 우선 (2026-10-19, R16)
+- 결정: 앱이 관리대장을 불러올 때 '체험단' 시트를 읽어(`promo_sheet.read_promo_sheet` → `InputList.promo`) ① 끝에 `apply_promo_starts` 로 결과 블록에 체험단 시작일을 넣는다. 연결 = 링크의 vendorItemId → productId 순(이름 아님), 2차 옵션 블록이면 같은 등록명 대표 블록, 같은 상품 여러 회차면 **가장 최근 요청일**. 저장 = `_마케팅` 6열 '체험단 시작(자동)'(`set_promo_start`) — 수집 주기 게이팅(`has_marketing`=3~5열)을 켜지 않는다. `promo_effect` 시작일 = 직원 입력(계정목록 체험단 시작일) 우선, 없으면 자동값. 매 반영 때 자동값을 비우고 다시 채움. 체험단 시트를 못 읽으면 `promo=None` → 기존 자동값 유지(로그).
+- 근거: 소유자 2026-10-19 "1번 체험단 시작일 자동 연결 진행". 실측: 계정목록 체험단 칸 0/88 → 체험단효과 전부 공란 · 체험단 시트 53건(요청일 26.08.11~10.08·링크 VID). **기존 마케팅 칸(3열)에 넣으면 `has_marketing` 이 켜져 마케팅 없는 상품이 전부 3일 주기 수집으로 바뀜**(`product_cadence` every3) → 별도 칸. 실제 데이터 반영 시험: 52줄 → 23개 상품 연결·결과에 없는 상품 8줄(대장 외 위탁자·다른 옵션 VID)·has_marketing False · 효과 계산 5건(55마켓 순위 50→12 ↑ 등)·18건은 시작일 전 측정 이력이 없어 공란(정상). 재현 실패 → 수정 → 통과: verify_offline [13b] · 시뮬 시나리오 26(체험단 반영 뒤 다음 날도 매일 수집) · 게이트 14종·복잡도 초록.
+- 버린 대안: 기존 마케팅 시작일 칸에 저장(수집 주기 3일화 — 매일 통계 중단) · 상호+제품명 이름 매칭(표기 제각각 — '(주)슈카새우'·'㈜슈카새우') · 첫 회차 기준(추가 회차 효과를 못 봄 — 소유자 미결정 시 최근 회차로 두고 보고).
+- 영향 범위: 신규 `promo_sheet.py` · `workbook_meta.py`(`set_promo_start`·`promo_start_of`·`clear_promo_starts`) · `workbook_index.py`(promo_effect 시작일) · `input_list.py`(`InputList.promo`) · `pipeline.py`(run_full 반영) · `ui/app_qt.py`(관리대장 불러올 때 체험단 시트 읽기 — 원장 입력 소스일 땐 읽지 않음) · 테스트 2종. 결과 계정목록 체험단 시작일 칸(직원 입력)은 건드리지 않음 — 자동 시작일은 체험단효과 계산에만 쓰임. HQ 포팅 대상.
+- 상태: ACTIVE

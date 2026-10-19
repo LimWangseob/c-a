@@ -446,6 +446,40 @@ class _MetaMixin:
                     return (_norm(ws.cell(r, 3).value), _norm(ws.cell(r, 4).value), _norm(ws.cell(r, 5).value))
         return ("", "", "")
 
+    # ── 체험단 자동 시작일(관리대장 '체험단' 시트·D-086) — _마케팅 6열. 수집 주기(has_marketing=3~5열)와 무관 ──
+    def set_promo_start(self, biz: str, product: str, date_iso: str) -> None:
+        """체험단 효과 계산용 시작일(관리대장 체험단 시트에서 매 실행 다시 채움). 직원 입력 시작일(3열)과 분리."""
+        biz, product, date_iso = _norm(biz), _key(product), _norm(date_iso)
+        ws = self._mkt_ws(create=bool(date_iso))
+        if ws is None:
+            return
+        if _norm(ws.cell(1, 6).value) != "체험단 시작(자동)":
+            ws.cell(1, 6, "체험단 시작(자동)")
+        for r in range(2, ws.max_row + 1):
+            if _norm(ws.cell(r, 1).value) == biz and _key(ws.cell(r, 2).value) == product:
+                ws.cell(r, 6).value = date_iso or None
+                return
+        if date_iso:
+            r = ws.max_row + 1
+            ws.cell(r, 1, biz); ws.cell(r, 2, product)
+            ws.cell(r, 6).value = date_iso
+
+    def promo_start_of(self, biz: str, product: str) -> str:
+        ws = self._mkt_ws()
+        biz, product = _norm(biz), _key(product)
+        if ws:
+            for r in range(2, ws.max_row + 1):
+                if _norm(ws.cell(r, 1).value) == biz and _key(ws.cell(r, 2).value) == product:
+                    return _norm(ws.cell(r, 6).value)
+        return ""
+
+    def clear_promo_starts(self) -> None:
+        """체험단 자동 시작일 전부 비움(관리대장 체험단 시트를 다시 반영하기 전)."""
+        ws = self._mkt_ws()
+        if ws:
+            for r in range(2, ws.max_row + 1):
+                ws.cell(r, 6).value = None
+
     # ── 판매중지/삭제(대장에서 사라짐) 표기 — 데이터는 보존, 표시만 구분 ──────
     def set_discontinued(self, biz: str, product: str, flag: bool) -> None:
         """(사업자,상품) 판매중지 여부 기록. flag=False면 해제(대장에 다시 나타나면 복귀)."""

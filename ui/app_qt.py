@@ -33,6 +33,7 @@ from coupang_analytics import gsheet_api, gsheet_index  # noqa: E402
 from coupang_analytics.input_list import (parse_input_list, parse_input_rows,  # noqa: E402
                                            parse_password_candidates,
                                            read_ledger_rows, read_xlsx_rows)
+from coupang_analytics.promo_sheet import read_promo_sheet  # noqa: E402
 from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
 from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_credentials_file  # noqa: E402
@@ -1203,6 +1204,12 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         persist=False = 원장 로드 실패로 대신 읽는 경우 — 사용자가 고른 입력소스(원장)를 바꾸지 않는다."""
         title, rows, strike_grid = read_ledger_rows(url, store=self.creds_store)
         il = parse_input_rows(rows, strike_grid)
+        try:                                       # D-086 관리대장 '체험단' 시트 → 체험단 시작일(실패해도 입력은 계속)
+            il.promo = read_promo_sheet(url, store=self.creds_store)
+            if il.promo is not None:
+                self.log(f"[입력] 관리대장 체험단 시트 {len(il.promo)}줄 읽음")
+        except Exception as exc:
+            self.log(f"[입력] ⚠ 체험단 시트 읽기 실패 — 체험단 시작일은 지난 값 유지({exc.__class__.__name__}): {exc}")
         self._set_input_list(il, f"[구글시트] {title}")
         self._apply_pw_candidates(parse_password_candidates(rows))
         if not persist:

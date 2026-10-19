@@ -43,6 +43,7 @@ from .pipeline_gsheet import (  # noqa: E402,F401
 # (run_full 이 _login_and_discover·_process_account 호출·NeedLogin류 catch·도구/핀이 여러 심볼 import).
 from . import match_anchor  # noqa: E402
 from .match_anchor import anchor_path  # noqa: E402
+from .promo_sheet import apply_promo_starts  # noqa: E402
 from .pipeline_sales import (  # noqa: E402,F401
     LoginBlocked, LoginCredentialError, NeedLogin, _discover_inventory,
     _discover_products, _dump_raw, _ensure_login, _fresh_login, _ilog, _log_discover_summary,
@@ -766,6 +767,8 @@ def run_full(input_list: InputList, out_dir: str = "output",
     uncollected = [a for _, a in _not_done(accounts, done)]
     _log_login_failures(ctx, accounts, uncollected)
     _ensure_today_columns(wb, uncollected, col_label, log)   # D-084 미수집 계정도 그날 칸(③ 순위 측정용)
+    if input_list.promo is not None:                           # D-086 관리대장 '체험단' 시트 → 체험단 시작일(효과 계산용)
+        apply_promo_starts(wb, input_list.promo, log)
 
     removed_accounts, renamed_accounts = _reconcile_ledger_accounts(wb, input_list, uncollected, log,
                                                                     _match_results(out, log))

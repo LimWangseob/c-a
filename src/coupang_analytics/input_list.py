@@ -69,6 +69,7 @@ class InputList:
     struck: list[str] = field(default_factory=list)   # 취소선으로 제외된 계정/상품(해지·품절·판매중지)
     ledger_account_ids: set = field(default_factory=set)   # 관리대장에 **줄이 존재하는** 모든 계정ID
     #  (판매중지/취소선 포함 — '줄이 사라진' 계정과 구분해 완전삭제 판정에 씀, 2026-09-17)
+    promo: list | None = None   # 관리대장 '체험단' 시트(PromoRow) — None=읽지 않음(체험단 자동 시작일 유지·D-086)
 
 
 def _norm(value) -> str:

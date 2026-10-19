@@ -1724,6 +1724,45 @@ def t1_promo_effect():
     _ok("체험단효과: +38%·32→18↑=개선 / 데이터부족=공란 / 악화=down / 위밖=순위 제외")
 
 
+def t1_promo_sheet_start():
+    print("[13b] 관리대장 '체험단' 시트 → 체험단 시작일 자동(D-086) — 링크 VID 로 블록·최근 회차·수집 주기 불변")
+    from coupang_analytics import promo_sheet as PS
+    # 실측 시트 모양(10-19): 1행 제목·3행 헤더·요청일 '26.08.11'·링크에 vendorItemId
+    rows = [["체험단 진행 명단"], [],
+            ["열1", "요청일", "고객", "상호", "제품명", "링크", "키워드", "판매가", "리뷰/택배", "건수"], [],
+            ["1", "26.08.11", "대표A", "가게P", "기저귀가방", "https://www.coupang.com/vp/products/111?itemId=9&vendorItemId=8001", "기저귀가방"],
+            ["2", "26.09.15", "대표A", "가게P", "기저귀가방", "https://www.coupang.com/vp/products/111?vendorItemId=8001", "기저귀가방 토트백"],
+            ["3", "26.09.01", "대표A", "가게P", "상품P", "https://www.coupang.com/vp/products/222", "kw1"],   # 상품번호만
+            ["4", "26.09.20", "대표B", "모르는가게", "없는상품", "https://www.coupang.com/vp/products/999?vendorItemId=8999", "x"],
+            ["5", "", "대표C", "가게P", "날짜없음", "https://www.coupang.com/vp/products/111?vendorItemId=8001", "x"],   # 요청일 없음 → 제외
+            ["6", "26.09.21", "대표D", "가게P", "링크없음", "", "x"]]                                                   # 링크 없음 → 제외
+    promo = PS.parse_promo_rows(rows)
+    assert [(p.date_iso, p.vid, p.pid) for p in promo] == [
+        ("2026-08-11", "8001", "111"), ("2026-09-15", "8001", "111"), ("2026-09-01", "", "222"),
+        ("2026-09-20", "8999", "999")], promo
+    wb = OutputWorkbook.empty()
+    wb.ensure_product_block("가게P", "기저귀 백팩 (베이비)", config.KIND_CONTRACT, ["기저귀가방"], registered="기저귀가방 CL01")
+    wb.set_product_vids("가게P", "기저귀 백팩 (베이비)", ["8000"])
+    wb.ensure_product_block("가게P", "기저귀 백팩 (베이지)", config.KIND_CONTRACT, [], rank_rows=False, registered="기저귀가방 CL01")
+    wb.set_product_vids("가게P", "기저귀 백팩 (베이지)", ["8001"])                       # 체험단 링크 = 2차 옵션 VID
+    wb.ensure_product_block("가게P", "상품P", config.KIND_CONTRACT, ["kw1"], registered="상품P")
+    wb.set_product_pid("가게P", "상품P", "222")
+    linked, missed = PS.apply_promo_starts(wb, promo, lambda m: None)
+    assert wb.promo_start_of("가게P", "기저귀 백팩 (베이비)") == "2026-09-15", "옵션 링크 → 대표 블록·가장 최근 회차"
+    assert wb.promo_start_of("가게P", "상품P") == "2026-09-01", "상품번호(pid)로도 연결"
+    assert linked == 2 and [m.vid for m in missed] == ["8999"], (linked, missed)
+    assert not wb.has_marketing(), "체험단 자동 시작일은 수집 주기(3일 주기 게이팅)를 켜면 안 됨"
+    wb.set_product_metric("가게P", "상품P", config.M_SALES, "2026-08-30", 100)
+    wb.set_product_metric("가게P", "상품P", config.M_SALES, "2026-09-10", 150)
+    assert wb.promo_effect("가게P", "상품P")[0] == "판매 +50%", wb.promo_effect("가게P", "상품P")
+    wb.set_marketing("가게P", "상품P", "2026-09-05", "", "")                                # 직원 입력이 있으면 우선
+    wb.set_product_metric("가게P", "상품P", config.M_SALES, "2026-09-04", 120)
+    assert wb.promo_effect("가게P", "상품P")[0] == "판매 +25%", "직원 입력 시작일(09.05) 우선"
+    PS.apply_promo_starts(wb, [], lambda m: None)                                            # 체험단 시트 비면 자동값 지움
+    assert wb.promo_start_of("가게P", "상품P") == "" and wb.promo_start_of("가게P", "기저귀 백팩 (베이비)") == ""
+    _ok("체험단 시트: 요청일·링크 VID/상품번호 해석 · 옵션→대표 블록 · 최근 회차 · 직원 입력 우선 · 수집 주기 불변")
+
+
 def t1_apply_style_migrations():
     print("[14] apply_style 자가치유 — 판매가/판매상태 지표행 보정(항목4/6)·빈 키워드행 낡은순위 삭제(항목5)·"
           "비고=관리대장 판매상태(항목3)")
@@ -2476,6 +2515,7 @@ def main():
     t1_date_columns()
     t1_inventory_missing_error()
     t1_promo_effect()
+    t1_promo_sheet_start()
     t1_apply_style_migrations()
     t1_invalid_product_name()
     t1_multiline_product_name()

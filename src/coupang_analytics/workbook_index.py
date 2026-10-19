@@ -54,7 +54,8 @@ class _IndexMixin:
         판매=판매량 지표행 % 변화, 순위=모든 키워드 **최고 순위(숫자 최소)** before→after(예 32→18 ↑).
         개선(판매↑·순위↑=숫자↓)=up(초록)·악화=down(적색)·데이터 부족(시작 전/후 값 없음)=('', '')=공란."""
         biz, product = _norm(biz), _key(product)
-        start_d = _parse_date(self.marketing_of(biz, product)[0])
+        # 직원 입력 시작일 우선, 없으면 관리대장 '체험단' 시트 자동 시작일(D-086)
+        start_d = _parse_date(self.marketing_of(biz, product)[0] or self.promo_start_of(biz, product))
         if start_d is None or biz not in self.wb.sheetnames:
             return "", ""                                   # 체험단 시작일 없음 → 공란
         cols = self._date_col.get(biz) or {}
