@@ -53,7 +53,8 @@ from coupang_analytics.settlement_store import AMOUNTS, BASE, COSTS, FILES, JOBS
 from coupang_analytics import settlement_wing_api as API  # noqa: E402
 
 GAP_SEC = (45, 75)                                      # 요청 사이 = 앱 반자동 순위 간격과 같게(소유자 2026-10-06)
-LOOKUP_GAP_SEC = (3, 8)                                 # 조회·받기 사이(화면에서 넘겨 보는 정도)
+LOOKUP_GAP_SEC = (3, 8)
+AMOUNTS_FROM = date(2025, 11, 1)                        # 지급 내역 기록 시작 — 2026 첫 30% 줄의 70% 몫(2025-11·12 판매)·2025 보류(D-083)                                 # 조회·받기 사이(화면에서 넘겨 보는 정도)
 LOG: RL.RunLog = None  # type: ignore[assignment]   # main() 에서 실행 시작 시 생성
 CHANNELS: tuple = ()                                    # --channel 로 제한(비우면 윙·로켓그로스 둘 다)
 ORIGINALS: Path | None = None                           # --originals: 받은 쿠팡 원본 그대로 복사할 증빙 폴더(D-062)
@@ -239,14 +240,15 @@ _SOURCES = (("윙", API.WING_URL, API.WING_EVENTS, API.wing_events_body, API.win
             ("로켓그로스", API.RG_URL, API.RG_EVENTS, API.rg_events_body, API.rg_events))
 
 
-def read_events(b, name: str, start: date, end: date) -> list:
-    """지급일 기준 달 단위로 윙·로켓그로스 정산 일정 조회. 조회 구간마다 처리기록을 남긴다(날짜별 정상/비정상 분석)."""
+def read_events(b, name: str, start: date, end: date, amounts_from: date | None = None) -> list:
+    """지급일 기준 달 단위로 윙·로켓그로스 정산 일정 조회. 조회 구간마다 처리기록을 남긴다(날짜별 정상/비정상 분석).
+    amounts_from 이 start 보다 이르면 그때부터 지급 내역(금액)만 더 기록 — 돌려주는 정산 일정(받을 파일 계획)은 start 부터."""
     found: list = []
     for ch, url, path, body, parse in _SOURCES:
         if CHANNELS and ch not in CHANNELS:
             continue
         goto(b, url, name)
-        for k, (ws, we) in enumerate(API.month_windows(start, end)):
+        for k, (ws, we) in enumerate(API.month_windows(min(start, amounts_from or start), end)):
             if k:
                 time.sleep(random.uniform(*LOOKUP_GAP_SEC))
             resp = api(b, name, "POST", path, body(ws, we))
@@ -259,7 +261,7 @@ def read_events(b, name: str, start: date, end: date) -> list:
                 LOG.record(name, "조회", RL.WAIT, f"받을 리포트 미확인 비용 — {n}", channel=ch)
             for n in API.unsupported_cycles(resp):
                 LOG.record(name, "조회", RL.WAIT, f"확인 필요 — 받기 방법 미확인 정산주기 {n} · 그 줄만 건너뜀", channel=ch)
-            found += evs
+            found += [e for e in evs if e.settle_date >= start]
         _read_forecast(b, name, ch, path, body, end)
     return found
 
@@ -310,7 +312,7 @@ def _request_one(b, j, name: str) -> str:
 
 def cmd_request(a, b, args, jobs: list) -> None:
     name = name_of(a)
-    events = read_events(b, name, args.start, args.end)
+    events = read_events(b, name, args.start, args.end, amounts_from=AMOUNTS_FROM)
     picked = [j for j in SJ.plan_requests(events, jobs, today=date.today(), now=datetime.now(),
                                           per_account_cap=args.cap)
               if j.account == name and args.start.isoformat() <= j.settle_date <= args.end.isoformat()]   # 이번 기간만

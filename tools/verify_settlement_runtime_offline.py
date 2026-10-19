@@ -461,13 +461,15 @@ def p18_verify_collect():
         log.append(("화면", url))
 
     def call(method, path, body):
-        log.append((method, path))
+        log.append((method, path, body))
         if path == VC.WALLET_HIST:
             return {"walletHistories": [{"amount": 10 + body["pageNumber"], "bankAccountOwner": "예금주"}], "totalPage": 2}
         if path == VC.WALLET_BAL:
             return {"content": {"balanceAmount": 21, "bankAccountNumber": "123"}}
         if path == VC.PURCHASE and body["fromDate"] == "2026-09-01":
             raise API.ServerBusy("504")
+        if path == VC.PENDING:                     # 보류목록 = 긴 기간 한 번 + 여러 쪽(실측 2026-10-19 원더폴리 2025-12 보류 10건)
+            return {"pendingReports": [{"finalPaymentAmount": body["page"], "bankAccount": "가림"}], "totalPageCount": 2}
         return {"ok": path, "body": body}
     d = VC.collect(call, open_page, D("2026-08-01"), D("2026-10-08"))
     assert d["wallet"] == [{"amount": 10}, {"amount": 11}] and d["wallet_balance"] == 21    # 2쪽·예금주 제거
@@ -477,10 +479,14 @@ def p18_verify_collect():
     assert len(d["조회 실패"]) == 1 and "매출내역 202609" in d["조회 실패"][0]
     assert d["wing_vat"]["body"] == {"from": 202608, "to": 202610}
     assert d["rg_vat"]["ok"].endswith("?fromYearMonth=2026-08&toYearMonth=2026-10")
-    assert d["pending"]["202608"]["body"]["year"] == 2026 and d["pending"]["202608"]["body"]["month"] == 8
+    pend = [x for x in log if x[:2] == ("POST", VC.PENDING)]
+    assert len(pend) == 2, pend                                                              # 달마다 아님 — 기간 한 번·2쪽
+    assert d["pending"]["전체"]["pendingReports"] == [{"finalPaymentAmount": 1}, {"finalPaymentAmount": 2}]
+    assert d["pending"]["전체"]["totalRecordCount"] == 2 and d["pending"]["전체"]["from"] == "2025-01-01"
+    assert d["pending"]["전체"]["to"] == "2026-10-07"                                          # 어제까지·2026 전 보류 포함
     i = log.index(("화면", VC.SALES_URL))
-    assert log[i + 1] == ("POST", VC.PURCHASE)                                             # 매출내역 화면 연 뒤 조회
-    assert log.index(("화면", VC.PENDING_URL)) < log.index(("POST", VC.PENDING))
+    assert log[i + 1][:2] == ("POST", VC.PURCHASE)                                         # 매출내역 화면 연 뒤 조회
+    assert log.index(("화면", VC.PENDING_URL)) < next(k for k, x in enumerate(log) if x[:2] == ("POST", VC.PENDING))
     ok("월 끝=어제·빈 달 없음·화면 먼저·월렛 2쪽·예금주/계좌 제거·504 달=조회 실패 기록 후 계속·부가세 요청 모양")
 
 
@@ -1114,6 +1120,41 @@ def p31_keep_originals():
     ok("윙·판매수수료·비용 리포트 원본 바이트 그대로 복사 · 집계 사본(구매자명 제거)·비용 폴더 불변 · 미지정=폴더 없음")
 
 
+def p35_amounts_from():
+    print("[P35] 지급 내역 = 2025-11 부터 기록(2026 첫 30% 줄의 70% 몫·2025 보류 대조) · 받을 파일 계획은 시작일부터만")
+    from datetime import date
+    from types import SimpleNamespace
+    sys.path.insert(0, str(ROOT / "tools"))
+    import settlement_download as TD
+    seen, saved = [], []
+    olds = (TD.goto, TD.api, TD._save_amounts, TD._read_forecast, TD.LOG, TD.time.sleep, TD.CHANNELS, TD._SOURCES)
+
+    def body(ws, we):
+        return {"fromDate": ws.isoformat()}
+
+    def parse(resp, name):
+        return [SimpleNamespace(settle_date=date.fromisoformat(resp["w"][:8] + "20"), reports=())]
+
+    def api(b, name, m, path, bd):
+        seen.append(bd["fromDate"])
+        return {"w": bd["fromDate"]}
+    try:
+        TD.goto, TD._read_forecast, TD.time.sleep = (lambda *a: None), (lambda *a: None), (lambda s: None)
+        TD.LOG, TD.CHANNELS = SimpleNamespace(record=lambda *a, **k: None), ()
+        TD._SOURCES = (("윙", "url", "path", body, parse),)
+        TD._save_amounts = lambda name, ch, resp: saved.append(resp["w"])
+        TD.api = api
+        evs = TD.read_events(None, "A", date(2026, 1, 1), date(2026, 2, 28), amounts_from=TD.AMOUNTS_FROM)
+        plain = TD.read_events(None, "A", date(2026, 1, 1), date(2026, 2, 28))
+    finally:
+        (TD.goto, TD.api, TD._save_amounts, TD._read_forecast, TD.LOG, TD.time.sleep, TD.CHANNELS, TD._SOURCES) = olds
+    assert TD.AMOUNTS_FROM == date(2025, 11, 1)
+    assert saved[:4] == ["2025-11-01", "2025-12-01", "2026-01-01", "2026-02-01"], saved      # 2025-11·12 지급 내역 기록
+    assert [str(e.settle_date) for e in evs] == ["2026-01-20", "2026-02-20"], evs              # 계획엔 시작일부터만
+    assert [str(e.settle_date) for e in plain] == ["2026-01-20", "2026-02-20"] and saved[4:] == ["2026-01-01", "2026-02-01"]
+    ok("지급 내역 2025-11 부터 기록·받을 파일 계획(정산 일정)은 시작일부터만 — 2025 일정이 '요청예정'으로 남지 않음·인자 없으면 그대로")
+
+
 def p34_forecast_accuracy():
     print("[P34] 정산 예정 기록(D-078) — 오늘 뒤 줄은 예정 기록에만·같은 날 다시 보면 마지막 값·정산일 지나면 실제와 칸별 대조")
     from datetime import date
@@ -1248,6 +1289,7 @@ def main():
     p32_evidence_rules()
     p33_login_password_source()
     p34_forecast_accuracy()
+    p35_amounts_from()
     print("정산 런타임 오프라인 검증 통과")
 
 

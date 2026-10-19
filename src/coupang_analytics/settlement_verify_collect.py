@@ -37,6 +37,7 @@ WALLET_BAL = "/tenants/rfm/v2/wallet/balance/api"
 CALENDAR = "/tenants/msf/wing/api/payout-date-calendar/payout-dates"   # 윙 정산캘린더(폼 본문·과거~미래 지급일)
 CALENDAR_AHEAD = timedelta(days=70)
 WALLET_FROM = date(2025, 1, 1)          # 월렛 장부(입금−인출=잔액) 대조용 — 소급 시작보다 넉넉히
+PENDING_FROM = date(2025, 1, 1)         # 보류목록 = 보류일 기준 — 2026 지급 줄의 보류가 2025 에 잡힌 것까지(D-083)
 _PII = ("bank", "owner", "accountnumber")
 
 
@@ -92,11 +93,8 @@ def collect(call, open_page, start: date, today: date, *, note=lambda m: None, g
         data["wing_vat"] = safe("윙 부가세", lambda: call("POST", WING_VAT, {"from": int(mlist[0][0]), "to": int(mlist[-1][0])}))
     data["purchase"] = _monthly(call, open_page, safe, SALES_URL, "매출내역", mlist,
                                 lambda ym, f, t: (PURCHASE, {"fromDate": f.isoformat(), "toDate": t.isoformat()}))
-    data["pending"] = _monthly(call, open_page, safe, PENDING_URL, "보류목록", mlist,
-                               lambda ym, f, t: (PENDING, {"from": f.isoformat(), "to": t.isoformat(), "year": f.year,
-                                                           "month": f.month, "commerceType": "3PM",
-                                                           "searchType": "PENDING_DATE", "pendingType": "ALL",
-                                                           "pendingYn": "ALL", "page": 1, "pageSize": 100}))
+    open_page(PENDING_URL)
+    data["pending"] = {"전체": safe("보류목록", lambda: _pending(call, PENDING_FROM, today - timedelta(days=1)))}
     data["additional"] = _monthly(call, open_page, safe, ADDITIONAL_URL, "추가지급", mlist,
                                   lambda ym, f, t: (ADDITIONAL, {"fromDate": f.isoformat(), "toDate": t.isoformat(),
                                                                  "taxInvoiceIssueType": None, "requestStatusType": None,
@@ -114,6 +112,20 @@ def _wallet(call, start: date, today: date) -> list:
         page += 1
         if page >= (r.get("totalPage") or 0):
             return out
+
+
+def _pending(call, start: date, end: date) -> dict:
+    """보류목록 — 보류일 기준 긴 기간 한 번(실측 2026-10-19: 2025-01~2026-10 한 번 = 달마다 조회 합) · 쪽 끝까지."""
+    rows: list = []
+    page = 1
+    while True:
+        r = call("POST", PENDING, {"from": start.isoformat(), "to": end.isoformat(), "year": start.year,
+                                   "month": start.month, "commerceType": "3PM", "searchType": "PENDING_DATE",
+                                   "pendingType": "ALL", "pendingYn": "ALL", "page": page, "pageSize": 100})
+        rows += r.get("pendingReports") or []
+        if page >= (r.get("totalPageCount") or 0):
+            return {"from": start.isoformat(), "to": end.isoformat(), "totalRecordCount": len(rows), "pendingReports": rows}
+        page += 1
 
 
 def _monthly(call, open_page, safe, url, label, mlist, req) -> dict:
