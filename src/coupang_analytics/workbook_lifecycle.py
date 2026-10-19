@@ -9,6 +9,14 @@ from __future__ import annotations
 from .workbook_common import *  # noqa: F401,F403
 
 
+def _ledger_vids(vids_of: dict | None, names) -> set:
+    """{대장명: [VID…]} 에서 names(대장명들)의 VID 합집합 — 공백·줄바꿈 차이는 같은 대장명(match_anchor.key_of 와 동일)."""
+    if not vids_of:
+        return set()
+    by_key = {" ".join(str(k).split()): v for k, v in vids_of.items()}
+    return {v for n in names for v in by_key.get(" ".join(str(n).split()), [])}
+
+
 class _LifecycleMixin:
     def reconcile_account(self, biz: str, seen_products, ledger_products=None,
                           delete_missing: bool = False, account_id: str = "") -> tuple[list[str], list[str]]:
@@ -47,7 +55,7 @@ class _LifecycleMixin:
         return newly, deleted
 
     def sync_discontinued_from_ledger(self, biz: str, active_products, discontinued_products,
-                                      account_id: str = "") -> list[str]:
+                                      account_id: str = "", vids_of: dict | None = None) -> list[str]:
         """관리대장 기준으로 판매중지 플래그(_중단)를 **매 실행 동기화**한다(수집 여부 무관·2026-09-27).
 
         배경: `_중단` "Y"는 수집·대조(`reconcile_account`)할 때만 갱신돼, **이어쓰기(resume)로 ①판매수집을
@@ -58,18 +66,23 @@ class _LifecycleMixin:
         - 대장에 **없는** 블록(노출명 매칭분·완전삭제 대상 등) → **건드리지 않음**(다른 경로가 처리).
 
         블록명이 '등록명 (옵션)' 이어도 등록명(base)으로 대조한다. `account_id` 주면 그 계정ID 상품만(다계정ID
-        스코핑, [[fix-multiaccount-reconcile-scope]]). 반환=새로 판매중지로 바뀐 블록명 목록."""
+        스코핑, [[fix-multiaccount-reconcile-scope]]). 반환=새로 판매중지로 바뀐 블록명 목록.
+        `vids_of`={대장명: [VID…]}(① 매칭 결과) 주면 이름으로 못 찾은 블록도 VID 로 대조한다(D-082 — 블록 등록명=쿠팡
+        이름이라 대장명과 달라 취소선이 반영 안 되던 실측 10-19 '맛있는 마시는 알부민')."""
         active = {_key(p) for p in active_products}
         disc = {_key(p) for p in discontinued_products}
+        act_v, dis_v = _ledger_vids(vids_of, active), _ledger_vids(vids_of, disc)
         acct = _norm(account_id)
         newly: list[str] = []
         for p in list(self.products_of(biz)):
             if acct and self.product_account_id(biz, p) not in ("", acct):
                 continue                                       # 다른 계정ID 소속 → 제외(다계정ID 교차오염 방지)
             base = self.registered_name(biz, p) or p           # 옵션 블록은 등록명으로도 대조
-            if p in active or base in active:
+            named = p in active or base in active or p in disc or base in disc
+            vids = set() if named else set(self.product_vids(biz, p))
+            if p in active or base in active or vids & act_v:
                 self.set_discontinued(biz, p, False)           # 대장 활성 → 낡은 '판매중지' 해제
-            elif p in disc or base in disc:
+            elif p in disc or base in disc or vids & dis_v:
                 if not self.is_discontinued(biz, p):
                     newly.append(p)
                 self.set_discontinued(biz, p, True)            # 대장 판매중지 → 표기

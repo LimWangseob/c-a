@@ -599,6 +599,38 @@ def parse_input_rows(rows: list, strike_grid: list | None = None) -> InputList:
                        strike_fn=(strike_fn if strike_grid else None), emit_strike_warning=False)
 
 
+def apply_hidden_rows(rows: list, strike_grid: list | None, hidden: set[int]) -> tuple[list, list | None]:
+    """관리대장 **숨긴 행**(사용자 숨김, 1-based 번호) 반영(D-082·소유자 2026-10-19 '숨기면 대장에 없음').
+
+    숨긴 줄 = 그 줄 상품명 칸에 취소선을 켠 것과 같음 → 그 상품 판매중지(수집·순위 제외·이력 보존). 한 계정의 줄
+    (계정아이디 줄 + 그 아래 계정아이디 없는 줄)이 **전부** 숨겨졌으면 그 줄들을 빈 줄로 → 대장에 없는 계정(완전 삭제
+    대상·비밀번호 후보에서도 빠짐). ⚠실제 대장은 상품 줄마다 계정아이디를 반복하므로 '계정아이디 있는 줄 숨김'만으로
+    계정을 빼면 숨긴 상품 하나에 계정 전체가 사라진다(실측 10-19 40행 헬스매트). 원본은 바꾸지 않고 사본 반환."""
+    if not hidden:
+        return rows, strike_grid
+    header, hrow = _find_header_row(rows, lambda h: all(name in h for name in _REQUIRED))
+    if hrow < 0:
+        return rows, strike_grid
+    i_acct, i_prod = header.index(config.IN_COL_ACCOUNT_ID), header.index(config.IN_COL_PRODUCT)
+    rows = [list(r) for r in rows]
+    strike = [list(s) for s in (strike_grid or [])]
+    by_acct: dict[str, list[int]] = {}
+    cur = ""
+    for r in range(hrow + 1, len(rows)):
+        cur = _norm(_cell(rows[r], i_acct)) or cur
+        if cur:
+            by_acct.setdefault(cur, []).append(r)
+        if (r + 1) in hidden and _norm(_cell(rows[r], i_prod)):
+            strike.extend([] for _ in range(r + 1 - len(strike)))
+            strike[r].extend([False] * (i_prod + 1 - len(strike[r])))
+            strike[r][i_prod] = True                      # 숨긴 줄 = 그 상품 취소선과 같은 판매중지
+    for rs in by_acct.values():
+        if all((r + 1) in hidden for r in rs):            # 그 계정 줄이 전부 숨김 = 대장에 없는 계정
+            for r in rs:
+                rows[r] = [""] * len(rows[r])
+    return rows, strike
+
+
 def read_ledger_rows(url_or_id: str, *, store=None, sa_path=None) -> tuple[str, list, list]:
     """관리대장(구글시트)을 서비스계정으로 열어 **본체 시트의 (값 격자, 취소선 격자)** 를 (시트명, rows, strike_grid)로 반환.
 
@@ -618,6 +650,7 @@ def read_ledger_rows(url_or_id: str, *, store=None, sa_path=None) -> tuple[str, 
         if hrow >= 0:
             # 취소선은 사용된 행까지만 서식을 읽어 페이로드를 줄인다(관리대장 1000+행 전체 서식 = 과대·실패 위험)
             strike_grid = client.read_strike_grid(t, max_rows=len(rows))
+            rows, strike_grid = apply_hidden_rows(rows, strike_grid, client.read_hidden_rows(t, max_rows=len(rows)))
             return t, rows, strike_grid
     raise ValueError("관리대장에서 필수 헤더(사업자명·계정아이디·상품명)를 가진 시트를 찾지 못했습니다 "
                      f"(확인한 시트: {', '.join(titles)}).")

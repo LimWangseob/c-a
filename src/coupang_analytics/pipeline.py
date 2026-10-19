@@ -41,6 +41,7 @@ from .pipeline_gsheet import (  # noqa: E402,F401
 # (핀/시뮬 monkeypatch 대상은 pipeline_ranks).
 # ① 판매수집 엔진(로그인·발견·계정처리)은 pipeline_sales 로 분리. pipeline.X 로 다시 노출
 # (run_full 이 _login_and_discover·_process_account 호출·NeedLogin류 catch·도구/핀이 여러 심볼 import).
+from . import match_anchor  # noqa: E402
 from .match_anchor import anchor_path  # noqa: E402
 from .pipeline_sales import (  # noqa: E402,F401
     LoginBlocked, LoginCredentialError, NeedLogin, _discover_inventory,
@@ -275,7 +276,16 @@ def _consolidate_renamed_accounts(wb, input_list: InputList, log) -> list[tuple[
     return renamed
 
 
-def _reconcile_ledger_accounts(wb, input_list: InputList, uncollected, log
+def _match_results(out: Path, log) -> dict:
+    """① 매칭 결과(대장명 → VID, 계정별) — 판매중지 동기화의 VID 대조용(D-082). 손상이면 로그 후 이름으로만 대조."""
+    try:
+        return match_anchor.load_match_results(match_anchor.match_result_path(out))
+    except match_anchor.AnchorFileError as exc:
+        log(f"  [상태동기화] ⚠ ① 매칭 결과 읽기 실패 — 판매중지는 이름으로만 대조: {exc}")
+        return {}
+
+
+def _reconcile_ledger_accounts(wb, input_list: InputList, uncollected, log, vids_by_acct: dict | None = None
                                ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """계정 단위 대조(2026-09-17 정책) — 관리대장 기준으로 결과 워크북의 계정을 정리한다.
 
@@ -296,7 +306,8 @@ def _reconcile_ledger_accounts(wb, input_list: InputList, uncollected, log
             continue                                          # 시트 없음(신규 첫날 등) → 건너뜀
         act = [p.name for p in a.products if not p.discontinued]
         dis = [p.name for p in a.products if p.discontinued]
-        flipped = wb.sync_discontinued_from_ledger(a.label, act, dis, a.account_id)
+        flipped = wb.sync_discontinued_from_ledger(a.label, act, dis, a.account_id,
+                                                   vids_of=(vids_by_acct or {}).get(a.account_id))   # D-082 VID 대조
         if flipped:
             log(f"   [상태동기화] {a.label}: 대장 기준 판매중지 표기 {len(flipped)}개")
     active_biz = {a.label for a in input_list.accounts}
@@ -743,7 +754,8 @@ def run_full(input_list: InputList, out_dir: str = "output",
     uncollected = [a for _, a in _not_done(accounts, done)]
     _log_login_failures(ctx, accounts, uncollected)
 
-    removed_accounts, renamed_accounts = _reconcile_ledger_accounts(wb, input_list, uncollected, log)
+    removed_accounts, renamed_accounts = _reconcile_ledger_accounts(wb, input_list, uncollected, log,
+                                                                    _match_results(out, log))
     renamed_accounts = early_renamed + renamed_accounts   # 구글시트 옛 이름 시트·계정목록 행 정리 대상
 
     # 통계 마스터/스냅샷 저장 + 결과 구글시트 반영 + 진행파일 정리

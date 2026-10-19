@@ -102,6 +102,14 @@ def _cell_strikethrough(cell: dict) -> bool:
     return False
 
 
+def hidden_rows_from_response(resp: dict) -> set[int]:
+    """spreadsheets.get(rowMetadata) 응답 → **사용자가 숨긴** 행 번호(1-based) 집합(D-082).
+    필터로 가려진 행(hiddenByFilter)은 담당자 보기용이라 제외 — 필터 한 번에 계정이 대량 삭제되지 않게."""
+    data = (resp.get("sheets") or [{}])[0].get("data") or [{}]
+    meta = (data[0] if data else {}).get("rowMetadata", [])
+    return {i + 1 for i, m in enumerate(meta) if (m or {}).get("hiddenByUser")}
+
+
 # 구글 Sheets API 공통 재시도(일시적 오류만) — read timeout·429·5xx 지수백오프.
 _GSHEET_MAX_RETRIES = 4
 _RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
@@ -327,6 +335,14 @@ class GSheetClient:
         data = resp.get("sheets", [{}])[0].get("data", [{}])
         row_data = (data[0] if data else {}).get("rowData", [])
         return [[_cell_strikethrough(c) for c in row.get("values", [])] for row in row_data]
+
+    def read_hidden_rows(self, sheet: str, max_rows: int | None = None) -> set[int]:
+        """시트에서 **사용자가 숨긴 행** 번호(1-based) 집합(D-082). 행 정보만 읽어 가볍다."""
+        rng = f"'{sheet}'" if not max_rows else f"'{sheet}'!1:{max_rows}"
+        resp = self._exec(self._sheets().get(
+            spreadsheetId=self.spreadsheet_id, ranges=[rng], includeGridData=True,
+            fields="sheets.data.rowMetadata(hiddenByUser,hiddenByFilter)"), f"숨긴 행 읽기({sheet})")
+        return hidden_rows_from_response(resp)
 
     def batch_update(self, requests: list[dict]) -> dict:
         """서식·구조 변경 요청 묶음(병합·색·테두리·틀고정·하이퍼링크 등)을 한 번에 적용.

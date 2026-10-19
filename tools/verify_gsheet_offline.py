@@ -98,6 +98,40 @@ def t1b_ledger_strike() -> None:
     _ok("셀/부분 취소선 파싱 + 취소선-only 제외(상태 컬럼 없음) + None이면 하위호환")
 
 
+def t1d_ledger_hidden_rows() -> None:
+    print("[1d] 관리대장 숨긴 행(D-082·소유자 2026-10-19) — 숨긴 계정 줄=대장에 없음 · 숨긴 상품 줄=판매중지(취소선과 같음)")
+    from coupang_analytics.gsheet_api import hidden_rows_from_response
+    from coupang_analytics.input_list import apply_hidden_rows
+    # 사용자가 숨긴 행만(필터로 가려진 행은 담당자 보기용이라 제외 — 필터 한 번에 계정 대량 삭제 방지)
+    resp = {"sheets": [{"data": [{"rowMetadata": [{}, {"hiddenByUser": True}, {"hiddenByFilter": True}, {}]}]}]}
+    assert hidden_rows_from_response(resp) == {2}, hidden_rows_from_response(resp)
+    # 실측 10-19: 실제 대장은 **상품 줄마다 계정아이디를 반복** — 40행 (DW)커머스 헬스매트(계정ID 있음) 숨김 =
+    # 그 상품만 판매중지(계정은 그대로) · 75행 lslfgh(하성진) = 그 계정 줄 **전부** 숨김 = 계정 없음.
+    rows = [
+        ["대표자 (사업자)", "사업자명", "계정아이디", "상품명(관리상품명, 노출상품명)"],
+        ["서달원", "(DW)커머스", "dalbong1849", "햄스트링 기구 R010"],   # 2행
+        ["서달원", "(DW)커머스", "dalbong1849", "헬스매트 HM001 (블랙)"],  # 3행 숨김 → 그 상품만 판매중지
+        ["하성진", "", "lslfgh", "토탈사이언스"],                        # 4행 숨김
+        ["", "", "", "토탈 부속상품"],                                   # 5행 숨김(같은 계정 블록) → 계정 줄 전부 숨김
+        ["연다인", "벅스", "bux1004", "보냉백 BG001"],                   # 6행
+        ["", "", "", "변신큐브 A003"],                                   # 7행 숨김(계정ID 없는 상품 줄) → 판매중지
+    ]
+    strike = [[False] * 4 for _ in rows]
+    rows2, strike2 = apply_hidden_rows(rows, strike, {3, 4, 5, 7})
+    il = parse_input_rows(rows2, strike2)
+    assert [a.account_id for a in il.accounts] == ["dalbong1849", "bux1004"], [a.account_id for a in il.accounts]
+    assert "lslfgh" not in il.ledger_account_ids, "줄이 전부 숨겨진 계정 = 줄 없음(완전 삭제 대상)"
+    got = [[(p.name, p.discontinued) for p in a.products] for a in il.accounts]
+    assert got == [[("햄스트링 기구 R010", False), ("헬스매트 HM001 (블랙)", True)],
+                   [("보냉백 BG001", False), ("변신큐브 A003", True)]], got
+    assert rows[3][2] == "lslfgh" and strike[2][3] is False, "원본 격자는 그대로(사본 반환)"
+    assert apply_hidden_rows(rows, strike, set()) == (rows, strike), "숨긴 행 없으면 그대로"
+    # 계정 줄 일부만 숨김 → 계정 유지(첫 줄이 숨겨져도 남은 줄이 있으면 그 계정은 대장에 있음)
+    il3 = parse_input_rows(*apply_hidden_rows(rows, strike, {2}))
+    assert "dalbong1849" in [a.account_id for a in il3.accounts], "일부 줄만 숨긴 계정이 사라짐"
+    _ok("숨긴 줄=그 상품 판매중지 · 계정 줄이 전부 숨겨진 계정만 대장에 없음 · 필터 숨김 제외 · 원본 불변")
+
+
 def t1c_real_ledger_shape() -> None:
     print("[1c] 실제 셀독리스트 구조 재현 — 행1 잔여값·행2 헤더·식별열 세로병합(상속)·우측 컬럼·취소선·판매상태")
     # 실측 구조(토탈셀러_셀독 관리 대장): 좌측에 관리열들, 우측에 대표자명/사업자명/계정아이디/비밀번호/상품명/판매상태.
@@ -1027,7 +1061,7 @@ def t17_restore_master_via_sa() -> None:
 
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
-    for fn in (t1_ledger_rows, t1b_ledger_strike, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
+    for fn in (t1_ledger_rows, t1b_ledger_strike, t1d_ledger_hidden_rows, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
                t3d_grid_autogrow, t3c_delete_accounts, t3e_delete_renamed, t3f_find_renamed_orphans, t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook,
                t6b_multi_account_roster, t6c_content_col_widths, t7_staff_keywords_merge,
                t8_exec_retry, t9_legacy_format_mismatch, t10_stats_full_replace_mismatch,

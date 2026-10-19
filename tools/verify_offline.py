@@ -1162,7 +1162,21 @@ def t1_sync_discontinued_ledger():
     wb.set_discontinued(BIZ, "정상상품A (블랙)", True)
     wb.sync_discontinued_from_ledger(BIZ, ["정상상품A"], [], "")
     assert not wb.is_discontinued(BIZ, "정상상품A (블랙)"), "옵션 블록도 등록명으로 대조해 해제돼야"
-    _ok("대장 동기화: 활성=낡은 판매중지 해제·판매중지=표기·미상 블록 불변·옵션은 등록명 대조")
+    # D-082(실측 10-19): 블록 등록명=쿠팡 이름('웰빙곳간 맛있는 마시는 알부민 활력 오리지널 30포')·대장='맛있는 마시는 알부민'
+    # (취소선) → 이름으로 못 찾아 결과가 계속 판매중으로 남았다. ① 매칭 결과(대장명 → VID)로도 대조.
+    wb.ensure_product_block(BIZ, "웰빙곳간 맛있는 마시는 알부민 활력 오리지널", config.KIND_CONTRACT, ["kw"],
+                            registered="웰빙곳간 맛있는 마시는 알부민 활력 오리지널 30포")
+    wb.set_product_vids(BIZ, "웰빙곳간 맛있는 마시는 알부민 활력 오리지널", ["v_alb"])
+    wb.ensure_product_block(BIZ, "런닝머신 층간 소음 방지 매트", config.KIND_CONTRACT, ["kw"], registered="헬스매트 HM001 (블랙)")
+    wb.set_product_vids(BIZ, "런닝머신 층간 소음 방지 매트", ["v_mat"])
+    wb.set_discontinued(BIZ, "런닝머신 층간 소음 방지 매트", True)
+    vids_of = {"맛있는 마시는 알부민": ["v_alb"], "헬스매트 HM001  (블랙)": ["v_mat"]}   # 공백 차이도 같은 대장명
+    flipped = wb.sync_discontinued_from_ledger(BIZ, ["헬스매트 HM001 (블랙)"], ["맛있는 마시는 알부민"], "", vids_of=vids_of)
+    assert wb.is_discontinued(BIZ, "웰빙곳간 맛있는 마시는 알부민 활력 오리지널"), "VID 로 이어진 대장 판매중지가 반영돼야"
+    assert not wb.is_discontinued(BIZ, "런닝머신 층간 소음 방지 매트"), "등록명 일치(활성)는 그대로 해제"
+    assert flipped == ["웰빙곳간 맛있는 마시는 알부민 활력 오리지널"], flipped
+    assert not wb.is_discontinued(BIZ, "모르는블록C"), "VID 도 이름도 대장에 없는 블록은 불변"
+    _ok("대장 동기화: 활성=낡은 판매중지 해제·판매중지=표기·미상 블록 불변·옵션은 등록명 대조·이름 다르면 ① 매칭 VID 대조")
 
 
 def t1_date_columns():
