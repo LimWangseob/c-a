@@ -835,3 +835,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 부모 PID 없는 watch 거부(기존 시험·수동 실행 경로가 parent 없이 watch 를 씀) · 단계 기록을 ① 완료 시각으로 고정(앱 재부팅 복구·정산 대기 판정이 함께 쓰는 기록이라 범위 큼).
 - 영향 범위: `settlement_watch.py`(already_done) · `tools/settlement_download.py`(cmd_watch 한 줄) · `app_process.py`(remove_legacy_settlement_task·prepare_auto_start) · `tools/verify_settlement_runtime_offline.py`(P36). 운용 PC = 재배포 후 첫 18:00 에 옛 작업 삭제 로그 확인. HQ 포팅 대상.
 - 상태: ACTIVE
+
+### D-092 [COMPANY_STOCK_HEADER] 관리대장 회사보유재고 열 = '회사보유재고'로 시작하는 열 · 앱이 머리글을 '회사보유재고 (자동갱신 MM.DD)'로 갱신 (2026-10-21, R20)
+- 결정: `company_stock._ledger_rows` 가 공백을 뺀 머리글이 '회사보유재고'로 **시작**하는 열을 찾는다(예 '회사보유재고 (10.20기준)'). 역기록할 때마다(미리보기 제외) 머리글을 그로스 재고 열과 같은 방식으로 '회사보유재고 (자동갱신 MM.DD)'로 바꾼다(같은 날·같은 값이면 쓰기 없음). 재고현황 시트는 지금처럼 '현재고' 칸만 쓰고 셀독·당근·자사 칸은 쓰지 않는다(소유자 확인).
+- 근거: 소유자 2026-10-21 "그로스 재고 열처럼 열 이름 끝 날짜를 앱이 (자동갱신 MM.DD)로 바꿔줘", "재고 시트는 최신·셀독/당근/자사 구분 사용 안 함". 실측: 10-20 03:10 까지 역기록 정상(73줄 매칭) → 직원이 머리글을 '회사보유재고 (10.20기준)'로 바꾼 뒤 10-21 04:29 `ValueError: 관리대장에 '회사보유재고' 열이 없음`(이름 완전 일치 비교). 재현 실패(verify_registry_offline R21) → 수정 → 통과.
+- 버린 대안: 이름 완전 일치 유지 + 직원에게 머리글 고정 요청(다시 바뀌면 또 멈춤).
+- 영향 범위: `company_stock.py`(_ledger_rows·write_company_stock) · `tools/verify_registry_offline.py`(R21). HQ 포팅 대상.
+- 상태: ACTIVE

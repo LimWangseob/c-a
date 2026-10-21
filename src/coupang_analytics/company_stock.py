@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from openpyxl.utils import get_column_letter
 
@@ -106,7 +107,8 @@ def _ledger_rows(values: list) -> tuple[int, int, list]:
     if hrow < 0:
         raise ValueError("관리대장 헤더(사업자명·계정아이디·상품명)를 찾지 못함")
     nz = ["".join(str(h).split()) for h in header]
-    if STOCK_COL not in nz:
+    col = next((i for i, h in enumerate(nz) if h.startswith(STOCK_COL)), None)   # '회사보유재고 (10.20기준)'·(자동갱신 MM.DD) 도
+    if col is None:
         raise ValueError(f"관리대장에 '{STOCK_COL}' 열이 없음")
     i_biz, i_acct, i_prod = (header.index(c) for c in
                              (config.IN_COL_BUSINESS, config.IN_COL_ACCOUNT_ID, config.IN_COL_PRODUCT))
@@ -121,7 +123,7 @@ def _ledger_rows(values: list) -> tuple[int, int, list]:
         prod = _norm(_cell(row, i_prod)).split("\n")[0].strip()
         if prod and _is_real_product_name(prod):
             out.append((r, biz, prod, cur))
-    return hrow, nz.index(STOCK_COL), out
+    return hrow, col, out
 
 
 def apply_to_workbook(wb, stock: dict, cache: dict | None = None, title_of=None) -> int:
@@ -193,6 +195,9 @@ def write_company_stock(client, stock: dict, *, dry_run: bool = False,
             col_out[r - hrow - 1] = [text]
     if res.changed and not dry_run:
         client.write_values(sheet, col_out, start=f"{get_column_letter(col + 1)}{hrow + 2}")
+    head = f"{STOCK_COL} (자동갱신 {datetime.now():%m.%d})"     # 그로스 재고 열처럼 갱신일 표기(소유자 2026-10-21)
+    if not dry_run and str(_cell(values[hrow], col) or "").strip() != head:
+        client.write_values(sheet, [[head]], start=f"{get_column_letter(col + 1)}{hrow + 1}")
     return res
 
 

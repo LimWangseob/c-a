@@ -880,14 +880,21 @@ def t21_company_stock():
     assert (res.matched, res.changed, res.stock_sheet) == (3, 3, "Sheet1") and not led.writes     # 미리보기 = 쓰기 0
     assert res.unmatched == [("(주)예시", "없는상품")], res.unmatched
     res = CS.run_company_stock("https://x/edit?gid=1", "L", stock_client=stock_cli, ledger_client=led)
-    assert led.writes == [("셀독리스트", "G3", False)], led.writes                                # 그 열 데이터 구간 1회
+    head = f"회사보유재고 (자동갱신 {datetime.now():%m.%d})"                                  # 그로스 재고처럼(소유자 2026-10-21)
+    assert led.writes == [("셀독리스트", "G3", False), ("셀독리스트", "G2", False)], led.writes   # 데이터 구간 + 머리글 1회
+    assert led.grids["셀독리스트"][1][6] == head, led.grids["셀독리스트"][1]
     g = led.grids["셀독리스트"]
     ham = "김포1 , 2,400개 / 검단 , 24개"
     assert [r[6] for r in g[2:]] == [ham, "검단 , 0개", "7", "9", ham], [r[6] for r in g[2:]]
     for new, old in zip(g, before):
         assert new[:6] + new[7:] == old[:6] + old[7:], (new, old)                                # 다른 열 불변
     assert CS.run_company_stock("https://x/edit?gid=1", "L", stock_client=stock_cli,
-                                ledger_client=led).changed == 0 and len(led.writes) == 1          # 같은 값 = 쓰기 없음
+                                ledger_client=led).changed == 0 and len(led.writes) == 2          # 같은 날·같은 값 = 쓰기 없음
+    # 직원이 머리글에 날짜를 붙여도 찾음(실측 10-21 '회사보유재고 (10.20기준)' → 열 못 찾아 역기록 실패)
+    led2 = FakeClient()
+    led2.grids["셀독리스트"] = [["예시"], hdr[:6] + ["회사보유재고 (10.20기준)", hdr[7]]] + copy.deepcopy(before[2:])
+    assert CS.run_company_stock("https://x/edit?gid=1", "L", stock_client=stock_cli, ledger_client=led2).matched == 3
+    assert led2.grids["셀독리스트"][1][6] == head, led2.grids["셀독리스트"][1]
     bad = FakeClient()
     bad.grids["셀독리스트"] = [hdr[:6]]
     _expect(ValueError, lambda: CS.write_company_stock(bad, stock), "회사보유재고 열 없음")
