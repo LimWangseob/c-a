@@ -904,3 +904,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 판매 있는 계정만 + 판매 없음 한 줄(D-098 — 소유자가 전 계정 요청).
 - 영향 범위: `workbook_sales_dash._ranks` · `tools/verify_sales_summary_offline.py`(T11) · `designs/SALES_SUMMARY.md` §5-1. 일별 상세표는 이미 전 계정 소계를 보임(상품 줄은 31일 중 판매 있는 상품만 — D-064 그대로).
 - 상태: ACTIVE
+
+### D-102 [SALES_DETAIL_ACCOUNT_BLOCK] 통합판매현황 일별 상세표 = 계정마다 한 블록(같은 색 계열 + 바깥 굵은 테두리) (2026-10-21, R31)
+- 결정: 일별 상세표에서 계정 하나(소계 2줄 + 상품 줄들)를 한 블록으로 — 소계 = 진한 색·상품 = 같은 계열 연한 색, 계정마다 파랑(D9E2F3/EEF3FB)·초록(E2EFDA/F3F9EF) 번갈아, 블록 바깥 변만 굵은 테두리(medium·595959)·안쪽 가는 선 유지. 전체 합계·미수집 계정 수 줄은 그대로(노랑).
+- 근거: 소유자 2026-10-21 "계정별 상품별 동일 그룹은 1개의 블럭으로 … 테두리선을 진하게 또는 소계와 상품리스트와 판매내역을 같은 색상으로 구분해서 계정별로 시각적으로 구분"(구글 반영본 화면 — 소계만 회색·상품 흰색이라 계정 경계가 안 보임). 둘 다 적용. 시험 T4(계정마다 다른 색·소계/상품 같은 계열·바깥만 굵게) 통과 · Excel 그림으로 확인.
+- 버린 대안: 테두리만 또는 색만(소유자 '또는' — 둘 다 적용해도 서로 방해 없음) · 계정마다 다른 색 여러 개(27계정이면 색이 많아 산만).
+- 영향 범위: `workbook_sales.py`(_BLOCK_FILLS·_EDGE·_outline·_write_section) · `tools/verify_sales_summary_offline.py`(T4) · `designs/SALES_SUMMARY.md` §5. 구글 미러 = 배경색·SOLID_MEDIUM 테두리 그대로 옮김(gsheet_stats._borders).
+- 상태: ACTIVE

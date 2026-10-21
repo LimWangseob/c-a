@@ -158,6 +158,22 @@ def t4_sheet():
         from openpyxl.utils import get_column_letter
         ws_w = {sws.column_dimensions[get_column_letter(c)].width for c in range(4, 4 + 31)}
         assert len(ws_w) == 1, f"날짜 칸 너비 모두 같음: {ws_w}"
+        # 계정 블록(소유자 2026-10-21·D-102): 소계+상품 = 같은 색 계열 · 계정마다 번갈아 · 블록 바깥 굵은 테두리
+        subs_r = [i + 1 for i, r in enumerate(cells) if r[1] and str(r[1]).startswith("소계")]
+        fills = [sws.cell(rr, 4).fill.fgColor.rgb[-6:] for rr in subs_r]
+        assert len(set(fills)) == 2, f"계정마다 다른 색(번갈아): {fills}"
+        prod_r = j + 1                                                   # 에벤에셀 캠핑테이블 첫 줄(1-기준)
+        a1_sub = next(rr for rr in subs_r if cells[rr - 1][0] == "에벤에셀 (a1)")
+        pair = {"D9E2F3": "EEF3FB", "E2EFDA": "F3F9EF"}
+        assert pair[sws.cell(a1_sub, 4).fill.fgColor.rgb[-6:]] == sws.cell(prod_r, 4).fill.fgColor.rgb[-6:], \
+            "같은 계정의 소계·상품 = 같은 색 계열"
+        last_c = 3 + 31
+        assert sws.cell(a1_sub, 1).border.top.style == "medium" and sws.cell(a1_sub, 1).border.left.style == "medium"
+        nxt = [rr for rr in subs_r if rr > a1_sub]
+        end = nxt[0] - 1 if nxt else max(i + 1 for i, r in enumerate(cells) if r[2])   # 블록 끝 = 다음 소계 직전·마지막 줄
+        assert sws.cell(end, last_c).border.bottom.style == "medium" and             sws.cell(end - 2, last_c).border.bottom.style != "medium", "블록 끝만 굵은 아래 테두리"
+        assert sws.cell(a1_sub, last_c).border.right.style == "medium" and \
+            sws.cell(a1_sub + 1, 5).border.top.style != "medium", "바깥만 굵게·안쪽은 가는 선"
         kpi = next(r for r in cells if str(r[0]).startswith("전일 "))
         assert (kpi[1], kpi[2]) == (35000, 4), f"대시보드 전일 = 상세 전체 합계: {kpi}"
         assert "기록" in msg or "갱신" in msg, msg

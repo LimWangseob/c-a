@@ -28,6 +28,11 @@ _THIN = Side(style="thin", color="BFBFBF")
 _BOX = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 _CENTER = Alignment(horizontal="center", vertical="center")
 _MID = Alignment(vertical="center")
+# 일별 상세 계정 블록(소유자 2026-10-21·D-102): 계정마다 소계+상품 = 같은 색 계열(소계 진하게·상품 연하게)·계정마다 번갈아 ·
+# 블록 바깥 = 굵은 테두리 → 계정별로 한눈에 구분
+_BLOCK_FILLS = ((PatternFill("solid", fgColor="D9E2F3"), PatternFill("solid", fgColor="EEF3FB")),   # 파랑
+                (PatternFill("solid", fgColor="E2EFDA"), PatternFill("solid", fgColor="F3F9EF")))   # 초록
+_EDGE = Side(style="medium", color="595959")
 _MISSING = "미수집"
 
 
@@ -126,15 +131,30 @@ def _write_section(ws, r: int, sec, reasons: dict) -> int:
             _cell(ws, r, c, v or None, fill=_FILL_TOTAL, box=True)
         for i, col in enumerate(sec.cols):
             _cell(ws, r, 4 + i, sec.missing[col.key] or None, fill=_FILL_TOTAL, box=True, num=True)
-    for blk in sec.accounts:
+    for i, blk in enumerate(sec.accounts):
+        sub_fill, row_fill = _BLOCK_FILLS[i % 2]
         why = reasons.get(blk.aid) if any(v is None for v in blk.total.values()) else None
-        r = _two_rows(ws, r + 1, (blk.label, f"소계 — ⚠ {why}" if why else "소계"), "", sec.cols, blk.total,
-                      bold=True, fill=_FILL_SUB)
+        top = r + 1
+        r = _two_rows(ws, top, (blk.label, f"소계 — ⚠ {why}" if why else "소계"), "", sec.cols, blk.total,
+                      bold=True, fill=sub_fill)
         for row in blk.rows:   # 상품: 그 날 기록 없음 = 계정이 받은 날이면 0, 계정 미수집이면 미수집
             vals = {c.key: row.values.get(c.key, (0, 0) if blk.total.get(c.key) is not None else None)
                     for c in sec.cols}
-            r = _two_rows(ws, r + 1, (blk.label, row.product), row.kind, sec.cols, vals, gray_first=True)
+            r = _two_rows(ws, r + 1, (blk.label, row.product), row.kind, sec.cols, vals, fill=row_fill,
+                          gray_first=True)
+        _outline(ws, top, r, 1, last)
     return r
+
+
+def _outline(ws, r1, r2, c1, c2) -> None:
+    """r1~r2 × c1~c2 블록 바깥 변만 굵게(안쪽 가는 선은 그대로) — 계정 블록 구분."""
+    for r in range(r1, r2 + 1):
+        for c in range(c1, c2 + 1):
+            if r not in (r1, r2) and c not in (c1, c2):
+                continue
+            b = ws.cell(r, c).border
+            ws.cell(r, c).border = Border(left=_EDGE if c == c1 else b.left, right=_EDGE if c == c2 else b.right,
+                                          top=_EDGE if r == r1 else b.top, bottom=_EDGE if r == r2 else b.bottom)
 
 
 def _missing_names(sec) -> str:
