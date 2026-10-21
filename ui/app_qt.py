@@ -169,7 +169,7 @@ _GS_LINKS = {
     "input": ("gsheet/input_url", "관리대장(입력)"),
     "output": ("gsheet/output_url", "결과(출력)"),
     "stock": (KEY_STOCK_URL, "재고현황(회사 재고)"),
-    "registry": (registry_ui.KEY_URL, "셀독등록원장"),
+    "registry": (registry_ui.KEY_URL, "셀독계정상품이력관리원장"),
 }
 
 
@@ -230,7 +230,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self.tabs.addTab(self._rank_tab(), "순위 조회")
         self.tabs.addTab(self._images_tab(), "상세 이미지")
         self.tabs.addTab(self._collect_tab(), "전체 실행")
-        self.tabs.addTab(self._settlement_tab(), "정산")   # 회사재고 + 셀독등록원장 실행(링크는 설정 탭)
+        self.tabs.addTab(self._settlement_tab(), "정산")   # 회사재고 + 셀독계정상품이력관리원장 실행(링크는 설정 탭)
         self.log_panel = self._log_panel()
         self._splitter.addWidget(self.log_panel)
         self._splitter.setStretchFactor(0, 0)
@@ -396,7 +396,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         edit.setFocus()
 
     def _settlement_tab(self):
-        """정산 탭 — 회사보유재고(재고현황→관리대장) + 셀독등록원장(원장 미리보기/반영·비밀번호 불일치).
+        """정산 탭 — 회사보유재고(재고현황→관리대장) + 셀독계정상품이력관리원장(원장 미리보기/반영·비밀번호 불일치).
 
         설정 탭에 있던 두 카드를 정산 성격으로 묶어 별도 탭으로(2026-09-29 소유자). 카드 자체는 mixin 이 만든다."""
         scroll = QtWidgets.QScrollArea()
@@ -406,14 +406,14 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         scroll.setWidget(inner)
         v = QtWidgets.QVBoxLayout(inner)
         v.setContentsMargins(14, 12, 14, 12)
-        sub = QtWidgets.QLabel("회사 재고(판매자배송) 반영과 셀독등록원장 관리를 여기서 합니다. "
+        sub = QtWidgets.QLabel("회사 재고(판매자배송) 반영과 셀독계정상품이력관리원장 관리를 여기서 합니다. "
                                "링크 등록·변경은 '설정' 탭에서 합니다. 정산 금액·지급일 계산 기능은 준비 중입니다.")
         sub.setObjectName("muted")
         sub.setWordWrap(True)
         v.addWidget(sub)
         v.addWidget(self._settlement_status_card())  # 창 없는 정산 자동 다운로드의 '지금 상태'를 색으로 한눈에
         v.addWidget(self._stock_card())     # 회사 재고(판매자배송) — 재고현황 → 관리대장 '회사보유재고'
-        v.addWidget(self._registry_card())  # 셀독등록원장(원장 링크·미리보기/반영·비밀번호 불일치)
+        v.addWidget(self._registry_card())  # 셀독계정상품이력관리원장(원장 링크·미리보기/반영·비밀번호 불일치)
         v.addStretch(1)
         return scroll
 
@@ -596,7 +596,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         g.addLayout(self._gs_link_box("output", self.gs_output_edit), 3, 1)
         g.addWidget(out_chk, 3, 2)
 
-        # 4) 재고현황(회사 재고)·셀독등록원장 링크 — 실행 버튼은 '정산' 탭(여기선 등록·연결확인만)
+        # 4) 재고현황(회사 재고)·셀독계정상품이력관리원장 링크 — 실행 버튼은 '정산' 탭(여기선 등록·연결확인만)
         self.stock_url_edit = QtWidgets.QLineEdit(st.value(KEY_STOCK_URL, "", type=str))
         self.stock_url_edit.setPlaceholderText("재고현황 구글시트 링크 또는 ID — 비우면 회사 재고 반영 안 함(서비스계정 공유)")
         self.reg_url_edit = QtWidgets.QLineEdit(st.value(registry_ui.KEY_URL, "", type=str))

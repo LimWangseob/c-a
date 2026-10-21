@@ -1,4 +1,4 @@
-"""셀독등록원장 — 원장 → 앱 입력 변환(2단계 앱 연계). SSOT=designs/LEDGER_REGISTRY.md §10-1.
+"""셀독계정상품이력관리원장 — 원장 → 앱 입력 변환(2단계 앱 연계). SSOT=designs/LEDGER_REGISTRY.md §10-1.
 
 - `to_input_list(reg, as_of)`: 관리중 계정·상품으로 InputList 구성(입력소스=원장, 2-4).
 - `password_map(reg)`: 관리중 계정의 비밀번호 맵(credstore 저장용 — InputList 엔 비밀번호 칸이 없음).

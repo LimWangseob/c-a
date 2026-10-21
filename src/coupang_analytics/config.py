@@ -177,7 +177,7 @@ LOGIN_BLOCK_GRACE_SEC = 8        # 무인 시 Akamai 차단 감지 후 이 초�
 LOGIN_SEMI_ON_BLOCK = True
 LOGIN_SEMI_WAIT_SEC = 90         # 그 1회 재시도의 로그인 완료 최대 대기(초, 창 표시 상태)
 
-# ── 셀독등록원장(designs/LEDGER_REGISTRY.md) ─────────────────────
+# ── 셀독계정상품이력관리원장(designs/LEDGER_REGISTRY.md) ─────────────────────
 # 대장 계정 급감 안전장치: 원장 관리중 계정이 REGISTRY_DROP_MIN 개 이상인데 대장에 그 중 REGISTRY_DROP_GUARD
 # 비율 미만만 남아 있으면 대장 일부 유실로 보고 반영을 중단한다(전부 관리중단 처리되는 사고 방지).
 REGISTRY_DROP_MIN = 5

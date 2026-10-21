@@ -1,4 +1,4 @@
-"""셀독등록원장 — 대장 스냅샷을 원장 줄·이력으로 반영(계정·상품 추가/수정/관리중단/재개). SSOT=designs/LEDGER_REGISTRY.md §4.
+"""셀독계정상품이력관리원장 — 대장 스냅샷을 원장 줄·이력으로 반영(계정·상품 추가/수정/관리중단/재개). SSOT=designs/LEDGER_REGISTRY.md §4.
 """
 from __future__ import annotations
 

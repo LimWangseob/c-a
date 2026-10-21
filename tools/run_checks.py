@@ -34,7 +34,7 @@ CHECKS = [
     ("핀(L1 데이터 백본 공개 API 계약)", "tools/pin_l1_contract.py", True),
     ("구글시트 오프라인 검증", "tools/verify_gsheet_offline.py", True),
     ("정밀 렌더 검증(시트·항목·값 end-to-end)", "tools/verify_render_precision.py", True),
-    ("셀독등록원장(대장→원장·이력·복원)", "tools/verify_registry_offline.py", True),
+    ("셀독계정상품이력관리원장(대장→원장·이력·복원)", "tools/verify_registry_offline.py", True),
     ("소싱 후보(발굴·검색량·경쟁·점수 랭킹)", "tools/verify_sourcing_offline.py", True),
     ("정산 계산(지급일·금액·파싱 골든)", "tools/verify_settlement_offline.py", True),
     ("정산 런타임(다운로드·감시·검증 시트·지급일 대조)", "tools/verify_settlement_runtime_offline.py", True),

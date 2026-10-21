@@ -1,4 +1,4 @@
-"""셀독등록원장 — 동기화 진입점(대장 → 원장 + 이력)과 공개 API. SSOT=designs/LEDGER_REGISTRY.md.
+"""셀독계정상품이력관리원장 — 동기화 진입점(대장 → 원장 + 이력)과 공개 API. SSOT=designs/LEDGER_REGISTRY.md.
 
 원칙: 원장 줄은 지우지 않는다 · 이력은 추가만 · 관리상태는 이력에서 계산 · 이름 변경은 자동 병합하지 않고
 '확인필요'로 보류 · 대장 계정 급감이면 반영 중단. 구성: registry_core(자료구조)·registry_rename(이름 변경)·

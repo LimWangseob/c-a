@@ -1,4 +1,4 @@
-"""셀독등록원장 2단계 — UI 공용 도우미(Qt 없음 · app_qt/app 양쪽이 호출).
+"""셀독계정상품이력관리원장 2단계 — UI 공용 도우미(Qt 없음 · app_qt/app 양쪽이 호출).
 
 원장 로직은 전부 registry/registry_gsheet(D8) 것을 **호출만** 한다. 여기엔 화면이 쓰는 얇은 묶음만 둔다.
 SSOT=designs/LEDGER_REGISTRY.md §10-1 (2-1 원장 자동 반영 · 2-3 이전 비밀번호 · 2-4 입력소스 원장).

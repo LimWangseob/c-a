@@ -1,4 +1,4 @@
-"""셀독등록원장 동기화 도구 — 관리대장(구글시트) → 셀독등록원장(구글시트) 1회 반영. SSOT=designs/LEDGER_REGISTRY.md.
+"""셀독계정상품이력관리원장 동기화 도구 — 관리대장(구글시트) → 셀독계정상품이력관리원장(구글시트) 1회 반영. SSOT=designs/LEDGER_REGISTRY.md.
 
 로그인·수집 없음(구글시트만). 첫 실행이면 원장 시트 5개를 만들고 현재 대장 전체를 '최초등록'으로 넣는다.
 이후 실행은 바뀐 것만 원장에 반영하고 계정이력·상품이력·그로스이력에 한 줄씩 추가한다(원장 줄은 지우지 않음).
@@ -47,8 +47,8 @@ def _shared_setting(key: str) -> str:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="관리대장 → 셀독등록원장 동기화")
-    ap.add_argument("--registry", help="셀독등록원장 구글시트 URL(기본=설정 registry/url)")
+    ap = argparse.ArgumentParser(description="관리대장 → 셀독계정상품이력관리원장 동기화")
+    ap.add_argument("--registry", help="셀독계정상품이력관리원장 구글시트 URL(기본=설정 registry/url)")
     ap.add_argument("--ledger", help="셀독관리대장 구글시트 URL(기본=설정 gsheet/input_url)")
     ap.add_argument("--dry-run", action="store_true", help="미리보기(원장에 쓰지 않음)")
     ap.add_argument("--save-url", action="store_true", help="--registry URL 을 설정에 저장")
@@ -57,7 +57,7 @@ def main() -> int:
     registry_url = args.registry or _shared_setting("registry/url")
     ledger_url = args.ledger or _shared_setting("gsheet/input_url")
     if not registry_url:
-        print("[중단] 셀독등록원장 URL 이 없습니다 — --registry 로 주거나 설정 registry/url 에 저장하세요.")
+        print("[중단] 셀독계정상품이력관리원장 URL 이 없습니다 — --registry 로 주거나 설정 registry/url 에 저장하세요.")
         return 1
     if not ledger_url:
         print("[중단] 관리대장 URL 이 없습니다 — --ledger 로 주거나 설정 탭에서 관리대장 링크를 등록하세요.")

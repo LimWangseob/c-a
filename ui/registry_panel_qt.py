@@ -1,4 +1,4 @@
-"""셀독등록원장 2단계 — 정산 탭 '원장' 카드와 실행 시작 원장 반영(Qt 믹스인).
+"""셀독계정상품이력관리원장 2단계 — 정산 탭 '원장' 카드와 실행 시작 원장 반영(Qt 믹스인).
 원장 링크 입력칸은 **설정 탭**(구글 시트 연동 카드)에 있다(2026-10-03 소유자: 설정 일원화) — 여기선 상태만.
 
 app_qt.App 이 상속한다. App 쪽에서 쓰는 것: _card·log·run_bg·creds_store·_save_shared·_store_passwords_map·
@@ -30,7 +30,7 @@ class RegistryPanelMixin:
     _guard_busy: Callable[[], bool]
     # ── 설정 카드 ────────────────────────────────────────────
     def _registry_card(self):
-        card = self._card("셀독등록원장 (지우지 않고 쌓는 원장 — 관리대장과 별도 구글시트)")
+        card = self._card("셀독계정상품이력관리원장 (지우지 않고 쌓는 원장 — 관리대장과 별도 구글시트)")
         g = QtWidgets.QGridLayout(card)
         g.setColumnStretch(1, 1)
 

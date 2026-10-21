@@ -1,4 +1,4 @@
-"""셀독등록원장 — 핵심 자료구조(원장·이력 상태 계산·실행 컨텍스트). SSOT=designs/LEDGER_REGISTRY.md.
+"""셀독계정상품이력관리원장 — 핵심 자료구조(원장·이력 상태 계산·실행 컨텍스트). SSOT=designs/LEDGER_REGISTRY.md.
 
 관리상태(관리중/관리중단)는 원장에 저장된 값이 아니라 **이력에서 계산**한다(_replay_status).
 """

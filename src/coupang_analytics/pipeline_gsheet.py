@@ -287,7 +287,7 @@ def inject_company_stock(wb, stock_url: str | None, log) -> None:
 
 
 def push_coupang_checks(registry_url: str | None, checks: dict, log) -> None:
-    """2-2(§10-1): ①판매수집에서 산출한 쿠팡확인을 셀독등록원장에 **1회** 기록(비치명).
+    """2-2(§10-1): ①판매수집에서 산출한 쿠팡확인을 셀독계정상품이력관리원장에 **1회** 기록(비치명).
 
     registry_url 없거나 checks 비면 no-op(원장 미사용·②③·수집 0). write_coupang_check 는 폴백 없이
     예외를 올리므로 여기서 try/로그로 감싼다(원장 실패해도 xlsx·수집은 진행). 무인(--auto)에서도 호출됨

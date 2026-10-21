@@ -1,4 +1,4 @@
-"""셀독등록원장 오프라인 검증 — 설계서(designs/LEDGER_REGISTRY.md) 기대 동작을 가짜 대장·가짜 구글시트로 확인.
+"""셀독계정상품이력관리원장 오프라인 검증 — 설계서(designs/LEDGER_REGISTRY.md) 기대 동작을 가짜 대장·가짜 구글시트로 확인.
 
 로그인·실 API 없음(결정적). 실패 시 AssertionError → exit 1. run_checks 게이트 편입.
 
@@ -1045,7 +1045,7 @@ def main():
     t21b_company_stock_match()
     t22_name_rules()
     t23_company_stock_skip_logged()
-    print("셀독등록원장 오프라인 검증 통과")
+    print("셀독계정상품이력관리원장 오프라인 검증 통과")
 
 
 if __name__ == "__main__":

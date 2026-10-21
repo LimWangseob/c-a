@@ -1,4 +1,4 @@
-"""셀독등록원장 — 원장 쓰기 동시 실행 잠금. SSOT=designs/LEDGER_REGISTRY.md §10-1.
+"""셀독계정상품이력관리원장 — 원장 쓰기 동시 실행 잠금. SSOT=designs/LEDGER_REGISTRY.md §10-1.
 
 원장 쓰기(run_sync·run_backfill·write_coupang_check)는 셀독원장 시트 전체를 읽고→비교→덮어쓴다. 둘이 겹치면
 나중 쓰기가 앞 쓰기를 덮는다(lost update: 쿠팡확인 소실·이력 번호 겹침). → **읽기부터 쓰기까지** 잠근다.

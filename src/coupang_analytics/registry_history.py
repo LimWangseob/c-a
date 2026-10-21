@@ -1,4 +1,4 @@
-"""셀독등록원장 — 과거 시점 복원(as_of)·관리기간(managed_between)·무결성 점검. SSOT=designs/LEDGER_REGISTRY.md §7·§8.
+"""셀독계정상품이력관리원장 — 과거 시점 복원(as_of)·관리기간(managed_between)·무결성 점검. SSOT=designs/LEDGER_REGISTRY.md §7·§8.
 
 현재 원장에서 효력일이 기준일보다 늦은 이력을 **최신부터 거꾸로 되돌려** 그날의 원장을 만든다. 되돌릴 때 현재 값이
 그 이력의 '변경값'과 달라야 할 이유가 없으므로, 다르면 손수정·누락으로 보고 무결성 오류로 알린다.
