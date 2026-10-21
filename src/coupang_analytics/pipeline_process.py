@@ -1,4 +1,4 @@
-"""① 판매수집 — 상품/옵션 처리(_process_account·_process_option·블록 정리) + ② 동결 키워드 검색량 채우기.
+"""① 판매수집 — 상품/옵션 처리(_process_account·_process_option·블록 정리) + ② 키워드 검색량 매 실행 갱신(D-096).
 
 pipeline_sales(로그인·발견)에서 다시 분리(대형 파일 정비, 행동 불변). run_full._finish 가 _process_account 를
 호출하므로 pipeline.py 로 재수출한다. 키워드 선정·순위는 이 모듈에 없다(②=pipeline.select_keywords_stage·
@@ -15,37 +15,28 @@ from .workbook import OutputWorkbook
 from .pipeline_sales import _ilog   # 로그 헬퍼(로그인·발견 모듈과 공유·단방향)
 
 
-def _fill_frozen_search_volumes(wb, biz: str, product: str, keywords: list[str],
-                                naver: NaverAdApi | None, log) -> int:
-    """동결 키워드 중 **검색량이 비어 있는 것만** 네이버 검색광고 API로 채운다(AI 불필요, fix ②).
-
-    키워드가 있으면 생성(선정)은 생략(동결)하되, 직원이 결과 시트에 직접 넣어 **검색량 칸이 공란**인
-    키워드는 네이버 월검색량으로 채운다(소유자 규칙 2026-09-20). 못 찾은 키워드는 공란 유지(날조 금지).
-    """
+def _refresh_search_volumes(wb, biz: str, product: str, keywords: list[str],
+                            naver: NaverAdApi | None, log) -> int:
+    """동결 키워드 **전부**의 검색량(네이버 월간 PC+모바일)을 매 실행 새로 받아 덮어쓴다(D-096·소유자 2026-10-21
+    '매일 앱 실행 시 매번 다시 조사'). 예전(2026-09-20)엔 빈 칸만 채워 등록 시점 값이 계속 남았다(계절 상품 차이).
+    네이버가 돌려주지 않은 키워드·조회 실패면 기존값 유지(날조 금지·비치명). 반환 = 갱신한 키워드 수."""
     if naver is None or not keywords:
         return 0
-
-    def _blank(v) -> bool:
-        return v is None or (isinstance(v, str) and not v.strip())
-
-    empties = [kw for kw in keywords if _blank(wb.keyword_search(biz, product, kw))]
-    if not empties:
-        return 0
     try:
-        vols = naver.related_keywords_multi(empties)
-    except Exception as exc:   # 네이버 400/429 등이 동결 상품 처리를 막지 않게 격리(공란 유지)
-        log(f"  [검색량] {product} 동결 키워드 검색량 조회 실패(공란 유지) — "
+        vols = naver.related_keywords_multi(list(keywords))
+    except Exception as exc:   # 네이버 400/429 등이 동결 상품 처리를 막지 않게 격리(기존값 유지)
+        log(f"  [검색량] {product} 키워드 검색량 조회 실패(기존값 유지) — "
             f"{exc.__class__.__name__}: {str(exc)[:80]}")
         return 0
     norm = lambda s: str(s).replace(" ", "").lower()   # 네이버는 힌트 공백 제거·대소문자 무시로 조회
     by = {norm(v.keyword): v.total for v in vols}
     n = 0
-    for kw in empties:
+    for kw in keywords:
         vol = by.get(norm(kw))
         if vol is not None and wb.set_keyword_search(biz, product, kw, vol):
             n += 1
     if n:
-        log(f"  [검색량] {product} 동결 키워드 {n}개 검색량 채움(네이버)")
+        log(f"  [검색량] {product} 키워드 {n}/{len(keywords)}개 검색량 새로 받음(네이버 최근 한 달)")
     return n
 
 

@@ -1588,7 +1588,33 @@ def t1_keyword_freeze_boundary():
     kws3 = wb3.product_keywords(BIZ, "공란상품")
     assert _called["n"] == 1, "공란(4키워드 비어있음)인데 AI 선정 미호출(항목6 위반)"
     assert kws3 == ["고른키워드"], f"공란 → AI 선정 키워드 적재 실패: {kws3}"
-    _ok("1건=동결(AI 생략)·가변개수(>4)·공란 순위행 미검색·동결시 AI 미호출·**공란시 AI 선정 실시(항목6)**")
+    # (D) D-096(소유자 2026-10-21 '매일 앱 실행 시 매번 다시 조사'): 동결 키워드도 검색량을 **매 실행 네이버로 새로** 받음
+    #     — 값 있던 칸도 갱신 · 네이버가 못 준 키워드는 기존값 유지(날조 금지) · 네이버 실패면 전부 기존값 유지(비치명)
+    _V = namedtuple("_V", "keyword total")
+
+    class _Naver:
+        def __init__(self, vols=None, fail=False):
+            self.vols, self.fail, self.calls = vols or {}, fail, []
+
+        def related_keywords_multi(self, hints):
+            self.calls.append(list(hints))
+            if self.fail:
+                raise RuntimeError("네이버 429")
+            return [_V(k, v) for k, v in self.vols.items()]
+    wb4 = OutputWorkbook.empty()
+    wb4.ensure_product_block(BIZ, "갱신상품", config.KIND_CONTRACT, ["kA", "k B", "kC"], registered="갱신상품")
+    for kw, v in (("kA", 100), ("k B", 200), ("kC", 300)):
+        wb4.set_keyword_search(BIZ, "갱신상품", kw, v)
+    nv = _Naver({"kA": 150, "kB": 260})                      # 네이버는 공백 없이 돌려줌 · kC 는 안 줌
+    pl._select_product_keywords(wb4, BIZ, "갱신상품", nv, "x", None, False, lambda m: None)
+    assert nv.calls == [["kA", "k B", "kC"]], f"값 있는 키워드도 전부 다시 조회해야: {nv.calls}"
+    got = [wb4.keyword_search(BIZ, "갱신상품", k) for k in ("kA", "k B", "kC")]
+    assert got == [150, 260, 300], f"새 검색량으로 갱신·못 받은 키워드는 기존값 유지: {got}"
+    pl._select_product_keywords(wb4, BIZ, "갱신상품", _Naver(fail=True), "x", None, False, lambda m: None)
+    got = [wb4.keyword_search(BIZ, "갱신상품", k) for k in ("kA", "k B", "kC")]
+    assert got == [150, 260, 300], f"네이버 실패 = 기존값 유지: {got}"
+    _ok("1건=동결(AI 생략)·가변개수(>4)·공란 순위행 미검색·동결시 AI 미호출·**공란시 AI 선정 실시(항목6)**"
+        "·동결 키워드 검색량 매 실행 갱신(D-096)")
 
 
 def t1_preflight_sync_check():

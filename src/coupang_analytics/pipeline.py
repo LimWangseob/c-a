@@ -54,7 +54,7 @@ from .pipeline_sales import (  # noqa: E402,F401
 # (run_full._finish 가 _process_account 호출·도구가 _ProcCtx/_fill_product_metrics 등 import).
 from .pipeline_process import (  # noqa: E402,F401
     _ProcCtx, _apply_pid, _apply_vid_meta, _block_name, _block_sale_status,
-    _fill_frozen_search_volumes, _fill_product_metrics,
+    _fill_product_metrics, _refresh_search_volumes,
     _migrate_product_blocks, _process_account, _process_option,
     _purge_upbundle_blocks, _sweep_dead_duplicates, purge_uncollected_vidless)
 from .pipeline_ranks import (  # noqa: E402,F401
@@ -838,8 +838,8 @@ def _select_product_keywords(wb, biz: str, pname: str, naver, ai_key, browser, g
     if not wb.has_keyword_section(biz, pname):   # 다중옵션 2차 블록(판매정보만) → 키워드 선정 대상 아님
         return
     existing = wb.product_keywords(biz, pname)
-    if existing:   # 시트에 채워진 키워드 = 그대로 사용. 검색량 공란만 네이버로(fix ②)
-        _fill_frozen_search_volumes(wb, biz, pname, existing, naver, log)
+    if existing:   # 시트에 채워진 키워드 = 그대로 사용. 검색량은 매 실행 네이버로 새로(D-096)
+        _refresh_search_volumes(wb, biz, pname, existing, naver, log)
     # **키워드가 있으면 시트 값 그대로 동결** — 일부(2개)만 있으면 일부만, AI 톱업 없음(소유자 2026-09-20).
     # 새 키워드는 grow(발굴 추가) 옵션일 때만 상한 내에서 추가. 키워드가 아예 없으면(새 상품) AI 첫 선정.
     if existing and not grow:
