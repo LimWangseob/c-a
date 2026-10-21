@@ -66,7 +66,9 @@ def refresh_sales_sheet(owb, out_dir="output", log=None, today: date | None = No
         log(f"  {msg}")
         return msg
     managed, labels = managed_vids(owb), account_labels(owb)
-    daily, periods = sales_summary.scope(daily, managed), sales_summary.scope(periods, managed)
+    listings = sales_summary.managed_listings((daily, periods), managed)   # D-107: 관리 상품 전체(옵션·윙·재등록 VID)
+    daily, periods = (sales_summary.scope(daily, managed, listings),
+                      sales_summary.scope(periods, managed, listings))
     summary = sales_summary.build(daily, labels, yesterday)
     board = sales_dashboard.build(daily, periods, labels, yesterday)
     write_sales_sheet(owb.wb, summary, _login_reasons(out_dir, log), board)

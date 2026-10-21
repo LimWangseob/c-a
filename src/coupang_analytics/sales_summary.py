@@ -3,7 +3,8 @@
 상세표 = 계정→상품(윙/로켓그로스 구분) **일별** 판매수량·판매금액, **최근 31일·최신이 왼쪽**(2026-10-21 개편 —
 주간·월별 구역은 상단 대시보드 차트가 대신·sales_dashboard). 원천 = 판매분석 저장(sales_history) 일별 기록.
 값이 없는 날 = None(**미수집**) — 판매 0(0, 0)과 구분한다. 집계 기준 = **관리 상품**(결과 사업자 시트 블록의 VID,
-판매중지 블록 포함)만 — scope(). 일별 소급(2026-04-01~) 계획 = plan_backfill.
+판매중지 블록 포함 + 그 VID 와 상품명이 같은 다른 옵션·판매자배송·재등록 VID — D-107)만 — scope(). 위탁자 본인이
+등록한 다른 상품은 빠진다. 일별 소급(2026-04-01~) 계획 = plan_backfill.
 """
 from __future__ import annotations
 
@@ -111,8 +112,27 @@ def plan_backfill(existing: dict, yesterday: date, today: date | None = None,
     return out
 
 
-def scope(store: dict, managed: dict | None) -> dict:
-    """{계정: {키: 기록}} → 관리 상품(VID)만 남긴 사본. managed = {계정ID: VID 집합}(결과 사업자 시트 블록) ·
+def _listing(o: dict) -> str:
+    """판매 기록 옵션의 상품명(쿠팡 노출 상품 단위 — 옵션·배송방식이 달라도 같음)·공백 정리."""
+    return " ".join(str(o.get("상품") or "").split())
+
+
+def managed_listings(stores, managed: dict) -> dict:
+    """{계정ID: 관리 상품명 집합} — 관리 VID 로 팔린 기록의 상품명(일별·기간 저장 전부에서). D-107: 관리 상품의
+    **다른 옵션·판매자배송(윙)·재등록 VID** 판매도 같은 상품명이면 관리 상품으로 센다(소유자 2026-10-21 '(가) 상품 전체')."""
+    out: dict = {}
+    for store in stores:
+        for aid, recs in store.items():
+            vids = managed.get(aid) or ()
+            names = out.setdefault(aid, set())
+            for r in recs.values():
+                names.update(_listing(o) for v, o in (r.get("옵션") or {}).items() if v in vids and _listing(o))
+    return out
+
+
+def scope(store: dict, managed: dict | None, listings: dict | None = None) -> dict:
+    """{계정: {키: 기록}} → 관리 상품만 남긴 사본. managed = {계정ID: VID 집합}(결과 사업자 시트 블록) ·
+    listings = {계정ID: 관리 상품명 집합}(managed_listings — 있으면 같은 상품명의 다른 VID 도 포함·D-107) ·
     None = 거르지 않음. managed 에 없는 계정(결과 파일에 없는 계정)은 뺀다."""
     if managed is None:
         return store
@@ -120,8 +140,9 @@ def scope(store: dict, managed: dict | None) -> dict:
     for aid, recs in store.items():
         if aid not in managed:
             continue
-        vids = managed[aid]
-        out[aid] = {k: {**r, "옵션": {v: o for v, o in (r.get("옵션") or {}).items() if v in vids}}
+        vids, names = managed[aid], (listings or {}).get(aid) or set()
+        out[aid] = {k: {**r, "옵션": {v: o for v, o in (r.get("옵션") or {}).items()
+                                     if v in vids or _listing(o) in names}}
                     for k, r in recs.items()}
     return out
 
