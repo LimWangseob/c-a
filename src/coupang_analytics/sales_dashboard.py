@@ -36,6 +36,7 @@ class Kpi:
     change: float | None      # 비율(0.123 = +12.3%) · None = 비교 불가
     basis: str                # 비교 기준 설명
     missing: int = 0
+    missing_names: tuple = ()  # 미수집 계정 이름(사업자명·소유자 2026-10-21 '어느 계정인지 괄호로')
 
 
 @dataclass
@@ -58,6 +59,7 @@ class Dashboard:
     weeks: list
     days: list
     accounts: list            # 이번 달 누계 금액 순(미수집 = 맨 뒤)
+    missing_today_names: tuple = ()   # 전일 미수집 계정 이름
 
 
 # ── 기간 ──────────────────────────────────────────────────────
@@ -83,6 +85,16 @@ def _month_spans(yesterday: date, first: date) -> list[tuple[str, str, date, dat
         out.append((month_key(s), label, s, min(end, yesterday), end > yesterday))
         y, m = (y, m + 1) if m < 12 else (y + 1, 1)
     return out
+
+
+def short_name(label: str) -> str:
+    """'사업자 (계정ID)' → '사업자'(미수집 이름 표시용)."""
+    return label.rsplit(" (", 1)[0] if label.endswith(")") and " (" in label else label
+
+
+def missing_names(aids, labels, vals) -> tuple:
+    """값 None(미수집)인 계정의 사업자명 — 등장 순서·중복 없이."""
+    return tuple(dict.fromkeys(short_name(labels[a]) for a, v in zip(aids, vals) if v is None))
 
 
 def _span(s: date, e: date) -> str:
@@ -143,22 +155,24 @@ def build(daily: dict, period_recs: dict, labels: dict, yesterday: date, weeks: 
     day_v = per_acct(yesterday, yesterday)
     lw_v, pw_v = (per_acct(m, m + timedelta(days=6), wk_key[m]) for m in (lw, lw - timedelta(weeks=1)))
     mo_v, pm_v = per_acct(m_s, yesterday, month_key(m_s)), per_acct(pm_s, pm_e)
-    kpis = [_kpi("전일", yesterday, yesterday, day_v, None, ""),
-            _kpi("지난주(월~일)", lw, lw + timedelta(days=6), lw_v, pw_v,
-                 f"그 전주 {_span(lw - timedelta(weeks=1), lw - timedelta(days=1))} 대비"),
-            _kpi("이번 달 누계", m_s, yesterday, mo_v, pm_v, f"지난달 같은 기간 {_span(pm_s, pm_e)} 대비")]
+    def kpi(title, s, e, cur, prev, basis):
+        return _kpi(title, s, e, cur, prev, basis, missing_names(aids, labels, cur))
+    kpis = [kpi("전일", yesterday, yesterday, day_v, None, ""),
+            kpi("지난주(월~일)", lw, lw + timedelta(days=6), lw_v, pw_v,
+                f"그 전주 {_span(lw - timedelta(weeks=1), lw - timedelta(days=1))} 대비"),
+            kpi("이번 달 누계", m_s, yesterday, mo_v, pm_v, f"지난달 같은 기간 {_span(pm_s, pm_e)} 대비")]
     months = [_point(lb, per_acct(s, e, k), part) for k, lb, s, e, part in _month_spans(yesterday, first)]
     week_pts = [_point(f"{m:%m.%d}", per_acct(m, m + timedelta(days=6), wk_key[m])) for m in wk]
     day_pts = [_point(f"{d:%m.%d}", per_acct(d, d)) for d in
                (yesterday - timedelta(days=i) for i in range(days - 1, -1, -1))]
     return Dashboard(yesterday, kpis, sum(v is None for v in day_v), len(aids), months, week_pts, day_pts,
-                     _ranks(aids, labels, mo_v, lw_v, pw_v))
+                     _ranks(aids, labels, mo_v, lw_v, pw_v), missing_names(aids, labels, day_v))
 
 
-def _kpi(title, s, e, cur, prev, basis) -> Kpi:
+def _kpi(title, s, e, cur, prev, basis, names=()) -> Kpi:
     p = _point("", cur)
     return Kpi(title, _span(s, e) if s != e else f"{s:%m.%d}", p.qty, p.amount,
-               change(cur, prev) if prev is not None else None, basis, p.missing)
+               change(cur, prev) if prev is not None else None, basis, p.missing, names)
 
 
 def _ranks(aids, labels, cur, week, prev_week) -> list:

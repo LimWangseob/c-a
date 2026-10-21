@@ -883,3 +883,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 열 고정 유지 + 차트를 D열 뒤로(대시보드가 오른쪽으로 치우침) · 픽셀 고정 크기(엑셀 6pt/글자·구글 7px+5 가 달라 한쪽만 맞음) · 일별 미수집 날 0 막대(판매 0 과 구분 안 됨).
 - 영향 범위: `workbook_sales_dash.py`(재작성 — 3회째 큰 변경) · `workbook_sales.py`(_write_section 2줄·_two_rows·열 너비·freeze A3) · `sales_dashboard.py`(AccountRank 지난주·전주·ProductHeat/spark 삭제) · `tools/verify_sales_summary_offline.py`(T4·T5·T10·T11) · `designs/SALES_SUMMARY.md` §5·§5-1 · CLAUDE.md 운영 정책 한 줄. 결과 시트 다시 그리기 = 운용 PC 자료 가진 세션. 새 배포 zip 필요.
 - 상태: ACTIVE
+
+### D-099 [SALES_MISSING_NAMES] 통합판매현황 미수집 계정 = 사업자명을 괄호로 표시 (2026-10-21, R28)
+- 결정: 미수집 계정이 있으면 이름(사업자명·계정ID 뺌·중복 없이)을 함께 보인다 — ① '미수집 계정(전일)' = '2 / 26 계정 (유라이프, 반달컴퍼니)' · ① 비교 기준 = '미수집 2계정(유라이프, 반달컴퍼니) 제외' · ⑤ 순위 아래 = '미수집 N계정: 유라이프(사유)' · 일별 상세표 '미수집 계정 수' 줄 B칸 = '유라이프 5일, 반달컴퍼니 3일'(31일 중 빠진 일수 많은 순 — 날짜 칸은 좁아 개수만). 미수집이 없으면 괄호 없음.
+- 근거: 소유자 2026-10-21 — 오늘 반영본에 '미수집 계정(전일) 2 / 26 계정'만 보여 어느 계정인지 물음(실제 = 유라이프 gyi0101·반달컴퍼니 mrc098, 10.19 일별 기록 없음). 시험 T11 에 이름 표시 확인 추가(통과).
+- 버린 대안: 날짜 칸마다 이름(칸 너비 12 로 잘림) · 계정ID 표시(소유자 예시 = 사업자명).
+- 영향 범위: `sales_dashboard.py`(short_name·missing_names·Kpi.missing_names·Dashboard.missing_today_names) · `workbook_sales_dash.py`(paren·① 미수집 칸 B~J 병합) · `workbook_sales.py`(_missing_names) · `tools/verify_sales_summary_offline.py`(T11) · `designs/SALES_SUMMARY.md` §5-1.
+- 상태: ACTIVE

@@ -122,7 +122,7 @@ def _write_section(ws, r: int, sec, reasons: dict) -> int:
     r = _two_rows(ws, r + 1, ("전체 합계", ""), "", sec.cols, sec.total, bold=True, fill=_FILL_TOTAL)
     if any(sec.missing.values()):
         r += 1
-        for c, v in enumerate(("미수집 계정 수", "", "계정 수"), 1):
+        for c, v in enumerate(("미수집 계정 수", _missing_names(sec), "계정 수"), 1):
             _cell(ws, r, c, v or None, fill=_FILL_TOTAL, box=True)
         for i, col in enumerate(sec.cols):
             _cell(ws, r, 4 + i, sec.missing[col.key] or None, fill=_FILL_TOTAL, box=True, num=True)
@@ -135,6 +135,13 @@ def _write_section(ws, r: int, sec, reasons: dict) -> int:
                     for c in sec.cols}
             r = _two_rows(ws, r + 1, (blk.label, row.product), row.kind, sec.cols, vals, gray_first=True)
     return r
+
+
+def _missing_names(sec) -> str:
+    """상세표 기간 안 미수집 계정 이름·일수 — '유라이프 5일, 반달컴퍼니 3일'(많은 순·소유자 2026-10-21)."""
+    from .sales_dashboard import short_name
+    days = [(short_name(b.label), sum(v is None for v in b.total.values())) for b in sec.accounts]
+    return ", ".join(f"{nm} {n}일" for nm, n in sorted((x for x in days if x[1]), key=lambda x: -x[1]))
 
 
 def _two_rows(ws, r, heads, kind, cols, values: dict, *, bold=False, fill=None, gray_first=False) -> int:

@@ -17,6 +17,7 @@ from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import column_index_from_string, get_column_letter
 
+from .sales_dashboard import short_name
 from .workbook_sales import _FILL_HEAD, _FILL_SEC, _FILL_SUB, _FILL_TOTAL, _FN, SALES_SHEET, _cell
 
 SPEC_PREFIX = "차트설정:"
@@ -67,6 +68,11 @@ def _span(ws, r, c1, c2, v, **kw):
         ws.merge_cells(start_row=r, start_column=c1, end_row=r, end_column=c2)
 
 
+def paren(names) -> str:
+    """미수집 계정 이름 괄호 — '(유라이프, 반달컴퍼니)' · 없으면 ''."""
+    return f"({', '.join(names)})" if names else ""
+
+
 def pct_text(v: float | None) -> tuple[str, str | None]:
     """비율 → ('▲ 12.3%', 초록) · ('▼ 5.0%', 빨강) · 비교 불가 = ('—', 회색)."""
     if v is None:
@@ -92,13 +98,14 @@ def _kpis(ws, r, d) -> int:
         _cell(ws, r, 3, k.qty, num=True, **t)
         text, color = pct_text(k.change) if k.basis else ("", None)
         _span(ws, r, 4, 5, text or None, bold=True, center=True, color=color, **t)
-        note = " · ".join(x for x in (k.basis, f"미수집 {k.missing}계정 제외" if k.missing else "") if x)
+        miss = f"미수집 {k.missing}계정{paren(k.missing_names)} 제외" if k.missing else ""
+        note = " · ".join(x for x in (k.basis, miss) if x)
         _span(ws, r, 6, DASH_COLS, note or None, color="595959", **t)
     r += 1
     _cell(ws, r, 1, "미수집 계정(전일)", bold=True, fill=_FILL_SUB, box=True)
-    _cell(ws, r, 2, f"{d.missing_today} / {d.accounts_total} 계정", bold=True, fill=_FILL_SUB, box=True,
-          color=_RED if d.missing_today else None)
-    _span(ws, r, 3, DASH_COLS, None, fill=_FILL_SUB, box=True)
+    names = f" {paren(d.missing_today_names)}" if d.missing_today_names else ""
+    _span(ws, r, 2, DASH_COLS, f"{d.missing_today} / {d.accounts_total} 계정{names}", bold=True, fill=_FILL_SUB,
+          box=True, color=_RED if d.missing_today else None)
     return r
 
 
@@ -129,7 +136,7 @@ def _ranks(ws, r, d, rc, reasons) -> tuple[int, list]:
         text, color = pct_text(a.change)
         _span(ws, r, 8, DASH_COLS, text, center=True, color=color, **f)
     zero = [a.label for a in d.accounts if a.amount == 0]
-    miss = [f"{a.label}({reasons.get(a.aid) or '자료 없음'})" for a in d.accounts if a.amount is None]
+    miss = [f"{short_name(a.label)}({reasons.get(a.aid) or '자료 없음'})" for a in d.accounts if a.amount is None]
     for title, names, color in (("판매 없음", zero, "595959"), ("미수집", miss, _RED)):
         if names:
             r += 1
