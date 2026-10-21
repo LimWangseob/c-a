@@ -1,8 +1,9 @@
-"""통합 판매현황 집계(순수 로직·오프라인) — SSOT=designs/SALES_SUMMARY.md(소유자 2026-10-15).
+"""통합 판매현황 집계(순수 로직·오프라인) — SSOT=designs/SALES_SUMMARY.md(소유자 2026-10-15·2026-10-21).
 
-계정별·상품별 판매수량·판매금액(윙/로켓그로스 구분)을 **전일 · 주간(월~일) · 월별** 세 구역으로 만든다.
-원천 = 판매분석 저장(sales_history): 전일 = 일별 기록, 주·월 = 기간별 기록(쿠팡이 준 기간 합계 그대로).
-값이 없는 기간 = None(**미수집**) — 판매 0(0, 0)과 구분한다. 최신 칸이 왼쪽(결과 파일 날짜 칸과 같은 방향).
+상세표 = 계정→상품(윙/로켓그로스 구분) **일별** 판매수량·판매금액, **최근 31일·최신이 왼쪽**(2026-10-21 개편 —
+주간·월별 구역은 상단 대시보드 차트가 대신·sales_dashboard). 원천 = 판매분석 저장(sales_history) 일별 기록.
+값이 없는 날 = None(**미수집**) — 판매 0(0, 0)과 구분한다. 집계 기준 = **관리 상품**(결과 사업자 시트 블록의 VID,
+판매중지 블록 포함)만 — scope(). 일별 소급(2026-04-01~) 계획 = plan_backfill.
 """
 from __future__ import annotations
 
@@ -11,7 +12,10 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 FIRST_DAY = date(2026, 1, 1)   # 월별 시작(소유자 2026-10-15 '2026.1.1부터')
-WEEKS = 8                       # 주간 칸 수(이번 주 누계 포함)
+WEEKS = 8                       # 주간 기간 수(기간 조회·대시보드 주간 선)
+DETAIL_DAYS = 31                # 상세표 일별 칸 수(최근 31일·최신이 왼쪽 — 소유자 2026-10-21)
+BACKFILL_FROM = date(2026, 4, 1)   # 일별 소급 시작(소유자 2026-10-21 '4/1부터')
+BACKFILL_PER_DAY = 30              # 계정당 하루 최대 조회 일수(같은 세션 API — 차단 위험 줄이기)
 
 
 @dataclass(frozen=True)
@@ -93,6 +97,36 @@ def plan_periods(existing: dict, yesterday: date, weeks: int = WEEKS, first: dat
     return months + weeks_
 
 
+def plan_backfill(existing: dict, yesterday: date, today: date | None = None,
+                  first: date = BACKFILL_FROM, limit: int = BACKFILL_PER_DAY) -> list[str]:
+    """일별 기록이 없는 날 ['YYYY-MM-DD'] — **최근 날짜부터 거꾸로**(어제 → first), 이미 있는 날은 빼고 최대 limit 개.
+    오늘 이미 받은 기록(수집 시각이 오늘 — ① 하루치·앞선 실행의 소급 포함)만큼 limit 에서 빼서 '계정당 하루 최대'를 지킴."""
+    stamp = (today or yesterday + timedelta(days=1)).isoformat()
+    used = sum(1 for r in existing.values() if str((r or {}).get("수집", "")).startswith(stamp))
+    out: list[str] = []
+    d = yesterday
+    while d >= first and len(out) < limit - used:
+        if d.isoformat() not in existing:
+            out.append(d.isoformat())
+        d -= timedelta(days=1)
+    return out
+
+
+def scope(store: dict, managed: dict | None) -> dict:
+    """{계정: {키: 기록}} → 관리 상품(VID)만 남긴 사본. managed = {계정ID: VID 집합}(결과 사업자 시트 블록) ·
+    None = 거르지 않음. managed 에 없는 계정(결과 파일에 없는 계정)은 뺀다."""
+    if managed is None:
+        return store
+    out: dict = {}
+    for aid, recs in store.items():
+        if aid not in managed:
+            continue
+        vids = managed[aid]
+        out[aid] = {k: {**r, "옵션": {v: o for v, o in (r.get("옵션") or {}).items() if v in vids}}
+                    for k, r in recs.items()}
+    return out
+
+
 # ── 집계 ──────────────────────────────────────────────────────
 def _rows_of(rec: dict | None) -> dict | None:
     """기록 하나 → {(상품, 구분): (수량, 금액)} (옵션 합산). 기록 없음 = None(미수집)."""
@@ -129,23 +163,15 @@ def _section(title: str, cols: list, recs_of, labels: dict) -> Section:
     return sec
 
 
-def build(daily: dict, period_recs: dict, labels: dict, yesterday: date,
-          weeks: int = WEEKS, first: date = FIRST_DAY) -> Summary:
-    """daily = {계정: {'YYYY-MM-DD': 기록}} · period_recs = {계정: {키: 기록}} · labels = {계정ID: 표시명}(위탁계정 전체).
-    저장에만 있는 계정도 표시(표시명 = 계정ID)."""
+def build(daily: dict, labels: dict, yesterday: date, days: int = DETAIL_DAYS) -> Summary:
+    """상세표(일별·최근 days 일·최신이 왼쪽). daily = {계정: {'YYYY-MM-DD': 기록}}(scope 로 거른 것) ·
+    labels = {계정ID: 표시명}. 저장에만 있는 계정도 표시(표시명 = 계정ID — 거르지 않은 경우)."""
     labels = dict(labels)
-    for aid in list(daily) + list(period_recs):
+    for aid in daily:
         labels.setdefault(aid, aid)
-    ps = periods(yesterday, weeks, first)
-    day_cols = [Col(f"D:{yesterday.isoformat()}", f"{yesterday:%m.%d}")]
-    week_cols = [Col(k, lb) for k, lb, _s, _e in ps if k.startswith("W:")]
-    month_cols = [Col(k, lb) for k, lb, _s, _e in ps if k.startswith("M:")]
+    cols = [Col(f"D:{d.isoformat()}", f"{d:%m.%d}") for d in (yesterday - timedelta(days=i) for i in range(days))]
+
     def day_rec(aid, key):
         return (daily.get(aid) or {}).get(key[2:])
-
-    def per(aid, key):
-        return (period_recs.get(aid) or {}).get(key)
-
-    day = _section(f"1. 전일 {yesterday:%m.%d}", day_cols, day_rec, labels)
-    return Summary(yesterday, [day, _section("2. 주간 (월~일)", week_cols, per, labels),
-                               _section("3. 월별", month_cols, per, labels)])
+    return Summary(yesterday, [_section(f"상세 — 일별 판매 (최근 {days}일 · 최신이 왼쪽 · 관리 상품만)",
+                                        cols, day_rec, labels)])

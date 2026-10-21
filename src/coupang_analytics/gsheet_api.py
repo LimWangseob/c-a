@@ -243,6 +243,15 @@ class GSheetClient:
                 return s["properties"].get("gridProperties", {}).get("columnCount")
         return None
 
+    def chart_ids(self, title: str) -> list[int]:
+        """그 시트에 붙은 차트 id 목록(매번 새로 읽음 — 통합판매현황 차트 교체용). 시트 없으면 빈 목록."""
+        resp = self._exec(self._sheets().get(spreadsheetId=self.spreadsheet_id,
+                                             fields="sheets(properties(title),charts(chartId))"), "차트 조회")
+        for s in resp.get("sheets", []):
+            if s.get("properties", {}).get("title") == title:
+                return [c["chartId"] for c in s.get("charts", [])]
+        return []
+
     def ensure_sheet(self, title: str) -> int:
         """시트가 없으면 만들고 gid 반환. 있으면 기존 gid."""
         gid = self.sheet_id(title)

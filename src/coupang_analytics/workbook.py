@@ -50,7 +50,10 @@ class OutputWorkbook(_RenderMixin, _IndexMixin, _MetaMixin, _DateMixin, _Lifecyc
 
     @classmethod
     def load(cls, path: str | Path) -> "OutputWorkbook":
-        return cls(openpyxl.load_workbook(path))
+        from .workbook_sales_dash import restore_charts
+        xwb = openpyxl.load_workbook(path)
+        restore_charts(xwb)          # openpyxl 은 열 때 차트를 버림 → 통합판매현황 차트 다시 붙임(저장해도 유지)
+        return cls(xwb)
 
     def save(self, path: str | Path) -> None:
         if not self.wb.worksheets:

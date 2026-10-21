@@ -111,11 +111,13 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
         found = _discover_products(b, a, date_from, date_to, log, ai_key=ai_key, anchor_file=anchor_file)
         _dump_raw(a.account_id, log)         # 3 API 응답 원문 저장(가공 없음·분석용). found None(데이터없음)이어도 남김
         _record_sales_periods(b.page, a.account_id, "output", log)   # 통합 판매현황 월·주 합계(같은 세션·조회만)
+        if found is not None:
+            _record_sales_history(a.account_id, date_from, date_to, found[2], log)   # 판매금액 날짜별 누적
+        _record_sales_backfill(b.page, a.account_id, "output", log)   # 일별 소급(4/1~)·빠진 날 보충(같은 세션)
         if found is None:                    # 판매분석·상품조회 모두 데이터 없음 → 건너뜀
             return None, {}, {}, {}, set(), set(), {}, {}
         (products, tracked, metrics, inventory, sale_status, upbundle_vids, live_all_vids,
          vid_meta, pid_by_vid) = found
-        _record_sales_history(a.account_id, date_from, date_to, metrics, log)   # 판매금액 날짜별 누적
         session_state.observe_collection_done(a.account_id)         # 관측: 이 계정 수집 완료 시각
     report = Account(a.account_id, a.representative, a.business_name, tracked)
     report.ledger_products = set(a.ledger_products)   # ⑥: 줄 존재 전체(활성+판매중지/취소선) 전파 — 완전삭제 판정용
@@ -160,6 +162,31 @@ def _record_sales_periods(page, account_id: str, out_dir, log, yesterday: date |
         done += 1
     if plan:
         log(f"  [판매현황] {account_id} 월·주 판매 합계 {done}/{len(plan)}건 기록")
+
+
+def _record_sales_backfill(page, account_id: str, out_dir, log, yesterday: date | None = None) -> None:
+    """통합 판매현황 일별 소급(소유자 2026-10-21) — 2026-04-01~어제 중 **빠진 날**을 최근부터 거꾸로 하루씩 조회·저장.
+    계정당 하루 최대 sales_summary.BACKFILL_PER_DAY 일·조회 사이 쉼. 실패면 그 계정 소급 멈춤(다음 실행이 이어서·비치명)."""
+    from . import collector, sales_history, sales_summary
+    y = yesterday or (date.today() - timedelta(days=1))
+    try:
+        plan = sales_summary.plan_backfill(sales_history.load_daily(out_dir).get(account_id, {}), y)
+    except (OSError, ValueError) as exc:
+        log(f"  [판매현황] ⚠ {account_id} 일별 기록 읽기 실패(비치명) — {exc.__class__.__name__}: {str(exc)[:80]}")
+        return
+    done = 0
+    for d in plan:
+        if done:
+            time.sleep(random.uniform(*_PERIOD_GAP_SEC))
+        try:
+            sales_history.record(out_dir, account_id, d, d, collector.fetch_sales_details(page, d, d))
+        except Exception as exc:   # 부가 기능 — 어떤 실패도 ① 수집을 막지 않음(브라우저 오류 포함·로그로 명시)
+            log(f"  [판매현황] ⚠ {account_id} {d} 일별 소급 실패 — 이 계정 소급 중단(다음 실행이 이어서) · "
+                f"{exc.__class__.__name__}: {str(exc)[:80]}")
+            break
+        done += 1
+    if plan:
+        log(f"  [판매현황] {account_id} 일별 소급 {done}/{len(plan)}일({plan[0]}부터 거꾸로)")
 
 
 PW_MAX_TRIES = 2   # 관리대장 한 계정 여러 줄의 비번이 서로 다를 때 실행당 시도할 최대 값 수(D-012·잠금 5회 대비)
