@@ -1138,6 +1138,74 @@ def p31_keep_originals():
     ok("윙·판매수수료·비용 리포트 원본 바이트 그대로 복사 · 집계 사본(구매자명 제거)·비용 폴더 불변 · 미지정=폴더 없음")
 
 
+def p36_same_cycle_done():
+    print("[P36] 같은 회차에 이미 '완료'면 ① 단계 기록 시각이 바뀌어도(sales→done) 다시 안 받음 — 실측 10-21 08:00 "
+          "옛 예약작업이 35계정 재로그인(D-091) · 옛 예약작업 제거 명령")
+    import json as _json
+    import os
+    from datetime import datetime as RealDT, timedelta
+    from types import SimpleNamespace
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    from coupang_analytics import app_process as AP
+    from coupang_analytics import settlement_runlog as RLG
+    from coupang_analytics import settlement_watch as W
+    D = RealDT
+    assert "Unregister-ScheduledTask" in AP._LEGACY_WATCH_PS and "watch" in AP._LEGACY_WATCH_PS
+    logs: list = []
+    old_ps = AP._ps
+    try:
+        AP._ps = lambda script, env: "R\n"
+        assert AP.remove_legacy_settlement_task(logs.append) == 1 and "삭제" in logs[-1], logs
+        AP._ps = lambda script, env: ""
+        assert AP.remove_legacy_settlement_task(logs.append) == 0
+    finally:
+        AP._ps = old_ps
+
+    def run(now, marker_at, done_key):
+        clock = {"now": now}
+        passes: list = []
+        stage = Path("output") / "쿠팡데이타분석_실행단계.json"
+        stage.write_text(_json.dumps({"date": f"{marker_at:%Y-%m-%d}", "stage": "done", "at": marker_at.isoformat()}),
+                         encoding="utf-8")
+        W.write_done(TD.DONE_FILE, done_key, "done", "다 받음")
+
+        class FakeDT(RealDT):
+            @classmethod
+            def now(cls, tz=None):
+                return clock["now"]
+
+        def fake_sleep(sec):
+            clock["now"] += timedelta(seconds=max(sec, 1))
+        olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG)
+        args = SimpleNamespace(parent=0, until="", until_at=None, hidden=False, since="")
+        try:
+            TD.datetime, TD.time.sleep = FakeDT, fake_sleep
+            TD._one_pass = lambda a: (passes.append(clock["now"]), (False, 0))[1]
+            TD._pending_jobs, TD._wait_accounts = (lambda: 0), (lambda lg: 0)
+            TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
+            TD.LOG.heartbeat = lambda st, msg: None
+            TD.cmd_watch(args)
+        finally:
+            TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG = olds
+            stage.unlink(missing_ok=True)
+        return passes
+
+    old_cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            (Path(tmp) / "output").mkdir()
+            # 실측: 10-20 18:48 ① 완료 기준 '완료'(21:31) → ③ 끝(04:29)에 단계 기록이 done 으로 바뀜 → 08:00 옛 예약작업
+            assert run(D(2026, 10, 21, 8, 0, 2), D(2026, 10, 21, 4, 29), "2026-10-20T18:48:17") == [], \
+                "같은 회차 '완료'인데 단계 기록 시각이 바뀌었다고 다시 받음"
+            # 지난 회차의 '완료'는 이번 회차를 막지 않음(다음 날 18:00 이후 ① 완료 → 받음)
+            assert run(D(2026, 10, 21, 19, 0), D(2026, 10, 21, 18, 50), "2026-10-20T18:48:17"), "새 회차인데 안 받음"
+        finally:
+            os.chdir(old_cwd)
+    ok("같은 회차 완료 = 단계 기록 시각과 무관하게 종료 · 새 회차는 받음 · 옛 예약작업 제거")
+
+
 def p35_amounts_from():
     print("[P35] 지급 내역 = 2025-11 부터 기록(2026 첫 30% 줄의 70% 몫·2025 보류 대조) · 받을 파일 계획은 시작일부터만")
     from datetime import date
@@ -1315,6 +1383,7 @@ def main():
     p33_login_password_source()
     p34_forecast_accuracy()
     p35_amounts_from()
+    p36_same_cycle_done()
     print("정산 런타임 오프라인 검증 통과")
 
 

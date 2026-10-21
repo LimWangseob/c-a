@@ -150,7 +150,31 @@ def stop_other_apps(log) -> int:
     return _kill(APP_EXE, "app_qt.py", log, "이전 앱", "[시작]")
 
 
+# 옛 정산 예약작업(로그온+매일 08:00, 인자 'watch') 제거 — install.ps1 은 '자동실행 등록=Y' 때만 지워서, 폴더 덮어쓰기
+# 업데이트로는 남는다(실측 10-19·20·21 매일 08:00:02 앱 없이 정산 재실행 → 35계정 재로그인·압축 시 잠금 파일 사용 중).
+_LEGACY_WATCH_PS = ("Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { "
+                    "((($_.Actions | ForEach-Object { [string]$_.Arguments }) -join ' ') -match '(^|\\s)watch(\\s|$)') } | "
+                    "ForEach-Object { try { Unregister-ScheduledTask -TaskName $_.TaskName -TaskPath $_.TaskPath "
+                    "-Confirm:$false -ErrorAction Stop; 'R' } catch { 'F' } }")
+
+
+def remove_legacy_settlement_task(log) -> int:
+    """옛 정산 예약작업이 남아 있으면 지운다(D-091). 지운 수 반환 · 실패는 로그 후 0(18:00 실행은 계속)."""
+    try:
+        out = _ps(_LEGACY_WATCH_PS, {})
+    except (OSError, subprocess.SubprocessError) as exc:
+        log(f"[시작] ⚠ 옛 정산 예약작업 확인 실패({exc.__class__.__name__}) — 계속")
+        return 0
+    n, failed = out.count("R"), out.count("F")
+    if n:
+        log(f"[시작] 옛 정산 예약작업(매일 08:00) {n}개 삭제 — 정산은 18:00 앱과 함께만 돎(D-021)")
+    if failed:
+        log(f"[시작] ⚠ 옛 정산 예약작업 {failed}개 삭제 실패(권한) — 작업 스케줄러에서 인자 'watch' 작업을 지워 주세요")
+    return n
+
+
 def prepare_auto_start(log) -> None:
-    """18:00 무인 시작 정리 — 이전 앱·정산 프로그램 종료(옛 정산 예약작업 제거는 install.ps1 이 설치 때 함)."""
+    """18:00 무인 시작 정리 — 이전 앱·정산 프로그램 종료 + 옛 정산 예약작업 제거(업데이트로는 안 지워져 여기서도·D-091)."""
     stop_other_apps(log)
     stop_settlement(log)
+    remove_legacy_settlement_task(log)

@@ -43,11 +43,12 @@ config.apply_proxy_override = lambda log=None: None
 
 _LOGIN_FAIL_ID = "FAIL"
 _STATE = {"discover_calls": 0, "crash_at": None, "error_at": None,
-          "need_login": set(), "block_login": set()}
+          "need_login": set(), "block_login": set(), "pw_fail": set()}
 # crash_at = N번째 계정 발견에서 프로세스 강제종료 프록시(KeyboardInterrupt=BaseException, 계정격리 안 됨 → resume 대상)
 # error_at = N번째 계정 발견에서 처리 오류 프록시(RuntimeError=일반 예외 → 그 계정만 건너뜀, 전체 완주)
 # need_login = 세션 만료(1차 패스에서 NeedLogin→대기열, 2차 로그인 시 정상 수집)
 # block_login = Akamai 로그인 차단(2차 패스에서 LoginBlocked → 서킷브레이커 카운트)
+# pw_fail = 비밀번호 오류(2차 패스에서 LoginCredentialError → 재시도 금지·'처리됨' 표시)
 
 
 # ── 가짜 의존성 ────────────────────────────────────────────────
@@ -75,6 +76,10 @@ def _fake_login_and_discover(a, date_from, date_to, get_password, log, login=Tru
         raise P.LoginBlocked()                     # 2차: 로그인 차단
     if a.account_id in _STATE["need_login"] and not login:
         raise P.NeedLogin()                        # 1차: 세션 만료 → 대기열(2차 로그인 시 정상)
+    if a.account_id in _STATE["pw_fail"]:
+        if not login:
+            raise P.NeedLogin()                    # 1차: 세션 없음 → 대기열
+        raise P.LoginCredentialError(a.account_id) # 2차: 비밀번호 오류(재시도 금지)
     if a.account_id == _LOGIN_FAIL_ID:
         log(f"  [{a.business_name}] 로그인 미완료 — 건너뜀(가짜)")
         return None, {}, {}, {}, set(), set(), {}, {}
@@ -807,6 +812,27 @@ def scenario_promo_start_keeps_daily():
         _check(bool(row and col) and wb.wb[biz].cell(row, col).value == 7, f"{biz} 다음 날(09.03)도 판매 수집(3일 주기로 안 빠짐)")
 
 
+def scenario_pwfail_still_ranked():
+    print("[시나리오 26] 비밀번호 오류 계정도 그날 날짜 칸 생성 → ③ 순위 측정·판매 공란(D-089, 실측 10-20 유라이프·반달컴퍼니 칸 없음)")
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set(), pw_fail=set())
+    from coupang_analytics.workbook import OutputWorkbook
+    d = Path(tempfile.mkdtemp())
+    master = P._master_path(d)
+    accts = _accounts(["a1", "b1"])
+    _ops(accts, d, date_from="2026-09-01", date_to="2026-09-01", resume=False)
+    _STATE.update(pw_fail={"b1"})                         # 다음 날 b1 비밀번호 오류 → '처리됨'(재시도 금지)이지만 미수집
+    try:
+        _ops(accts, d, date_from="2026-09-02", date_to="2026-09-02", carry_forward=True)
+    finally:
+        _STATE.update(pw_fail=set())
+    wb = OutputWorkbook.load(master)
+    _check("09.02" in wb._date_col.get("비즈-b1", {}), f"비번 오류 계정에도 그날 칸 {sorted(wb._date_col.get('비즈-b1', {}))}")
+    _check(wb.is_rank_filled("비즈-b1", "상품-b1", "kw1", "09.02"), "비번 오류 계정 순위는 그날 칸에 측정됨(로그인 불필요)")
+    srow = wb._metric_row.get(("비즈-b1", "상품-b1", config.M_SALES))
+    col = wb._date_col.get("비즈-b1", {}).get("09.02")
+    _check(bool(srow and col) and wb.wb["비즈-b1"].cell(srow, col).value in (None, ""), "비번 오류 계정 그날 판매는 공란(0 아님)")
+
+
 def scenario_business_rename_keeps_history():
     print("[시나리오 24] 대장 사업자명 변경(계정ID 동일) = 같은 시트로 이력·키워드 유지(D-080, 실측 10-16 최문석→셀와니)")
     _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
@@ -864,6 +890,7 @@ def main():
     scenario_manual_keywords_saved()
     scenario_business_rename_keeps_history()
     scenario_uncollected_still_ranked()
+    scenario_pwfail_still_ranked()
     scenario_promo_start_keeps_daily()
     print("=" * 60)
     print("  [완료] 모든 시나리오 통과")

@@ -381,6 +381,55 @@ def test_semi_block_rotate_signal() -> None:
         PR.rotation_can_rotate, PR._interruptible_sleep = orig_can, orig_sleep
 
 
+def test_semi_dead_ip() -> None:
+    """③ IP 불량(D-090 · 실측 10-20 밤 IP 69개 중 31개가 처음부터 쿠팡 검색창 없음 → 그 IP 검색 92/92 '결과 미로딩'·
+    마지막 바퀴가 전부 그런 IP 라 '진전 없음'으로 오판해 빈 칸 12개 남기고 마침): 검색창 없음 = 키워드를 미루지 않고 증거
+    남긴 뒤 새 IP·이번 바퀴 '장애 있음'(일찍 안 마침)·회전 불가면 기존 미로딩 처리·성공 없이 _DEAD_STREAK_STOP 번이면 마침."""
+    from coupang_analytics import pipeline_ranks as PR
+    orig = (PR.rotation_can_rotate, PR._save_block_evidence, PR._semi_search_one, PR._semi_prep_product,
+            PR._unfilled, PR._connection_down)
+    ev: list = []
+
+    class _B:
+        page = None
+
+        def to_front(self):
+            return None
+    def _evidence(pg, kw, marker) -> dict:
+        ev.append((kw, marker))
+        return {"file": "x"}
+    try:
+        PR._save_block_evidence = _evidence
+        PR.rotation_can_rotate = lambda: True
+        PR._connection_down = lambda b: False
+        st = PR._SemiState()
+        assert PR._semi_on_dead(st, _B(), "kw", lambda m: None) is True
+        assert (st.halted, st.halt_reason, st.dead_total, st.rotations, st.pass_trouble, st.gave_up) == \
+            (True, "dead", 1, 1, True, False), st
+        assert ev == [("kw", "검색창 없음")], f"IP 불량 증거 화면 저장: {ev}"
+        # 키워드 루프: 검색창 없음 → 이 IP 는 그만·그 키워드는 뒤로 미룸(바퀴 끝 빈 칸 재검색·소유자 2026-10-21)
+        PR._semi_prep_product = lambda st, wb, biz, pname, date, log: (None, ["k1", "k2"])
+        PR._semi_search_one = lambda st, browser, kw, should_stop, log: (None, PR._DEAD, False)
+        st = PR._SemiState()
+        PR._semi_track_product(st, _B(), None, "비즈", "상품", "10.20", None, lambda: False, lambda m: None)
+        assert st.halted and st.deferred == {("비즈", "상품", "k1")} and st.dead_total == 1, \
+            (st.halted, st.deferred, st.dead_total)
+        # 바퀴 끝: 진전 0 이어도 IP 불량이 있었으면 ③ 을 마치지 않고 다음 바퀴(빈 칸 0 까지·D-053)
+        PR._unfilled = lambda wb, date_label: [("비즈", "상품", "k1")]
+        assert PR._semi_next_pass(st, None, "10.20", None, lambda m: None) is True, "IP 불량 바퀴를 진전 없음으로 오판"
+        # 회전 불가(프록시 OFF) → False(호출부가 기존 미로딩 처리 = 키워드 미룸)
+        PR.rotation_can_rotate = lambda: False
+        st = PR._SemiState()
+        assert PR._semi_on_dead(st, _B(), "kw", lambda m: None) is False and not st.halted
+        # 성공 없이 연속 _DEAD_STREAK_STOP 번 → 화면 구조 변경 의심으로 마침(무한 회전 방지)
+        PR.rotation_can_rotate = lambda: True
+        st = PR._SemiState(dead_streak=PR._DEAD_STREAK_STOP - 1)
+        assert PR._semi_on_dead(st, _B(), "", lambda m: None) is True and st.gave_up and st.halted
+    finally:
+        (PR.rotation_can_rotate, PR._save_block_evidence, PR._semi_search_one, PR._semi_prep_product,
+         PR._unfilled, PR._connection_down) = orig
+
+
 def test_drive_rank_conn_not_block() -> None:
     """drive_rank(2026-10-13): IP 확인 실패 = 연결 장애 → 검색 안 하고 다음 IP·차단 목록 기록 없음. 3번 연속이면
     쉬고(sleep) 다음 IP 는 확인 실패여도 실행. 검색 중 연결 장애(halt_reason 'conn')도 차단 기록 없음."""
@@ -425,6 +474,11 @@ def test_drive_rank_conn_not_block() -> None:
 
         PR.drive_rank(offscreen=False, run_once=_conn_then_ok, log=lambda m: None, halt_reason=lambda: cur["r"])
         assert recorded == [], f"검색 중 연결 장애도 차단 기록 없음: {recorded}"
+
+        ips = iter(["9.9.9.3", "9.9.9.4"])
+        reasons = iter(["dead", ""])
+        PR.drive_rank(offscreen=False, run_once=_conn_then_ok, log=lambda m: None, halt_reason=lambda: cur["r"])
+        assert recorded == [], f"IP 불량(검색창 없음)은 차단 목록에 안 남김(D-090): {recorded}"
     finally:
         (config.PROXY_ENABLED, config.RANK_PROXY_ROTATE_ON_BLOCK, config.RANK_PROXY_PRECHECK_EGRESS) = saved
         (PR.WingBrowser, proxy_pool.rank_proxy_pool_urls, bl.resolve_egress_ip, bl.is_blocked, bl.record,
@@ -556,6 +610,7 @@ def main() -> None:
         test_drive_rank_rotation,
         test_rank_block_images,
         test_semi_block_rotate_signal,
+        test_semi_dead_ip,
         test_drive_rank_conn_not_block,
         test_drive_rank_profile_per_ip,
         test_rank_identity_follows_ip,

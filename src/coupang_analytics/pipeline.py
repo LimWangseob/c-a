@@ -766,7 +766,10 @@ def run_full(input_list: InputList, out_dir: str = "output",
 
     uncollected = [a for _, a in _not_done(accounts, done)]
     _log_login_failures(ctx, accounts, uncollected)
-    _ensure_today_columns(wb, uncollected, col_label, log)   # D-084 미수집 계정도 그날 칸(③ 순위 측정용)
+    # D-084 미수집 계정도 그날 칸(③ 순위 측정용) — 비밀번호 오류 계정은 재시도 금지로 '처리됨'(done)이라 uncollected 에
+    # 안 들어가므로 따로 더한다(D-089 · 실측 10-20 유라이프·반달컴퍼니 칸 없음 → 순위 0건)
+    pw_failed = [a for a in accounts if a.account_id in _pw_failed(ctx) and a not in uncollected]
+    _ensure_today_columns(wb, uncollected + pw_failed, col_label, log)
     if input_list.promo is not None:                           # D-086 관리대장 '체험단' 시트 → 체험단 시작일(효과 계산용)
         apply_promo_starts(wb, input_list.promo, log)
 

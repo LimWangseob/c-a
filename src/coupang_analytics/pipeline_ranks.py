@@ -182,6 +182,8 @@ def drive_rank(offscreen: bool, run_once, log, should_stop=None, halt_reason=Non
                 prog["pairs"].add((px, egress))
                 proxy_blocklist.record(egress, "Akamai 검색차단")
                 log(f"  [프록시] ⛔ 차단 감지 — egress {egress} 차단목록 등록")
+            elif egress and halt_reason() == _DEAD:   # IP 불량 — 이번 실행만 건너뜀(쿠팡 차단 확정 아님 → 목록엔 안 남김·D-090)
+                prog["pairs"].add((px, egress))
             prog["rotations"] += 1
             log(f"  [프록시] 🔄 새 IP로 전환({prog['rotations']}번째) — 다음 키워드부터(막힌 키워드는 다음 바퀴)")
     finally:
@@ -335,6 +337,28 @@ def _save_block_evidence(pg, kw: str, marker: str) -> dict:
     except Exception as exc:
         info["error"] = f"{exc.__class__.__name__}: {str(exc)[:80]}"
     return info
+
+
+# IP 불량(D-090) — 쿠팡 화면에 검색창이 없음 = 이 IP 로는 쿠팡이 안 열림(키워드 탓 아님).
+_DEAD = "dead"
+_SEARCH_BOX_JS = "() => !!document.querySelector(\"input[name='q'], input.headerSearchKeyword, #headerSearchKeyword\")"
+_SEARCH_BOX_WAIT_SEC = 15      # 느리게 뜨는 화면 여유(실측 10-20: 검색창 있는 IP 의 미로딩은 4건뿐)
+_DEAD_STREAK_STOP = 15         # 성공 없이 IP 불량이 이만큼 이어지면 쿠팡 화면 구조 변경 의심 → ③ 마침(실측 최대 연속 5)
+
+
+def _search_box_present(browser) -> bool:
+    """창(모든 탭)에 쿠팡 검색창이 있나 — _SEARCH_BOX_WAIT_SEC 까지 기다림. 크롬 연결 오류 화면이면 바로 False."""
+    deadline = time.time() + _SEARCH_BOX_WAIT_SEC
+    while True:
+        for pg in _all_pages(browser):
+            try:
+                if pg.evaluate(_SEARCH_BOX_JS):
+                    return True
+            except Exception:
+                continue
+        if time.time() >= deadline or _connection_down(browser):
+            return False
+        time.sleep(1.0)
 
 
 def _connection_down(browser) -> bool:
@@ -537,7 +561,10 @@ class _SemiState:
     pass_no: int = 1
     pass_mark: int = 0          # 이번 바퀴 시작 때의 searched(진전 판정)
     pass_trouble: bool = False  # 이번 바퀴에 차단/연결 장애가 있었나(없는데 진전도 없으면 측정 불가로 마침)
-    halt_reason: str = ""       # 'block' | 'conn' | 'miss' — drive_rank 가 차단 IP 기록 여부 판단(conn 은 기록 안 함)
+    halt_reason: str = ""       # 'block' | 'conn' | 'miss' | 'dead' — drive_rank 가 차단 IP 기록 여부 판단(block 만 기록)
+    dead_total: int = 0         # IP 불량(쿠팡 화면에 검색창 없음) 횟수 — 차단·연결 장애와 구분(D-090)
+    dead_streak: int = 0        # 성공 없이 이어진 IP 불량 수(_DEAD_STREAK_STOP 이면 ③ 마침)
+    gave_up: bool = False       # IP 불량이 너무 이어져 ③ 을 마침(새 IP 로 더 돌지 않음)
     unfilled: list = field(default_factory=list)   # 끝날 때 남은 빈 칸 (사업자, 상품, 키워드)
 
 
@@ -560,13 +587,15 @@ def _track_ranks_semi(wb, path, log, should_stop, date_label: str | None = None,
     def _run_semi(browser, egress) -> bool:
         st.halted, st.halt_reason, st.miss_streak = False, "", 0   # 새 egress → 이어서(누적 카운터·미룬 키워드 유지)
         _semi_browser_prep(browser)
+        if not _connection_down(browser) and not _search_box_present(browser) and _semi_on_dead(st, browser, "", log):
+            return not st.gave_up and not should_stop()   # 검색 전에 IP 불량 판정 → 키워드 소모 없이 새 IP(D-090)
         while not should_stop():
             _semi_one_pass(st, browser, wb, path, date_label, should_stop, log)
             if should_stop() or st.halted:
                 break
             if not _semi_next_pass(st, wb, date_label, on_pass, log):
                 break
-        return st.halted and not should_stop()   # 차단 중단 → drive_rank 가 새 egress 로 이어서
+        return st.halted and not should_stop() and not st.gave_up   # 차단 중단 → drive_rank 가 새 egress 로 이어서
 
     drive_rank(offscreen=False, run_once=_run_semi, log=log, should_stop=should_stop,
                halt_reason=lambda: st.halt_reason)
@@ -606,7 +635,7 @@ def _semi_next_pass(st: _SemiState, wb, date_label, on_pass, log) -> bool:
         return False
     if not progressed and not st.pass_trouble:
         for biz, pname, kw in left:        # 차단도 연결 장애도 아닌데 화면이 계속 안 나옴 = 측정 불가 → 무한 반복 대신 마침
-            log(f"  ❌ [순위] {biz} · {pname} 「{kw}」 — 검색결과가 두 바퀴 연속 안 나옴(차단·연결 장애 아님) → 공란, 확인 필요")
+            log(f"  ❌ [순위] {biz} · {pname} 「{kw}」 — 검색결과가 두 바퀴 연속 안 나옴(차단·연결 장애·IP 불량 아님) → 공란, 확인 필요")
         return False
     st.pass_no += 1
     st.pass_mark, st.pass_trouble = st.searched, False
@@ -648,7 +677,7 @@ def _unfilled(wb, date_label) -> list:
 def _semi_summary_log(st: _SemiState, log) -> None:
     """순위 단계 종료 요약 — 측정·차단·연결 장애·IP 전환·빈 칸·VID 없음 누적 + 검색간격. 차단이 있으면 간격 상향 검토를 안내."""
     log(f"== [순위요약] 측정 {st.searched}건 · 빈 칸 {len(st.unfilled)} · 차단감지 {st.blocked_total}회 · "
-        f"연결 장애 {st.conn_fail}회 · IP 전환 {st.rotations}회 · {st.pass_no}바퀴 · VID 없음 {st.novid_products} · "
+        f"연결 장애 {st.conn_fail}회 · IP 불량(화면 안 열림) {st.dead_total}회 · IP 전환 {st.rotations}회 · {st.pass_no}바퀴 · VID 없음 {st.novid_products} · "
         f"검색간격 {config.RANK_NAV_DELAY_MIN_SEC}~{config.RANK_NAV_DELAY_MAX_SEC}s ==")
     if st.blocked_total:
         log("== [순위요약] ⚠ 차단 발생 — 검색간격(설정 탭 '순위 간격' · config RANK_NAV_DELAY) 상향 검토 · "
@@ -725,10 +754,12 @@ def _semi_track_product(st: _SemiState, browser, wb, biz, pname, date, path, sho
         if aborted:          # 검색 직전 pause 중 중지/halt → 키워드 루프 종료
             break
         if pg is None:
-            st.deferred.add((biz, pname, kw))
-            _semi_on_miss(st, kw, blocked, _connection_down(browser), log)
+            st.deferred.add((biz, pname, kw))   # 못 잰 키워드는 이번 바퀴 끝 뒤 빈 칸 재검색에서 다시(차단·IP 불량 공통)
+            if blocked == _DEAD and _semi_on_dead(st, browser, kw, log):
+                break        # 이 IP 버림 — 새 IP 는 다음 키워드부터(D-090)
+            _semi_on_miss(st, kw, False if blocked == _DEAD else blocked, _connection_down(browser), log)
             continue
-        st.miss_streak = 0   # 성공 → 연속 실패 리셋
+        st.miss_streak = st.dead_streak = 0   # 성공 → 연속 실패 리셋
         st.searched += 1     # 종료 요약용 누적(리셋 안 함)
         seen_name = _semi_record(wb, pg, matcher, biz, pname, kw, date, path, idx, len(todo), log) or seen_name
     if seen_name:
@@ -742,6 +773,8 @@ def _semi_search_one(st: _SemiState, browser, kw, should_stop, log):
     반환: (pg, blocked, aborted). blocked = 차단 증거 dict(판정 단어·증거 파일) 또는 False.
     aborted=True 면 pause 중 중지/halt(호출부가 키워드 루프 종료)."""
     filled = _prefill_search(browser, kw)   # 사람처럼 한 글자씩 타이핑(붙여넣기 아님)
+    if not filled and not _connection_down(browser) and not _search_box_present(browser):
+        return None, _DEAD, False           # 검색창 없음 = IP 불량(검색해도 결과 안 나옴 — 10-20 밤 92/92·D-090)
     # 타이핑이 이미 사람 리듬(글자별 미세 랜덤)을 재현 → 다 치고 **짧게 멈춘 뒤** 검색(사람 패턴).
     pause = random.uniform(0.5, 1.4)
     log(f"     ⌨ 「{kw}」 한 글자씩 자동 타이핑{'' if filled else '(검색창 못찾음→URL 폴백)'}"
@@ -753,6 +786,33 @@ def _semi_search_one(st: _SemiState, browser, kw, should_stop, log):
     st.measured_any = True               # 실제 검색 발생 → 다음 키워드는 '검색 사이' 간격 적용
     pg, blocked = _wait_results_loaded(browser, kw, should_stop, config.RANK_SEMI_AUTO_WAIT_SEC)
     return pg, blocked, False
+
+
+def _semi_on_dead(st: _SemiState, browser, kw: str, log) -> bool:
+    """IP 불량(D-090) — 쿠팡 화면에 검색창이 없음(이 IP 로는 쿠팡이 안 열림). 실측 10-20 밤: IP 69개 중 31개가 처음부터
+    이 상태였고 그 IP 의 검색 92건이 전부 '결과 미로딩' — 키워드 탓이 아니다. 증거 화면을 남기고 이번 바퀴를 '장애 있음'
+    으로 표시(진전 없는 바퀴로 오판해 ③ 을 일찍 마치지 않게)한 뒤, 회전 가능하면 새 IP(True). 못 잰 키워드는 호출부가 뒤로
+    미뤄 바퀴 끝 빈 칸 재검색에서 다시 잰다(소유자 2026-10-21 '즉시 다른 IP·키워드로 전환, 한 사이클 뒤 누락분 재검색').
+    회전 불가면 False(호출부가 기존 미로딩 처리). 성공 없이 _DEAD_STREAK_STOP 번 이어지면 화면 구조 변경 의심 → ③ 마침."""
+    st.dead_total += 1
+    st.dead_streak += 1
+    st.pass_trouble = True
+    ev = _save_block_evidence(browser.page, kw or "홈", "검색창 없음")
+    log(f"  [반자동] {f'「{kw}」 ' if kw else ''}쿠팡 화면에 검색창 없음 = IP 불량(화면이 안 열림·키워드 탓 아님) · "
+        f"증거 {ev.get('file') or ev.get('error', '없음')}")
+    if st.dead_streak >= _DEAD_STREAK_STOP:
+        st.gave_up = st.halted = True
+        st.halt_reason = _DEAD
+        log(f"  ❌ [순위] 성공 없이 IP 불량 {st.dead_streak}번 연속 — 쿠팡 화면 구조 변경 또는 프록시 전체 불량 의심 → "
+            f"순위 마침(증거 화면 {_EVIDENCE_DIR} 확인 필요)")
+        return True
+    if not rotation_can_rotate():
+        return False
+    st.rotations += 1
+    st.miss_streak = 0
+    st.halted, st.halt_reason = True, _DEAD
+    log("  ⟳ 프록시 새 IP 로 전환 — 다음 키워드부터(못 잰 키워드는 바퀴 끝 빈 칸 재검색에서 다시)")
+    return True
 
 
 def _semi_on_miss(st: _SemiState, kw, blocked, conn: bool, log) -> None:

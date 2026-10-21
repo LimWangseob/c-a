@@ -67,8 +67,17 @@ def sales_key(marker: dict | None, now: datetime) -> str:
     return f"수동:{now.date().isoformat()}"
 
 
-def already_done(done: dict | None, key: str) -> bool:
-    return bool(done) and done.get("key") == key and done.get("result") == RESULT["done"]
+def already_done(done: dict | None, key: str, cycle_start: datetime | None = None) -> bool:
+    """이미 '완료'인가 — 같은 키, 또는 **완료 키(①완료 시각)가 이번 회차 시작(cycle_start·--since 반영) 이후**면 완료.
+    ① 단계 기록은 ③ 끝에 'done' 으로 시각이 바뀌어 키만 비교하면 같은 회차를 다시 받았다(D-091·실측 10-21 08:00)."""
+    if not done or done.get("result") != RESULT["done"]:
+        return False
+    if done.get("key") == key:
+        return True
+    try:
+        return cycle_start is not None and datetime.fromisoformat(str(done.get("key"))) >= cycle_start
+    except ValueError:
+        return False                    # '수동:날짜' 키 등 = 시각 아님 → 키 일치로만 판정
 
 
 def read_done(path) -> dict | None:

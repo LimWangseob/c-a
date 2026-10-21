@@ -697,7 +697,7 @@ def cmd_watch(args) -> int:
                 last_state = ""
                 key = W.sales_key(marker, datetime.now())
                 done = W.read_done(DONE_FILE)
-                if W.already_done(done, key):
+                if W.already_done(done, key, cycle_start):   # 같은 회차 '완료'면 ① 기록 시각이 바뀌어도 끝(D-091)
                     log(f"[자동] 이번 ①판매수집({key}) 기준 정산은 이미 끝남 — {done.get('reason', '')} — 종료")
                     LOG.heartbeat(W.done_status(int(done.get("failed") or 0)), f"이미 끝남 — {done.get('reason', '')}")
                     return 0

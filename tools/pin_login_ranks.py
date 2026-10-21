@@ -425,6 +425,7 @@ def _install_rank_fakes(wait_results, serp=None):
     serp = serp if serp is not None else ({"제품": (3, None)}, 3)
     # ③순위는 pipeline_ranks 로 분리 — rank 내부 호출은 PR 네임스페이스로 resolve 되므로 PR 을 패치한다.
     PR._prefill_search = lambda browser, kw: True
+    PR._search_box_present = lambda browser: True   # 정상 쿠팡 화면(검색창 있음) — IP 불량 판정은 test_proxy_patch(D-090)
     PR._submit_search = lambda browser, kw: None
     PR._wait_results_loaded = fake_wait
     PR.human_mouse = SimpleNamespace(browse_serp=lambda pg: None)
