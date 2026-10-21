@@ -1,6 +1,7 @@
 """통합 판매현황 상단 대시보드 집계(순수 로직·오프라인) — SSOT=designs/SALES_SUMMARY.md §5-1(소유자 2026-10-21).
 
-① 요약(전일·지난주·이번 달 누계·미수집 계정) ② 월별 ③ 주간(최근 8주) ④ 일별(최근 31일) ⑤ 계정 순위 ⑥ 상품 상위 20 × 8주.
+① 요약(전일·지난주·이번 달 누계·미수집 계정) ② 월별 ③ 주간(최근 8주) ④ 일별(최근 31일) ⑤ 계정 순위
+(이번 달 누계·지난주·전주 대비 — 2026-10-21 2차: ⑥ 상품 열지도·글자 그래프 삭제·D-098).
 입력 = sales_summary.scope 로 **관리 상품만** 거른 저장(상세표와 같은 기준 → 합계 일치).
 계정 하나의 기간 값 = 그 기간 일별 기록이 **모두 있으면 일별 합**, 아니면 쿠팡 기간 합계(조회기간이 정확히 같은 것),
 둘 다 없으면 **미수집**(합계에서 빼고 개수로 표시). 증감 % = 두 기간 **모두 받은 계정끼리** 비교(빠진 계정이 증감을 왜곡 안 함).
@@ -9,15 +10,12 @@
 from __future__ import annotations
 
 import calendar
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, timedelta
 
 from .sales_summary import FIRST_DAY, WEEKS, _rows_of, month_key, week_monday
 
 DAYS = 31        # ④ 일별 막대 칸 수
-TOP = 20         # ⑥ 상품 상위
-SPARK = "▁▂▃▄▅▆▇█"
-SPARK_MISSING = "·"
 
 
 @dataclass
@@ -25,7 +23,7 @@ class Point:
     label: str
     qty: int
     amount: int
-    missing: int = 0          # 그 기간 미수집 계정 수
+    missing: int = 0          # 그 기간 미수집 계정 수(= 전체 계정 수면 자료 없음 → 빈 칸)
     partial: bool = False     # 진행 중 기간(이번 달 누계)
 
 
@@ -45,19 +43,9 @@ class AccountRank:
     aid: str
     label: str
     amount: int | None        # 이번 달 누계(None = 미수집)
-    prev: int | None          # 지난달 같은 기간
-    change: float | None
-    share: float | None
-    spark: str
-
-
-@dataclass
-class ProductHeat:
-    account: str
-    product: str
-    kind: str
-    weeks: list               # 8주 금액(오래된 것 → 최신) · None = 그 주 미수집
-    total: int
+    week: int | None          # 지난주(끝난 월~일)
+    prev_week: int | None     # 그 전주
+    change: float | None      # 지난주 vs 그 전주
 
 
 @dataclass
@@ -69,9 +57,7 @@ class Dashboard:
     months: list
     weeks: list
     days: list
-    accounts: list
-    products: list
-    week_labels: list = field(default_factory=list)
+    accounts: list            # 이번 달 누계 금액 순(미수집 = 맨 뒤)
 
 
 # ── 기간 ──────────────────────────────────────────────────────
@@ -138,23 +124,9 @@ def change(cur: list, prev: list) -> float | None:
     return (sum(c for c, _p in pairs) - base) / base if pairs and base else None
 
 
-def spark(values: list) -> str:
-    """금액 목록 → ▁▂▃▅▇ 미니 그래프(계정 최대 기준) · 미수집 = '·'."""
-    top = max((v for v in values if v), default=0)
-    out = []
-    for v in values:
-        if v is None:
-            out.append(SPARK_MISSING)
-        elif not v or not top:
-            out.append(SPARK[0])
-        else:
-            out.append(SPARK[max(1, min(7, round(v / top * 7)))])
-    return "".join(out)
-
-
 # ── 대시보드 ──────────────────────────────────────────────────
 def build(daily: dict, period_recs: dict, labels: dict, yesterday: date, weeks: int = WEEKS,
-          first: date = FIRST_DAY, days: int = DAYS, top: int = TOP) -> Dashboard:
+          first: date = FIRST_DAY, days: int = DAYS) -> Dashboard:
     """daily·period_recs = scope 로 거른 저장 · labels = {계정ID: 표시명}(결과 파일 계정)."""
     aids = sorted(labels, key=lambda a: labels[a])
 
@@ -179,10 +151,8 @@ def build(daily: dict, period_recs: dict, labels: dict, yesterday: date, weeks: 
     week_pts = [_point(f"{m:%m.%d}", per_acct(m, m + timedelta(days=6), wk_key[m])) for m in wk]
     day_pts = [_point(f"{d:%m.%d}", per_acct(d, d)) for d in
                (yesterday - timedelta(days=i) for i in range(days - 1, -1, -1))]
-    week_rows = {aid: [acct(aid, m, m + timedelta(days=6), wk_key[m]) for m in wk] for aid in aids}
     return Dashboard(yesterday, kpis, sum(v is None for v in day_v), len(aids), months, week_pts, day_pts,
-                     _ranks(aids, labels, mo_v, pm_v, week_rows), _products(aids, labels, week_rows, top),
-                     [f"{m:%m.%d}주" for m in wk])
+                     _ranks(aids, labels, mo_v, lw_v, pw_v))
 
 
 def _kpi(title, s, e, cur, prev, basis) -> Kpi:
@@ -191,27 +161,10 @@ def _kpi(title, s, e, cur, prev, basis) -> Kpi:
                change(cur, prev) if prev is not None else None, basis, p.missing)
 
 
-def _ranks(aids, labels, cur, prev, week_rows) -> list:
-    total = sum(v[1] for v in cur if v is not None)
-    out = []
-    for aid, c, p in zip(aids, cur, prev):
-        amt = c[1] if c is not None else None
-        out.append(AccountRank(aid, labels[aid], amt, p[1] if p is not None else None, change([c], [p]),
-                               amt / total if amt is not None and total else None,
-                               spark([(_total(r) or (0, None))[1] for r in week_rows[aid]])))
+def _ranks(aids, labels, cur, week, prev_week) -> list:
+    def amt(v):
+        return v[1] if v is not None else None
+    out = [AccountRank(aid, labels[aid], amt(c), amt(w), amt(p), change([w], [p]))
+           for aid, c, w, p in zip(aids, cur, week, prev_week)]
     out.sort(key=lambda r: (r.amount is None, -(r.amount or 0), r.label))
     return out
-
-
-def _products(aids, labels, week_rows, top) -> list:
-    heat: dict = {}
-    for aid in aids:
-        rows = week_rows[aid]
-        for i, got in enumerate(rows):
-            for (prod, kind), (_q, a) in (got or {}).items():
-                heat.setdefault((aid, prod, kind), [None if r is None else 0 for r in rows])[i] = a
-    out = [ProductHeat(labels[aid], prod, kind, vals, sum(v or 0 for v in vals))
-           for (aid, prod, kind), vals in heat.items()]
-    out = [p for p in out if p.total > 0]
-    out.sort(key=lambda p: (-p.total, p.account, p.product, p.kind))
-    return out[:top]

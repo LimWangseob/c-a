@@ -1,8 +1,9 @@
 """결과 파일 첫 시트 '통합판매현황' 그리기·구글시트 반영 — SSOT=designs/SALES_SUMMARY.md(소유자 2026-10-15).
 
-위 = 대시보드(①요약·②월별·③주간·④일별 차트·⑤계정 순위·⑥상품 상위 20 열지도 — workbook_sales_dash·소유자 2026-10-21) →
-아래 = 상세표 [일별 최근 31일·최신이 왼쪽] 전체 합계 → 계정 소계 → 상품 줄(윙/로켓그로스 나눔·판매 있는 상품만).
-칸마다 수량·금액. 받지 못한 날 = '미수집'(0 과 다름). 집계 기준 = **관리 상품**(결과 사업자 시트 블록 VID·판매중지 포함).
+위 = 대시보드(①요약·②월별·③주간·④일별 차트·⑤계정 순위 — workbook_sales_dash·소유자 2026-10-21·D-098) →
+아래 = 상세표 [일별 최근 31일·최신이 왼쪽·날짜 1칸] 전체 합계 → 계정 소계 → 상품(윙/로켓그로스 나눔·판매 있는 상품만) —
+한 건 = **2줄(수량 줄·금액 줄)**, 구분 칸 = '로켓그로스·수량'. 받지 못한 날 = '미수집'(0 과 다름).
+집계 기준 = **관리 상품**(결과 사업자 시트 블록 VID·판매중지 포함). 열 고정 없음(행 1~2만 — 차트가 고정 구역에 묻히지 않게).
 매번 시트를 지우고 맨 앞(index 0)에 다시 만든다 — 사업자 시트가 아니라 특수 시트(_SPECIAL_SHEETS)라 미러링·삭제 정리·
 색인 대상 아님. 원천·집계 = sales_history·sales_summary.
 """
@@ -26,6 +27,7 @@ _FILL_SUB = PatternFill("solid", fgColor="F2F2F2")
 _THIN = Side(style="thin", color="BFBFBF")
 _BOX = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 _CENTER = Alignment(horizontal="center", vertical="center")
+_MID = Alignment(vertical="center")
 _MISSING = "미수집"
 
 
@@ -91,7 +93,7 @@ def write_sales_sheet(xwb, summary, reasons: dict | None = None, board=None) -> 
     if SALES_SHEET in xwb.sheetnames:
         del xwb[SALES_SHEET]
     ws = xwb.create_sheet(SALES_SHEET, 0)
-    ncol = 3 + 2 * max(len(s.cols) for s in summary.sections)
+    ncol = 3 + max(len(s.cols) for s in summary.sections)
     _cell(ws, 1, 1, "통합 판매현황 — 위탁계정 계정·상품별 판매수량·판매금액(윙/로켓그로스 구분)",
           font=Font(name=_FN, size=14, bold=True))
     _cell(ws, 2, 1, f"기준 전일 {summary.yesterday.isoformat()} · 갱신 {datetime.now():%Y-%m-%d %H:%M} · "
@@ -100,72 +102,59 @@ def write_sales_sheet(xwb, summary, reasons: dict | None = None, board=None) -> 
           font=Font(name=_FN, size=10, color="595959"))
     r = 4
     if board is not None:
-        r = workbook_sales_dash.write_dashboard(ws, board, r, ncol + 3) + 3
+        r = workbook_sales_dash.write_dashboard(ws, board, r, ncol + 3, reasons) + 3
     for sec in summary.sections:
         r = _write_section(ws, r, sec, reasons or {}) + 2
-    widths = {1: 28, 2: 46, 3: 11}
-    for c in range(1, ncol + 1):
-        ws.column_dimensions[get_column_letter(c)].width = widths.get(c, 7 if c % 2 == 0 else 13)
-    ws.freeze_panes = "D3"
+    for c in range(1, ncol + 1):   # 날짜 칸 너비 모두 같음(대시보드 폭 W 계산과 같은 표)
+        ws.column_dimensions[get_column_letter(c)].width = workbook_sales_dash.col_width(c)
+    ws.freeze_panes = "A3"   # 행 1~2만 고정 — 열 고정 시 구글에서 고정 구역 안 차트가 안 보임(10-21 실측 ② 월별)
 
 
 def _write_section(ws, r: int, sec, reasons: dict) -> int:
-    """구역 하나(제목·머리 2줄·전체 합계·계정 소계·상품 줄) — 마지막으로 쓴 행 번호 반환."""
-    last = 3 + 2 * len(sec.cols)
+    """상세표(제목·머리·전체 합계·미수집 계정 수·계정 소계·상품) — 한 건 = 수량·금액 2줄. 마지막으로 쓴 행 번호 반환."""
+    last = 3 + len(sec.cols)
     _cell(ws, r, 1, sec.title, font=Font(name=_FN, size=12, bold=True), fill=_FILL_SEC)
-    # 제목 병합 = 고정 열 A:C 안에서만(freeze D3) — 구글시트는 고정·비고정 열에 걸친 병합을 400 으로 거부하고
-    # 그 뒤 계정목록 동기화까지 막음(라이브 2026-10-15 "You can't merge frozen and non-frozen columns").
-    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=3)
-    for c in range(4, last + 1):
-        _cell(ws, r, c, None, fill=_FILL_SEC)   # 오른쪽은 같은 색만(병합 없이 한 띠로 보이게)
-    h1, h2 = r + 1, r + 2
-    for c, h in enumerate(("계정", "상품", "구분"), 1):
-        _cell(ws, h1, c, h, bold=True, fill=_FILL_HEAD, box=True, center=True)
-        _cell(ws, h2, c, None, fill=_FILL_HEAD, box=True)
-        ws.merge_cells(start_row=h1, start_column=c, end_row=h2, end_column=c)
-    for i, col in enumerate(sec.cols):
-        c = 4 + 2 * i
-        _cell(ws, h1, c, col.label, bold=True, fill=_FILL_HEAD, box=True, center=True)
-        _cell(ws, h1, c + 1, None, fill=_FILL_HEAD, box=True)
-        ws.merge_cells(start_row=h1, start_column=c, end_row=h1, end_column=c + 1)
-        _cell(ws, h2, c, "수량", bold=True, fill=_FILL_HEAD, box=True, center=True)
-        _cell(ws, h2, c + 1, "금액", bold=True, fill=_FILL_HEAD, box=True, center=True)
-    r = h2 + 1
-    _values_row(ws, r, ("전체 합계", "", ""), sec.cols, sec.total, bold=True, fill=_FILL_TOTAL)
+    for c in range(2, last + 1):
+        _cell(ws, r, c, None, fill=_FILL_SEC)
+    r += 1
+    for c, h in enumerate(("계정", "상품", "구분", *(col.label for col in sec.cols)), 1):
+        _cell(ws, r, c, h, bold=True, fill=_FILL_HEAD, box=True, center=True)
+    r = _two_rows(ws, r + 1, ("전체 합계", ""), "", sec.cols, sec.total, bold=True, fill=_FILL_TOTAL)
     if any(sec.missing.values()):
         r += 1
-        _cell(ws, r, 1, "미수집 계정 수", fill=_FILL_TOTAL, box=True)
-        for c in (2, 3):
-            _cell(ws, r, c, None, fill=_FILL_TOTAL, box=True)
+        for c, v in enumerate(("미수집 계정 수", "", "계정 수"), 1):
+            _cell(ws, r, c, v or None, fill=_FILL_TOTAL, box=True)
         for i, col in enumerate(sec.cols):
-            _cell(ws, r, 4 + 2 * i, sec.missing[col.key] or None, fill=_FILL_TOTAL, box=True)
-            _cell(ws, r, 5 + 2 * i, None, fill=_FILL_TOTAL, box=True)
+            _cell(ws, r, 4 + i, sec.missing[col.key] or None, fill=_FILL_TOTAL, box=True, num=True)
     for blk in sec.accounts:
-        r += 1
         why = reasons.get(blk.aid) if any(v is None for v in blk.total.values()) else None
-        _values_row(ws, r, (blk.label, f"소계 — ⚠ {why}" if why else "소계", ""), sec.cols, blk.total,
-                    bold=True, fill=_FILL_SUB)
-        for row in blk.rows:   # 상품 줄: 그 칸 기록 없음 = 계정이 받은 기간이면 0, 계정 미수집이면 미수집
-            r += 1
+        r = _two_rows(ws, r + 1, (blk.label, f"소계 — ⚠ {why}" if why else "소계"), "", sec.cols, blk.total,
+                      bold=True, fill=_FILL_SUB)
+        for row in blk.rows:   # 상품: 그 날 기록 없음 = 계정이 받은 날이면 0, 계정 미수집이면 미수집
             vals = {c.key: row.values.get(c.key, (0, 0) if blk.total.get(c.key) is not None else None)
                     for c in sec.cols}
-            _values_row(ws, r, (blk.label, row.product, row.kind), sec.cols, vals, gray_first=True)
+            r = _two_rows(ws, r + 1, (blk.label, row.product), row.kind, sec.cols, vals, gray_first=True)
     return r
 
 
-def _values_row(ws, r, heads, cols, values: dict, *, bold=False, fill=None, gray_first=False) -> None:
-    for c, v in enumerate(heads, 1):
-        color = "9AA7B6" if gray_first and c == 1 else None
-        _cell(ws, r, c, v or None, bold=bold, fill=fill, box=True, color=color)
-    for i, col in enumerate(cols):   # values = {열 키: (수량, 금액) | None(미수집)}
-        v = values.get(col.key)
-        c = 4 + 2 * i
-        if v is None:
-            _cell(ws, r, c, _MISSING, fill=fill, box=True, color="9AA7B6", center=True)
-            _cell(ws, r, c + 1, None, fill=fill, box=True)
-            continue
-        _cell(ws, r, c, v[0], bold=bold, fill=fill, box=True, num=True)
-        _cell(ws, r, c + 1, v[1], bold=bold, fill=fill, box=True, num=True)
+def _two_rows(ws, r, heads, kind, cols, values: dict, *, bold=False, fill=None, gray_first=False) -> int:
+    """한 건 = 2줄(수량 줄·금액 줄). A·B 는 두 줄 병합, C = '로켓그로스·수량'. 미수집 = 두 줄 모두 '미수집'. 끝 행 반환."""
+    for i, (part, k) in enumerate((("수량", 0), ("금액", 1))):
+        rr = r + i
+        for c, v in enumerate(heads, 1):
+            _cell(ws, rr, c, (v or None) if i == 0 else None, bold=bold, fill=fill, box=True,
+                  color="9AA7B6" if gray_first and c == 1 else None)
+        _cell(ws, rr, 3, f"{kind}·{part}" if kind else part, bold=bold, fill=fill, box=True)
+        for j, col in enumerate(cols):   # values = {열 키: (수량, 금액) | None(미수집)}
+            v = values.get(col.key)
+            if v is None:
+                _cell(ws, rr, 4 + j, _MISSING, fill=fill, box=True, color="9AA7B6", center=True)
+            else:
+                _cell(ws, rr, 4 + j, v[k], bold=bold, fill=fill, box=True, num=True)
+    for c in (1, 2):
+        ws.cell(r, c).alignment = _MID
+        ws.merge_cells(start_row=r, start_column=c, end_row=r + 1, end_column=c)
+    return r + 1
 
 
 def _cell(ws, r, c, v, *, font=None, bold=False, fill=None, box=False, center=False, color=None, num=False):

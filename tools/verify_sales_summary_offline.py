@@ -142,16 +142,26 @@ def t4_sheet():
         flat = [v for r in cells for v in r if v is not None]
         assert any(str(v).startswith("① 요약") for v in flat) and any(str(v).startswith("상세 — 일별") for v in flat)
         assert not any(str(v).startswith(("2. 주간", "3. 월별")) for v in flat), "옛 주간·월별 구역 없음"
-        tot = next(r for r in cells if r[0] == "전체 합계")
-        assert tot[3] == 4 and tot[4] == 35000, tot
+        i = next(i for i, r in enumerate(cells) if r[0] == "전체 합계")
+        assert tuple(cells[i][2:4]) == ("수량", 4) and tuple(cells[i + 1][2:4]) == ("금액", 35000), cells[i:i + 2]   # 2줄
         assert any(r[0] == "니코에이블 (a2)" and r[3] == "미수집" for r in cells), "미수집 계정 표시"
         subs = {r[0]: r[1] for r in cells if r[1] and str(r[1]).startswith("소계")}
         assert subs == {"니코에이블 (a2)": "소계 — ⚠ 로그인 비밀번호 오류", "에벤에셀 (a1)": "소계"}, subs   # 소유자 2026-10-16
-        assert any(r[1] == "캠핑테이블" and r[2] == "로켓그로스" and r[4] == 30000 for r in cells)
+        j = next(i for i, r in enumerate(cells) if r[1] == "캠핑테이블")
+        assert tuple(cells[j][2:4]) == ("로켓그로스·수량", 3) and tuple(cells[j + 1][2:4]) == ("로켓그로스·금액", 30000), \
+            "상품 1건 = 수량 줄·금액 줄 · 구분 = 판매방식·수량/금액"
+        assert not any(str(v).startswith("⑥") for v in flat), "⑥ 상품 열지도 없음"
+        sws = wb2.wb[WS.SALES_SHEET]
+        assert sws.freeze_panes == "A3", f"열 고정 없음(행 1~2만): {sws.freeze_panes}"
+        hrow = next(r for r in cells if r[0] == "계정" and r[1] == "상품")
+        assert len([v for v in hrow[3:] if v]) == 31 and hrow[3] == "10.14", "날짜 1칸·31일·최신 왼쪽"
+        from openpyxl.utils import get_column_letter
+        ws_w = {sws.column_dimensions[get_column_letter(c)].width for c in range(4, 4 + 31)}
+        assert len(ws_w) == 1, f"날짜 칸 너비 모두 같음: {ws_w}"
         kpi = next(r for r in cells if str(r[0]).startswith("전일 "))
         assert (kpi[1], kpi[2]) == (35000, 4), f"대시보드 전일 = 상세 전체 합계: {kpi}"
         assert "기록" in msg or "갱신" in msg, msg
-    ok("첫 시트·계정 목록 두 번째·활성 시트·사업자 시트 목록 불변·전체 합계 4개 35,000원·미수집 표시·미수집 사유(로그인 비밀번호 오류)")
+    ok("첫 시트·계정 목록 두 번째·사업자 시트 불변·전체 합계 2줄(4개/35,000원)·상품 2줄·미수집 사유·⑥ 없음·열 고정 없음·날짜 칸 같은 너비")
 
 
 def t5_gsheet():
@@ -195,8 +205,25 @@ def t5_gsheet():
     first_cells = kinds.index("updateCells", len(kinds) - kinds[::-1].index("deleteEmbeddedObject"))
     assert dels == [501, 502], "옛 차트를 지움"
     charts = [r["addChart"]["chart"] for r in c.reqs if "addChart" in r]
-    assert len(charts) == 3 and kinds.index("addChart") > first_cells, "값을 쓴 뒤 차트 3개 다시 추가"
-    assert sorted(ch["spec"]["basicChart"]["chartType"] for ch in charts) == ["COLUMN", "COLUMN", "LINE"]
+    assert len(charts) == 4 and kinds.index("addChart") > first_cells, "값을 쓴 뒤 차트 4개 다시 추가"
+    assert [ch["spec"]["basicChart"]["chartType"] for ch in charts] == ["COLUMN", "LINE", "COLUMN", "BAR"]
+    grid = [r["updateSheetProperties"]["properties"]["gridProperties"] for r in c.reqs if "updateSheetProperties" in r
+            and r["updateSheetProperties"]["properties"].get("sheetId") == 99
+            and "gridProperties" in r["updateSheetProperties"]["properties"]]
+    assert grid and grid[-1]["frozenColumnCount"] == 0, f"열 고정 없음(고정 구역에 차트가 묻힘): {grid}"
+    px = {r["updateDimensionProperties"]["range"]["startIndex"]: r["updateDimensionProperties"]["properties"]["pixelSize"]
+          for r in c.reqs if "updateDimensionProperties" in r and r["updateDimensionProperties"]["range"].get("sheetId") == 99
+          and "pixelSize" in r["updateDimensionProperties"]["properties"]
+          and r["updateDimensionProperties"]["range"]["dimension"] == "COLUMNS"}
+    W = sum(px[i] for i in range(10))                                      # 대시보드 폭 = A~J 실제 열 픽셀 합
+    edges = []
+    for ch in charts:
+        pos = ch["position"]["overlayPosition"]
+        left = sum(px[i] for i in range(pos["anchorCell"]["columnIndex"])) + pos.get("offsetXPixels", 0)
+        edges.append((left, left + pos["widthPixels"]))
+    (l2, r2), (l3, r3), (l4, r4), (l5, r5) = edges
+    assert l2 == l4 == l5 == 0 and abs(r3 - W) <= 1 and abs(r4 - W) <= 1 and abs(r5 - W) <= 1, (W, edges)
+    assert 0 < l3 - r2 < 40 and abs((r2 - l2) - (r3 - l3)) <= 1, f"②③ = W 를 반씩·사이 간격 일정: {edges}"
     assert all(ch["spec"]["hiddenDimensionStrategy"] == "SHOW_ALL" for ch in charts), "숨긴 열 자료도 그림"
     hid = [r["updateDimensionProperties"] for r in c.reqs if "updateDimensionProperties" in r
            and r["updateDimensionProperties"]["properties"].get("hiddenByUser")]
@@ -205,7 +232,7 @@ def t5_gsheet():
     assert hid and all(any(h["range"]["startIndex"] <= ci < h["range"]["endIndex"] for h in hid) for ci in cols), \
         "차트 자료 = 숨긴 열"
     assert kinds[-1] == "updateSheetProperties", "index 0 이동이 마지막"
-    ok("옛 차트 삭제 → 값·서식 교체 → 숨긴 열·차트 3개 추가 → index 0 · 사업자 미러링 아님 · 틀고정 넘는 병합 없음")
+    ok("옛 차트 삭제 → 값·서식 → 숨긴 열·차트 4개 → index 0 · 열 고정 0 · ②③ W 반씩·④⑤ = W(열 픽셀 합) · 병합 400 없음")
 
 
 def _merges_across_freeze(reqs: list) -> list:
@@ -340,7 +367,7 @@ def _dash_fixture(d):
 
 
 def t10_dashboard():
-    print("[T10] 대시보드 값 — 전일·지난주(그 전주 대비)·이번 달 누계(지난달 같은 기간 대비)·월별·주간·일별·계정 순위·상품")
+    print("[T10] 대시보드 값 — 전일·지난주(그 전주 대비)·이번 달 누계(지난달 같은 기간 대비)·월별·주간·일별·계정 순위")
     y = date(2026, 10, 20)   # 화요일
     assert SD.prev_month_same(y) == (date(2026, 9, 1), date(2026, 9, 20))
     assert SD.prev_month_same(date(2026, 3, 31)) == (date(2026, 2, 1), date(2026, 2, 28)), "지난달이 짧으면 말일"
@@ -367,48 +394,77 @@ def t10_dashboard():
     assert len(b.days) == 31 and b.days[-1].label == "10.20" and b.days[0].label == "09.20", "일별 = 오래된 → 최신"
     assert b.days[-1].amount == 1500, "관리 안 하는 vx 999원 빠짐"
     r1, r2 = b.accounts
-    assert (r1.aid, r1.amount, r1.prev, r1.share) == ("a1", 30000, 20000, 1.0) and abs(r1.change - 0.5) < 1e-9
-    assert r1.spark == "··▆▆▆▇██", r1.spark      # 8/24·8/31 주 = 일별 빠짐(9/1 시작) → 미수집
-    assert r2.aid == "a2" and r2.amount is None and r2.change is None, "미수집 계정 = 맨 아래"
-    assert [(p.account, p.product) for p in b.products] == [("니코에이블 (a2)", "기저귀백팩"), ("에벤에셀 (a1)", "캠핑테이블")]
-    assert b.products[0].weeks[-1] is None and b.products[0].weeks[2] == 14000, b.products[0].weeks
-    ok("전일 1,500 · 지난주 10,500(0%) · 이번 달 30,000(+50%) · 1월 기간합계 · 10월 진행 중 · 순위 a1·a2 미수집 · ··▆▆▆▇██")
+    assert (r1.aid, r1.amount, r1.week, r1.prev_week, r1.change) == ("a1", 30000, 10500, 10500, 0.0), r1
+    assert (r2.aid, r2.amount, r2.week, r2.prev_week, r2.change) == ("a2", None, None, 14000, None), "미수집 = 맨 아래"
+    assert not hasattr(b, "products"), "⑥ 상품 열지도 자료 없음"
+    ok("전일 1,500 · 지난주 10,500(0%) · 이번 달 30,000(+50%) · 1월 기간합계 · 10월 진행 중 · 순위 a1(지난주 10,500·0%)·a2 미수집")
 
 
 def t11_charts_persist():
-    print("[T11] 엑셀 차트 3개 — 숨긴 열 자료·다시 열어도(③ 등이 마스터를 다시 열고 저장) 차트 유지·중복 없음")
+    print("[T11] 엑셀 — 차트 4개(②③④⑤)·같은 왼쪽 끝·같은 폭 W·다시 열어도 유지 · ⑤ 5칸 표·판매 없음/미수집 줄 · 10월 막대")
     from openpyxl.utils import get_column_letter
     with tempfile.TemporaryDirectory() as d:
         _dash_fixture(d)
+        day = date(2026, 10, 1)
+        while day <= date(2026, 10, 20):                                   # a3 = 이번 달 매일 받았지만 판매 0
+            SH.record(d, "a3", day.isoformat(), day.isoformat(), {})
+            day += timedelta(days=1)
         path = Path(d) / "m.xlsx"
         wb = _wb_with_accounts(path)
         wb.set_product_vids("에벤에셀", "에벤에셀 상품", ["v1"])
         wb.set_product_vids("니코에이블", "니코에이블 상품", ["v2"])
+        wb.ensure_account("벅스")
+        wb.set_account_id("벅스", "a3")
+        wb.ensure_product_block("벅스", "벅스 상품", config.KIND_CONTRACT, ["kw"], registered="벅스 상품")
+        wb.set_product_vids("벅스", "벅스 상품", ["v7"])
         WS.refresh_sales_sheet(wb, d, today=date(2026, 10, 21))
         ws = wb.wb[WS.SALES_SHEET]
-        assert len(ws._charts) == 3
+        assert len(ws._charts) == 4
         specs = WD.read_specs(ws)
         data_cols = {c for sp in specs for c in [sp["cat"][2]] + [s[2] for s in sp["series"]]}
         assert all(ws.column_dimensions[get_column_letter(c)].hidden for c in data_cols), "차트 자료 = 숨긴 열"
-        assert min(data_cols) > 3 + 2 * 31, "상세표 오른쪽"
+        assert min(data_cols) > 3 + 31, "상세표 오른쪽"
+        w_pt = sum(ws.column_dimensions[get_column_letter(c)].width * WD.XL_PT_PER_CHAR for c in range(1, 11))
+        col_pt = [ws.column_dimensions[get_column_letter(c)].width * WD.XL_PT_PER_CHAR for c in range(1, 11)]
+        edges = []
+        for ch in ws._charts:                                              # 실제 붙은 차트의 anchor 로 계산
+            f = ch.anchor._from
+            left = (sum(col_pt[:f.col]) * 12700 + f.colOff) / 12700
+            edges.append((round(left, 1), round(left + ch.anchor.ext.width / 12700, 1)))
+        assert [e[0] for e in edges] == [0, edges[1][0], 0, 0] and all(abs(e[1] - w_pt) < 1 for e in edges[1:]), \
+            f"모든 도식 = 같은 왼쪽 끝·오른쪽 끝 W({w_pt}pt): {edges}"
+        months = {ws.cell(r, specs[0]["cat"][2]).value: (ws.cell(r, specs[0]["cat"][2] + 1).value,
+                                                         ws.cell(r, specs[0]["cat"][2] + 2).value)
+                  for r in range(specs[0]["cat"][0] + 1, specs[0]["cat"][1] + 1)}
+        assert months["10월"] == (0, 30000) and months["9월"][0] == 90000 and months["5월"] == (None, None), \
+            f"10월 = 진행 중(연한 막대)·자료 없는 달 = 빈칸: {months}"
+        dc = specs[2]["cat"][2]
+        days = {ws.cell(r, dc).value: (ws.cell(r, dc + 1).value, ws.cell(r, dc + 2).value)
+                for r in range(specs[2]["cat"][0] + 1, specs[2]["cat"][1] + 1)}
+        assert days["10.15"] == (3500, 0) and days["10.20"] == (0, 1500), f"일부 계정 미수집 날 = 회색 계열: {days}"
         wb.save(path)
         wb2 = OutputWorkbook.load(path)
-        assert len(wb2.wb[WS.SALES_SHEET]._charts) == 3, "다시 열면 설정으로 다시 붙임"
+        assert len(wb2.wb[WS.SALES_SHEET]._charts) == 4, "다시 열면 설정으로 다시 붙임"
         wb2.save(path)
         wb3 = OutputWorkbook.load(path)
-        assert len(wb3.wb[WS.SALES_SHEET]._charts) == 3, "열고 저장을 거듭해도 3개"
+        assert len(wb3.wb[WS.SALES_SHEET]._charts) == 4, "열고 저장을 거듭해도 4개"
         cells = list(wb3.wb[WS.SALES_SHEET].iter_rows(values_only=True))
-    head = next(r for r in cells if r[0] == "계정" and r[3] == "10.20")
-    assert head[3:6] == ("10.20", None, "10.19") and head[3 + 2 * 30] == "09.20", "상세 = 최신이 왼쪽 31일"
+    assert WD._val(SD.Point("x", 0, 0, missing=3), 3) is None, "모든 계정 자료 없음 = 빈칸(0 막대 아님)"
+    head = next(r for r in cells if r[0] == "계정" and r[1] == "상품")
+    assert head[3:5] == ("10.20", "10.19") and head[3 + 30] == "09.20", "상세 = 최신이 왼쪽 31일·날짜 1칸"
     tot = next(r for r in cells if r[0] == "전체 합계")
     kpi = next(r for r in cells if str(r[0]).startswith("전일 "))
-    assert tot[4] == kpi[1] == 1500, (tot[4], kpi[1])
-    rank = [r[0] for r in cells if isinstance(r[1], str) and r[1] and set(r[1]) <= set(SD.SPARK + SD.SPARK_MISSING)]
-    assert rank == ["에벤에셀 (a1)", "니코에이블 (a2)"], rank
-    assert any(v == "▲ 50.0%" for r in cells for v in r), "증감 표시"
-    fill, color = WD.heat_style(90, 100)
-    assert fill.fgColor.rgb.endswith("2F75B5") and color == "FFFFFF" and WD.heat_style(None, 100) == (None, "9AA7B6")
-    ok("차트 3개 · 자료 = 상세표 오른쪽 숨긴 열 · 다시 열고 저장 2회에도 3개 · 상세 10.20 → 09.20 · 전일 = 상세 합계")
+    i = cells.index(tot)
+    assert cells[i + 1][3] == kpi[1] == 1500, (cells[i + 1][3], kpi[1])
+    rh = next(r for r in cells if r[0] == "순위")
+    assert [v for v in rh[:10] if v] == ["순위", "계정", "이번 달 누계(원)", "지난주(원)", "전주 대비"], rh[:10]
+    rows = [r for r in cells if isinstance(r[0], int) and r[1]]
+    assert [(r[0], r[1], r[2], r[5]) for r in rows] == [(1, "에벤에셀 (a1)", 30000, 10500)], rows
+    flat = [v for r in cells for v in r if isinstance(v, str)]
+    assert "판매 없음 1계정: 벅스 (a3)" in flat, [v for v in flat if "계정:" in v]
+    assert any(v.startswith("미수집 1계정: 니코에이블 (a2)(") for v in flat), "미수집 = 이름(사유)"
+    assert not any(v.startswith("⑥") for v in flat) and not any(set(v) <= set("▁▂▃▄▅▆▇█·") for v in flat if v)
+    ok("차트 4개 · 왼쪽 0·오른쪽 W 일치 · ②③ 반씩 · 10월 진행 중 30,000(a2 빠진 날 있어 제외) · 미수집 날 회색 · ⑤ 5칸·판매 없음/미수집 줄 · 다시 열어도 4개")
 
 
 def main() -> int:
