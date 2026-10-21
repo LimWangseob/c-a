@@ -8,8 +8,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .registry_model import (HISTORY_SHEETS, ITEM_ACCT_ID, ITEM_PROD_NAME, ITEM_STATUS, K_CONFIRMED, K_INIT,
-                             K_NEW_ACCT, K_NEW_PROD, K_REJECTED, K_RESUME, K_STOP, SHEET_ACCT, SHEET_PROD,
-                             ST_ACTIVE, ST_STOPPED, HistRow, LedgerSnapshot, RegRow)
+                             K_MISTAKE, K_NEW_ACCT, K_NEW_PROD, K_REJECTED, K_RESUME, K_STOP, SHEET_ACCT,
+                             SHEET_PROD, ST_ACTIVE, ST_MISTAKE, ST_STOPPED, HistRow, LedgerSnapshot, RegRow)
 
 
 class RegistryGuardError(Exception):
@@ -33,6 +33,7 @@ def _order(h: HistRow):
 class _State:
     acct: dict = field(default_factory=dict)      # 계정아이디 → (중단여부, 중단일)
     prod: dict = field(default_factory=dict)      # (계정아이디, 상품명) → (중단여부, 중단일)
+    mistake: dict = field(default_factory=dict)   # 계정아이디 → 오입력 판정일(D-103 · 다시 열리면 해제)
 
 
 def _replay_status(history: list[HistRow], at: str | None = None) -> _State:
@@ -46,7 +47,12 @@ def _replay_status(history: list[HistRow], at: str | None = None) -> _State:
         elif h.kind == K_CONFIRMED and h.item == ITEM_PROD_NAME:
             if (h.account_id, h.old) in st.prod:
                 st.prod[(h.account_id, h.new)] = st.prod.pop((h.account_id, h.old))
+        elif h.kind == K_MISTAKE and h.sheet == SHEET_ACCT:
+            st.acct[h.account_id] = (True, h.eff)
+            st.mistake[h.account_id] = h.eff
         elif h.kind in _OPENERS or h.kind == K_STOP:
+            if h.kind in _OPENERS and h.sheet == SHEET_ACCT:
+                st.mistake.pop(h.account_id, None)
             flag = (True, h.eff) if h.kind == K_STOP else (False, "")
             if h.sheet == SHEET_ACCT:
                 st.acct[h.account_id] = flag
@@ -58,11 +64,15 @@ def _replay_status(history: list[HistRow], at: str | None = None) -> _State:
 def _rename_state_account(st: _State, old: str, new: str) -> None:
     if old in st.acct:
         st.acct[new] = st.acct.pop(old)
+    if old in st.mistake:
+        st.mistake[new] = st.mistake.pop(old)
     for (aid, p) in [k for k in st.prod if k[0] == old]:
         st.prod[(new, p)] = st.prod.pop((aid, p))
 
 
 def _row_status(st: _State, aid: str, prod: str) -> tuple[str, str]:
+    if aid in st.mistake:
+        return ST_MISTAKE, st.mistake[aid]
     a_stop, a_date = st.acct.get(aid, (False, ""))
     p_stop, p_date = st.prod.get((aid, prod), (False, ""))
     dates = [d for s, d in ((a_stop, a_date), (p_stop, p_date)) if s]
@@ -82,6 +92,10 @@ class Registry:
 
     def row_status(self, aid: str, prod: str) -> tuple[str, str]:
         return _row_status(_replay_status(self.history), aid, prod)
+
+    def mistaken_ids(self) -> set:
+        """오입력(D-103)으로 판정된 계정ID — 정산·로그인 대상에서 뺀다."""
+        return set(_replay_status(self.history).mistake)
 
     def next_no(self, sheet: str) -> int:
         return max((h.no for h in self.history if h.sheet == sheet), default=0) + 1

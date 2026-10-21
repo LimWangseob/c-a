@@ -99,3 +99,57 @@ def renames(old_names, accounts: list[SettleAccount], tok=lambda s: s) -> dict:
         if a is not None and old != tok(display_name(a)):
             out[old] = tok(display_name(a))
     return out
+
+
+# ── 정산 계정 출처 = 셀독계정상품이력관리원장(D-103) ─────────────────────────────
+KEEP_DAYS = 90        # 관리중단 뒤에도 남은 정산(로켓그로스 월정산·지급 보류 등)을 받는 기간
+SYNC_MAX_AGE_H = 26   # 원장 마지막 동기화가 이보다 오래면 정산 계정 구성 중단(18:00 실행이 하루 한 번 동기화)
+
+
+class AccountSourceError(Exception):
+    """원장에서 정산 계정을 만들 수 없음(동기화 오래됨·링크 오류 등) — 옛 계정 파일로 대신하지 않고 정산 중단."""
+
+
+def last_sync_time(sync_values: list) -> str:
+    """'동기화기록' 값 격자(최신이 위) → 가장 최근 실행일시('YYYY-MM-DD HH:MM:SS'·없으면 '')."""
+    if len(sync_values) < 2:
+        return ""
+    head = [str(h).strip() for h in sync_values[0]]
+    i = head.index("실행일시") if "실행일시" in head else 1
+    times = [str(r[i]).strip() for r in sync_values[1:] if len(r) > i and str(r[i]).strip()]
+    return max(times, default="")
+
+
+def accounts_from_registry(reg, settle_rows: dict, last_sync: str, now, keep_days: int = KEEP_DAYS,
+                           max_age_h: int = SYNC_MAX_AGE_H) -> tuple[list[SettleAccount], dict]:
+    """원장 → 정산 계정 [SettleAccount] + 구성 요약. 대상 = (셀독원장) 최근 keep_days 일 안에 하루라도 관리한 계정
+    (관리중 + 관리중단 뒤 keep_days 일 이내) − 오입력 + (정산전용계정) 관리중 또는 중단일이 keep_days 일 이내.
+    비밀번호 = 원장 값(셀독원장 = 매일 관리대장에서 반영). 원장 동기화가 max_age_h 시간보다 오래면 AccountSourceError."""
+    from datetime import datetime as _dt, timedelta
+    from .registry_history import managed_between
+    from .registry_model import valid_account_id
+    if not last_sync:
+        raise AccountSourceError("원장 동기화 기록이 없음 — 설정 탭 원장 링크·18:00 실행 확인(옛 정산 계정 파일로 대신하지 않음)")
+    age = now - _dt.fromisoformat(last_sync)
+    if age > timedelta(hours=max_age_h):
+        raise AccountSourceError(f"원장 마지막 동기화 {last_sync} — {max_age_h}시간이 넘음(원장 링크가 바뀌었거나 18:00 실행이 "
+                                 "안 됨). 설정 탭 원장 링크 확인 후 다시 실행(옛 정산 계정 파일로 대신하지 않음)")
+    start = (now - timedelta(days=keep_days)).strftime("%Y-%m-%d")
+    mistaken = reg.mistaken_ids()
+    picked = [a for a in managed_between(reg, start, now.strftime("%Y-%m-%d")) if a not in mistaken and valid_account_id(a)]
+    out = []
+    for aid in picked:
+        acct = reg.account_rows(aid)[0].acct
+        name = "-".join(x for x in (acct.get("대표자명", ""), acct.get("사업자명", "")) if x)
+        out.append(SettleAccount(aid, name or aid, acct.get("비밀번호", "")))
+    dup, settle_n = [], 0
+    for aid, row in settle_rows.items():
+        if aid in picked:
+            dup.append(aid)
+            continue
+        if row.active or (row.fields.get("중단일", "") or "9999") >= start:
+            out.append(SettleAccount(aid, row.label or aid, row.fields.get("비밀번호", "")))
+            settle_n += 1
+    info = {"원장 동기화": last_sync, "셀독원장": len(picked), "정산전용": settle_n,
+            "오입력 제외": len(mistaken), "중복(셀독원장 우선)": dup}
+    return out, info

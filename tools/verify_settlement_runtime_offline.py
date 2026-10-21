@@ -1356,6 +1356,41 @@ def p32_evidence_rules():
     ok("사업자 폴더('-' 보존)·월 구간·정산 줄 없는 주(니코에이블 5/11~17)·누락 검사·환급 이름·완료 표시·목록 제외 규칙")
 
 
+def p37_accounts_from_registry():
+    print("[P37] 정산 계정 = 원장(셀독원장 관리중·관리중단 90일 이내 − 오입력 + 정산전용계정) · 동기화 오래되면 중단(D-103)")
+    from datetime import datetime as D
+    from coupang_analytics import registry as R, registry_model as M, registry_settle as RS
+    from coupang_analytics import settlement_accounts as SA
+
+    def snap(accts):
+        hdr = ["구분", "대표자명", "사업자명", "계정아이디", "비밀번호", "상품명"]
+        rows = [["예시"], hdr] + [["", rep, biz, aid, pw, "상품"] for aid, rep, biz, pw in accts]
+        return M.parse_ledger(rows, None, "셀독리스트")
+    reg = R.Registry()
+    R.sync(reg, snap([("keep1", "대표", "가게1", "pw1"), ("old1", "대표", "옛가게", "pw2"), ("rec1", "대표", "최근가게", "pw3")]),
+           now=D(2026, 6, 1, 18))
+    R.sync(reg, snap([("keep1", "대표", "가게1", "pw1"), ("rec1", "대표", "최근가게", "pw3")]), now=D(2026, 7, 1, 18))   # old1 중단
+    R.sync(reg, snap([("keep1", "대표", "가게1", "pw1b")]), now=D(2026, 10, 11, 18))                                   # rec1 중단·비번 변경
+    settle, _w = RS.parse_settle([list(RS.SETTLE_HEADER),
+                                  ["관리중", "2026-10-21", "", "우리사업자", "임", "디프", "own1", "pwO", ""],
+                                  ["관리중단", "2026-01-01", "2026-05-01", "위탁", "김", "끝난곳", "gone1", "pwG", ""],
+                                  ["관리중", "", "", "위탁", "박", "중복", "keep1", "pwX", ""]])
+    now = D(2026, 10, 21, 19)
+    accts, info = SA.accounts_from_registry(reg, settle, "2026-10-21 18:00:30", now)
+    got = {a.account_id: (a.label, a.password) for a in accts}
+    assert set(got) == {"keep1", "rec1", "own1"}, got                     # old1(중단 112일)·gone1(중단 173일) 제외
+    assert got["keep1"] == ("대표-가게1", "pw1b") and got["own1"] == ("임-디프", "pwO"), got   # 원장 최신 비번·정산전용 값
+    assert info["중복(셀독원장 우선)"] == ["keep1"] and info["정산전용"] == 1, info
+    for last, why in (("2026-10-20 08:00:00", "오래됨"), ("", "기록 없음")):
+        try:
+            SA.accounts_from_registry(reg, settle, last, now)
+        except SA.AccountSourceError:
+            pass
+        else:
+            raise AssertionError(f"동기화 {why}인데 통과")
+    ok("관리중·중단 90일 이내 포함·오래된 중단 제외·정산전용 관리중 포함·중복=원장 우선·최신 비번·동기화 오래됨/없음=중단")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -1384,6 +1419,7 @@ def main():
     p34_forecast_accuracy()
     p35_amounts_from()
     p36_same_cycle_done()
+    p37_accounts_from_registry()
     print("정산 런타임 오프라인 검증 통과")
 
 

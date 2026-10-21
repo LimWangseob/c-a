@@ -17,9 +17,9 @@ from .registry import Registry, RegistryIntegrityError, SyncResult, check_integr
 from .registry_core import _replay_status, _row_status
 from .registry_lock import DEFAULT_LOCK_PATH, registry_lock
 from .registry_model import (ALL_SHEETS, CONFIRM_CHOICES, COUPANG_CHECK_VALUES, GROWTH_FIELDS, HIST_HEADER,
-                             HISTORY_SHEETS,
+                             HISTORY_SHEETS, ITEM_ACCT_ID,
                              MAIN_HEADER, SHEET_MAIN, SHEET_SYNC, ST_ACTIVE, STOCK_FIELD, SYNC_HEADER, HistRow,
-                             RegRow, parse_ledger)
+                             RegRow, parse_ledger, valid_account_id)
 
 _HEADER_BG = {"red": 0xB7 / 255, "green": 0xC9 / 255, "blue": 0xE8 / 255}
 _GREY = {"red": 0.6, "green": 0.6, "blue": 0.6}
@@ -297,9 +297,15 @@ def backup_local(raws: dict, backup_dir: str | Path, now: datetime, log) -> Path
     return path
 
 
+def _safe_id(v: str) -> str:
+    """로그용 계정ID — 형식 오류 값(비밀번호 오입력 등)은 가림(D-103)."""
+    return v if not v or valid_account_id(v) else "(형식 오류 계정ID)"
+
+
 def _describe(h: HistRow) -> str:
-    vals = "(값 생략)" if h.item == "비밀번호" else f"'{h.old}' → '{h.new}'" if (h.old or h.new) else ""
-    what = f"{h.account_id}" + (f" / {h.product}" if h.product else "")
+    old, new = (_safe_id(h.old), _safe_id(h.new)) if h.item == ITEM_ACCT_ID else (h.old, h.new)
+    vals = "(값 생략)" if h.item == "비밀번호" else f"'{old}' → '{new}'" if (old or new) else ""
+    what = f"{_safe_id(h.account_id)}" + (f" / {h.product}" if h.product else "")
     return f"  [{h.sheet}] {h.kind} {what} {h.item} {vals}".rstrip()
 
 
@@ -400,6 +406,7 @@ def _sync_locked(client, snap, now: datetime, log, dry_run: bool, backup_dir, ju
         backup_local(raws, backup_dir, now, log)
     res = sync(reg, snap, now=now, judge=judge)
     _log_result(res, log, dry_run)
+    _sync_settle_sheet(client, now, log, dry_run)
     if dry_run:
         return res
     if not exists:
@@ -407,6 +414,15 @@ def _sync_locked(client, snap, now: datetime, log, dry_run: bool, backup_dir, ju
     save_registry(client, reg, res, now)
     _mark_auto_resolved(client, res, now)
     return res
+
+
+def _sync_settle_sheet(client, now: datetime, log, dry_run: bool) -> None:
+    """정산 전용 계정 시트 변경이력(D-103) — 시트 오류(같은 계정 두 줄 등)는 셀독원장 반영을 막지 않게 따로 알림."""
+    from .registry_settle import SettleSheetError, sync_settle
+    try:
+        sync_settle(client, now, log, dry_run=dry_run)
+    except SettleSheetError as exc:
+        log(f"  [원장] ❌ 정산 전용 계정 시트 오류 — 그 시트 이력 반영 안 함·정산 계정 구성도 멈춤: {exc}")
 
 
 _AUTO_NOTE = re.compile(r"^#(\d+) 자동 (승인|반려)")

@@ -27,6 +27,7 @@ ALL_SHEETS = (SHEET_MAIN, *HISTORY_SHEETS, SHEET_SYNC)
 
 ST_ACTIVE = "관리중"
 ST_STOPPED = "관리중단"
+ST_MISTAKE = "오입력"     # 계정ID 형식 오류(비밀번호 등 오입력) — 정산·로그인 제외(D-103)
 
 ACCOUNT_FIELDS = ("대표자명", "사업자명", "비밀번호", "계약금", "체험단주체")
 GROWTH_FIELDS = ("그로스 요청수량", "그로스 작업수량", "그로스 박스", "그로스 파레트",
@@ -57,6 +58,7 @@ K_RENAME_PROD = "상품명변경"
 K_RENAME_ACCT = "계정아이디변경"
 K_CONFIRMED = "확인완료"
 K_REJECTED = "반려"
+K_MISTAKE = "오입력"      # 계정 단위 — 형식이 틀린 계정ID(D-103). 원장 값은 그대로·상태만 오입력
 
 C_AUTO = "자동반영"
 C_PENDING = "확인필요"
@@ -87,6 +89,14 @@ def _canon_date_text(s: str) -> str:
     except ValueError:
         return s
 
+
+# 쿠팡 판매자 계정ID = 영문·숫자로 시작, 영문·숫자·._@- (실측 10-21: 원장·정산 계정 44개 중 위반 1개 = 비밀번호를 계정아이디
+# 칸에 넣은 오입력). 비밀번호 포함 여부로는 판정하지 않음(비밀번호에 계정ID 를 넣는 정상 계정이 있음).
+_ACCOUNT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@-]*$")
+
+
+def valid_account_id(aid: str) -> bool:
+    return bool(_ACCOUNT_ID.match(str(aid or "").strip()))
 
 def canon(v) -> str:
     """비교·저장용 정규화 — 표기만 다른 값을 같게 만든다: 앞뒤·연속 공백, 90.0, 날짜객체, 천단위 쉼표 숫자,

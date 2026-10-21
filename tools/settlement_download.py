@@ -88,9 +88,8 @@ def _is_browser_closed(exc: BaseException) -> bool:
 
 
 # ── 계정·세션 ─────────────────────────────────────────────────────
-def load_accounts(only: set) -> list:
-    """정산 계정 파일(계정ID·비번·대표자-사업자) — 위치=config.json settlement/accounts_file(기본 data/정산_계정목록.txt).
-    읽을 때마다 예전 이름으로 된 요청 기록·파일·금액 기록을 지금 이름으로 맞춘다(계정ID 기준)."""
+def _accounts_from_file() -> list:
+    """옛 방식 — 정산 계정 파일(계정ID·비번·대표자-사업자). 설정 settlement/account_source=file 일 때만."""
     from coupang_analytics import appconfig
     path = appconfig.get(SA.CONFIG_KEY, "") or SA.DEFAULT_PATH
     try:
@@ -100,10 +99,48 @@ def load_accounts(only: set) -> list:
     for w in warns:
         log(f"  [계정 파일] {w}")
     log(f"  [계정 파일] {path} · 계정 {len(accts)}개")
+    return accts
+
+
+def _accounts_from_registry() -> list:
+    """D-103 — 셀독계정상품이력관리원장(링크 = 설정 registry/url)에서 정산 계정을 만든다: 셀독원장(관리중·관리중단 90일
+    이내·오입력 제외) + 정산전용계정 시트. 원장이 오래됐거나 못 읽으면 중단(옛 계정 파일로 대신하지 않음)."""
+    from coupang_analytics import appconfig, gsheet_api, registry_gsheet as RG, registry_settle as RS
+    url = appconfig.get("registry/url", "")
+    if not url:
+        raise SystemExit("정산 계정 출처 = 원장인데 원장 링크(설정 탭 '원장')가 비어 있음 — 링크를 넣고 다시 실행")
+    try:
+        client = gsheet_api.GSheetClient(url, on_log=log)
+        reg = RG.load_registry(client)
+        titles = client.sheet_titles()
+        settle, warns = (RS.parse_settle(client.read_values(RS.SHEET_SETTLE)) if RS.SHEET_SETTLE in titles else ({}, []))
+        last = SA.last_sync_time(client.read_values("동기화기록"))
+        accts, info = SA.accounts_from_registry(reg, settle, last, datetime.now())
+    except (SA.AccountSourceError, RS.SettleSheetError) as exc:
+        raise SystemExit(f"정산 계정(원장) 구성 실패: {exc}") from exc
+    except Exception as exc:   # 링크·권한·시트 누락 등 — 이유를 그대로 남기고 중단
+        raise SystemExit(f"정산 계정(원장) 읽기 실패 — 설정 탭 원장 링크·서비스계정 공유 확인: "
+                         f"{exc.__class__.__name__}: {str(exc)[:150]}") from exc
+    for w in warns:
+        log(f"  [계정 출처] ⚠ {w}")
+    log(f"  [계정 출처] 원장 · 동기화 {info['원장 동기화']} · 정산 대상 {len(accts)}계정(셀독원장 {info['셀독원장']} · "
+        f"정산전용 {info['정산전용']}) · 오입력 제외 {info['오입력 제외']}"
+        + (f" · 두 곳에 있어 셀독원장 값 사용 {info['중복(셀독원장 우선)']}" if info['중복(셀독원장 우선)'] else ""))
+    return accts
+
+
+def load_accounts(only: set) -> list:
+    """정산 계정 목록 — 출처 = 설정 settlement/account_source: 'registry'(기본·D-103 원장) | 'file'(옛 정산 계정 파일).
+    읽을 때마다 예전 이름으로 된 요청 기록·파일·금액 기록을 지금 이름으로 맞춘다(계정ID 기준)."""
+    from coupang_analytics import appconfig
+    source = (appconfig.get("settlement/account_source", "") or "registry").strip()
+    if source not in ("registry", "file"):
+        raise SystemExit(f"설정 settlement/account_source='{source}' — registry 또는 file 만")
+    accts = _accounts_from_file() if source == "file" else _accounts_from_registry()
     _migrate_names(accts)
     picked = [a for a in accts if not only or a.account_id in only]
     if only and len(picked) != len(only):
-        raise SystemExit(f"계정 파일에 없는 계정: {sorted(only - {a.account_id for a in picked})}")
+        raise SystemExit(f"정산 계정에 없는 계정: {sorted(only - {a.account_id for a in picked})}")
     return picked
 
 
@@ -630,7 +667,14 @@ def _one_pass(args) -> tuple[bool, int]:
     log(f"실행 {LOG.run_id} · 자동 · 정산 수집 · 기간 {args.start}~{args.end}")
     LOG.heartbeat("작동중", f"정산 수집 · 기간 {args.start}~{args.end}")
     try:
-        rc = _run_accounts(load_accounts(set()), cmd_run, args)
+        accts = load_accounts(set())
+    except SystemExit as exc:                # 계정 구성 실패(원장 오래됨·링크 오류 등) = 이 회차 정산 중단 — 상태 카드에 이유
+        reason = f"❌ {exc}"
+        log(f"[자동] {reason}")
+        LOG.heartbeat("종료", reason)
+        raise
+    try:
+        rc = _run_accounts(accts, cmd_run, args)
         work = _sweep_work_count(LOG)
         cmd_stats()
     except Exception as exc:                 # 그 바퀴만 실패 기록(다음 판단은 진전 없음으로)

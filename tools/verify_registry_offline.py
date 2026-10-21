@@ -1017,6 +1017,75 @@ def t23_company_stock_skip_logged():
     ok("링크 미설정 3경우·계정목록 주입 미설정·SA 미등록 각 1줄 안내·반영 호출 없음·오류 표기 아님")
 
 
+def t24_mistaken_account_id():
+    print("[R24] 계정아이디 형식 오류(비밀번호 오입력 등) = 원장에 안 넣음·이미 들어간 것은 '오입력' 표시(정산·로그인 제외)·로그 가림(D-103)")
+    BAD = "!!x9secret"
+    # (1) 옛 코드가 넣어 버린 상황 재현(형식 검사 끔) → 새 코드로 다시 동기화
+    orig = R.valid_account_id
+    R.valid_account_id = lambda aid: True
+    reg = R.Registry()
+    try:
+        R.sync(reg, snap_of([A("good1", "대표", "상사", "pw1", products=[P("상품A")]),
+                             A(BAD, "대표", "상사", "pw1", products=[P("상품A")])]), now=day(1))
+    finally:
+        R.valid_account_id = orig
+    assert reg.account_rows(BAD), "재현 실패(옛 코드처럼 들어가야)"
+    res = R.sync(reg, snap_of([A("good1", "대표", "상사", "pw1", products=[P("상품A")])]), now=day(2))
+    mk = [e for e in res.events if e.kind == M.K_MISTAKE]
+    assert len(mk) == 1 and mk[0].account_id == BAD and mk[0].new == M.ST_MISTAKE, kinds(res.events)
+    assert reg.mistaken_ids() == {BAD} and status(reg, BAD, "상품A")[0] == M.ST_MISTAKE
+    assert not any(e.kind == M.K_STOP and e.account_id == BAD for e in res.events), "오입력 뒤 관리중단 중복"
+    R.check_integrity(reg)
+    res2 = R.sync(reg, snap_of([A("good1", "대표", "상사", "pw1", products=[P("상품A")])]), now=day(3))
+    assert not res2.events, f"두 번째 동기화에 또 기록: {kinds(res2.events)}"
+    assert BAD not in [a.account_id for a in R.to_input_list(reg).accounts], "오입력 계정이 입력으로"
+    assert all(BAD not in RG._describe(h) for h in reg.history), "로그 문구에 오입력 값 노출"
+    # (2) 대장에 새로 들어온 형식 오류 계정 = 원장에 안 넣고 경고(값은 경고에 안 씀)
+    reg2 = R.Registry()
+    res3 = R.sync(reg2, snap_of([A("good1", "대표", "상사", "pw1"), A(BAD, "대표", "상사", "pw1")]), now=day(1))
+    assert not reg2.account_rows(BAD) and any("형식 오류" in w for w in res3.warnings), res3.warnings
+    assert not any(BAD in w for w in res3.warnings), "경고에 오입력 값 노출"
+    ok("옛 오입력 = '오입력' 1회·관리중단 중복 없음·무결성 유지·입력 제외·로그 가림 · 새 오입력 = 원장에 안 넣음+경고")
+
+
+def t25_settle_only_sheet():
+    from coupang_analytics import registry_settle as RS
+    from coupang_analytics.settlement_accounts import SettleAccount
+    print("[R25] 정산전용계정 시트(사람 편집) → 정산전용이력 자동 기록(신규·수정·관리중단·목록 삭제·비번 로그 생략)·한 번만(D-103)")
+    cli = FakeClient()
+    logs: list = []
+    accts = [SettleAccount("own1", "대표-디프", "pwA"), SettleAccount("cons1", "홍길동-위탁상사", "pwB"),
+             SettleAccount("ledger1", "대표-대장계정", "pwC"), SettleAccount("one1", "디프픽", "pwD")]
+    added = RS.import_rows(cli, accts, skip_ids={"ledger1"}, own_ids={"own1"}, today="2026-10-21")
+    assert added == ["own1", "cons1", "one1"], added
+    assert cli.grids[RS.SHEET_SETTLE][3][4:6] == ["", "디프픽"], "한 단어 이름 = 사업자명(표시 이름 그대로)"
+    rows = cli.grids[RS.SHEET_SETTLE]
+    assert rows[0] == list(RS.SETTLE_HEADER) and rows[1][3] == "우리사업자" and rows[2][3] == "위탁" and rows[2][4:6] == ["홍길동", "위탁상사"]
+    assert RS.import_rows(cli, accts, skip_ids={"ledger1"}, own_ids={"own1"}, today="2026-10-21") == [], "두 번 넣음"
+    ch = RS.sync_settle(cli, day(21), logs.append)
+    assert [c[2] for c in ch].count(RS.K_NEW) == 3, ch
+    assert RS.sync_settle(cli, day(22), logs.append) == [], "변경 없는데 또 기록"
+    rows[2][7] = "pwNEW"                                  # 비밀번호 변경
+    rows[1][0], rows[1][2] = "관리중단", "2026-10-23"       # 관리중단
+    ch = RS.sync_settle(cli, day(23), logs.append)
+    assert {(c[0], c[3]) for c in ch} == {("cons1", "비밀번호"), ("own1", "관리상태"), ("own1", "중단일")}, ch
+    assert not any("pwNEW" in m or "pwB" in m for m in logs), "로그에 비밀번호 값"
+    del rows[2]
+    ch = RS.sync_settle(cli, day(24), logs.append)
+    assert ch == [("cons1", "위탁상사", RS.K_GONE, "", "", "")], ch
+    hist = cli.grids[RS.SHEET_SETTLE_HIST]
+    nos = [int(r[0]) for r in hist[1:] if r]
+    assert nos == sorted(nos, reverse=True) and sorted(nos) == list(range(1, len(nos) + 1)), nos   # 최신 위·번호 연속
+    rows.append(rows[1][:])                               # 같은 계정 두 줄 = 오류(쓰기 없음)
+    try:
+        RS.sync_settle(cli, day(25), logs.append)
+    except RS.SettleSheetError:
+        pass
+    else:
+        raise AssertionError("같은 계정ID 두 줄인데 통과")
+    ok("가져오기(대장 계정 제외·우리사업자 구분)·신규/수정/중단/삭제 이력·재실행 0건·비번 로그 생략·번호 연속·중복 줄 오류")
+
+
 def main():
     t16_backfill()
     t15_format_equivalence()
@@ -1045,6 +1114,8 @@ def main():
     t21b_company_stock_match()
     t22_name_rules()
     t23_company_stock_skip_logged()
+    t24_mistaken_account_id()
+    t25_settle_only_sheet()
     print("셀독계정상품이력관리원장 오프라인 검증 통과")
 
 
