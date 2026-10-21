@@ -63,7 +63,7 @@ a_diag = Analysis(
 )
 # 정산 파일 배치 다운로드(읽기·콘솔 없음): 운용 PC 에서 watch 무인 실행(정산다운로드.exe watch).
 # 로그인 세션 same-origin fetch 로 WING 정산 파일을 받는다(정책=실제 Chrome). 앱(①판매수집)과 같은 계정 프로필
-# 동시 사용은 계정 잠금으로 방지. 정산 입력=data\정산_계정목록.txt(비번 평문·zip 미동봉·운용 PC 에 소유자가 직접).
+# 동시 사용은 계정 잠금으로 방지. 정산 입력=셀독계정상품이력관리원장(설정 registry/url·D-103 · 옛 계정 파일은 settlement/account_source=file 일 때만).
 a_settle = Analysis(
     ["tools/settlement_download.py"],
     pathex=["src"],

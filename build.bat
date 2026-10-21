@@ -70,7 +70,7 @@ if errorlevel 1 goto :err
 echo.
 echo 완료!
 echo   결과 폴더: dist\coupang-analytics\  (쿠팡애널리틱스.exe·쿠팡진단.exe·정산다운로드.exe·설치.bat·_설정값.json)
-echo   ※ 정산 자동 다운로드는 설치 PC 의 data\정산_계정목록.txt 가 있어야 동작(비번 평문·zip 미동봉·소유자가 직접 둠).
+echo   ※ 정산 자동 다운로드 계정·비번 = 설정 탭 원장 링크의 셀독계정상품이력관리원장(D-103) — 링크가 틀리거나 원장이 26시간 넘게 안 갱신되면 정산 중단.
 echo   배포 zip:  dist\쿠팡애널리틱스_배포.zip   ← 이 파일 하나만 새 PC로 보내세요(폴더명=coupang-analytics, 노트북과 동일).
 echo.
 echo   [새 PC · 처음] zip 풀기 → coupang-analytics\ 안의 "설치.bat" 더블클릭(관리자 권장) → 끝.
