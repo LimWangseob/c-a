@@ -25,8 +25,8 @@ COL_W = {1: 28, 2: 46, 3: 16}   # 열 너비(글자) — A 계정 · B 상품 ·
 DATE_W = 12                     # 날짜 칸(상세표)·대시보드 D~J 열 너비 — 모두 같음
 DASH_COLS = 10                  # 대시보드 폭 W = A~J 열
 XL_PT_PER_CHAR = 6              # 엑셀 열 너비 1 = 6pt(실측 2026-10-21: 28→168pt) · 1pt = 12,700 EMU
-XL_ROW_PT = 16.5                # 엑셀 기본 행 높이(실측)
-G_ROW_PX = 21                   # 구글 기본 행 높이
+XL_ROW_PT = 15                  # 엑셀 행 높이 하한(실측 16.5pt·PC 글꼴 따라 15pt) — 작은 쪽으로 잡아 아래 표를 덮지 않게
+G_ROW_PX = 20                   # 구글 실제 행 높이(10-21 실측 20px — 21px 로 잡아 ⑤ 차트가 표를 16px 덮었음·D-104)
 CHART_ROWS = 15                 # ②③ · ④ 차트 한 줄이 차지하는 행 수
 GAP = 0.012                     # ②와 ③ 사이 간격(W 비율)
 DATA_WIDTH = 13                 # 숨긴 차트 자료 열 수(월 3·빈칸·주 2·빈칸·일 3·빈칸·계정 2)
@@ -207,13 +207,14 @@ def place(units: list, x0: float, x1: float) -> tuple[int, float, float]:
 
 
 def xl_geometry(sp: dict) -> tuple[int, int, int, int, int]:
-    """엑셀 (열, 행, 열 안 오프셋 EMU, 폭 EMU, 높이 EMU) — 열 너비 × 6pt · 1pt = 12,700 EMU."""
+    """엑셀 (열, 행, 열 안 오프셋 EMU, 폭 EMU, 높이 EMU) — 열 너비 × 6pt · 1pt = 12,700 EMU · 높이 = 비워 둔 행 − 1줄."""
     c, off, w = place([col_width(i) * XL_PT_PER_CHAR for i in range(1, DASH_COLS + 1)], sp["x0"], sp["x1"])
     return c, sp["row"] - 1, int(off * 12700), int(w * 12700), int((sp["rows"] - 1) * XL_ROW_PT * 12700)
 
 
 def g_geometry(sp: dict) -> tuple[int, int, int, int, int]:
-    """구글 (열, 행, 오프셋 px, 폭 px, 높이 px) — 열 픽셀 = int(너비×7+5)(gsheet_stats 열 너비 변환과 같음)."""
+    """구글 (열, 행, 오프셋 px, 폭 px, 높이 px) — 열 픽셀 = int(너비×7+5)(gsheet_stats 열 너비 변환과 같음) ·
+    높이 = (비워 둔 행 − 1) × 20px(아래 표와 한 줄 여유)."""
     c, off, w = place([int(col_width(i) * 7 + 5) for i in range(1, DASH_COLS + 1)], sp["x0"], sp["x1"])
     return c, sp["row"] - 1, int(off), int(w), (sp["rows"] - 1) * G_ROW_PX
 

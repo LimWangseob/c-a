@@ -248,7 +248,40 @@ def t5_gsheet():
     assert hid and all(any(h["range"]["startIndex"] <= ci < h["range"]["endIndex"] for h in hid) for ci in cols), \
         "차트 자료 = 숨긴 열"
     assert kinds[-1] == "updateSheetProperties", "index 0 이동이 마지막"
+    with tempfile.TemporaryDirectory() as d:                               # 계정 26개 — ⑤ 막대가 아래 표를 덮지 않음
+        big = _many_accounts_wb(d)
+    cb = _Client()
+    WS.push_sales_sheet(cb, big)
+    bws = big.wb[WS.SALES_SHEET]
+    for ch in (r["addChart"]["chart"] for r in cb.reqs if "addChart" in r):
+        pos = ch["position"]["overlayPosition"]
+        row = pos["anchorCell"]["rowIndex"] + 1
+        room = _free_rows_below(bws, row) * 20                             # 구글 실제 행 높이 20px(10-21 실측)
+        assert pos.get("offsetYPixels", 0) + pos["heightPixels"] <= room, \
+            f"차트가 아래 내용을 덮음(구글): {ch['spec']['title']} 높이 {pos['heightPixels']} > 빈 행 {room}px"
     ok("옛 차트 삭제 → 값·서식 → 숨긴 열·차트 4개 → index 0 · 열 고정 0 · ②③ W 반씩·④⑤ = W(열 픽셀 합) · 병합 400 없음")
+
+
+def _free_rows_below(ws, row: int) -> int:
+    """row 부터 A~J 에 내용이 처음 나오는 행 직전까지 행 수 — 차트가 이 안에 들어가야 아래 표를 덮지 않음."""
+    r = row
+    while r <= ws.max_row and not any(ws.cell(r, c).value not in (None, "") for c in range(1, 11)):
+        r += 1
+    return r - row
+
+
+def _many_accounts_wb(d):
+    """계정 26개(⑤ 막대가 길어지는 경우 — 10-21 구글 실측 겹침 재현): 계정마다 오늘 하루 판매 1건."""
+    wb = OutputWorkbook.empty()
+    for i in range(26):
+        biz, aid = f"사업자{i:02d}", f"acc{i:02d}"
+        wb.ensure_account(biz)
+        wb.set_account_id(biz, aid)
+        wb.ensure_product_block(biz, f"{biz} 상품", config.KIND_CONTRACT, ["kw"], registered=f"{biz} 상품")
+        wb.set_product_vids(biz, f"{biz} 상품", [f"v{i}"])
+        SH.record(d, aid, "2026-10-20", "2026-10-20", {f"v{i}": _m(f"v{i}", "상품", "RFM", 1, 1000 * (i + 1))})
+    WS.refresh_sales_sheet(wb, d, today=date(2026, 10, 21))
+    return wb
 
 
 def _merges_across_freeze(reqs: list) -> list:
@@ -466,6 +499,14 @@ def t11_charts_persist():
         assert len(wb3.wb[WS.SALES_SHEET]._charts) == 4, "열고 저장을 거듭해도 4개"
         cells = list(wb3.wb[WS.SALES_SHEET].iter_rows(values_only=True))
     assert WD._val(SD.Point("x", 0, 0, missing=3), 3) is None, "모든 계정 자료 없음 = 빈칸(0 막대 아님)"
+    with tempfile.TemporaryDirectory() as d:                               # 계정 26개 — 엑셀도 차트 아래 끝 ≤ 다음 표
+        big = _many_accounts_wb(d)
+    bws = big.wb[WS.SALES_SHEET]
+    for ch in bws._charts:
+        row = ch.anchor._from.row + 1
+        room_pt = _free_rows_below(bws, row) * 15                          # 엑셀 기본 행 15~16.5pt — 작은 쪽으로
+        assert ch.anchor.ext.height / 12700 <= room_pt, \
+            f"차트가 아래 내용을 덮음(엑셀): 높이 {ch.anchor.ext.height / 12700:.0f}pt > 빈 행 {room_pt}pt"
     head = next(r for r in cells if r[0] == "계정" and r[1] == "상품")
     assert head[3:5] == ("10.20", "10.19") and head[3 + 30] == "09.20", "상세 = 최신이 왼쪽 31일·날짜 1칸"
     tot = next(r for r in cells if r[0] == "전체 합계")

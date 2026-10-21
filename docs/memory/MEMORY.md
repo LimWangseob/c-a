@@ -31,6 +31,7 @@
 ## 입력·수집
 - [입력=셀독 관리대장(헤더2행·첫줄·괄호=AI판단·10-19 개편 헤더·숨긴 행=판매중지·체험단 시트=시작일·회사보유재고 열 접두·오입력 계정ID 제거 D-092·093)](input-ledger-format.md) · [대장 스코핑·AI 매칭+VID 고정(D-009)](ledger-scoped-tracking.md) · [판매 API vi-detail-search](sales-data-api-vi-detail-search.md) · [재고 API orderableQuantity](inventory-api-rfm-search.md)
 - [⭐통합 판매현황=결과 첫 시트·위 대시보드(차트·순위·열지도)+일별 상세 31일·관리 상품 기준·일별 4/1 소급(D-064·D-094)](feature-sales-summary-first-sheet.md)
+- [⚠사본 마스터로 통합판매현황 다시 그리기 = D-093 정리 전 오입력 계정ID 노출(10-21 실제)·구글 반영은 한 세션만](feedback-redraw-needs-account-prune.md)
 - [판매데이터 익일반영](coupang-sales-data-lag.md) · [productId 소스 API](api-productid-source-vendor-items-with-vendoritems.md) · [상품명 규약(대장=담당자·결과=노출명)](product-name-convention-ledger-vs-result.md)
 
 ## 키워드·순위

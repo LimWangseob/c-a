@@ -917,3 +917,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 계정아이디에 비밀번호가 포함되면 오입력(정상 계정도 걸림 — 비밀번호에 계정ID 를 넣는 계정 2개 실측) · 정산전용 계정을 셀독원장 줄로 추가(무결성 점검·관리대장 동기화가 관리중단으로 돌림) · 원장 실패 시 옛 파일로 대신(폴백 금지).
 - 영향 범위: `registry_model`(K_MISTAKE·ST_MISTAKE·valid_account_id) · `registry_core`(상태 재생·mistaken_ids) · `registry`(sync 형식 검사·_mark_mistaken) · `registry_gsheet`(_sync_settle_sheet·로그 가림) · 신규 `registry_settle.py`·`tools/registry_settle_import.py` · `settlement_accounts`(accounts_from_registry·last_sync_time) · `tools/settlement_download`(load_accounts 출처·watch 실패 상태) · 시험 3개 · LEDGER_REGISTRY §14. 운용 PC: 원장 링크 원복(D-095) 뒤 첫 18:00 동기화부터 · 표시 이름 11계정이 원장 기준으로 바뀌어 정산 기록·파일 이름이 새 이름으로 맞춰짐(설계된 자동 이름 맞춤) · 관리중단 90일 이내 4계정(lslfgh·plan_it·seankim137·unipang)이 새로 정산 대상. HQ 포팅 대상.
 - 상태: ACTIVE
+
+### D-104 [SALES_CHART_NO_OVERLAP] 통합판매현황 차트 높이 = 비워 둔 행 − 1줄(구글 행 20px·엑셀 15pt 기준) — ⑤ 막대 차트가 아래 표를 덮던 결함 수정 (2026-10-21, R33)
+- 결정: 차트 높이 계산의 행 높이를 구글 20px(실측)·엑셀 15pt(행 높이 하한 — 실측 16.5pt PC 도 안전)로 바꾸고, 높이 = (차트 아래 비워 둔 행 수 − 1) × 행 높이. ⑤ 막대 차트의 비워 둘 행 수도 20px 기준으로 계산.
+- 근거: 소유자 2026-10-21 "계정별 순위 도표와 세부 내역이 겹쳐서 보여"(구글 화면 캡처). 구글 실측(b1d5fd9 반영본): ⑤ 차트 44행·높이 756px = (37−1)×21px, 비워 둔 44~80행 = 37×20px = 740px → 표 머리줄·1위 줄을 16px 덮음(전 계정 26개로 늘어 행이 많아지자 21px−20px 차이가 쌓임). 시험 재현: '차트 아래 끝 ≤ 아래 내용 줄'(구글 20px·엑셀 15pt, 계정 26개) — 수정 전 '756 > 740' 실패 → 수정 후 통과. Excel COM 실측(계정 26개): ⑤ 차트 아래 끝 1270.5pt < 표 머리줄 1342.5pt.
+- 버린 대안: 행 높이를 시트에 직접 지정(미러가 1행 높이만 옮김 — 구글 반영 요청 추가 필요·과함).
+- 영향 범위: `workbook_sales_dash.py`(XL_ROW_PT·G_ROW_PX·geometry 설명) · `tools/verify_sales_summary_offline.py`(_free_rows_below·_many_accounts_wb·T5·T11) · `designs/SALES_SUMMARY.md` §5-1. 차트가 조금 낮아짐(②③④ 엑셀 231→210pt·구글 294→280px).
+- 상태: ACTIVE
