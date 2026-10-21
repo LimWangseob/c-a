@@ -298,6 +298,25 @@ def _match_results(out: Path, log) -> dict:
         return {}
 
 
+def _sync_ledger_state(wb, input_list: InputList, log, vids_by_acct: dict | None) -> None:
+    """대장 계정마다 결과 시트를 대장 상태에 맞춤 — (1) 판매중지 플래그 동기화(매 실행·수집 여부 무관, 2026-09-27:
+    이어쓰기/미수집으로 대조가 누락돼 **정상 상품이 계정목록에 '판매중지'로 남던** 문제 교정 · 대장 활성=해제·판매중지=
+    표기·대장에 없는 블록=불변 · 실측 커스텀존 이큐나라·하성진 · 계정 단위 다계정ID 스코핑) (2) 대장에 없는 계정ID
+    제거(D-093 — 오입력 값이 시트 제목·통합판매현황에 남지 않게)."""
+    sheets = set(wb.account_sheets())
+    for a in input_list.accounts:
+        if a.label not in sheets:
+            continue                                          # 시트 없음(신규 첫날 등) → 건너뜀
+        act = [p.name for p in a.products if not p.discontinued]
+        dis = [p.name for p in a.products if p.discontinued]
+        flipped = wb.sync_discontinued_from_ledger(a.label, act, dis, a.account_id,
+                                                   vids_of=(vids_by_acct or {}).get(a.account_id))   # D-082 VID 대조
+        if flipped:
+            log(f"   [상태동기화] {a.label}: 대장 기준 판매중지 표기 {len(flipped)}개")
+        if input_list.ledger_account_ids and wb.prune_account_ids(a.label, input_list.ledger_account_ids):
+            log(f"   [계정ID 정리] {a.label}: 관리대장에 없는 계정ID 제거(오입력 값은 로그에 남기지 않음·D-093)")
+
+
 def _reconcile_ledger_accounts(wb, input_list: InputList, uncollected, log, vids_by_acct: dict | None = None
                                ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """계정 단위 대조(2026-09-17 정책) — 관리대장 기준으로 결과 워크북의 계정을 정리한다.
@@ -310,19 +329,7 @@ def _reconcile_ledger_accounts(wb, input_list: InputList, uncollected, log, vids
     반환 = (완전 삭제한 [(사업자, 계정ID)…], 일원화로 사라진 옛 이름 [(옛사업자명, 계정ID)…]).
     """
     renamed = _consolidate_renamed_accounts(wb, input_list, log)  # 시트명 변경 계정 먼저 흡수(고아 오분류 방지)
-    # 관리대장 기준 판매중지 플래그 동기화(매 실행·수집 여부 무관, 2026-09-27) — 이어쓰기/미수집으로
-    # 대조가 누락돼 **정상 상품이 계정목록에 '판매중지'로 남던** 문제 교정(대장 활성=해제·판매중지=표기·
-    # 대장에 없는 블록=불변). 실측 커스텀존 이큐나라·하성진. 계정 단위(다계정ID 스코핑).
-    sheets = set(wb.account_sheets())
-    for a in input_list.accounts:
-        if a.label not in sheets:
-            continue                                          # 시트 없음(신규 첫날 등) → 건너뜀
-        act = [p.name for p in a.products if not p.discontinued]
-        dis = [p.name for p in a.products if p.discontinued]
-        flipped = wb.sync_discontinued_from_ledger(a.label, act, dis, a.account_id,
-                                                   vids_of=(vids_by_acct or {}).get(a.account_id))   # D-082 VID 대조
-        if flipped:
-            log(f"   [상태동기화] {a.label}: 대장 기준 판매중지 표기 {len(flipped)}개")
+    _sync_ledger_state(wb, input_list, log, vids_by_acct)
     active_biz = {a.label for a in input_list.accounts}
     active_ids = input_list.ledger_account_ids            # 대장에 줄이 존재하는 계정ID(판매중지 포함)
     uncollected_biz = {a.label for a in uncollected}

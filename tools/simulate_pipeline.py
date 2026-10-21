@@ -833,6 +833,34 @@ def scenario_pwfail_still_ranked():
     _check(bool(srow and col) and wb.wb["비즈-b1"].cell(srow, col).value in (None, ""), "비번 오류 계정 그날 판매는 공란(0 아님)")
 
 
+def scenario_stale_account_id_pruned():
+    print("[시나리오 27] 대장 계정아이디 칸 오입력(비밀번호 등) 하루 → 대장 고치면 결과 계정ID·시트 제목·통합판매현황에서 사라짐(D-093, 실측 10-20 유라이프)")
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set(), pw_fail=set())
+    from coupang_analytics.workbook import OutputWorkbook
+    d = Path(tempfile.mkdtemp())
+    master = P._master_path(d)
+    good = _accounts(["a1", "b1"])
+    good.ledger_account_ids = {"a1", "b1"}
+    _ops(good, d, date_from="2026-09-01", date_to="2026-09-01", resume=False)
+    bad = _accounts(["a1", "b1"])
+    bad.accounts[1].account_id = "PWX!secret"                # 같은 사업자(비즈-b1)·계정아이디 칸에 다른 값
+    bad.ledger_account_ids = {"a1", "PWX!secret"}
+    _STATE.update(pw_fail={"PWX!secret"})                     # 그 값으로 로그인 → 거부
+    try:
+        _ops(bad, d, date_from="2026-09-02", date_to="2026-09-02", carry_forward=True)
+    finally:
+        _STATE.update(pw_fail=set())
+    wb = OutputWorkbook.load(master)
+    _check("PWX!secret" in wb.account_ids_of("비즈-b1"), f"(재현) 오입력 값이 계정ID로 남음 {len(wb.account_ids_of('비즈-b1'))}개")
+    _ops(good, d, date_from="2026-09-03", date_to="2026-09-03", carry_forward=True)   # 대장 고침
+    wb = OutputWorkbook.load(master)
+    _check(wb.account_ids_of("비즈-b1") == ["b1"], f"대장에 없는 계정ID 제거 — 남은 개수 {len(wb.account_ids_of('비즈-b1'))}")
+    texts = [str(c.value) for ws in wb.wb.worksheets for row in ws.iter_rows() for c in row if c.value is not None]
+    _check(not any("PWX!secret" in t for t in texts), "결과 파일 어디에도 오입력 값 없음(시트 제목·통합판매현황·숨김 시트)")
+    _check(wb.is_rank_filled("비즈-b1", "상품-b1", "kw1", "09.01") and "상품-b1" in wb.products_of("비즈-b1"),
+           "그 사업자 이력·상품 보존")
+
+
 def scenario_business_rename_keeps_history():
     print("[시나리오 24] 대장 사업자명 변경(계정ID 동일) = 같은 시트로 이력·키워드 유지(D-080, 실측 10-16 최문석→셀와니)")
     _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
@@ -891,6 +919,7 @@ def main():
     scenario_business_rename_keeps_history()
     scenario_uncollected_still_ranked()
     scenario_pwfail_still_ranked()
+    scenario_stale_account_id_pruned()
     scenario_promo_start_keeps_daily()
     print("=" * 60)
     print("  [완료] 모든 시나리오 통과")

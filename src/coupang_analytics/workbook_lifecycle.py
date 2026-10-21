@@ -122,6 +122,28 @@ class _LifecycleMixin:
             self._reindex()
         return removed
 
+    def prune_account_ids(self, biz: str, ledger_ids) -> int:
+        """그 사업자에 저장된 계정ID 중 **관리대장에 없고 어느 상품에도 태그되지 않은** 것을 지운다(D-093) — `_계정정보`
+        목록과 `_수집스탬프` 그 계정ID 행. 남은 개수가 0 이 되면 지우지 않는다(이름 변경·삭제 판정은 다른 경로).
+        실측 10-20 유라이프: 대장 계정아이디 칸에 비밀번호 값이 하루 들어가 계정ID로 쌓였고(set_account_id 는 누적만),
+        대장을 고친 뒤에도 시트 제목·통합판매현황에 그 값이 계속 보였다. 반환 = 지운 개수(값은 호출부도 로그에 안 남김)."""
+        ids = self.account_ids_of(biz)
+        tagged = {self.product_account_id(biz, p) for p in self.products_of(biz)}
+        drop = [a for a in ids if a not in ledger_ids and a not in tagged]
+        keep = [a for a in ids if a not in drop]
+        if not drop or not keep:
+            return 0
+        ws = self.wb[_ACCT_SHEET]
+        for r in range(2, ws.max_row + 1):
+            if _norm(ws.cell(r, 1).value) == biz:
+                ws.cell(r, 2, " / ".join(keep))
+        if _STAMP_SHEET in self.wb.sheetnames:
+            sws = self.wb[_STAMP_SHEET]
+            for r in range(sws.max_row, 1, -1):
+                if _norm(sws.cell(r, 1).value) in drop:
+                    sws.delete_rows(r)
+        return len(drop)
+
     def _copy_product_block(self, src: str, product: str, dst: str, other=None) -> None:
         """other(기본=이 워크북)의 src 시트 상품 블록 하나를 dst 로 복제(이력·키워드·순위·검색량·메타 전부·일자 라벨로 정렬)."""
         o = other or self
