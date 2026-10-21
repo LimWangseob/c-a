@@ -812,6 +812,29 @@ def scenario_promo_start_keeps_daily():
         _check(bool(row and col) and wb.wb[biz].cell(row, col).value == 7, f"{biz} 다음 날(09.03)도 판매 수집(3일 주기로 안 빠짐)")
 
 
+def scenario_promo_end_keeps_daily():
+    print("[시나리오 26b] 계정목록 '체험단 종료일'만 입력해도 매일 수집·순위 유지(3일 주기 안 켜짐, D-108)")
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    from coupang_analytics.workbook import OutputWorkbook
+    d = Path(tempfile.mkdtemp())
+    master = P._master_path(d)
+    accts = _accounts(["a1", "b1"])
+    _ops(accts, d, date_from="2026-09-01", date_to="2026-09-01", resume=False)
+    for a in accts.accounts:                      # 직원이 계정목록 b1 상품에 체험단 종료일만 입력(read_marketing → apply_marketing)
+        if a.account_id == "b1":
+            a.products[0].mkt_end = "2026-09-30"
+    for day in ("02", "03"):
+        _ops(accts, d, date_from=f"2026-09-{day}", date_to=f"2026-09-{day}", carry_forward=True)
+    wb = OutputWorkbook.load(master)
+    _check(wb.marketing_of("비즈-b1", "상품-b1")[1] == "2026-09-30", "체험단 종료일은 기록됨(체험단중·종료 표시용)")
+    _check(not wb.has_marketing(), "종료일만으로는 수집 주기 게이팅을 켜지 않음")
+    for biz, prod in (("비즈-a1", "상품-a1"), ("비즈-b1", "상품-b1")):
+        row = wb._metric_row.get((biz, prod, config.M_SALES))
+        col = wb._date_col.get(biz, {}).get("09.03")
+        _check(bool(row and col) and wb.wb[biz].cell(row, col).value == 7, f"{biz} 09.03 도 판매 수집(3일 주기로 안 빠짐)")
+        _check(wb.is_rank_filled(biz, prod, "kw1", "09.03"), f"{biz} 09.03 도 순위 측정")
+
+
 def scenario_pwfail_still_ranked():
     print("[시나리오 26] 비밀번호 오류 계정도 그날 날짜 칸 생성 → ③ 순위 측정·판매 공란(D-089, 실측 10-20 유라이프·반달컴퍼니 칸 없음)")
     _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set(), pw_fail=set())
@@ -921,6 +944,7 @@ def main():
     scenario_pwfail_still_ranked()
     scenario_stale_account_id_pruned()
     scenario_promo_start_keeps_daily()
+    scenario_promo_end_keeps_daily()
     print("=" * 60)
     print("  [완료] 모든 시나리오 통과")
     print("=" * 60)

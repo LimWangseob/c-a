@@ -529,11 +529,14 @@ class _MetaMixin:
 
     # ── 수집 주기(마케팅 기반) ────────────────────────────────
     def has_marketing(self) -> bool:
-        """마케팅 기간이 한 건이라도 설정돼 있는가(수집 주기 게이팅 활성 조건). 미설정이면 현행대로 매일."""
+        """마케팅 기간이 한 건이라도 설정돼 있는가(수집 주기 게이팅 활성 조건). 미설정이면 현행대로 매일.
+
+        판정 = 시작(3열)·모니터링종료(5열)만. **종료(4열)만 있는 건 게이팅을 켜지 않는다**(D-108 — 직원이 계정목록
+        '체험단 종료일'만 적어도 체험단 없는 상품까지 3일 주기 수집·순위로 바뀌던 결함). 종료일은 체험단중·종료 표시용."""
         ws = self._mkt_ws()
         if ws is None:
             return False
         for r in range(2, ws.max_row + 1):
-            if any(_norm(ws.cell(r, c).value) for c in (3, 4, 5)):
+            if any(_norm(ws.cell(r, c).value) for c in (3, 5)):
                 return True
         return False
