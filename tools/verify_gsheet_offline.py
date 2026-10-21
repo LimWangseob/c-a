@@ -194,7 +194,7 @@ def _touched_data_mkt(req) -> set:
     if not uc or uc["start"].get("rowIndex", 0) < DATA_START0:
         return set()
     start = uc["start"]["columnIndex"]; ncol = len(uc["rows"][0]["values"])
-    mkt = (gi.COL_MKT_END, gi.COL_MKT_MON)   # 직원 입력 열(체험단 종료·모니터링 종료) — 시작일은 D-087 부터 자동(체험단 시트)
+    mkt = (gi.COL_MKT_END,)   # 직원 입력 열(체험단 종료) — 시작일은 D-087 부터 자동(체험단 시트)·모니터링 종료일 열은 D-106 삭제
     return {c for c in range(start, start + ncol) if c in mkt}
 
 
@@ -304,6 +304,13 @@ class _FakeClient:
                 c0, c1 = rg.get("startColumnIndex", 0), rg.get("endColumnIndex", 0)
                 self._merges = [m for m in self._merges
                                 if not (m[0] < r1 and m[1] > r0 and m[2] < c1 and m[3] > c0)]
+            dd = r.get("deleteDimension")   # D-106 열 삭제 재현(모니터링 종료일) — 그 열 값 제거·오른쪽이 왼쪽으로
+            if dd and dd["range"].get("dimension") == "COLUMNS":
+                d0, d1 = dd["range"]["startIndex"], dd["range"]["endIndex"]
+                for (mr0, mr1, mc0, mc1) in merges_at_start:   # 보수적 재현: 병합 안 열 삭제는 실패로(이전이 먼저 해제해야)
+                    if mc0 <= d0 < mc1 and (mc1 - mc0) > 1:
+                        raise RuntimeError("deleteDimension across merged range (fake)")
+                self._v = [list(row[:d0]) + list(row[d1:]) for row in self._v]
             mv = r.get("moveDimension")   # 항목④ 열 이동 재현: source 열을 destinationIndex 로(값 유지)
             if mv and mv["source"].get("dimension") == "COLUMNS":
                 s = mv["source"]["startIndex"]; dest = mv["destinationIndex"]
@@ -518,10 +525,13 @@ def t4_marketing_merge() -> None:
     n = gi.apply_marketing(accts, m)
     # D-087: 시작일 칸은 체험단 시트 자동값이라 되읽지 않음(되읽으면 마케팅 시작일 → 3일 주기 수집이 켜짐)
     assert n == 1, n                                          # 우산(시작일만 있음) = 직원 입력 없음
-    assert accts[0].products[0].mkt_start == "" and accts[0].products[0].mkt_mon == "2026-10-31"
+    # D-106: 모니터링 종료일 열 삭제 → 옛 시트에 값이 남아 있어도 읽지 않음(모니터링 = '')
+    assert accts[0].products[0].mkt_start == "" and accts[0].products[0].mkt_mon == ""
     assert accts[0].products[0].mkt_end == "2026-09-30" and accts[1].products[0].mkt_start == ""
+    mon_only = [["계정목록"], list(_HEAD), ["대표A", "가게A", "idA", "텀블러", "", "", "2026-10-31", "예정"]]
+    assert gi.read_marketing(_FakeClient(mon_only)) == {}    # 모니터링만 있는 행 = 직원 입력 없음
     assert gi.read_marketing(_FakeClient([])) == {}          # 시트 없으면 빈 dict
-    _ok("직원 입력(종료·모니터링) 반영·시작일 칸(자동) 되읽지 않음·미입력 스킵·시트 없으면 빈 dict")
+    _ok("직원 입력(체험단 종료일) 반영·시작일 칸(자동)·모니터링(D-106 삭제) 되읽지 않음·미입력 스킵·시트 없으면 빈 dict")
 
 
 def _sample_workbook() -> OutputWorkbook:
@@ -605,7 +615,12 @@ def t6_roster_from_workbook() -> None:
         for j, cell in enumerate(uc["rows"][0]["values"]):
             if cell.get("userEnteredFormat", {}).get("backgroundColor"):
                 bg_cols.add(start + j)
-    assert bg_cols == {0, 1, 2, 3, 4, 5, 9, 10}, bg_cols   # A~F(대표자·사업자·계정ID·상품·회사재고·그로스) + J·K(상태·체험단효과) 담당(G~I 마케팅 미접촉)
+    assert bg_cols == {0, 1, 2, 3, 4, 5, 6, 9}, bg_cols   # D-106: A~G(대표자·사업자·계정ID·상품·상태·회사재고·그로스) + J(체험단효과) 담당(H~I 마케팅 바탕 미접촉)
+    # D-106: 회사보유재고(F) = 칸 안 줄바꿈(옆 칸으로 넘어가지 않게) · 상태(E) = 상품명 바로 오른쪽
+    vals = reqs[0]["updateCells"]["rows"][0]["values"]
+    assert vals[gi.COL_STATUS]["userEnteredValue"]["stringValue"] == "예정", vals[gi.COL_STATUS]
+    assert vals[gi.COL_STOCK]["userEnteredFormat"].get("wrapStrategy") == "WRAP", vals[gi.COL_STOCK]
+    assert "userEnteredFormat.wrapStrategy" in reqs[0]["updateCells"]["fields"]
     # I열 체험단효과 색: 개선=연초록·악화=연적색·그외=밴드색(값도 기록)
     def _promo_cell(verdict):
         rq = gi._auto_cells_request(1, DATA_START0,
@@ -624,6 +639,39 @@ def t6_roster_from_workbook() -> None:
     assert rc["cell"]["userEnteredFormat"]["backgroundColor"] == gi._band_fill(1)
     assert "userEnteredValue" not in str(rc["fields"])   # 배경/정렬만 — 값 미기록(직원 입력 보존)
     _ok("노출명·안정키·통계링크 + 행 전체 사업자 밴드색(A~G, D~F는 값 보존한 채 배경만)")
+
+
+def t6d_status_layout_migration() -> None:
+    print("[6d] 계정목록 옛 11열 → 새 10열(D-106: 모니터링 종료일 삭제·상태=상품명 오른쪽·행 고정 2·그로스재고 헤더 2줄)")
+    old11 = ["대표자", "사업자", "계정ID", "상품명(클릭 이동)", "회사보유재고", "그로스재고 (자동갱신 10.20)",
+             "체험단 시작일", "체험단 종료일", "모니터링 종료일", "상태", "체험단효과"]
+    vals = [["계정목록 · 상품 2개"], list(old11),
+            ["대표A", "가게A", "idA", "텀블러", "검단 , 5개", 3, "2026-09-01", "2026-09-30", "", "예정", "순위 9→3 ↑"],
+            ["대표A", "가게A", "idA", "보온병", "", 0, "", "", "", "⛔ 판매중지", ""]]
+    fc = _FakeClient(vals, col_count=26, merges=[(0, 1, 0, 11)])
+    logs: list = []
+    gi._ensure_status_layout(fc, "계정목록", fc.sheet_id("계정목록"), on_log=logs.append)
+    hdr = fc._v[1]
+    assert "모니터링 종료일" not in hdr and hdr[gi.COL_STATUS] == "상태", hdr
+    assert hdr[gi.COL_STOCK] == "회사보유재고" and hdr[gi.COL_MKT_END] == "체험단 종료일" and hdr[gi.COL_PROMO] == "체험단효과", hdr
+    row = fc._v[2]   # 값이 열과 함께 이동(직원 입력 체험단 종료일·체험단효과 보존)
+    assert (row[gi.COL_STATUS], row[gi.COL_STOCK], row[gi.COL_MKT_END], row[gi.COL_PROMO]) == \
+        ("예정", "검단 , 5개", "2026-09-30", "순위 9→3 ↑"), row
+    assert fc._v[3][gi.COL_STATUS] == "⛔ 판매중지", fc._v[3]
+    assert (0, 1, 0, gi.N_COLS) in fc._merges, f"제목 재병합(A1:J1) 안 됨: {fc._merges}"
+    assert any("값 0칸" in m for m in logs), logs
+    n = len(fc.batches)
+    gi._ensure_status_layout(fc, "계정목록", fc.sheet_id("계정목록"))   # 멱등 — 이미 새 배치면 손대지 않음
+    assert len(fc.batches) == n, "새 배치인데 다시 이전함"
+    # 증분 동기화 = 행 고정 2 매번 보정 · 그로스재고 헤더 2줄(줄바꿈 허용)
+    reqs = gi._build_requests_for_plan(7, gi.SyncPlan(updates=[], inserts=[], discontinue=[], total_rows=0),
+                                       growth_asof="10.21")
+    fz = [r["updateSheetProperties"] for r in reqs if "updateSheetProperties" in r]
+    assert fz and fz[0]["properties"]["gridProperties"] == {"frozenRowCount": 2}, fz   # 열 고정은 안 건드림(병합 400)
+    head = reqs[0]["updateCells"]["rows"][0]["values"]
+    assert head[gi.COL_GROWTH]["userEnteredValue"]["stringValue"] == "그로스재고\n(자동갱신 10.21)", head[gi.COL_GROWTH]
+    assert head[gi.COL_GROWTH]["userEnteredFormat"]["wrapStrategy"] == "WRAP"
+    _ok("모니터링 열 삭제·상태 E로 이동(값 함께)·제목 재병합·멱등 + 증분마다 행 고정 2·그로스재고 헤더 2줄")
 
 
 def t6c_content_col_widths() -> None:
@@ -1075,7 +1123,7 @@ def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
     for fn in (t1_ledger_rows, t1b_ledger_strike, t1d_ledger_hidden_rows, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
                t3d_grid_autogrow, t3c_delete_accounts, t3e_delete_renamed, t3f_find_renamed_orphans, t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook,
-               t6b_multi_account_roster, t6c_content_col_widths, t7_staff_keywords_merge,
+               t6b_multi_account_roster, t6c_content_col_widths, t6d_status_layout_migration, t7_staff_keywords_merge,
                t8_exec_retry, t9_legacy_format_mismatch, t10_stats_full_replace_mismatch,
                t11_move_across_title_merge, t11b_merge_failure_nonfatal, t11c_stock_migration_frozen_cols,
                t12_delete_ghost_product_rows, t13_backup_result_via_sa, t14_sheet_id_robust,
