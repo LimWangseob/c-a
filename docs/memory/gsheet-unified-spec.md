@@ -23,3 +23,5 @@ metadata:
 **작업 전 백업(backup_sources) = SA 다운로드(2026-10-02 수정)**: 예전엔 결과시트·관리대장을 **공개 export**(`gsheet.download_xlsx`)로 백업 → 두 시트 다 **SA 공유(비공개)**라 **401**(실측). 수정: 결과시트는 **서비스계정(Sheets API) 값 스냅샷**(`_download_gsheet_via_sa`=각 시트 read_values→openpyxl)으로 백업, **관리대장은 로컬 백업 생략**(평문 비밀번호 있어 output 평문 금지 — 기존 401이 사실 이 유출을 막고 있었음·복구는 구글 버전기록). 게이트 `verify_gsheet_offline[13]`. ⚠`restore_master_from_gsheet`(마스터 없을 때 복원)도 공개 export라 같은 401 가능 — 복원본은 실제 xlsx 구조가 필요해 값 스냅샷으로 못 바꿈(별도 과제·씨앗 동봉으로 거의 안 탐). ⚠**403/400 라이브 함정**: SA에 시트가 공유 안 됐으면 404/403, 시트가 **엑셀(.xlsx) 업로드본**이면 "must not be an Office file" 400 → 네이티브 구글시트로 변환 필요. 회사재고(stock)·원장(registry) 링크도 동일 규칙.
 
 관련: [[seldoc-output-format]] [[input-ledger-format]] [[daily-stats-keyword-freeze]] [[keyword-methodology-ai-anchor]] [[login-policy-real-browser-only]]
+
+- **계정목록 10열(D-106·2026-10-21 소유자)**: 대표자·사업자·계정ID·상품명·**상태**·회사보유재고(칸 안 줄바꿈 130~190px)·그로스재고(머리글 2줄)·체험단 시작일(자동)·체험단 종료일(직원 입력)·체험단효과. 모니터링 종료일 열 삭제. 행 고정 2 를 증분마다 보정(전체 생성 때만 걸던 것). 옛 11열은 `_ensure_status_layout` 이 자동 이전. **⚠ 열 배치를 바꾸면 운용 PC 옛 버전이 옛 위치로 써서 칸이 어긋남 → 구글 적용은 새 버전 배포와 같이**(10-21 은 소유자 지시로 먼저 적용).
