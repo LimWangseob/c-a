@@ -401,7 +401,7 @@ def t10_dashboard():
 
 
 def t11_charts_persist():
-    print("[T11] 엑셀 — 차트 4개(②③④⑤)·같은 왼쪽 끝·같은 폭 W·다시 열어도 유지 · ⑤ 5칸 표·판매 없음/미수집 줄 · 10월 막대")
+    print("[T11] 엑셀 — 차트 4개(②③④⑤)·같은 왼쪽 끝·같은 폭 W·다시 열어도 유지 · ⑤ 전 계정 5칸 표·미수집 줄 · 10월 막대")
     from openpyxl.utils import get_column_letter
     with tempfile.TemporaryDirectory() as d:
         _dash_fixture(d)
@@ -458,10 +458,13 @@ def t11_charts_persist():
     assert cells[i + 1][3] == kpi[1] == 1500, (cells[i + 1][3], kpi[1])
     rh = next(r for r in cells if r[0] == "순위")
     assert [v for v in rh[:10] if v] == ["순위", "계정", "이번 달 누계(원)", "지난주(원)", "전주 대비"], rh[:10]
-    rows = [r for r in cells if isinstance(r[0], int) and r[1]]
-    assert [(r[0], r[1], r[2], r[5]) for r in rows] == [(1, "에벤에셀 (a1)", 30000, 10500)], rows
+    k = cells.index(rh)
+    rows = [(r[0], r[1], r[2], r[5]) for r in cells[k + 1:k + 4]]
+    assert rows == [(1, "에벤에셀 (a1)", 30000, 10500), ("-", "벅스 (a3)", 0, 0), ("-", "니코에이블 (a2)", "미수집", "미수집")], \
+        f"⑤ = 전 계정(판매 순 → 판매 0 → 미수집·소유자 2026-10-21): {rows}"
+    assert specs[3]["cat"][1] - specs[3]["cat"][0] == 3, "⑤ 막대 차트도 전 계정"
     flat = [v for r in cells for v in r if isinstance(v, str)]
-    assert "판매 없음 1계정: 벅스 (a3)" in flat, [v for v in flat if "계정:" in v]
+    assert not any(v.startswith("판매 없음") for v in flat), "판매 0 계정은 표에 나오므로 따로 줄 없음"
     assert "미수집 1계정: 니코에이블(자료 없음)" in flat, "미수집 = 이름(사유)"
     # 소유자 2026-10-21: 미수집 계정이 생기면 계정명을 괄호로(① 미수집 칸·비교 기준·⑤·상세 미수집 줄)
     assert "1 / 3 계정 (니코에이블)" in flat, [v for v in flat if "/ 3 계정" in v]
@@ -470,7 +473,7 @@ def t11_charts_persist():
     assert miss_row[1].startswith("벅스 ") and "니코에이블 5일" in miss_row[1], f"상세 미수집 줄 = 이름·일수: {miss_row}"
     assert WD.paren(()) == "" and WD.paren(("유라이프", "반달컴퍼니")) == "(유라이프, 반달컴퍼니)", "없으면 괄호 없음"
     assert not any(v.startswith("⑥") for v in flat) and not any(set(v) <= set("▁▂▃▄▅▆▇█·") for v in flat if v)
-    ok("차트 4개 · 왼쪽 0·오른쪽 W 일치 · ②③ 반씩 · 10월 진행 중 30,000(a2 빠진 날 있어 제외) · 미수집 날 회색 · ⑤ 5칸·판매 없음/미수집 줄 · 다시 열어도 4개")
+    ok("차트 4개 · 왼쪽 0·오른쪽 W 일치 · ②③ 반씩 · 10월 진행 중 30,000(a2 빠진 날 있어 제외) · 미수집 날 회색 · ⑤ 전 계정(판매 0·미수집 포함)·미수집 줄 · 다시 열어도 4개")
 
 
 def main() -> int:

@@ -110,38 +110,37 @@ def _kpis(ws, r, d) -> int:
 
 
 def _ranks(ws, r, d, rc, reasons) -> tuple[int, list]:
-    """⑤ 이번 달 누계 가로 막대(판매 있는 계정만) + 표 5칸(순위·계정·이번 달 누계·지난주·전주 대비) + 판매 없음·미수집 한 줄씩."""
-    _band(ws, r, "⑤ 계정 순위 — 이번 달 누계 판매금액 순(판매 있는 계정)")
-    sold = [a for a in d.accounts if a.amount]
-    _table(ws, r + 1, rc, ("계정", "이번 달 누계"), [(a.label, a.amount) for a in sold])
-    rows = max(6, math.ceil((60 + 26 * len(sold)) / G_ROW_PX) + 1)
-    spec = [{"type": "hbar", "title": "⑤ 이번 달 누계 판매금액(계정)", "row": r + 1, "rows": rows, "x0": 0.0,
-             "x1": 1.0, "cat": [r + 1, r + 1 + len(sold), rc], "series": [[r + 1, r + 1 + len(sold), rc + 1]],
-             "colors": [_C_ACC]}] if sold else []
-    r = r + 1 + (rows if sold else 0)
+    """⑤ 이번 달 누계 가로 막대 + 표 5칸(순위·계정·이번 달 누계·지난주·전주 대비) — **전 계정**(소유자 2026-10-21·D-101):
+    판매 순 → 판매 0 → 미수집. 순위 번호는 판매 있는 계정만('-' = 판매 0·미수집). 미수집 사유는 표 아래 한 줄."""
+    _band(ws, r, "⑤ 계정 순위 — 이번 달 누계 판매금액 순(전 계정 · 판매 0·미수집 포함)")
+    acc = d.accounts
+    _table(ws, r + 1, rc, ("계정", "이번 달 누계"), [(a.label, a.amount) for a in acc])
+    rows = max(6, math.ceil((60 + 26 * len(acc)) / G_ROW_PX) + 1)
+    spec = [{"type": "hbar", "title": "⑤ 이번 달 누계 판매금액(전 계정)", "row": r + 1, "rows": rows, "x0": 0.0,
+             "x1": 1.0, "cat": [r + 1, r + 1 + len(acc), rc], "series": [[r + 1, r + 1 + len(acc), rc + 1]],
+             "colors": [_C_ACC]}] if acc else []
+    r = r + 1 + (rows if acc else 0)
     h = dict(bold=True, fill=_FILL_HEAD, box=True, center=True)
     _cell(ws, r, 1, "순위", **h)
     _cell(ws, r, 2, "계정", **h)
     _span(ws, r, 3, 5, "이번 달 누계(원)", **h)
     _span(ws, r, 6, 7, "지난주(원)", **h)
     _span(ws, r, 8, DASH_COLS, "전주 대비", **h)
-    for i, a in enumerate(sold, 1):
+    for i, a in enumerate(acc, 1):
         r += 1
         f = dict(fill=_FILL_SUB if i % 2 == 0 else None, box=True)
-        _cell(ws, r, 1, i, center=True, **f)
+        _cell(ws, r, 1, i if a.amount else "-", center=True, **f)
         _cell(ws, r, 2, a.label, **f)
-        _span(ws, r, 3, 5, a.amount, num=True, **f)
-        _span(ws, r, 6, 7, a.week if a.week is not None else "미수집", num=True,
-              color=None if a.week is not None else _GRAY, **f)
+        for c1, c2, v in ((3, 5, a.amount), (6, 7, a.week)):
+            _span(ws, r, c1, c2, v if v is not None else "미수집", num=True,
+                  color=None if v is not None else _GRAY, **f)
         text, color = pct_text(a.change)
         _span(ws, r, 8, DASH_COLS, text, center=True, color=color, **f)
-    zero = [a.label for a in d.accounts if a.amount == 0]
-    miss = [f"{short_name(a.label)}({reasons.get(a.aid) or '자료 없음'})" for a in d.accounts if a.amount is None]
-    for title, names, color in (("판매 없음", zero, "595959"), ("미수집", miss, _RED)):
-        if names:
-            r += 1
-            _span(ws, r, 1, DASH_COLS, f"{title} {len(names)}계정: " + ", ".join(names), color=color)
-            ws.cell(r, 1).alignment = _LEFT_WRAP
+    miss = [f"{short_name(a.label)}({reasons.get(a.aid) or '자료 없음'})" for a in acc if a.amount is None]
+    if miss:
+        r += 1
+        _span(ws, r, 1, DASH_COLS, f"미수집 {len(miss)}계정: " + ", ".join(miss), color=_RED)
+        ws.cell(r, 1).alignment = _LEFT_WRAP
     return r, spec
 
 
