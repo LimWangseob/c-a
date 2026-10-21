@@ -194,8 +194,8 @@ def _touched_data_mkt(req) -> set:
     if not uc or uc["start"].get("rowIndex", 0) < DATA_START0:
         return set()
     start = uc["start"]["columnIndex"]; ncol = len(uc["rows"][0]["values"])
-    mkt = (gi.COL_MKT_END,)   # 직원 입력 열(체험단 종료) — 시작일은 D-087 부터 자동(체험단 시트)·모니터링 종료일 열은 D-106 삭제
-    return {c for c in range(start, start + ncol) if c in mkt}
+    # D-109: 직원 입력 열 없음(체험단 종료일 삭제) → 데이터 행 기록이 9열(A~I) 밖으로 나가면 안 됨
+    return {c for c in range(start, start + ncol) if c >= gi.N_COLS}
 
 
 def t3_index_sync() -> None:
@@ -615,7 +615,7 @@ def t6_roster_from_workbook() -> None:
         for j, cell in enumerate(uc["rows"][0]["values"]):
             if cell.get("userEnteredFormat", {}).get("backgroundColor"):
                 bg_cols.add(start + j)
-    assert bg_cols == {0, 1, 2, 3, 4, 5, 6, 9}, bg_cols   # D-106: A~G(대표자·사업자·계정ID·상품·상태·회사재고·그로스) + J(체험단효과) 담당(H~I 마케팅 바탕 미접촉)
+    assert bg_cols == {0, 1, 2, 3, 4, 5, 6, 8}, bg_cols   # D-109: A~G(대표자·사업자·계정ID·상품·상태·회사재고·그로스) + I(체험단효과) · H 체험단 시작일 바탕은 _mkt_fill_request
     # D-106: 회사보유재고(F) = 칸 안 줄바꿈(옆 칸으로 넘어가지 않게) · 상태(E) = 상품명 바로 오른쪽
     vals = reqs[0]["updateCells"]["rows"][0]["values"]
     assert vals[gi.COL_STATUS]["userEnteredValue"]["stringValue"] == "예정", vals[gi.COL_STATUS]
@@ -642,7 +642,7 @@ def t6_roster_from_workbook() -> None:
 
 
 def t6d_status_layout_migration() -> None:
-    print("[6d] 계정목록 옛 11열 → 새 10열(D-106: 모니터링 종료일 삭제·상태=상품명 오른쪽·행 고정 2·그로스재고 헤더 2줄)")
+    print("[6d] 계정목록 옛 11열·10열 → 새 9열(D-106·D-109: 모니터링·체험단 종료일 삭제·상태=상품명 오른쪽·행 고정 2·그로스재고 헤더 2줄)")
     old11 = ["대표자", "사업자", "계정ID", "상품명(클릭 이동)", "회사보유재고", "그로스재고 (자동갱신 10.20)",
              "체험단 시작일", "체험단 종료일", "모니터링 종료일", "상태", "체험단효과"]
     vals = [["계정목록 · 상품 2개"], list(old11),
@@ -652,14 +652,23 @@ def t6d_status_layout_migration() -> None:
     logs: list = []
     gi._ensure_status_layout(fc, "계정목록", fc.sheet_id("계정목록"), on_log=logs.append)
     hdr = fc._v[1]
-    assert "모니터링 종료일" not in hdr and hdr[gi.COL_STATUS] == "상태", hdr
-    assert hdr[gi.COL_STOCK] == "회사보유재고" and hdr[gi.COL_MKT_END] == "체험단 종료일" and hdr[gi.COL_PROMO] == "체험단효과", hdr
-    row = fc._v[2]   # 값이 열과 함께 이동(직원 입력 체험단 종료일·체험단효과 보존)
-    assert (row[gi.COL_STATUS], row[gi.COL_STOCK], row[gi.COL_MKT_END], row[gi.COL_PROMO]) == \
-        ("예정", "검단 , 5개", "2026-09-30", "순위 9→3 ↑"), row
+    assert "모니터링 종료일" not in hdr and "체험단 종료일" not in hdr and hdr[gi.COL_STATUS] == "상태", hdr
+    assert hdr[gi.COL_STOCK] == "회사보유재고" and hdr[gi.COL_MKT_START] == "체험단 시작일" and hdr[gi.COL_PROMO] == "체험단효과", hdr
+    row = fc._v[2]   # 값이 열과 함께 이동(체험단 시작일·체험단효과 보존)
+    assert (row[gi.COL_STATUS], row[gi.COL_STOCK], row[gi.COL_MKT_START], row[gi.COL_PROMO]) == \
+        ("예정", "검단 , 5개", "2026-09-01", "순위 9→3 ↑"), row
     assert fc._v[3][gi.COL_STATUS] == "⛔ 판매중지", fc._v[3]
     assert (0, 1, 0, gi.N_COLS) in fc._merges, f"제목 재병합(A1:J1) 안 됨: {fc._merges}"
-    assert any("값 0칸" in m for m in logs), logs
+    assert any("'모니터링 종료일'" in m and "값 0칸" in m for m in logs) and \
+        any("'체험단 종료일'" in m and "값 1칸" in m for m in logs), logs
+    # D-106 10열(체험단 종료일 남음) → 9열: 종료일 열만 지움(상태는 이미 E)
+    new10 = ["대표자", "사업자", "계정ID", "상품명(클릭 이동)", "상태", "회사보유재고", "그로스재고\n(자동갱신 10.21)",
+             "체험단 시작일", "체험단 종료일", "체험단효과"]
+    fc10 = _FakeClient([["계정목록"], list(new10), ["대표A", "가게A", "idA", "텀블러", "", "", 3, "2026-09-01", "", "순위 9→3 ↑"]],
+                       col_count=26, merges=[(0, 1, 0, 10)])
+    gi._ensure_status_layout(fc10, "계정목록", fc10.sheet_id("계정목록"))
+    assert fc10._v[1][gi.COL_PROMO] == "체험단효과" and len([h for h in fc10._v[1] if h]) == gi.N_COLS, fc10._v[1]
+    assert fc10._v[2][gi.COL_MKT_START] == "2026-09-01" and fc10._v[2][gi.COL_PROMO] == "순위 9→3 ↑", fc10._v[2]
     n = len(fc.batches)
     gi._ensure_status_layout(fc, "계정목록", fc.sheet_id("계정목록"))   # 멱등 — 이미 새 배치면 손대지 않음
     assert len(fc.batches) == n, "새 배치인데 다시 이전함"

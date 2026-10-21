@@ -41,5 +41,5 @@
 - [⚠IP 정책 맥락별 반대·흔적은 IP 따라 D-058](proxy-ip-policy-by-context.md) · [프록시 라이브 실측](proxy-live-test-261002.md) · [egress 회전+차단IP](proxy-rotation-design-261002.md) · [프록시 통합 초기](proxy-integration-off-261001.md)
 
 ## 출력·배포·참조
-- [출력=셀독 서식](seldoc-output-format.md) · [날짜컬럼=실행날짜](date-column-run-date-rule.md) · [구글시트 통합 스펙·계정목록 10열 D-106](gsheet-unified-spec.md) · [상세 이미지 추출(CDP)](detail-image-extraction.md)
+- [출력=셀독 서식](seldoc-output-format.md) · [날짜컬럼=실행날짜](date-column-run-date-rule.md) · [구글시트 통합 스펙·계정목록 9열 D-106·D-109](gsheet-unified-spec.md) · [상세 이미지 추출(CDP)](detail-image-extraction.md)
 - [exe 배포·Defender 제외](exe-packaging-deploy.md) · [⭐쿠팡 WING 도움말 133편 학습 KB=docs/COUPANG_WING_HELP_KB.md(재학습 금지)](coupang-official-reference.md) · [정산 실행흐름(18:00·전체실행 버튼 D-055 동시 기동·①대기·17:55 종료 D-021·사람이 끄면 함께 종료 D-020·같은 회차 재실행 금지·옛 08:00 예약 자동삭제 D-091)·상태 카드](feature-settlement-status-monitoring.md)

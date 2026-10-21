@@ -1,13 +1,13 @@
 """출력 결과 구글시트의 `계정목록` 시트 생성·동기화 (Sheets API).
 
-스키마(10열, designs/GSHEET_UNIFIED.md 확정 · D-106 2026-10-21 상태를 상품명 오른쪽으로·모니터링 종료일 삭제):
+스키마(9열, designs/GSHEET_UNIFIED.md 확정 · D-106 상태를 상품명 오른쪽으로·모니터링 종료일 삭제 · D-109 체험단 종료일 삭제):
     A 대표자 | B 사업자 | C 계정ID | D 상품명(클릭 이동·노출명·통계시트 하이퍼링크) | E 상태 |
     F 회사보유재고(칸 안 줄바꿈) | G 그로스재고(헤더 2줄 '그로스재고' + '(자동갱신 MM.DD)') | H 체험단 시작일 |
-    I 체험단 종료일 | J 체험단효과 · 행 고정 2(제목·헤더 — 매 동기화 보정)
+    I 체험단효과 · 행 고정 2(제목·헤더 — 매 동기화 보정)
 
-- **자동 열 = A~H·J** (프로그램이 씀·H 체험단 시작일=D-087 자동). **직원 입력 열 = I**(체험단 종료일) → 프로그램이 **절대 안 씀**.
-- 옛 11열(… 그로스재고·체험단 시작일·종료일·**모니터링 종료일·상태**·체험단효과) 시트는 sync 시 자동 이전(D-106):
-  모니터링 종료일 열 삭제 → 상태 열을 상품명 오른쪽으로 이동(값·메모·서식 그대로·`_ensure_status_layout`).
+- **전 열 자동**(프로그램이 씀·H 체험단 시작일=관리대장 '체험단' 시트 요청일 D-087). 직원 입력 열 없음(D-109).
+- 옛 시트는 sync 시 자동 이전(`_ensure_status_layout`): '모니터링 종료일'(D-106)·'체험단 종료일'(D-109) 열 삭제(지운 값
+  개수 로그) → 상태 열을 상품명 오른쪽으로 이동(값·메모·서식 그대로).
 - 회사보유재고(E)·그로스재고(F)는 2026-09-29 추가(상품명 오른쪽). 기존 시트는 sync 시 상품명 오른쪽에 **빈 열 2개 삽입**으로 자동 마이그레이션(마케팅·상태·체험단효과 값·메모·서식이 오른쪽으로 밀려 새 위치와 정확히 일치).
 - 대표자(A)는 2026-09-17 추가. 기존 7열 시트는 sync 시 **A에 빈 열 1개 삽입**으로 자동 마이그레이션(모든 값·메모·서식이 오른쪽으로 밀려 새 위치와 정확히 일치).
 - 신규 상품은 **계정별 그룹 맨 마지막**에 `insertDimension`으로 빈 행을 끼워 넣는다(기존 마케팅 행은
@@ -26,9 +26,9 @@ COL_REP = 0                                    # 대표자(2026-09-17 추가)
 COL_BUSINESS, COL_ACCOUNT, COL_PRODUCT = 1, 2, 3   # 항목④(2026-09-25): 계정ID(C)를 상품명(D) **왼쪽**으로
 COL_STATUS = 4         # 상태(D-106 2026-10-21 소유자: 상품명 바로 오른쪽 — 옛 J)
 COL_STOCK, COL_GROWTH = 5, 6   # 회사보유재고·그로스재고(2026-09-29) — 상태 오른쪽·자동열(마케팅 앞)
-COL_MKT_START, COL_MKT_END = 7, 8   # 체험단 시작일(자동 D-087)·종료일(직원 입력) — 모니터링 종료일 열은 삭제(D-106)
-COL_PROMO = 9          # 체험단효과(자동열, 2026-09-24) — 직원 마케팅 뒤(끝)에 추가해 미접촉
-N_COLS = 10
+COL_MKT_START = 7      # 체험단 시작일(자동 D-087) — 모니터링 종료일(D-106)·체험단 종료일(D-109) 열은 삭제
+COL_PROMO = 8          # 체험단효과(자동열, 2026-09-24)
+N_COLS = 9
 HEADER_ROW0 = 1        # 헤더가 있는 0-based 행(=시트 2행). 0행=제목.
 DATA_START0 = 2        # 데이터 시작 0-based 행(=시트 3행)
 DISCONTINUED = "⛔ 판매중지"
@@ -175,9 +175,8 @@ def _growth_cell(v, bg: dict) -> dict:
 
 
 def _auto_cells_request(sheet_id: int, grid_row: int, row: IndexRow) -> list[dict]:
-    """A~G(+B열=사업자 셀에 키 메모·E 상태)·H(체험단 시작일·자동 D-087)·J(체험단효과)를 쓰는 updateCells
-    (직원 입력 I 체험단 종료일은 미접촉)."""
-    bg = {"backgroundColor": _band_fill(row.band)}   # 사업자별 밴드색(자동열만 — H~I 마케팅색 불변)
+    """A~G(+B열=사업자 셀에 키 메모·E 상태)·H(체험단 시작일·자동 D-087)·I(체험단효과)를 쓰는 updateCells."""
+    bg = {"backgroundColor": _band_fill(row.band)}   # 사업자별 밴드색
     abcd = {
         "updateCells": {
             "start": {"sheetId": sheet_id, "rowIndex": grid_row, "columnIndex": COL_REP},
@@ -195,7 +194,7 @@ def _auto_cells_request(sheet_id: int, grid_row: int, row: IndexRow) -> list[dic
     }
     promo_bg = (_PROMO_UP_FILL if row.promo_verdict == "up"
                 else _PROMO_DOWN_FILL if row.promo_verdict == "down" else _band_fill(row.band))
-    promo = {                                    # J 체험단효과(자동열) — 개선=연초록·악화=연적색·그외=밴드색
+    promo = {                                    # I 체험단효과(자동열) — 개선=연초록·악화=연적색·그외=밴드색
         "updateCells": {
             "start": {"sheetId": sheet_id, "rowIndex": grid_row, "columnIndex": COL_PROMO},
             "rows": [{"values": [{**_s(row.promo_effect),
@@ -235,12 +234,11 @@ def _insert_blank_row_request(sheet_id: int, grid_row: int) -> dict:
 
 
 def _mkt_fill_request(sheet_id: int, grid_row: int, band: int) -> dict:
-    """행의 H~I(체험단 시작·종료일)를 그 사업자 밴드색으로 칠한다 → **행 전체 동일 바탕색**.
-    배경만 설정(값·다른 서식 불변)이라 직원 입력 I 값은 보존된다(repeatCell = updateCells 아님)."""
+    """행의 H(체험단 시작일)를 그 사업자 밴드색·가운데 정렬로 칠한다 → **행 전체 동일 바탕색**(배경·정렬만·값 불변)."""
     return {
         "repeatCell": {
             "range": {"sheetId": sheet_id, "startRowIndex": grid_row, "endRowIndex": grid_row + 1,
-                      "startColumnIndex": COL_MKT_START, "endColumnIndex": COL_MKT_END + 1},
+                      "startColumnIndex": COL_MKT_START, "endColumnIndex": COL_MKT_START + 1},
             "cell": {"userEnteredFormat": {"backgroundColor": _band_fill(band),
                                            "horizontalAlignment": "CENTER"}},
             "fields": "userEnteredFormat.backgroundColor,userEnteredFormat.horizontalAlignment",
@@ -321,9 +319,10 @@ def _build_requests_for_plan(sheet_id: int, plan: SyncPlan,
 
 
 _HEADS = ["대표자", "사업자", "계정ID", "상품명(클릭 이동)", "상태", "회사보유재고", "그로스재고",
-          "체험단 시작일", "체험단 종료일", "체험단효과"]   # D-106: 상태=상품명 오른쪽·모니터링 종료일 삭제
-_MKT_LABELS = (_HEADS[COL_MKT_START], _HEADS[COL_MKT_END])   # 체험단 2열 헤더 라벨
-_MON_LABEL = "모니터링 종료일"   # 옛 레이아웃 열(D-106 삭제) — 이전(_ensure_status_layout) 판정용
+          "체험단 시작일", "체험단효과"]   # D-106: 상태=상품명 오른쪽·모니터링 종료일 삭제 · D-109: 체험단 종료일 삭제
+_START_LABEL = _HEADS[COL_MKT_START]
+_END_LABEL = "체험단 종료일"          # 옛 직원 입력 열(D-109 삭제) — 옛 시트 되읽기·이전 판정용
+_OBSOLETE_LABELS = ("모니터링 종료일", _END_LABEL)   # 옛 레이아웃에만 있는 열(D-106·D-109) → 이전 때 삭제
 
 
 def _heads(growth_asof: str = "") -> list[str]:
@@ -338,7 +337,7 @@ _COL_W_MIN = {COL_REP: 80, COL_BUSINESS: 100, COL_ACCOUNT: 80, COL_PRODUCT: 140,
               COL_STOCK: 130, COL_GROWTH: 100, COL_STATUS: 70, COL_PROMO: 130}
 _COL_W_MAX = {COL_REP: 170, COL_BUSINESS: 260, COL_ACCOUNT: 170, COL_PRODUCT: 430,   # 회사보유재고=칸 안 줄바꿈이라
               COL_STOCK: 190, COL_GROWTH: 120, COL_STATUS: 150, COL_PROMO: 280}       # 약간만 넓게(D-106)
-_COL_W_MKT = {COL_MKT_START: 95, COL_MKT_END: 95}   # 체험단 시작·종료일=고정
+_COL_W_MKT = {COL_MKT_START: 95}   # 체험단 시작일=고정
 
 
 def _disp_len(s) -> int:
@@ -429,8 +428,9 @@ def marketing_key(account_id: str, product: str) -> str:
 
 
 def read_marketing(client, *, sheet: str = INDEX_SHEET_NAME) -> dict[str, tuple[str, str, str]]:
-    """출력 `계정목록`의 **직원 입력 체험단 종료일(I)** 을 {안정키: (시작, 종료, 모니터링종료)} 로 읽는다(시작=자동값이라
-    되읽지 않음·D-087 / 모니터링 종료일 열은 D-106 삭제 → 항상 '').
+    """출력 `계정목록`의 **직원 입력 마케팅 값**을 {안정키: (시작, 종료, 모니터링종료)} 로 읽는다. D-109 부터 계정목록에
+    직원 입력 열이 없어(체험단 종료일 삭제) 새 시트에선 빈 dict — 아직 이전 전인 옛 시트의 '체험단 종료일'만 읽는다
+    (시작=자동값이라 되읽지 않음·D-087 / 모니터링 종료일 D-106 삭제 → 항상 '' / 종료일은 수집 주기 무관·D-108).
 
     값이 하나도 없는 행은 건너뛴다. 시트가 아직 없으면 빈 dict(첫 실행 대비 — fallback 아님, 정상 상태).
     """
@@ -445,7 +445,7 @@ def read_marketing(client, *, sheet: str = INDEX_SHEET_NAME) -> dict[str, tuple[
     def _col(label):
         return hdr.index(label) if label in hdr else None
 
-    c_start, c_end = _col(_MKT_LABELS[0]), _col(_MKT_LABELS[1])
+    c_start, c_end = _col(_START_LABEL), _col(_END_LABEL)
     c_biz, c_acct = _col("사업자"), _col("계정ID")
     c_prod = next((i for i, h in enumerate(hdr) if h.startswith("상품명")), None)
     if c_start is None:                     # 마케팅 열이 없으면(레이아웃 이상) 빈 dict
@@ -597,7 +597,7 @@ def _ensure_stock_columns(client, sheet: str, sheet_id: int, on_log=None) -> Non
     if len(values) <= HEADER_ROW0:
         return                                            # 신규/빈 시트 → full build 가 새 레이아웃으로 생성
     hdr = [str(h).strip() for h in (values[HEADER_ROW0] or [])]
-    if _MKT_LABELS[0] not in hdr or _HEADS[COL_STOCK] in hdr:
+    if _START_LABEL not in hdr or _HEADS[COL_STOCK] in hdr:
         return                                            # 마케팅 라벨 없음(이상) or 이미 회사재고·그로스재고 열 있음
     ccur = client.grid_col_count(sheet) or N_COLS
     # 배치1: 제목 병합 해제(삽입이 병합 가로지르지 않게) + 열 고정 해제 — **선커밋**(Google 은 삽입을 배치 시작
@@ -623,16 +623,17 @@ def _ensure_stock_columns(client, sheet: str, sheet_id: int, on_log=None) -> Non
             f"  [구글시트] ⚠ 계정목록 제목 재병합 건너뜀(장식·비치명) — {str(exc)[:200]}")
 
 
-def _drop_monitor_column(client, sheet_id: int, values: list, mon_i: int, log) -> None:
-    """옛 '모니터링 종료일' 열 삭제(D-106) — 직원 입력 열이라 지운 값 개수를 로그로 남긴다(실측 10-21 = 0칸)."""
-    n_val = sum(1 for r in values[DATA_START0:] if len(r) > mon_i and str(r[mon_i]).strip())
-    client.batch_update([{"deleteDimension": {"range": {
-        "sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": mon_i, "endIndex": mon_i + 1}}}])
-    log(f"  [구글시트] 계정목록 '모니터링 종료일' 열 삭제(D-106·값 {n_val}칸)")
+def _drop_obsolete_columns(client, sheet_id: int, values: list, hdr: list, log) -> None:
+    """옛 직원 입력 열('모니터링 종료일' D-106·'체험단 종료일' D-109) 삭제 — 오른쪽부터(인덱스 안정)·지운 값 개수 로그."""
+    for i in sorted((hdr.index(lb) for lb in _OBSOLETE_LABELS if lb in hdr), reverse=True):
+        n_val = sum(1 for r in values[DATA_START0:] if len(r) > i and str(r[i]).strip())
+        client.batch_update([{"deleteDimension": {"range": {
+            "sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": i, "endIndex": i + 1}}}])
+        log(f"  [구글시트] 계정목록 '{hdr[i]}' 열 삭제(D-106·D-109·값 {n_val}칸)")
 
 
 def _remerge_title(client, sheet_id: int, log) -> None:
-    """제목 A1:J1 재병합 = 장식 — 실패해도 열 이전은 이미 성공(비치명·로그)."""
+    """제목 A1:I1 재병합 = 장식 — 실패해도 열 이전은 이미 성공(비치명·로그)."""
     from .gsheet_api import GSheetError
     title = {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1, "startColumnIndex": 0, "endColumnIndex": N_COLS}
     try:
@@ -642,8 +643,8 @@ def _remerge_title(client, sheet_id: int, log) -> None:
 
 
 def _ensure_status_layout(client, sheet: str, sheet_id: int, on_log=None) -> None:
-    """D-106(2026-10-21 소유자): 옛 11열 시트를 새 10열로 이전 — **모니터링 종료일 열 삭제** + **상태 열을 상품명
-    오른쪽(E)으로 이동**(값·메모·서식 그대로). 헤더 라벨로 판정해 멱등(이미 새 배치면 no-op·신규/빈 시트도 no-op).
+    """D-106·D-109(2026-10-21 소유자): 옛 시트를 새 9열로 이전 — **모니터링 종료일·체험단 종료일 열 삭제** + **상태 열을
+    상품명 오른쪽(E)으로 이동**(값·메모·서식 그대로). 헤더 라벨로 판정해 멱등(이미 새 배치면 no-op·신규/빈 시트도 no-op).
     ⚠ 제목 병합을 가로지르는 삭제·이동은 Google 400 → `_ensure_column_order` 와 같은 다배치 패턴(병합 해제 선커밋
     → 삭제 → 이동 → 재병합[장식·비치명])."""
     log = on_log or (lambda m: None)
@@ -651,19 +652,18 @@ def _ensure_status_layout(client, sheet: str, sheet_id: int, on_log=None) -> Non
     if len(values) <= HEADER_ROW0:
         return
     hdr = [str(h).strip() for h in (values[HEADER_ROW0] or [])]
-    mon_i = hdr.index(_MON_LABEL) if _MON_LABEL in hdr else None
-    st_i = hdr.index(_HEADS[COL_STATUS]) if _HEADS[COL_STATUS] in hdr else None
-    if mon_i is None and st_i in (None, COL_STATUS):
+    kept = [h for h in hdr if h not in _OBSOLETE_LABELS]   # 옛 열을 지운 뒤의 머리줄 — 상태 열 위치는 이것 기준
+    has_old = len(kept) != len(hdr)
+    st_i = kept.index(_HEADS[COL_STATUS]) if _HEADS[COL_STATUS] in kept else None
+    if not has_old and st_i in (None, COL_STATUS):
         return                                            # 이미 새 배치(또는 상태 라벨 없음 = 손대지 않음)
     ccur = client.grid_col_count(sheet) or N_COLS
     client.batch_update([                                 # 배치1: 제목 병합·열 고정 해제 — 선커밋
         {"unmergeCells": {"range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1,
                                     "startColumnIndex": 0, "endColumnIndex": max(ccur, N_COLS + 1)}}},
         _unfreeze_cols_request(sheet_id)])
-    if mon_i is not None:                                 # 배치2: 모니터링 종료일 열 삭제
-        _drop_monitor_column(client, sheet_id, values, mon_i, log)
-        if st_i is not None and st_i > mon_i:
-            st_i -= 1
+    if has_old:                                           # 배치2: 옛 직원 입력 열 삭제(모니터링·체험단 종료일)
+        _drop_obsolete_columns(client, sheet_id, values, hdr, log)
     if st_i is not None and st_i != COL_STATUS:          # 배치3: 상태 열 → 상품명 오른쪽(E)
         client.batch_update([{"moveDimension": {
             "source": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": st_i, "endIndex": st_i + 1},
@@ -847,7 +847,7 @@ def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME
                growth_asof: str = "") -> SyncPlan:
     """결과 구글시트의 `계정목록`을 원하는 로스터에 맞춰 생성/동기화하고 계획을 반환.
 
-    비어 있으면 전체 생성, 아니면 증분(자동열만 갱신·신규 삽입·판매중지 표기). 직원 입력 I(체험단 종료일)는 안 건드린다.
+    비어 있으면 전체 생성, 아니면 증분(자동열 갱신·신규 삽입·판매중지 표기).
     삽입이 그리드 끝을 넘지 않게 **미리 그리드를 확장**한다(부족할 때만 — insertDimension 400 방지).
     growth_asof = 그로스재고 헤더 자동갱신일자('월.일').
     """
@@ -855,7 +855,7 @@ def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME
     _ensure_rep_column(client, sheet, sheet_id)   # 옛 7열 시트면 A에 대표자 빈 열 삽입(멱등) → 아래 읽기는 새 레이아웃
     _ensure_column_order(client, sheet, sheet_id, on_log)  # 항목④: 옛 순서(상품C·계정ID D)면 계정ID를 C로 물리 이전(멱등)
     _ensure_stock_columns(client, sheet, sheet_id, on_log)  # 2026-09-29: 상품명 오른쪽에 회사재고·그로스재고 2열 삽입(멱등)
-    _ensure_status_layout(client, sheet, sheet_id, on_log)  # D-106: 모니터링 종료일 삭제·상태를 상품명 오른쪽으로(멱등)
+    _ensure_status_layout(client, sheet, sheet_id, on_log)  # D-106·D-109: 옛 종료일 열 삭제·상태를 상품명 오른쪽으로(멱등)
     _delete_missing_product_rows(client, sheet, desired, on_log)   # 2026-09-29: 마스터에 없는 유령 상품 행 삭제(그다음 증분)
     existing = _read_existing(client, sheet)
     if not existing:
