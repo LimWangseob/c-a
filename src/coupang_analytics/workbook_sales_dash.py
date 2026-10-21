@@ -83,29 +83,44 @@ def pct_text(v: float | None) -> tuple[str, str | None]:
 
 
 def _kpis(ws, r, d) -> int:
+    """① 요약 — 전일·지난주·이번 달 누계(노랑) → 미수집 계정(전일) → 월별 누계(4월~이번 달·D-105)."""
     _band(ws, r, "① 요약 — 관리 상품 기준(결과 사업자 시트의 상품·판매중지 포함 · 상세표 합계와 같음)")
-    h = dict(bold=True, fill=_FILL_HEAD, box=True, center=True)
-    for c, t in ((1, "구분"), (2, "판매금액(원)"), (3, "수량")):
-        _cell(ws, r + 1, c, t, **h)
-    _span(ws, r + 1, 4, 5, "증감", **h)
-    _span(ws, r + 1, 6, DASH_COLS, "비교 기준", **h)
-    r += 1
+    r = _kpi_head(ws, r + 1)
     for k in d.kpis:
-        r += 1
-        t = dict(fill=_FILL_TOTAL, box=True)
-        _cell(ws, r, 1, f"{k.title} {k.span}", bold=True, **t)
-        _cell(ws, r, 2, k.amount, bold=True, num=True, **t)
-        _cell(ws, r, 3, k.qty, num=True, **t)
-        text, color = pct_text(k.change) if k.basis else ("", None)
-        _span(ws, r, 4, 5, text or None, bold=True, center=True, color=color, **t)
-        miss = f"미수집 {k.missing}계정{paren(k.missing_names)} 제외" if k.missing else ""
-        note = " · ".join(x for x in (k.basis, miss) if x)
-        _span(ws, r, 6, DASH_COLS, note or None, color="595959", **t)
+        r = _kpi_row(ws, r + 1, k, _FILL_TOTAL)
     r += 1
     _cell(ws, r, 1, "미수집 계정(전일)", bold=True, fill=_FILL_SUB, box=True)
     names = f" {paren(d.missing_today_names)}" if d.missing_today_names else ""
     _span(ws, r, 2, DASH_COLS, f"{d.missing_today} / {d.accounts_total} 계정{names}", bold=True, fill=_FILL_SUB,
           box=True, color=_RED if d.missing_today else None)
+    if d.month_kpis:
+        r += 1
+        _span(ws, r, 1, DASH_COLS, "월별 누계 — 4월부터 · 끝난 달 = 전월 대비 · 진행 중 달 = 지난달 같은 기간 대비",
+              bold=True, fill=_FILL_HEAD, box=True)
+        for k in d.month_kpis:
+            r = _kpi_row(ws, r + 1, k, None)
+    return r
+
+
+def _kpi_head(ws, r) -> int:
+    h = dict(bold=True, fill=_FILL_HEAD, box=True, center=True)
+    for c, t in ((1, "구분"), (2, "판매금액(원)"), (3, "수량")):
+        _cell(ws, r, c, t, **h)
+    _span(ws, r, 4, 5, "증감", **h)
+    _span(ws, r, 6, DASH_COLS, "비교 기준", **h)
+    return r
+
+
+def _kpi_row(ws, r, k, fill) -> int:
+    """요약 한 줄 — 구분(기간)·판매금액·수량·증감(▲초록/▼빨강)·비교 기준(+ 미수집 계정 이름)."""
+    t = dict(fill=fill, box=True)
+    _cell(ws, r, 1, f"{k.title} {k.span}", bold=True, **t)
+    _cell(ws, r, 2, k.amount, bold=True, num=True, **t)
+    _cell(ws, r, 3, k.qty, num=True, **t)
+    text, color = pct_text(k.change) if k.basis else ("", None)
+    _span(ws, r, 4, 5, text or None, bold=True, center=True, color=color, **t)
+    miss = f"미수집 {k.missing}계정{paren(k.missing_names)} 제외" if k.missing else ""
+    _span(ws, r, 6, DASH_COLS, " · ".join(x for x in (k.basis, miss) if x) or None, color="595959", **t)
     return r
 
 

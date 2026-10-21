@@ -60,6 +60,7 @@ class Dashboard:
     days: list
     accounts: list            # 이번 달 누계 금액 순(미수집 = 맨 뒤)
     missing_today_names: tuple = ()   # 전일 미수집 계정 이름
+    month_kpis: tuple = ()    # ① 월별 누계(시작월~이번 달·전월 대비 — 진행 중 달은 지난달 같은 기간 대비·D-105)
 
 
 # ── 기간 ──────────────────────────────────────────────────────
@@ -161,12 +162,28 @@ def build(daily: dict, period_recs: dict, labels: dict, yesterday: date, weeks: 
             kpi("지난주(월~일)", lw, lw + timedelta(days=6), lw_v, pw_v,
                 f"그 전주 {_span(lw - timedelta(weeks=1), lw - timedelta(days=1))} 대비"),
             kpi("이번 달 누계", m_s, yesterday, mo_v, pm_v, f"지난달 같은 기간 {_span(pm_s, pm_e)} 대비")]
-    months = [_point(lb, per_acct(s, e, k), part) for k, lb, s, e, part in _month_spans(yesterday, first)]
+    spans = _month_spans(yesterday, first)
+    month_vals = [per_acct(s, e, k) for k, _lb, s, e, _part in spans]
+    months = [_point(lb, v, part) for (_k, lb, _s, _e, part), v in zip(spans, month_vals)]
     week_pts = [_point(f"{m:%m.%d}", per_acct(m, m + timedelta(days=6), wk_key[m])) for m in wk]
     day_pts = [_point(f"{d:%m.%d}", per_acct(d, d)) for d in
                (yesterday - timedelta(days=i) for i in range(days - 1, -1, -1))]
     return Dashboard(yesterday, kpis, sum(v is None for v in day_v), len(aids), months, week_pts, day_pts,
-                     _ranks(aids, labels, mo_v, lw_v, pw_v), missing_names(aids, labels, day_v))
+                     _ranks(aids, labels, mo_v, lw_v, pw_v), missing_names(aids, labels, day_v),
+                     tuple(_month_kpis(spans, month_vals, mo_v, pm_v, (pm_s, pm_e), kpi)))
+
+
+def _month_kpis(spans, vals, mo_v, pm_v, pm_span, kpi):
+    """① 월별 누계 줄 — 끝난 달 = 전월(통째) 대비 · 진행 중 달 = 지난달 같은 기간 대비(이번 달 누계와 같은 값) ·
+    시작월 = 비교 없음. 금액·수량·미수집 = 그 달 값(일별 다 있으면 일별 합, 아니면 쿠팡 기간 합계)."""
+    for i, ((_k, label, s, e, partial), cur) in enumerate(zip(spans, vals)):
+        if partial:
+            yield kpi(f"{label} 누계", s, e, mo_v, pm_v, f"지난달 같은 기간 {_span(*pm_span)} 대비")
+        elif i == 0:
+            yield kpi(label, s, e, cur, None, "")
+        else:
+            ps, pe = spans[i - 1][2], spans[i - 1][3]
+            yield kpi(label, s, e, cur, vals[i - 1], f"전월 {_span(ps, pe)} 대비")
 
 
 def _kpi(title, s, e, cur, prev, basis, names=()) -> Kpi:

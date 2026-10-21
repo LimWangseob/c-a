@@ -42,21 +42,22 @@ def _m(vid, name, reg, qty, gmv, opt="기본"):
 
 
 def t1_plan():
-    print("[T1] 기간 조회 계획 — 처음 = 1월~이번 달 + 최근 8주, 마감된 기간은 다시 안 함, 이번 달·주는 매일 다시")
+    print("[T1] 기간 조회 계획 — 처음 = 4월~이번 달 + 최근 8주, 마감된 기간은 다시 안 함, 이번 달·주는 매일 다시")
     plan = SS.plan_periods({}, Y)
     keys = [k for k, _f, _t in plan]
     months = [k for k in keys if k.startswith("M:")]
     weeks = [k for k in keys if k.startswith("W:")]
-    assert months == [f"M:2026-{m:02d}" for m in range(1, 11)], months
+    assert months == [f"M:2026-{m:02d}" for m in range(4, 11)], months   # 판매 실적 = 4월부터(소유자 2026-10-21)
+    assert SS.FIRST_DAY == date(2026, 4, 1) and not hasattr(SS, "BACKFILL_FROM"), "시작일 상수 하나(월별 = 소급)"
     assert weeks[0] == "W:2026-10-12" and weeks[-1] == "W:2026-08-24" and len(weeks) == 8, weeks
     rng = {k: (f, t) for k, f, t in plan}
-    assert rng["M:2026-10"] == ("2026-10-01", "2026-10-14") and rng["M:2026-02"] == ("2026-02-01", "2026-02-28")
+    assert rng["M:2026-10"] == ("2026-10-01", "2026-10-14") and rng["M:2026-04"] == ("2026-04-01", "2026-04-30")
     assert rng["W:2026-10-12"] == ("2026-10-12", "2026-10-14") and rng["W:2026-10-05"] == ("2026-10-05", "2026-10-11")
     done = {k: {"조회기간": [f, t]} for k, f, t in plan}               # 전부 받음(이번 달·주는 10-14 까지)
     again = SS.plan_periods(done, date(2026, 10, 15))
     assert [k for k, _f, _t in again] == ["M:2026-10", "W:2026-10-12"], again   # 마감된 것은 다시 안 함
     assert SS.plan_periods(done, Y) == [], "같은 날 다시 돌면 조회 없음"
-    ok("1~10월 10개 + 8주 · 2월 말일 · 이번 주 = 월~어제 · 다음 날엔 이번 달·주만 다시")
+    ok("4~10월 7개 + 8주 · 4월 말일 · 이번 주 = 월~어제 · 다음 날엔 이번 달·주만 다시 · 시작일 상수 하나")
 
 
 def t2_record_period():
@@ -348,7 +349,7 @@ def t7_backfill_plan():
     assert SS.plan_backfill({}, date(2026, 4, 3)) == ["2026-04-03", "2026-04-02", "2026-04-01"], "4/1 전은 안 함"
     full = {f"x{i}": {"수집": "2026-10-21T19:00:00"} for i in range(60)}
     assert SS.plan_backfill(full, y, today=date(2026, 10, 21)) == [], "오늘 60일 받았으면 내일"
-    days = (y - SS.BACKFILL_FROM).days + 1
+    days = (y - SS.FIRST_DAY).days + 1
     assert days == 203 and -(-days // SS.BACKFILL_PER_DAY) == 4, days
     ok("10.19부터 거꾸로 59일(오늘 1건) · 있는 날 건너뜀 · 4/1 끝 · 하루 60일 상한 · 4/1~10/20 = 203일 → 약 4일")
 
@@ -413,6 +414,7 @@ def _dash_fixture(d):
             SH.record(d, "a2", day.isoformat(), day.isoformat(), {"v2": _m("v2", "기저귀백팩", "NORMAL", 2, 2000)})
         day += timedelta(days=1)
     SH.record_period(d, "a1", "M:2026-01", "2026-01-01", "2026-01-31", {"v1": _m("v1", "캠핑테이블", "RFM", 5, 50000)})
+    SH.record_period(d, "a1", "M:2026-04", "2026-04-01", "2026-04-30", {"v1": _m("v1", "캠핑테이블", "RFM", 4, 40000)})
 
 
 def t10_dashboard():
@@ -434,8 +436,8 @@ def t10_dashboard():
     assert k_month.amount == 30000 and abs(k_month.change - 0.5) < 1e-9, k_month       # 30,000 vs 9/1~20 20,000
     assert "09.01~09.20" in k_month.basis
     months = {p.label: p for p in b.months}
-    assert list(months)[0] == "1월" and list(months)[-1] == "10월" and len(months) == 10
-    assert months["1월"].amount == 50000 and months["1월"].missing == 1, "1월 = 쿠팡 기간 합계(일별 없음)"
+    assert list(months)[0] == "4월" and list(months)[-1] == "10월" and len(months) == 7, "판매 실적 = 4월부터"
+    assert months["4월"].amount == 40000 and months["4월"].missing == 1, "4월 = 쿠팡 기간 합계(일별 없음)"
     assert months["9월"].amount == 30 * 1000 + 30 * 2000 and months["9월"].missing == 0
     assert months["10월"].partial and months["10월"].amount == 30000 and months["10월"].missing == 1
     assert months["5월"].amount == 0 and months["5월"].missing == 2, "자료 없는 달 = 미수집"
@@ -446,6 +448,15 @@ def t10_dashboard():
     assert (r1.aid, r1.amount, r1.week, r1.prev_week, r1.change) == ("a1", 30000, 10500, 10500, 0.0), r1
     assert (r2.aid, r2.amount, r2.week, r2.prev_week, r2.change) == ("a2", None, None, 14000, None), "미수집 = 맨 아래"
     assert not hasattr(b, "products"), "⑥ 상품 열지도 자료 없음"
+    mk = {k.title: k for k in b.month_kpis}                                # ① 월별 누계(소유자 2026-10-21)
+    assert list(mk) == ["4월", "5월", "6월", "7월", "8월", "9월", "10월 누계"], list(mk)
+    assert (mk["4월"].span, mk["4월"].amount, mk["4월"].qty, mk["4월"].change) == ("04.01~04.30", 40000, 4, None)
+    assert mk["4월"].basis == "", "시작월 = 비교 없음"
+    assert (mk["9월"].amount, mk["9월"].qty, mk["9월"].change) == (90000, 90, None), "8월 자료 없음 → 비교 불가"
+    assert mk["9월"].basis == "전월 08.01~08.31 대비"
+    m10 = mk["10월 누계"]
+    assert (m10.span, m10.amount, m10.missing_names) == ("10.01~10.20", 30000, ("니코에이블",)), m10
+    assert abs(m10.change - 0.5) < 1e-9 and m10.basis == "지난달 같은 기간 09.01~09.20 대비", "진행 중 달 = 지난달 같은 기간"
     ok("전일 1,500 · 지난주 10,500(0%) · 이번 달 30,000(+50%) · 1월 기간합계 · 10월 진행 중 · 순위 a1(지난주 10,500·0%)·a2 미수집")
 
 
@@ -507,6 +518,11 @@ def t11_charts_persist():
         room_pt = _free_rows_below(bws, row) * 15                          # 엑셀 기본 행 15~16.5pt — 작은 쪽으로
         assert ch.anchor.ext.height / 12700 <= room_pt, \
             f"차트가 아래 내용을 덮음(엑셀): 높이 {ch.anchor.ext.height / 12700:.0f}pt > 빈 행 {room_pt}pt"
+    labels_a = [str(r[0]) for r in cells if r and r[0]]
+    assert "4월 04.01~04.30" in labels_a and "10월 누계 10.01~10.20" in labels_a, "① 월별 누계 줄"
+    assert not any(v.startswith(("1월", "2월", "3월")) for v in labels_a), "4월 전 달은 안 보임"
+    r10 = next(r for r in cells if r[0] == "10월 누계 10.01~10.20")
+    assert r10[1] == 30000 and r10[3] == "▲ 50.0%" and r10[5].endswith("미수집 1계정(니코에이블) 제외"), r10
     head = next(r for r in cells if r[0] == "계정" and r[1] == "상품")
     assert head[3:5] == ("10.20", "10.19") and head[3 + 30] == "09.20", "상세 = 최신이 왼쪽 31일·날짜 1칸"
     tot = next(r for r in cells if r[0] == "전체 합계")

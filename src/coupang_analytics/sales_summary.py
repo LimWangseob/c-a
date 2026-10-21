@@ -11,10 +11,9 @@ import calendar
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-FIRST_DAY = date(2026, 1, 1)   # 월별 시작(소유자 2026-10-15 '2026.1.1부터')
+FIRST_DAY = date(2026, 4, 1)   # 판매 실적 시작 = 월별(기간 조회·대시보드)·일별 소급 공통(소유자 2026-10-21 '4월부터'·D-105)
 WEEKS = 8                       # 주간 기간 수(기간 조회·대시보드 주간 선)
 DETAIL_DAYS = 31                # 상세표 일별 칸 수(최근 31일·최신이 왼쪽 — 소유자 2026-10-21)
-BACKFILL_FROM = date(2026, 4, 1)   # 일별 소급 시작(소유자 2026-10-21 '4/1부터')
 BACKFILL_PER_DAY = 60              # 계정당 하루 최대 조회 일수(같은 세션 API — 차단 위험 줄이기·D-097 30→60)
 
 
@@ -98,7 +97,7 @@ def plan_periods(existing: dict, yesterday: date, weeks: int = WEEKS, first: dat
 
 
 def plan_backfill(existing: dict, yesterday: date, today: date | None = None,
-                  first: date = BACKFILL_FROM, limit: int = BACKFILL_PER_DAY) -> list[str]:
+                  first: date = FIRST_DAY, limit: int = BACKFILL_PER_DAY) -> list[str]:
     """일별 기록이 없는 날 ['YYYY-MM-DD'] — **최근 날짜부터 거꾸로**(어제 → first), 이미 있는 날은 빼고 최대 limit 개.
     오늘 이미 받은 기록(수집 시각이 오늘 — ① 하루치·앞선 실행의 소급 포함)만큼 limit 에서 빼서 '계정당 하루 최대'를 지킴."""
     stamp = (today or yesterday + timedelta(days=1)).isoformat()
