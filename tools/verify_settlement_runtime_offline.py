@@ -1253,9 +1253,14 @@ def p34_forecast_accuracy():
     assert [r["정산일"] for r in past] == ["2026-10-15"] and [r["정산일"] for r in fut] == ["2026-10-22"]
     with tempfile.TemporaryDirectory() as tmp:
         f = Path(tmp) / "예정.jsonl"
-        FC.record(f, "A", "로켓그로스", fut, date(2026, 10, 16))
-        FC.record(f, "A", "로켓그로스", [{**fut[0], "최종지급액": 1200}], date(2026, 10, 16))       # 같은 날 다시 → 마지막
-        FC.record(f, "A", "로켓그로스", [{**fut[0], "최종지급액": 1300}], date(2026, 10, 20))
+        # 시계가 같은 값을 돌려줘도(Windows 시계 정밀도 — 10-21 게이트 간헐 실패 실측) 묶음 번호는 계속 커져야 함
+        real_ns, FC.time.time_ns = FC.time.time_ns, (lambda: 1_792_590_650_777_422_500)
+        try:
+            FC.record(f, "A", "로켓그로스", fut, date(2026, 10, 16))
+            FC.record(f, "A", "로켓그로스", [{**fut[0], "최종지급액": 1200}], date(2026, 10, 16))   # 같은 날 다시 → 마지막
+            FC.record(f, "A", "로켓그로스", [{**fut[0], "최종지급액": 1300}], date(2026, 10, 20))
+        finally:
+            FC.time.time_ns = real_ns
         fc = FC.load(f)
         assert sorted((r["수집일"], r["최종지급액"]) for r in fc) == [("2026-10-16", 1200), ("2026-10-20", 1300)], fc
         assert FC.accuracy(fc, [], date(2026, 10, 21)) == []                                    # 정산일 전 = 비교 안 함

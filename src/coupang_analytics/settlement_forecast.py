@@ -61,6 +61,17 @@ def _key(acct: str, ch: str, r: dict) -> tuple:
     return acct, ch, str(r["정산일"])[:10], str(r["기간 시작"])[:10], str(r["기간 끝"])[:10], float(r["지급비율"] or 0)
 
 
+_last_batch = 0
+
+
+def _next_batch() -> str:
+    """묶음 번호 = 조회 시각(ns) — 단 이 프로세스 안에서는 **항상 앞 번호보다 큼**. Windows 시계는 연달아 부르면 같은
+    값을 줄 수 있어(10-21 게이트 간헐 실패 실측: 두 조회가 같은 번호 → '마지막 묶음'이 둘을 합침) 같으면 1 올린다."""
+    global _last_batch
+    _last_batch = max(time.time_ns(), _last_batch + 1)
+    return str(_last_batch)
+
+
 def record(path, acct: str, ch: str, rows: list, today: date) -> int:
     """오늘 본 예정 줄을 추가 — 한 번 조회의 줄 묶음에 같은 '묶음' 번호. 같은 날 다시 조회하면 읽을 때 정산일마다 마지막
     묶음만 남음(같은 정산 줄 키가 여러 개인 보류 해제 100% 줄도 전부 · D-085). 반환 = 기록한 줄 수."""
@@ -68,7 +79,7 @@ def record(path, acct: str, ch: str, rows: list, today: date) -> int:
         return 0
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    batch = str(time.time_ns())
+    batch = _next_batch()
     with p.open("a", encoding="utf-8") as f:
         for r in rows:
             f.write(json.dumps({"수집일": today.isoformat(), "계정": acct, "채널": ch, "묶음": batch,
