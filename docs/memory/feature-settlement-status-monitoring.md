@@ -41,3 +41,5 @@ metadata:
 관련: [[settlement-batch-download-decisions]] · [[runtime-ui-and-always-on]] · [[exe-packaging-deploy]] · [[code-health-regression-gate]]
 
 **2026-10-10 갱신(D-020·D-021, D-010 SUPERSEDED)**: 회차 18:00~다음 날 17:55(`settlement_watch.cycle_window`). 앱 main(`--auto`/`--resume`)이 시작하면서 `start_settlement_watch`(`watch --parent 앱PID`) → 정산은 이번 회차 ①완료 기록(`_실행단계.json` at≥회차 시작)까지 대기 → 받기 → 다 받으면 종료·17:55 종료. 무인이 스스로 끝나면(`_auto_quit`→`_앱정상종료.json`) 정산 계속, 사람이 닫음/작업관리자 종료면 `watch_parent`가 정산+Chrome 종료. 정산 탭 [정산 시작]도 같은 한 경로. ⚠ install.ps1 예약작업 13h 제한(E3)이 07:00 넘는 실행을 끊으면 정산도 함께 종료 — FEATURE_INVENTORY E3 수정 대기.
+
+**2026-10-21 중복 실행 방지(D-091)**: 운용 PC 에 옛 정산 예약작업(로그온+매일 08:00·인자 watch)이 남아 매일 08:00 앱 없이 정산 재실행(35계정 재로그인·output 압축 시 `_watch.lock` 사용 중 오류·아침 비번 거부가 그날 18:00 수집 막음). 원인 = install.ps1 은 '자동실행 등록=Y' 때만 지움(덮어쓰기 업데이트로는 남음) + '이미 완료' 키 = ①완료 시각인데 ③ 끝에 단계 기록이 done 으로 바뀌어 불일치. 수정 = 같은 회차(--since 반영) 완료면 종료(`already_done(…, cycle_start)`) · 18:00 시작(`prepare_auto_start`)이 인자 watch 예약작업 삭제. output 압축 시 잠금 파일 오류 = 정산 실행 중 → '모든 항목에 같은 작업'+건너뛰기(0바이트).

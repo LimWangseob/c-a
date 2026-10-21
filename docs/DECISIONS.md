@@ -855,3 +855,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: SPARKLINE 수식(엑셀에서 깨짐) · 조건부서식 열지도(구글 미러가 못 옮김) · 진행률 대비 이번 달 비교(소유자 = 지난달 같은 기간) · 차트 자료 별도 숨김 시트(구글 미러 대상 아님) · 판매분석 전체 상품 기준(상세·대시보드 합 불일치 — 소유자 '관리 상품' 선택, 바꾸려면 `refresh_sales_sheet` 의 `scope(…, managed)` 를 None 으로).
 - 영향 범위: `sales_summary.py`(plan_backfill·scope·build 31일) · 신규 `sales_dashboard.py`·`workbook_sales_dash.py` · `workbook_sales.py`(managed_vids·refresh·write·push) · `pipeline_sales.py`(_record_sales_backfill·호출 순서) · `gsheet_api.py`(chart_ids) · `workbook.py`(load → restore_charts) · `tools/verify_sales_summary_offline.py`(T3~T5 갱신·T7~T11 신규) · `designs/SALES_SUMMARY.md`. ① 야간 시간: 소급 기간(약 7일 밤) 계정당 +약 1~1.5분. HQ `R0_DATA_CONTRACT` 알림·포팅 대상(첫 시트 구조·일별 저장 범위).
 - 상태: ACTIVE
+
+### D-095 [REGISTRY_SEPARATE_FILE] 셀독등록원장 = 별도 파일 '셀독등록원장_자동화용'만 — 설정 탭 '원장 링크'에 관리대장 주소 금지 · 10-20 대장 안에 잘못 생긴 원장 시트 5개 삭제 (2026-10-21, R23)
+- 결정: 원장 링크(config `registry/url`)는 `셀독등록원장_자동화용`(…/d/1Fb_G1Jz3EmYbu_SnDVPXiMmO7In7vq6d_lfFPriQYq0) 하나. 관리대장 주소를 넣으면 18:00 실행이 대장 파일 안에 원장 시트 5개(셀독원장·계정이력·상품이력·그로스이력·동기화기록 — 셀독원장에 비밀번호 칸 사본)를 새로 만들고 원래 원장은 갱신이 멈춘다. 10-20 에 생긴 5개는 소유자 지시로 10-21 삭제(구글 버전 기록으로 복구 가능 · 하루치 '최초 등록'만 있어 잃는 이력 없음). 운용 PC 설정 탭 링크는 소유자가 원래 주소로 되돌림.
+- 근거: 소유자 2026-10-21 "셀독등록원장_자동화용 주소임 · 삭제해줘". 실측: 운용 PC 로그 10-20 10:06 `셀독등록원장 연결 확인 OK — '[셀독] 관리 대장'` → 18:00 `[원장] … 신규계정 27 · 신규상품 93`·`시트 5개 생성` · 원래 원장 동기화기록 51회 마지막 = R261019-180029(10-19 18:00) · 운용 PC 백업 원장_261018·261019 와 같은 파일.
+- 버린 대안: 대장 안 원장 유지(비밀번호 사본·원래 이력과 분리) · 코드로 '원장 링크 = 관리대장 주소' 거부(소유자 미결정 — STATE 제안).
+- 영향 범위: 운용 설정(config.json `registry/url`)·관리대장 시트 구성. 코드 변경 없음.
+- 상태: ACTIVE

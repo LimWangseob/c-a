@@ -10,7 +10,7 @@
 ## 사업·범위·결정
 - [⭐⭐사업 맥락: 커머스 판로·위탁관리·사업4종·채권자 370명/300억](business-context-consignment-creditors.md) · [앱 범위: 주문배송=샵마인·우리=등록+관리+통계+CS(D10)](app-scope-no-orders-shopmine.md)
 - [디자인 컨셉(보라)·통합앱 적용](decision-design-concept-261003.md) · [저장소=구글시트+규칙4](decision-storage-gsheet-4rules.md) · [입출력 정의서137칸](io-definition-spec.md)
-- [정산 D8 확정 사실(운용·API·규칙 — 상태는 STATE.md)](settlement-batch-download-decisions.md) · [정산 도메인 지식 D8](settlement-domain-knowledge.md) · [셀독등록원장](feature-ledger-registry.md)
+- [정산 D8 확정 사실(운용·API·규칙 — 상태는 STATE.md)](settlement-batch-download-decisions.md) · [정산 도메인 지식 D8](settlement-domain-knowledge.md) · [셀독등록원장=별도 파일만·대장 주소 금지(D-095)](feature-ledger-registry.md)
 - [판매상태 불일치 경고](feature-sale-status-mismatch-flag.md) · [VID 출처=상품조회·옵션분리](feature-vid-source-from-product-list.md)
 - [⭐셀독 정산서 규칙: 저장=D:\토탈셀러\쿠팡 정산 자료·원천=앱 수집분만·쿠팡 실지급→계약 7:3(계정 합산)](settlement-statement-rules.md)
 
@@ -29,16 +29,16 @@
 - [OpenAPI 불가→WING 세션](coupang-openapi-not-available-consignment.md) · [샵마인=WebView2](shopmine-architecture.md)
 
 ## 입력·수집
-- [입력=셀독 관리대장(헤더2행·첫줄·괄호=AI판단·10-19 개편 헤더·숨긴 행=판매중지·체험단 시트=시작일)](input-ledger-format.md) · [대장 스코핑·AI 매칭+VID 고정(D-009)](ledger-scoped-tracking.md) · [판매 API vi-detail-search](sales-data-api-vi-detail-search.md) · [재고 API orderableQuantity](inventory-api-rfm-search.md)
+- [입력=셀독 관리대장(헤더2행·첫줄·괄호=AI판단·10-19 개편 헤더·숨긴 행=판매중지·체험단 시트=시작일·회사보유재고 열 접두·오입력 계정ID 제거 D-092·093)](input-ledger-format.md) · [대장 스코핑·AI 매칭+VID 고정(D-009)](ledger-scoped-tracking.md) · [판매 API vi-detail-search](sales-data-api-vi-detail-search.md) · [재고 API orderableQuantity](inventory-api-rfm-search.md)
 - [⭐통합 판매현황=결과 첫 시트·위 대시보드(차트·순위·열지도)+일별 상세 31일·관리 상품 기준·일별 4/1 소급(D-064·D-094)](feature-sales-summary-first-sheet.md)
 - [판매데이터 익일반영](coupang-sales-data-lag.md) · [productId 소스 API](api-productid-source-vendor-items-with-vendoritems.md) · [상품명 규약(대장=담당자·결과=노출명)](product-name-convention-ledger-vs-result.md)
 
 ## 키워드·순위
 - [키워드 방법론(AI앵커)·띄어쓰기=별개](keyword-methodology-ai-anchor.md) · [매일 통계·키워드 동결](daily-stats-keyword-freeze.md) · [네이버쇼핑 API 종료](naver-shopping-api-terminated.md) · [Wing 키워드 구독게이팅](wing-keyword-data-subscription-gated.md)
-- [파이프라인 3단계](pipeline-3stage-separation.md) · [핵심=정확 등수 매일](session-handoff-exact-rank-required.md) · [반자동 순위+노출명](semi-auto-rank-and-exposed-name.md) · [안티차단·간격45~75s·바퀴반복D-053·프로필IP별D-057](rank-antiblock-circuit-breaker.md)
+- [파이프라인 3단계](pipeline-3stage-separation.md) · [핵심=정확 등수 매일](session-handoff-exact-rank-required.md) · [반자동 순위+노출명](semi-auto-rank-and-exposed-name.md) · [안티차단·간격45~75s·바퀴반복D-053·프로필IP별D-057·검색창 없는 IP=불량 D-090](rank-antiblock-circuit-breaker.md)
 - [붙여넣기 차단·타이핑만](coupang-blocks-paste-requires-typing.md) · [프라임 후 fetch](coupang-search-prime-then-fetch.md) · [50위 placeholder](rank-blocked-placeholder-50.md) · [지문 정합1·2](fingerprint-consistency.md)
 - [⚠IP 정책 맥락별 반대·흔적은 IP 따라 D-058](proxy-ip-policy-by-context.md) · [프록시 라이브 실측](proxy-live-test-261002.md) · [egress 회전+차단IP](proxy-rotation-design-261002.md) · [프록시 통합 초기](proxy-integration-off-261001.md)
 
 ## 출력·배포·참조
 - [출력=셀독 서식](seldoc-output-format.md) · [날짜컬럼=실행날짜](date-column-run-date-rule.md) · [구글시트 통합 스펙](gsheet-unified-spec.md) · [상세 이미지 추출(CDP)](detail-image-extraction.md)
-- [exe 배포·Defender 제외](exe-packaging-deploy.md) · [⭐쿠팡 WING 도움말 133편 학습 KB=docs/COUPANG_WING_HELP_KB.md(재학습 금지)](coupang-official-reference.md) · [정산 실행흐름(18:00·전체실행 버튼 D-055 동시 기동·①대기·17:55 종료 D-021·사람이 끄면 함께 종료 D-020)·상태 카드](feature-settlement-status-monitoring.md)
+- [exe 배포·Defender 제외](exe-packaging-deploy.md) · [⭐쿠팡 WING 도움말 133편 학습 KB=docs/COUPANG_WING_HELP_KB.md(재학습 금지)](coupang-official-reference.md) · [정산 실행흐름(18:00·전체실행 버튼 D-055 동시 기동·①대기·17:55 종료 D-021·사람이 끄면 함께 종료 D-020·같은 회차 재실행 금지·옛 08:00 예약 자동삭제 D-091)·상태 카드](feature-settlement-status-monitoring.md)
