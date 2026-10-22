@@ -28,6 +28,7 @@
 | `--auto` 조립(①→재개→②→③→재고 역기록→종료) | 끝까지 완주 후 종료 | `start_auto` → `pipeline_stages.run_stages`(B6 단일 조립) | ✓ pin_run_plan P10·P11(순서·단계 기록·야간 1회 재개) |
 | `--resume` 재부팅 복구 | 남은 단계만 이어서 | `start_resume` → `plan_resume_stages` + `run_stages` | ✓ pin_run_plan P9·P10 |
 | 정산 자동 수집(D-020·D-021) | 18:00 함께 기동·①완료 대기·다 받으면/17:55 종료·사람이 앱 끄면 함께 종료 | main(`--auto`/`--resume`)·정산 탭 | ✓ runtime P25~P27·e2e |
+| 셀독전환자 로그인 확인(D-111·1단계) | 미정산 셀독전환자 ①②계정 로그인 성공/실패 표 + '연락 필요' 목록(비번 오류·2단계 인증·비번 없음) · 다운로드 없음 | '셀독전환 정산' 탭 → `정산다운로드.exe transfer-login` → `transfer_login.run` | ✓ verify_transfer_offline T1~T7 |
 
 ### 1-2. 로그인·매칭·출력
 | 기능 | 목표 결과 | 게이트 |

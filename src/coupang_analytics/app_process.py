@@ -68,6 +68,31 @@ def start_settlement_watch(log, since: datetime | None = None) -> subprocess.Pop
     return proc
 
 
+def transfer_login_cmd(retry: bool = False, file: str = "") -> tuple[list[str], str]:
+    """셀독전환자 로그인 확인(D-111)을 띄울 명령 + 작업 폴더 — 정산 프로그램의 transfer-login 명령(배포=정산다운로드.exe)."""
+    tail = ["transfer-login", *(["--retry"] if retry else []), *(["--file", file] if file else [])]
+    if getattr(sys, "frozen", False):
+        folder = Path(sys.executable).parent
+        return [str(folder / SETTLE_EXE), *tail], str(folder)
+    root = Path(__file__).resolve().parents[2]
+    return [sys.executable, str(root / "tools" / "settlement_download.py"), *tail], str(root)
+
+
+def start_transfer_login(log, retry: bool = False, file: str = "") -> subprocess.Popen | None:
+    """창 없이 띄움(로그 = output/정산_셀독전환/로그 — 화면이 읽어 보여 줌). 18:00 무인 시작·[정산 중지]가
+    정산 프로그램을 끝낼 때 함께 끝난다(같은 exe — 런타임 병렬 금지). 실패는 로그 후 None."""
+    cmd, cwd = transfer_login_cmd(retry, file)
+    if getattr(sys, "frozen", False) and not Path(cmd[0]).exists():
+        log(f"[셀독전환] ⚠ {SETTLE_EXE} 를 찾을 수 없어 로그인 확인을 못 띄움: {cmd[0]}")
+        return None
+    try:
+        return subprocess.Popen(cmd, cwd=cwd, creationflags=_NO_CONSOLE | _NEW_GROUP, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as exc:
+        log(f"[셀독전환] ⚠ 로그인 확인 시작 실패: {exc}")
+        return None
+
+
 # ── D-020: 앱 종료 감시 ─────────────────────────────────────────────
 APP_DONE_FILE = Path("output") / "정산" / "로그" / "_앱정상종료.json"   # 무인 ①②③ 완주 표시(앱 PID)
 _SYNCHRONIZE = 0x00100000

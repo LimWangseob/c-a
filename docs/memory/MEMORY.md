@@ -12,6 +12,7 @@
 - [디자인 컨셉(보라)·통합앱 적용](decision-design-concept-261003.md) · [저장소=구글시트+규칙4](decision-storage-gsheet-4rules.md) · [입출력 정의서137칸](io-definition-spec.md)
 - [정산 D8 확정 사실(운용·API·규칙 — 상태는 STATE.md)](settlement-batch-download-decisions.md) · [정산 도메인 지식 D8](settlement-domain-knowledge.md) · [셀독계정상품이력관리원장(옛 셀독등록원장)=별도 파일만·대장 주소 금지(D-095·D-100)·정산 계정 출처=원장+정산전용계정 시트(D-103)](feature-ledger-registry.md)
 - [판매상태 불일치 경고](feature-sale-status-mismatch-flag.md) · [VID 출처=상품조회·옵션분리](feature-vid-source-from-product-list.md)
+- [셀독전환자 ①②103계정 정산(D-111) — 1단계 로그인 확인 탭 구현·2단계 다운로드·빈도(주1회 vs 매일) 미결정](feature-transfer-settlement.md)
 - [⭐셀독 정산서 규칙: 저장=D:\토탈셀러\쿠팡 정산 자료·원천=앱 수집분만·쿠팡 실지급→계약 7:3(계정 합산)](settlement-statement-rules.md)
 
 ## 작업 원칙(피드백·정책)

@@ -40,6 +40,7 @@ CHECKS = [
     ("정산 런타임(다운로드·감시·검증 시트·지급일 대조)", "tools/verify_settlement_runtime_offline.py", True),
     ("판매분석 금액 날짜별 누적", "tools/verify_sales_history_offline.py", True),
     ("통합 판매현황(첫 시트·월·주 조회)", "tools/verify_sales_summary_offline.py", True),
+    ("셀독전환자 로그인 확인(파일·비번 후보·멈춤·연락 필요 목록)", "tools/verify_transfer_offline.py", True),
     ("오프라인 실증(워크북·매칭·키워드선정)", "tools/verify_offline.py", False),
 ]
 

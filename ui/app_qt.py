@@ -51,6 +51,7 @@ from proxy_panel_qt import ProxyPanelMixin  # noqa: E402
 from registry_panel_qt import RegistryPanelMixin  # noqa: E402
 from settlement_status_panel_qt import SettlementStatusMixin  # noqa: E402
 from stock_panel_qt import KEY_STOCK_URL, StockPanelMixin  # noqa: E402
+from transfer_panel_qt import TransferPanelMixin  # noqa: E402
 
 _PROFILE = "data/chrome-ui"
 _IMG_PROFILE = "data/chrome-images"   # 상세이미지 전용 Chrome 프로필(사용자가 여기 코팡 로그인 → warm 영속)
@@ -173,7 +174,8 @@ _GS_LINKS = {
 }
 
 
-class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatusMixin, QtWidgets.QMainWindow):
+class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatusMixin, TransferPanelMixin,
+          QtWidgets.QMainWindow):
     log_signal = QtCore.Signal(str)
     finish_signal = QtCore.Signal(object, object, object, object)   # (btn, on_done, result, err)
     gs_status_signal = QtCore.Signal(str, object, str)   # (_GS_LINKS 종류, 연결됨 True/False/None=미확인, 설명)
@@ -231,6 +233,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self.tabs.addTab(self._images_tab(), "상세 이미지")
         self.tabs.addTab(self._collect_tab(), "전체 실행")
         self.tabs.addTab(self._settlement_tab(), "정산")   # 회사재고 + 셀독계정상품이력관리원장 실행(링크는 설정 탭)
+        self.tabs.addTab(self._transfer_tab(), "셀독전환 정산")   # 미정산 셀독전환자 로그인 확인(1단계·D-111)
         self.log_panel = self._log_panel()
         self._splitter.addWidget(self.log_panel)
         self._splitter.setStretchFactor(0, 0)

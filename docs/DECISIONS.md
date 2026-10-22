@@ -967,3 +967,11 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 달력 기준 한 달(지난달 같은 날 다음날~어제 — 달마다 28~31일로 길이가 달라짐) · 쿠팡 기간 합계 'R:' 키 추가 조회(① 로그인 세션에 조회 1회 추가 — 일별 소급이 이미 덮어 불필요) · 30일 중 받은 날만 합산(빠진 날이 있는 계정이 작게 보여 순위 왜곡).
 - 영향 범위: `sales_dashboard.py`(recent_month·Dashboard.rank_span·build) · `workbook_sales_dash._ranks`(띠·차트 제목·표 머리줄) · `tools/verify_sales_summary_offline.py` T10·T11 · `designs/SALES_SUMMARY.md` §5-1 · `tools/build_staff_manual.py` 5쪽·FAQ 문구. 결과 구글시트 반영 = 새 버전 실행 때(통제 세션).
 - 상태: ACTIVE
+
+### D-111 [TRANSFER_LOGIN_CHECK] 미정산 셀독전환자 ①②계정 정산 — 1단계 = 로그인 확인 전용 명령·탭 · 정산 계정(원장)·기록과 분리 (2026-10-22, R47)
+- 결정: ① 입력 = 셀독전환자 파일(설정 `transfer/file`)의 ①·② 시트 103계정(`transfer_accounts.read_transfer_file` — 머리줄 이름으로 칸·계정명 중복 = 중단·비번 공백 = 떼고 경고). ② 비밀번호 = 파일 값 먼저 → 관리대장 저장 값(빈 칸이면 관리대장), 최대 2개(D-012)·D-068 그대로. ③ `정산다운로드.exe transfer-login`(`transfer_login.run`) = 앱 ①과 같은 로그인 함수로 로그인만 확인 → `output/정산_셀독전환/` 결과 JSON·엑셀('로그인 결과'·'연락 필요'). ④ 안전 = 앱 파이프라인·정산 watch 잠금 확인(돌면 멈춤)·17:40 이후 새 계정 안 함·계정 사이 45~75초·차단 2연속 전체 중단·프록시 없음. ⑤ 앱 '셀독전환 정산' 탭(시작·성공 안 된 계정만 다시·중지·결과 폴더)이 결과·로그 파일을 3초마다 읽어 표시(배포 exe 콘솔 없음). ⑥ 원장(D-103) 정산 계정·`output/정산` 기록·정산 상태 화면과 섞지 않음(계정 출처·목적 다름 — 미정산 원금 공제용).
+- 근거: 소유자 2026-10-22(셀독 전환자 파일 분석 세션 전달·이 세션 질문 답) "정상 로그인 되는지부터 확인" · "비번 빈 계정 = 관리대장 비번 적용" · "비번 오류로 접속이 불가한 것은 별도로 리스트 작성(개별 연락)". 실측(노트북 파일): ①52·②51 = 103계정·계정명 형식 오류 0·중복 0·비번 공백 1(jljhome1)·이 PC 기준 비번 없음 10(운용 PC 관리대장 저장 값은 다를 수 있음). 시험 verify_transfer_offline T1~T7(파일·오류·비번 후보·실행/엑셀·멈춤·잠금 감지·판정 분류)·결과 파일 비밀번호 0건.
+- 버린 대안: 정산 계정 출처에 'transfer' 추가(원장 정산 기록·상태 화면·이름 변경 이전과 섞임) · 파일 비번 무시하고 관리대장만(②는 대부분 관리대장에 없음) · 로그인 확인을 18:00 흐름에 자동 편입(1단계는 소유자 확인용·로그인 103회 추가 = IP 위험).
+- 영향 범위: 신규 `transfer_accounts.py`·`transfer_login.py`·`ui/transfer_panel_qt.py`·`tools/verify_transfer_offline.py` · `app_process.transfer_login_cmd/start_transfer_login` · `tools/settlement_download.py`(명령 1개 전달) · `ui/app_qt.py`(탭 1줄) · `tools/run_checks.py` · `designs/SETTLEMENT_MODULE.md §15` · `designs/FEATURE_INVENTORY.md`. 2단계(정산 다운로드·자동 실행 빈도)는 미결정.
+- 상태: ACTIVE
+

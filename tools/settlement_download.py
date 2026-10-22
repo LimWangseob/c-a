@@ -769,7 +769,8 @@ def cmd_watch(args) -> int:
 def main() -> int:
     global LOG
     ap = argparse.ArgumentParser(description="쿠팡 정산 파일 배치 다운로드")
-    ap.add_argument("command", choices=("probe", "request", "download", "run", "watch", "stats", "merge", "evidence"))
+    ap.add_argument("command", choices=("probe", "request", "download", "run", "watch", "stats", "merge", "evidence",
+                                        "transfer-login"))
     ap.add_argument("--accounts", default="", help="계정ID 쉼표 구분(비우면 관리대장 전체)")
     ap.add_argument("--from", dest="start", type=date.fromisoformat, default=date(2026, 1, 1))
     ap.add_argument("--to", dest="end", type=date.fromisoformat, default=date.today())
@@ -784,12 +785,18 @@ def main() -> int:
     ap.add_argument("--since", default="", help="watch: 이 시각(ISO) 뒤에 끝난 ①판매수집만 기다림(앱 전체실행 버튼)")
     ap.add_argument("--out", default="", help="evidence: 증빙 상위 폴더(계정마다 증빙_{사업자}_쿠팡원본 — D-067)")
     ap.add_argument("--redo", action="store_true", help="evidence: 끝난 계정도 다시 받기")
+    ap.add_argument("--file", default="", help="transfer-login: 셀독전환자 파일(비우면 설정 transfer/file)")
+    ap.add_argument("--retry", action="store_true", help="transfer-login: 마지막 결과가 성공이 아닌 계정만")
     args = ap.parse_args()
     global CHANNELS, ORIGINALS, JOBS
     CHANNELS = (args.channel,) if args.channel else ()
     args.out = str(Path(args.out).resolve()) if args.out else ""     # set_workdir(작업 폴더 이동) 전에 고정
     ORIGINALS = Path(args.originals).resolve() if args.originals else None   # set_workdir(작업 폴더 이동) 전에 고정
     apppaths.set_workdir()
+    if args.command == "transfer-login":   # D-111 셀독전환자 로그인 확인 — 정산 기록·상태 화면과 섞지 않음(output/정산_셀독전환)
+        from coupang_analytics import transfer_login
+        args.until = args.until or transfer_login.UNTIL_DEFAULT
+        return transfer_login.main_cli(args)
     LOG = RL.RunLog(BASE)
     log(f"실행 {LOG.run_id} · 명령 {args.command} · 기간 {args.start}~{args.end} · 데이터 폴더 {Path.cwd()}")
     if args.command != "watch":   # watch 는 잠금을 얻은 뒤 cmd_watch 가 상태를 쓴다 — 2중 실행(잠금 실패로 즉시
