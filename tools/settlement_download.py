@@ -786,7 +786,8 @@ def main() -> int:
     ap.add_argument("--out", default="", help="evidence: 증빙 상위 폴더(계정마다 증빙_{사업자}_쿠팡원본 — D-067)")
     ap.add_argument("--redo", action="store_true", help="evidence: 끝난 계정도 다시 받기")
     ap.add_argument("--file", default="", help="transfer-login: 셀독전환자 파일(비우면 설정 transfer/file)")
-    ap.add_argument("--retry", action="store_true", help="transfer-login: 마지막 결과가 성공이 아닌 계정만")
+    ap.add_argument("--retry", action="store_true", help="transfer-login: 성공·인증번호·같은 틀린 비번 제외하고 다시")
+    ap.add_argument("--start", default="", help="transfer-login: HH:MM 까지 기다렸다 시작(밤에 이어 하기)")
     args = ap.parse_args()
     global CHANNELS, ORIGINALS, JOBS
     CHANNELS = (args.channel,) if args.channel else ()

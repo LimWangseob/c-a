@@ -28,6 +28,7 @@ from coupang_analytics import transfer_login as TL  # noqa: E402
 from coupang_analytics.registry_lock import registry_lock  # noqa: E402
 
 PW = "S3cret!pw"          # 결과 파일에 나오면 안 되는 값
+FP = lambda aid, p: f"fp-{aid}-{len(p)}"   # noqa: E731  가짜 지문(실제 credstore 키 안 씀)
 HEAD = ["대표자명", "연락처", "사업자명", "계정명", "비밀번호", "상품명", "생산가", "공급가", None, "판매가"]
 
 
@@ -158,7 +159,7 @@ def t4_run_and_report():
     def pw(a):
         return ([], "비밀번호 없음(파일·관리대장 모두)") if a.account_id == "acc3" else ([PW], "파일")
     with tempfile.TemporaryDirectory() as d:
-        rc = TL.run(accts, logs.append, out_dir=d, check=check, passwords=pw, busy=lambda: "", sleep=slept.append,
+        rc = TL.run(accts, logs.append, fp=FP, out_dir=d, check=check, passwords=pw, busy=lambda: "", sleep=slept.append,
                     now=_Clock(), until="17:40")
         state = TL.load_state(d)
         files = sorted(Path(d).glob("로그인확인_*.xlsx"))
@@ -172,7 +173,8 @@ def t4_run_and_report():
     assert all(c[1] == (PW,) and c[2] is False for c in called), "보이는 창(사람이 볼 수 있게)·비번 후보 전달"
     assert len(slept) == 3 and all(TL.GAP_SEC[0] <= s <= TL.GAP_SEC[1] for s in slept), f"로그인 사이 쉼 3번: {slept}"
     assert state["acc3"]["결과"] == TL.FAIL and "비밀번호 없음" in state["acc3"]["사유"]
-    assert state["acc1"] == {"결과": TL.OK, "사유": "로그인 됨", "비밀번호 출처": "파일", "시도": "2026-10-22 10:00:00"}
+    assert state["acc1"] == {"결과": TL.OK, "사유": "로그인 됨", "비밀번호 출처": "파일", "시도": "2026-10-22 10:00:00",
+                             "지문": [FP("acc1", PW)]}
     assert res[0] == list(TL.HEAD) and len(res) == 6 and res[1][3] == "acc1" and res[1][5] == TL.OK
     assert need[0] == list(TL.CONTACT_HEAD)
     assert [r[2] for r in need[1:]] == ["acc2", "acc3", "acc4"], f"연락 필요 = 비번 오류·비번 없음·2단계 인증: {need}"
@@ -194,24 +196,26 @@ def t5_stops():
         called.append(a.account_id)
         return next(seq)
     with tempfile.TemporaryDirectory() as d:
-        rc = TL.run(accts, lambda m: None, out_dir=d, check=check, passwords=pw, busy=lambda: "", sleep=lambda s: None,
+        rc = TL.run(accts, lambda m: None, fp=FP, out_dir=d, check=check, passwords=pw, busy=lambda: "", sleep=lambda s: None,
                     now=_Clock())
         assert rc == 1 and called == ["acc1", "acc2", "acc3"], (rc, called)
         called.clear()
-        rc = TL.run(accts, lambda m: None, out_dir=d, retry=True, passwords=pw, busy=lambda: "", sleep=lambda s: None,
+        rc = TL.run(accts, lambda m: None, fp=FP, out_dir=d, retry=True, passwords=pw, busy=lambda: "", sleep=lambda s: None,
                     now=_Clock(), check=lambda a, p, h, lg: (called.append(a.account_id), (TL.OK, "로그인 됨"))[1])
         assert rc == 0 and called == ["acc2", "acc3", "acc4", "acc5"], f"재시도 = 성공 아닌 계정만(acc1 제외): {called}"
         called.clear()
         busy = iter(["", "앱 실행(판매수집·순위)이 도는 중"])
-        rc = TL.run(accts, lambda m: None, out_dir=d, passwords=pw, busy=lambda: next(busy), sleep=lambda s: None,
+        rc = TL.run(accts, lambda m: None, fp=FP, out_dir=d, passwords=pw, busy=lambda: next(busy), sleep=lambda s: None,
                     now=_Clock(), check=lambda a, p, h, lg: (called.append(a.account_id), (TL.OK, "로그인 됨"))[1])
         assert rc == 2 and called == ["acc1"], (rc, called)
         called.clear()
-        rc = TL.run(accts, lambda m: None, out_dir=d, passwords=pw, busy=lambda: "", sleep=lambda s: None,
+        rc = TL.run(accts, lambda m: None, fp=FP, out_dir=d, passwords=pw, busy=lambda: "", sleep=lambda s: None,
                     now=_Clock("17:40"), check=lambda a, p, h, lg: (called.append(a.account_id), (TL.OK, ""))[1])
         assert rc == 0 and called == [], "17:40 지나면 새 계정 시작 안 함(18:00 앱 실행 보호)"
-    assert not TL.past_until("", datetime(2026, 10, 22, 23, 0)) and TL.past_until("17:40", datetime(2026, 10, 22, 17, 41))
-    ok("차단 연속 2 → 중단 · 재시도 = 성공 아닌 4계정 · 다른 실행 중 → 멈춤 · 17:40 지나면 시작 안 함")
+    assert not TL.in_quiet("", datetime(2026, 10, 22, 18, 0)) and TL.in_quiet("17:40", datetime(2026, 10, 22, 19, 0))
+    assert not TL.in_quiet("17:40", datetime(2026, 10, 22, 21, 0)) and not TL.in_quiet("17:40", datetime(2026, 10, 23, 2, 0))
+    assert TL.in_quiet("17:40", datetime(2026, 10, 22, 20, 39)) and not TL.in_quiet("17:40", datetime(2026, 10, 22, 17, 39))
+    ok("차단 연속 2 → 중단 · 재시도 = 성공 아닌 4계정 · 다른 실행 중 → 멈춤 · 17:40~20:40(운용 PC 실행 시간대) 시작 안 함")
 
 
 def t6_busy_lock():
@@ -268,9 +272,55 @@ def t7_check_one_mapping():
     finally:
         BR.WingBrowser, PS._login_with_candidates, LT.reasons_today = orig
     assert "비밀번호 오류" in got[2][1] and "비밀번호가 다릅니다" in got[2][1], got[2]
-    assert "2단계 인증" in got[3][1], got[3]
+    assert "2단계 인증" in got[3][1] and "비밀번호 맞음" in got[3][1], got[3]
     assert closed == [False] * len(cases), "보이는 창·매번 닫음"
     ok("성공 · Akamai 차단 · 비번 오류(쿠팡 안내 문구) · 2단계 인증 · 챌린지 = 차단 · 미완료 = 건너뜀 · 브라우저 6번 닫음")
+
+
+def t8_night_rules():
+    print("[T8] 야간 이어 하기 — 멈춤 시각 = 시작 뒤 첫 그 시각 · 시작 대기 · 차단/미완료/오류 2연속 중단 · 재시도 대상 · 비번 지문")
+    from datetime import timedelta
+    d21, d14 = datetime(2026, 10, 22, 21, 0), datetime(2026, 10, 22, 14, 0)
+    assert TL.deadline_of("17:40", d21) == datetime(2026, 10, 23, 17, 40), "밤에 시작 = 다음 날 17:40"
+    assert TL.deadline_of("17:40", d14) == datetime(2026, 10, 22, 17, 40)
+    assert TL.deadline_of("", d14) is None
+    slept, logs = [], []
+    clock = {"t": datetime(2026, 10, 22, 15, 20)}
+
+    def fake_sleep(s):
+        slept.append(s)
+        clock["t"] += timedelta(seconds=s)
+    TL.wait_until("21:00", logs.append, now=lambda: clock["t"], sleep=fake_sleep)
+    assert clock["t"] >= datetime(2026, 10, 22, 21, 0) and any("21:00" in m for m in logs), (clock, logs)
+    n = len(slept)
+    TL.wait_until("21:00", logs.append, now=lambda: clock["t"], sleep=fake_sleep)
+    assert len(slept) == n, "이미 지났으면 바로 시작"
+    # 차단·미완료·오류 2연속 = 중단(오늘 15:08 실측: 차단 화면 → '미완료' → 다음 계정 연결 오류)
+    accts = _accts()
+    pw = lambda a: ([PW], "파일")   # noqa: E731
+    seq = iter([(TL.SKIP, "미완료"), (TL.OK, "x"), (TL.BLOCK, "차단"), (TL.SKIP, "오류"), (TL.OK, "x")])
+    called = []
+    with tempfile.TemporaryDirectory() as d:
+        rc = TL.run(accts, lambda m: None, out_dir=d, passwords=pw, busy=lambda: "", sleep=lambda s: None, now=_Clock(),
+                    fp=lambda aid, p: f"fp:{aid}:{p}",
+                    check=lambda a, p, h, lg: (called.append(a.account_id), next(seq))[1])
+        assert rc == 1 and called == ["acc1", "acc2", "acc3", "acc4"], (rc, called)
+        st = TL.load_state(d)
+        assert st["acc1"]["지문"] == [f"fp:acc1:{PW}"] and PW not in json.dumps(
+            {k: {kk: vv for kk, vv in v.items() if kk != "지문"} for k, v in st.items()}, ensure_ascii=False)
+    # 재시도 대상: 성공·인증번호 제외 · 비번 오류는 비번이 바뀐 계정만 · 미완료·비번 없음은 다시
+    state = {"acc1": {"결과": TL.OK, "사유": "로그인 됨"},
+             "acc2": {"결과": TL.FAIL, "사유": "로그인 비밀번호 오류", "지문": [f"fp:acc2:{PW}"]},
+             "acc3": {"결과": TL.FAIL, "사유": "로그인 비밀번호 오류", "지문": ["fp:acc3:옛값"]},
+             "acc4": {"결과": TL.FAIL, "사유": "비밀번호 맞음 — 2단계 인증 필요"},
+             "acc5": {"결과": TL.SKIP, "사유": "로그인 미완료"}}
+    got = [a.account_id for a in TL.pick(accts, state, True, pw, lambda aid, p: f"fp:{aid}:{p}")]
+    assert got == ["acc3", "acc5"], f"재시도 = 비번 바뀐 acc3·미완료 acc5 (acc5 다음 미확인 없음): {got}"
+    accts6 = accts + [TA.TransferAccount("acc6", "x", "", "", "", "①", 9, (), "")]
+    got = [a.account_id for a in TL.pick(accts6, state, True, lambda a: ([], "비밀번호 없음") if a.account_id == "acc6"
+                                         else pw(a), lambda aid, p: f"fp:{aid}:{p}")]
+    assert got == ["acc3", "acc5", "acc6"], got
+    ok("밤 시작 → 다음 날 17:40 · 21:00 까지 대기 · 차단+오류 2연속 중단 · 재시도 = 비번 바뀐 계정·미완료·미확인만 · 지문만 저장")
 
 
 def main() -> int:
@@ -281,6 +331,7 @@ def main() -> int:
     t5_stops()
     t6_busy_lock()
     t7_check_one_mapping()
+    t8_night_rules()
     print("셀독전환자 로그인 확인 오프라인 검증 통과")
     return 0
 

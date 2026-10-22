@@ -975,3 +975,10 @@ un_log_*.log`)로 확인 필요.
 - 영향 범위: 신규 `transfer_accounts.py`·`transfer_login.py`·`ui/transfer_panel_qt.py`·`tools/verify_transfer_offline.py` · `app_process.transfer_login_cmd/start_transfer_login` · `tools/settlement_download.py`(명령 1개 전달) · `ui/app_qt.py`(탭 1줄) · `tools/run_checks.py` · `designs/SETTLEMENT_MODULE.md §15` · `designs/FEATURE_INVENTORY.md`. 2단계(정산 다운로드·자동 실행 빈도)는 미결정.
 - 상태: ACTIVE
 
+### D-112 [TRANSFER_LOGIN_NIGHT] 셀독전환자 로그인 확인 — 밤에 이어 하기(--start)·운용 PC 실행 시간대 피함·차단/미완료/오류 2연속 중단·같은 틀린 비번 재시도 금지 (2026-10-22, R48)
+- 결정: ① `--start HH:MM` = 그 시각까지 기다렸다 시작. 멈춤 시각(기본 17:40) = 시작 뒤 처음 오는 그 시각(밤 시작 = 다음 날 17:40). ② 17:40~20:40(QUIET_HOURS 3 — 운용 PC 18:00 ①판매수집·정산 로그인 시간대)엔 시작·새 계정 안 함 — 이 PC 잠금으로는 다른 PC 를 못 봐서 시각으로 피함(같은 사무실 IP 동시 로그인 방지). ③ 전체 중단 = 차단뿐 아니라 **차단·미완료·오류 2계정 연속**. ④ 재시도 = 성공·'비밀번호 맞음 — 2단계 인증 필요' 제외 · 비밀번호 오류는 시도한 값의 지문(login_today.fingerprint HMAC)과 지금 후보가 다를 때만 · 결과 JSON 에 지문 저장(비밀번호 값 아님). ⑤ 2단계 인증 사유 = '비밀번호 맞음 — 2단계 인증 필요(계약자 휴대폰 인증번호 — 연락 필요)'.
+- 근거: 소유자 2026-10-22 "나머지는 18시 이후에 이어서 처리되도록" · "비밀번호 맞음(인증번호 필요) 9도 연락이 필요한 건". 실측(오늘 14:23~15:10 28계정): 15:08 Akamai 차단 화면 → '미완료(unknown)'로 기록돼 차단 2연속 장치가 안 셈 · 다음 계정 브라우저 연결 오류(ECONNREFUSED) · 비번 오류 14·인증번호 9·성공 3. 운용 PC ① 끝 = 10-15~18 18:44~19:06(그 뒤 정산 로그인). 옛 멈춤 판정(시:분 비교)은 밤 시작 시 즉시 멈춤. 시험 T5·T7·T8 재현 → 수정 후 통과. 오늘 결과 JSON 28건에 지문 보강·인증번호 사유 9건 갱신 → 재시도 대상 77(미확인 75·미완료 2).
+- 버린 대안: 운용 PC 정산 자동 수집 끝에 이어 붙이기(오늘 밤 배포·파일 복사 필요 — 2단계 때 검토) · 비번 오류도 다시(같은 틀린 값 재제출 = 계정 잠금 위험·D-068 은 그날만 막음) · 차단만 셈(실측상 차단이 미완료로 끝남).
+- 영향 범위: `transfer_login.py`(deadline_of·in_quiet·wait_until·pick/_retry_needed·save_result 지문·run) · `tools/settlement_download.py`(--start) · `tools/verify_transfer_offline.py` T5·T7·T8 · `designs/SETTLEMENT_MODULE.md §15`.
+- 상태: ACTIVE
+
