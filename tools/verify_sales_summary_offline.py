@@ -460,8 +460,10 @@ def t10_dashboard():
     assert [p.label for p in b.weeks][-1] == "10.12" and len(b.weeks) == 8
     assert len(b.days) == 31 and b.days[-1].label == "10.20" and b.days[0].label == "09.20", "일별 = 오래된 → 최신"
     assert b.days[-1].amount == 1500, "관리 안 하는 vx 999원 빠짐"
+    assert SD.recent_month(y) == (date(2026, 9, 21), date(2026, 10, 20)), "최근 1개월 = 어제까지 30일(소유자 2026-10-22)"
+    assert b.rank_span == (date(2026, 9, 21), date(2026, 10, 20))
     r1, r2 = b.accounts
-    assert (r1.aid, r1.amount, r1.week, r1.prev_week, r1.change) == ("a1", 30000, 10500, 10500, 0.0), r1
+    assert (r1.aid, r1.amount, r1.week, r1.prev_week, r1.change) == ("a1", 40000, 10500, 10500, 0.0),         f"⑤ 최근 1개월 = 9/21~30 1,000×10 + 10/1~20 1,500×20: {r1}"
     assert (r2.aid, r2.amount, r2.week, r2.prev_week, r2.change) == ("a2", None, None, 14000, None), "미수집 = 맨 아래"
     assert not hasattr(b, "products"), "⑥ 상품 열지도 자료 없음"
     mk = {k.title: k for k in b.month_kpis}                                # ① 월별 누계(소유자 2026-10-21)
@@ -473,7 +475,7 @@ def t10_dashboard():
     m10 = mk["10월 누계"]
     assert (m10.span, m10.amount, m10.missing_names) == ("10.01~10.20", 30000, ("니코에이블",)), m10
     assert abs(m10.change - 0.5) < 1e-9 and m10.basis == "지난달 같은 기간 09.01~09.20 대비", "진행 중 달 = 지난달 같은 기간"
-    ok("전일 1,500 · 지난주 10,500(0%) · 이번 달 30,000(+50%) · 1월 기간합계 · 10월 진행 중 · 순위 a1(지난주 10,500·0%)·a2 미수집")
+    ok("전일 1,500 · 지난주 10,500(0%) · 이번 달 30,000(+50%) · 1월 기간합계 · 10월 진행 중 · 순위 a1(최근 1개월 40,000·지난주 10,500·0%)·a2 미수집")
 
 
 def t11_charts_persist():
@@ -481,8 +483,8 @@ def t11_charts_persist():
     from openpyxl.utils import get_column_letter
     with tempfile.TemporaryDirectory() as d:
         _dash_fixture(d)
-        day = date(2026, 10, 1)
-        while day <= date(2026, 10, 20):                                   # a3 = 이번 달 매일 받았지만 판매 0
+        day = date(2026, 9, 21)
+        while day <= date(2026, 10, 20):                                   # a3 = 최근 1개월 매일 받았지만 판매 0
             SH.record(d, "a3", day.isoformat(), day.isoformat(), {})
             day += timedelta(days=1)
         path = Path(d) / "m.xlsx"
@@ -546,12 +548,14 @@ def t11_charts_persist():
     i = cells.index(tot)
     assert cells[i + 1][3] == kpi[1] == 1500, (cells[i + 1][3], kpi[1])
     rh = next(r for r in cells if r[0] == "순위")
-    assert [v for v in rh[:10] if v] == ["순위", "계정", "이번 달 누계(원)", "지난주(원)", "전주 대비"], rh[:10]
+    assert [v for v in rh[:10] if v] == ["순위", "계정", "최근 1개월 누계(원)", "지난주(원)", "전주 대비"], rh[:10]
     k = cells.index(rh)
     rows = [(r[0], r[1], r[2], r[5]) for r in cells[k + 1:k + 4]]
-    assert rows == [(1, "에벤에셀 (a1)", 30000, 10500), ("-", "벅스 (a3)", 0, 0), ("-", "니코에이블 (a2)", "미수집", "미수집")], \
+    assert rows == [(1, "에벤에셀 (a1)", 40000, 10500), ("-", "벅스 (a3)", 0, 0), ("-", "니코에이블 (a2)", "미수집", "미수집")], \
         f"⑤ = 전 계정(판매 순 → 판매 0 → 미수집·소유자 2026-10-21): {rows}"
     assert specs[3]["cat"][1] - specs[3]["cat"][0] == 3, "⑤ 막대 차트도 전 계정"
+    assert specs[3]["title"] == "⑤ 최근 1개월 누계 판매금액(전 계정 · 09.21~10.20)", specs[3]["title"]
+    assert any(v.startswith("⑤ 계정 순위 — 최근 1개월(09.21~10.20)") for v in (c for r in cells for c in r if isinstance(c, str)))
     flat = [v for r in cells for v in r if isinstance(v, str)]
     assert not any(v.startswith("판매 없음") for v in flat), "판매 0 계정은 표에 나오므로 따로 줄 없음"
     assert "미수집 1계정: 니코에이블(자료 없음)" in flat, "미수집 = 이름(사유)"
@@ -559,7 +563,7 @@ def t11_charts_persist():
     assert "1 / 3 계정 (니코에이블)" in flat, [v for v in flat if "/ 3 계정" in v]
     assert any(v.endswith("미수집 1계정(니코에이블) 제외") for v in flat), [v for v in flat if "제외" in v]
     miss_row = next(r for r in cells if r[0] == "미수집 계정 수")
-    assert miss_row[1].startswith("벅스 ") and "니코에이블 5일" in miss_row[1], f"상세 미수집 줄 = 이름·일수: {miss_row}"
+    assert miss_row[1] == "니코에이블 5일, 벅스 1일", f"상세 미수집 줄 = 이름·일수(많은 순): {miss_row}"
     assert WD.paren(()) == "" and WD.paren(("유라이프", "반달컴퍼니")) == "(유라이프, 반달컴퍼니)", "없으면 괄호 없음"
     assert not any(v.startswith("⑥") for v in flat) and not any(set(v) <= set("▁▂▃▄▅▆▇█·") for v in flat if v)
     ok("차트 4개 · 왼쪽 0·오른쪽 W 일치 · ②③ 반씩 · 10월 진행 중 30,000(a2 빠진 날 있어 제외) · 미수집 날 회색 · ⑤ 전 계정(판매 0·미수집 포함)·미수집 줄 · 다시 열어도 4개")

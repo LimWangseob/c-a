@@ -1,7 +1,7 @@
 """통합 판매현황 상단 대시보드 집계(순수 로직·오프라인) — SSOT=designs/SALES_SUMMARY.md §5-1(소유자 2026-10-21).
 
 ① 요약(전일·지난주·이번 달 누계·미수집 계정) ② 월별 ③ 주간(최근 8주) ④ 일별(최근 31일) ⑤ 계정 순위
-(이번 달 누계·지난주·전주 대비 — 2026-10-21 2차: ⑥ 상품 열지도·글자 그래프 삭제·D-098).
+(최근 1개월 누계·지난주·전주 대비 — 2026-10-21 2차: ⑥ 상품 열지도·글자 그래프 삭제·D-098 · 최근 1개월 D-110).
 입력 = sales_summary.scope 로 **관리 상품만** 거른 저장(상세표와 같은 기준 → 합계 일치).
 계정 하나의 기간 값 = 그 기간 일별 기록이 **모두 있으면 일별 합**, 아니면 쿠팡 기간 합계(조회기간이 정확히 같은 것),
 둘 다 없으면 **미수집**(합계에서 빼고 개수로 표시). 증감 % = 두 기간 **모두 받은 계정끼리** 비교(빠진 계정이 증감을 왜곡 안 함).
@@ -16,6 +16,7 @@ from datetime import date, timedelta
 from .sales_summary import FIRST_DAY, WEEKS, _rows_of, month_key, week_monday
 
 DAYS = 31        # ④ 일별 막대 칸 수
+RECENT_DAYS = 30  # ⑤ 계정 순위 '최근 1개월' = 어제까지 30일(소유자 2026-10-22·D-110)
 
 
 @dataclass
@@ -43,7 +44,7 @@ class Kpi:
 class AccountRank:
     aid: str
     label: str
-    amount: int | None        # 이번 달 누계(None = 미수집)
+    amount: int | None        # 최근 1개월 누계(None = 미수집)
     week: int | None          # 지난주(끝난 월~일)
     prev_week: int | None     # 그 전주
     change: float | None      # 지난주 vs 그 전주
@@ -58,9 +59,10 @@ class Dashboard:
     months: list
     weeks: list
     days: list
-    accounts: list            # 이번 달 누계 금액 순(미수집 = 맨 뒤)
+    accounts: list            # 최근 1개월 누계 금액 순(미수집 = 맨 뒤)
     missing_today_names: tuple = ()   # 전일 미수집 계정 이름
     month_kpis: tuple = ()    # ① 월별 누계(시작월~이번 달·전월 대비 — 진행 중 달은 지난달 같은 기간 대비·D-105)
+    rank_span: tuple = ()     # ⑤ 최근 1개월 (시작, 끝)
 
 
 # ── 기간 ──────────────────────────────────────────────────────
@@ -74,6 +76,11 @@ def prev_month_same(yesterday: date) -> tuple[date, date]:
     first = (yesterday.replace(day=1) - timedelta(days=1)).replace(day=1)
     last = calendar.monthrange(first.year, first.month)[1]
     return first, first.replace(day=min(yesterday.day, last))
+
+
+def recent_month(yesterday: date) -> tuple[date, date]:
+    """⑤ 최근 1개월(어제까지 RECENT_DAYS 일) — 월초에도 한 달치가 보이도록(이번 달 누계 대신·D-110)."""
+    return yesterday - timedelta(days=RECENT_DAYS - 1), yesterday
 
 
 def _month_spans(yesterday: date, first: date) -> list[tuple[str, str, date, date, bool]]:
@@ -156,6 +163,8 @@ def build(daily: dict, period_recs: dict, labels: dict, yesterday: date, weeks: 
     day_v = per_acct(yesterday, yesterday)
     lw_v, pw_v = (per_acct(m, m + timedelta(days=6), wk_key[m]) for m in (lw, lw - timedelta(weeks=1)))
     mo_v, pm_v = per_acct(m_s, yesterday, month_key(m_s)), per_acct(pm_s, pm_e)
+    rm = recent_month(yesterday)
+    rm_v = per_acct(*rm)                                                 # 일별 합만(쿠팡 기간 합계 조회 없음)
     def kpi(title, s, e, cur, prev, basis):
         return _kpi(title, s, e, cur, prev, basis, missing_names(aids, labels, cur))
     kpis = [kpi("전일", yesterday, yesterday, day_v, None, ""),
@@ -169,8 +178,8 @@ def build(daily: dict, period_recs: dict, labels: dict, yesterday: date, weeks: 
     day_pts = [_point(f"{d:%m.%d}", per_acct(d, d)) for d in
                (yesterday - timedelta(days=i) for i in range(days - 1, -1, -1))]
     return Dashboard(yesterday, kpis, sum(v is None for v in day_v), len(aids), months, week_pts, day_pts,
-                     _ranks(aids, labels, mo_v, lw_v, pw_v), missing_names(aids, labels, day_v),
-                     tuple(_month_kpis(spans, month_vals, mo_v, pm_v, (pm_s, pm_e), kpi)))
+                     _ranks(aids, labels, rm_v, lw_v, pw_v), missing_names(aids, labels, day_v),
+                     tuple(_month_kpis(spans, month_vals, mo_v, pm_v, (pm_s, pm_e), kpi)), rm)
 
 
 def _month_kpis(spans, vals, mo_v, pm_v, pm_span, kpi):

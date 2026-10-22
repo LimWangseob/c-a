@@ -1,6 +1,6 @@
 """통합판매현황 상단 대시보드 그리기·차트(엑셀·구글) — SSOT=designs/SALES_SUMMARY.md §5-1(소유자 2026-10-21·D-094·D-098).
 
-①요약 표 → ②월별 막대 + ③주간 선(반씩) → ④일별 막대 → ⑤계정 순위(이번 달 누계 가로 막대 + 5칸 표 + 판매 없음·미수집
+①요약 표 → ②월별 막대 + ③주간 선(반씩) → ④일별 막대 → ⑤계정 순위(최근 1개월 누계 가로 막대 + 5칸 표 + 판매 없음·미수집
 한 줄씩). 집계 = sales_dashboard(순수). **모든 도식이 같은 왼쪽 끝·같은 폭 W(A~J열)** — 차트 위치·폭은 W 에 대한 비율로
 저장하고 엑셀·구글이 각자 자기 열 픽셀로 계산한다(엑셀 = 열 너비 1 = 6pt 실측, 구글 = 7px+5 — gsheet_stats 와 같은 변환).
 차트 자료 = 상세표 오른쪽 **숨긴 열** · 차트 설정(JSON) = 그 첫 칸(1행) → openpyxl 은 파일을 다시 열면 차트를 버리므로
@@ -125,20 +125,22 @@ def _kpi_row(ws, r, k, fill) -> int:
 
 
 def _ranks(ws, r, d, rc, reasons) -> tuple[int, list]:
-    """⑤ 이번 달 누계 가로 막대 + 표 5칸(순위·계정·이번 달 누계·지난주·전주 대비) — **전 계정**(소유자 2026-10-21·D-101):
-    판매 순 → 판매 0 → 미수집. 순위 번호는 판매 있는 계정만('-' = 판매 0·미수집). 미수집 사유는 표 아래 한 줄."""
-    _band(ws, r, "⑤ 계정 순위 — 이번 달 누계 판매금액 순(전 계정 · 판매 0·미수집 포함)")
+    """⑤ 최근 1개월 누계 가로 막대 + 표 5칸(순위·계정·최근 1개월 누계·지난주·전주 대비) — **전 계정**(D-101·
+    최근 1개월 = 어제까지 30일 D-110): 판매 순 → 판매 0 → 미수집. 순위 번호는 판매 있는 계정만('-' = 판매 0·미수집).
+    미수집 사유는 표 아래 한 줄."""
+    span = "~".join(f"{x:%m.%d}" for x in d.rank_span)
+    _band(ws, r, f"⑤ 계정 순위 — 최근 1개월({span}) 누계 판매금액 순(전 계정 · 판매 0·미수집 포함)")
     acc = d.accounts
-    _table(ws, r + 1, rc, ("계정", "이번 달 누계"), [(a.label, a.amount) for a in acc])
+    _table(ws, r + 1, rc, ("계정", "최근 1개월 누계"), [(a.label, a.amount) for a in acc])
     rows = max(6, math.ceil((60 + 26 * len(acc)) / G_ROW_PX) + 1)
-    spec = [{"type": "hbar", "title": "⑤ 이번 달 누계 판매금액(전 계정)", "row": r + 1, "rows": rows, "x0": 0.0,
+    spec = [{"type": "hbar", "title": f"⑤ 최근 1개월 누계 판매금액(전 계정 · {span})", "row": r + 1, "rows": rows, "x0": 0.0,
              "x1": 1.0, "cat": [r + 1, r + 1 + len(acc), rc], "series": [[r + 1, r + 1 + len(acc), rc + 1]],
              "colors": [_C_ACC]}] if acc else []
     r = r + 1 + (rows if acc else 0)
     h = dict(bold=True, fill=_FILL_HEAD, box=True, center=True)
     _cell(ws, r, 1, "순위", **h)
     _cell(ws, r, 2, "계정", **h)
-    _span(ws, r, 3, 5, "이번 달 누계(원)", **h)
+    _span(ws, r, 3, 5, "최근 1개월 누계(원)", **h)
     _span(ws, r, 6, 7, "지난주(원)", **h)
     _span(ws, r, 8, DASH_COLS, "전주 대비", **h)
     for i, a in enumerate(acc, 1):
