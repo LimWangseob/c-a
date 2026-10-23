@@ -36,3 +36,13 @@ def sheet_id_from_url(url: str) -> str:
             "링크 칸을 비우고 주소(또는 ID)를 한 번만 넣어 주세요.")
     raise ValueError("구글 시트 URL/ID 를 인식하지 못했습니다.")
 
+
+def sheet_link(doc_id: str, gid: int, row: int = 1) -> str:
+    """같은 구글 시트 파일 안의 탭(gid)·행으로 가는 **전체 주소** 링크(구글 '시트 링크 복사' 형식 + 범위).
+
+    상대 링크 `#gid=…` 는 PC 브라우저에선 같은 파일 안 이동이지만 **모바일 시트 앱에선 열리지 않음**(소유자
+    2026-10-23 실측: 계정목록 상품명·'계정목록으로 이동' 클릭 무반응). 파일 ID 가 없으면 만들 수 없어 예외."""
+    if not doc_id:
+        raise ValueError("시트 링크를 만들 파일 ID 가 없음 — 상대 링크(#gid)는 모바일에서 안 열려 쓰지 않음")
+    return f"https://docs.google.com/spreadsheets/d/{doc_id}/edit?gid={gid}#gid={gid}&range=A{row}"
+

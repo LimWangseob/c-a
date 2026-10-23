@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .gsheet import sheet_link
+
 # 열 인덱스(0-based)
 COL_REP = 0                                    # 대표자(2026-09-17 추가)
 COL_BUSINESS, COL_ACCOUNT, COL_PRODUCT = 1, 2, 3   # 항목④(2026-09-25): 계정ID(C)를 상품명(D) **왼쪽**으로
@@ -151,10 +153,10 @@ def _s(v: str) -> dict:
     return {"userEnteredValue": {"stringValue": v}}
 
 
-def _product_cell(row: IndexRow) -> dict:
-    """B 상품명 셀 — 통계시트 링크가 있으면 HYPERLINK 수식, 없으면 텍스트."""
+def _product_cell(row: IndexRow, doc_id: str) -> dict:
+    """D 상품명 셀 — 통계시트 링크가 있으면 HYPERLINK 수식(전체 주소 — 모바일 앱에서도 열림), 없으면 텍스트."""
     if row.link_gid is not None and row.link_row is not None:
-        loc = f"#gid={row.link_gid}&range=A{row.link_row}"
+        loc = sheet_link(doc_id, row.link_gid, row.link_row)
         name = row.product.replace('"', '""')
         return {"userEnteredValue": {"formulaValue": f'=HYPERLINK("{loc}","{name}")'}}
     return _s(row.product)
@@ -174,7 +176,7 @@ def _growth_cell(v, bg: dict) -> dict:
             if isinstance(v, (int, float)) else {"userEnteredFormat": bg})
 
 
-def _auto_cells_request(sheet_id: int, grid_row: int, row: IndexRow) -> list[dict]:
+def _auto_cells_request(sheet_id: int, grid_row: int, row: IndexRow, doc_id: str = "") -> list[dict]:
     """A~G(+B열=사업자 셀에 키 메모·E 상태)·H(체험단 시작일·자동 D-087)·I(체험단효과)를 쓰는 updateCells."""
     bg = {"backgroundColor": _band_fill(row.band)}   # 사업자별 밴드색
     abcd = {
@@ -184,7 +186,7 @@ def _auto_cells_request(sheet_id: int, grid_row: int, row: IndexRow) -> list[dic
                 {**_s(row.representative), "userEnteredFormat": bg},              # A 대표자
                 {**_s(row.business), "note": row.key, "userEnteredFormat": bg},   # B 사업자 + 안정 키 메모
                 {**_s(row.account_id), "userEnteredFormat": bg},                  # C 계정ID(항목④: 상품명 왼쪽)
-                {**_product_cell(row), "userEnteredFormat": bg},                  # D 상품명(링크)
+                {**_product_cell(row, doc_id), "userEnteredFormat": bg},                  # D 상품명(링크)
                 {**_s(row.status), "userEnteredFormat": bg},                      # E 상태(D-106)
                 _stock_cell(row.company_stock, bg),                              # F 회사보유재고(칸 안 줄바꿈)
                 _growth_cell(row.growth_inv, bg),                                # G 그로스재고(숫자)
@@ -291,7 +293,7 @@ def _rep_cell_request(sheet_id: int, grid_row: int, rep: str, band: int) -> dict
 def _build_requests_for_plan(sheet_id: int, plan: SyncPlan,
                              band_by_acct: dict[str, int] | None = None,
                              rep_by_acct: dict[str, str] | None = None,
-                             growth_asof: str = "") -> list[dict]:
+                             growth_asof: str = "", doc_id: str = "") -> list[dict]:
     """증분 동기화 요청 묶음. 삽입은 최종 위치 오름차순으로(선삽입이 후위치 인덱스를 맞춰줌).
 
     band_by_acct: 계정ID→밴드(desired 로스터에서). 판매중지 행을 그 계정 밴드색으로 칠하는 데 쓴다.
@@ -304,10 +306,10 @@ def _build_requests_for_plan(sheet_id: int, plan: SyncPlan,
     for grid_row, _row in sorted(plan.inserts, key=lambda t: t[0]):
         reqs.append(_insert_blank_row_request(sheet_id, grid_row))
     for grid_row, row in plan.inserts:
-        reqs += _auto_cells_request(sheet_id, grid_row, row)
+        reqs += _auto_cells_request(sheet_id, grid_row, row, doc_id)
         reqs.append(_mkt_fill_request(sheet_id, grid_row, row.band))
     for grid_row, row in plan.updates:
-        reqs += _auto_cells_request(sheet_id, grid_row, row)
+        reqs += _auto_cells_request(sheet_id, grid_row, row, doc_id)
         reqs.append(_mkt_fill_request(sheet_id, grid_row, row.band))   # 기존 행 D~F도 밴드색으로(행 전체 동일)
     for grid_row, acct in plan.discontinue:
         reqs.append(_status_only_request(sheet_id, grid_row, DISCONTINUED))
@@ -377,7 +379,7 @@ def _title_request(sheet_id: int, desired: list[IndexRow]) -> dict:
         "fields": "userEnteredValue,userEnteredFormat"}}
 
 
-def _full_build_requests(sheet_id: int, desired: list[IndexRow], growth_asof: str = "") -> list[dict]:
+def _full_build_requests(sheet_id: int, desired: list[IndexRow], growth_asof: str = "", doc_id: str = "") -> list[dict]:
     """빈 계정목록 최초 생성 — 제목·헤더·전체 행·서식(틀고정·마케팅색·열너비)."""
     reqs: list[dict] = []
     # 제목(A1:K1 병합)
@@ -389,7 +391,7 @@ def _full_build_requests(sheet_id: int, desired: list[IndexRow], growth_asof: st
     # 데이터 행
     for i, row in enumerate(desired):
         grid = DATA_START0 + i
-        reqs += _auto_cells_request(sheet_id, grid, row)
+        reqs += _auto_cells_request(sheet_id, grid, row, doc_id)
         reqs.append(_mkt_fill_request(sheet_id, grid, row.band))
     # 틀고정(제목·헤더 2행 + A~C 3열) + 열너비
     # 틀고정: 제목·헤더 2행만. ⚠ 열 고정은 넣지 않는다 — 제목이 A1:G1 병합이라 열 고정(예 3열)이 그 병합을
@@ -860,7 +862,7 @@ def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME
     existing = _read_existing(client, sheet)
     if not existing:
         grow = _grid_grow_requests(client, sheet, sheet_id, len(desired))
-        client.batch_update(grow + _full_build_requests(sheet_id, desired, growth_asof))
+        client.batch_update(grow + _full_build_requests(sheet_id, desired, growth_asof, client.spreadsheet_id))
         # 최초 생성도 계획 형태로 반환(삽입=전체)
         return SyncPlan(updates=[], inserts=[(DATA_START0 + i, d) for i, d in enumerate(desired)],
                         discontinue=[], total_rows=len(desired))
@@ -870,5 +872,6 @@ def sync_index(client, desired: list[IndexRow], *, sheet: str = INDEX_SHEET_NAME
     grow = _grid_grow_requests(client, sheet, sheet_id, plan.total_rows)
     width = _col_width_requests(sheet_id, desired)   # 항목④: 증분도 내용 길이 기반 폭 갱신(신규 상품 반영)
     client.batch_update(grow + [_title_request(sheet_id, desired)]   # 제목 상품 수도 매번 최신(행 0 = 삽입 대상 밖)
-                        + _build_requests_for_plan(sheet_id, plan, band_by_acct, rep_by_acct, growth_asof) + width)
+                        + _build_requests_for_plan(sheet_id, plan, band_by_acct, rep_by_acct, growth_asof,
+                                                   client.spreadsheet_id) + width)
     return plan

@@ -193,6 +193,7 @@ def t5_gsheet():
     class _Client:
         def __init__(self):
             self.reqs, self.made = [], []
+            self.spreadsheet_id = "DOC1"   # 내부 링크 = 파일 전체 주소(2026-10-23)
 
         def ensure_sheets(self, titles):
             self.made += titles

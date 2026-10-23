@@ -90,7 +90,7 @@ FUNC_CONTRACTS: dict = {
         ("merge_staff_keywords", "P:client:0 P:wb:0 K:on_log:1"),
         ("push_statistics", "P:client:0 P:wb:0 K:on_log:1"),
         ("read_staff_keywords", "P:client:0 P:wb:0"),
-        ("worksheet_to_requests", "P:ws:0 P:sheet_id:0 P:index_gid:1"),
+        ("worksheet_to_requests", "P:ws:0 P:sheet_id:0 P:index_gid:1 P:doc_id:1"),   # doc_id = 내부 링크 전체 주소(모바일·2026-10-23·선택 인자)
     ],
     pipeline_gsheet: [
         # ⚠ 옛 이름 _push_gsheet·_pull_gsheet_keywords 를 공개 이름으로 정리(2026-09-28).

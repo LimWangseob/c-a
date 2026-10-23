@@ -982,3 +982,10 @@ un_log_*.log`)로 확인 필요.
 - 영향 범위: `transfer_login.py`(deadline_of·in_quiet·wait_until·pick/_retry_needed·save_result 지문·run) · `tools/settlement_download.py`(--start) · `tools/verify_transfer_offline.py` T5·T7·T8 · `designs/SETTLEMENT_MODULE.md §15`.
 - 상태: ACTIVE
 
+### D-113 [SHEET_LINK_ABSOLUTE] 결과 구글시트 시트 사이 링크 = 파일 전체 주소(`…/edit?gid=X#gid=X&range=A행`) — 모바일 시트 앱에서도 열리게 (2026-10-23, R50)
+- 결정: 계정목록 상품명 → 사업자 시트 블록 링크와 사업자 시트 1행 '👈 계정목록으로 이동' 링크를 상대 주소 `#gid=…&range=…` 대신 **파일 전체 주소 + 탭**(구글 '시트 링크 복사' 형식 `https://docs.google.com/spreadsheets/d/<파일ID>/edit?gid=X#gid=X` + `&range=A행`)으로 만든다(`gsheet.sheet_link`). 파일 ID 가 없으면 링크를 만들지 않고 예외(상대 링크로 조용히 대체 금지). 계정목록은 매 실행 모든 행의 자동 칸을, 사업자 시트는 통째로 다시 쓰므로 새 버전 첫 실행에서 기존 링크도 모두 바뀜. 엑셀(xlsx) 파일 안 링크는 그대로(엑셀 내부 위치 링크).
+- 근거: 소유자 2026-10-23 "결과파일을 모바일에서 열고 계정목록에서 상품명을 클릭하면 해당 시트로 이동해야 하는데 안됨 · 시트 상단 계정목록 클릭도 안됨". 코드 = 두 곳 모두 `=HYPERLINK("#gid=…")` 상대 링크(gsheet_index._product_cell·gsheet_stats._cell_value). 상대 링크는 PC 브라우저에서만 같은 파일 안 이동으로 처리됨(모바일 앱 동작은 공식 문서로 확정 못 함 — 소유자 휴대폰 실측으로 확인 필요). 시험: verify_gsheet_offline [5]·[6](전체 주소·파일 ID 없으면 예외)·정밀렌더·L1 계약 핀(worksheet_to_requests 선택 인자 doc_id 추가) 재현→수정→통과·게이트 15종.
+- 버린 대안: 상대 링크 유지 + 사용 안내(앱에서 안 됨) · 링크 대신 시트 목록 안내(이동 불가).
+- 영향 범위: `gsheet.py`(sheet_link) · `gsheet_index.py`(_product_cell·_auto_cells_request·_build_requests_for_plan·_full_build_requests·sync_index) · `gsheet_stats.py`(_cell_value·worksheet_to_requests·push_statistics) · 시험 3종·핀 · `designs/GSHEET_UNIFIED.md`. HQ R0_DATA_CONTRACT: 링크 형식만 바뀜(시트·열 구조 동일).
+- 상태: ACTIVE
+

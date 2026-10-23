@@ -17,6 +17,7 @@ from typing import Any
 from openpyxl.worksheet.worksheet import Worksheet
 
 from . import config
+from .gsheet import sheet_link
 from .gsheet_index import INDEX_SHEET_NAME
 from .workbook import (_COL_KW, _COL_METRIC, _COL_NAME, _LABEL_DATE, _LABEL_KEYWORD,
                        _SPECIAL_SHEETS, _key)
@@ -119,11 +120,11 @@ def _cell_format(cell) -> dict:
     return fmt
 
 
-def _cell_value(cell, index_gid: int | None) -> dict | None:
+def _cell_value(cell, index_gid: int | None, doc_id: str = "") -> dict | None:
     """openpyxl 셀 값 → Sheets userEnteredValue. 값 없으면 None.
 
-    내부 하이퍼링크(예 '👈 계정 목록' 복귀 링크)는 구글 네이티브 `=HYPERLINK("#gid=..&range=A1", 텍스트)`
-    수식으로, **외부 http(s) 링크(항목3 상품명→쿠팡 노출상품)는 `=HYPERLINK("{url}", 텍스트)`** 로 옮긴다.
+    내부 하이퍼링크(예 '👈 계정 목록' 복귀 링크)는 `=HYPERLINK("<파일 전체 주소>?gid=..#gid=..&range=A1", 텍스트)`
+    수식으로(상대 '#gid' 는 모바일 앱에서 안 열림 — gsheet.sheet_link·2026-10-23), **외부 http(s) 링크(항목3 상품명→쿠팡 노출상품)는 `=HYPERLINK("{url}", 텍스트)`** 로 옮긴다.
     그 외 문자열/숫자는 그대로."""
     link = getattr(cell, "hyperlink", None)
     if link is not None:
@@ -133,7 +134,7 @@ def _cell_value(cell, index_gid: int | None) -> dict | None:
             url = str(target).replace('"', '""')
             return {"formulaValue": f'=HYPERLINK("{url}","{text}")'}
         if getattr(link, "location", None) and index_gid is not None:   # 내부 시트 점프(복귀 링크)
-            return {"formulaValue": f'=HYPERLINK("#gid={index_gid}&range=A1","{text}")'}
+            return {"formulaValue": f'=HYPERLINK("{sheet_link(doc_id, index_gid)}","{text}")'}
     v = cell.value
     if v is None or v == "":
         return None
@@ -160,7 +161,7 @@ def _freeze(ws: Worksheet) -> tuple[int, int]:
     return max(row - 1, 0), max(col - 1, 0)     # 그 셀 위/왼쪽까지 고정
 
 
-def worksheet_to_requests(ws: Worksheet, sheet_id: int, index_gid: int | None = None) -> list[dict]:
+def worksheet_to_requests(ws: Worksheet, sheet_id: int, index_gid: int | None = None, doc_id: str = "") -> list[dict]:
     """openpyxl 사업자 시트 하나 → Sheets batchUpdate 요청 묶음(전체 교체). 순수 함수(테스트 가능).
 
     순서: 병합해제(전체) → 그리드 크기/틀고정 → 값+서식(updateCells) → 병합 재적용 → 열너비/행높이.
@@ -189,7 +190,7 @@ def worksheet_to_requests(ws: Worksheet, sheet_id: int, index_gid: int | None = 
         for c in range(1, maxc + 1):
             cell = ws.cell(r, c)
             cd: dict[str, Any] = {}
-            uev = _cell_value(cell, index_gid)
+            uev = _cell_value(cell, index_gid, doc_id)
             if uev is not None:
                 cd["userEnteredValue"] = uev
             fmt = _cell_format(cell)
@@ -247,7 +248,7 @@ def push_statistics(client, wb, *, on_log=None) -> dict[str, int]:
     for biz in biz_sheets:
         ws = wb.wb[biz]
         sheet_id = gid_map[biz]
-        reqs = worksheet_to_requests(ws, sheet_id, index_gid=index_gid)
+        reqs = worksheet_to_requests(ws, sheet_id, index_gid=index_gid, doc_id=client.spreadsheet_id)
         if reqs:
             client.batch_update(reqs)
         gids[biz] = sheet_id

@@ -248,6 +248,7 @@ class _FakeClient:
     def __init__(self, values, titles=None, row_count=1000, col_count=26, merges=None, raise_on_merge=False,
                  frozen_cols=0):
         self._v = values; self.batches = []
+        self.spreadsheet_id = "DOC1"   # 내부 링크 = 파일 전체 주소(모바일 앱·2026-10-23)
         self._raise_on_merge = raise_on_merge   # mergeCells 400 시뮬(제목 재병합 실패 재현·비치명 검증용)
         self._row_count = row_count   # 그리드 행수(확장 판단용) — 기본 넉넉히
         self._col_count = col_count   # 그리드 열수(확장 판단용) — 기본 넉넉히(신규 시트 26열)
@@ -555,7 +556,7 @@ def t5_stats_mirror() -> None:
     assert wb.registered_name("가게A", "스텐 텀블러 500ml") == "텀블러"   # 노출명 변경에도 등록명 보존
 
     ws = wb.wb["가게A"]
-    reqs = gsheet_stats.worksheet_to_requests(ws, 42, index_gid=7)
+    reqs = gsheet_stats.worksheet_to_requests(ws, 42, index_gid=7, doc_id="DOC1")
     kinds = [next(iter(r)) for r in reqs]
     for need in ("unmergeCells", "updateSheetProperties", "updateCells", "mergeCells"):
         assert need in kinds, (need, kinds)
@@ -565,11 +566,18 @@ def t5_stats_mirror() -> None:
         if "mergeCells" in r:
             assert r["mergeCells"]["mergeType"] in {"MERGE_ALL", "MERGE_ROWS", "MERGE_COLUMNS"}
     flat = str(next(r for r in reqs if "updateCells" in r))
-    assert "#gid=7&range=A1" in flat and "계정목록으로 이동" in flat        # 복귀 링크 문구 → 계정목록 gid
+    # 모바일 앱(소유자 2026-10-23): 상대 링크 '#gid=' 는 앱에서 안 열림 → 파일 전체 주소 + 탭(구글 '시트 링크 복사' 형식)
+    assert "https://docs.google.com/spreadsheets/d/DOC1/edit?gid=7#gid=7&range=A1" in flat and "계정목록으로 이동" in flat
+    assert 'HYPERLINK("#gid' not in flat, "상대 링크(#gid) 남음 — 모바일에서 안 열림"
+    try:
+        gsheet_stats.worksheet_to_requests(ws, 42, index_gid=7)
+        raise AssertionError("파일 ID 없이 내부 링크를 만들면 안 됨(상대 링크로 조용히 대체 금지)")
+    except ValueError:
+        pass
     # 항목3: 상품명 헤더의 **외부 쿠팡 링크**가 =HYPERLINK 로 미러링(내부 점프뿐 아니라 http 외부 링크도)
     wb.set_product_pid("가게A", "스텐 텀블러 500ml", "98765")
     wb.apply_style()
-    reqs2 = gsheet_stats.worksheet_to_requests(wb.wb["가게A"], 42, index_gid=7)
+    reqs2 = gsheet_stats.worksheet_to_requests(wb.wb["가게A"], 42, index_gid=7, doc_id="DOC1")
     flat2 = str(next(r for r in reqs2 if "updateCells" in r))
     assert 'HYPERLINK("https://www.coupang.com/vp/products/98765' in flat2, "상품명 외부 쿠팡 링크 미러링 실패"
     _ok("전체교체 요청(병합해제·틀고정 H2·복귀 HYPERLINK) + 등록명 보존 + 상품명 쿠팡 외부링크 미러링(항목3)")
@@ -601,9 +609,15 @@ def t6_roster_from_workbook() -> None:
     wb.set_promo_start("가게A", "스텐 텀블러 500ml", "2026-09-15")                 # D-087 체험단 시트 자동 시작일
     assert next(r for r in gi.roster_from_workbook(wb, {"가게A": 42}) if r.product).promo_start == "2026-09-15"
     # 상품 링크 수식 = 사업자 통계시트(#gid)+블록 헤더행. ⚠ '계정목록!A1' 자가참조 아님(어제 gsheet 버그).
-    _cell = gi._product_cell(r0)
+    _cell = gi._product_cell(r0, "DOC1")
     _fml = _cell["userEnteredValue"]["formulaValue"]
-    assert _fml == f'=HYPERLINK("#gid=42&range=A{r0.link_row}","{r0.product}")', _fml
+    assert _fml == (f'=HYPERLINK("https://docs.google.com/spreadsheets/d/DOC1/edit?gid=42#gid=42&range=A{r0.link_row}",'
+                    f'"{r0.product}")'), _fml   # 모바일 앱에서도 열리는 전체 주소(2026-10-23)
+    try:
+        gi._product_cell(r0, "")
+        raise AssertionError("파일 ID 없이 상품 링크를 만들면 안 됨")
+    except ValueError:
+        pass
     assert "!A1" not in _fml and "계정목록" not in _fml, _fml   # 자기 탭 A1 자가참조(버그) 아님
     # 사업자별 바탕색 밴딩: 인접 사업자는 다른 색 + 팔레트 길이마다 순환(행 전체 A~G 동일색)
     assert gi._band_fill(0) != gi._band_fill(1) != gi._band_fill(2)          # 인접 밴드는 서로 다름

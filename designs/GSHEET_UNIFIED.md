@@ -166,7 +166,8 @@ G 그로스재고(헤더 2줄 '그로스재고⏎(자동갱신 MM.DD)') | H 체�
       `src/coupang_analytics/gsheet_stats.py`: `worksheet_to_requests(ws, sheet_id, index_gid)`(순수·테스트) —
       openpyxl 사업자 시트 1개 → Sheets `batchUpdate`(병합해제→그리드/틀고정→값+서식 updateCells→병합 재적용→
       열너비/행높이). 색(ARGB→0~1)·글꼴·정렬·줄바꿈·테두리·숫자서식 번역. "👈 계정 목록" 복귀 링크는 구글
-      `계정목록` gid 로 `=HYPERLINK("#gid=..&range=A1", …)` 재연결. `push_statistics(client, wb)` — 사업자 시트만
+      `계정목록` gid 로 `=HYPERLINK("https://docs.google.com/spreadsheets/d/<파일ID>/edit?gid=..#gid=..&range=A1", …)` 재연결
+      (D-113: 상대 링크 `#gid=` 는 모바일 시트 앱에서 안 열려 **파일 전체 주소**로 — `gsheet.sheet_link`·계정목록 상품명 링크도 같음). `push_statistics(client, wb)` — 사업자 시트만
       **전체 교체**(프로그램 전용이라 안전), 특수시트 제외. `GSheetClient.ensure_sheets([...])` 로 대량 최초 생성 429 회피.
 - [x] **시계열 이어쓰기** = openpyxl 마스터가 이미 날짜 컬럼을 누적(키워드 동결)하므로 그 시트를 미러링하면 그대로 재현.
 - [x] **파이프라인 배선**: `run_full(..., gsheet_output_url=)`(UI가 `gsheet/output_url` 전달·수동/무인 3개 호출부).

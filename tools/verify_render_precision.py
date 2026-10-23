@@ -232,7 +232,7 @@ def main() -> int:
 
     # ── 항목1: gsheet 미러링(통계 셀단위 자동미러 + 상품명 외부링크 =HYPERLINK) ──
     print("[항목1] gsheet 미러링")
-    reqs = gsheet_stats.worksheet_to_requests(ws, 42, index_gid=7)
+    reqs = gsheet_stats.worksheet_to_requests(ws, 42, index_gid=7, doc_id="DOC1")
     flat = str(next(r for r in reqs if "updateCells" in r))
     _chk('HYPERLINK("https://www.coupang.com/' in flat, "통계 gsheet: 상품명 쿠팡 외부링크 =HYPERLINK 미러")
     roster = gsheet_index.roster_from_workbook(wl, {"로움컨설팅": 42, "단독상사": 43})
