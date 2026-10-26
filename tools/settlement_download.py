@@ -468,6 +468,7 @@ def cmd_run(a, b, args, jobs: list) -> None:
         time.sleep(90)
         cmd_download(a, b, args, jobs)
         collect_verify(a, b, args)
+        collect_ads(a, b, args)
 
 
 def collect_verify(a, b, args) -> None:
@@ -489,6 +490,30 @@ def collect_verify(a, b, args) -> None:
     STORE.write_json_atomic(path, data)
     LOG.record(name, "검증", RL.OK, f"검증 자료 저장 — 월렛 {len(data.get('wallet') or [])}건·반품 조회 {len(orders)}주문·"
                f"조회 실패 {len(data['조회 실패'])}건")
+
+
+def collect_ads(a, b, args) -> None:
+    """광고비 원천 월별(D-116 ③④) — 받을 달이 있을 때만 광고센터를 연다. 실패는 기록하고 정산은 계속(차단만 중단)."""
+    from coupang_analytics import settlement_ads as AD
+    from coupang_analytics import settlement_evidence_web as EW
+    name, q = name_of(a), None
+
+    def call(method: str, path: str, body):
+        nonlocal q
+        if q is None:
+            q = EW.open_adcenter(sys.modules[__name__], b, name)
+        return API.call(q, method, path, body)
+    try:
+        s = AD.collect(call, lambda url: _get_bytes(b, url), VERIFY / "광고", SF._token(name, "계정명"), args.start, date.today())
+        if s["받을 것"]:
+            LOG.record(name, "광고비", RL.OK, " · ".join(f"{k} {','.join(v)}" for k, v in s.items() if v and k != "받을 것"))
+    except BlockDetected:
+        raise
+    except Exception as exc:                              # 광고비 원천은 정산 금액과 별개 — 그 단계만 실패 기록
+        LOG.error(name, "광고비", exc)
+    finally:
+        if q is not None:
+            q.close()
 
 
 def _wing_files(name: str) -> list:

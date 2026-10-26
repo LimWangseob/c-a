@@ -274,7 +274,8 @@ def rg_ad_milkrun(T, b, label: str, start: date, end: date, out: Path) -> dict:
 
 
 # ── 광고센터 월별 광고비 정산내역 보고서 ─────────────────────────────
-def _open_adcenter(T, b, label: str):
+def open_adcenter(T, b, label: str):
+    """윙 메뉴 '광고센터' → 새 창(광고센터 로그인 유지) · 안내·동의 창은 닫기만. 반환 = 광고센터 페이지."""
     T.goto(b, API.WING_URL, label)
     with b.context.expect_page(timeout=20000) as np:
         b.page.locator("a", has_text="광고센터").first.click()
@@ -293,6 +294,11 @@ def _open_adcenter(T, b, label: str):
         time.sleep(1.5)
     if title.count() and title.first.is_visible():
         raise RuntimeError("광고센터 마케팅 동의 창이 닫히지 않음 — 동의는 누르지 않고 중단")
+    return q
+
+
+def _open_adcenter(T, b, label: str):
+    q = open_adcenter(T, b, label)
     q.get_by_text("광고보고서", exact=True).first.click()
     time.sleep(6)
     q.get_by_text("광고비 정산 보고서", exact=True).first.click()

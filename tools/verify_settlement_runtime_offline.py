@@ -1508,6 +1508,69 @@ def p40_orphan_ship_returns():
     ok("상품 없는 배송비 주문만(금액 0·다른 파일 상품 줄 제외)·새/실패 주문만 조회·개인정보·고객 글 안 남김·빈 본문=반품 없음·504=조회 실패")
 
 
+def p41_ad_reports():
+    print("[P41] 광고비 원천 월별(D-116 ③④) — 끝난 달(+3일)만 · 윙 로켓그로스 광고비 내역 엑셀 + 매출 성장 광고 보고서(요청→다음에 받기)")
+    import json
+    import tempfile
+    from pathlib import Path
+    from coupang_analytics import settlement_ads as AD
+    assert [m[0] for m in AD.due_months(D("2026-06-15"), D("2026-08-03"))] == ["202606"]       # 7월은 8/4 부터
+    assert [m[0] for m in AD.due_months(D("2026-06-15"), D("2026-08-04"))] == ["202606", "202607"]
+    assert AD.due_months(D("2026-06-15"), D("2026-08-04"))[0][1:] == (D("2026-06-01"), D("2026-06-30"))   # 달 전체
+    # 실측(벅스 2026-10-26): reportList 줄 = id·startDate·endDate(YYYYMMDD 정수)·dateGroup 'daily'·granularity 'keyword'·
+    # campaignCount·status(inprogress|completed|error)
+    rep = {"id": "14900611", "startDate": 20260701, "endDate": 20260731, "dateGroup": "daily", "granularity": "keyword",
+           "campaignCount": 2, "status": "completed"}
+    assert AD.pick_report([rep, {**rep, "id": "9", "campaignCount": 1}], "202607", 2)["id"] == "14900611"
+    assert AD.pick_report([{**rep, "id": "15000000", "status": "error"}, rep], "202607", 2)["id"] == "14900611"  # 실패 건 무시
+    assert AD.pick_report([{**rep, "granularity": "campaign"}], "202607", 2) is None
+    calls: list = []
+    store: dict = {"reports": [], "campaigns": {"202606": [], "202607": [{"id": "105108858", "name": "07-12 보냉백 3종"},
+                                                                         {"id": "1", "name": "b"}]}}
+
+    def call(method, path, body):
+        calls.append(body["query"].split("(")[0].split()[-1] if "query" in body else "?")
+        q = body["query"]
+        if "getCampaignList" in q:
+            return {"data": {"getCampaignList": store["campaigns"][str(body["variables"]["startDate"])[:6]]}}
+        if "reportList" in q:
+            return {"data": {"reportList": {"reports": store["reports"]}}}
+        if "requestReport" in q:
+            store["asked"] = body["variables"]
+            return {"data": {"requestReport": {"id": "1"}}}
+        raise AssertionError(q)
+    got: list = []
+
+    def get_bytes(url):
+        got.append(url)
+        return b"PK-" + url.encode()
+    with tempfile.TemporaryDirectory() as d:
+        folder = Path(d)
+        s1 = AD.collect(call, get_bytes, folder, "벅스-bux1004", D("2026-06-10"), D("2026-08-04"))
+        v = store["asked"]
+        assert v == {"startDate": 20260701, "endDate": 20260731, "campaignIds": ["105108858", "1"], "reportType": "pa",
+                     "dateGroup": "daily", "granularity": "keyword", "excludeIfNoClickCount": False}, v
+        assert got == [AD.CMG_EXCEL.format(y=2026, m=6), AD.CMG_EXCEL.format(y=2026, m=7)], got        # 광고비 내역은 바로
+        assert (folder / "벅스-bux1004_광고비내역_202607.xlsx").read_bytes().startswith(b"PK")
+        assert s1["요청"] == ["202607"] and s1["캠페인 없음"] == ["202606"], s1
+        st = json.loads((folder / "벅스-bux1004_광고.json").read_text(encoding="utf-8"))
+        assert st["캠페인 없음"] == ["202606"]
+        store["reports"] = [{**rep, "status": "inprogress"}]
+        got.clear()
+        calls.clear()
+        s2 = AD.collect(call, get_bytes, folder, "벅스-bux1004", D("2026-06-10"), D("2026-08-05"))
+        assert s2["기다림"] == ["202607"] and got == [] and "requestReport" not in str(calls), (s2, calls)   # 6월 다시 안 물음
+        store["reports"] = [rep]
+        s3 = AD.collect(call, get_bytes, folder, "벅스-bux1004", D("2026-06-10"), D("2026-08-06"))
+        assert s3["받음"] == ["202607"] and got == [AD.PA_EXCEL.format(id="14900611")], (s3, got)
+        assert (folder / "벅스-bux1004_매출성장광고_202607.xlsx").exists()
+        got.clear()
+        calls.clear()
+        s4 = AD.collect(call, get_bytes, folder, "벅스-bux1004", D("2026-06-10"), D("2026-08-07"))
+        assert calls == [] and got == [] and not s4["받을 것"], (calls, got, s4)                     # 다 받았으면 광고센터 안 엶
+    ok("끝난 달+3일·광고비 내역 엑셀 바로·캠페인 전부로 보고서 요청·진행 중=기다림·완료=받기·캠페인 없는 달 기록·다 받으면 호출 없음")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -1540,6 +1603,7 @@ def main():
     p38_wing_extra_settlement()
     p39_favorable_refund()
     p40_orphan_ship_returns()
+    p41_ad_reports()
     print("정산 런타임 오프라인 검증 통과")
 
 
