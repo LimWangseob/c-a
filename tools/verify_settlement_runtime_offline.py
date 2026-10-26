@@ -1416,6 +1416,45 @@ def p38_wing_extra_settlement():
     ok("추가정산(B) 줄만 건너뜀·'확인 필요' 기록 문구·주정산은 그대로·다른 모르는 코드는 중단")
 
 
+def p39_favorable_refund():
+    print("[P39] 우대수수료 환급 주문별(D-116 ③②) — 매일 검증 자료에 결제/취소일 달마다·쪽 끝까지·필요한 칸만")
+    from coupang_analytics import settlement_verify_collect as VC
+    from coupang_analytics import settlement_wing_api as API
+    # 실측(벅스 2026-10-26): 화면 조회 = GET …/favorablefee/refund/list/data?page&pageSize&from&to&dateType · 한 달 넘으면 400 ·
+    # pageSize=500 → 9월 67건 한 번 · 줄 칸 = orderId·transactionDate(Str)·expected/realTransferDate(Str)·refundAmount·
+    # companyScale·transferStatus·taxBillIssueTarget + 매 줄 localeProperty(큰 번역표 — 저장 안 함).
+    row = {"orderId": 7102282429642, "transactionDate": 1788188400000, "transactionDateStr": "2026-09-01",
+           "expectedTransferDate": 1789570800000, "expectedTransferDateStr": "2026-09-17", "realTransferDate": None,
+           "realTransferDateStr": None, "refundAmount": -226, "refundAmountStr": "-226", "companyScale": "THREE",
+           "companyScaleStr": "중소3", "transferStatus": "TRANSFER_WAIT", "transferStatusStr": "지급 대기",
+           "taxBillIssueTarget": True, "taxBillIssueTargetStr": "Y", "localeProperty": {"big": "x" * 50}}
+    gets: list = []
+
+    def call(method, path, body):
+        if path.startswith(VC.FAVORABLE):
+            q = dict(x.split("=", 1) for x in path.split("?", 1)[1].split("&"))
+            gets.append((method, q))
+            if q["from"] == "2026-08-01":
+                raise API.ServerBusy("504")
+            if q["from"] == "2026-09-01":
+                return {"dtos": [{**row, "orderId": int(q["page"])}], "totalCount": 2, "totalPage": 2, "page": int(q["page"])}
+            return {"dtos": [], "totalCount": 0, "totalPage": 0, "page": 1}
+        return {}
+    d = VC.collect(call, lambda url: None, D("2026-08-01"), D("2026-10-08"))
+    fav = d["favorable"]
+    assert set(fav) == {"202608", "202609", "202610"} and fav["202608"] is None, fav
+    assert any("우대수수료 환급 202608" in x for x in d["조회 실패"]), d["조회 실패"]
+    assert fav["202610"] == {"totalCount": 0, "rows": []}
+    assert fav["202609"]["totalCount"] == 2 and [r["orderId"] for r in fav["202609"]["rows"]] == [1, 2]   # 2쪽 끝까지
+    assert fav["202609"]["rows"][0] == {"orderId": 1, "transactionDateStr": "2026-09-01", "expectedTransferDateStr": "2026-09-17",
+                                        "realTransferDateStr": None, "refundAmount": -226, "companyScale": "THREE",
+                                        "transferStatus": "TRANSFER_WAIT", "taxBillIssueTarget": True}
+    q10 = [q for m, q in gets if q["from"] == "2026-10-01"][0]
+    assert q10["to"] == "2026-10-07" and q10["dateType"] == "TRANSACTION" and q10["pageSize"] == "500"   # 한 달·어제까지
+    assert all(m == "GET" for m, _ in gets) and len(gets) == 4, gets              # 8월 실패 1·9월 2쪽·10월 1
+    ok("결제/취소일 달마다 GET·pageSize 500·어제까지·2쪽 끝까지·localeProperty/Str 칸 버림·504 달=조회 실패 기록 후 계속")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -1446,6 +1485,7 @@ def main():
     p36_same_cycle_done()
     p37_accounts_from_registry()
     p38_wing_extra_settlement()
+    p39_favorable_refund()
     print("정산 런타임 오프라인 검증 통과")
 
 

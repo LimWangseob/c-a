@@ -9,6 +9,7 @@
 | 로켓그로스 부가세 | 로켓그로스 부가세 화면 | GET /tenants/rfm/api/settlements/vat/search?fromYearMonth&toYearMonth |
 | 보류목록 / 추가지급(월별) | 정산 > 보류목록 / 추가지급 | POST …/payment-pending-report/list · …/additional-payment-report/list |
 | 윙 정산캘린더(지급일·예정) | 정산 현황 > 정산캘린더 | POST /tenants/msf/wing/api/payout-date-calendar/payout-dates (폼 startDate·endDate) |
+| 우대수수료 환급(주문별·결제/취소일 달마다) | 정산 > 우대수수료 환급조회 | GET …/favorablefee/refund/list/data?page&pageSize&from&to&dateType |
 ⚠ 매출내역 등은 그 화면을 연 상태에서 불러야 한다(다른 화면에서 부르면 504 — 실측). 오늘 이후 날짜를 넣으면 504(실측)
 → 월 끝은 어제까지. 서버 일시 오류(ServerBusy)는 그 항목만 '조회 실패'로 남기고 다음 항목 진행.
 개인정보(계좌·예금주)는 저장하지 않는다.
@@ -35,6 +36,11 @@ RG_VAT = "/tenants/rfm/api/settlements/vat/search"
 WALLET_HIST = "/tenants/rfm/v2/wallet/histories/search/api"
 WALLET_BAL = "/tenants/rfm/v2/wallet/balance/api"
 CALENDAR = "/tenants/msf/wing/api/payout-date-calendar/payout-dates"   # 윙 정산캘린더(폼 본문·과거~미래 지급일)
+# 우대수수료 환급 주문별(D-116) — 엑셀(FAVORABLE_FEE_DETAIL)과 같은 칸을 화면 조회로 바로(요청·생성 대기 없음). 실측(벅스 2026-10-26):
+# 다른 윙 화면에서 불러도 됨 · 한 달 넘으면 400 · pageSize 500 허용 · 줄마다 큰 localeProperty → 아래 칸만 저장.
+FAVORABLE = "/tenants/finance/wing/integrated/favorablefee/refund/list/data"
+FAV_KEEP = ("orderId", "transactionDateStr", "expectedTransferDateStr", "realTransferDateStr", "refundAmount", "companyScale",
+            "transferStatus", "taxBillIssueTarget")
 CALENDAR_AHEAD = timedelta(days=70)
 WALLET_FROM = date(2025, 1, 1)          # 월렛 장부(입금−인출=잔액) 대조용 — 소급 시작보다 넉넉히
 PENDING_FROM = date(2025, 1, 1)         # 보류목록 = 보류일 기준 — 2026 지급 줄의 보류가 2025 에 잡힌 것까지(D-083)
@@ -99,6 +105,7 @@ def collect(call, open_page, start: date, today: date, *, note=lambda m: None, g
                                   lambda ym, f, t: (ADDITIONAL, {"fromDate": f.isoformat(), "toDate": t.isoformat(),
                                                                  "taxInvoiceIssueType": None, "requestStatusType": None,
                                                                  "orderId": None, "page": 1, "pageSize": 100}))
+    data["favorable"] = {ym: safe(f"우대수수료 환급 {ym}", lambda f=f, t=t: _favorable(call, f, t)) for ym, f, t in mlist}
     return scrub(data)
 
 
@@ -125,6 +132,19 @@ def _pending(call, start: date, end: date) -> dict:
         rows += r.get("pendingReports") or []
         if page >= (r.get("totalPageCount") or 0):
             return {"from": start.isoformat(), "to": end.isoformat(), "totalRecordCount": len(rows), "pendingReports": rows}
+        page += 1
+
+
+def _favorable(call, start: date, end: date) -> dict:
+    """우대수수료 환급 — 결제/취소일 한 달(어제까지) · 쪽 끝까지 → {totalCount, rows[FAV_KEEP 칸]}."""
+    rows: list = []
+    page = 1
+    while True:
+        r = call("GET", f"{FAVORABLE}?page={page}&pageSize=500&from={start.isoformat()}&to={end.isoformat()}"
+                        "&dateType=TRANSACTION", None)
+        rows += [{k: x.get(k) for k in FAV_KEEP} for x in r.get("dtos") or []]
+        if page >= (r.get("totalPage") or 0):
+            return {"totalCount": r.get("totalCount") or len(rows), "rows": rows}
         page += 1
 
 
