@@ -1,12 +1,13 @@
 """광고비·밀크런 원천 월별 수집 — 1원 정산(D-116 ③④⑤). 조회·보고서 요청·받기만(광고 설정은 건드리지 않음).
 
 실측(벅스 2026-10-26):
-- 윙 로켓그로스 광고비 내역 엑셀 = GET /tenants/rfm-portal-2/excel/cmg-settlement/{연}/{월} — 캠페인마다 광고비·**청구가능 광고비**
-  (7월 378,188 → 부가세 37,819 → 청구 대상액 416,007 = 8/10~9/7 로켓그로스 지급 줄 광고비 공제 합과 원 단위 일치).
+- 광고센터 일별 광고비 정산내역 = GraphQL getDailySettlement(기간, settlementDomain SELLER) — **날짜 × 캠페인** 소진 광고비·
+  예산 초과 차감 후·**청구가능 광고비**(쿠팡이 주는 가장 작은 청구 단위 — 상품별 청구액은 없음). 7월 청구가능 378,188(7/12·13·14
+  일예산 초과 750 차감) + 부가세 37,819 = 416,007 = 8/10~9/7 로켓그로스 광고비 공제 합 · 6월 244,347 = 6월분 공제 합(원 단위).
 - 광고센터 매출 성장 광고 보고서(advertising.coupang.com, GraphQL /marketing-reporting/v2/graphql):
   getCampaignList(기간) → requestReport(일별·키워드·캠페인 ID 전부) → reportList(status completed) →
   GET /marketing-reporting/v2/api/excel-report?id=… (xlsx). 칸 = 날짜·광고집행 옵션ID·광고비 등(견본 벅스 7월 378,986).
-  ⚠ 보고서 광고비 합(378,986)은 청구가능액(378,188)과 다름 → 상품 몫 = 캠페인 청구가능액을 보고서 옵션별 광고비 비율로 나눔.
+  ⚠ 보고서 광고비는 정산 소진액보다 날마다 2~9원 큼(끝전) → 상품 몫 = 날짜×캠페인 청구가능액 × 그날 보고서 옵션 광고비 비율(D-119).
 - 윙 로켓그로스 밀크런 내역 엑셀 = GET /tenants/rfm-portal-2/excel/milkrun-settlement?searchYear&searchMonth&milkrunId&feeType —
   밀크런번호·픽업일·발생금액·세액·조정액 등(상품 없음 → 입고 내역 milkrunSeq 로 상품 수량과 이음, settlement_verify_collect).
 달이 끝나고 SETTLE_DAYS 일 뒤부터 받는다(월말 계산·청구가능 확정 여유). 받은 파일은 다시 받지 않는다.
@@ -20,7 +21,6 @@ from pathlib import Path
 from .settlement_evidence import month_windows
 
 GQL = "/marketing-reporting/v2/graphql"
-CMG_EXCEL = "https://wing.coupang.com/tenants/rfm-portal-2/excel/cmg-settlement/{y}/{m}"
 MILK_EXCEL = "https://wing.coupang.com/tenants/rfm-portal-2/excel/milkrun-settlement?searchYear={y}&searchMonth={m}&milkrunId=&feeType="
 PA_EXCEL = "https://advertising.coupang.com/marketing-reporting/v2/api/excel-report?id={id}"
 SETTLE_DAYS = 3
@@ -30,6 +30,12 @@ _LIST = ("query ReportList($reportType: ReportType!, $page: Int!, $pageSize: Int
          "{ reportList(data: {reportType: $reportType, page: $page, pageSize: $pageSize, duration: $duration, "
          "onlyScheduledReport: $onlyScheduledReport}) { reports { id requestDate startDate endDate dateGroup granularity "
          "campaignCount status } } }")
+_DAILY = ("mutation DailySettlement($startDate: Int!, $endDate: Int!, $settlementDomain: SettlementDomain!) "
+          "{ getDailySettlement(startDate: $startDate, endDate: $endDate, settlementDomain: $settlementDomain) { "
+          "summary { total { deliveredAdcost deliveredAdcostAfterCap billableAmount totalFinalAmount } "
+          "rocketGrowth { billableAmount vat totalFinalAmount } nonRod { billableAmount vat totalFinalAmount } } "
+          "items { date campaignId campaignName adType deliveredAdcost deliveredAdcostAdj deliveredAdcostAfterCap "
+          "promotionAdjustment billableAdjustment billableAmount } } }")
 _REQUEST = ("mutation RequestReport($startDate: Int!, $endDate: Int!, $campaignIds: [ID], $reportType: ReportType!, "
             "$dateGroup: DateGroup!, $granularity: Granularity, $excludeIfNoClickCount: Boolean) { requestReport(data: "
             "{startDate: $startDate, endDate: $endDate, campaignIds: $campaignIds, reportType: $reportType, dateGroup: $dateGroup, "
@@ -74,12 +80,13 @@ def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date) 
     out: dict = {"받을 것": [], "요청": [], "기다림": [], "받음": [], "캠페인 없음": []}
     reports: list | None = None
     for ym, f, t in due_months(start, today):
-        cmg = folder / f"{acct}_광고비내역_{ym}.xlsx"
-        if not cmg.exists():
-            cmg.write_bytes(get_bytes(CMG_EXCEL.format(y=f.year, m=f.month)))
         milk = folder / f"{acct}_밀크런_{ym}.xlsx"
         if not milk.exists():
             milk.write_bytes(get_bytes(MILK_EXCEL.format(y=f.year, m=f.month)))
+        daily = folder / f"{acct}_광고정산_{ym}.json"
+        if not daily.exists():
+            d = _gql(call, _DAILY, {"startDate": _ymd(f), "endDate": _ymd(t), "settlementDomain": "SELLER"})["getDailySettlement"]
+            daily.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
         pa = folder / f"{acct}_매출성장광고_{ym}.xlsx"
         if pa.exists() or ym in none:
             continue

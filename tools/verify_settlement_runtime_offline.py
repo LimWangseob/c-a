@@ -1531,6 +1531,13 @@ def p41_ad_reports():
     def call(method, path, body):
         calls.append(body["query"].split("(")[0].split()[-1] if "query" in body else "?")
         q = body["query"]
+        if "getDailySettlement" in q:                 # 실측(벅스 7월): 날짜×캠페인 청구가능 — 7/12 소진 30,150 → 일예산 초과 차감 30,000
+            v = body["variables"]
+            assert v["settlementDomain"] == "SELLER", v
+            items = [{"date": 20260712, "campaignId": "105108858", "campaignName": "07-12 보냉백 3종", "deliveredAdcost": 30150,
+                      "deliveredAdcostAfterCap": 30000, "billableAmount": 30000}] if v["startDate"] == 20260701 else []
+            return {"data": {"getDailySettlement": {"summary": {"total": {"billableAmount": 30000 if items else 0}},
+                                                    "items": items}}}
         if "getCampaignList" in q:
             return {"data": {"getCampaignList": store["campaigns"][str(body["variables"]["startDate"])[:6]]}}
         if "reportList" in q:
@@ -1550,9 +1557,11 @@ def p41_ad_reports():
         v = store["asked"]
         assert v == {"startDate": 20260701, "endDate": 20260731, "campaignIds": ["105108858", "1"], "reportType": "pa",
                      "dateGroup": "daily", "granularity": "keyword", "excludeIfNoClickCount": False}, v
-        assert got == [u.format(y=2026, m=m) for m in (6, 7) for u in (AD.CMG_EXCEL, AD.MILK_EXCEL)], got   # 광고비·밀크런 내역은 바로
+        assert got == [AD.MILK_EXCEL.format(y=2026, m=m) for m in (6, 7)], got                       # 밀크런 내역은 바로
+        settle = json.loads((folder / "벅스-bux1004_광고정산_202607.json").read_text(encoding="utf-8"))
+        assert settle["items"][0]["billableAmount"] == 30000 and settle["items"][0]["date"] == 20260712, settle
+        assert json.loads((folder / "벅스-bux1004_광고정산_202606.json").read_text(encoding="utf-8"))["items"] == []
         assert (folder / "벅스-bux1004_밀크런_202606.xlsx").exists()
-        assert (folder / "벅스-bux1004_광고비내역_202607.xlsx").read_bytes().startswith(b"PK")
         assert s1["요청"] == ["202607"] and s1["캠페인 없음"] == ["202606"], s1
         st = json.loads((folder / "벅스-bux1004_광고.json").read_text(encoding="utf-8"))
         assert st["캠페인 없음"] == ["202606"]
@@ -1561,6 +1570,7 @@ def p41_ad_reports():
         calls.clear()
         s2 = AD.collect(call, get_bytes, folder, "벅스-bux1004", D("2026-06-10"), D("2026-08-05"))
         assert s2["기다림"] == ["202607"] and got == [] and "requestReport" not in str(calls), (s2, calls)   # 6월 다시 안 물음
+        assert "DailySettlement" not in str(calls), calls                                          # 받은 정산내역 다시 안 받음
         store["reports"] = [rep]
         s3 = AD.collect(call, get_bytes, folder, "벅스-bux1004", D("2026-06-10"), D("2026-08-06"))
         assert s3["받음"] == ["202607"] and got == [AD.PA_EXCEL.format(id="14900611")], (s3, got)
