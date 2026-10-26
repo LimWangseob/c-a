@@ -476,14 +476,30 @@ def collect_verify(a, b, args) -> None:
     name = name_of(a)
     path = VERIFY / f"{SF._token(name, '계정명')}.json"
     today = date.today()
-    if path.exists() and json.loads(path.read_text(encoding="utf-8")).get("수집일") == today.isoformat():
+    old = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    if old.get("수집일") == today.isoformat():
         return
+    kept = old.get("returns") or {}                        # 반품 조회 결과는 누적(이미 찾은 주문은 다시 안 부름 — D-116)
+    orders = VC.returns_to_ask(VC.orphan_ship_orders(_wing_files(name)), kept)
     data = VC.collect(lambda m, p, body: api(b, name, m, p, body), lambda url: goto(b, url, name), args.start, today,
                       note=lambda m: LOG.record(name, "검증", RL.WAIT, m),
-                      gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)))
+                      gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)), orders=orders)
+    data["returns"] = {**kept, **(data.get("returns") or {})}
     path.parent.mkdir(parents=True, exist_ok=True)
     STORE.write_json_atomic(path, data)
-    LOG.record(name, "검증", RL.OK, f"검증 자료 저장 — 월렛 {len(data.get('wallet') or [])}건·조회 실패 {len(data['조회 실패'])}건")
+    LOG.record(name, "검증", RL.OK, f"검증 자료 저장 — 월렛 {len(data.get('wallet') or [])}건·반품 조회 {len(orders)}주문·"
+               f"조회 실패 {len(data['조회 실패'])}건")
+
+
+def _wing_files(name: str) -> list:
+    """이 계정의 윙 정산 파일(읽을 수 없는 파일은 건너뜀 — 받기 단계가 이미 오류로 기록)."""
+    out = []
+    for p in sorted(FILES.glob(f"{SF._token(name, '계정명')}_*_윙_*.xlsx")):
+        try:
+            out.append(SF.load_settle_file(p))
+        except Exception:  # noqa: BLE001
+            continue
+    return out
 
 
 def cmd_probe(a, b, args, jobs: list) -> None:

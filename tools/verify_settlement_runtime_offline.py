@@ -1455,6 +1455,59 @@ def p39_favorable_refund():
     ok("결제/취소일 달마다 GET·pageSize 500·어제까지·2쪽 끝까지·localeProperty/Str 칸 버림·504 달=조회 실패 기록 후 계속")
 
 
+def p40_orphan_ship_returns():
+    print("[P40] 상품 없는 윙 배송비 줄(D-116 ③③) → 그 주문의 반품 정보(주문조회 반품)만 조회·개인정보 없는 칸만 누적 저장")
+    from coupang_analytics import settlement_files as SF
+    from coupang_analytics import settlement_verify_collect as VC
+    from coupang_analytics import settlement_wing_api as API
+
+    def r(order, pid, opt, sales):
+        return SF.SettleRow("윙", "벅스-bux1004", D("2026-08-01"), D("2026-08-31"), order, pid, opt, "", "", 0, sales, 0, 0,
+                            sales, D("2026-08-06"), "")
+    f1 = SF.SettleFile("윙", "벅스-bux1004", D("2026-08-01"), D("2026-08-31"),
+                       rows=[r("16102026647963", "", "<기본배송료>", 6000),      # 실측: 상품 줄 없음 = 반품 왕복배송비
+                             r("200", "", "<기본배송료>", 3000), r("300", "", "<기본배송료>", 0), r("400", "", "<기본배송료>", 3000)])
+    f2 = SF.SettleFile("윙", "벅스-bux1004", D("2026-07-01"), D("2026-07-31"),
+                       rows=[r("200", "8976534411", "95425233537", 37900)])           # 다른 파일에 상품 줄 = 정상 배송비
+    assert VC.orphan_ship_orders([f1, f2]) == ["16102026647963", "400"]            # 금액 0 줄 제외
+    old = {"16102026647963": [{"cancelId": 1}], "400": None}
+    assert VC.returns_to_ask(["16102026647963", "400", "500"], old) == ["400", "500"]   # 조회 실패(None)·새 주문만
+    # 실측 응답(벅스 2026-10-26, 개인정보 칸은 가짜 값): GET /tenants/sfl-portal/return/delivery/{주문번호} — 다른 화면에서도 됨 ·
+    # 없는 주문 = 200 빈 본문
+    rec = {"cancelId": 1832692324, "orderId": 16102026647963, "amount": 37900, "memberName": "홍길동", "receiverName": "홍길동",
+           "receiverPhoneNumber": "010", "returnAddress": "주소", "receiptDate": "2026-08-04T07:22:12.000+00:00",
+           "returnDate": "2026-08-06T04:15:40.000+00:00", "returnStatus": "REFUND_COMPLETED", "requestSolution": "RETURN_REFUND",
+           "reasonCode": "REORDER", "reasonCodeName": "상품을 추가하여 재주문", "reasonUserText": "고객이 쓴 글", "faultType": "CUSTOMER",
+           "returnDeliveryPriceBurden": "고객", "deliveryChargeType": "FREE", "returnDeliveryPrice": 3000,
+           "estimatedRefundPrice": 31900, "cancelCountSum": 1, "productShipmentType": "THIRD_PARTY",
+           "omsSimpleOrderItemDtos": [{"vendorItemName": "무선 진공 압축 포장기, J0058", "vendorItemId": 95425233537,
+                                       "vendorId": "A01263988", "unitPrice": 37900, "price": 37900, "quantity": 1,
+                                       "paymentId": 16100315998115, "csCancelQuantity": 0, "cancelQuantity": 1}]}
+    gets: list = []
+
+    def call(method, path, body):
+        gets.append((method, path))
+        oid = path.rsplit("/", 1)[-1]
+        if path.startswith(VC.RETURN_DELIVERY) and oid == "16102026647963":
+            return [rec]
+        if oid == "400":
+            raise API.SiteChangedError(f"{path} 응답이 JSON 아님: ''")
+        if oid == "500":
+            raise API.ServerBusy("504")
+        return {}
+    d = VC.collect(call, lambda url: None, D("2026-08-01"), D("2026-08-03"), orders=["16102026647963", "400", "500"])
+    got = d["returns"]
+    assert [p for m, p in gets if VC.RETURN_DELIVERY in p] == [f"{VC.RETURN_DELIVERY}/{o}" for o in ("16102026647963", "400", "500")]
+    assert got["400"] == [] and got["500"] is None and any("반품 조회 500" in x for x in d["조회 실패"]), got
+    x = got["16102026647963"][0]
+    assert x["items"] == [{"vendorItemId": 95425233537, "vendorItemName": "무선 진공 압축 포장기, J0058", "unitPrice": 37900,
+                           "price": 37900, "quantity": 1, "cancelQuantity": 1}], x
+    assert x["returnDate"].startswith("2026-08-06") and x["returnDeliveryPriceBurden"] == "고객" and x["returnDeliveryPrice"] == 3000
+    assert "홍길동" not in str(got) and "010" not in str(got) and "주소" not in str(got) and "고객이 쓴 글" not in str(got)
+    assert "returns" not in VC.collect(lambda *a: {}, lambda url: None, D("2026-08-01"), D("2026-08-03"))   # 주문 없으면 안 부름
+    ok("상품 없는 배송비 주문만(금액 0·다른 파일 상품 줄 제외)·새/실패 주문만 조회·개인정보·고객 글 안 남김·빈 본문=반품 없음·504=조회 실패")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -1486,6 +1539,7 @@ def main():
     p37_accounts_from_registry()
     p38_wing_extra_settlement()
     p39_favorable_refund()
+    p40_orphan_ship_returns()
     print("정산 런타임 오프라인 검증 통과")
 
 

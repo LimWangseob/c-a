@@ -10,6 +10,7 @@
 | 보류목록 / 추가지급(월별) | 정산 > 보류목록 / 추가지급 | POST …/payment-pending-report/list · …/additional-payment-report/list |
 | 윙 정산캘린더(지급일·예정) | 정산 현황 > 정산캘린더 | POST /tenants/msf/wing/api/payout-date-calendar/payout-dates (폼 startDate·endDate) |
 | 우대수수료 환급(주문별·결제/취소일 달마다) | 정산 > 우대수수료 환급조회 | GET …/favorablefee/refund/list/data?page&pageSize&from&to&dateType |
+| 상품 없는 배송비 주문의 반품(주문번호별) | 주문/배송 > 주문조회 > 주문상세 '반품정보' | GET /tenants/sfl-portal/return/delivery/{주문번호} |
 ⚠ 매출내역 등은 그 화면을 연 상태에서 불러야 한다(다른 화면에서 부르면 504 — 실측). 오늘 이후 날짜를 넣으면 504(실측)
 → 월 끝은 어제까지. 서버 일시 오류(ServerBusy)는 그 항목만 '조회 실패'로 남기고 다음 항목 진행.
 개인정보(계좌·예금주)는 저장하지 않는다.
@@ -19,6 +20,7 @@ from __future__ import annotations
 import calendar
 from datetime import date, timedelta
 
+from .settlement_files import _SHIP_MARK
 from .settlement_wing_api import RG_URL, ServerBusy, SiteChangedError
 
 _W = "https://wing.coupang.com"
@@ -44,6 +46,13 @@ FAV_KEEP = ("orderId", "transactionDateStr", "expectedTransferDateStr", "realTra
 CALENDAR_AHEAD = timedelta(days=70)
 WALLET_FROM = date(2025, 1, 1)          # 월렛 장부(입금−인출=잔액) 대조용 — 소급 시작보다 넉넉히
 PENDING_FROM = date(2025, 1, 1)         # 보류목록 = 보류일 기준 — 2026 지급 줄의 보류가 2025 에 잡힌 것까지(D-083)
+# 상품 없는 윙 배송비 줄 = 구매확정 전 반품의 고객 부담 왕복배송비(D-116) → 그 주문의 반품 상품. 실측(벅스 2026-10-26): 주문번호 검색은
+# 기간 무관 · 다른 윙 화면에서도 됨 · 없는 주문 = 200 빈 본문. 응답엔 고객 이름·연락처·주소·고객이 쓴 글이 있어 아래 칸만 저장.
+RETURN_DELIVERY = "/tenants/sfl-portal/return/delivery"
+RET_KEEP = ("cancelId", "orderId", "receiptDate", "returnDate", "returnStatus", "requestSolution", "reasonCode", "reasonCodeName",
+            "faultType", "returnDeliveryPriceBurden", "deliveryChargeType", "returnDeliveryPrice", "estimatedRefundPrice",
+            "cancelCountSum", "productShipmentType")
+RET_ITEM_KEEP = ("vendorItemId", "vendorItemName", "unitPrice", "price", "quantity", "cancelQuantity")
 _PII = ("bank", "owner", "accountnumber")
 
 
@@ -67,7 +76,20 @@ def scrub(obj):
     return obj
 
 
-def collect(call, open_page, start: date, today: date, *, note=lambda m: None, gap=lambda: None) -> dict:
+def orphan_ship_orders(files: list) -> list[str]:
+    """윙 정산 파일들 → 배송비 줄(금액 있음)만 있고 상품 줄이 어느 파일에도 없는 주문번호(정렬)."""
+    prod = {r.order_id for f in files for r in f.rows if r.product_id}
+    return sorted({r.order_id for f in files for r in f.rows
+                   if _SHIP_MARK.fullmatch(r.option_id or "") and (r.sales or r.settle) and r.order_id not in prod})
+
+
+def returns_to_ask(orders: list[str], old: dict) -> list[str]:
+    """이미 저장한 주문(반품 기록·반품 없음 [])은 다시 조회하지 않음 — 새 주문과 조회 실패(None)만."""
+    return [o for o in orders if old.get(o) is None]
+
+
+def collect(call, open_page, start: date, today: date, *, note=lambda m: None, gap=lambda: None,
+            orders: list[str] = ()) -> dict:
     """call(method, path, body)→JSON · open_page(url) — 호출부가 차단 검사·재시도 포함해 넘김.
     반환 = 검증 원자료 dict(개인정보 제거). 항목별 실패는 '조회 실패' 목록에 남기고 계속(차단은 호출부 예외로 중단)."""
     data: dict = {"수집일": today.isoformat(), "기간": [start.isoformat(), (today - timedelta(days=1)).isoformat()],
@@ -106,6 +128,8 @@ def collect(call, open_page, start: date, today: date, *, note=lambda m: None, g
                                                                  "taxInvoiceIssueType": None, "requestStatusType": None,
                                                                  "orderId": None, "page": 1, "pageSize": 100}))
     data["favorable"] = {ym: safe(f"우대수수료 환급 {ym}", lambda f=f, t=t: _favorable(call, f, t)) for ym, f, t in mlist}
+    if orders:
+        data["returns"] = {o: safe(f"반품 조회 {o}", lambda o=o: _returns(call, o)) for o in orders}
     return scrub(data)
 
 
@@ -146,6 +170,18 @@ def _favorable(call, start: date, end: date) -> dict:
         if page >= (r.get("totalPage") or 0):
             return {"totalCount": r.get("totalCount") or len(rows), "rows": rows}
         page += 1
+
+
+def _returns(call, order: str) -> list:
+    """주문 하나의 반품 접수 목록(RET_KEEP·상품 RET_ITEM_KEEP 칸만). 빈 본문(반품 없음) = []."""
+    try:
+        recs = call("GET", f"{RETURN_DELIVERY}/{order}", None)
+    except SiteChangedError as exc:
+        if str(exc).endswith("JSON 아님: ''"):
+            return []
+        raise
+    return [{**{k: x.get(k) for k in RET_KEEP},
+             "items": [{k: i.get(k) for k in RET_ITEM_KEEP} for i in x.get("omsSimpleOrderItemDtos") or []]} for x in recs or []]
 
 
 def _monthly(call, open_page, safe, url, label, mlist, req) -> dict:
