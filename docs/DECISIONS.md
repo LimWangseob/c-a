@@ -1034,3 +1034,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 월·캠페인 청구가능 × 월 보고서 비율(D-117 — 예산 초과 차감 날짜가 섞임) · 보고서 광고비 ×1.1 그대로(청구액과 안 맞음) · 계정 광고비를 관리 정산 비율로(상품 자료 무시).
 - 영향 범위: `settlement_ads.py`(_DAILY·collect — CMG_EXCEL 삭제) · `tools/verify_settlement_runtime_offline.py` P41 · git 밖 `managed_alloc.py`·`statement_managed.py`·`test_managed_alloc.py`. 운용 PC 재배포 후 수집. 관리 상품과 관리 밖 상품을 한 캠페인에 섞지 않으면 비율 없이 정확(운영 권고). HQ 포팅 대상.
 - 상태: ACTIVE
+
+### D-120 [SETTLE_COLLECT_SAFETY] 정산 수집 보강 안전장치(운용 PC 설치 전) — 광고비 원천 하루 계정당 2개월·요청마다 쉼 · 검증 새 항목 예상 밖 오류 = 그 항목만 조회 실패 (2026-10-26, R64)
+- 결정(소유자 2026-10-26 "권장대로 진행해줘" — 통제 세션 검토): (1) `settlement_ads.collect` — 받을 게 남은 달을 **최근 달부터 한 실행에 계정당 MAX_MONTHS=2개월**만(남은 달 수를 처리기록에 '남은 달 N(다음 실행에)') · 원격 요청(밀크런 엑셀·일별 정산내역·캠페인 목록·보고서 목록/요청·보고서 받기)마다 먼저 쉼(정산 LOOKUP_GAP_SEC 3~8초). (2) `settlement_verify_collect.collect(fatal=…)` — D-116 새 항목(우대수수료 환급·입고 내역·반품 조회)은 차단(fatal — 앱은 BlockDetected·기본 ApiBlocked) 외 **모든 예외**도 그 항목만 '조회 실패'로 남기고 계속(시간 초과·응답 모양 변경이 계정 실패 → 연속 2계정 정산 전체 중단으로 번지지 않게). 기존 항목은 지금처럼(ServerBusy·SiteChangedError).
+- 근거: 첫 실행에 계정 ~30 × 밀린 9개월 × 요청 4~5종이 쉼 없이 나가면 사무실 IP·위탁 로그인 세션 Akamai 차단 위험(통제 세션 검토) · 새 항목은 실측 1계정(벅스)뿐이라 다른 계정 응답 모양이 다를 수 있음. 시험 P43(9개월 → 첫날 9·8월·다음 날 7·6월·남은 달 7→5·요청마다 쉼 먼저 / 환급 TimeoutError·입고 응답 모양·반품 KeyError = 조회 실패 4건·추가지급 등 계속·차단은 올라감) 재현 실패 → 수정 → 통과 · P41 순서(최근 달부터) 갱신 · run_checks 초록.
+- 버린 대안: 첫 실행에 전부(차단 위험) · 새 항목도 기존 safe 만(예상 밖 오류가 계정 실패로) · 모든 항목을 넓게 잡기(기존 항목 동작 변경 — 범위 밖).
+- 영향 범위: `settlement_ads.py`(MAX_MONTHS·collect gap/max_months·남은 달) · `settlement_verify_collect.py`(safe_new·fatal) · `tools/settlement_download.py`(collect_verify fatal=BlockDetected·collect_ads gap·처리기록 문구) · P41·P43. 운용 PC 재배포 후 적용.
+- 상태: ACTIVE

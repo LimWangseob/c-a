@@ -24,6 +24,7 @@ GQL = "/marketing-reporting/v2/graphql"
 MILK_EXCEL = "https://wing.coupang.com/tenants/rfm-portal-2/excel/milkrun-settlement?searchYear={y}&searchMonth={m}&milkrunId=&feeType="
 PA_EXCEL = "https://advertising.coupang.com/marketing-reporting/v2/api/excel-report?id={id}"
 SETTLE_DAYS = 3
+MAX_MONTHS = 2                  # 하루(한 번 실행) 계정당 받는 달 수 — 밀린 달은 최근 달부터 날마다 나눠서(판매 소급 하루 60일과 같은 방식·D-120)
 _CAMPAIGNS = ("query GetCampaignListInBillboard($startDate: Int!, $endDate: Int!, $reportType: ReportType!) "
               "{ getCampaignList(startDate: $startDate, endDate: $endDate, reportType: $reportType) { id name } }")
 _LIST = ("query ReportList($reportType: ReportType!, $page: Int!, $pageSize: Int!, $duration: Int!, $onlyScheduledReport: Boolean) "
@@ -70,16 +71,35 @@ def _gql(call, query: str, variables: dict) -> dict:
     return r["data"]
 
 
-def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date) -> dict:
+def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date, *, gap=lambda: None,
+            max_months: int = MAX_MONTHS) -> dict:
     """call(method, path, body) = 광고센터 화면 안 호출(처음 부를 때 광고센터를 열도록 호출부가 늦게 연결) ·
-    get_bytes(url) = 로그인 세션으로 파일 받기. 반환 = 요약 {받을 것, 요청, 기다림, 받음, 캠페인 없음}."""
+    get_bytes(url) = 로그인 세션으로 파일 받기 · gap() = 원격 요청마다 먼저 쉼(차단 방지). 받을 게 남은 달은 최근 달부터
+    max_months 개만. 반환 = 요약 {받을 것, 요청, 기다림, 받음, 캠페인 없음, 남은 달}."""
     folder.mkdir(parents=True, exist_ok=True)
     state_p = folder / f"{acct}_광고.json"
     state = json.loads(state_p.read_text(encoding="utf-8")) if state_p.exists() else {}
     none = set(state.get("캠페인 없음") or [])
-    out: dict = {"받을 것": [], "요청": [], "기다림": [], "받음": [], "캠페인 없음": []}
+    out: dict = {"받을 것": [], "요청": [], "기다림": [], "받음": [], "캠페인 없음": [], "남은 달": 0}
     reports: list | None = None
-    for ym, f, t in due_months(start, today):
+
+    raw_call, raw_bytes = call, get_bytes
+
+    def call_(method, path, body):
+        gap()
+        return raw_call(method, path, body)
+
+    def bytes_(url):
+        gap()
+        return raw_bytes(url)
+
+    def done(ym: str) -> bool:
+        return all((folder / f"{acct}_{k}_{ym}.{x}").exists() for k, x in (("밀크런", "xlsx"), ("광고정산", "json"))) and (
+            ym in none or (folder / f"{acct}_매출성장광고_{ym}.xlsx").exists())
+    todo = [m for m in reversed(due_months(start, today)) if not done(m[0])]
+    out["남은 달"] = max(0, len(todo) - max_months)
+    call, get_bytes = call_, bytes_
+    for ym, f, t in todo[:max_months]:
         milk = folder / f"{acct}_밀크런_{ym}.xlsx"
         if not milk.exists():
             milk.write_bytes(get_bytes(MILK_EXCEL.format(y=f.year, m=f.month)))

@@ -22,7 +22,7 @@ import calendar
 from datetime import date, timedelta
 
 from .settlement_files import _SHIP_MARK
-from .settlement_wing_api import RG_URL, ServerBusy, SiteChangedError
+from .settlement_wing_api import RG_URL, ApiBlocked, ServerBusy, SiteChangedError
 
 _W = "https://wing.coupang.com"
 SALES_URL = f"{_W}/tenants/finance/wing/contentsurl/sales-report"
@@ -92,9 +92,10 @@ def returns_to_ask(orders: list[str], old: dict) -> list[str]:
 
 
 def collect(call, open_page, start: date, today: date, *, note=lambda m: None, gap=lambda: None,
-            orders: list[str] = ()) -> dict:
+            orders: list[str] = (), fatal: tuple = (ApiBlocked,)) -> dict:
     """call(method, path, body)→JSON · open_page(url) — 호출부가 차단 검사·재시도 포함해 넘김.
-    반환 = 검증 원자료 dict(개인정보 제거). 항목별 실패는 '조회 실패' 목록에 남기고 계속(차단은 호출부 예외로 중단)."""
+    반환 = 검증 원자료 dict(개인정보 제거). 항목별 실패는 '조회 실패' 목록에 남기고 계속(차단은 호출부 예외로 중단).
+    D-116 새 항목(환급·입고·반품)은 fatal(차단) 외 모든 예외도 그 항목만 '조회 실패'(D-120 — 계정 실패로 번지지 않게)."""
     data: dict = {"수집일": today.isoformat(), "기간": [start.isoformat(), (today - timedelta(days=1)).isoformat()],
                   "조회 실패": []}
     mlist = months(start, today)
@@ -108,6 +109,16 @@ def collect(call, open_page, start: date, today: date, *, note=lambda m: None, g
             return None
         finally:
             gap()
+
+    def safe_new(label, fn):
+        try:
+            return safe(label, fn)
+        except fatal:
+            raise
+        except Exception as exc:  # noqa: BLE001 — 새 항목의 예상 못 한 오류(시간 초과·응답 모양)는 그 항목만 실패
+            data["조회 실패"].append(f"{label}: {exc.__class__.__name__}: {str(exc)[:120]}")
+            note(f"검증 자료 {label} 조회 실패 — {exc.__class__.__name__}")
+            return None
 
     open_page(CALENDAR_URL)
     data["calendar"] = safe("정산캘린더", lambda: call("POST", CALENDAR, f"startDate={start - timedelta(days=7)}"
@@ -130,10 +141,10 @@ def collect(call, open_page, start: date, today: date, *, note=lambda m: None, g
                                   lambda ym, f, t: (ADDITIONAL, {"fromDate": f.isoformat(), "toDate": t.isoformat(),
                                                                  "taxInvoiceIssueType": None, "requestStatusType": None,
                                                                  "orderId": None, "page": 1, "pageSize": 100}))
-    data["favorable"] = {ym: safe(f"우대수수료 환급 {ym}", lambda f=f, t=t: _favorable(call, f, t)) for ym, f, t in mlist}
-    data["inbound"] = safe("입고 내역", lambda: _inbound(call))
+    data["favorable"] = {ym: safe_new(f"우대수수료 환급 {ym}", lambda f=f, t=t: _favorable(call, f, t)) for ym, f, t in mlist}
+    data["inbound"] = safe_new("입고 내역", lambda: _inbound(call))
     if orders:
-        data["returns"] = {o: safe(f"반품 조회 {o}", lambda o=o: _returns(call, o)) for o in orders}
+        data["returns"] = {o: safe_new(f"반품 조회 {o}", lambda o=o: _returns(call, o)) for o in orders}
     return scrub(data)
 
 

@@ -484,7 +484,7 @@ def collect_verify(a, b, args) -> None:
     orders = VC.returns_to_ask(VC.orphan_ship_orders(_wing_files(name)), kept)
     data = VC.collect(lambda m, p, body: api(b, name, m, p, body), lambda url: goto(b, url, name), args.start, today,
                       note=lambda m: LOG.record(name, "검증", RL.WAIT, m),
-                      gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)), orders=orders)
+                      gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)), orders=orders, fatal=(BlockDetected,))
     data["returns"] = {**kept, **(data.get("returns") or {})}
     path.parent.mkdir(parents=True, exist_ok=True)
     STORE.write_json_atomic(path, data)
@@ -504,9 +504,11 @@ def collect_ads(a, b, args) -> None:
             q = EW.open_adcenter(sys.modules[__name__], b, name)
         return API.call(q, method, path, body)
     try:
-        s = AD.collect(call, lambda url: _get_bytes(b, url), VERIFY / "광고", SF._token(name, "계정명"), args.start, date.today())
-        if s["받을 것"]:
-            LOG.record(name, "광고비", RL.OK, " · ".join(f"{k} {','.join(v)}" for k, v in s.items() if v and k != "받을 것"))
+        s = AD.collect(call, lambda url: _get_bytes(b, url), VERIFY / "광고", SF._token(name, "계정명"), args.start, date.today(),
+                       gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)))
+        msg = [f"{k} {','.join(v)}" for k, v in s.items() if isinstance(v, list) and v and k != "받을 것"]
+        if msg or s["남은 달"]:
+            LOG.record(name, "광고비", RL.OK, " · ".join(msg + ([f"남은 달 {s['남은 달']}(다음 실행에)"] if s["남은 달"] else [])))
     except BlockDetected:
         raise
     except Exception as exc:                              # 광고비 원천은 정산 금액과 별개 — 그 단계만 실패 기록

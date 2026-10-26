@@ -1557,7 +1557,7 @@ def p41_ad_reports():
         v = store["asked"]
         assert v == {"startDate": 20260701, "endDate": 20260731, "campaignIds": ["105108858", "1"], "reportType": "pa",
                      "dateGroup": "daily", "granularity": "keyword", "excludeIfNoClickCount": False}, v
-        assert got == [AD.MILK_EXCEL.format(y=2026, m=m) for m in (6, 7)], got                       # 밀크런 내역은 바로
+        assert got == [AD.MILK_EXCEL.format(y=2026, m=m) for m in (7, 6)], got                       # 밀크런 내역은 바로(최근 달부터)
         settle = json.loads((folder / "벅스-bux1004_광고정산_202607.json").read_text(encoding="utf-8"))
         assert settle["items"][0]["billableAmount"] == 30000 and settle["items"][0]["date"] == 20260712, settle
         assert json.loads((folder / "벅스-bux1004_광고정산_202606.json").read_text(encoding="utf-8"))["items"] == []
@@ -1614,6 +1614,65 @@ def p42_inbound():
     ok("밀크런번호·픽업일·상태·상품(옵션ID·요청/입고/적치 수량)만 · 0쪽부터 끝까지")
 
 
+def p43_collect_throttle_isolation():
+    print("[P43] 운용 PC 설치 전 보완(D-120) — 광고비 하루 받는 달 수 상한·요청 사이 쉼 / 검증 새 항목 예상 못 한 오류 = 그 항목만 조회 실패")
+    import tempfile
+    from pathlib import Path
+    from coupang_analytics import settlement_ads as AD
+    from coupang_analytics import settlement_verify_collect as VC
+    # ① 9개월 밀린 계정: 첫날 최근 2개월만·원격 요청마다 gap(쉼) 먼저
+    log: list = []
+
+    def call(method, path, body):
+        log.append("call")
+        q = body["query"]
+        if "getDailySettlement" in q:
+            return {"data": {"getDailySettlement": {"summary": {}, "items": []}}}
+        if "getCampaignList" in q:
+            return {"data": {"getCampaignList": []}}
+        raise AssertionError(q)
+
+    def get_bytes(url):
+        log.append("get")
+        return b"PK"
+    with tempfile.TemporaryDirectory() as d:
+        s = AD.collect(call, get_bytes, Path(d), "a-x", D("2026-01-01"), D("2026-10-26"), gap=lambda: log.append("gap"))
+        assert s["캠페인 없음"] == ["202609", "202608"] and s["남은 달"] == 7, s                        # 9개월 중 최근 2개월
+        assert log and all(log[i] == "gap" for i in range(0, len(log), 2)) and log.count("gap") == len(log) // 2, log
+        log.clear()
+        s = AD.collect(call, get_bytes, Path(d), "a-x", D("2026-01-01"), D("2026-10-27"), gap=lambda: log.append("gap"))
+        assert s["캠페인 없음"] == ["202607", "202606"] and s["남은 달"] == 5, s                        # 다음 날 그다음 2개월
+    # ② 새 항목(환급·입고·반품)에서 예상 못 한 오류(시간 초과·응답 모양) = 그 항목만 '조회 실패' · 차단(fatal)은 그대로 올라감
+    from coupang_analytics import settlement_wing_api as API
+
+    class Blocked(Exception):
+        pass
+
+    def call2(method, path, body):
+        if path.startswith(VC.FAVORABLE):
+            raise TimeoutError("시간 초과")
+        if path.startswith(VC.INBOUND):
+            return {"content": None, "pagination": "모양 다름"}      # AttributeError 유발
+        if path.startswith(VC.RETURN_DELIVERY):
+            raise KeyError("x")
+        return {}
+    dd = VC.collect(call2, lambda url: None, D("2026-09-01"), D("2026-10-03"), orders=["1"], fatal=(Blocked,))
+    assert dd["favorable"] == {"202609": None, "202610": None} and dd["inbound"] is None and dd["returns"] == {"1": None}, dd
+    assert sum(("우대수수료 환급" in x) + ("입고 내역" in x) + ("반품 조회" in x) for x in dd["조회 실패"]) == 4, dd["조회 실패"]
+    assert dd["additional"] == {"202609": {}, "202610": {}}                                           # 다른 항목은 계속 조회
+
+    def call3(method, path, body):
+        if path.startswith(VC.FAVORABLE):
+            raise Blocked("차단")
+        return {}
+    expect(Blocked, lambda: VC.collect(call3, lambda url: None, D("2026-09-01"), D("2026-10-03"), fatal=(Blocked,)),
+           "차단은 삼키지 않음")
+    expect(API.ApiBlocked, lambda: VC.collect(lambda m, p, b: (_ for _ in ()).throw(API.ApiBlocked("x"))
+                                              if p.startswith(VC.FAVORABLE) else {}, lambda url: None,
+                                              D("2026-09-01"), D("2026-10-03")), "기본 fatal = ApiBlocked")
+    ok("광고 9개월 → 하루 최근 2개월·요청마다 쉼 / 환급·입고·반품 예상 밖 오류 = 그 항목만 조회 실패·차단은 중단")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -1648,6 +1707,7 @@ def main():
     p40_orphan_ship_returns()
     p41_ad_reports()
     p42_inbound()
+    p43_collect_throttle_isolation()
     print("정산 런타임 오프라인 검증 통과")
 
 
