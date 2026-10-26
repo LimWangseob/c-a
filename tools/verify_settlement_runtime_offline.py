@@ -1396,6 +1396,26 @@ def p37_accounts_from_registry():
     ok("관리중·중단 90일 이내 포함·오래된 중단 제외·정산전용 관리중 포함·중복=원장 우선·최신 비번·동기화 오래됨/없음=중단")
 
 
+def p38_wing_extra_settlement():
+    print("[P38] 윙 정산주기 'B' = 추가정산 — 받기 방법 미확인 → 그 줄만 건너뛰고 '확인 필요' · 다른 주기는 계속 받음")
+    from datetime import date as D
+    from coupang_analytics import settlement_wing_api as API
+    # 실측(운용 PC 10-22~10-25 매 실행): roum0502 일정 '[추가정산] 10/20 ~ 10/20' · 지급일 10-22 · 코드 'B'
+    #   → SiteChangedError 로 계정 전체 실패(그 계정 다른 주정산까지 못 받음).
+    week = {"payDate": "2026-10-20", "transactionCycleCode": "W", "recognitionFrom": "2026-09-21",
+            "recognitionTo": "2026-09-27", "paymentStatus": "DONE", "ratio": 70}
+    extra = {"payDate": "2026-10-22", "transactionCycleCode": "B", "recognitionFrom": "2026-10-20",
+             "recognitionTo": "2026-10-20", "title": "[추가정산]\n10/20 ~ 10/20"}
+    resp = {"paymentReports": [week, extra]}
+    ev = API.wing_events(resp, "로움")
+    assert [(e.kind, e.settle_date, e.period_start) for e in ev] == [("주정산", D(2026, 10, 20), D(2026, 9, 21))], ev
+    notes = API.unsupported_cycles(resp)
+    assert len(notes) == 1 and "추가정산" in notes[0] and "'B'" in notes[0] and "2026-10-20" in notes[0], notes
+    expect(API.SiteChangedError, lambda: API.wing_events(
+        {"paymentReports": [week, {**extra, "transactionCycleCode": "X"}]}, "a"), "다른 모르는 코드는 여전히 중단")
+    ok("추가정산(B) 줄만 건너뜀·'확인 필요' 기록 문구·주정산은 그대로·다른 모르는 코드는 중단")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -1425,6 +1445,7 @@ def main():
     p35_amounts_from()
     p36_same_cycle_done()
     p37_accounts_from_registry()
+    p38_wing_extra_settlement()
     print("정산 런타임 오프라인 검증 통과")
 
 

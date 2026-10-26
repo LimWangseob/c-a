@@ -34,8 +34,9 @@ WING_EXCEL = "MSF_PAYMENT_REVENUE_DETAIL"
 # transactionCycleCode(실측: 주정산 70%=W·월별 최종액 30%=R·월정산 100%=M). M = D-075(2026-10-16 노바네스트 화면 실측):
 # 월정산 줄도 같은 '엑셀 다운로드 요청'(revenue-detail)·검색조건 '구매확정일 그 달 전체'·메뉴명 '[중개] 정산현황 주문 상세 내역'.
 _WING_KIND = {"W": "주정산", "R": "최종액", "M": "월정산"}
-# 아는데 아직 받기 방법을 확인 못 한 주기 — 그 줄만 건너뛰고 처리기록에 '확인 필요'(계정 전체 실패 금지·D-010). 현재 없음.
-_WING_UNSUPPORTED: dict = {}
+# 아는데 아직 받기 방법을 확인 못 한 주기 — 그 줄만 건너뛰고 처리기록에 '확인 필요'(계정 전체 실패 금지·D-010).
+# 'B' = 추가정산(화면 일정 '[추가정산] 10/20 ~ 10/20' · roum0502 지급일 2026-10-22 실측·D-115).
+_WING_UNSUPPORTED: dict = {"B": "추가정산"}
 _RG_KIND = {"WEEKLY": None, "MONTHLY": "월정산"}   # WEEKLY 는 지급비율로 주정산/최종액 · MONTHLY = D-075(같은 request-download)
 _RG_UNSUPPORTED: dict = {}
 _RG_REPORT = {"판매수수료": "CATEGORY_TR", "입출고/배송비": "WAREHOUSING_SHIPPING", "보관비": "STORAGE_FEE",
