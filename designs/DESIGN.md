@@ -30,6 +30,7 @@
 - **판매가·판매상태 지표행 자가치유**(`_backfill_metric_rows`·apply_style): 2026-09-24 신설 이전 옛 블록(대장서 빠진 판매중지·미로그인=파이프라인 미방문)에 두 행이 없던(실측 13블록) 것을 저장마다 없는 행만 삽입 보정(재고<판매가<판매상태·재고는 KINDS_WITH_INVENTORY만). [항목4/6]
 - **빈 키워드행 낡은순위 삭제**(`_clear_blank_keyword_ranks`): 이름 공란 M_RANK 행에 남은 옛 '50위'(실측 43행)="키워드 없는데 순위 표기"를 저장마다 일자칸 삭제(이름 있는 행 불변). [항목5]
 - **비고 소헤더 = 관리대장 판매상태**(⛔판매중지>🔴체험단중>판매중, 옛 '비고' 라벨 폐지). ⚠`has_keyword_section` 소헤더 판정을 G('비고')+A('키워드')→**A('키워드')만**(항목3 G 용도전환 대응·`_find_kw_head`와 일관). [항목3]
+- **체험단 시작일 7일 배경(D-121·2026-10-27)**: 상품 블록의 일자 칸을 **체험단 시작일 = 가장 진하게(FFC000) → 날마다 흰색 쪽으로 옅게 → 8일째부터 배경 없음**(날짜 머리줄·지표·키워드 줄 같은 칸). 시작일 = 직원 입력(_마케팅 3열) 우선·없으면 관리대장 '체험단' 시트 요청일(_마케팅 6열·D-086). `workbook_render._promo_fills`. 옛 '마케팅 기간(시작~종료) 연주황 FCE4D6'·'시작일~+1개월 노출순위 배경'은 폐지.
 - **상품명 하이퍼링크 = productId(노출상품ID) 기반 정규 URL**(`/vp/products/{productId}?vendorItemId={vid}`). ⛔vid-only URL(`/0?vid`) 폐기(실측 서버오류·2026-09-27). productId 는 상품조회엔 없고(0/20) **`vendor-inventory-items-with-vendorItems` GET(전 상품)∪재고∪판매분석**으로 확보(2026-09-28 라이브 실증·아래 링크 항목 참조) → 순수 판매자배송·무판매까지 정상 링크. pid 없으면 노출명 검색 폴백.
 - **상품명 아닌 대장 행 파싱 제외**(`input_list._is_real_product_name`·`_parse_grid`): 자리표시('--'·기호/공백만)는 추적 상품으로 만들지 않음(블록·시트·계정목록 생성 제외·ledger_products 미포함→기존 잔재 reconcile 삭제). [항목5 후속·소유자 2026-09-26]
 - **검증**: 게이트 7종+`check_complexity`(exit 0). 핀 pin_apply_style[S1·S9]·verify_offline[14·15]·verify_render_precision[항목2 링크·상품군색]·페이크(pin_login_ranks·simulate·verify_render) 4튜플화.

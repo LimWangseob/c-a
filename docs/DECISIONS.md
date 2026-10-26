@@ -1041,3 +1041,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 첫 실행에 전부(차단 위험) · 새 항목도 기존 safe 만(예상 밖 오류가 계정 실패로) · 모든 항목을 넓게 잡기(기존 항목 동작 변경 — 범위 밖).
 - 영향 범위: `settlement_ads.py`(MAX_MONTHS·collect gap/max_months·남은 달) · `settlement_verify_collect.py`(safe_new·fatal) · `tools/settlement_download.py`(collect_verify fatal=BlockDetected·collect_ads gap·처리기록 문구) · P41·P43. 운용 PC 재배포 후 적용.
 - 상태: ACTIVE
+
+### D-121 [PROMO_START_FADE_7D] 결과 사업자 시트 일자 칸 = 체험단 시작일부터 7일 배경(시작일 진하게 → 날마다 옅게 → 8일째 없음) (2026-10-27, R66)
+- 결정(소유자 2026-10-27 "관리대장 두번째 시트인 체험단 시트에서 체험단 시작일을 결과 파일에 표시 … 체험단 시작일은 진하게 하고 점차 연하게 … 종료 시점은 1주일(7일)"): 상품 블록의 일자 칸(날짜 머리줄·지표·키워드 소헤더·순위 줄 전부 같은 칸)을 체험단 시작일 칸 = FFC000(진한 주황노랑)에서 하루마다 흰색 쪽으로 1/7씩 옅게(FFC924·FFD249·FFDB6D·FFE492·FFEDB6·FFF6DB) 칠하고 **시작일 포함 7일 뒤(8일째)부터 배경 없음**. 시작일 = 직원 입력 시작일(_마케팅 3열) 우선·없으면 관리대장 '체험단' 시트 요청일(D-086 자동 시작일·체험단효과와 같은 기준). 결과 구글시트는 통계 미러링(`worksheet_to_requests`)으로 같은 색.
+- 근거: 실측 10-26 마스터 — 직원 입력 시작일 0/27·자동 시작일 25/27 → 옛 배경(직원 입력 기간만 사용)은 늘 비어 있었음. 핀 S4(시작일~+6일 7단계 색·전날/8일째 없음·직원 입력 우선) 재현 실패 → 수정 → 통과 · 실데이터 비엔케이미디어 10.15 FFC000 → 10.21 FFF6DB · 10.22 없음 · 구글 반영 요청에 색 포함 · run_checks 15종·복잡도 초록.
+- 버린 대안: 옛 '마케팅 기간(시작~종료) 연주황'·'시작일~+1개월 노출순위 배경'(2026-09-24) 유지 — 직원 입력 칸이 없어져(D-109) 쓰이지 않고 새 요구와 겹침 → 물리 삭제(`_mkt_cols`·`_promo_cols`·`_FILL_MKT`·`_StyleCtx.mkt_fill`) · 시작일 하나만 칠하기(요구와 다름).
+- 영향 범위: `workbook_render.py`(`_promo_fills`·`_style_block`/`_style_metric_rows`/`_style_keyword_rows`) · `workbook_common._StyleCtx` · `tools/pin_apply_style.py` S4 · DESIGN.md · GSHEET_UNIFIED.md. 체험단중 표시·체험단효과·수집 주기(has_marketing)는 그대로. 운용 PC 재배포 후 적용.
+- 상태: ACTIVE

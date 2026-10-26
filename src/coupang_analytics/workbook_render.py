@@ -21,7 +21,8 @@ class _RenderMixin:
     _FILL_LABEL = "D9E9FA"    # G열 지표 라벨/순위(연파랑)
     _FILL_KWHEAD = "E8E8E8"   # 키워드 소헤더행(회색)
     _FILL_KIND = "FFFFFF"     # 구분(계약/개인)·사업자명(흰)
-    _FILL_MKT = "FCE4D6"      # 마케팅 기간 일자 컬럼 배경(연주황 — 캠페인 구간 구분)
+    _PROMO_BASE = (0xFF, 0xC0, 0x00)   # 체험단 시작일 배경(진한 주황노랑) — 날마다 흰색 쪽으로 옅어짐(D-121)
+    _PROMO_DAYS = 7                    # 시작일 포함 7일만 표시(8일째부터 배경 없음)
 
     def _migrate_vids_to_meta(self) -> None:
         """옛 마스터(vid=헤더 이름칸 꼬리)의 vid 를 숨김 메타 col3 에 영속(레이아웃 v4 렌더 전 유실 방지).
@@ -298,7 +299,6 @@ class _RenderMixin:
             f_label=PatternFill("solid", fgColor=self._FILL_LABEL),
             f_kwhead=PatternFill("solid", fgColor=self._FILL_KWHEAD),
             f_kind=PatternFill("solid", fgColor=self._FILL_KIND),
-            mkt_fill=PatternFill("solid", fgColor=self._FILL_MKT),   # 마케팅 기간 일자 컬럼 배경
             box=Border(left=thin, right=thin, top=thin, bottom=thin),
             center=Alignment(horizontal="center", vertical="center"),
             wrap=Alignment(horizontal="center", vertical="center", wrap_text=True),
@@ -393,48 +393,35 @@ class _RenderMixin:
             # 없으면 노출명 검색 폴백. 멱등(매 apply_style 재설정). 서식은 _style_metric_rows 가 이어서 입힌다.
             url = self.product_url(ws.title, nm)
             c_name.hyperlink = Hyperlink(ref=c_name.coordinate, target=url)
-        # 마케팅: 이 상품의 기간·상태 + 마케팅기간(시작~종료)에 해당하는 일자 컬럼 집합(배경색용)
+        # 마케팅: 이 상품의 기간·상태 + 체험단 시작일 7일 일자 컬럼 배경(직원 입력 시작일 우선·없으면 체험단 시트 D-121)
         mstart, mend, _mmon = self.marketing_of(ws.title, nm)
         is_mkt = self._mkt_status(mstart, mend, _mmon) == "체험단중"
         is_disc = self.is_discontinued(ws.title, nm)   # 대장에서 사라짐 = 판매중지 표기
-        mcols = self._mkt_cols(ws, mstart, mend)
-        promo_cols = self._promo_cols(ws, mstart)   # 체험단 시작일~+1개월 → 노출순위 배경색(소유자 2026-09-24)
+        promo = self._promo_fills(ws, mstart or self.promo_start_of(ws.title, nm))
         kh = self._find_kw_head(ws, hr, end)   # 키워드 소헤더행(C='키워드')·없으면 None(2차 옵션 블록)
         m_end = (kh - 1) if kh else end
         # 이 상품군의 옅은 톤(값칸·키워드 배경) — 상품군 전체를 은은히 통일(소유자 2026-09-25)
         prod_fill_lt = sty.f_prod_lt if prod_fill is sty.f_prod else sty.f_prod2_lt
-        self._style_metric_rows(ws, sty, hr, m_end, mcols, maxc, prod_fill, prod_fill_lt)
+        self._style_metric_rows(ws, sty, hr, m_end, promo, maxc, prod_fill, prod_fill_lt)
         if kh:
-            self._style_keyword_rows(ws, sty, kh, end, promo_cols, maxc, is_disc, is_mkt, prod_fill_lt)
+            self._style_keyword_rows(ws, sty, kh, end, promo, maxc, is_disc, is_mkt, prod_fill_lt)
             self._flag_sale_mismatch(ws, sty, kh, nm, is_disc)
         self._style_block_edges(ws, sty, i, hr, end, m_end, kh, headers, regs, maxc)
 
-    def _mkt_cols(self, ws, mstart, mend) -> set[int]:
-        """마케팅 기간(시작~종료)에 해당하는 일자 컬럼번호 집합(배경색용). 시작 없으면 빈 집합."""
-        mcols: set[int] = set()
-        _s, _e = _parse_date(mstart), _parse_date(mend)
-        if _s:
-            for _lbl, _cc in self._date_col.get(ws.title, {}).items():
-                _d = _parse_date(_lbl)
-                if _d and _d >= _s and (not _e or _d <= _e):
-                    mcols.add(_cc)
-        return mcols
-
-    def _promo_cols(self, ws, mstart) -> set[int]:
-        """체험단 **시작일부터 1개월** 에 해당하는 일자 컬럼번호 집합 — 노출순위 행 배경색용(소유자 2026-09-24).
-
-        마케팅 종료일(mend)과 무관하게 '시작일 + 1개월'(같은 날, 월말 보정) 창으로 계산한다. 시작 없으면 빈 집합."""
-        s = _parse_date(mstart)
+    def _promo_fills(self, ws, start) -> dict[int, PatternFill]:
+        """체험단 시작일부터 7일 일자 컬럼 → 배경(소유자 2026-10-27·D-121): 시작일 = 가장 진하게, 날마다 옅게,
+        8일째부터 없음. 날짜 머리줄·지표·키워드 줄 모두 같은 칸에 칠한다. 시작일 없으면 빈 dict."""
+        s = _parse_date(start)
         if not s:
-            return set()
-        y, mo = (s.year + 1, 1) if s.month == 12 else (s.year, s.month + 1)
-        import calendar
-        e = _date(y, mo, min(s.day, calendar.monthrange(y, mo)[1]))   # 시작일 +1개월(월말 보정)
-        out: set[int] = set()
-        for _lbl, _cc in self._date_col.get(ws.title, {}).items():
-            _d = _parse_date(_lbl)
-            if _d and s <= _d <= e:
-                out.add(_cc)
+            return {}
+        out: dict[int, PatternFill] = {}
+        for lbl, cc in self._date_col.get(ws.title, {}).items():
+            d = _parse_date(lbl)
+            k = (d - s).days if d else -1
+            if 0 <= k < self._PROMO_DAYS:
+                t = k / self._PROMO_DAYS                  # 0(시작일) → 6/7(마지막 날) 흰색 쪽으로
+                rgb = "".join(f"{round(v + (255 - v) * t):02X}" for v in self._PROMO_BASE)
+                out[cc] = PatternFill("solid", fgColor=rgb)
         return out
 
     def _find_kw_head(self, ws, hr: int, end: int):
@@ -444,10 +431,10 @@ class _RenderMixin:
                 return r
         return None
 
-    def _style_metric_rows(self, ws, sty: _StyleCtx, hr: int, m_end: int, mcols: set, maxc: int,
+    def _style_metric_rows(self, ws, sty: _StyleCtx, hr: int, m_end: int, promo: dict, maxc: int,
                            prod_fill: PatternFill, prod_fill_lt: PatternFill) -> None:
         """상품 헤더블록(레이아웃 v4·소유자 확정 2026-09-24): 좌측 A:B=라벨 칸(상품군색·굵게)·C:F=값 칸(흰) /
-        우측 G=지표 라벨(연파랑)·H~=값(마케팅기간 배경). 좌측 라벨 7줄(상품명2·VID·판매방식·로켓그로스3)이
+        우측 G=지표 라벨(연파랑)·H~=값(체험단 시작일 7일 배경). 좌측 라벨 7줄(상품명2·VID·판매방식·로켓그로스3)이
         우측 지표 7줄과 정렬(판매자배송 6줄은 로켓그로스 생략). prod_fill = 이 상품군의 교대 배경색.
 
         라벨/값 텍스트는 `_v4_layout`의 pos 앵커행에만 쓰고, 세로병합은 `_style_block_edges`가 처리한다."""
@@ -470,15 +457,14 @@ class _RenderMixin:
                 _sty_cell(ws, r, c, sty, fill=cf_fill, fnt=cf_fnt, align=sty.wrap)
             _sty_cell(ws, r, _COL_METRIC, sty, fill=sty.f_label, fnt=sty.bold)        # G 지표 라벨(연파랑·굵게=제목)
             is_hdr = (r == hr)                                                        # 날짜 헤더행(H~=날짜라벨=굵게)
-            for c in range(_FIRST_DATE, maxc + 1):                                   # H~ 값(마케팅기간 배경)
-                _sty_cell(ws, r, c, sty, num=True, fnt=(sty.bold if is_hdr else None),
-                          fill=(sty.mkt_fill if c in mcols else None))
+            for c in range(_FIRST_DATE, maxc + 1):                                   # H~ 값(체험단 7일 배경)
+                _sty_cell(ws, r, c, sty, num=True, fnt=(sty.bold if is_hdr else None), fill=promo.get(c))
             if r in label_at:                        # 좌측 라벨(A) — 앵커행에만(세로병합 top-left)
                 ws.cell(r, 1, label_at[r])
             if r in value_at:                        # 좌측 값(C) — 앵커행에만
                 ws.cell(r, _COL_NAME, values.get(value_at[r], ""))
 
-    def _style_keyword_rows(self, ws, sty: _StyleCtx, kh: int, end: int, mcols: set, maxc: int,
+    def _style_keyword_rows(self, ws, sty: _StyleCtx, kh: int, end: int, promo: dict, maxc: int,
                             is_disc: bool, is_mkt: bool, prod_fill_lt: PatternFill) -> None:
         """키워드블록(레이아웃 v4): A~E 키워드명(가로 병합·좌측확장) · F 검색량 · G(소헤더 비고/순위라벨) · H~ 순위.
         사업자명(A:B) 표기 폐지 — 키워드가 A~E 로 좌측 확장(소유자 확정 2026-09-24). 키워드명 앵커=A.
@@ -505,7 +491,7 @@ class _RenderMixin:
                     gm.value = "판매중"
                     gm.font = sty.bold
             for c in range(_FIRST_DATE, maxc + 1):
-                _sty_cell(ws, r, c, sty, fill=(sty.mkt_fill if c in mcols else None))
+                _sty_cell(ws, r, c, sty, fill=promo.get(c))
 
     def _flag_sale_mismatch(self, ws, sty: _StyleCtx, kh: int, nm: str, is_disc: bool) -> None:
         """판매상태 불일치 경고: 대장=판매중지인데 쿠팡 실제=판매중/부분판매중이면 판매중지 소헤더행(kh)의

@@ -45,7 +45,6 @@ class _StyleCtx:
     f_label: PatternFill
     f_kwhead: PatternFill
     f_kind: PatternFill
-    mkt_fill: PatternFill
     box: Border
     center: Alignment
     wrap: Alignment

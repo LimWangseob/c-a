@@ -180,17 +180,31 @@ def pin_sale_status_mismatch():
 
 
 def pin_marketing_fill():
-    print("[핀 S4] 마케팅 기간 일자 컬럼 배경(연주황) + 소헤더 '🔴 체험단중'")
+    print("[핀 S4] 체험단 시작일 7일 배경(시작일 진하게→날마다 옅게·8일째 없음 D-121) + 소헤더 '🔴 체험단중'")
     wb = _build()
+    wb.ensure_product_block(BIZ, "자동체험", config.KIND_PERSONAL, ["kwP"], registered="자동체험")
+    wb.set_product_vids(BIZ, "자동체험", ["vidP"])
+    wb.set_promo_start(BIZ, "자동체험", "2026-09-14")    # 관리대장 '체험단' 시트 요청일(자동)
+    for d in range(12, 22):
+        wb.ensure_date(BIZ, f"2026-09-{d:02d}")
     wb.apply_style()
     ws = wb.wb[BIZ]
-    hr = _hdr_row(ws, "체험상품")
+    from coupang_analytics.workbook_common import _parse_date
+    cols = {_parse_date(k).isoformat(): v for k, v in wb._date_col.get(BIZ, {}).items()}   # 라벨 '09.14' → ISO
+    hr = _hdr_row(ws, "자동체험")
     kh = _kw_head_row(ws, hr)
-    cols = wb._date_col.get(BIZ, {})
-    last_col = max(cols.values())
-    _check(_fill(ws, hr + 1, last_col).endswith(OutputWorkbook._FILL_MKT),
-           "마케팅 기간 일자 컬럼 배경 연주황(FCE4D6)")
-    _check(_n(ws.cell(kh, 7).value) == "🔴 체험단중", "마케팅 상품 소헤더 G='🔴 체험단중'")
+    want = ["FFC000", "FFC924", "FFD249", "FFDB6D", "FFE492", "FFEDB6", "FFF6DB"]   # 시작일~+6일
+    for k, hexv in enumerate(want):
+        c = cols[f"2026-09-{14 + k:02d}"]
+        for r in (hr, hr + 1, kh, kh + 1):                # 날짜 머리줄·지표·키워드 소헤더·순위 줄 모두
+            _check(_fill(ws, r, c).endswith(hexv), f"+{k}일({14 + k}일) {r}행 배경 {hexv} — 실제 {_fill(ws, r, c)}")
+    for d in ("2026-09-13", "2026-09-21"):                # 시작 전날·8일째 = 배경 없음
+        _check(not _fill(ws, hr + 1, cols[d]).endswith(tuple(want)), f"{d} 배경 없음")
+    # 직원 입력 시작일(_마케팅 3열)이 있으면 그 날짜가 우선(체험단효과와 같은 기준)
+    hm = _hdr_row(ws, "체험상품")
+    _check(_fill(ws, hm + 1, cols["2026-09-19"]).endswith(want[0]), "직원 입력 시작일(09-19) = 가장 진하게")
+    _check(_fill(ws, hm + 1, cols["2026-09-20"]).endswith(want[1]), "다음 날(09-20) = 한 단계 옅게")
+    _check(_n(ws.cell(_kw_head_row(ws, hm), 7).value) == "🔴 체험단중", "마케팅 상품 소헤더 G='🔴 체험단중'")
 
 
 def pin_group_edges():
