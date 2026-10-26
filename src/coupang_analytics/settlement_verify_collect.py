@@ -10,6 +10,7 @@
 | 보류목록 / 추가지급(월별) | 정산 > 보류목록 / 추가지급 | POST …/payment-pending-report/list · …/additional-payment-report/list |
 | 윙 정산캘린더(지급일·예정) | 정산 현황 > 정산캘린더 | POST /tenants/msf/wing/api/payout-date-calendar/payout-dates (폼 startDate·endDate) |
 | 우대수수료 환급(주문별·결제/취소일 달마다) | 정산 > 우대수수료 환급조회 | GET …/favorablefee/refund/list/data?page&pageSize&from&to&dateType |
+| 로켓그로스 입고 내역(밀크런번호·상품 수량) | 로켓그로스 > 입고관리 | GET /tenants/rfm-inbound/data/inbound/search?pagingSize&pageIndex |
 | 상품 없는 배송비 주문의 반품(주문번호별) | 주문/배송 > 주문조회 > 주문상세 '반품정보' | GET /tenants/sfl-portal/return/delivery/{주문번호} |
 ⚠ 매출내역 등은 그 화면을 연 상태에서 불러야 한다(다른 화면에서 부르면 504 — 실측). 오늘 이후 날짜를 넣으면 504(실측)
 → 월 끝은 어제까지. 서버 일시 오류(ServerBusy)는 그 항목만 '조회 실패'로 남기고 다음 항목 진행.
@@ -48,6 +49,8 @@ WALLET_FROM = date(2025, 1, 1)          # 월렛 장부(입금−인출=잔액) 
 PENDING_FROM = date(2025, 1, 1)         # 보류목록 = 보류일 기준 — 2026 지급 줄의 보류가 2025 에 잡힌 것까지(D-083)
 # 상품 없는 윙 배송비 줄 = 구매확정 전 반품의 고객 부담 왕복배송비(D-116) → 그 주문의 반품 상품. 실측(벅스 2026-10-26): 주문번호 검색은
 # 기간 무관 · 다른 윙 화면에서도 됨 · 없는 주문 = 200 빈 본문. 응답엔 고객 이름·연락처·주소·고객이 쓴 글이 있어 아래 칸만 저장.
+# 입고 내역(D-116 밀크런 몫 = 입고 건별 상품 수량 비율) — 실측(벅스 2026-10-26) 34건 한 쪽 · 실제 입고 수량 = stowedQty.
+INBOUND = "/tenants/rfm-inbound/data/inbound/search"
 RETURN_DELIVERY = "/tenants/sfl-portal/return/delivery"
 RET_KEEP = ("cancelId", "orderId", "receiptDate", "returnDate", "returnStatus", "requestSolution", "reasonCode", "reasonCodeName",
             "faultType", "returnDeliveryPriceBurden", "deliveryChargeType", "returnDeliveryPrice", "estimatedRefundPrice",
@@ -128,6 +131,7 @@ def collect(call, open_page, start: date, today: date, *, note=lambda m: None, g
                                                                  "taxInvoiceIssueType": None, "requestStatusType": None,
                                                                  "orderId": None, "page": 1, "pageSize": 100}))
     data["favorable"] = {ym: safe(f"우대수수료 환급 {ym}", lambda f=f, t=t: _favorable(call, f, t)) for ym, f, t in mlist}
+    data["inbound"] = safe("입고 내역", lambda: _inbound(call))
     if orders:
         data["returns"] = {o: safe(f"반품 조회 {o}", lambda o=o: _returns(call, o)) for o in orders}
     return scrub(data)
@@ -170,6 +174,28 @@ def _favorable(call, start: date, end: date) -> dict:
         if page >= (r.get("totalPage") or 0):
             return {"totalCount": r.get("totalCount") or len(rows), "rows": rows}
         page += 1
+
+
+def _inbound(call) -> list:
+    """로켓그로스 입고 전부(0쪽부터 끝까지) → 밀크런번호·상태·상품 수량만."""
+    out: list = []
+    page = 0
+    while True:
+        r = call("GET", f"{INBOUND}?pagingSize=50&pageIndex={page}", None)
+        for x in r.get("content") or []:
+            st = x.get("latestShipmentStatus") or {}
+            out.append({"shipmentId": x.get("shipmentId"), "milkrunSeq": x.get("milkrunSeq"), "shipmentType": x.get("shipmentType"),
+                        "createdAt": x.get("createdAt"), "fcCode": x.get("fcCode"),
+                        "pickupDate": (x.get("milkrunShipmentInfo") or {}).get("pickupDateYYYYMMDD"),
+                        "statusId": st.get("statusId"), "cancelled": st.get("shipmentCancelled"),
+                        "skus": [{"vendorItemId": (k.get("plannedSku") or {}).get("vendorItemId"),
+                                  "skuName": (k.get("plannedSku") or {}).get("cachedSkuName"),
+                                  "requestedQty": (k.get("plannedSku") or {}).get("requestedQty"),
+                                  "receivedQty": k.get("receivedQty"), "stowedQty": k.get("stowedQty")}
+                                 for k in x.get("skuDetails") or []]})
+        page += 1
+        if page >= ((r.get("pagination") or {}).get("totalPages") or 0):
+            return out
 
 
 def _returns(call, order: str) -> list:

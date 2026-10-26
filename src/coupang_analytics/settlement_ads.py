@@ -1,4 +1,4 @@
-"""광고비 원천 월별 수집 — 1원 정산(D-116 ③④). 조회·보고서 요청·받기만(광고 설정은 건드리지 않음).
+"""광고비·밀크런 원천 월별 수집 — 1원 정산(D-116 ③④⑤). 조회·보고서 요청·받기만(광고 설정은 건드리지 않음).
 
 실측(벅스 2026-10-26):
 - 윙 로켓그로스 광고비 내역 엑셀 = GET /tenants/rfm-portal-2/excel/cmg-settlement/{연}/{월} — 캠페인마다 광고비·**청구가능 광고비**
@@ -7,6 +7,8 @@
   getCampaignList(기간) → requestReport(일별·키워드·캠페인 ID 전부) → reportList(status completed) →
   GET /marketing-reporting/v2/api/excel-report?id=… (xlsx). 칸 = 날짜·광고집행 옵션ID·광고비 등(견본 벅스 7월 378,986).
   ⚠ 보고서 광고비 합(378,986)은 청구가능액(378,188)과 다름 → 상품 몫 = 캠페인 청구가능액을 보고서 옵션별 광고비 비율로 나눔.
+- 윙 로켓그로스 밀크런 내역 엑셀 = GET /tenants/rfm-portal-2/excel/milkrun-settlement?searchYear&searchMonth&milkrunId&feeType —
+  밀크런번호·픽업일·발생금액·세액·조정액 등(상품 없음 → 입고 내역 milkrunSeq 로 상품 수량과 이음, settlement_verify_collect).
 달이 끝나고 SETTLE_DAYS 일 뒤부터 받는다(월말 계산·청구가능 확정 여유). 받은 파일은 다시 받지 않는다.
 """
 from __future__ import annotations
@@ -19,6 +21,7 @@ from .settlement_evidence import month_windows
 
 GQL = "/marketing-reporting/v2/graphql"
 CMG_EXCEL = "https://wing.coupang.com/tenants/rfm-portal-2/excel/cmg-settlement/{y}/{m}"
+MILK_EXCEL = "https://wing.coupang.com/tenants/rfm-portal-2/excel/milkrun-settlement?searchYear={y}&searchMonth={m}&milkrunId=&feeType="
 PA_EXCEL = "https://advertising.coupang.com/marketing-reporting/v2/api/excel-report?id={id}"
 SETTLE_DAYS = 3
 _CAMPAIGNS = ("query GetCampaignListInBillboard($startDate: Int!, $endDate: Int!, $reportType: ReportType!) "
@@ -74,6 +77,9 @@ def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date) 
         cmg = folder / f"{acct}_광고비내역_{ym}.xlsx"
         if not cmg.exists():
             cmg.write_bytes(get_bytes(CMG_EXCEL.format(y=f.year, m=f.month)))
+        milk = folder / f"{acct}_밀크런_{ym}.xlsx"
+        if not milk.exists():
+            milk.write_bytes(get_bytes(MILK_EXCEL.format(y=f.year, m=f.month)))
         pa = folder / f"{acct}_매출성장광고_{ym}.xlsx"
         if pa.exists() or ym in none:
             continue

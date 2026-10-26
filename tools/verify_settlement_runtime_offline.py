@@ -1550,7 +1550,8 @@ def p41_ad_reports():
         v = store["asked"]
         assert v == {"startDate": 20260701, "endDate": 20260731, "campaignIds": ["105108858", "1"], "reportType": "pa",
                      "dateGroup": "daily", "granularity": "keyword", "excludeIfNoClickCount": False}, v
-        assert got == [AD.CMG_EXCEL.format(y=2026, m=6), AD.CMG_EXCEL.format(y=2026, m=7)], got        # 광고비 내역은 바로
+        assert got == [u.format(y=2026, m=m) for m in (6, 7) for u in (AD.CMG_EXCEL, AD.MILK_EXCEL)], got   # 광고비·밀크런 내역은 바로
+        assert (folder / "벅스-bux1004_밀크런_202606.xlsx").exists()
         assert (folder / "벅스-bux1004_광고비내역_202607.xlsx").read_bytes().startswith(b"PK")
         assert s1["요청"] == ["202607"] and s1["캠페인 없음"] == ["202606"], s1
         st = json.loads((folder / "벅스-bux1004_광고.json").read_text(encoding="utf-8"))
@@ -1568,7 +1569,39 @@ def p41_ad_reports():
         calls.clear()
         s4 = AD.collect(call, get_bytes, folder, "벅스-bux1004", D("2026-06-10"), D("2026-08-07"))
         assert calls == [] and got == [] and not s4["받을 것"], (calls, got, s4)                     # 다 받았으면 광고센터 안 엶
-    ok("끝난 달+3일·광고비 내역 엑셀 바로·캠페인 전부로 보고서 요청·진행 중=기다림·완료=받기·캠페인 없는 달 기록·다 받으면 호출 없음")
+    ok("끝난 달+3일·광고비·밀크런 내역 엑셀 바로·캠페인 전부로 보고서 요청·진행 중=기다림·완료=받기·캠페인 없는 달 기록·다 받으면 호출 없음")
+
+
+def p42_inbound():
+    print("[P42] 로켓그로스 입고 내역(D-116 ③⑤) — 밀크런번호·상품별 요청/적치 수량 · 쪽 끝까지 · 필요한 칸만")
+    from coupang_analytics import settlement_verify_collect as VC
+    # 실측(벅스 2026-10-26): GET /tenants/rfm-inbound/data/inbound/search?pagingSize&pageIndex(0부터) → content[34]·pagination
+    # {currentPage,totalPages,totalElements} · milkrunSeq = 밀크런 엑셀 '밀크런번호'(11322007 = 10/14) · 실제 입고 = stowedQty
+    # (receivedQty 0) · shipmentId 는 19자리(JS 숫자 범위 밖 → 파이썬 json 그대로 정수).
+    ship = {"shipmentId": 1113306920199917568, "milkrunSeq": "11322007", "shipmentType": "MILKRUN_PALLET",
+            "createdAt": 1791000000000, "fcCode": "INC4", "updatedBy": "bux1004", "truckShipmentInfo": {"driver": "x"},
+            "milkrunShipmentInfo": {"pickupDateYYYYMMDD": "20261014", "milkrunSeq": "11322007", "weight": 150},
+            "latestShipmentStatus": {"statusId": "STOWED", "shipmentCancelled": False, "internalLifecycleStatus": "DONE",
+                                     "updatedBy": "System"},
+            "skuDetails": [{"receivedQty": 0, "stowedQty": 124, "plannedSku": {"vendorItemId": 95501572184, "requestedQty": 124,
+                                                                             "cachedSkuName": "보냉백", "barcode": "88"}}]}
+    seen: list = []
+
+    def call(method, path, body):
+        if path.startswith(VC.INBOUND):
+            q = dict(x.split("=", 1) for x in path.split("?", 1)[1].split("&"))
+            seen.append(q["pageIndex"])
+            return {"content": [{**ship, "shipmentId": int(q["pageIndex"])}], "pagination": {"currentPage": int(q["pageIndex"]),
+                                                                                            "totalPages": 2, "totalElements": 2}}
+        return {}
+    d = VC.collect(call, lambda url: None, D("2026-08-01"), D("2026-08-03"))
+    ib = d["inbound"]
+    assert seen == ["0", "1"] and [x["shipmentId"] for x in ib] == [0, 1], (seen, ib)
+    assert ib[0] == {"shipmentId": 0, "milkrunSeq": "11322007", "shipmentType": "MILKRUN_PALLET", "createdAt": 1791000000000,
+                     "fcCode": "INC4", "pickupDate": "20261014", "statusId": "STOWED", "cancelled": False,
+                     "skus": [{"vendorItemId": 95501572184, "skuName": "보냉백", "requestedQty": 124, "receivedQty": 0,
+                               "stowedQty": 124}]}, ib[0]
+    ok("밀크런번호·픽업일·상태·상품(옵션ID·요청/입고/적치 수량)만 · 0쪽부터 끝까지")
 
 
 def main():
@@ -1604,6 +1637,7 @@ def main():
     p39_favorable_refund()
     p40_orphan_ship_returns()
     p41_ad_reports()
+    p42_inbound()
     print("정산 런타임 오프라인 검증 통과")
 
 
