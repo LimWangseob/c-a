@@ -237,6 +237,12 @@ def pin_sale_status_accurate():
     # 계정목록이 아니라 상품블록 '판매상태' 지표행(sale_status)에만 표기 → status_of 는 productStatus 미반영.
     _check(wb.status_of(BIZ, "임시상품") != "임시저장", "status_of(계정목록)=대장상태만(productStatus 미표기)")
     _check(wb.rank_suppressed(BIZ, "임시상품"), "임시저장 → 순위 제외(rank_suppressed)")
+    # D-114(소유자 2026-10-26 "승인반려인 경우에도 노출순위는 조회되어야 함"): 승인반려 = 순위 조사(제외 아님)
+    wb.ensure_product_block(BIZ, "반려상품", config.KIND_PERSONAL, ["kw"], registered="반려상품")
+    wb.set_product_vids(BIZ, "반려상품", ["vidR"])
+    wb.apply_sale_status(BIZ, {"vidR": "승인반려"})
+    _check(wb.sale_status(BIZ, "반려상품") == "승인반려", "apply_sale_status: 승인반려 보존")
+    _check(not wb.rank_suppressed(BIZ, "반려상품"), "승인반려 → 순위 조사(rank_suppressed 아님·D-114)")
 
 
 def pin_group_fill_alternation():

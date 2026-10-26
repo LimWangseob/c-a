@@ -649,7 +649,7 @@ def _rank_todo(wb, biz, pname, date):
     생략: 수집주기 밖·판매중지(rank_suppressed)·키워드 없음(2차 옵션)·다 채움. vids = sibling_vids(전 옵션·아이템위너)."""
     if wb.has_marketing() and not wb.product_due(biz, pname, date)[0]:
         return None                        # 상품 수집 주기(마케팅 상품만 매일) — 오늘 대상 아니면 순위도 생략
-    if wb.rank_suppressed(biz, pname):     # 판매중지·임시저장·승인반려·대장취소선 → 순위 제외(소유자 2026-09-22)
+    if wb.rank_suppressed(biz, pname):     # 판매중지·임시저장·검토중·대장취소선 → 순위 제외(승인반려는 조사·D-114)
         return None
     keywords = wb.product_keywords(biz, pname)
     if not keywords:                       # 2차 옵션 블록(키워드 없음)은 순위 대상 아님

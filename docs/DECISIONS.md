@@ -989,3 +989,10 @@ un_log_*.log`)로 확인 필요.
 - 영향 범위: `gsheet.py`(sheet_link) · `gsheet_index.py`(_product_cell·_auto_cells_request·_build_requests_for_plan·_full_build_requests·sync_index) · `gsheet_stats.py`(_cell_value·worksheet_to_requests·push_statistics) · 시험 3종·핀 · `designs/GSHEET_UNIFIED.md`. HQ R0_DATA_CONTRACT: 링크 형식만 바뀜(시트·열 구조 동일).
 - 상태: ACTIVE
 
+### D-114 [RANK_INCLUDE_REJECTED] 쿠팡 판매상태 '승인반려' 상품도 노출순위 조사 — 순위 제외는 판매중지·임시저장·검토중·대장 취소선만 (2026-10-26, R51)
+- 결정: ③ 노출순위 조사 대상에서 빼는 쿠팡 판매상태(`workbook_common._NOT_SELLING_STATUSES`)에서 '승인반려'를 뺀다 → 승인반려 상품은 순위를 잰다. 판매중지·임시저장·검토중·대장 취소선(숨김)은 지금처럼 제외. 판매 정보 수집은 원래부터 상태와 무관.
+- 근거: 소유자 2026-10-26 "승인반려인 경우에도 노출순위는 조회되어야 함". 실측(output(26)·결과 시트): 휴라엘 '디프 노브라 누드브라 실리콘 니플패치 원형 10매'(vid 96205126338) 판매상태 10.20 판매중 → 10.21~ 승인반려, 노출순위 10.21~10.25 빈 칸(③ 로그에 이 상품 순위 줄 없음 = rank_suppressed). 시험 pin_apply_style S7(승인반려 → 순위 조사) 재현→수정→통과.
+- 버린 대안: 빈 칸 대신 '순위 제외(승인반려)' 표시만(소유자 요구 = 조사).
+- 영향 범위: `workbook_common.py`(_NOT_SELLING_STATUSES) · `workbook_meta.rank_suppressed` 설명 · `pipeline_ranks` 주석 · `tools/pin_apply_style.py` · CLAUDE.md 운영 정책 줄. D-084(대표 판매중지여도 옵션 판매중이면 순위)와 무관 — 그대로. 순위 키워드 수가 승인반려 상품만큼 늘어남(③ 시간 소폭 증가).
+- 상태: ACTIVE (2026-09-22 '판매중/부분판매중만 순위' 중 승인반려 부분을 대체)
+
