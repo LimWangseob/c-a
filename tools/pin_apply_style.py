@@ -184,7 +184,7 @@ def pin_marketing_fill():
     wb = _build()
     wb.ensure_product_block(BIZ, "자동체험", config.KIND_PERSONAL, ["kwP"], registered="자동체험")
     wb.set_product_vids(BIZ, "자동체험", ["vidP"])
-    wb.set_promo_start(BIZ, "자동체험", "2026-09-14")    # 관리대장 '체험단' 시트 요청일(자동)
+    wb.set_promo_start(BIZ, "자동체험", "2026-09-14")    # 관리대장 '체험단' 시트 체험단시작일(자동·D-122)
     for d in range(12, 22):
         wb.ensure_date(BIZ, f"2026-09-{d:02d}")
     wb.apply_style()

@@ -5,7 +5,7 @@
     F 회사보유재고(칸 안 줄바꿈) | G 그로스재고(헤더 2줄 '그로스재고' + '(자동갱신 MM.DD)') | H 체험단 시작일 |
     I 체험단효과 · 행 고정 2(제목·헤더 — 매 동기화 보정)
 
-- **전 열 자동**(프로그램이 씀·H 체험단 시작일=관리대장 '체험단' 시트 요청일 D-087). 직원 입력 열 없음(D-109).
+- **전 열 자동**(프로그램이 씀·H 체험단 시작일=관리대장 '체험단' 시트 체험단시작일 칸 D-087·D-122). 직원 입력 열 없음(D-109).
 - 옛 시트는 sync 시 자동 이전(`_ensure_status_layout`): '모니터링 종료일'(D-106)·'체험단 종료일'(D-109) 열 삭제(지운 값
   개수 로그) → 상태 열을 상품명 오른쪽으로 이동(값·메모·서식 그대로).
 - 회사보유재고(E)·그로스재고(F)는 2026-09-29 추가(상품명 오른쪽). 기존 시트는 sync 시 상품명 오른쪽에 **빈 열 2개 삽입**으로 자동 마이그레이션(마케팅·상태·체험단효과 값·메모·서식이 오른쪽으로 밀려 새 위치와 정확히 일치).
@@ -72,7 +72,7 @@ class IndexRow:
     promo_verdict: str = ""  # 판정: 'up'(개선=초록)·'down'(악화=적색)·''(혼조/무변화=밴드색)
     company_stock: str = ""  # E 회사보유재고(판매자배송 자체재고 '창고 , 수량개'). 없으면 공란
     growth_inv: object = ""  # F 그로스재고(로켓그로스 최신 숫자). 없으면 공란
-    promo_start: str = ""    # G 체험단 시작일(자동 — 관리대장 '체험단' 시트 요청일·D-087). 없으면 공란
+    promo_start: str = ""    # G 체험단 시작일(자동 — 관리대장 '체험단' 시트 체험단시작일 칸·D-087·D-122). 없으면 공란
 
 
 @dataclass
@@ -205,7 +205,7 @@ def _auto_cells_request(sheet_id: int, grid_row: int, row: IndexRow, doc_id: str
             "fields": "userEnteredValue,userEnteredFormat.backgroundColor,userEnteredFormat.horizontalAlignment",
         }
     }
-    start = {                                    # H 체험단 시작일(자동 — 체험단 시트 요청일·없으면 비움, D-087)
+    start = {                                    # H 체험단 시작일(자동 — 체험단 시트 체험단시작일 칸·없으면 비움, D-087·D-122)
         "updateCells": {
             "start": {"sheetId": sheet_id, "rowIndex": grid_row, "columnIndex": COL_MKT_START},
             "rows": [{"values": [_s(row.promo_start) if row.promo_start else {}]}],

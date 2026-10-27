@@ -1751,21 +1751,24 @@ def t1_promo_effect():
 
 
 def t1_promo_sheet_start():
-    print("[13b] 관리대장 '체험단' 시트 → 체험단 시작일 자동(D-086) — 링크 VID 로 블록·최근 회차·수집 주기 불변")
+    print("[13b] 관리대장 '체험단' 시트 → 체험단 시작일 자동(D-086·D-122) — '체험단시작일' 칸·링크 VID 로 블록·최근 회차·수집 주기 불변")
     from coupang_analytics import promo_sheet as PS
-    # 실측 시트 모양(10-19): 1행 제목·3행 헤더·요청일 '26.08.11'·링크에 vendorItemId
+    # 실측 시트 모양(10-27): 1행 제목·3행 헤더·요청일 '26.08.11'(업체 의뢰일 — 시작일 아님)·체험단시작일 '9.17'(년도 없음)
     rows = [["체험단 진행 명단"], [],
-            ["열1", "요청일", "고객", "상호", "제품명", "링크", "키워드", "판매가", "리뷰/택배", "건수"], [],
-            ["1", "26.08.11", "대표A", "가게P", "기저귀가방", "https://www.coupang.com/vp/products/111?itemId=9&vendorItemId=8001", "기저귀가방"],
-            ["2", "26.09.15", "대표A", "가게P", "기저귀가방", "https://www.coupang.com/vp/products/111?vendorItemId=8001", "기저귀가방 토트백"],
-            ["3", "26.09.01", "대표A", "가게P", "상품P", "https://www.coupang.com/vp/products/222", "kw1"],   # 상품번호만
-            ["4", "26.09.20", "대표B", "모르는가게", "없는상품", "https://www.coupang.com/vp/products/999?vendorItemId=8999", "x"],
-            ["5", "", "대표C", "가게P", "날짜없음", "https://www.coupang.com/vp/products/111?vendorItemId=8001", "x"],   # 요청일 없음 → 제외
-            ["6", "26.09.21", "대표D", "가게P", "링크없음", "", "x"]]                                                   # 링크 없음 → 제외
+            ["열1", "요청일", "고객", "상호", "제품명", "링크", "키워드", "포토/텍스트", "체험단시작일", "완료여부"], [],
+            ["1", "26.08.11", "대표A", "가게P", "기저귀가방", "https://www.coupang.com/vp/products/111?itemId=9&vendorItemId=8001", "기저귀가방", "텍스트", "8.20", "완료"],
+            ["2", "26.09.10", "대표A", "가게P", "기저귀가방", "https://www.coupang.com/vp/products/111?vendorItemId=8001", "기저귀가방 토트백", "텍스트", "9.15", "완료"],
+            ["3", "26.08.25", "대표A", "가게P", "상품P", "https://www.coupang.com/vp/products/222", "kw1", "텍스트", "09.01 완료", ""],   # 상품번호만·옛 진행여부 표기
+            ["4", "26.09.20", "대표B", "모르는가게", "없는상품", "https://www.coupang.com/vp/products/999?vendorItemId=8999", "x", "", "9.22", ""],
+            ["5", "26.09.25", "대표C", "가게P", "시작일없음", "https://www.coupang.com/vp/products/111?vendorItemId=8001", "x", "", "", ""],   # 요청일만 → 제외
+            ["6", "26.09.21", "대표D", "가게P", "링크없음", "", "x", "", "9.21", ""],                                                   # 링크 없음 → 제외
+            ["7", "", "대표E", "가게P", "완료만", "https://www.coupang.com/vp/products/111?vendorItemId=8001", "x", "", "완료", ""]]  # 날짜 없음 → 제외
     promo = PS.parse_promo_rows(rows)
     assert [(p.date_iso, p.vid, p.pid) for p in promo] == [
-        ("2026-08-11", "8001", "111"), ("2026-09-15", "8001", "111"), ("2026-09-01", "", "222"),
-        ("2026-09-20", "8999", "999")], promo
+        ("2026-08-20", "8001", "111"), ("2026-09-15", "8001", "111"), ("2026-09-01", "", "222"),
+        ("2026-09-22", "8999", "999")], promo
+    assert PS.parse_promo_rows([["요청일", "링크"], ["26.09.01", "https://www.coupang.com/vp/products/1"]]) == [],         "체험단시작일 칸 없는 시트 = 요청일로 대신하지 않음"
+    assert PS._start_iso("1.05", "2026-12-20") == "2027-01-05", "연말 요청·연초 시작 = 다음 해"
     wb = OutputWorkbook.empty()
     wb.ensure_product_block("가게P", "기저귀 백팩 (베이비)", config.KIND_CONTRACT, ["기저귀가방"], registered="기저귀가방 CL01")
     wb.set_product_vids("가게P", "기저귀 백팩 (베이비)", ["8000"])
@@ -1799,7 +1802,7 @@ def t1_promo_sheet_start():
     assert wb2.promo_start_of("가게P", "상품P") == "2026-09-01"
     PS.apply_promo_starts(wb, [], lambda m: None)                                            # 체험단 시트 비면 자동값 지움
     assert wb.promo_start_of("가게P", "상품P") == "" and wb.promo_start_of("가게P", "기저귀 백팩 (베이비)") == ""
-    _ok("체험단 시트: 요청일·링크 VID/상품번호 해석 · 옵션→대표 블록 · 최근 회차 · 직원 입력 우선 · 수집 주기 불변")
+    _ok("체험단 시트: 체험단시작일(빈 칸 제외·요청일 미사용)·링크 VID/상품번호 해석 · 옵션→대표 블록 · 최근 회차 · 직원 입력 우선 · 수집 주기 불변")
 
 
 def t1_apply_style_migrations():

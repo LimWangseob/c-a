@@ -142,7 +142,7 @@ P.append("""
 <table>
  <tr><th>결과 파일에 보이는 것</th><th>원천</th><th>고치는 사람</th></tr>
  <tr><td>계정·상품 목록, 대표자·사업자·계정ID, 판매중지 여부</td><td><span class="name">[셀독] 관리 대장</span> › <span class="tab">셀독리스트</span></td><td>직원</td></tr>
- <tr><td>체험단 시작일</td><td><span class="name">[셀독] 관리 대장</span> › <span class="tab">체험단</span> 시트의 요청일</td><td>직원</td></tr>
+ <tr><td>체험단 시작일</td><td><span class="name">[셀독] 관리 대장</span> › <span class="tab">체험단</span> 시트의 체험단시작일</td><td>직원</td></tr>
  <tr><td>회사보유재고</td><td><span class="name">[재고] 현황</span> 의 '현재고'</td><td>직원</td></tr>
  <tr><td>판매량·방문자·노출량·판매금액·수량</td><td>쿠팡 WING 각 계정 판매분석(전일 자료)</td><td>자동</td></tr>
  <tr><td>재고현황·그로스재고·판매상태·판매가</td><td>쿠팡 WING 각 계정 재고·상품 정보</td><td>자동</td></tr>
