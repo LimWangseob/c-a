@@ -675,7 +675,7 @@ un_log_*.log`)로 확인 필요.
 - 근거: 소유자 2026-10-16 "로그인 재시도후 오류이면 해당일 재시도 하지 않음", "결과시트 판매현황에 '로그인 비밀번호 오류'와 같이 간단히 사유 명시". 실측 output(22)·capture.zip: 같은 틀린 값 재제출 plan_it 26회(09-28~)·gyi0101 13회(10-13~·앱 5+정산 8)·dalbong1849 첫 값 14회 — 실행 안 재시도만 막혀 있었음. 캡처 259건 분류: lslfgh 59건·nihaoha 16건·nicoable 2건 = 전부 '2단계 인증(휴대폰번호로 인증하기)' 화면인데 앱은 '인증 전환 중'으로 보고 매번 시간초과 후 '세션만료+Akamai차단'으로 보고(사실과 다름). 10-15 요약 '성공 27/28·실패 하성진 1'인데 플랜잇·유라이프도 미수집. 재현: 핀 D2(같은 날 2회차 자동입력 1회 기대) 옛 코드 실패 → 수정 → 통과 · 핀 E2(실측 화면 글자 → otp) · 판매현황 T4 사유 표시.
 - 버린 대안: 같은 값만 영구 금지(다음 날 계정 상태가 풀려도 시도 안 함 — 소유자 '해당일'과 다름) · 그날 계정 전체 금지(대장 비번을 고쳐도 다음 날까지 못 받음) · 비밀번호 sha256 저장(output 폴더가 분석용으로 밖에 보내짐 — 약한 비번 역산 위험 → PC 전용 키 HMAC).
 - 영향 범위: 신규 `src/coupang_analytics/login_today.py` · `pipeline_sales.py`(_fresh_login·_ensure_login·_resolve_login_failure) · `browser.py`(classify_login 2단계 화면) · `pipeline.py`(① 끝 사유 로그·완료 줄) · `workbook_sales.py`(소계 사유) · `tools/pin_login_ranks.py` 핀 D2·E2 · `tools/verify_sales_summary_offline.py` T4. 정산 프로그램은 같은 `_ensure_login` 을 써서 자동 적용. HQ 포팅 대상.
-- 상태: ACTIVE
+- 상태: ACTIVE · '그날(달력 날짜)' 부분은 SUPERSEDED by D-123(거부 시각부터 24시간)
 
 ### D-069 [REGISTRY_CHECK_PENDING_RENAME] 원장 상품명 변경 '확인필요' 중 = 쿠팡확인을 옛 이름 줄에 기록 (2026-10-16, R13)
 - 결정: 원장 상품이력에 승인·반려 안 된 '상품명변경'(확인필요)이 있으면, 대장 새 이름으로 계산한 쿠팡확인·확인일을 **원장 옛 이름 줄**에 쓴다(`registry_gsheet._pending_renames` → `_plan_checks` 별칭). 이름 변경 보류·승인 규칙(LEDGER_REGISTRY §6)은 그대로 — 승인하면 그 줄이 새 이름으로 이어진다.
@@ -1056,3 +1056,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 체험단시작일 비면 요청일로 대신(소유자 '공란은 제외') · '완료여부' 칸 사용(날짜 없음).
 - 영향 범위: `promo_sheet.py`(`_START_COL`·`_start_iso`·`parse_promo_rows`) · `tools/verify_offline.py` [13b] · 설명 문구(`gsheet_index.py` 주석·`tools/build_staff_manual.py`·`tools/pin_apply_style.py` 주석·DESIGN·CLAUDE.md). 운용 PC = 새 zip 설치 전엔 밤 실행이 요청일 기준으로 되돌림. HQ 포팅 대상.
 - 상태: ACTIVE — D-086 의 '시작일 = 요청일' 부분을 대체(SUPERSEDED by D-122 표기는 D-086 상태 줄에)
+
+### D-123 [LOGIN_PW_TRIM_ALL_AND_24H_BLOCK] 비밀번호 앞뒤 공백 떼기 = 앱·정산·전환자 확인 공통 · 거부된 값은 거부 시각부터 24시간 다시 넣지 않음(달력 날짜 기준 폐지) (2026-10-27, R69)
+- 결정(소유자 2026-10-27 "대장은 성공했는데 정산은 실패한 원인 파악 … 둘 다 고치고"): (1) 공용 로그인 `pipeline_sales._login_with_candidates` 가 후보마다 앞뒤 공백을 떼고 공백만 다른 값은 하나로 합친다 — 앱 ①·정산·셀독전환자 확인 모두 같은 함수. 정산 `settlement_accounts.login_passwords` 도 대장 저장값·원장 값을 공백 뗀 뒤 비교(같으면 1개)·설명 문구 '정산 계정 파일' → '원장'(D-103 이후 실제 출처). 원장은 계속 대장 원문 그대로 저장(로그인 때만 뗌). (2) D-068 '그날 다시 넣지 않음'을 **거부 시각부터 24시간**으로 바꾼다(`login_today.BLOCK_HOURS`·지문별 거부 시각 `fp_at`·옛 기록 fps 는 at 을 거부 시각으로 읽음). 고친 값은 지금처럼 바로 시도. 로그인 실패 사유 표시(reasons_today)는 그대로 날짜 기준.
+- 근거: output(27) 실측 — (DW)커머스 dalbong1849 대장 41행=값1(틀림)·40·43~50행=값2(맞음, 앞뒤 공백). 앱 ① 18:21 값1 거부 → 값2(공백 뗌·D-018) 성공. 정산 02:26 후보 = 저장값(대장 첫 후보=값1) + 원장 값(대장 40행 원문 = 값2+공백) → 둘 다 거부. 원장 백업 비교(값 미출력): 원장 값 ≠ 값2, 공백 떼면 = 값2. 원장 34계정 중 공백 계정 = dalbong1849·plan_it. 자정 문제: plan_it 22:32 2회 → 04:33 2회(6시간에 틀린 입력 4회)·unipang 23:39 → 05:58·dalbong 18:21 → 02:26 2회 — 달력 날짜가 바뀌어 같은 밤 정산이 다시 넣음(쿠팡 5회 오류 = 잠금). 재현: verify_offline [37]·verify_settlement P33·핀 D2 새 항목이 옛 코드에서 실패 → 수정 → 통과. 실데이터 시뮬: 수정 뒤 dalbong 정산 후보 2번째 = 앱 ① 성공 값 · 어젯밤 기록으로 plan_it·unipang·dalbong·wavetech = 10-28 02:00 에도 막힘(24시간 안)·gbseller808(00:04 거부) = 10-28 02:00 다시 시도 가능.
+- 버린 대안: 운영일(18:00 기준) 날짜로 바꾸기(오후 수동 실행에서 1시간 만에 다시 넣는 경계 남음) · 원장에 공백 뗀 값 저장(원장 원문 보존 원칙 LEDGER_REGISTRY §9 와 충돌) · 대장만 고치기(같은 실수 재발).
+- 영향 범위: `login_today.py`(`_blocked`·`record_failure/record_success/refused_today` now 인자) · `pipeline_sales.py`(후보 정리·막힘 문구) · `settlement_accounts.py` · `tools/settlement_download.py` 주석 · 시험 3종(verify_offline [37]·verify_settlement P33·pin_login_ranks D2). HQ 포팅 대상(로그인 공통).
+- 상태: ACTIVE — D-068 의 '그날(달력 날짜)' 부분을 대체(SUPERSEDED by D-123 표기는 D-068 상태 줄에) · D-018 적용 범위를 정산·전환자 확인까지 넓힘

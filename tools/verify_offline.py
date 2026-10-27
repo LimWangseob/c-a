@@ -815,6 +815,12 @@ def t1_login_pw_candidates():
         except PS.LoginCredentialError:
             pass
         assert tried == ["X1", "X2"], "후보 2개 모두 거부 = 2회만 제출"
+        tried.clear()   # D-123: 정산·전환자 확인도 앱 ①처럼 앞뒤 공백 떼고 입력(원장 원문 공백 → 정산만 거부된 실측 dalbong1849)
+        assert PS._login_with_candidates(_B(), acc, [" OLD ", "NEW  "], logs.append, login=True, semi=False) is True
+        assert tried == ["OLD", "NEW"], f"앞뒤 공백 떼고 입력: {tried}"
+        tried.clear()
+        assert PS._login_with_candidates(_B(), acc, ["NEW", " NEW "], logs.append, login=True, semi=False) is True
+        assert tried == ["NEW"], f"공백만 다른 같은 값 = 한 번만: {tried}"
     finally:
         PS._ensure_login, PS._fresh_login = old
     _ok("거부 시 다른 줄 값으로 1회 더·성공 로그·후보 1개=재시도 없음·모두 거부=최대 2회 후 실패")

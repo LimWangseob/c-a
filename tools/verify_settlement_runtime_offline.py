@@ -1315,7 +1315,11 @@ def p33_login_password_source():
     assert pws == ["pw-f"] and "관리대장에 없음" in note, note                                   # 대장에 없는 계정(디프 등)
     assert SA.login_passwords(acc("none", ""), st) == ([], "비밀번호 없음")
     assert "pw" not in note                                                                   # 값은 설명에 안 씀
-    ok("관리대장 값 우선·다르면 대장→파일 순서(최대 2)·대장에 없는 계정은 파일 값·값 노출 없음")
+    # D-123: 원장 비밀번호는 대장 원문(앞뒤 공백 포함) — 앱 ①처럼 공백 떼고 비교·입력(실측 dalbong1849 정산만 거부)
+    assert SA.login_passwords(acc("diff", " pw-new  "), st) == (["pw-new"], "관리대장"), "공백만 다르면 같은 값 1개"
+    assert SA.login_passwords(acc("nofile", " pw-f "), st)[0] == ["pw-f"], "원장 값 앞뒤 공백 뗌"
+    assert "원장" in SA.login_passwords(acc("diff", "pw-old"), st)[1], "설명 = 원장(옛 '계정 파일' 문구 아님)"
+    ok("관리대장 값 우선·다르면 대장→원장 순서(최대 2)·대장에 없는 계정은 원장 값·앞뒤 공백 뗌·값 노출 없음")
 
 
 def p32_evidence_rules():

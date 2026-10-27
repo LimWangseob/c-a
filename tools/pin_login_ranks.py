@@ -263,8 +263,8 @@ def _run_login_pw(pw: str):
 
 
 def pin_pw_refused_same_day():
-    print("[핀 D2] 거부된 비밀번호는 그날 다시 넣지 않음·고친 값은 바로 시도·다음 날 다시(D-068)")
-    from datetime import date, timedelta
+    print("[핀 D2] 거부된 비밀번호는 거부 뒤 24시간 다시 넣지 않음·고친 값은 바로 시도·24시간 지나면 다시(D-068·D-123)")
+    from datetime import date, datetime, timedelta
     from coupang_analytics import login_today as LT
     LT._path(None).unlink(missing_ok=True)
     _SPEC.clear(); _COUNT.clear()
@@ -286,10 +286,15 @@ def pin_pw_refused_same_day():
     acct = _run_login_pw("pw-고친값")[0]
     _check(acct is not None and _COUNT.get("autofill", 0) == 2, "대장에서 고친 값은 같은 날 바로 시도·로그인되면 수집")
     _check(LT.reasons_today() == {} and LT.refused_today("pin1", "pw"), "로그인 되면 사유 지움·거부된 옛 값은 그날 계속 막음")
-    data = LT._load(None)
-    data["pin1"]["date"] = (date.today() - timedelta(days=1)).isoformat()
-    LT._save(None, data)
-    _check(not LT.refused_today("pin1", "pw"), "다음 날엔 다시 시도")
+    # D-123: 막는 기간 = 거부 시각부터 24시간(자정 넘는 밤 실행이 다시 넣던 결함 — 실측 plan_it 22:32→04:33 재제출)
+    now = datetime.now()
+    _check(LT.refused_today("pin1", "pw", now=now + timedelta(hours=23)), "거부 뒤 23시간(날짜 바뀜) = 아직 막음")
+    _check(not LT.refused_today("pin1", "pw", now=now + timedelta(hours=25)), "24시간 지나면 다시 시도")
+    night = datetime.combine(date.today(), datetime.min.time()) - timedelta(hours=1, minutes=28)   # 어제 22:32
+    LT.record_failure("pin2", LT.PW_WRONG, "pw2", now=night)
+    _check(LT.refused_today("pin2", "pw2", now=night + timedelta(hours=4)), "어제 22:32 거부 → 오늘 02:32 정산도 다시 넣지 않음")
+    LT.record_success("pin2", now=night + timedelta(hours=4))
+    _check(LT.refused_today("pin2", "pw2", now=night + timedelta(hours=5)), "다른 값으로 로그인돼도 거부된 값은 24시간 막음")
 
 
 def pin_login_reason_otp():

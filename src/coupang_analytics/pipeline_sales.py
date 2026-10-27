@@ -202,7 +202,9 @@ def _pw_list(v) -> list:
 
 def _login_with_candidates(b, a: Account, pws: list, log, *, login: bool, semi: bool) -> bool:
     """관리대장 비번 후보를 차례로 — 첫 값은 평소 로그인(_ensure_login), **'비밀번호가 다릅니다'(LoginCredentialError)
-    일 때만** 다음 값으로 1회 더(소유자 2026-10-09 D-012). 후보가 1개면 지금과 똑같다(재시도 없음). 모두 거부면 그대로 raise."""
+    일 때만** 다음 값으로 1회 더(소유자 2026-10-09 D-012). 후보가 1개면 지금과 똑같다(재시도 없음). 모두 거부면 그대로 raise.
+    앞뒤 공백은 떼고 입력·공백만 다른 값은 하나로(D-018 을 정산·전환자 확인까지 — D-123 원장 원문 공백으로 정산만 거부)."""
+    pws = list(dict.fromkeys((p.strip() or None) if isinstance(p, str) else p for p in pws)) or [None]
     for k, pw in enumerate(pws):
         try:
             if k == 0:
@@ -247,9 +249,9 @@ def _fresh_login(b, a: Account, pw, log, unattended: bool) -> bool:
     """신선 로그인(세션 없음) — 자동입력·대기·반자동 1회 재시도·실패분류·성공 안착.
 
     반환 True/False, 예외 LoginBlocked/LoginCredentialError 는 _ensure_login 규약과 동일."""
-    if pw and _refused_today(a, pw, log):   # D-068: 오늘 거부된 값은 그날 다시 넣지 않음
-        log(f"  [{a.label}] ⛔ 이 비밀번호는 오늘 이미 쿠팡에서 거부됨 — 오늘은 다시 넣지 않음(계정 잠금 방지·D-068). "
-            "관리대장(정산은 계정 파일) 비밀번호를 고치면 바로 다시 시도합니다")
+    if pw and _refused_today(a, pw, log):   # D-068·D-123: 거부된 값은 거부 시각부터 24시간 다시 넣지 않음
+        log(f"  [{a.label}] ⛔ 이 비밀번호는 최근 24시간 안에 쿠팡에서 거부됨 — 거부 뒤 24시간은 다시 넣지 않음"
+            "(계정 잠금 방지·D-068·D-123). 관리대장(정산은 원장) 비밀번호를 고치면 바로 다시 시도합니다")
         raise LoginCredentialError(a.account_id)
     shown = {"v": False}
 

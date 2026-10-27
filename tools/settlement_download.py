@@ -230,7 +230,7 @@ def session(a, hidden: bool, until: datetime | None = None):
     prof = account_profile(a.account_id)
     if _profile_busy(prof, until=until):
         raise SessionSkip("이 계정 Chrome 이 계속 실행 중(①판매수집 등) — 회차 끝/대기 시간 초과")
-    pws, src = SA.login_passwords(a)                      # 관리대장(앱 저장) 값 먼저 · 대장에 없으면 계정 파일 값
+    pws, src = SA.login_passwords(a)                      # 관리대장(앱 저장) 값 먼저 · 대장에 없으면 원장 값(D-103·D-123)
     if not pws:
         raise SessionSkip("비밀번호 없음(관리대장·정산 계정 파일 모두)")
     log(f"  [비번] {name_of(a)}: {src}")
