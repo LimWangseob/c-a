@@ -8,6 +8,7 @@
 - 이전 진입점(기록): [10-05](handoff-session-261005.md)·[10-04 설정URL분열](handoff-session-261004.md)·[09-30 H_ui](handoff-hui-ui-fixes-260930.md)·[운영대장4파일](handoff-operation-data-model-261001.md)·[아키텍처4계층](handoff-architecture-parallel-260928.md)·[도메인분리](handoff-domain-design-260928.md)
 
 ## 사업·범위·결정
+- [진행 중: 정산 공지방 377명 명단→계약자 현황 파일 대조·분류(10-27 새 세션 이관)](project-openchat-member-contract-match.md)
 - [⭐⭐사업 맥락: 커머스 판로·위탁관리·사업4종·채권자 370명/300억](business-context-consignment-creditors.md) · [앱 범위: 주문배송=샵마인·우리=등록+관리+통계+CS(D10)](app-scope-no-orders-shopmine.md)
 - [디자인 컨셉(보라)·통합앱 적용](decision-design-concept-261003.md) · [저장소=구글시트+규칙4](decision-storage-gsheet-4rules.md) · [입출력 정의서137칸](io-definition-spec.md)
 - [정산 D8 확정 사실(운용·API·규칙 — 상태는 STATE.md)](settlement-batch-download-decisions.md) · [정산 도메인 지식 D8](settlement-domain-knowledge.md) · [셀독계정상품이력관리원장(옛 셀독등록원장)=별도 파일만·대장 주소 금지(D-095·D-100)·정산 계정 출처=원장+정산전용계정 시트(D-103)](feature-ledger-registry.md)
