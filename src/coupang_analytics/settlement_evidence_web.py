@@ -16,6 +16,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import openpyxl
+from playwright.sync_api import Error as PwError
+from playwright.sync_api import TimeoutError as PwTimeout
 
 from . import settlement_evidence as EV
 from . import settlement_wing_api as API
@@ -28,6 +30,7 @@ PII_WORDS = ("주문자", "구매자명", "수취인")
 CFS_KINDS = ("부가서비스비", "입출고/배송비", "보관비", "반품 회수/재입고 비용", "반출비")
 SALES_MENUS = (("기간별 판매", "기간별판매"), ("상품별 판매", "상품별판매"))
 GAP = (6, 12)
+NAV_RETRIES = 4                                     # 광고센터 이동 중 evaluate 다시 시도 상한(처음 포함)
 _SET_VALUE = """([sel, v]) => { const e = document.querySelector(sel); if (!e) return false;
   const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(e, v);
   e.dispatchEvent(new Event('input', {bubbles: true})); e.dispatchEvent(new Event('change', {bubbles: true})); return e.value; }"""
@@ -274,6 +277,20 @@ def rg_ad_milkrun(T, b, label: str, start: date, end: date, out: Path) -> dict:
 
 
 # ── 광고센터 월별 광고비 정산내역 보고서 ─────────────────────────────
+def _eval_settled(T, q, js: str, arg=None):
+    """화면 이동 중 evaluate = 'Execution context was destroyed' — 이동이 끝나길 기다렸다 다시(NAV_RETRIES 번까지).
+    다른 오류는 바로 올림."""
+    for i in range(NAV_RETRIES):
+        try:
+            return q.evaluate(js, arg)
+        except PwError as exc:
+            if "Execution context was destroyed" not in str(exc) or i == NAV_RETRIES - 1:
+                raise
+            T.log(f"  광고센터 화면 이동 중 — 기다렸다 다시({i + 1}/{NAV_RETRIES - 1}) {q.url}")
+            q.wait_for_load_state("domcontentloaded")
+            time.sleep(3)
+
+
 def open_adcenter(T, b, label: str):
     """윙 메뉴 '광고센터' → 새 창(광고센터 로그인 유지) · 안내·동의 창은 닫기만. 반환 = 광고센터 페이지."""
     T.goto(b, API.WING_URL, label)
@@ -281,16 +298,21 @@ def open_adcenter(T, b, label: str):
         b.page.locator("a", has_text="광고센터").first.click()
     q = np.value
     q.wait_for_load_state("domcontentloaded")
+    try:                                             # 새 창 = relay/wing/home → marketing/dashboard 로 한 번 더 이동(실측)
+        q.wait_for_url(lambda u: "/relay/" not in u, timeout=30000)
+        q.wait_for_load_state("domcontentloaded")
+    except PwTimeout:
+        T.log(f"  광고센터 이동 대기 30초 넘음({q.url}) — 그대로 진행")
     time.sleep(8)
     for _ in range(6):                               # 안내·동의 창 = 오른쪽 위 글자 없는 닫기(X)만(동의·이동 버튼 안 누름)
-        closed = q.evaluate(_CLOSE_POPUP)
+        closed = _eval_settled(T, q, _CLOSE_POPUP)
         if not closed:
             break
         T.log(f"  광고센터 안내 창 닫음: {closed}")
         time.sleep(1.5)
     title = q.get_by_text("마케팅 활용 및 광고 수신", exact=True)   # 창 제목(배너 문장 안의 같은 말은 제외 — 실측 오인)
     if title.count() and title.first.is_visible():
-        T.log(f"  광고센터 동의 창 닫기: {q.evaluate(_CLOSE_TITLED, '마케팅 활용 및 광고 수신')}")
+        T.log(f"  광고센터 동의 창 닫기: {_eval_settled(T, q, _CLOSE_TITLED, '마케팅 활용 및 광고 수신')}")
         time.sleep(1.5)
     if title.count() and title.first.is_visible():
         raise RuntimeError("광고센터 마케팅 동의 창이 닫히지 않음 — 동의는 누르지 않고 중단")

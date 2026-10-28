@@ -1677,6 +1677,82 @@ def p43_collect_throttle_isolation():
     ok("광고 9개월 → 하루 최근 2개월·요청마다 쉼 / 환급·입고·반품 예상 밖 오류 = 그 항목만 조회 실패·차단은 중단")
 
 
+def p44_adcenter_navigation():
+    print("[P44] 광고센터 새 창 이동 중 evaluate(운용 PC 10-27 43계정 실패) — 최종 주소까지 기다리고 '실행 맥락 사라짐'은 쉬고 다시(상한)")
+    from playwright.sync_api import Error as PwError
+    from coupang_analytics import settlement_evidence_web as EW
+    gone = "Page.evaluate: Execution context was destroyed, most likely because of a navigation"
+
+    class Loc:
+        def __init__(self, n=0):
+            self.n, self.first = n, self
+
+        def click(self):
+            pass
+
+        def count(self):
+            return self.n
+
+    class Page:                                      # 윙 '광고센터' → relay/wing/home → marketing/dashboard 로 한 번 더 이동
+        def __init__(self, fails):
+            self.fails, self.url, self.evals = fails, "https://advertising.coupang.com/relay/wing/home", []
+
+        def wait_for_load_state(self, state="load", timeout=None):
+            pass
+
+        def wait_for_url(self, pred, timeout=None):
+            assert not pred("https://advertising.coupang.com/relay/wing/home")
+            self.url = "https://advertising.coupang.com/marketing/dashboard/sales"
+            assert pred(self.url)
+
+        def evaluate(self, js, arg=None):
+            self.evals.append(js)
+            if self.fails:
+                self.fails -= 1
+                raise PwError(gone)
+            return None                              # 닫을 안내 창 없음
+
+        def get_by_text(self, text, exact=False):
+            return Loc(0)
+
+    class Pop:
+        def __init__(self, q):
+            self.value = q
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class B:
+        def __init__(self, q):
+            self.page = type("P", (), {"locator": lambda s, *a, **k: Loc()})()
+            self.context = type("C", (), {"expect_page": lambda s, timeout=None: Pop(q)})()
+
+    T = type("T", (), {"goto": staticmethod(lambda b, url, label: None), "log": staticmethod(lambda m: None)})
+    sleep = EW.time.sleep
+    EW.time.sleep = lambda s: None
+    try:
+        q = Page(fails=2)
+        assert EW.open_adcenter(T, B(q), "벅스") is q
+        assert q.evals == [EW._CLOSE_POPUP] * 3 and "marketing/dashboard" in q.url, (q.evals, q.url)  # 2번 사라짐 → 3번째 정상
+        q = Page(fails=99)
+        expect(PwError, lambda: EW.open_adcenter(T, B(q), "벅스"), "계속 사라지면 상한 뒤 오류")
+        assert len(q.evals) == EW.NAV_RETRIES, len(q.evals)
+        q = Page(fails=0)
+
+        def other(js, arg=None):
+            q.evals.append(js)
+            raise PwError("Page.evaluate: TypeError: x is not a function")
+        q.evaluate = other
+        expect(PwError, lambda: EW.open_adcenter(T, B(q), "벅스"), "다른 오류는 다시 안 함")
+        assert len(q.evals) == 1, q.evals
+    finally:
+        EW.time.sleep = sleep
+    ok("relay → 최종 주소 기다림 · 이동 중 사라짐 = 쉬고 다시(상한 NAV_RETRIES) · 다른 오류는 바로 올림 · 동의·이동 버튼 안 누름(닫기 JS만)")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -1712,6 +1788,7 @@ def main():
     p41_ad_reports()
     p42_inbound()
     p43_collect_throttle_isolation()
+    p44_adcenter_navigation()
     print("정산 런타임 오프라인 검증 통과")
 
 

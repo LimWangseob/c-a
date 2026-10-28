@@ -1070,3 +1070,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 판매금액에 '정산 중 포함' 문구만(혼란) · 2번 표를 정산 확정/예정으로 나눔(쿠팡 70%/30% 지급 때문에 확정분에도 입금 예정이 섞여 '받은 돈/받을 돈'이 안 나옴) · 계정 실제 입금 비율 한 번 배분(세부 내역 없음·판매 달별 관리 비율 차이 무시).
 - 영향 범위: git 밖 `output\_분석_261013\정산스크립트\statement_managed.py`(shown·status_split·managed_lines·book) — 견본 `D:\토탈셀러\쿠팡 정산 자료\정산서_견본_261026\정산서_샘플_니코에이블_한상현_관리상품_261027_v5.xlsx`. 전 계정 정산서 폴더(`위탁정산서_20261018기준_관리상품\`)는 아직 옛 양식 — 다시 만들어야 함.
 - 상태: ACTIVE
+
+### D-125 [ADCENTER_NAV_SETTLE] 광고센터 새 창 = relay 를 벗어난 최종 주소까지 기다린 뒤 화면 조작 · 이동 중 'Execution context was destroyed' = 쉬고 다시(처음 포함 4번) (2026-10-28, R72)
+- 결정: `settlement_evidence_web.open_adcenter` 가 새 창 domcontentloaded 뒤 주소가 `/relay/` 를 벗어날 때까지(최대 30초, 넘으면 기록하고 진행) 기다리고 다시 domcontentloaded 를 기다린다. 안내·동의 창 닫기 evaluate(`_CLOSE_POPUP`·`_CLOSE_TITLED`)는 `_eval_settled` 로 감싸 'Execution context was destroyed' 일 때만 domcontentloaded 대기 + 3초 쉬고 다시(`NAV_RETRIES = 4`, 처음 포함) · 다른 오류·상한 초과는 그대로 올림(광고비 단계 실패 기록). 동의·이동 버튼 안 누름(D-067)·하루 계정당 2개월·요청마다 쉼(D-120)은 그대로.
+- 근거: 운용 PC output(28) 10-27 23:48~ 오류 로그 '광고비' 블록 43개 전부 같은 줄 — `collect_ads` → `settlement_ads.collect`(_gql 첫 호출) → `open_adcenter` 286줄 `q.evaluate(_CLOSE_POPUP)` → `Page.evaluate: Execution context was destroyed, most likely because of a navigation`. 10-26 실측 탭 주소 = 새 창이 `relay/wing/home` → `marketing/dashboard/...` 로 한 번 더 이동 → domcontentloaded(relay 화면)+8초 뒤 evaluate 가 이동 도중에 걸림. 영향 = 계정마다 밀크런 202609 만 받고 광고 일별 정산에서 멈춤 → `done()` 미충족·과거 달 진행 없음. 재현: `verify_settlement_runtime_offline` P44(가짜 창 relay→dashboard·evaluate 2번 사라짐)가 옛 코드에서 같은 286줄 같은 오류로 실패 → 수정 → 통과(3번째 정상·계속 사라지면 4번 뒤 오류·다른 오류는 1번에 올림).
+- 버린 대안: 8초 고정 대기를 늘리기(이동 시각이 PC·네트워크마다 달라 또 걸림) · 모든 Playwright 오류 재시도(진짜 화면 변경·차단을 가림) · 광고 GraphQL 호출(API.call evaluate)까지 재시도(보고서 요청이 두 번 갈 수 있음 — 이번 증거는 창 열기에서만).
+- 영향 범위: `src/coupang_analytics/settlement_evidence_web.py`(`_eval_settled`·`NAV_RETRIES`·`open_adcenter` — `adcenter_monthly` 도 같은 함수 사용) · `tools/verify_settlement_runtime_offline.py` P44. 운용 PC = 새 zip 설치 후 적용 · 설치 뒤 첫 실행에서 처리기록 '광고비' 줄 정상 확인 필요(라이브 미실측).
+- 상태: ACTIVE
