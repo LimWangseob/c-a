@@ -29,9 +29,9 @@ def ok(msg):
     print(f"  ✔ {msg}")
 
 
-def _item(vid, gmv, units, orders, reg="RFM", name="캠핑테이블 XR010", opt="블랙"):
+def _item(vid, gmv, units, orders, reg="RFM", name="캠핑테이블 XR010", opt="블랙", inv=16328453904):
     return {"vendorItemDetails": {"vendorItemId": vid, "productName": name, "itemName": opt, "itemId": 77,
-                                  "registrationType": reg, "productId": 900},
+                                  "registrationType": reg, "productId": 900, "inventoryId": inv},
             "businessInsightsMetricsResponse": {"totalPageViews": 40.0, "totalUnitsSold": float(units),
                                                 "totalUniqueVisitor": 20.0, "totalGmv": float(gmv),
                                                 "totalOrders": float(orders)}}
@@ -55,7 +55,7 @@ def s2_record_daily():
         d = json.loads((out / SH.DIRNAME / "acc1.json").read_text(encoding="utf-8"))
         day = d["2026-10-12"]
         assert day["옵션"]["111"] == {"상품": "캠핑테이블 XR010", "옵션": "블랙", "구분": "로켓그로스", "판매금액": 125000,
-                                     "판매수량": 5, "주문": 3}, day
+                                     "판매수량": 5, "주문": 3, "등록상품ID": "16328453904"}, day
         assert day["옵션"]["222"]["구분"] == "윙" and day["합계"] == {"판매금액": 155000, "판매수량": 6, "주문": 4}
         assert day["수집"]                                                      # 수집 시각 남김
         m2 = C._parse_vendor_items([_item(111, 50000, 2, 2)])
@@ -83,11 +83,28 @@ def s3_skip():
     ok("기간 조회·엑셀 폴백은 기록 안 함(사유 반환)")
 
 
+def s4_inventory_id():
+    print("[S4] 등록상품ID(판매분석 inventoryId — 9월 판매현황 파일과 같은 번호) 저장 · 응답에 없으면 빈 칸 (D-129)")
+    m = C._parse_vendor_items([_item(111, 125000, 5, 3), _item(222, 0, 0, 0, inv=None)])
+    assert m["111"].inventory_id == "16328453904" and m["222"].inventory_id == "", (m["111"], m["222"])
+    assert OptionMetric("1", "p", "o", "i", 0, 0, 0).inventory_id == "", "엑셀 폴백 등 = 빈 칸"
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "output"
+        SH.record(out, "acc1", "2026-10-12", "2026-10-12", m)
+        SH.record_period(out, "acc1", "M:2026-10", "2026-10-01", "2026-10-12", m)
+        day = json.loads((out / SH.DIRNAME / "acc1.json").read_text(encoding="utf-8"))["2026-10-12"]["옵션"]
+        per = json.loads((out / SH.PERIOD_DIRNAME / "acc1.json").read_text(encoding="utf-8"))["M:2026-10"]["옵션"]
+        assert day["111"]["등록상품ID"] == per["111"]["등록상품ID"] == "16328453904"
+        assert day["222"]["등록상품ID"] == per["222"]["등록상품ID"] == "", "응답에 없으면 빈 칸(칸은 있음 = 새 기록)"
+    ok("inventoryId → 등록상품ID · 일별·기간 기록 모두 · 없으면 빈 칸")
+
+
 def main():
     old = os.getcwd()
     try:
         s1_parse_gmv()
         s2_record_daily()
+        s4_inventory_id()
         s3_skip()
     finally:
         os.chdir(old)

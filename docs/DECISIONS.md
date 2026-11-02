@@ -1098,3 +1098,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 계정목록 제목처럼 판매중지 제외 상품 수만(소유자 '등록 갯수' — 판매중지도 등록 상품이라 함께 보이고 따로 표시) · 정산 금액으로 누적(① 요약은 판매분석 주문 기준 — 정산과 기준이 다름).
 - 영향 범위: `sales_dashboard.Dashboard.managed` · `workbook_sales.managed_counts`·`refresh_sales_sheet` · `workbook_sales_dash._scale_rows` · `tools/verify_sales_summary_offline.py` T12 · `designs/SALES_SUMMARY.md` · CLAUDE.md. 직원 매뉴얼 ① 요약 화면(스크린샷 좌표)은 다음 매뉴얼 갱신 때. HQ 포팅 대상.
 - 상태: ACTIVE
+
+### D-129 [SALES_RECORD_INVENTORY_ID] 판매분석 기록(일별·기간)에 등록상품ID 저장 · 저장 전에 받은 달은 한 번 다시 조회 (2026-11-02, R78)
+- 결정(소유자 2026-11-02 "앱이 등록상품ID도 저장하게 고쳐줘, 10월 자료는 다운로드"): 판매분석(vi-detail-search) 응답의 `vendorItemDetails.inventoryId` 를 `OptionMetric.inventory_id` 로 받아 `output/판매분석_일별`·`판매분석_기간` 옵션마다 '등록상품ID' 칸으로 저장(없으면 빈 칸). `sales_summary.plan_periods` 는 옵션이 있는데 '등록상품ID' 칸이 없는 **달(M:)** 기록을 한 번 다시 조회(빈 칸이면 저장 후 기록이라 다시 안 받음 — 무한 재조회 없음·주는 다시 안 받음). 10월분은 Claude 가 직접 받지 않음(위탁계정 비밀번호 로그인 = 하지 않는 일) → 새 zip 설치 뒤 첫 밤 ① 판매수집 같은 세션에서 4~10월이 등록상품ID 와 함께 다시 들어옴.
+- 근거: 소유자 9월 판매현황 파일(`셀독 9월 판매현황_집계_0901-0927.xlsx`) 상품 수 = 등록상품ID 546(상품명 333). 앱 기록엔 상품명·VID 만 있어 10월을 같은 단위로 셀 수 없었음(현재 상품조회로 VID 연결 시 옛 로켓그로스 VID 다수 미연결 — 에벤에셀 75옵션). 실측(운용 PC 10-26 응답 원문): 판매분석 `inventoryId` 16개 중 14개가 9월 파일 등록상품ID 와 일치·15개가 상품조회 vendorInventoryId 와 일치(`itemId` 는 다른 번호). 재현: verify_sales_history S4·verify_sales_summary T1 새 항목이 옛 코드에서 실패 → 수정 → 통과 · 게이트 15종·복잡도 초록. 실데이터 계획: 운용 PC 기록으로 첫 밤 다시 받을 조회 260건(30계정·계정당 약 9건).
+- 버린 대안: 현재 상품조회 목록으로 VID→등록상품ID 연결(삭제·교체된 옛 VID 미연결) · 옛 `item_id`(itemId) 재사용(다른 번호 — 엑셀 폴백의 '등록상품ID' 와 뜻이 섞임).
+- 영향 범위: `report.OptionMetric.inventory_id` · `collector._parse_vendor_items` · `sales_history._options` · `sales_summary.plan_periods`·`_before_inventory_id` · 시험 2종 · `designs/SALES_SUMMARY.md`. R0 데이터 형식 추가(옵션에 '등록상품ID' 칸) → HQ `R0_DATA_CONTRACT` 알림 대상.
+- 상태: ACTIVE

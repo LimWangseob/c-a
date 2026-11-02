@@ -57,6 +57,12 @@ def t1_plan():
     again = SS.plan_periods(done, date(2026, 10, 15))
     assert [k for k, _f, _t in again] == ["M:2026-10", "W:2026-10-12"], again   # 마감된 것은 다시 안 함
     assert SS.plan_periods(done, Y) == [], "같은 날 다시 돌면 조회 없음"
+    # D-129: 등록상품ID 저장 전에 받은 달(옵션에 '등록상품ID' 칸 없음)은 한 번 다시 받음 — 9월 판매현황과 같은 단위로 세기 위해
+    old = {k: {**v, "옵션": {"v1": {"상품": "a", "판매금액": 1}}} for k, v in done.items()}
+    assert [k for k, _f, _t in SS.plan_periods(old, Y)] == [f"M:2026-{m:02d}" for m in range(4, 11)],         "옛 기록 달 = 4~10월 다시(주는 다시 안 함)"
+    new = {k: {**v, "옵션": {"v1": {"상품": "a", "판매금액": 1, "등록상품ID": ""}}} for k, v in done.items()}
+    assert SS.plan_periods(new, Y) == [], "등록상품ID 칸이 있으면(빈 칸이어도) 다시 안 받음 — 무한 재조회 없음"
+    assert SS.plan_periods({k: {**v, "옵션": {}} for k, v in done.items()}, Y) == [], "판매 기록 없는 달은 다시 안 받음"
     ok("4~10월 7개 + 8주 · 4월 말일 · 이번 주 = 월~어제 · 다음 날엔 이번 달·주만 다시 · 시작일 상수 하나")
 
 

@@ -268,6 +268,7 @@ def _parse_vendor_items(items: list[dict]) -> dict[str, OptionMetric]:
             product_id=str(d.get("productId") or "").strip(),   # 노출상품ID(항목2 하이퍼링크)
             gmv=_num(m.get("totalGmv")),                        # 판매금액(날짜별 누적·sales_history)
             orders=_num(m.get("totalOrders")),
+            inventory_id=str(d.get("inventoryId") or "").strip(),   # 등록상품ID(D-129)
         )
     return out
 

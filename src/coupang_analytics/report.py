@@ -49,6 +49,7 @@ class OptionMetric:
     product_id: str = ""  # 노출상품ID(productId) — 상품명 하이퍼링크(쿠팡 노출페이지)용. 판매분석 응답서 확보(항목2)
     gmv: int | None = None   # 판매금액(totalGmv) — 판매분석 API 만 채움, 엑셀 폴백 등 모르면 None(0 과 구분)·날짜별 누적용
     orders: int = 0          # 주문수(totalOrders)
+    inventory_id: str = ""   # 등록상품ID(판매분석 inventoryId — 셀독 월 판매현황 파일과 같은 번호·D-129). 모르면 ''
 
 
 def parse_by_option(path: str | Path) -> dict[str, OptionMetric]:

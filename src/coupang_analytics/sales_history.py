@@ -61,7 +61,7 @@ def load_periods(out_dir) -> dict:
 def _options(metrics: dict) -> tuple[dict, dict]:
     opts = {vid: {"상품": m.product_name, "옵션": m.option_name,
                   "구분": _KIND.get(m.registration_type, m.registration_type or "-"),
-                  "판매금액": m.gmv, "판매수량": m.sales, "주문": m.orders}
+                  "판매금액": m.gmv, "판매수량": m.sales, "주문": m.orders, "등록상품ID": m.inventory_id}
             for vid, m in sorted(metrics.items())}
     return opts, {k: sum(o[k] for o in opts.values()) for k in ("판매금액", "판매수량", "주문")}
 

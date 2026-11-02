@@ -86,15 +86,22 @@ def periods(yesterday: date, weeks: int = WEEKS, first: date = FIRST_DAY) -> lis
 
 def plan_periods(existing: dict, yesterday: date, weeks: int = WEEKS, first: date = FIRST_DAY) -> list[tuple[str, str, str]]:
     """조회해야 할 기간 [(키, 시작, 끝)] — 아직 없거나, 받은 끝이 지금 계산한 끝보다 이른 것(이번 달·주 누계·막 끝난 기간).
-    마감된 기간(받은 끝 = 기간 끝)은 다시 조회하지 않는다. 달 먼저(오래된 것부터) → 주."""
+    마감된 기간(받은 끝 = 기간 끝)은 다시 조회하지 않는다 — 단 등록상품ID 저장 전에 받은 달은 한 번 다시(D-129).
+    달 먼저(오래된 것부터) → 주."""
     need = []
     for key, _label, s, e in periods(yesterday, weeks, first):
-        got = (existing.get(key) or {}).get("조회기간") or ["", ""]
-        if got[1] < e.isoformat():
+        rec = existing.get(key) or {}
+        got = rec.get("조회기간") or ["", ""]
+        if got[1] < e.isoformat() or (key.startswith("M:") and _before_inventory_id(rec)):
             need.append((key, s.isoformat(), e.isoformat()))
     months = sorted(k for k in need if k[0].startswith("M:"))
     weeks_ = sorted((k for k in need if k[0].startswith("W:")), reverse=True)
     return months + weeks_
+
+
+def _before_inventory_id(rec: dict) -> bool:
+    """등록상품ID 저장 전(D-129) 기록 — 옵션이 있는데 '등록상품ID' 칸이 없음(빈 칸이면 저장 후 기록 = 다시 안 받음)."""
+    return any("등록상품ID" not in o for o in (rec.get("옵션") or {}).values())
 
 
 def plan_backfill(existing: dict, yesterday: date, today: date | None = None,
