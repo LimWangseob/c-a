@@ -18,6 +18,7 @@ from openpyxl.styles import Alignment, Font
 from openpyxl.utils import column_index_from_string, get_column_letter
 
 from .sales_dashboard import short_name
+from .sales_summary import FIRST_DAY
 from .workbook_sales import _FILL_HEAD, _FILL_SEC, _FILL_SUB, _FILL_TOTAL, _FN, SALES_SHEET, _cell
 
 SPEC_PREFIX = "차트설정:"
@@ -33,6 +34,7 @@ DATA_WIDTH = 13                 # 숨긴 차트 자료 열 수(월 3·빈칸·�
 _GREEN, _RED, _GRAY = "1E8E3E", "C00000", "9AA7B6"
 _C_DONE, _C_PART, _C_LINE, _C_DAY, _C_MISS, _C_ACC = "4472C4", "A9C4EB", "2F5597", "5B9BD5", "BFBFBF", "4472C4"
 _LEFT_WRAP = Alignment(horizontal="left", vertical="center")
+FIRST_SPAN = f"{FIRST_DAY:%m.%d}"   # 누적 시작일 표기(04.01)
 
 
 def col_width(c: int) -> int:
@@ -104,10 +106,24 @@ def _kpis(ws, r, d) -> int:
 
 
 def _scale_rows(ws, r, d) -> int:
-    """① 맨 위 세 줄(소유자 2026-11-02·D-128) — 셀독 관리 계정 수 · 관리 상품 등록 수(판매중지 따로) · 누적 매출금액
-    (= 아래 월별 누계 합·4월~어제). 마지막으로 쓴 행 반환."""
+    """① 맨 위 — [셀독 관리 상품] 셀독 관리 계정 수 · 관리 상품 등록 수(판매중지 따로) · 누적 매출금액(= 아래 월별 누계
+    합·4월~어제·D-128) → [위탁자 직접 관리 상품] 상품 등록 수(판매분석 등록상품ID) · 누적 매출금액(D-130). 마지막 행 반환."""
     if not d.managed:
         return r
+    r += 1
+    _span(ws, r, 1, DASH_COLS, "셀독 관리 상품", bold=True, fill=_FILL_HEAD, box=True)
+    r = _managed_lines(ws, r, d)
+    return _own_lines(ws, r, d) if d.own else r
+
+
+def _line(ws, r, label, value) -> int:
+    r += 1
+    _cell(ws, r, 1, label, bold=True, fill=_FILL_SUB, box=True)
+    _span(ws, r, 2, DASH_COLS, value, bold=True, fill=_FILL_SUB, box=True)
+    return r
+
+
+def _managed_lines(ws, r, d) -> int:
     accts, prods, stop = d.managed
     lines = [("셀독 관리 계정 수", f"{accts:,}개"),
              ("관리 상품 등록 수", f"{prods:,}개 (판매 중 {prods - stop:,} · 판매중지 {stop:,})")]
@@ -117,10 +133,20 @@ def _scale_rows(ws, r, d) -> int:
         miss = " · 미수집 계정 기간 제외" if any(k.missing for k in d.month_kpis) else ""
         lines.append(("누적 매출금액", f"{total:,}원 ({span} · 아래 월별 누계 합{miss})"))
     for label, value in lines:
-        r += 1
-        _cell(ws, r, 1, label, bold=True, fill=_FILL_SUB, box=True)
-        _span(ws, r, 2, DASH_COLS, value, bold=True, fill=_FILL_SUB, box=True)
+        r = _line(ws, r, label, value)
     return r
+
+
+def _own_lines(ws, r, d) -> int:
+    """위탁자 직접 관리 상품(관리 상품 밖) 2줄 — 쿠팡 판매분석 기준(9월 판매현황과 같은 등록상품ID 단위·D-130)."""
+    ids, sold, amount, missing, no_id = d.own
+    span = f"{FIRST_SPAN}~{d.yesterday:%m.%d}"
+    r += 1
+    _span(ws, r, 1, DASH_COLS, "위탁자 직접 관리 상품(관리 상품 외) — 쿠팡 판매분석 기준", bold=True, fill=_FILL_HEAD, box=True)
+    no = f" · 등록상품ID 모르는 옵션 {no_id:,}개 제외" if no_id else ""
+    r = _line(ws, r, "상품 등록 수", f"{ids:,}개 ({span} 판매분석에 나온 등록상품ID · 매출 발생 {sold:,}{no})")
+    miss = " · 미수집 계정 기간 제외" if missing else ""
+    return _line(ws, r, "누적 매출금액", f"{amount:,}원 ({span} · 월별 합{miss})")
 
 
 def _kpi_head(ws, r) -> int:

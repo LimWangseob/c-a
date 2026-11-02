@@ -1105,3 +1105,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 현재 상품조회 목록으로 VID→등록상품ID 연결(삭제·교체된 옛 VID 미연결) · 옛 `item_id`(itemId) 재사용(다른 번호 — 엑셀 폴백의 '등록상품ID' 와 뜻이 섞임).
 - 영향 범위: `report.OptionMetric.inventory_id` · `collector._parse_vendor_items` · `sales_history._options` · `sales_summary.plan_periods`·`_before_inventory_id` · 시험 2종 · `designs/SALES_SUMMARY.md`. R0 데이터 형식 추가(옵션에 '등록상품ID' 칸) → HQ `R0_DATA_CONTRACT` 알림 대상.
 - 상태: ACTIVE
+
+### D-130 [SALES_SUMMARY_OWN_PRODUCTS] 통합판매현황 ① 요약에 위탁자 직접 관리 상품(관리 상품 외) 2줄 — 쿠팡 판매분석 기준 상품 등록 수·누적 매출 (2026-11-02, R80)
+- 결정(소유자 2026-11-02 "관리상품 이외에 계정별로 본인이 직접 관리하는 상품도 추가 … 각 계정별 상품등록수와 매출금액 … 쿠팡의 판매분석을 기준 … 2줄(제목포함하면 4줄)"): ① 요약 맨 위를 소제목 **'셀독 관리 상품'** + D-128 3줄, 그 아래 소제목 **'위탁자 직접 관리 상품(관리 상품 외) — 쿠팡 판매분석 기준'** + 2줄로. ① 상품 등록 수 = 결과 파일 계정의 관리 상품 밖 옵션(`sales_summary.scope(outside=True)`)이 4월~어제 판매분석 **달(M:) 기록**에 나온 **등록상품ID** 수(그로스·판매자배송 같은 ID = 1개 · 9월 판매현황 파일과 같은 단위)·'매출 발생'(그 ID 기간 매출 > 0 — 9월 파일 223 과 같은 기준)·등록상품ID 모르는 옵션은 세지 않고 개수 표시. ② 누적 매출금액 = 관리 상품 밖 저장으로 만든 대시보드의 월별 누계 합(관리 상품 누적과 같은 계산·미수집 계정 기간 제외 표시).
+- 근거: 소유자 요청 · 9월 판매현황 파일 기준 검토(상품 수 = 판매분석에 나온 등록상품ID·판매 발생 = 매출 > 0 — 9월 파일 실측 223 일치). 실데이터 시험(운용 PC 10-26 마스터): 직접 관리 누적 1,591,002,770원 + 관리 424,646,660원 ≈ 전체 상품 합(2,014,414,830원·일별 합 기준)과 같은 규모 · 상품 등록 수 = 기존 기록에 등록상품ID 없어 '0개(모르는 옵션 5,984개 제외)' — 새 zip 첫 밤 D-129 재조회로 채워짐. 재현: verify_sales_summary T12(소제목 2줄 + 직접 관리 2줄·같은 ID 두 옵션 = 1·ID 모름 따로)가 옛 코드에서 실패 → 수정 → 통과 · 게이트 15종·복잡도 초록.
+- 버린 대안: 상품명 기준(9월 파일 546 과 단위 다름) · 쿠팡 등록 목록(상품조회) 전체(대량 등록·판매종료 포함 — 판매분석 기준 아님) · 계정별 표 추가(소유자 '2줄').
+- 영향 범위: `sales_summary.scope(outside=)` · `sales_dashboard.Dashboard.own`·`own_scale` · `workbook_sales.refresh_sales_sheet` · `workbook_sales_dash._scale_rows`·`_managed_lines`·`_own_lines`·`_line` · 시험 T12 · `designs/SALES_SUMMARY.md` · CLAUDE.md. HQ 포팅 대상.
+- 상태: ACTIVE

@@ -577,10 +577,15 @@ def t11_charts_persist():
 
 
 def t12_managed_counts():
-    print("[T12] ① 요약 맨 위 — 셀독 관리 계정 수·관리 상품 등록 수(판매중지 포함·따로 표시)·누적 매출금액(4월~ 월별 누계 합) (D-128)")
+    print("[T12] ① 요약 맨 위 — 셀독 관리(계정·상품·누적 매출 D-128) + 위탁자 직접 관리(판매분석 등록상품ID·누적 매출 D-130)")
     with tempfile.TemporaryDirectory() as d:
         _fixture(d)
-        SH.record_period(d, "a1", "M:2026-04", "2026-04-01", "2026-04-30", {"v1": _m("v1", "캠핑테이블", "RFM", 4, 40000)})
+        own = lambda vid, name, gmv, inv: OptionMetric(vid, name, "기본", "i", 0, 1, 0, registration_type="NORMAL",  # noqa: E731
+                                                     gmv=gmv, orders=1, inventory_id=inv)
+        SH.record_period(d, "a1", "M:2026-04", "2026-04-01", "2026-04-30", {
+            "v1": _m("v1", "캠핑테이블", "RFM", 4, 40000),
+            "x1": own("x1", "위탁자상품", 7000, "I9"), "x2": own("x2", "위탁자상품", 3000, "I9"),   # 같은 등록상품ID 두 옵션 = 1개
+            "x3": own("x3", "안팔린위탁자상품", 0, "I8"), "x4": own("x4", "번호모름", 500, "")})       # 등록상품ID 없음 = 따로 표시
         path = Path(d) / "m.xlsx"
         wb = _wb_with_accounts(path)
         wb.ensure_product_block("에벤에셀", "옛상품", config.KIND_CONTRACT, ["kw2"], registered="옛상품")
@@ -595,13 +600,18 @@ def t12_managed_counts():
         assert val.get("셀독 관리 계정 수") == "3개", val
         assert val.get("관리 상품 등록 수") == "3개 (판매 중 2 · 판매중지 1)", val
         band = next(i for i, r in enumerate(cells) if str(r[0]).startswith("① 요약"))
-        assert [cells[band + k][0] for k in (1, 2, 3)] == ["셀독 관리 계정 수", "관리 상품 등록 수", "누적 매출금액"],             "① 요약 띠 바로 아래 세 줄"
+        assert [cells[band + k][0] for k in range(1, 8)] == [
+            "셀독 관리 상품", "셀독 관리 계정 수", "관리 상품 등록 수", "누적 매출금액",
+            "위탁자 직접 관리 상품(관리 상품 외) — 쿠팡 판매분석 기준", "상품 등록 수", "누적 매출금액"],             [cells[band + k][0] for k in range(1, 8)]   # D-130: 소제목 2줄 + 직접 관리 2줄
+        o_cnt, o_amt = cells[band + 6][1], cells[band + 7][1]
+        assert o_cnt == "2개 (04.01~10.14 판매분석에 나온 등록상품ID · 매출 발생 1 · 등록상품ID 모르는 옵션 1개 제외)", o_cnt
+        assert str(o_amt).startswith("10,500원 (04.01~10.14"), o_amt                      # 관리 밖 판매 = 7,000+3,000+500
         months = [r for r in cells if r[0] and str(r[0])[:3].rstrip(" 0123456789.~").endswith("월")
                   and isinstance(r[1], int) and "월 " in str(r[0])]
         total = sum(r[1] for r in months)
         assert months and str(months[0][0]).startswith("4월"), [r[0] for r in months]
-        assert str(val.get("누적 매출금액", "")).startswith(f"{total:,}원 (04.01~10.14"), (val, total)
-    ok("계정 3(상품 0개 계정 포함) · 상품 3(판매 중 2·판매중지 1) · 누적 = 4월~ 월별 누계 합 · ① 요약 맨 위 3줄")
+        assert str(cells[band + 4][1]).startswith(f"{total:,}원 (04.01~10.14"), (val, total)
+    ok("계정 3(상품 0개 계정 포함) · 상품 3(판매 중 2·판매중지 1) · 누적 = 4월~ 월별 누계 합 · 직접 관리 = 등록상품ID 2개(같은 ID 두 옵션 = 1)·매출 발생 1·ID 모르는 옵션 따로·10,500원 · 소제목 2줄")
 
 
 def main() -> int:

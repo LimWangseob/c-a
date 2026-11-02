@@ -63,6 +63,7 @@ class Dashboard:
     missing_today_names: tuple = ()   # 전일 미수집 계정 이름
     month_kpis: tuple = ()    # ① 월별 누계(시작월~이번 달·전월 대비 — 진행 중 달은 지난달 같은 기간 대비·D-105)
     rank_span: tuple = ()     # ⑤ 최근 1개월 (시작, 끝)
+    own: tuple = ()           # ① 위탁자 직접 관리 상품 (등록상품ID 수, 매출 발생 수, 누적 매출, 미수집 있음, ID 모르는 옵션 수)·D-130
     managed: tuple = ()       # ① 맨 위 (셀독 관리 계정 수, 관리 상품 등록 수, 그중 판매중지) — 결과 파일 로스터(D-128)
 
 
@@ -181,6 +182,27 @@ def build(daily: dict, period_recs: dict, labels: dict, yesterday: date, weeks: 
     return Dashboard(yesterday, kpis, sum(v is None for v in day_v), len(aids), months, week_pts, day_pts,
                      _ranks(aids, labels, rm_v, lw_v, pw_v), missing_names(aids, labels, day_v),
                      tuple(_month_kpis(spans, month_vals, mo_v, pm_v, (pm_s, pm_e), kpi)), rm)
+
+
+def own_scale(period_recs: dict, own_board: Dashboard, first: date = FIRST_DAY) -> tuple:
+    """위탁자 직접 관리 상품(관리 상품 밖·D-130) — 쿠팡 판매분석 기준(9월 판매현황과 같은 단위).
+    입력 = scope(outside=True) 로 거른 기간 저장 + 그 저장으로 만든 대시보드. 상품 수 = first~어제 달 기록(M:)에 나온
+    등록상품ID 수(그로스·판매자배송 같은 ID = 1개) · 매출 발생 = 그 ID 의 기간 매출 > 0 · 누적 매출 = 월별 누계 합(관리 상품 줄과
+    같은 계산) · 등록상품ID 모르는 옵션(D-129 전 기록 등)은 세지 않고 개수만 돌려줌."""
+    keys = {k for k, *_ in _month_spans(own_board.yesterday, first)}
+    amt: dict = {}
+    no_id = 0
+    for aid, recs in period_recs.items():
+        for key in keys & set(recs):
+            for o in (recs[key].get("옵션") or {}).values():
+                inv = o.get("등록상품ID")
+                if not inv:
+                    no_id += 1
+                    continue
+                amt[(aid, inv)] = amt.get((aid, inv), 0) + int(o.get("판매금액") or 0)
+    months = own_board.month_kpis
+    return (len(amt), sum(a > 0 for a in amt.values()), sum(k.amount for k in months),
+            any(k.missing for k in months), no_id)
 
 
 def _month_kpis(spans, vals, mo_v, pm_v, pm_span, kpi):
