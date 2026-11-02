@@ -127,26 +127,32 @@ def _managed_lines(ws, r, d) -> int:
     accts, prods, stop = d.managed
     lines = [("셀독 관리 계정 수", f"{accts:,}개"),
              ("관리 상품 등록 수", f"{prods:,}개 (판매 중 {prods - stop:,} · 판매중지 {stop:,})")]
-    if d.month_kpis:
-        total = sum(k.amount for k in d.month_kpis)
-        span = f"{d.month_kpis[0].span[:5]}~{d.yesterday:%m.%d}"
-        miss = " · 미수집 계정 기간 제외" if any(k.missing for k in d.month_kpis) else ""
-        lines.append(("누적 매출금액", f"{total:,}원 ({span} · 아래 월별 누계 합{miss})"))
+    if d.cum:
+        lines.append(("누적 매출금액", _cum_text(d, *d.cum)))
     for label, value in lines:
         r = _line(ws, r, label, value)
     return r
 
 
+def _cum_text(d, amount, gaps) -> str:
+    """누적 매출금액 값 칸 — 받은 날 전부 합 · 빠진 날 있으면 '빠진 날: 웨이브텍 1일'(많은 순·5곳까지·D-131)."""
+    gap = ""
+    if gaps:
+        top = sorted(gaps, key=lambda g: -g[1])
+        more = f" 외 {len(top) - 5}계정" if len(top) > 5 else ""
+        gap = " · 빠진 날: " + ", ".join(f"{nm} {n:,}일" for nm, n in top[:5]) + more
+    return f"{amount:,}원 ({FIRST_SPAN}~{d.yesterday:%m.%d} · 계정별 받은 날 전부 합{gap})"
+
+
 def _own_lines(ws, r, d) -> int:
     """위탁자 직접 관리 상품(관리 상품 밖) 2줄 — 쿠팡 판매분석 기준(9월 판매현황과 같은 등록상품ID 단위·D-130)."""
-    ids, sold, amount, missing, no_id = d.own
+    ids, sold, amount, gaps, no_id = d.own
     span = f"{FIRST_SPAN}~{d.yesterday:%m.%d}"
     r += 1
     _span(ws, r, 1, DASH_COLS, "위탁자 직접 관리 상품(관리 상품 외) — 쿠팡 판매분석 기준", bold=True, fill=_FILL_HEAD, box=True)
     no = f" · 등록상품ID 모르는 옵션 {no_id:,}개 제외" if no_id else ""
     r = _line(ws, r, "상품 등록 수", f"{ids:,}개 ({span} 판매분석에 나온 등록상품ID · 매출 발생 {sold:,}{no})")
-    miss = " · 미수집 계정 기간 제외" if missing else ""
-    return _line(ws, r, "누적 매출금액", f"{amount:,}원 ({span} · 월별 합{miss})")
+    return _line(ws, r, "누적 매출금액", _cum_text(d, amount, gaps))
 
 
 def _kpi_head(ws, r) -> int:

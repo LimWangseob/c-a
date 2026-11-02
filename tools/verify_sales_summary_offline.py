@@ -614,6 +614,39 @@ def t12_managed_counts():
     ok("계정 3(상품 0개 계정 포함) · 상품 3(판매 중 2·판매중지 1) · 누적 = 4월~ 월별 누계 합 · 직접 관리 = 등록상품ID 2개(같은 ID 두 옵션 = 1)·매출 발생 1·ID 모르는 옵션 따로·10,500원 · 소제목 2줄")
 
 
+def t13_cumulative_gaps():
+    print("[T13] ① 누적 매출금액 — 하루 빠진 계정도 받은 날 전부 더함(달 통째 제외 안 함)·빠진 날 표시 (D-131)")
+    with tempfile.TemporaryDirectory() as d:
+        for aid, amt in (("a1", 30000), ("a2", 20000), ("a3", 10000)):     # 4월 = 쿠팡 기간 합계(다 받음)
+            SH.record_period(d, aid, "M:2026-04", "2026-04-01", "2026-04-30", {f"v{aid}": _m(f"v{aid}", f"상품{aid}", "RFM", 1, amt)})
+        own = lambda gmv: _m("x9", "위탁자상품", "NORMAL", 1, gmv)          # noqa: E731 — 관리 상품 밖(D-130)
+        for k in range(1, 11):                                             # a1 = 5/1~5/10 일별 다 있음(하루 1,000)
+            day = f"2026-05-{k:02d}"
+            SH.record(d, "a1", day, day, {"va1": _m("va1", "상품a1", "RFM", 1, 1000)})
+            if k != 9:                                                     # a2 = 5/9 하루 빠짐(로그인 실패한 날)
+                SH.record(d, "a2", day, day, {"va2": _m("va2", "상품a2", "RFM", 1, 2000), "x9": own(100)})
+        SH.record_period(d, "a2", "M:2026-05", "2026-05-01", "2026-05-08",   # 5/9 실행 때 받은 기간 합계(5/8까지)
+                         {"va2": _m("va2", "상품a2", "RFM", 8, 16000), "x9": own(800)})
+        SH.record_period(d, "a3", "M:2026-05", "2026-05-01", "2026-05-09",   # a3 = 기간 합계 5/9까지 + 5/10 일별 = 다 받음
+                         {"va3": _m("va3", "상품a3", "RFM", 9, 9000)})
+        SH.record(d, "a3", "2026-05-10", "2026-05-10", {"va3": _m("va3", "상품a3", "RFM", 1, 3000)})
+        wb = OutputWorkbook.empty()
+        for biz, aid in (("가나상사", "a1"), ("다라상사", "a2"), ("마바상사", "a3")):
+            wb.ensure_account(biz)
+            wb.set_account_id(biz, aid)
+            wb.ensure_product_block(biz, f"상품{aid}", config.KIND_CONTRACT, ["kw"], registered=f"상품{aid}")
+            wb.set_product_vids(biz, f"상품{aid}", [f"v{aid}"])
+        wb.apply_style()
+        WS.refresh_sales_sheet(wb, d, today=date(2026, 5, 11))
+        cells = [list(r) for r in wb.wb[WS.SALES_SHEET].iter_rows(values_only=True)]
+        band = next(i for i, r in enumerate(cells) if str(r[0]).startswith("① 요약"))
+        m_amt, o_amt = cells[band + 4][1], cells[band + 7][1]
+        # 관리 = a1 30,000+10,000 · a2 20,000+16,000(5/1~5/8)+2,000(5/10) · a3 10,000+9,000+3,000 = 100,000
+        assert m_amt == "100,000원 (04.01~05.10 · 계정별 받은 날 전부 합 · 빠진 날: 다라상사 1일)", m_amt
+        assert o_amt == "900원 (04.01~05.10 · 계정별 받은 날 전부 합 · 빠진 날: 다라상사 1일)", o_amt   # 800 + 100(5/10)
+    ok("하루 빠진 계정(다라상사)도 받은 날 전부(기간 합계 5/8까지 + 5/10 일별) · 기간 합계 + 그 뒤 일별 = 다 받음(마바상사) · 빠진 날 표시 · 직접 관리도 같은 계산")
+
+
 def main() -> int:
     t1_plan()
     t2_record_period()
@@ -627,6 +660,7 @@ def main() -> int:
     t10_dashboard()
     t11_charts_persist()
     t12_managed_counts()
+    t13_cumulative_gaps()
     print("통합 판매현황 오프라인 검증 통과")
     return 0
 
