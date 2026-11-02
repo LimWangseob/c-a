@@ -570,6 +570,34 @@ def t11_charts_persist():
     ok("차트 4개 · 왼쪽 0·오른쪽 W 일치 · ②③ 반씩 · 10월 진행 중 30,000(a2 빠진 날 있어 제외) · 미수집 날 회색 · ⑤ 전 계정(판매 0·미수집 포함)·미수집 줄 · 다시 열어도 4개")
 
 
+def t12_managed_counts():
+    print("[T12] ① 요약 맨 위 — 셀독 관리 계정 수·관리 상품 등록 수(판매중지 포함·따로 표시)·누적 매출금액(4월~ 월별 누계 합) (D-128)")
+    with tempfile.TemporaryDirectory() as d:
+        _fixture(d)
+        SH.record_period(d, "a1", "M:2026-04", "2026-04-01", "2026-04-30", {"v1": _m("v1", "캠핑테이블", "RFM", 4, 40000)})
+        path = Path(d) / "m.xlsx"
+        wb = _wb_with_accounts(path)
+        wb.ensure_product_block("에벤에셀", "옛상품", config.KIND_CONTRACT, ["kw2"], registered="옛상품")
+        wb.set_product_vids("에벤에셀", "옛상품", ["v8"])
+        wb.set_discontinued("에벤에셀", "옛상품", True)                     # 관리대장 판매중지
+        wb.ensure_account("온라이프")
+        wb.set_account_id("온라이프", "a3")                                 # 상품 0개 계정도 관리 계정
+        wb.apply_style()
+        WS.refresh_sales_sheet(wb, d, today=date(2026, 10, 15))
+        cells = [list(r) for r in wb.wb[WS.SALES_SHEET].iter_rows(values_only=True)]
+        val = {r[0]: r[1] for r in cells if r[0] in ("셀독 관리 계정 수", "관리 상품 등록 수", "누적 매출금액")}
+        assert val.get("셀독 관리 계정 수") == "3개", val
+        assert val.get("관리 상품 등록 수") == "3개 (판매 중 2 · 판매중지 1)", val
+        band = next(i for i, r in enumerate(cells) if str(r[0]).startswith("① 요약"))
+        assert [cells[band + k][0] for k in (1, 2, 3)] == ["셀독 관리 계정 수", "관리 상품 등록 수", "누적 매출금액"],             "① 요약 띠 바로 아래 세 줄"
+        months = [r for r in cells if r[0] and str(r[0])[:3].rstrip(" 0123456789.~").endswith("월")
+                  and isinstance(r[1], int) and "월 " in str(r[0])]
+        total = sum(r[1] for r in months)
+        assert months and str(months[0][0]).startswith("4월"), [r[0] for r in months]
+        assert str(val.get("누적 매출금액", "")).startswith(f"{total:,}원 (04.01~10.14"), (val, total)
+    ok("계정 3(상품 0개 계정 포함) · 상품 3(판매 중 2·판매중지 1) · 누적 = 4월~ 월별 누계 합 · ① 요약 맨 위 3줄")
+
+
 def main() -> int:
     t1_plan()
     t2_record_period()
@@ -582,6 +610,7 @@ def main() -> int:
     t9_scope()
     t10_dashboard()
     t11_charts_persist()
+    t12_managed_counts()
     print("통합 판매현황 오프라인 검증 통과")
     return 0
 

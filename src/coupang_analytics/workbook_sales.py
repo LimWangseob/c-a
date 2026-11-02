@@ -55,6 +55,18 @@ def managed_vids(owb) -> dict:
     return out
 
 
+def managed_counts(owb) -> tuple[int, int, int]:
+    """(셀독 관리 계정 수, 관리 상품 등록 수, 그중 판매중지) — 결과 계정목록과 같은 로스터(상품 0개 계정 포함·
+    다중옵션 2차 블록 제외·판매중지 포함·D-128)."""
+    accts, prods, stop = set(), 0, 0
+    for biz, prod, _hdr, has_sheet in owb.product_roster():
+        accts.add((owb.product_account_id(biz, prod) if prod else "") or owb.account_id_of(biz) or biz)
+        if prod:
+            prods += 1
+            stop += bool(has_sheet and owb.is_discontinued(biz, prod))
+    return len(accts), prods, stop
+
+
 def refresh_sales_sheet(owb, out_dir="output", log=None, today: date | None = None) -> str:
     """저장된 판매분석 기록으로 첫 시트를 다시 그린다(저장은 호출부). 반환 = 로그 한 줄."""
     log = log or (lambda m: None)
@@ -71,6 +83,7 @@ def refresh_sales_sheet(owb, out_dir="output", log=None, today: date | None = No
                       sales_summary.scope(periods, managed, listings))
     summary = sales_summary.build(daily, labels, yesterday)
     board = sales_dashboard.build(daily, periods, labels, yesterday)
+    board.managed = managed_counts(owb)
     write_sales_sheet(owb.wb, summary, _login_reasons(out_dir, log), board)
     day = summary.sections[0]
     key = day.cols[0].key

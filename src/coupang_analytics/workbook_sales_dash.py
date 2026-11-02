@@ -83,9 +83,10 @@ def pct_text(v: float | None) -> tuple[str, str | None]:
 
 
 def _kpis(ws, r, d) -> int:
-    """① 요약 — 전일·지난주·이번 달 누계(노랑) → 미수집 계정(전일) → 월별 누계(4월~이번 달·D-105)."""
+    """① 요약 — 관리 규모(계정·상품·누적 매출·D-128) → 전일·지난주·이번 달 누계(노랑) → 미수집 계정(전일) →
+    월별 누계(4월~이번 달·D-105)."""
     _band(ws, r, "① 요약 — 관리 상품 기준(결과 사업자 시트의 상품·판매중지 포함 · 상세표 합계와 같음)")
-    r = _kpi_head(ws, r + 1)
+    r = _kpi_head(ws, _scale_rows(ws, r, d) + 1)
     for k in d.kpis:
         r = _kpi_row(ws, r + 1, k, _FILL_TOTAL)
     r += 1
@@ -99,6 +100,26 @@ def _kpis(ws, r, d) -> int:
               bold=True, fill=_FILL_HEAD, box=True)
         for k in d.month_kpis:
             r = _kpi_row(ws, r + 1, k, None)
+    return r
+
+
+def _scale_rows(ws, r, d) -> int:
+    """① 맨 위 세 줄(소유자 2026-11-02·D-128) — 셀독 관리 계정 수 · 관리 상품 등록 수(판매중지 따로) · 누적 매출금액
+    (= 아래 월별 누계 합·4월~어제). 마지막으로 쓴 행 반환."""
+    if not d.managed:
+        return r
+    accts, prods, stop = d.managed
+    lines = [("셀독 관리 계정 수", f"{accts:,}개"),
+             ("관리 상품 등록 수", f"{prods:,}개 (판매 중 {prods - stop:,} · 판매중지 {stop:,})")]
+    if d.month_kpis:
+        total = sum(k.amount for k in d.month_kpis)
+        span = f"{d.month_kpis[0].span[:5]}~{d.yesterday:%m.%d}"
+        miss = " · 미수집 계정 기간 제외" if any(k.missing for k in d.month_kpis) else ""
+        lines.append(("누적 매출금액", f"{total:,}원 ({span} · 아래 월별 누계 합{miss})"))
+    for label, value in lines:
+        r += 1
+        _cell(ws, r, 1, label, bold=True, fill=_FILL_SUB, box=True)
+        _span(ws, r, 2, DASH_COLS, value, bold=True, fill=_FILL_SUB, box=True)
     return r
 
 
