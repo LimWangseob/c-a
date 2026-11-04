@@ -381,10 +381,11 @@ def cmd_request(a, b, args, jobs: list) -> None:
         LOG.record(name, "요청", RL.OK, f"다운로드 요청함(요청번호 {rid})", **_job_fields(j))
 
 
-def _get_bytes(b, url: str) -> bytes:
+def _get_bytes(b, url: str, text_ok: bool = False) -> bytes:
     r = b.context.request.get(url, timeout=120000)
     body = r.body()
-    if r.status != 200 or body[:2] != b"PK":                # xlsx = zip
+    is_text = text_ok and "text/csv" in (r.headers.get("content-type") or "")   # 큰 광고 보고서(AD.report_xlsx 가 엑셀로 바꿈)
+    if r.status != 200 or (body[:2] != b"PK" and not is_text):                # xlsx = zip
         raise API.SiteChangedError(f"파일 받기 실패: {r.status} {r.headers.get('content-type')} {body[:60]!r}")
     return body
 
@@ -505,7 +506,7 @@ def collect_ads(a, b, args) -> None:
         return API.call(q, method, path, body)
     try:
         s = AD.collect(call, lambda url: _get_bytes(b, url), VERIFY / "광고", SF._token(name, "계정명"), args.start, date.today(),
-                       gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)))
+                       gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)), get_report=lambda url: _get_bytes(b, url, text_ok=True))
         msg = [f"{k} {','.join(v)}" for k, v in s.items() if isinstance(v, list) and v and k != "받을 것"]
         if msg or s["남은 달"]:
             LOG.record(name, "광고비", RL.OK, " · ".join(msg + ([f"남은 달 {s['남은 달']}(다음 실행에)"] if s["남은 달"] else [])))

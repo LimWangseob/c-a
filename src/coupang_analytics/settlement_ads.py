@@ -6,7 +6,7 @@
   일예산 초과 750 차감) + 부가세 37,819 = 416,007 = 8/10~9/7 로켓그로스 광고비 공제 합 · 6월 244,347 = 6월분 공제 합(원 단위).
 - 광고센터 매출 성장 광고 보고서(advertising.coupang.com, GraphQL /marketing-reporting/v2/graphql):
   getCampaignList(기간) → requestReport(일별·키워드·캠페인 ID 전부) → reportList(status completed) →
-  GET /marketing-reporting/v2/api/excel-report?id=… (xlsx). 칸 = 날짜·광고집행 옵션ID·광고비 등(견본 벅스 7월 378,986).
+  GET /marketing-reporting/v2/api/excel-report?id=… (xlsx — 큰 보고서는 탭 구분 글자 text/csv 로 옴·report_xlsx 로 엑셀로 바꿔 저장). 칸 = 날짜·광고집행 옵션ID·광고비 등(견본 벅스 7월 378,986).
   ⚠ 보고서 광고비는 정산 소진액보다 날마다 2~9원 큼(끝전) → 상품 몫 = 날짜×캠페인 청구가능액 × 그날 보고서 옵션 광고비 비율(D-119).
 - 윙 로켓그로스 밀크런 내역 엑셀 = GET /tenants/rfm-portal-2/excel/milkrun-settlement?searchYear&searchMonth&milkrunId&feeType —
   밀크런번호·픽업일·발생금액·세액·조정액 등(상품 없음 → 입고 내역 milkrunSeq 로 상품 수량과 이음, settlement_verify_collect).
@@ -14,11 +14,17 @@
 """
 from __future__ import annotations
 
+import csv
+import io
 import json
+import re
 from datetime import date, timedelta
 from pathlib import Path
 
+import openpyxl
+
 from .settlement_evidence import month_windows
+from .settlement_wing_api import SiteChangedError
 
 GQL = "/marketing-reporting/v2/graphql"
 MILK_EXCEL = "https://wing.coupang.com/tenants/rfm-portal-2/excel/milkrun-settlement?searchYear={y}&searchMonth={m}&milkrunId=&feeType="
@@ -64,6 +70,36 @@ def pick_report(reports: list, ym: str, n_campaigns: int) -> dict | None:
     return max(hit, key=lambda r: int(r["id"])) if hit else None
 
 
+def _report_cell(v: str):
+    """글자 보고서 칸 → 숫자면 숫자(엑셀 보고서와 같게 — 정산서가 숫자 칸만 읽음)."""
+    if not v:
+        return None
+    if re.fullmatch(r"-?\d[\d,]*(\.\d+)?", v):
+        x = float(v.replace(",", ""))
+        return int(x) if x.is_integer() else x
+    return v
+
+
+def report_xlsx(body: bytes) -> bytes:
+    """매출 성장 광고 보고서 응답 → 엑셀 바이트. 큰 보고서 = 쿠팡이 탭 구분 글자로 줌(운용 PC 2026-11-03 실측) — 칸이 다르면 저장 안 함."""
+    if body[:2] == b"PK":
+        return body
+    try:
+        rows = list(csv.reader(io.StringIO(body.decode("utf-8-sig"), newline=""), delimiter="\t"))
+    except UnicodeDecodeError as exc:
+        raise SiteChangedError(f"광고 보고서 글자 응답을 못 읽음: {body[:60]!r}") from exc
+    if not rows or not {"날짜", "캠페인 ID", "광고집행 옵션ID", "광고비"} <= set(rows[0]):
+        raise SiteChangedError(f"광고 보고서 칸이 예상과 다름: {body[:60]!r}")
+    wb = openpyxl.Workbook(write_only=True)
+    ws = wb.create_sheet()
+    ws.append(rows[0])
+    for r in rows[1:]:
+        ws.append([_report_cell(v) for v in r])
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
 def _gql(call, query: str, variables: dict) -> dict:
     r = call("POST", GQL, {"query": query, "variables": variables})
     if r.get("errors"):
@@ -72,9 +108,9 @@ def _gql(call, query: str, variables: dict) -> dict:
 
 
 def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date, *, gap=lambda: None,
-            max_months: int = MAX_MONTHS) -> dict:
+            max_months: int = MAX_MONTHS, get_report=None) -> dict:
     """call(method, path, body) = 광고센터 화면 안 호출(처음 부를 때 광고센터를 열도록 호출부가 늦게 연결) ·
-    get_bytes(url) = 로그인 세션으로 파일 받기 · gap() = 원격 요청마다 먼저 쉼(차단 방지). 받을 게 남은 달은 최근 달부터
+    get_bytes(url) = 로그인 세션으로 파일 받기 · get_report(url) = 보고서 받기(글자 응답 허용, 없으면 get_bytes) · gap() = 원격 요청마다 먼저 쉼(차단 방지). 받을 게 남은 달은 최근 달부터
     max_months 개만. 반환 = 요약 {받을 것, 요청, 기다림, 받음, 캠페인 없음, 남은 달}."""
     folder.mkdir(parents=True, exist_ok=True)
     state_p = folder / f"{acct}_광고.json"
@@ -83,7 +119,7 @@ def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date, 
     out: dict = {"받을 것": [], "요청": [], "기다림": [], "받음": [], "캠페인 없음": [], "남은 달": 0}
     reports: list | None = None
 
-    raw_call, raw_bytes = call, get_bytes
+    raw_call, raw_bytes, raw_report = call, get_bytes, get_report or get_bytes
 
     def call_(method, path, body):
         gap()
@@ -92,6 +128,10 @@ def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date, 
     def bytes_(url):
         gap()
         return raw_bytes(url)
+
+    def report_(url):
+        gap()
+        return raw_report(url)
 
     def done(ym: str) -> bool:
         return all((folder / f"{acct}_{k}_{ym}.{x}").exists() for k, x in (("밀크런", "xlsx"), ("광고정산", "json"))) and (
@@ -126,7 +166,7 @@ def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date, 
                                   "excludeIfNoClickCount": False})
             out["요청"].append(ym)
         elif rep.get("status") == "completed":
-            pa.write_bytes(get_bytes(PA_EXCEL.format(id=rep["id"])))
+            pa.write_bytes(report_xlsx(report_(PA_EXCEL.format(id=rep["id"]))))
             out["받음"].append(ym)
         else:
             out["기다림"].append(ym)
