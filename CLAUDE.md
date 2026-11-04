@@ -3,8 +3,8 @@
 > ⛔**불변 정책 — 모든 도메인·세션·worktree·향후 세션에 영구 적용**(소유자 2026-10-07·08·session-kit 전역 일원화):
 > ①**메모리(MEMORY.md 색인) 30~50줄**·초과분 CLAUDE.md 이관. ②**CLAUDE.md 200줄 미만**·초과 시 색인만+상세 별도 파일.
 > ③**핸드오프 = `STATE.md` 한 곳**(repo 루트·100줄 이하·세션마다 전체 덮어쓰기·새 handoff 문서 난립 금지). ④**DECISIONS =
-> `docs/DECISIONS.md` D-번호 블록·추가 전용**(기존 수정·삭제 금지·뒤집으면 새 항목+`SUPERSEDED by D-xxx`·전환 전 한 줄은 동결 아카이브).
-> ⑤**세션 시작** = STATE.md+DECISIONS 읽고 `git log/status` 대조 3줄 요약 후 착수. ⑥**세션 종료 = `/session-close`**·커밋 =
+> `docs/DECISIONS.md` D-번호 블록·추가 전용**(기존 수정·삭제 금지·뒤집으면 새 항목+`SUPERSEDED by D-xxx`·대체 없는 폐기는 `RETIRED by D-xxx`·전환 전 한 줄은 `docs/decisions/` 동결 아카이브).
+> ⑤**세션 시작** = STATE.md+`docs/DECISIONS_INDEX.md`(자동 생성·직접 수정 금지) 읽고 `git log/status` 대조 3줄 요약 후 착수. DECISIONS.md 전체는 읽지 않고 작업 관련 D번호·태그 원문만 읽으며 현재 코드와 어긋나면 작업 전에 보고. ⑥**세션 종료 = `/session-close`**·커밋 =
 > `[R{n}] 요약`. 되돌림·완화 금지. 전역 SSOT = `~/.claude/CLAUDE.md` "결정 기록·핸드오프·세션 종료" 절.
 
 관리 쿠팡 판매자 계정들의 **상품별×일자별** 지표(노출순위·노출건수·판매건수·방문자)를 수집해
