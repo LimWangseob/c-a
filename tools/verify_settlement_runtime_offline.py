@@ -1753,6 +1753,68 @@ def p44_adcenter_navigation():
     ok("relay → 최종 주소 기다림 · 이동 중 사라짐 = 쉬고 다시(상한 NAV_RETRIES) · 다른 오류는 바로 올림 · 동의·이동 버튼 안 누름(닫기 JS만)")
 
 
+def p45_ad_report_csv():
+    print("[P45] 큰 매출 성장 광고 보고서 = 쿠팡이 엑셀 대신 탭 구분 글자(text/csv)로 줌(운용 PC 11-03 꿈꾸는아재·디프픽 202604) — 엑셀로 바꿔 저장")
+    import io
+    import openpyxl
+    import settlement_download as TD
+    from coupang_analytics import settlement_ads as AD
+    from coupang_analytics import settlement_wing_api as API
+    head = ["날짜", "캠페인 ID", "캠페인명", "광고집행 옵션ID", "키워드", "노출수", "광고비"]
+    tsv = "\n".join("\t".join(f'"{x}"' for x in r) for r in [
+        head, ["20260401", "105108858", "04-01 보냉백", "95501572184", "보냉백, 3중", "1,204", "12345"],
+        ["20260402", "105108858", "2026", "95501572184", "", "7", "-20.5"]]).encode("utf-8")
+    rows = list(openpyxl.load_workbook(io.BytesIO(AD.report_xlsx(tsv))).active.iter_rows(values_only=True))
+    assert list(rows[0]) == head and len(rows) == 3, rows
+    assert rows[1] == (20260401, 105108858, "04-01 보냉백", 95501572184, "보냉백, 3중", 1204, 12345), rows[1]
+    assert rows[2][-1] == -20.5 and rows[2][4] is None, rows[2]                    # 금액 = 숫자(정산서가 숫자 칸만 읽음)
+    assert AD.report_xlsx(b"PK-xlsx") == b"PK-xlsx"
+    for bad in (b'"a"\t"b"\n"1"\t"2"', "오류 안내".encode("utf-8"), b"\xff\xfe\x00"):      # 다른 모양 = 조용히 저장 안 함
+        try:
+            AD.report_xlsx(bad)
+            raise AssertionError(bad)
+        except API.SiteChangedError:
+            pass
+
+    class R:
+        status = 200
+        headers = {"content-type": "text/csv; charset=utf-8"}
+
+        def body(self):
+            return tsv
+
+    class B:
+        class context:
+            class request:
+                @staticmethod
+                def get(url, timeout):
+                    return R()
+    assert TD._get_bytes(B, "u", text_ok=True) == tsv
+    try:
+        TD._get_bytes(B, "u")                                                      # 밀크런·정산 원본은 그대로 엑셀만
+        raise AssertionError("글자 응답을 받음")
+    except API.SiteChangedError:
+        pass
+    rep = {"id": "7", "startDate": 20260401, "endDate": 20260430, "dateGroup": "daily", "granularity": "keyword",
+           "campaignCount": 1, "status": "completed"}
+
+    def call(method, path, body):
+        q = body["query"]
+        if "getDailySettlement" in q:
+            return {"data": {"getDailySettlement": {"summary": {}, "items": []}}}
+        if "getCampaignList" in q:
+            return {"data": {"getCampaignList": [{"id": "105108858", "name": "c"}]}}
+        return {"data": {"reportList": {"reports": [rep]}}}
+    with tempfile.TemporaryDirectory() as d:
+        folder = Path(d)
+        s = AD.collect(call, lambda url: b"PK-milk", folder, "꿈꾸는아재-t", date(2026, 4, 1), date(2026, 5, 4),
+                       get_report=lambda url: tsv)
+        assert s["받음"] == ["202604"], s
+        saved = folder / "꿈꾸는아재-t_매출성장광고_202604.xlsx"
+        assert saved.read_bytes()[:2] == b"PK" and (folder / "꿈꾸는아재-t_밀크런_202604.xlsx").read_bytes() == b"PK-milk"
+    ok("글자 보고서 → 엑셀(금액 숫자·따옴표·콤마) · 다른 모양 = 저장 안 하고 오류 · 밀크런·정산 원본은 엑셀만 · 받은 달 다시 안 받음")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -1789,6 +1851,7 @@ def main():
     p42_inbound()
     p43_collect_throttle_isolation()
     p44_adcenter_navigation()
+    p45_ad_report_csv()
     print("정산 런타임 오프라인 검증 통과")
 
 
