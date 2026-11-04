@@ -369,8 +369,9 @@ _PROMO_DOWN_FILL = {"red": 0.957, "green": 0.800, "blue": 0.800}   # F4CCCC 연�
 
 
 def _title_request(sheet_id: int, desired: list[IndexRow]) -> dict:
-    """제목(A1) '계정목록 · 상품 N개'(판매중지 제외) — 최초 생성·증분 동기화 공통(예전엔 최초만 써서 N 이 낡음·2026-10-12)."""
-    n_prod = sum(1 for d in desired if d.status != DISCONTINUED)
+    """제목(A1) '계정목록 · 상품 N개'(판매중지·상품 없는 계정 줄 제외·D-135) — 최초 생성·증분 동기화 공통(예전엔 최초만 써서
+    N 이 낡음·2026-10-12)."""
+    n_prod = sum(1 for d in desired if d.product and d.status != DISCONTINUED)
     return {"updateCells": {
         "start": {"sheetId": sheet_id, "rowIndex": 0, "columnIndex": 0},
         "rows": [{"values": [{**_s(f"계정목록 · 상품 {n_prod}개"),

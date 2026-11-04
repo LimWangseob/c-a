@@ -122,6 +122,15 @@ class _LifecycleMixin:
             self._reindex()
         return removed
 
+    def roster_only_accounts(self) -> list[tuple[str, str]]:
+        """사업자 시트 없이 `_계정정보`에만 있는 계정 [(사업자, 계정ID)…] — 계정목록의 '미수집' 빈 줄(D-135)."""
+        have = set(self.account_sheets())
+        if _ACCT_SHEET not in self.wb.sheetnames:
+            return []
+        ws = self.wb[_ACCT_SHEET]
+        names = dict.fromkeys(_norm(ws.cell(r, 1).value) for r in range(2, ws.max_row + 1))
+        return [(b, self.account_id_of(b)) for b in names if b and b not in have]
+
     def prune_account_ids(self, biz: str, ledger_ids) -> int:
         """그 사업자에 저장된 계정ID 중 **관리대장에 없고 어느 상품에도 태그되지 않은** 것을 지운다(D-093) — `_계정정보`
         목록과 `_수집스탬프` 그 계정ID 행. 남은 개수가 0 이 되면 지우지 않는다(이름 변경·삭제 판정은 다른 경로).

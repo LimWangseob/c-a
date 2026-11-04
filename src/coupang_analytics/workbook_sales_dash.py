@@ -106,8 +106,8 @@ def _kpis(ws, r, d) -> int:
 
 
 def _scale_rows(ws, r, d) -> int:
-    """① 맨 위 — [셀독 관리 상품] 셀독 관리 계정 수 · 관리 상품 등록 수(판매중지 따로) · 누적 매출금액(= 아래 월별 누계
-    합·4월~어제·D-128) → [위탁자 직접 관리 상품] 상품 등록 수(판매분석 등록상품ID) · 누적 매출금액(D-130). 마지막 행 반환."""
+    """① 맨 위 — 상품 수·누적 매출 2가지(둘 다 판매분석 기준·D-139): [셀독 관리 상품] 셀독 관리 계정 수 · 관리 상품 등록 수
+    (계정목록 수·판매중지 따로 표시) · 누적 매출금액 → [위탁자 직접 관리 상품] 계정별 전체 상품 등록 수 · 누적 매출금액. 마지막 행 반환."""
     if not d.managed:
         return r
     r += 1
@@ -125,13 +125,19 @@ def _line(ws, r, label, value) -> int:
 
 def _managed_lines(ws, r, d) -> int:
     accts, prods, stop = d.managed
-    lines = [("셀독 관리 계정 수", f"{accts:,}개"),
-             ("관리 상품 등록 수", f"{prods:,}개 (판매 중 {prods - stop:,} · 판매중지 {stop:,})")]
-    if d.cum:
-        lines.append(("누적 매출금액", _cum_text(d, *d.cum)))
-    for label, value in lines:
+    ids, sold, amount, gaps, no_id = d.mine
+    roster = f" · 계정목록 {prods:,}개: 판매 중 {prods - stop:,} · 판매중지 {stop:,}"
+    for label, value in (("셀독 관리 계정 수", f"{accts:,}개"),
+                         ("관리 상품 등록 수", _count_text(d, ids, sold, no_id, roster)),
+                         ("누적 매출금액", _cum_text(d, amount, gaps))):
         r = _line(ws, r, label, value)
     return r
+
+
+def _count_text(d, count, sold, no_id, tail="") -> str:
+    """상품 등록 수 값 칸 — 판매분석에 나온 등록상품ID 수·매출 발생(D-139)."""
+    no = f" · 등록상품ID 모르는 옵션 {no_id:,}개 제외" if no_id else ""
+    return f"{count:,}개 ({FIRST_SPAN}~{d.yesterday:%m.%d} 판매분석에 나온 등록상품ID · 매출 발생 {sold:,}{no}{tail})"
 
 
 def _cum_text(d, amount, gaps) -> str:
@@ -145,13 +151,11 @@ def _cum_text(d, amount, gaps) -> str:
 
 
 def _own_lines(ws, r, d) -> int:
-    """위탁자 직접 관리 상품(관리 상품 밖) 2줄 — 쿠팡 판매분석 기준(9월 판매현황과 같은 등록상품ID 단위·D-130)."""
+    """위탁자 직접 관리 상품(관리 상품 포함) 2줄 — 계정별 전체 상품·쿠팡 판매분석 기준(D-130·D-139)."""
     ids, sold, amount, gaps, no_id = d.own
-    span = f"{FIRST_SPAN}~{d.yesterday:%m.%d}"
     r += 1
-    _span(ws, r, 1, DASH_COLS, "위탁자 직접 관리 상품(관리 상품 외) — 쿠팡 판매분석 기준", bold=True, fill=_FILL_HEAD, box=True)
-    no = f" · 등록상품ID 모르는 옵션 {no_id:,}개 제외" if no_id else ""
-    r = _line(ws, r, "상품 등록 수", f"{ids:,}개 ({span} 판매분석에 나온 등록상품ID · 매출 발생 {sold:,}{no})")
+    _span(ws, r, 1, DASH_COLS, "위탁자 직접 관리 상품(관리 상품 포함) — 쿠팡 판매분석 기준", bold=True, fill=_FILL_HEAD, box=True)
+    r = _line(ws, r, "상품 등록 수", _count_text(d, ids, sold, no_id))
     return _line(ws, r, "누적 매출금액", _cum_text(d, amount, gaps))
 
 

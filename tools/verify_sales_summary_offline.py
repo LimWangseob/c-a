@@ -577,13 +577,13 @@ def t11_charts_persist():
 
 
 def t12_managed_counts():
-    print("[T12] ① 요약 맨 위 — 셀독 관리(계정·상품·누적 매출 D-128) + 위탁자 직접 관리(판매분석 등록상품ID·누적 매출 D-130)")
+    print("[T12] ① 요약 맨 위 — 상품 수·누적 매출 2가지(관리 상품만·계정별 전체) 둘 다 판매분석 기록만(D-139)")
     with tempfile.TemporaryDirectory() as d:
         _fixture(d)
         own = lambda vid, name, gmv, inv: OptionMetric(vid, name, "기본", "i", 0, 1, 0, registration_type="NORMAL",  # noqa: E731
                                                      gmv=gmv, orders=1, inventory_id=inv)
         SH.record_period(d, "a1", "M:2026-04", "2026-04-01", "2026-04-30", {
-            "v1": _m("v1", "캠핑테이블", "RFM", 4, 40000),
+            "v1": own("v1", "캠핑테이블", 40000, "I1"),                                     # 관리 상품도 포함(D-132)
             "x1": own("x1", "위탁자상품", 7000, "I9"), "x2": own("x2", "위탁자상품", 3000, "I9"),   # 같은 등록상품ID 두 옵션 = 1개
             "x3": own("x3", "안팔린위탁자상품", 0, "I8"), "x4": own("x4", "번호모름", 500, "")})       # 등록상품ID 없음 = 따로 표시
         path = Path(d) / "m.xlsx"
@@ -598,20 +598,22 @@ def t12_managed_counts():
         cells = [list(r) for r in wb.wb[WS.SALES_SHEET].iter_rows(values_only=True)]
         val = {r[0]: r[1] for r in cells if r[0] in ("셀독 관리 계정 수", "관리 상품 등록 수", "누적 매출금액")}
         assert val.get("셀독 관리 계정 수") == "3개", val
-        assert val.get("관리 상품 등록 수") == "3개 (판매 중 2 · 판매중지 1)", val
+        assert val.get("관리 상품 등록 수") == ("1개 (04.01~10.14 판매분석에 나온 등록상품ID · 매출 발생 1 · 등록상품ID 모르는 옵션 "
+                                               "2개 제외 · 계정목록 3개: 판매 중 2 · 판매중지 1)"), val   # I1 만 · 모름 = 10월 v1·v3
         band = next(i for i, r in enumerate(cells) if str(r[0]).startswith("① 요약"))
         assert [cells[band + k][0] for k in range(1, 8)] == [
             "셀독 관리 상품", "셀독 관리 계정 수", "관리 상품 등록 수", "누적 매출금액",
-            "위탁자 직접 관리 상품(관리 상품 외) — 쿠팡 판매분석 기준", "상품 등록 수", "누적 매출금액"],             [cells[band + k][0] for k in range(1, 8)]   # D-130: 소제목 2줄 + 직접 관리 2줄
+            "위탁자 직접 관리 상품(관리 상품 포함) — 쿠팡 판매분석 기준", "상품 등록 수", "누적 매출금액"],             [cells[band + k][0] for k in range(1, 8)]   # D-130: 소제목 2줄 + 직접 관리 2줄
         o_cnt, o_amt = cells[band + 6][1], cells[band + 7][1]
-        assert o_cnt == "2개 (04.01~10.14 판매분석에 나온 등록상품ID · 매출 발생 1 · 등록상품ID 모르는 옵션 1개 제외)", o_cnt
-        assert str(o_amt).startswith("10,500원 (04.01~10.14"), o_amt                      # 관리 밖 판매 = 7,000+3,000+500
+        assert o_cnt == ("3개 (04.01~10.14 판매분석에 나온 등록상품ID · 매출 발생 2 · "
+                         "등록상품ID 모르는 옵션 3개 제외)"), o_cnt   # I1·I9·I8(판매분석에 안 나온 관리 상품 = 안 셈) · 모름 = 10월 v1·v3 + x4
+        assert str(o_amt).startswith("150,500원 (04.01~10.14"), o_amt                     # 관리 40,000+100,000 + 밖 10,500
         months = [r for r in cells if r[0] and str(r[0])[:3].rstrip(" 0123456789.~").endswith("월")
                   and isinstance(r[1], int) and "월 " in str(r[0])]
         total = sum(r[1] for r in months)
         assert months and str(months[0][0]).startswith("4월"), [r[0] for r in months]
         assert str(cells[band + 4][1]).startswith(f"{total:,}원 (04.01~10.14"), (val, total)
-    ok("계정 3(상품 0개 계정 포함) · 상품 3(판매 중 2·판매중지 1) · 누적 = 4월~ 월별 누계 합 · 직접 관리 = 등록상품ID 2개(같은 ID 두 옵션 = 1)·매출 발생 1·ID 모르는 옵션 따로·10,500원 · 소제목 2줄")
+    ok("계정 3(상품 0개 계정 포함) · 상품 3(판매 중 2·판매중지 1) · 누적 = 4월~ 월별 누계 합 · 관리 상품 수 = 판매분석에 나온 등록상품ID 1·계정목록 3 따로 표시 · 계정별 전체 = 등록상품ID 3개(같은 ID 두 옵션 = 1)·매출 발생 2·ID 모르는 옵션 따로·150,500원 · 소제목 2줄")
 
 
 def t13_cumulative_gaps():
@@ -643,7 +645,7 @@ def t13_cumulative_gaps():
         m_amt, o_amt = cells[band + 4][1], cells[band + 7][1]
         # 관리 = a1 30,000+10,000 · a2 20,000+16,000(5/1~5/8)+2,000(5/10) · a3 10,000+9,000+3,000 = 100,000
         assert m_amt == "100,000원 (04.01~05.10 · 계정별 받은 날 전부 합 · 빠진 날: 다라상사 1일)", m_amt
-        assert o_amt == "900원 (04.01~05.10 · 계정별 받은 날 전부 합 · 빠진 날: 다라상사 1일)", o_amt   # 800 + 100(5/10)
+        assert o_amt == "100,900원 (04.01~05.10 · 계정별 받은 날 전부 합 · 빠진 날: 다라상사 1일)", o_amt   # 관리 + x9 900
     ok("하루 빠진 계정(다라상사)도 받은 날 전부(기간 합계 5/8까지 + 5/10 일별) · 기간 합계 + 그 뒤 일별 = 다 받음(마바상사) · 빠진 날 표시 · 직접 관리도 같은 계산")
 
 

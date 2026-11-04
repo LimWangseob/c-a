@@ -1224,32 +1224,14 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         return True
 
     def _auto_load_input(self) -> bool:
-        """입력 자동 로드(무인 실행·재시작 후): 소스=원장이면 원장에서(실패 시 로그 후 구글 관리대장),
-        gsheet면 등록 링크에서, 아니면 마지막 PC 엑셀에서."""
+        """입력 자동 로드(무인 실행·재시작 후) — 구글 소스 실패 = 오류·실행 안 함(registry_ui.auto_load_input·D-134)."""
         st = QtCore.QSettings("coupang-analytics", "ui")
-        url = st.value("gsheet/input_url", "", type=str)
-        src = st.value("input/source", "", type=str)
-        if src == registry_ui.SOURCE_REGISTRY:
-            reg_url = st.value(registry_ui.KEY_URL, "", type=str).strip()
-            try:
-                if not reg_url:
-                    raise ValueError("원장 링크 미등록")
-                return self._apply_input_registry(reg_url)
-            except Exception as exc:
-                self.log(f"== [입력] 원장 로드 실패 → 관리대장으로 전환: {exc.__class__.__name__}: {exc} ==")
-        if src in ("gsheet", registry_ui.SOURCE_REGISTRY) and url:
-            try:
-                return self._apply_input_gsheet(url, persist=(src == "gsheet"))
-            except Exception as exc:
-                self.log(f"[입력] 구글시트 자동 로드 실패({exc.__class__.__name__}): {exc} — PC 엑셀로 폴백 시도")
-        path = st.value("file/input", "", type=str)
-        if not (path and Path(path).exists()):
-            return False
-        try:
-            return self._apply_input(path)
-        except Exception as exc:
-            self.log(f"[입력] 자동 로드 실패({exc.__class__.__name__}): {exc}")
-            return False
+        return registry_ui.auto_load_input(
+            st.value("input/source", "", type=str), st.value("gsheet/input_url", "", type=str),
+            st.value(registry_ui.KEY_URL, "", type=str).strip(), st.value("file/input", "", type=str),
+            from_registry=self._apply_input_registry,
+            from_ledger=lambda url, persist: self._apply_input_gsheet(url, persist=persist),
+            from_file=self._apply_input, log=self.log)
 
     def _store_passwords_map(self, pw_map: dict, quiet=False) -> int:
         """{계정아이디: 비밀번호} 를 DPAPI(이 PC 전용)로 저장. 관리대장(파일/구글시트) 공용.
@@ -1554,7 +1536,8 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
     def _require_run_inputs(self) -> bool:
         """전체실행/판매수집 전 필수 입력·키 확인 — 없으면 경고 후 False."""
         if self.input_list is None:
-            QtWidgets.QMessageBox.warning(self, "입력 필요", "설정 탭에서 입력 엑셀을 먼저 여세요.")
+            QtWidgets.QMessageBox.warning(self, "입력 필요", "관리대장을 읽지 못했습니다. 설정 탭에서 '관리대장에서 불러오기'를 "
+                                                         "눌러 로그의 사유를 확인하세요.")
             return False
         if self.naver_creds is None:
             QtWidgets.QMessageBox.warning(self, "키 필요", "설정 탭에서 네이버 API 키를 먼저 여세요.")
@@ -1655,10 +1638,9 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self.log("== [무인 자동 실행] 시작 ==")
         power.keep_awake(True)
         if self.input_list is None:
-            # 입력 자동 로드(_auto_load_input)가 구글시트·PC엑셀 모두 실패 → 바로 종료. 위에 이미 사유 로그가 있다
-            # (예: 구글시트 403/404). 구글시트 사용자인데 "입력 엑셀이 없어"만 보여 혼동되던 것을 명확히 한다.
-            self.log("[무인] 입력을 불러오지 못해 실행 불가(구글시트·PC엑셀 모두 실패) — "
-                     "위 로그의 '입력 … 로드 실패' 사유를 확인하세요(구글시트 링크·서비스계정 편집 공유 또는 PC 엑셀). 종료")
+            # 입력 자동 로드(_auto_load_input) 실패 → 바로 종료(구글 소스는 PC 엑셀로 대신 안 돌림·D-134). 위에 사유 로그가 있다
+            self.log("[무인] ❌ 입력을 불러오지 못해 실행을 중단합니다 — 위 로그의 '[입력]' 사유를 확인하세요"
+                     "(인터넷·구글시트 링크·서비스계정 편집 공유). 종료")
             return self._auto_quit()
         if self.naver_creds is None or not self.ai_key:
             self.log("[무인] 네이버/OpenAI 키 미설정 — 설정 후 재시도. 종료")

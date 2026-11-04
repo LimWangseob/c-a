@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import os
 import sys
 import tempfile
@@ -365,7 +366,11 @@ def t3b_full_and_incremental() -> None:
               if "updateCells" in r and r["updateCells"]["start"].get("rowIndex") == 0
               for row in r["updateCells"]["rows"] for c in row["values"]]
     assert "계정목록 · 상품 3개" in titles, f"증분 동기화가 제목 상품 수를 갱신 안 함: {titles}"
-    _ok("기존 시트(8열) → 증분(상품4 신규 삽입, 상품2 판매중지)·제목 상품 수 갱신")
+    # 상품 없는 계정 줄(미수집)은 상품이 아님(D-135 — 실측 11-03: 판매 중 101 인데 제목 105)
+    with_blank = [*desired, dataclasses.replace(desired[0], product="", status="미수집", key="blank")]
+    head = gi._title_request(0, with_blank)["updateCells"]["rows"][0]["values"][0]
+    assert head["userEnteredValue"]["stringValue"] == "계정목록 · 상품 3개", head
+    _ok("기존 시트(8열) → 증분(상품4 신규 삽입, 상품2 판매중지)·제목 상품 수 갱신(빈 계정 줄 제외)")
 
     # 옛 7열 시트 → 대표자 컬럼 자동 마이그레이션(A에 빈 열 삽입 후 증분)
     old_vals = [

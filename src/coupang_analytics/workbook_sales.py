@@ -79,14 +79,14 @@ def refresh_sales_sheet(owb, out_dir="output", log=None, today: date | None = No
         return msg
     managed, labels = managed_vids(owb), account_labels(owb)
     listings = sales_summary.managed_listings((daily, periods), managed)   # D-107: 관리 상품 전체(옵션·윙·재등록 VID)
-    raw_stores = (daily, periods)                                           # 거르기 전(위탁자 직접 관리 상품용·D-130)
+    all_d, all_p = ({a: r for a, r in raw.items() if a in managed} for raw in (daily, periods))   # 결과 계정 전체(D-130·D-132)
     daily, periods = (sales_summary.scope(daily, managed, listings),
                       sales_summary.scope(periods, managed, listings))
     summary = sales_summary.build(daily, labels, yesterday)
     board = sales_dashboard.build(daily, periods, labels, yesterday)
     board.managed = managed_counts(owb)
-    own_d, own_p = (sales_summary.scope(raw, managed, listings, outside=True) for raw in raw_stores)   # D-130
-    board.own = sales_dashboard.own_scale(own_p, sales_dashboard.build(own_d, own_p, labels, yesterday))
+    board.mine = sales_dashboard.sales_scale(periods, board)                # 관리 상품만(D-139)
+    board.own = sales_dashboard.sales_scale(all_p, sales_dashboard.build(all_d, all_p, labels, yesterday))   # 계정별 전체
     write_sales_sheet(owb.wb, summary, _login_reasons(out_dir, log), board)
     day = summary.sections[0]
     key = day.cols[0].key

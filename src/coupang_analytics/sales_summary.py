@@ -137,11 +137,10 @@ def managed_listings(stores, managed: dict) -> dict:
     return out
 
 
-def scope(store: dict, managed: dict | None, listings: dict | None = None, outside: bool = False) -> dict:
+def scope(store: dict, managed: dict | None, listings: dict | None = None) -> dict:
     """{계정: {키: 기록}} → 관리 상품만 남긴 사본. managed = {계정ID: VID 집합}(결과 사업자 시트 블록) ·
     listings = {계정ID: 관리 상품명 집합}(managed_listings — 있으면 같은 상품명의 다른 VID 도 포함·D-107) ·
-    None = 거르지 않음. managed 에 없는 계정(결과 파일에 없는 계정)은 뺀다.
-    outside=True = 반대로 **관리 상품 밖**(위탁자가 직접 관리하는 상품)만 남김(D-130)."""
+    None = 거르지 않음. managed 에 없는 계정(결과 파일에 없는 계정)은 뺀다."""
     if managed is None:
         return store
     out: dict = {}
@@ -150,7 +149,7 @@ def scope(store: dict, managed: dict | None, listings: dict | None = None, outsi
             continue
         vids, names = managed[aid], (listings or {}).get(aid) or set()
         out[aid] = {k: {**r, "옵션": {v: o for v, o in (r.get("옵션") or {}).items()
-                                     if (v in vids or _listing(o) in names) != outside}}
+                                     if v in vids or _listing(o) in names}}
                     for k, r in recs.items()}
     return out
 

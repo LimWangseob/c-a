@@ -2,7 +2,8 @@
 
 재고는 두 가지: 로켓그로스 재고(쿠팡 재고현황 API → '그로스 재고' 열, input_list.write_ledger_inventory)와
 **판매자배송용 회사 자체 재고**(이 모듈). 소유자 결정(2026-09-29):
-- 읽을 탭 = 설정에 넣은 **링크의 gid 탭**(gid 없는 링크면 구글시트가 여는 첫 탭).
+- 읽을 탭 = 설정에 넣은 **링크의 gid 탭**(gid 없는 링크면 구글시트가 여는 첫 탭). 양식 2가지 — 상품별 '상품명·현재고' ·
+  팔래트/박스 줄 '제품명(판매처 제품명)·총입고수량'(창고별 합산·한 팔래트 두 상품 줄 '가 / 나'·'45 / 96' 나눔·D-141).
 - 대장 표기 = **'창고 , 수량개'**(예 '김포2 , 150개'). 여러 창고면 ' / ' 로 이어 씀(파일 순서), 같은 창고가 여러
   줄이면 그 창고 안에서 합산. '-' = 0, 음수는 그대로 쓰고 경고.
 - 매칭 = **동일 상품명**(띄어쓰기·대소문자 무시). 관리대장 상품명이 여러 줄이면 첫 줄(대장 규칙).
@@ -64,14 +65,22 @@ def resolve_tab(client, url: str) -> str:
 
 
 def _stock_columns(rows: list) -> tuple[int, int, int, int]:
-    """(헤더 행, 창고 열, 상품명 열, 현재고 열) — 헤더 이름으로 찾음(탭마다 열 위치가 다름)."""
+    """(헤더 행, 창고 열, 상품명 열, 수량 열) — 헤더 이름으로 찾음(탭마다 열 위치가 다름). 양식 2가지:
+    '상품명'·'현재고' · 팔래트/박스 줄 양식 '제품명(판매처 제품명)'·'총입고수량'(D-141)."""
     for r, row in enumerate(rows[:_HEADER_SCAN]):
         cells = ["".join(str(c).split()) for c in row]
-        if "상품명" in cells and "창고" in cells:
-            qty = next((i for i, c in enumerate(cells) if "현재고" in c), None)
-            if qty is not None:
-                return r, cells.index("창고"), cells.index("상품명"), qty
-    raise ValueError(f"재고현황 상단 {_HEADER_SCAN}행에서 '창고'·'상품명'·'현재고' 헤더를 찾지 못함")
+        name = next((i for i, c in enumerate(cells) if c == "상품명" or c.startswith("제품명")), None)
+        qty = next((i for i, c in enumerate(cells) if "현재고" in c or "총입고수량" in c), None)
+        if "창고" in cells and name is not None and qty is not None:
+            return r, cells.index("창고"), name, qty
+    raise ValueError(f"재고현황 상단 {_HEADER_SCAN}행에서 '창고'·'상품명(제품명)'·'현재고(총입고수량)' 헤더를 찾지 못함")
+
+
+def _split_pallet(name: str, qty) -> list:
+    """한 팔래트 두 상품 줄 '가 / 나'·'45 / 96' → [(가, 45), (나, 96)] — 수량 칸 개수가 이름과 같을 때만(D-141)."""
+    qtys = re.split(r"\s*/\s*", str(qty if qty is not None else "").strip())
+    names = re.split(r"\s+/\s+", name)
+    return list(zip(names, qtys)) if 1 < len(names) == len(qtys) else [(name, qty)]
 
 
 def stock_text(by_wh: dict) -> str:
@@ -85,16 +94,17 @@ def read_stock(rows: list) -> tuple[dict, list]:
     stock: dict[str, tuple[str, dict]] = {}
     warnings: list[str] = []
     for r, row in enumerate(rows[hrow + 1:], start=hrow + 2):
-        name = " ".join(str(_cell(row, i_name) or "").split())
-        if not name:
+        cell_name = " ".join(str(_cell(row, i_name) or "").split())
+        if not cell_name:
             continue
-        q = parse_qty(_cell(row, i_qty))
         wh = " ".join(str(_cell(row, i_wh) or "").split())
-        if q is None or not wh:
-            warnings.append(f"재고현황 {r}행 '{name}' 창고 '{wh}'·수량 '{_cell(row, i_qty)}' 확인 필요 — 제외")
-            continue
-        by_wh = stock.setdefault(name_key(name), (name, {}))[1]
-        by_wh[wh] = by_wh.get(wh, 0) + q
+        for name, raw in _split_pallet(cell_name, _cell(row, i_qty)):
+            q = parse_qty(raw)
+            if q is None or not wh:
+                warnings.append(f"재고현황 {r}행 '{name}' 창고 '{wh}'·수량 '{raw}' 확인 필요 — 제외")
+                continue
+            by_wh = stock.setdefault(name_key(name), (name, {}))[1]
+            by_wh[wh] = by_wh.get(wh, 0) + q
     for shown, by_wh in stock.values():
         if any(q < 0 for q in by_wh.values()):
             warnings.append(f"재고현황 '{shown}' 음수 재고({stock_text(by_wh)}) — 그대로 기록, 재고현황 확인 필요")

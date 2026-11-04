@@ -2417,6 +2417,85 @@ def t1_vidless_uncollected():
     _ok("미수집 계정 잔재 3개 삭제·대장 상품·VID 블록·메타 없는 복원 블록·다른 계정ID 보존")
 
 
+def t1_gsheet_fail_stops():
+    print("[D-134] 구글 관리대장을 못 읽으면 오류·실행 중단 — PC 엑셀로 대신 돌리지 않음")
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ui"))
+    import registry_ui
+    calls: list[str] = []
+    logs: list[str] = []
+
+    def fail(*_a):
+        calls.append("구글")
+        raise OSError("Unable to find the server")
+
+    def from_file(_p):
+        calls.append("엑셀")
+        return True
+
+    with tempfile.TemporaryDirectory() as d:
+        old = Path(d) / "옛대장.xlsx"
+        old.write_bytes(b"x")
+        for src, url in (("gsheet", "u"), ("gsheet", ""), (registry_ui.SOURCE_REGISTRY, "u")):
+            calls.clear()
+            got = registry_ui.auto_load_input(src, url, "r", str(old), from_registry=fail, from_ledger=fail,
+                                              from_file=from_file, log=logs.append)
+            assert got is False and "엑셀" not in calls, f"구글 실패인데 PC 엑셀로 돌림: {src}/{url!r} {calls}"
+        assert any("❌" in m and "중단" in m for m in logs), logs
+        calls.clear()
+        assert registry_ui.auto_load_input("file", "u", "r", str(old), from_registry=fail, from_ledger=fail,
+                                           from_file=from_file, log=logs.append) is True
+        assert calls == ["엑셀"], calls                      # 사람이 PC 엑셀을 고른 경우만 엑셀
+        got: list = []
+        assert registry_ui.auto_load_input("gsheet", "u", "r", "", from_registry=fail,
+                                           from_ledger=lambda u, p: got.append(p) or True,
+                                           from_file=from_file, log=logs.append) is True
+        assert got == [True], got                            # 관리대장 소스 = 설정 저장
+    _ok("구글 소스 실패(서버 못 찾음·링크 없음·원장+관리대장 실패) = ❌ 로그·실행 안 함 · PC 엑셀 소스만 엑셀")
+
+
+def t1_roster_follows_ledger():
+    print("[D-135] 계정목록 계정 = 관리대장 — 시트 없이 남은 줄 삭제·미수집 대장 계정 유지·계정 수 일치")
+    from coupang_analytics import workbook_sales as WS
+    from coupang_analytics.input_list import Account, InputList, Product
+    from coupang_analytics.pipeline import _reconcile_ledger_accounts
+    # 실측(11-01 옛 PC 엑셀 폴백): 온라이프·플랜잇·하성진이 시트 없이 로스터에 남음 — 삭제 고리는 사업자 시트만 봐서 계속 잔존
+    wb = OutputWorkbook.empty()
+    wb.ensure_product_block("가게A", "상품A", config.KIND_PERSONAL, ["kw"], registered="상품A")
+    wb.set_account_id("가게A", "a1")
+    for biz, aid in (("온라이프", "hide4u"), ("장성원", "hide4u"), ("플랜잇", "plan_it"), ("새계정", "new1")):
+        wb.set_account_id(biz, aid)
+    assert WS.managed_counts(wb)[0] == 4, WS.managed_counts(wb)   # 옛 동작 = 대장에 없는 2개 포함
+    a1 = Account("a1", "대표", "가게A", products=[Product(name="상품A")], ledger_products={"상품A"})
+    new = Account("new1", "대표", "새계정", products=[Product(name="새상품")], ledger_products={"새상품"})
+    il = InputList(accounts=[a1, new], errors=[], ledger_account_ids={"a1", "new1"})
+    logs: list[str] = []
+    removed, _renamed = _reconcile_ledger_accounts(wb, il, [new], logs.append)
+    assert sorted(removed) == [("온라이프", "hide4u"), ("장성원", "hide4u"), ("플랜잇", "plan_it")], removed
+    assert [b for b, *_ in wb.product_roster()] == ["가게A", "새계정"], wb.product_roster()   # 미수집 대장 계정 = 유지
+    assert WS.managed_counts(wb)[0] == 2, WS.managed_counts(wb)
+    _ok("대장에 없는 시트 없는 줄 3개 삭제 · 대장에 있는 미수집 계정 유지 · 계정 수 = 대장 2")
+
+
+def t1_file_input_keeps_accounts():
+    print("[D-134] PC 엑셀 입력 = 계정 삭제·판매중지 표기 안 함(옛 파일에 없다고 지우지 않음)")
+    from coupang_analytics.input_list import Account, InputList, Product
+    from coupang_analytics.pipeline import _reconcile_ledger_accounts
+    wb = OutputWorkbook.empty()
+    for biz, aid in (("가게A", "a1"), ("옛파일에없음", "b1")):
+        wb.ensure_product_block(biz, f"상품{aid}", config.KIND_PERSONAL, ["kw"], registered=f"상품{aid}")
+        wb.set_account_id(biz, aid)
+    wb.set_account_id("시트없음", "c1")
+    a1 = Account("a1", "대표", "가게A", products=[Product(name="상품a1")], ledger_products={"상품a1"})
+    il = InputList(accounts=[a1], errors=[], ledger_account_ids={"a1"}, from_file=True)
+    logs: list[str] = []
+    removed, _renamed = _reconcile_ledger_accounts(wb, il, [], logs.append)
+    assert removed == [] and "옛파일에없음" in wb.account_sheets(), (removed, wb.account_sheets())
+    assert not wb.is_discontinued("옛파일에없음", "상품b1")
+    assert "시트없음" in [b for b, *_ in wb.product_roster()]
+    assert any("PC 엑셀" in m for m in logs), logs
+    _ok("PC 엑셀 입력 = 삭제 0·판매중지 표기 0·로그 표시")
+
+
 def t1_twin_vid_purge():
     print("[B3] 추적 VID 와 같은 리스팅·같은 옵션의 다른 배송방식 VID 블록(추적 안 됨) = 정리 → 노출명 현행화")
     from coupang_analytics.input_list import Account, Option, Product
@@ -2551,6 +2630,9 @@ def main():
     t1_exposed_name_wing_modify()
     t1_no_vidless_blocks()
     t1_vidless_uncollected()
+    t1_gsheet_fail_stops()
+    t1_roster_follows_ledger()
+    t1_file_input_keeps_accounts()
     t1_twin_vid_purge()
     t1_rep_swap_merge_keywords()
     t1_shared_exposed_option_label()

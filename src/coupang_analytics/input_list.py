@@ -70,6 +70,7 @@ class InputList:
     ledger_account_ids: set = field(default_factory=set)   # 관리대장에 **줄이 존재하는** 모든 계정ID
     #  (판매중지/취소선 포함 — '줄이 사라진' 계정과 구분해 완전삭제 판정에 씀, 2026-09-17)
     promo: list | None = None   # 관리대장 '체험단' 시트(PromoRow) — None=읽지 않음(체험단 자동 시작일 유지·D-086)
+    from_file: bool = False     # PC 엑셀에서 읽음 = 옛 파일일 수 있어 계정 삭제·판매중지 표기 판정에 쓰지 않음(D-134)
 
 
 def _norm(value) -> str:
@@ -581,7 +582,9 @@ def parse_input_list(path: str | Path) -> InputList:
     ws, strike_ok = _load_for_parse(path)   # strike_ok=False면 취소선 자동감지 불가(한컴 스타일 비호환)
     rows = list(ws.iter_rows(values_only=True))
     strike_fn = (lambda row_no, col0: _cell_struck(ws, row_no, col0)) if strike_ok else None
-    return _parse_grid(rows, strike_fn=strike_fn, emit_strike_warning=not strike_ok)
+    il = _parse_grid(rows, strike_fn=strike_fn, emit_strike_warning=not strike_ok)
+    il.from_file = True
+    return il
 
 
 def parse_input_rows(rows: list, strike_grid: list | None = None) -> InputList:

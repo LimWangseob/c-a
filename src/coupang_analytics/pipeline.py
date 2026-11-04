@@ -329,6 +329,9 @@ def _reconcile_ledger_accounts(wb, input_list: InputList, uncollected, log, vids
     반환 = (완전 삭제한 [(사업자, 계정ID)…], 일원화로 사라진 옛 이름 [(옛사업자명, 계정ID)…]).
     """
     renamed = _consolidate_renamed_accounts(wb, input_list, log)  # 시트명 변경 계정 먼저 흡수(고아 오분류 방지)
+    if input_list.from_file:   # D-134: 옛 PC 엑셀에 없다고 지우지 않음(실측 10-30: 옛 파일 폴백으로 9계정 이력 삭제)
+        log("== [SYNC] PC 엑셀 입력 — 계정 삭제·판매중지 표기 건너뜀(구글 관리대장으로 실행할 때만 판정) ==")
+        return [], renamed
     _sync_ledger_state(wb, input_list, log, vids_by_acct)
     active_biz = {a.label for a in input_list.accounts}
     active_ids = input_list.ledger_account_ids            # 대장에 줄이 존재하는 계정ID(판매중지 포함)
@@ -348,6 +351,10 @@ def _reconcile_ledger_accounts(wb, input_list: InputList, uncollected, log, vids
             gone, _del = wb.reconcile_account(biz, [])       # delete_missing=False(기본): 줄 존재=유지
             if gone:
                 log(f"== [{biz}] 대장에 남았으나 비활성 → 상품 {len(gone)}개 판매중지 표기 ==")
+    for biz, aid in wb.roster_only_accounts():             # D-135: 계정목록 계정 = 관리대장 — 시트 없이 남은 줄 정리
+        if active_ids and aid and aid not in active_ids and wb.delete_account(biz):
+            removed_accounts.append((biz, aid))
+            log(f"== [{biz}] 관리대장에 없는 계정 줄 삭제(시트 없음·{aid}) ==")
     return removed_accounts, renamed
 
 

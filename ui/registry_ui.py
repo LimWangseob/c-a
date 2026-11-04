@@ -6,6 +6,7 @@ SSOT=designs/LEDGER_REGISTRY.md §10-1 (2-1 원장 자동 반영 · 2-3 이전 �
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
 from coupang_analytics import gsheet_api, registry, registry_gsheet
 from coupang_analytics.input_list import read_ledger_rows
@@ -15,6 +16,36 @@ SOURCE_REGISTRY = "registry"          # QSettings input/source 값(원장)
 KEY_URL = "registry/url"              # 원장 구글시트 링크(입력 관리대장·결과 시트와 별도)
 CHECK_PW_MISMATCH = "비밀번호불일치"   # registry_model.COUPANG_CHECK_VALUES 중 2-3 대상
 CHECK_CONFIRMED = "확인됨"
+
+
+def auto_load_input(src: str, ledger_url: str, registry_url: str, file_path: str, *,
+                    from_registry, from_ledger, from_file, log) -> bool:
+    """무인·재시작 입력 자동 로드 — 소스=원장이면 원장(실패 시 로그 후 구글 관리대장), gsheet 면 구글 관리대장, 그 밖엔 PC 엑셀.
+    ⛔ 구글 소스를 못 읽으면 **오류로 끝낸다 — PC 엑셀로 대신 돌리지 않음**(D-134: 10-30 옛 엑셀 폴백으로 9계정 이력 삭제).
+    from_ledger(url, persist) · persist=False = 원장 대신 읽는 경우(사용자가 고른 입력 소스 유지)."""
+    if src == SOURCE_REGISTRY:
+        try:
+            if not registry_url:
+                raise ValueError("원장 링크 미등록")
+            return from_registry(registry_url)
+        except Exception as exc:
+            log(f"== [입력] 원장 로드 실패 → 관리대장으로 전환: {exc.__class__.__name__}: {exc} ==")
+    if src in ("gsheet", SOURCE_REGISTRY):
+        try:
+            if not ledger_url:
+                raise ValueError("관리대장 링크 미등록")
+            return from_ledger(ledger_url, src == "gsheet")
+        except Exception as exc:
+            log(f"== [입력] ❌ 구글 관리대장을 읽지 못해 실행을 중단합니다 — {exc.__class__.__name__}: {exc} · PC 엑셀로 대신 "
+                "돌리지 않습니다. 인터넷·링크·서비스계정 공유를 확인한 뒤 다시 실행하세요 ==")
+            return False
+    if not (file_path and Path(file_path).exists()):
+        return False
+    try:
+        return from_file(file_path)
+    except Exception as exc:
+        log(f"[입력] 자동 로드 실패({exc.__class__.__name__}): {exc}")
+        return False
 
 
 def load(registry_url: str, store, log=None):

@@ -63,8 +63,9 @@ class Dashboard:
     missing_today_names: tuple = ()   # 전일 미수집 계정 이름
     month_kpis: tuple = ()    # ① 월별 누계(시작월~이번 달·전월 대비 — 진행 중 달은 지난달 같은 기간 대비·D-105)
     rank_span: tuple = ()     # ⑤ 최근 1개월 (시작, 끝)
-    own: tuple = ()           # ① 위탁자 직접 관리 상품 (등록상품ID 수, 매출 발생 수, 누적 매출, 빠진 날, ID 모르는 옵션 수)·D-130
-    managed: tuple = ()       # ① 맨 위 (셀독 관리 계정 수, 관리 상품 등록 수, 그중 판매중지) — 결과 파일 로스터(D-128)
+    own: tuple = ()           # ① 계정별 전체 상품 sales_scale (등록상품ID 수, 매출 발생 수, 누적 매출, 빠진 날, ID 모르는 옵션 수)·D-130·D-139
+    mine: tuple = ()          # ① 관리 상품만 sales_scale — own 과 같은 계산·범위만 다름(D-139)
+    managed: tuple = ()       # ① 맨 위 (셀독 관리 계정 수, 계정목록 상품 수, 그중 판매중지) — 결과 파일 로스터(D-128)
     cum: tuple = ()           # ① 누적 매출금액 (금액, 빠진 날 ((사업자명, 일수), …)) — 받은 날 전부 합(D-131)
 
 
@@ -218,12 +219,12 @@ def _month_received(day_recs: dict, per: dict | None, s: date, e: date) -> tuple
     return best
 
 
-def own_scale(period_recs: dict, own_board: Dashboard, first: date = FIRST_DAY) -> tuple:
-    """위탁자 직접 관리 상품(관리 상품 밖·D-130) — 쿠팡 판매분석 기준(9월 판매현황과 같은 단위).
-    입력 = scope(outside=True) 로 거른 기간 저장 + 그 저장으로 만든 대시보드. 상품 수 = first~어제 달 기록(M:)에 나온
-    등록상품ID 수(그로스·판매자배송 같은 ID = 1개) · 매출 발생 = 그 ID 의 기간 매출 > 0 · 누적 매출 = 받은 날 전부 합(관리 상품 줄과
-    같은 계산·D-131) · 등록상품ID 모르는 옵션(D-129 전 기록 등)은 세지 않고 개수만 돌려줌."""
-    keys = {k for k, *_ in _month_spans(own_board.yesterday, first)}
+def sales_scale(period_recs: dict, board: Dashboard, first: date = FIRST_DAY) -> tuple:
+    """① 상품 수·누적 매출 — 순수 쿠팡 판매분석 기준(D-130·D-139·9월 판매현황과 같은 단위). 입력 = 기간 저장 + 그 저장으로
+    만든 대시보드(같은 범위 — 관리 상품만이면 거른 저장, 계정별 전체면 결과 계정 저장 전체). 상품 수 = first~어제 달 기록(M:)에
+    나온 등록상품ID 수(그로스·판매자배송 같은 ID = 1개) · 매출 발생 = 그 ID 의 기간 매출 > 0 · 누적 매출 = 받은 날 전부 합(D-131) ·
+    등록상품ID 모르는 옵션(D-129 전 기록 등)은 세지 않고 개수만 돌려줌."""
+    keys = {k for k, *_ in _month_spans(board.yesterday, first)}
     amt: dict = {}
     no_id = 0
     for aid, recs in period_recs.items():
@@ -234,7 +235,7 @@ def own_scale(period_recs: dict, own_board: Dashboard, first: date = FIRST_DAY) 
                     no_id += 1
                     continue
                 amt[(aid, inv)] = amt.get((aid, inv), 0) + int(o.get("판매금액") or 0)
-    amount, gaps = own_board.cum
+    amount, gaps = board.cum
     return len(amt), sum(a > 0 for a in amt.values()), amount, gaps, no_id
 
 
