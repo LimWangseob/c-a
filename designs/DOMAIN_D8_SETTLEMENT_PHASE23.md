@@ -133,7 +133,7 @@ collector의 **same-origin fetch 프리미티브를 그대로 재사용**한다(
 - 원장(`registry_*`)이 **이력 보관**, `settlement.py`는 **계산**(SETTLEMENT_MODULE §0 분담 유지).
 
 ### 3.3 골든케이스 확장 방법 (완료 조건)
-- 현재 `coupang_golden_cases.json` = `payout_date[12]`·`amount_formula[2]`·`insights_row_invariants[4]`·`invariant_rules[3]`(실측 확인).
+- 현재 `coupang_golden_cases.json` = `payout_date[9]`·`amount_formula[2]`·`insights_row_invariants[4]`·`invariant_rules[3]`(실측 확인).
 - 3단계 추가(제안): **`contract_achievement[]`** 섹션 — 케이스마다 {계약조건, 실지급 누적 입력, 기대 달성률·잔액·예상 달성일}. `_meta.holidays_used`는 예상 달성일 계산에 재사용.
 - 검증: `tools/verify_settlement_offline.py`에 `contract_achievement` 대조 블록 **append**(기존 payout/amount/invariant 3블록 옆). **실 계약서 1건 이상 수령 후** 소유자 확인값으로 골든 작성(실측 근거·[[fix-from-real-evidence]]).
 - 완료 판정 = 추가 골든 100% 통과.

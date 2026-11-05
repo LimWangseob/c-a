@@ -1,4 +1,4 @@
-"""정산 지급일 6종 (POLICY `PAYOUT_*`). SSOT=designs/SETTLEMENT_MODULE.md §3.
+"""정산 지급 정책 6종 (POLICY `PAYOUT_*` — 윙 최종액은 금액만·지급일은 쿠팡 정산캘린더). SSOT=designs/SETTLEMENT_MODULE.md §3.
 
 정산 주 = 월~일. 주가 월 경계를 넘으면 월별로 행이 나뉘지만 **지급일은 그 주 마감일(일요일) 기준으로 같다**
 (골든: 2026-08-31 단독 행과 09-01~09-06 행 모두 09-29). 공휴일 집합은 인자로 받는 순수 계산(holiday_kr).
@@ -13,7 +13,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from .holiday_kr import add_business_days, next_business_day
 
 PAYOUT_MP_WEEKLY_1ST = "PAYOUT_MP_WEEKLY_1ST"       # 윙 주정산 70%: 주 마감일 + 15영업일
-PAYOUT_MP_WEEKLY_FINAL = "PAYOUT_MP_WEEKLY_FINAL"   # 윙 최종액 30%: 매출인식월 익익월 1일(보정 없음)
+PAYOUT_MP_WEEKLY_FINAL = "PAYOUT_MP_WEEKLY_FINAL"   # 윙 최종액 30%: 금액만 계산·지급일 = 쿠팡 정산캘린더(D-007·D-147)
 PAYOUT_MP_MONTHLY = "PAYOUT_MP_MONTHLY"             # 윙 월정산 100%: 월 마감일 + 15영업일
 PAYOUT_RG_WEEKLY_1ST = "PAYOUT_RG_WEEKLY_1ST"       # 로켓그로스 주정산 70%: 주 마감일 + 20영업일
 PAYOUT_RG_WEEKLY_FINAL = "PAYOUT_RG_WEEKLY_FINAL"   # 로켓그로스 2차 30%: 판매마감월 익익월 첫 영업일(월걸침 주=rg_payout_date)
@@ -22,7 +22,7 @@ PAYOUT_RG_MONTHLY = "PAYOUT_RG_MONTHLY"             # 로켓그로스 월정산 
 # policy → (기준, 영업일 수(월말 최종액=0·미사용), 지급 비율)
 _RULES: dict[str, tuple[str, int, Decimal]] = {
     PAYOUT_MP_WEEKLY_1ST: ("week", 15, Decimal("0.7")),
-    PAYOUT_MP_WEEKLY_FINAL: ("month_final_calendar", 0, Decimal("0.3")),
+    PAYOUT_MP_WEEKLY_FINAL: ("wing_calendar", 0, Decimal("0.3")),
     PAYOUT_MP_MONTHLY: ("month", 15, Decimal("1")),
     PAYOUT_RG_WEEKLY_1ST: ("week", 20, Decimal("0.7")),
     PAYOUT_RG_WEEKLY_FINAL: ("month_final_business", 0, Decimal("0.3")),
@@ -64,10 +64,12 @@ def _month_end(ym: str) -> date:
 def payout_date(policy: str, *, week_end: date | None = None, revenue_month: str | None = None,
                 holidays) -> date:
     """지급일. 주정산(_WEEKLY_1ST)=week_end(주 마감일 또는 분할 행 마감일 → 그 주 일요일로 맞춤) 필요,
-    월 기준(_MONTHLY·_WEEKLY_FINAL)=revenue_month('YYYY-MM') 필요. 누락·미지 policy = ValueError."""
+    월 기준(_MONTHLY·RG _WEEKLY_FINAL)=revenue_month('YYYY-MM') 필요. 누락·미지 policy·윙 최종액 = ValueError."""
     if policy not in _RULES:
         raise ValueError(f"알 수 없는 지급 정책: {policy!r} — {', '.join(POLICIES)}")
     basis, days, _ratio = _RULES[policy]
+    if basis == "wing_calendar":
+        raise ValueError(f"{policy} 지급일은 계산하지 않음 — 쿠팡 정산캘린더 값을 씀(D-007·D-147)")
     if basis == "week":
         if week_end is None:
             raise ValueError(f"{policy} 는 week_end(정산 주 마감일)가 필요함")
@@ -77,7 +79,7 @@ def payout_date(policy: str, *, week_end: date | None = None, revenue_month: str
     if basis == "month":
         return add_business_days(_month_end(revenue_month), days, holidays)
     first = _add_months(_month_start(revenue_month), 2)            # 익익월 1일
-    return first if basis == "month_final_calendar" else next_business_day(first, holidays)
+    return next_business_day(first, holidays)
 
 
 def rg_payout_date(ratio: int, period_start: date, period_end: date, holidays) -> date:

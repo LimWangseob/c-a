@@ -13,9 +13,6 @@
     {"policy": "PAYOUT_MP_WEEKLY_1ST", "confirm_week": ["2026-08-24", "2026-08-30"], "expected": "2026-09-18", "amount": 358481},
     {"policy": "PAYOUT_MP_WEEKLY_1ST", "confirm_week": ["2026-08-31", "2026-08-31"], "expected": "2026-09-29", "amount": 8896, "why": "월 경계 분할 행, 주 마감일 9/6 기준"},
     {"policy": "PAYOUT_MP_WEEKLY_1ST", "confirm_week": ["2026-09-01", "2026-09-06"], "expected": "2026-09-29", "amount": 1104130, "why": "추석 토요일 겹침 대체 없음 → 9/28 영업일"},
-    {"policy": "PAYOUT_MP_WEEKLY_FINAL", "revenue_month": "2025-01", "expected": "2025-03-01", "why": "익익월 1일, 토요일이어도 보정 없음"},
-    {"policy": "PAYOUT_MP_WEEKLY_FINAL", "revenue_month": "2026-07", "expected": "2026-09-01", "amount": 341946},
-    {"policy": "PAYOUT_MP_WEEKLY_FINAL", "revenue_month": "2026-08", "expected": "2026-10-01", "amount_estimate": 190079},
     {"policy": "PAYOUT_RG_WEEKLY_1ST", "sales_week": ["2026-08-17", "2026-08-23"], "expected": "2026-09-18", "amount": 6981},
     {"policy": "PAYOUT_RG_WEEKLY_1ST", "sales_week": ["2026-08-24", "2026-08-30"], "expected": "2026-09-29", "amount": 371921, "label": "8월 5주차 판매 70%"}
   ],

@@ -46,15 +46,15 @@ def expect(exc, fn, what):
 
 # ── 골든 ──────────────────────────────────────────────────────────
 def g1_payout_dates():
-    print("[G1] 지급일 골든 12케이스")
+    print("[G1] 지급일 골든 9케이스")
     cases = GOLDEN["payout_date"]
     for c in cases:
         week = c.get("confirm_week") or c.get("sales_week")
         got = P.payout_date(c["policy"], week_end=D(week[1]) if week else None,
                             revenue_month=c.get("revenue_month"), holidays=HOL)
         assert got == D(c["expected"]), (c, got)
-    assert len(cases) == 12, len(cases)
-    ok(f"{len(cases)}/{len(cases)} 일치(마감일+15/20영업일·월 경계 분할=같은 주 일요일·MP FINAL 익익월 1일 무보정)")
+    assert len(cases) == 9, len(cases)
+    ok(f"{len(cases)}/{len(cases)} 일치(마감일+15/20영업일·월 경계 분할=같은 주 일요일 무보정)")
 
 
 def g2_amounts():
@@ -130,6 +130,7 @@ def p2_payout_rules():
     assert P.payout_date(P.PAYOUT_RG_WEEKLY_FINAL, revenue_month="2024-11",
                          holidays={D("2025-01-01")}) == D("2025-01-02")          # 익익월 1일 공휴일 → 다음 영업일
     expect(ValueError, lambda: P.payout_date("PAYOUT_X", week_end=D("2026-08-09"), holidays=HOL), "미지 정책")
+    expect(ValueError, lambda: P.payout_date(P.PAYOUT_MP_WEEKLY_FINAL, revenue_month="2026-09", holidays=HOL), "윙 최종액 지급일 = 쿠팡 정산캘린더만(D-007·D-147)")
     expect(ValueError, lambda: P.payout_date(P.PAYOUT_MP_WEEKLY_1ST, holidays=HOL), "week_end 누락")
     expect(ValueError, lambda: P.payout_date(P.PAYOUT_MP_MONTHLY, holidays=HOL), "revenue_month 누락")
     expect(ValueError, lambda: P.payout_date(P.PAYOUT_MP_MONTHLY, revenue_month="2026/08", holidays=HOL), "월 형식")
@@ -645,7 +646,7 @@ def main():
     p8_settle_jobs()
     p9_settle_stats()
     p10_settle_dup_rows()
-    print("정산 계산 모듈 오프라인 검증 통과(골든 payout 12·amount 2·불변식 4행/3식 100%)")
+    print("정산 계산 모듈 오프라인 검증 통과(골든 payout 9·amount 2·불변식 4행/3식 100%)")
 
 
 if __name__ == "__main__":
