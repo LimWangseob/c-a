@@ -153,3 +153,4 @@
 - D-148 A [NO_ESTIMATE_FORECAST_EXCEPTION] 추정 금지의 예외 — 쿠팡 정산예정 금액은 불가피한 경우 추정 허용 (2026-11-05, R90)
 - D-149 A [EVIDENCE_ORIGINALS_EXPORT_INCLUDED] output 을 밖으로 보낼 때 정산 증빙 폴더를 포함한다 (2026-11-05, R90)
 - D-150 A [REGISTRY_LINK_NO_GUARD] 원장 링크 코드 가드를 만들지 않음 — 설정에 넣은 링크를 따른다 (2026-11-05, R90)
+- D-151 A [CLAUDEMD_SPLIT] 프로젝트 CLAUDE.md 를 색인+상시 규칙으로 축소 — 상세는 원문 그대로 문서로 이동 (2026-11-05, R91)
