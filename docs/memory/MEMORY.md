@@ -15,6 +15,7 @@
 - [판매상태 불일치 경고](feature-sale-status-mismatch-flag.md) · [VID 출처=상품조회·옵션분리](feature-vid-source-from-product-list.md)
 - [셀독전환자 ①②103계정 정산(D-111) — 1단계 로그인 확인 탭 구현·2단계 다운로드·빈도(주1회 vs 매일) 미결정](feature-transfer-settlement.md)
 - [⭐셀독 정산서 규칙: 저장=D:\토탈셀러\쿠팡 정산 자료·원천=앱 수집분만·쿠팡 실지급→계약 7:3(계정 합산)](settlement-statement-rules.md)
+- [계약자 정산(연다인·장대익·서달원) = 쿠팡 실지급 × 계약 조건·원가 계산 없음 D-152](contractor-settlement-payout-ratio.md)
 
 ## 작업 원칙(피드백·정책)
 - [⛔불변·전역: 메모리30~50줄·CLAUDE.md<200·핸드오프=STATE.md·DECISIONS D-번호 append-only·종료=/session-close·커밋[R{n}]](policy-memory-to-claudemd-200line.md) — session-kit 전역 일원화. SSOT=전역 CLAUDE.md
