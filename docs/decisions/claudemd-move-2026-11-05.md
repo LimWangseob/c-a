@@ -200,3 +200,6 @@ py -3.12 -c "import subprocess;L=[t for t in subprocess.run(['git','show','923f0
 | 150 | 9 | 환경 | ## 환경 | `CLAUDE.md:85` | 유지(원문) |
 | 151 | 231 | 환경 | - Windows, Python, Playwright(sync) + 실제 Goo | `CLAUDE.md:86` | 유지(원문) |
 | 152 | 331 | 환경 | - ⛔ 네이버쇼핑 검색 API(shop.json)는 2026-07-31자로 완전 | `CLAUDE.md:87` | 유지(원문) |
+
+## 토큰 비교
+`py -3.12 tools/measure_first_tokens.py` — 이 저장소에서 연 세션의 첫 응답 입력 토큰(최근 10개). 축소 전 기준 = 11-02 세션 104,107 · R91 이후 새 세션 값과 비교한다. 이 표를 만든 날에는 R91 이후 시작한 세션이 없어 미측정.
