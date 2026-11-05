@@ -230,6 +230,8 @@ def _stock_match_aids(log):
     매칭 고정 기록을 못 읽으면 로그 후 쿠팡 상품명 없이(모델번호는 대장 이름에서만)."""
     from . import match_anchor
     path = match_anchor.anchor_path()
+    if not path.is_file():
+        log("  [회사재고] ⚠ 매칭 고정 기록 없음 — AI 가 쿠팡 상품명 없이 대장 이름만 보고 판정(불명확한 이름은 못 찾을 수 있음)")
     try:
         anchors = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
     except (OSError, ValueError) as exc:

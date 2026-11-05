@@ -207,6 +207,41 @@ def pin_marketing_fill():
     _check(_n(ws.cell(_kw_head_row(ws, hm), 7).value) == "🔴 체험단중", "마케팅 상품 소헤더 G='🔴 체험단중'")
 
 
+def pin_promo_no_leftover():
+    print("[핀 S4b] 체험단 색 잔상 없음 — 날짜가 늘어도 7일 밖은 색 없음 · 시작일이 빠진 날도 지움 · 돌아오면 7일만(D-158)")
+    wb = _build()
+    wb.ensure_product_block(BIZ, "잔상체험", config.KIND_PERSONAL, ["kwP"], registered="잔상체험")
+    wb.set_product_vids(BIZ, "잔상체험", ["vidP"])
+    wb.set_promo_start(BIZ, "잔상체험", "2026-09-14")
+    from coupang_analytics.workbook_common import _parse_date
+    want = ["FFC000", "FFC924", "FFD249", "FFDB6D", "FFE492", "FFEDB6", "FFF6DB"]
+
+    def colored(day_iso):
+        """(hr 머리줄 색 있는 날짜 → 색) — 실행 하루를 재현: 날짜 칸 추가 → 정렬 → 서식."""
+        wb.ensure_date(BIZ, day_iso)
+        wb.normalize_date_columns()
+        wb.apply_style()
+        ws = wb.wb[BIZ]
+        hr = _hdr_row(ws, "잔상체험")
+        kh = _kw_head_row(ws, hr)
+        out = {}
+        for k, c in wb._date_col.get(BIZ, {}).items():
+            for r in (hr, hr + 1, kh, kh + 1):
+                if _fill(ws, r, c).endswith(tuple(want)):
+                    out[_parse_date(k).isoformat()] = _fill(ws, r, c)[-6:]
+        return out
+    band = {f"2026-09-{14 + i:02d}": h for i, h in enumerate(want)}
+    for d in range(12, 24):                                # 시작 전~8일째 이후까지 매일 실행
+        got = colored(f"2026-09-{d:02d}")
+    _check(got == band, f"날짜가 늘어도 7일만 색 — 실제 {got}")
+    wb.clear_promo_starts()                                # 실측 11-02·03: 시작일이 빠진 실행
+    got = colored("2026-09-24")
+    _check(got == {}, f"시작일 없는 실행 = 색 전부 없음(칸에 남지 않음) — 실제 {got}")
+    wb.set_promo_start(BIZ, "잔상체험", "2026-09-14")       # 실측 11-04: 시작일이 돌아온 실행
+    got = colored("2026-09-25")
+    _check(got == band, f"시작일이 돌아오면 7일만(10.28·29 같은 잔상 없음) — 실제 {got}")
+
+
 def pin_group_edges():
     print("[핀 S5] 같은 등록명 변형(옵션) 그룹 — 바깥=굵은선·사이=얇은선(fix ④)")
     wb = _build()
@@ -340,6 +375,7 @@ def main() -> int:
     pin_block_fills()
     pin_sale_status_mismatch()
     pin_marketing_fill()
+    pin_promo_no_leftover()
     pin_group_edges()
     pin_group_fill_alternation()
     pin_product_hyperlink()

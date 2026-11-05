@@ -890,24 +890,42 @@ def t21_company_stock():
     led.grids["셀독리스트"] = [["예시"], hdr,
                                ["", "홍길동", "(주)예시", "ex01", "pw!1", "햄스트링기구R010", "", "11"],   # 공백 무시
                                ["", "", "", "", "", "파미젠 nmn 정 60정\n(노출명 전체)", "5", "12"],       # 대소문자·첫 줄
-                               ["", "", "", "", "", "없는상품", "7", "13"],                              # 미매칭 → 7 유지
+                               ["", "", "", "", "", "없는상품", "검단 , 7개 / 김포2 , 1,200개", "13"],    # 앱이 쓴 옛 값 + 없음 판정 → 재고원장 없음
+                               ["", "", "", "", "", "메모상품", "0개 (계약자 관리상품)", "13"],            # 사람이 적은 메모 = 유지(D-156)
+                               ["", "", "", "", "", "빈칸상품", "", "13"],                                # 빈 칸 → 재고원장 없음
                                ["", "", "", "", "", "--", "9", ""],                                     # 상품명 아님
                                ["", "김예시", "예시마켓", "sm22", "0012", "햄스트링기구 R010", "", "14"]]  # 다른 계정 같은 값
     before = copy.deepcopy(led.grids["셀독리스트"])
-    res = CS.run_company_stock("https://x/edit?gid=1", "L", dry_run=True, stock_client=stock_cli, ledger_client=led)
-    assert (res.matched, res.changed, res.stock_sheet) == (3, 3, "Sheet1") and not led.writes     # 미리보기 = 쓰기 0
-    assert res.unmatched == [("(주)예시", "없는상품")], res.unmatched
-    res = CS.run_company_stock("https://x/edit?gid=1", "L", stock_client=stock_cli, ledger_client=led)
+
+    def ai_none(_s, u):                                                                      # AI 가 '해당 없음' 으로 답함
+        return {"items": [{"id": int(i), "pick": None, "reason": "없음"} for i in re.findall(r"^L(\d+)\.", u, re.M)]}
+    res = CS.run_company_stock("https://x/edit?gid=1", "L", dry_run=True, stock_client=stock_cli, ledger_client=led, ask=ai_none)
+    assert (res.matched, res.changed, res.stock_sheet) == (3, 5, "Sheet1") and not led.writes     # 미리보기 = 쓰기 0
+    assert res.unmatched == [("(주)예시", "없는상품"), ("(주)예시", "빈칸상품")], res.unmatched
+    assert res.memo == [("(주)예시", "메모상품")], res.memo
+    res = CS.run_company_stock("https://x/edit?gid=1", "L", stock_client=stock_cli, ledger_client=led, ask=ai_none)
     head = f"회사보유재고 (자동갱신 {datetime.now():%m.%d})"                                  # 그로스 재고처럼(소유자 2026-10-21)
     assert led.writes == [("셀독리스트", "G3", False), ("셀독리스트", "G2", False)], led.writes   # 데이터 구간 + 머리글 1회
     assert led.grids["셀독리스트"][1][6] == head, led.grids["셀독리스트"][1]
     g = led.grids["셀독리스트"]
     ham = "김포1 , 2,400개 / 검단 , 24개"
-    assert [r[6] for r in g[2:]] == [ham, "검단 , 0개", "7", "9", ham], [r[6] for r in g[2:]]
+    assert [r[6] for r in g[2:]] == [ham, "검단 , 0개", "재고원장 없음", "0개 (계약자 관리상품)", "재고원장 없음", "9", ham], [r[6] for r in g[2:]]
     for new, old in zip(g, before):
         assert new[:6] + new[7:] == old[:6] + old[7:], (new, old)                                # 다른 열 불변
-    assert CS.run_company_stock("https://x/edit?gid=1", "L", stock_client=stock_cli,
-                                ledger_client=led).changed == 0 and len(led.writes) == 2          # 같은 날·같은 값 = 쓰기 없음
+    assert CS.run_company_stock("https://x/edit?gid=1", "L", stock_client=stock_cli, ledger_client=led,
+                                ask=ai_none).changed == 0 and len(led.writes) == 2                # 같은 날·같은 값 = 쓰기 없음
+    # AI 가 판단하지 못한 줄 = '없음'이 아님 → 기존값 유지(장애·AI 없음·답에서 빠진 줄)
+    for bad_ask in (None, lambda _s, _u: (_ for _ in ()).throw(RuntimeError("down")), lambda _s, _u: {"items": []}):
+        led3 = FakeClient()
+        led3.grids["셀독리스트"] = copy.deepcopy(before)
+        res3 = CS.run_company_stock("https://x/edit?gid=1", "L", stock_client=stock_cli, ledger_client=led3, ask=bad_ask)
+        assert [r[6] for r in led3.grids["셀독리스트"][2:]] == [ham, "검단 , 0개", "검단 , 7개 / 김포2 , 1,200개",
+                                                               "0개 (계약자 관리상품)", "", "9", ham], led3.grids["셀독리스트"]
+        assert len(res3.undecided) == 3 and not res3.unmatched and not res3.memo, res3
+    for auto in ("", "재고원장 없음", "검단 , 1,505개 / 김포2 , 3개", "(그레이) 검단 , 599개 / (핑크) 검단 , -2개"):
+        assert CS._auto_written(auto), auto
+    for memo in ("0개", "-", "검단, 개", "0개\n(전량입고)", "8849 긴팔 164개\n8258 긴팔 120개"):
+        assert not CS._auto_written(memo), memo
     # 직원이 머리글에 날짜를 붙여도 찾음(실측 10-21 '회사보유재고 (10.20기준)' → 열 못 찾아 역기록 실패)
     led2 = FakeClient()
     led2.grids["셀독리스트"] = [["예시"], hdr[:6] + ["회사보유재고 (10.20기준)", hdr[7]]] + copy.deepcopy(before[2:])
@@ -917,6 +935,121 @@ def t21_company_stock():
     bad.grids["셀독리스트"] = [hdr[:6]]
     _expect(ValueError, lambda: CS.write_company_stock(bad, stock), "회사보유재고 열 없음")
     ok("탭 선택·창고별 표기(같은 창고 합산)·'-'=0·음수/비숫자 경고·공백/대소문자/첫 줄 매칭·계정 공통값·미매칭 보존·그 열만·미리보기 0")
+
+
+def t21d_company_stock_ai_decides():
+    print("[R21d] 회사재고 판정 = AI — 규칙은 후보만·완전 일치만 그대로·쿠팡 상품명 전달·AI 못 하면 기존값·새 색상 줄 재판정(D-157)")
+    from coupang_analytics import company_stock as CS, company_stock_match as M
+    rows = [["창고", "상품명", "현재고"]] + [[w, n, q] for w, n, q in (
+        ("김포2", "안전화 Y003 (250)", "165"), ("김포2", "안전화 Y003 (260)", "16"), ("3PL김포", "비강확장기 HR-01BK", "2,682"),
+        ("검단", "신형타프 R008 (블랙)", "1,476"), ("검단", "신형타프 R008 (베이지)", "208"), ("검단", "속싸개 (그레이)", "599"),
+        ("검단", "속싸개 (핑크)", "299"), ("검단", "같은이름상품", "3"))]
+    stock, _w = CS.read_stock(rows)
+    idx = M.build_index(stock)
+    # 진짜 사례: 모델번호만 같은 다른 상품 — 규칙 후보는 AI 앞에 놓일 뿐, 확정이 아니다
+    assert M.match_rules(stock, idx, "드라이기거치대 Y003", "드라이기거치대 Y003")[0]                  # 규칙은 후보를 낸다
+    seen: list = []
+
+    def ask(_s, user):
+        seen.append(user)
+        out = []
+        for i, line in re.findall(r"^L(\d+)\. (.*)$", user, re.M):
+            pick = None
+            if "비강확장기" in line.split(" · 후보:")[0]:
+                pick = next(int(n) for n, c in re.findall(r"(\d+)\) ([^|]+)", line.split(" · 후보:")[1]) if "비강확장기" in c)
+            elif "신형타프" in line.split(" · 후보:")[0]:
+                pick = 1
+            out.append({"id": int(i), "pick": pick, "reason": "시험"})
+        return {"items": out}
+    hdr = ["구분", "대표자명", "사업자명", "계정아이디", "비밀번호", "상품명", "회사보유재고"]
+    grid = [["예시"], hdr,
+            ["", "홍", "갑", "a1", "pw", "드라이기거치대 Y003", "재고원장 없음"],
+            ["", "", "", "", "", "코골이 방지 기구", ""],
+            ["", "", "", "", "", "신형타프 R008 (블랙 Free)", ""],
+            ["", "", "", "", "", "같은이름상품", ""]]
+    titles = {"드라이기거치대 Y003": "드라이기거치대 Y003", "코골이 방지 기구": "코골이 방지 비강확장기 숨통박사 자석 패치 80매"}
+    title_of = lambda _a, n: titles.get(n, "")                                                     # noqa: E731
+    led = FakeClient()
+    led.grids["셀독리스트"] = copy.deepcopy(grid)
+    cache: dict = {}
+    res = CS.write_company_stock(led, stock, title_of=title_of, ask=ask, cache=cache)
+    got = [r[6] for r in led.grids["셀독리스트"][2:]]
+    assert got == ["재고원장 없음", "3PL김포 , 2,682개", "검단 , 1,476개", "검단 , 3개"], got            # 안전화 재고가 드라이기에 붙으면 오류
+    assert res.matched == 3 and res.unmatched == [("갑", "드라이기거치대 Y003")], res
+    assert "관리대장: 같은이름상품" not in "".join(seen) and "숨통박사" in "".join(seen)                        # 완전 일치는 안 물음·쿠팡 상품명은 전달
+    assert "안전화 Y003 (250) 외 1줄" in "".join(seen)                                               # 색상·사이즈 줄 = 한 후보
+    # AI 를 못 쓰면 규칙 값으로 넘어가지 않는다
+    led2 = FakeClient()
+    led2.grids["셀독리스트"] = copy.deepcopy(grid)
+    res2 = CS.write_company_stock(led2, stock, title_of=title_of, ask=None, cache={})
+    assert [r[6] for r in led2.grids["셀독리스트"][2:]] == ["재고원장 없음", "", "", "검단 , 3개"], res2
+    assert len(res2.undecided) == 3, res2
+    # 저장된 판정 재사용 · 규칙 후보에 새 색상 줄이 생기면 다시 판정
+    keys = M.match_rules(stock, idx, "신형타프 R008 (블랙 Free)")[0]
+    assert M.from_cache(cache, stock, "신형타프 R008 (블랙 Free)", "", keys)[0] == keys
+    assert M.from_cache(cache, stock, "신형타프 R008 (블랙 Free)", "", keys + ["신형타프r008(블랙2)"]) is None
+    # 묶음 답(번호 범위 밖)·많은 줄 = 나눠 물음(응답 잘림 방지)
+    calls: list = []
+    many = [(i, f"상품{i}", "") for i in range(1, 62)]
+    M.ask_ai(lambda _s, u: calls.append(u) or {"items": []}, many, stock, idx, {}, print)
+    assert len(calls) == 3, len(calls)
+
+    class Wb:
+        got: dict = {}
+
+        def account_sheets(self):
+            return ["갑"]
+
+        def account_ids_of(self, _b):
+            return ["a1"]
+
+        def products_of(self, _b):
+            return ["드라이기거치대 Y003", "신형타프 R008 (블랙 Free)", "같은이름상품"]
+
+        def registered_name(self, _b, _p):
+            return ""
+
+        def set_company_stock(self, _b, p, t):
+            self.got[p] = t
+    wb = Wb()
+    CS.apply_to_workbook(wb, stock, cache=cache, title_of=title_of)                                 # 계정목록도 같은 판정
+    assert wb.got == {"드라이기거치대 Y003": CS.STOCK_NONE, "신형타프 R008 (블랙 Free)": "검단 , 1,476개",
+                      "같은이름상품": "검단 , 3개"}, wb.got
+    wb2 = Wb()
+    wb2.got = {}
+    CS.apply_to_workbook(wb2, stock, cache={}, title_of=title_of)
+    assert wb2.got == {"같은이름상품": "검단 , 3개"}, wb2.got                                         # 판정 전 = 공란(규칙으로 채우지 않음)
+    ok("드라이기≠안전화·줄임말 대장명=쿠팡 상품명으로 판정·완전 일치만 무문의·AI 없으면 기존값·새 줄 재판정·30줄씩·계정목록 동일")
+
+
+def t21c_company_stock_index_none():
+    print("[R21c] 계정목록 회사보유재고 — AI 없음 판정 = 재고원장 없음 · 판단 기록 없음 = 공란")
+    from coupang_analytics import company_stock as CS, company_stock_match as M
+
+    class Wb:
+        def __init__(self):
+            self.got = {}
+
+        def account_sheets(self):
+            return ["갑"]
+
+        def account_ids_of(self, _b):
+            return ["a1"]
+
+        def products_of(self, _b):
+            return ["있는상품", "없는상품", "처음상품"]
+
+        def registered_name(self, _b, _p):
+            return ""
+
+        def set_company_stock(self, _b, p, t):
+            self.got[p] = t
+    stock = {CS.name_key("있는상품"): ("있는상품", {"김포2": 5})}
+    cache = {M._cache_key("없는상품", ""): {"stock": [], "why": "없음", "date": "2026-01-01"}}     # 날짜 지나도 마지막 판정 유지
+    wb = Wb()
+    assert CS.apply_to_workbook(wb, stock, cache=cache) == 1
+    assert wb.got == {"있는상품": "김포2 , 5개", "없는상품": CS.STOCK_NONE}, wb.got
+    ok("없음 판정 표기·판단 기록 없는 상품은 공란")
 
 
 def t21b_company_stock_match():
@@ -1130,6 +1263,8 @@ def main():
     t20_write_lock()
     t21_company_stock()
     t21b_company_stock_match()
+    t21c_company_stock_index_none()
+    t21d_company_stock_ai_decides()
     t22_name_rules()
     t23_company_stock_skip_logged()
     t24_mistaken_account_id()

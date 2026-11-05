@@ -81,13 +81,21 @@ def parse_promo_rows(rows: list) -> list[PromoRow]:
     return out
 
 
-def read_promo_sheet(url_or_id: str, *, store=None) -> list[PromoRow] | None:
-    """관리대장의 '체험단' 시트를 읽어 PromoRow 목록. 시트가 없으면 None(반영 안 함 — 기존 값 유지)."""
+def read_promo_sheet(url_or_id: str, *, store=None, log=None) -> list[PromoRow] | None:
+    """관리대장의 '체험단' 시트를 읽어 PromoRow 목록. 시트가 없으면 None(반영 안 함 — 기존 값 유지).
+
+    시트에 내용이 있는데 한 줄도 인식 못 함 = 읽기 이상 → None + ❌ 로그(기존 시작일 유지·실측 11-02·03 '0줄' 이
+    시작일 11개를 전부 지워 일자 칸 색이 밀림·D-158)."""
     from . import gsheet_api
     client = gsheet_api.GSheetClient(url_or_id, store=store)
     if PROMO_SHEET not in client.sheet_titles():
         return None
-    return parse_promo_rows(client.read_values(PROMO_SHEET))
+    rows = client.read_values(PROMO_SHEET)
+    got = parse_promo_rows(rows)
+    if not got and any(str(c).strip() for r in rows for c in r):
+        (log or (lambda m: None))(f"[입력] ❌ 체험단 시트를 한 줄도 인식 못 함 — 머리글 '{_START_COL}'·'링크' 칸 확인 · 체험단 시작일은 지난 값 유지")
+        return None
+    return got
 
 
 def _primary_block(wb, biz: str, product: str) -> str:

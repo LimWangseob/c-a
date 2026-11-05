@@ -9,6 +9,9 @@ from __future__ import annotations
 from .workbook_common import *  # noqa: F401,F403
 
 
+_NO_FILL = PatternFill()   # 일자 칸 색 지움 — 값은 날짜 따라 옮겨 가도 색은 칸에 남으므로 7일 밖은 매번 지운다(D-158)
+
+
 class _RenderMixin:
     # ── 서식(셀독 서식 파일 재현: 병합·팔레트·테두리) ────────────
     # 사용자 `셀독 판매 데이터_서식.xlsx`(한컴 셀) 시각 서식을 재현한다. 행 스캔 방식이라
@@ -458,7 +461,7 @@ class _RenderMixin:
             _sty_cell(ws, r, _COL_METRIC, sty, fill=sty.f_label, fnt=sty.bold)        # G 지표 라벨(연파랑·굵게=제목)
             is_hdr = (r == hr)                                                        # 날짜 헤더행(H~=날짜라벨=굵게)
             for c in range(_FIRST_DATE, maxc + 1):                                   # H~ 값(체험단 7일 배경)
-                _sty_cell(ws, r, c, sty, num=True, fnt=(sty.bold if is_hdr else None), fill=promo.get(c))
+                _sty_cell(ws, r, c, sty, num=True, fnt=(sty.bold if is_hdr else None), fill=promo.get(c, _NO_FILL))
             if r in label_at:                        # 좌측 라벨(A) — 앵커행에만(세로병합 top-left)
                 ws.cell(r, 1, label_at[r])
             if r in value_at:                        # 좌측 값(C) — 앵커행에만
@@ -491,7 +494,7 @@ class _RenderMixin:
                     gm.value = "판매중"
                     gm.font = sty.bold
             for c in range(_FIRST_DATE, maxc + 1):
-                _sty_cell(ws, r, c, sty, fill=promo.get(c))
+                _sty_cell(ws, r, c, sty, fill=promo.get(c, _NO_FILL))
 
     def _flag_sale_mismatch(self, ws, sty: _StyleCtx, kh: int, nm: str, is_disc: bool) -> None:
         """판매상태 불일치 경고: 대장=판매중지인데 쿠팡 실제=판매중/부분판매중이면 판매중지 소헤더행(kh)의

@@ -8,7 +8,9 @@
   줄이면 그 창고 안에서 합산. '-' = 0, 음수는 그대로 쓰고 경고.
 - 매칭 = **동일 상품명**(띄어쓰기·대소문자 무시). 관리대장 상품명이 여러 줄이면 첫 줄(대장 규칙).
   → D-072(2026-10-16): 괄호 앞/안·색상별 줄·모델번호·AI 단계 추가(`company_stock_match`).
-- 미매칭 줄은 기존값 보존(공란으로 덮지 않음). 같은 상품이 여러 계정에 있으면 모두 같은 값(회사 전체 재고).
+- 미매칭 줄 = '재고원장 없음'(D-156 — 앱이 쓴 옛 값을 남기지 않음) · 사람이 적은 메모 유지 · AI 가 판단하지 못한 줄도 기존값
+  유지(없다고 확인 안 됨).
+  같은 상품이 여러 계정에 있으면 모두 같은 값(회사 전체 재고).
 """
 from __future__ import annotations
 
@@ -23,8 +25,10 @@ from .input_list import (_REQUIRED, _cell, _find_header_row, _is_real_product_na
                          account_labels)
 
 STOCK_COL = "회사보유재고"            # 관리대장 대상 열(헤더 이름으로 찾음)
+STOCK_NONE = "재고원장 없음"          # 재고현황에 없다고 판정한 상품 표기(D-156)
 _HEADER_SCAN = 15
 _GID = re.compile(r"[#?&]gid=(\d+)")
+_AUTO_TEXT = re.compile(r"(\([^)]*\) )?[^,/]+ , -?[\d,]+개")   # 앱이 쓰는 표기 한 조각(stock_text·text_of)
 
 
 @dataclass
@@ -32,6 +36,8 @@ class StockResult:
     matched: int = 0                               # 값을 쓴 대장 상품 줄 수
     changed: int = 0                               # 그중 값이 바뀐 줄 수
     unmatched: list = field(default_factory=list)  # (사업자명, 상품명) — 재고현황에 없음
+    undecided: list = field(default_factory=list)  # (사업자명, 상품명) — AI 판단 못 함(장애·AI 없음) → 기존값 유지
+    memo: list = field(default_factory=list)       # (사업자명, 상품명) — 재고현황에 없지만 사람이 적은 메모라 유지
     how: list = field(default_factory=list)        # (사업자명, 상품명, 근거) — 상품명 일치가 아닌 매칭(로그용)
     warnings: list = field(default_factory=list)
     stock_sheet: str = ""
@@ -137,11 +143,11 @@ def _ledger_rows(values: list) -> tuple[int, int, list]:
 
 
 def apply_to_workbook(wb, stock: dict, cache: dict | None = None, title_of=None) -> int:
-    """재고현황 값(`read_stock` 결과)을 워크북 상품에 매칭(D-072 규칙 1~3 + 저장된 AI 결과)해 회사보유재고로 주입.
+    """재고현황 값(`read_stock` 결과)을 워크북 상품에 매칭(상품명 완전 일치 + 저장된 AI 판정·D-157)해 회사보유재고로 주입.
 
     계정목록(엑셀·구글시트) 5열 표기용(계정목록 렌더 전에 호출). 매칭 이름 = 등록명(있으면·대장 원본명).
-    미매칭·재고현황에 없는 상품은 주입 안 함(계정목록에서 공란). 값 = 관리대장 역기록과 동일한 표기. AI 는 부르지 않음
-    (관리대장 역기록이 묻고 저장한 결과만 사용)."""
+    마지막 AI 판정이 '없음'이면 재고원장 없음(D-156) · 판정 기록이 없으면 주입 안 함(계정목록에서 공란). 값 = 관리대장
+    역기록과 동일한 표기. AI 는 부르지 않음(관리대장 역기록이 묻고 저장한 결과만 사용)."""
     from . import company_stock_match as M
     idx, n = M.build_index(stock), 0
     for biz in wb.account_sheets():
@@ -149,38 +155,47 @@ def apply_to_workbook(wb, stock: dict, cache: dict | None = None, title_of=None)
         for prod in wb.products_of(biz):
             name = wb.registered_name(biz, prod) or prod
             title = next((t for t in ((title_of or (lambda a, p: ""))(a, name) for a in aids) if t), "")
-            keys, _how = M.match_rules(stock, idx, name, title)
-            if not keys and cache is not None:
-                keys = (M.from_cache(cache, stock, name, title) or ([], ""))[0]
+            keys, how = M.match_rules(stock, idx, name, title)
+            if how != M.EXACT:
+                keys = (M.from_cache(cache or {}, stock, name, title, keys) or ([], ""))[0]
             if keys:
                 wb.set_company_stock(biz, prod, M.text_of(stock, keys, stock_text))
                 n += 1
+            elif cache is not None and M.judged_none(cache, name, title):
+                wb.set_company_stock(biz, prod, STOCK_NONE)
     return n
 
 
-def _match_rows(prods: list, stock: dict, title_of, ask, cache: dict, log) -> dict:
-    """{행: ([재고현황 키], 근거)} — 규칙 1~3 → 저장된 AI 결과 → AI(남은 것만 한 번에·D-072)."""
+def _auto_written(text: str) -> bool:
+    """빈 칸·재고원장 없음·앱이 쓴 '창고 , 수량개' 표기면 True — 그 밖의 값은 사람이 적은 메모(D-156)."""
+    return not text or text == STOCK_NONE or all(_AUTO_TEXT.fullmatch(x) for x in text.split(" / "))
+
+
+def _match_rows(prods: list, stock: dict, title_of, ask, cache: dict, log) -> tuple[dict, set]:
+    """({행: ([재고현황 키], 근거)}, AI 판단 못 한 행) — 상품명 완전 일치만 그대로 · 나머지 = 저장된 AI 판정 → AI(규칙은 후보·D-157)."""
     from . import company_stock_match as M
-    idx, found, todo = M.build_index(stock), {}, []
+    idx, found, todo, rules = M.build_index(stock), {}, [], {}
     for r, _biz, prod, aid in prods:
         title = (title_of or (lambda a, p: ""))(aid, prod)
         keys, how = M.match_rules(stock, idx, prod, title)
-        if not keys:
-            cached = M.from_cache(cache, stock, prod, title)
-            if cached is None:
-                todo.append((r, prod, title))
-                continue
-            keys, how = cached
-        if keys:
+        if how == M.EXACT:
             found[r] = (keys, how)
+            continue
+        rules[r] = keys
+        cached = M.from_cache(cache, stock, prod, title, keys)
+        if cached is None:
+            todo.append((r, prod, title))
+        elif cached[0]:
+            found[r] = cached
     found.update(M.ask_ai(ask, todo, stock, idx, cache, log))
-    return found
+    undecided = {r for r, name, title in todo if r not in found and M.from_cache(cache, stock, name, title, rules[r]) is None}
+    return found, undecided
 
 
 def write_company_stock(client, stock: dict, *, dry_run: bool = False,
                         sheet: str = "셀독리스트", title_of=None, ask=None, cache: dict | None = None,
                         log=None) -> StockResult:
-    """관리대장 '회사보유재고' 열에 재고현황 '창고 , 수량개'를 기록(매칭 줄만·미매칭은 기존값 보존).
+    """관리대장 '회사보유재고' 열에 재고현황 '창고 , 수량개'를 기록 · 없는 상품 = 재고원장 없음(D-156) · AI 판단 못 한 줄 = 기존값.
 
     다른 열은 건드리지 않는다(이 열의 데이터 구간만 한 번에 씀). 값이 바뀌는 줄이 없거나 dry_run 이면 쓰지 않음.
     title_of(계정ID, 대장명) = ① 매칭된 쿠팡 상품명(모델번호 단계) · ask = AI 호출 · cache = AI 결과 저장소(D-072)."""
@@ -190,16 +205,23 @@ def write_company_stock(client, stock: dict, *, dry_run: bool = False,
     res = StockResult()
     col_out = [[_cell(values[r], col) if _cell(values[r], col) is not None else ""]
                for r in range(hrow + 1, len(values))]
-    found = _match_rows(prods, stock, title_of, ask, {} if cache is None else cache, log or (lambda m: None))
+    found, undecided = _match_rows(prods, stock, title_of, ask, {} if cache is None else cache, log or (lambda m: None))
     for r, biz, prod, _aid in prods:
-        if r not in found:
-            res.unmatched.append((biz, prod))
+        if r in undecided:
+            res.undecided.append((biz, prod))
             continue
-        keys, how = found[r]
-        if how != "상품명 일치":
-            res.how.append((biz, prod, how))
-        res.matched += 1
-        text = M.text_of(stock, keys, stock_text)
+        if r in found:
+            keys, how = found[r]
+            if how != "상품명 일치":
+                res.how.append((biz, prod, how))
+            res.matched += 1
+            text = M.text_of(stock, keys, stock_text)
+        elif not _auto_written(str(col_out[r - hrow - 1][0]).strip()):
+            res.memo.append((biz, prod))
+            continue
+        else:
+            res.unmatched.append((biz, prod))
+            text = STOCK_NONE
         if str(col_out[r - hrow - 1][0]).strip() != text:
             res.changed += 1
             col_out[r - hrow - 1] = [text]
@@ -235,7 +257,13 @@ def run_company_stock(stock_url: str, input_url: str, *, dry_run: bool = False, 
     for biz, prod, how in res.how:
         log(f"  [회사재고] 매칭 — {biz} / {prod[:40]} ← {how}")
     for biz, prod in res.unmatched:
-        log(f"  [회사재고] 미매칭(기존값 유지) — {biz or '(사업자명 없음)'} / {prod}")
+        log(f"  [회사재고] 미매칭({STOCK_NONE}) — {biz or '(사업자명 없음)'} / {prod}")
+    for biz, prod in res.memo:
+        log(f"  [회사재고] 미매칭(메모 유지) — {biz or '(사업자명 없음)'} / {prod}")
+    for biz, prod in res.undecided:
+        log(f"  [회사재고] ⚠ AI 판단 못 함(기존값 유지) — {biz or '(사업자명 없음)'} / {prod}")
     log(f"== [회사재고] {'미리보기(저장 안 함) ' if dry_run else ''}재고현황 '{tab}' {len(stock)}품목 → "
-        f"관리대장 '{STOCK_COL}' 매칭 {res.matched}줄·변경 {res.changed}줄·미매칭 {len(res.unmatched)}줄 ==")
+        f"관리대장 '{STOCK_COL}' 매칭 {res.matched}줄·변경 {res.changed}줄·미매칭 {len(res.unmatched)}줄"
+        + (f"·메모 유지 {len(res.memo)}줄" if res.memo else "")
+        + (f"·AI 판단 못 함 {len(res.undecided)}줄" if res.undecided else "") + " ==")
     return res

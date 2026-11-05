@@ -1208,7 +1208,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         title, rows, strike_grid = read_ledger_rows(url, store=self.creds_store)
         il = parse_input_rows(rows, strike_grid)
         try:                                       # D-086 관리대장 '체험단' 시트 → 체험단 시작일(실패해도 입력은 계속)
-            il.promo = read_promo_sheet(url, store=self.creds_store)
+            il.promo = read_promo_sheet(url, store=self.creds_store, log=self.log)
             if il.promo is not None:
                 self.log(f"[입력] 관리대장 체험단 시트 {len(il.promo)}줄 읽음")
         except Exception as exc:

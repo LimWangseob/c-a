@@ -1806,6 +1806,30 @@ def t1_promo_sheet_start():
     wb2 = OutputWorkbook.load(_p); wb2.apply_style()
     assert not wb2.has_marketing() and wb2.marketing_of("가게P", "상품P")[0] == "", "계정 목록 시작일이 마케팅으로 되읽힘"
     assert wb2.promo_start_of("가게P", "상품P") == "2026-09-01"
+    # 시트에 내용이 있는데 한 줄도 인식 못 함 = 기존 시작일 유지 + ❌ 로그(실측 11-02·03 '0줄' → 시작일 전부 삭제·D-158)
+    import coupang_analytics.gsheet_api as _GA
+
+    class _FakeSheet:
+        grid: list = []
+
+        def __init__(self, *_a, **_k):
+            pass
+
+        def sheet_titles(self):
+            return ["셀독리스트", PS.PROMO_SHEET]
+
+        def read_values(self, _t):
+            return self.grid
+    _real, _GA.GSheetClient = _GA.GSheetClient, _FakeSheet
+    try:
+        seen: list = []
+        _FakeSheet.grid = [["체험단 진행 명단"], [], ["요청일", "시작", "링크"], ["26.09.01", "9.17", "https://www.coupang.com/vp/products/1"]]
+        assert PS.read_promo_sheet("u", log=seen.append) is None, "머리글 못 찾음 = 반영 안 함"
+        assert any("❌" in m and "체험단시작일" in m for m in seen), seen
+        _FakeSheet.grid = []
+        assert PS.read_promo_sheet("u", log=seen.append) == [], "완전히 빈 시트 = 0줄(오류 아님)"
+    finally:
+        _GA.GSheetClient = _real
     PS.apply_promo_starts(wb, [], lambda m: None)                                            # 체험단 시트 비면 자동값 지움
     assert wb.promo_start_of("가게P", "상품P") == "" and wb.promo_start_of("가게P", "기저귀 백팩 (베이비)") == ""
     _ok("체험단 시트: 체험단시작일(빈 칸 제외·요청일 미사용)·링크 VID/상품번호 해석 · 옵션→대표 블록 · 최근 회차 · 직원 입력 우선 · 수집 주기 불변")
