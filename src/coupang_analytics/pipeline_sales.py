@@ -16,7 +16,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from . import config
-from . import login_today, session_state
+from . import daily_snapshot, login_today, session_state
 from .browser import WING_URL, WingBrowser
 from .input_list import Account
 from .kw_ai import KeywordAIError
@@ -48,7 +48,8 @@ def _dump_raw(account_id: str, log, out_dir: str = "output") -> None:
     파싱/요약이 아니라 **쿠팡이 준 응답 바디 그대로**(F12 네트워크와 동일)를 남긴다. 재수집·재빌드 없이
     중복 판별·필드 탐색 등에 쓴다. 저장 위치=output/_raw/{계정}_{api}_p{n}.json.gz, run_log 엔 위치만(원문이
     커서 run_log 오염 방지). 설정(config.SAVE_RAW_RESPONSES) 끄면 no-op·버퍼 비면 no-op. 저장 실패는
-    비치명(로그만·수집은 계속). api = vendor_inventory | inventory | sales(각 페이지 p1·p2…)."""
+    비치명(로그만·수집은 계속). api = vendor_inventory | inventory | sales(각 페이지 p1·p2…).
+    _raw 는 매 실행 덮어쓰므로 재고현황은 날짜별로도 남긴다(_archive_inventory)."""
     if not config.SAVE_RAW_RESPONSES:
         return
     import gzip
@@ -69,6 +70,19 @@ def _dump_raw(account_id: str, log, out_dir: str = "output") -> None:
             log(f"  [원본저장] {account_id}: 응답 원문 {n}개 → output/_raw/{account_id}_*.json.gz (가공 없음·분석용)")
     except Exception as exc:   # 저장 실패해도 수집은 계속(비치명)
         log(f"  [원본저장] ⚠ {account_id} 응답 원문 저장 실패(비치명) — {exc.__class__.__name__}: {str(exc)[:80]}")
+    _archive_inventory(account_id, dumps.get("inventory"), log, out_dir)
+
+
+def _archive_inventory(account_id: str, bodies, log, out_dir) -> None:
+    """재고현황 응답 원문(pricing 쿠폰·개당 비용)을 계정·날짜별로 쌓음(output/재고현황_일별/{계정}/{날짜}.json.gz). 추가 조회 없음·
+    같은 날 다시 수집하면 앞 파일을 두고 시각 붙은 파일을 더 남김(daily_snapshot). 판매자배송 전용 계정은 재고 조회가 없어 no-op."""
+    if not bodies:
+        return
+    try:
+        path = daily_snapshot.save(out_dir, daily_snapshot.INVENTORY_DIRNAME, account_id, {"응답": bodies})
+        log(f"  [재고 보관] {account_id}: 재고현황 원문 {len(bodies)}개 → {path}")
+    except OSError as exc:   # 저장 실패해도 수집은 계속(비치명)
+        log(f"  [재고 보관] ⚠ {account_id} 저장 실패(비치명) — {exc.__class__.__name__}: {str(exc)[:80]}")
 
 
 def try_login_once(account_id: str, password: str, *, on_log=None) -> bool:
@@ -101,7 +115,7 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
     2차인증/직접로그인 처리)으로 로그인 → 그 신뢰 창에서 수집. ③ 반자동과 같은 '보이는 신뢰 세션' 방식.
     anchor_file = 매칭 고정 파일(D-009·run_full 이 output 기준으로 넘김). None 이면 고정 읽기/쓰기 안 함(도구·핀).
     """
-    from . import collector
+    from . import collector, wing_coupons
     pws = _pw_list(get_password(a.account_id) if get_password else None)
     # 기본은 **창 숨김**(offscreen). 반자동(semi)이면 처음부터 보이게 띄운다(사람이 2차인증 처리).
     with WingBrowser(profile_dir=account_profile(a.account_id), offscreen=not semi) as b:
@@ -114,6 +128,7 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
         if found is not None:
             _record_sales_history(a.account_id, date_from, date_to, found[2], log)   # 판매금액 날짜별 누적
         _record_sales_backfill(b.page, a.account_id, "output", log)   # 일별 소급(4/1~)·빠진 날 보충(같은 세션)
+        wing_coupons.record_day(b.page, a.account_id, "output", log, gap=_PERIOD_GAP_SEC)   # 할인쿠폰 날짜별 보관(같은 세션·조회만)
         if found is None:                    # 판매분석·상품조회 모두 데이터 없음 → 건너뜀
             return None, {}, {}, {}, set(), set(), {}, {}
         (products, tracked, metrics, inventory, sale_status, upbundle_vids, live_all_vids,
