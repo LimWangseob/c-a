@@ -48,7 +48,8 @@ def t1_plan():
     months = [k for k in keys if k.startswith("M:")]
     weeks = [k for k in keys if k.startswith("W:")]
     assert months == [f"M:2026-{m:02d}" for m in range(4, 11)], months   # 판매 실적 = 4월부터(소유자 2026-10-21)
-    assert SS.FIRST_DAY == date(2026, 4, 1) and not hasattr(SS, "BACKFILL_FROM"), "시작일 상수 하나(월별 = 소급)"
+    assert SS.FIRST_DAY == date(2026, 4, 1) and not hasattr(SS, "BACKFILL_FROM"), "표시·① 시작일 상수 하나(월별 = 소급)"
+    assert SS.COLLECT_FROM == date(2026, 1, 1), "정산 실행 수집 시작만 따로(D-161 — 표시는 FIRST_DAY)"
     assert weeks[0] == "W:2026-10-12" and weeks[-1] == "W:2026-08-24" and len(weeks) == 8, weeks
     rng = {k: (f, t) for k, f, t in plan}
     assert rng["M:2026-10"] == ("2026-10-01", "2026-10-14") and rng["M:2026-04"] == ("2026-04-01", "2026-04-30")

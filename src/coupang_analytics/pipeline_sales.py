@@ -153,13 +153,16 @@ def _record_sales_history(account_id: str, date_from, date_to, metrics: dict, lo
 _PERIOD_GAP_SEC = (1.0, 2.5)   # 기간 조회 사이 쉼(같은 세션 API 조회 — 몰아치기 방지)
 
 
-def _record_sales_periods(page, account_id: str, out_dir, log, yesterday: date | None = None) -> None:
-    """통합 판매현황(designs/SALES_SUMMARY.md) 월·주 판매 합계 조회·저장 — 처음엔 1월~이번 달·최근 8주 소급, 그 뒤엔
-    이번 달·이번 주 누계와 막 끝난 기간만. 조회 실패면 이 계정 남은 기간은 멈춤(다음 실행이 이어서·비치명·로그)."""
+def _record_sales_periods(page, account_id: str, out_dir, log, yesterday: date | None = None,
+                          first: date | None = None) -> None:
+    """통합 판매현황(designs/SALES_SUMMARY.md) 월·주 판매 합계 조회·저장 — 처음엔 first 달(기본 FIRST_DAY)~이번 달·최근 8주 소급,
+    그 뒤엔 이번 달·이번 주 누계와 막 끝난 기간만. 조회 실패면 이 계정 남은 기간은 멈춤(다음 실행이 이어서·비치명·로그).
+    first = 정산 실행이 1월부터 받을 때(D-161 COLLECT_FROM)만 넘김."""
     from . import collector, sales_history, sales_summary
     y = yesterday or (date.today() - timedelta(days=1))
     try:
-        plan = sales_summary.plan_periods(sales_history.load_periods(out_dir).get(account_id, {}), y)
+        plan = sales_summary.plan_periods(sales_history.load_periods(out_dir).get(account_id, {}), y,
+                                          first=first or sales_summary.FIRST_DAY)
     except (OSError, ValueError) as exc:
         log(f"  [판매현황] ⚠ {account_id} 기간 기록 읽기 실패(비치명) — {exc.__class__.__name__}: {str(exc)[:80]}")
         return
@@ -179,13 +182,16 @@ def _record_sales_periods(page, account_id: str, out_dir, log, yesterday: date |
         log(f"  [판매현황] {account_id} 월·주 판매 합계 {done}/{len(plan)}건 기록")
 
 
-def _record_sales_backfill(page, account_id: str, out_dir, log, yesterday: date | None = None) -> None:
-    """통합 판매현황 일별 소급(소유자 2026-10-21) — 2026-04-01~어제 중 **빠진 날**을 최근부터 거꾸로 하루씩 조회·저장.
-    계정당 하루 최대 sales_summary.BACKFILL_PER_DAY 일·조회 사이 쉼. 실패면 그 계정 소급 멈춤(다음 실행이 이어서·비치명)."""
+def _record_sales_backfill(page, account_id: str, out_dir, log, yesterday: date | None = None,
+                           first: date | None = None) -> None:
+    """통합 판매현황 일별 소급(소유자 2026-10-21) — first(기본 2026-04-01)~어제 중 **빠진 날**을 최근부터 거꾸로 하루씩 조회·저장.
+    계정당 하루 최대 sales_summary.BACKFILL_PER_DAY 일·조회 사이 쉼. 실패면 그 계정 소급 멈춤(다음 실행이 이어서·비치명).
+    first = 정산 실행이 1월부터 받을 때(D-161 COLLECT_FROM)만 넘김."""
     from . import collector, sales_history, sales_summary
     y = yesterday or (date.today() - timedelta(days=1))
     try:
-        plan = sales_summary.plan_backfill(sales_history.load_daily(out_dir).get(account_id, {}), y)
+        plan = sales_summary.plan_backfill(sales_history.load_daily(out_dir).get(account_id, {}), y,
+                                           first=first or sales_summary.FIRST_DAY)
     except (OSError, ValueError) as exc:
         log(f"  [판매현황] ⚠ {account_id} 일별 기록 읽기 실패(비치명) — {exc.__class__.__name__}: {str(exc)[:80]}")
         return

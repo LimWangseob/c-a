@@ -30,6 +30,7 @@ GQL = "/marketing-reporting/v2/graphql"
 MILK_EXCEL = "https://wing.coupang.com/tenants/rfm-portal-2/excel/milkrun-settlement?searchYear={y}&searchMonth={m}&milkrunId=&feeType="
 PA_EXCEL = "https://advertising.coupang.com/marketing-reporting/v2/api/excel-report?id={id}"
 SETTLE_DAYS = 3
+FROM = date(2025, 12, 1)        # 받는 시작 달 — 2026-01 지급에서 공제되는 2025-12분까지(D-161 ④·정산 시작일보다 이름)
 MAX_MONTHS = 2                  # 하루(한 번 실행) 계정당 받는 달 수 — 밀린 달은 최근 달부터 날마다 나눠서(판매 소급 하루 60일과 같은 방식·D-120)
 _CAMPAIGNS = ("query GetCampaignListInBillboard($startDate: Int!, $endDate: Int!, $reportType: ReportType!) "
               "{ getCampaignList(startDate: $startDate, endDate: $endDate, reportType: $reportType) { id name } }")

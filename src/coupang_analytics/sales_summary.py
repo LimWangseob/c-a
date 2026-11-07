@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 FIRST_DAY = date(2026, 4, 1)   # 판매 실적 시작 = 월별(기간 조회·대시보드)·일별 소급 공통(소유자 2026-10-21 '4월부터'·D-105)
+COLLECT_FROM = date(2026, 1, 1)   # 정산 실행의 판매분석 수집 시작(D-161 — 정산 예정금 입력·정산전용 계정 포함) · 표시는 FIRST_DAY 그대로
 WEEKS = 8                       # 주간 기간 수(기간 조회·대시보드 주간 선)
 DETAIL_DAYS = 31                # 상세표 일별 칸 수(최근 31일·최신이 왼쪽 — 소유자 2026-10-21)
 BACKFILL_PER_DAY = 60              # 계정당 하루 최대 조회 일수(같은 세션 API — 차단 위험 줄이기·D-097 30→60)

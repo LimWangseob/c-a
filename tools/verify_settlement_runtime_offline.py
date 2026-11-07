@@ -1815,6 +1815,193 @@ def p45_ad_report_csv():
     ok("글자 보고서 → 엑셀(금액 숫자·따옴표·콤마) · 다른 모양 = 저장 안 하고 오류 · 밀크런·정산 원본은 엑셀만 · 받은 달 다시 안 받음")
 
 
+def _patched(obj_attrs: list, fn):
+    """[(객체, 이름, 값)] 을 잠시 바꿔 fn() 실행 후 되돌림."""
+    olds = [(o, n, getattr(o, n)) for o, n, _v in obj_attrs]
+    try:
+        for o, n, v in obj_attrs:
+            setattr(o, n, v)
+        return fn()
+    finally:
+        for o, n, v in olds:
+            setattr(o, n, v)
+
+
+def p46_verify_keep_previous():
+    print("[P46] 검증 자료 조회 실패한 항목·달 = 지난 값 유지·받은 날 기록(D-161 — 매일 통째로 다시 써서 hide4u 1~4월 소실)")
+    import json
+    from types import SimpleNamespace
+    sys.path.insert(0, str(ROOT / "tools"))
+    import settlement_download as TD
+    from coupang_analytics import settlement_verify_collect as VC
+    old = {"수집일": "2026-11-04", "기간": ["2026-01-01", "2026-11-03"], "조회 실패": [],
+           "purchase": {"202601": {"purchaseReports": [{"revenueAmount": 100}]}, "202602": {"v": 2}},
+           "wallet": [{"amount": 1}], "wallet_balance": 5, "rg_vat": {"a": 1, "b": 2},
+           "pending": {"전체": {"totalRecordCount": 3}}, "returns": {"9": []}}
+    new = {"수집일": "2026-11-05", "기간": ["2026-01-01", "2026-11-04"], "조회 실패": ["매출내역 202601: ServerBusy: x"],
+           "purchase": {"202601": None, "202602": {"v": 3}, "202603": None},
+           "wallet": None, "wallet_balance": 6, "rg_vat": {"a": 9}, "pending": {"전체": None}}
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "A.json"
+        p.write_text(json.dumps(old, ensure_ascii=False), encoding="utf-8")
+        _patched([(TD, "VERIFY", Path(tmp)), (TD, "LOG", SimpleNamespace(record=lambda *a, **k: None)),
+                  (TD, "name_of", lambda a: "A"), (TD, "_wing_files", lambda n: []),
+                  (VC, "collect", lambda *a, **k: json.loads(json.dumps(new)))],
+                 lambda: TD.collect_verify(None, None, SimpleNamespace(start=D("2026-01-01"))))
+        got = json.loads(p.read_text(encoding="utf-8"))
+    assert got["purchase"]["202601"] == old["purchase"]["202601"], "조회 실패한 달은 지난 값 그대로(재현: None 으로 덮어씀)"
+    assert got["purchase"]["202602"] == {"v": 3} and got["purchase"]["202603"] is None, "새로 받은 달 = 새 값 · 지난 값 없는 달 = 그대로 실패"
+    assert got["wallet"] == [{"amount": 1}] and got["wallet_balance"] == 6 and got["pending"]["전체"] == {"totalRecordCount": 3}
+    assert got["rg_vat"] == {"a": 9}, "받은 응답은 지난 응답과 섞지 않음"
+    assert got["지난 값"] == {"purchase/202601": "2026-11-04", "wallet": "2026-11-04", "pending/전체": "2026-11-04"}, got["지난 값"]
+    assert got["조회 실패"] == new["조회 실패"] and got["수집일"] == "2026-11-05" and got["returns"] == {"9": []}
+    again = VC.keep_previous({**new, "수집일": "2026-11-06", "purchase": {"202601": None, "202602": None}}, got)
+    assert again["지난 값"]["purchase/202601"] == "2026-11-04" and again["지난 값"]["purchase/202602"] == "2026-11-05", again["지난 값"]
+    fixed = VC.keep_previous({**new, "purchase": {"202601": {"v": 1}}, "wallet": [], "pending": {"전체": {}}}, got)
+    assert fixed["지난 값"] == {} and fixed["purchase"]["202601"] == {"v": 1} and fixed["wallet"] == [], "다시 받으면 지난 값 표시 없음"
+    assert VC.keep_previous(new, {})["지난 값"] == {}
+    ok("실패한 달·항목 = 지난 값 유지(받은 날 이어서 기록) · 받은 값은 새 값 · 응답 안 섞음 · 다시 받으면 표시 지움")
+
+
+def p47_settle_sales_coupons():
+    print("[P47] 정산 실행에 판매분석 소급(2026-01-01부터·정산 계정 전부)·윙 쿠폰 수집 — 표시·① 판매수집은 4/1 그대로(D-161 ①②)")
+    import json
+    import os
+    from datetime import timedelta
+    from types import SimpleNamespace
+    sys.path.insert(0, str(ROOT / "tools"))
+    import settlement_download as TD
+    from coupang_analytics import collector, wing_coupons
+    from coupang_analytics import pipeline_sales as PS
+    from coupang_analytics import sales_summary as SS
+    assert SS.FIRST_DAY == D("2026-04-01") and SS.COLLECT_FROM == D("2026-01-01"), "표시 시작 4/1 · 수집 시작 1/1"
+    assert SS.plan_backfill({}, D("2026-01-02"), first=SS.COLLECT_FROM) == ["2026-01-02", "2026-01-01"]
+    assert SS.plan_backfill({}, D("2026-01-02")) == [], "기본(① 판매수집) = 4/1 전은 안 함"
+    y = date.today() - timedelta(days=1)
+    have = {(SS.FIRST_DAY + timedelta(days=i)).isoformat(): {"수집": "2000-01-01T00:00:00", "합계": {}, "옵션": {}}
+            for i in range((y - SS.FIRST_DAY).days + 1)}                    # ① 이 4/1~어제 다 받은 관리대장 계정
+    fetched, coupons, recs = [], [], []
+
+    def fetch(page, f, t, log=None):
+        fetched.append((f, t))
+        return {}
+    old_cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            d = Path("output") / "판매분석_일별"
+            d.mkdir(parents=True)
+            (d / "acc1.json").write_text(json.dumps(have), encoding="utf-8")
+            patches = [(collector, "fetch_sales_details", fetch), (PS.time, "sleep", lambda s: None),
+                       (wing_coupons, "record_day", lambda page, aid, out, log, gap=(0, 0): coupons.append((aid, out))),
+                       (TD, "goto", lambda b, url, who: None), (TD, "name_of", lambda a: "홍길동-가나-acc1"),
+                       (TD, "LOG", SimpleNamespace(record=lambda *a, **k: recs.append(a)))]
+            _patched(patches, lambda: PS._record_sales_backfill(object(), "acc1", "output", lambda m: None))
+            assert fetched == [], "① 판매수집 소급은 4/1 기준 그대로(1~3월 안 부름)"
+            _patched(patches, lambda: TD.collect_sales(SimpleNamespace(account_id="acc1"), SimpleNamespace(page=object()),
+                                                       SimpleNamespace(start=D("2026-01-01"))))
+            days = [f for f, t in fetched if f == t]
+            periods = [(f, t) for f, t in fetched if f != t]
+            assert days[0] == "2026-03-31" and len(days) == SS.BACKFILL_PER_DAY and days[-1] == "2026-01-31", days[:3]
+            assert ("2026-01-01", "2026-01-31") in periods and ("2026-03-01", "2026-03-31") in periods, periods
+            assert coupons == [("acc1", "output")], coupons
+            assert any(r[1] == "판매분석·쿠폰" for r in recs), recs
+            assert "2026-01-31" in json.loads((d / "acc1.json").read_text(encoding="utf-8")), "1~3월 일별 저장"
+        finally:
+            os.chdir(old_cwd)
+    ok("정산 실행 = 1/1부터 빠진 날(계정당 하루 60일·최근부터)·1~3월 월 합계·쿠폰(계정ID) · ① 판매수집은 4/1 그대로")
+
+
+def p48_ads_from_december():
+    print("[P48] 광고·밀크런 = 2025-12분부터(2026-01 지급 공제 근거·D-161 ④) · 하루 계정당 2개월 상한 그대로(D-120)")
+    from types import SimpleNamespace
+    sys.path.insert(0, str(ROOT / "tools"))
+    import settlement_download as TD
+    from coupang_analytics import settlement_ads as AD
+    seen = []
+
+    def fake(call, get_bytes, folder, acct, start, today, **k):
+        seen.append(start)
+        return {"받을 것": [], "요청": [], "기다림": [], "받음": [], "캠페인 없음": [], "남은 달": 0}
+    _patched([(AD, "collect", fake), (TD, "name_of", lambda a: "A"), (TD, "LOG", SimpleNamespace(record=lambda *a, **k: None))],
+             lambda: TD.collect_ads(None, None, SimpleNamespace(start=D("2026-01-01"))))
+    assert AD.FROM == D("2025-12-01") and seen == [D("2025-12-01")], seen
+    assert AD.due_months(AD.FROM, D("2026-01-05"))[0][0] == "202512" and AD.MAX_MONTHS == 2
+    ok("광고센터·밀크런 받는 시작 = 2025-12 · 상한 2개월 유지")
+
+
+def p49_rg_missing_costs():
+    print("[P49] 로켓그로스 빠진 비용 리포트를 매일 정산 계획에 — 정산 줄 없는 주 물류비·조회에 없는 지급 줄(0원 줄) · 원인 확인용 응답 원문 하루 1번(D-164)")
+    import gzip
+    import json
+    import os
+    from types import SimpleNamespace
+    sys.path.insert(0, str(ROOT / "tools"))
+    import settlement_download as TD
+    from coupang_analytics import settlement_jobs as SJ
+    from coupang_analytics import settlement_store as STORE
+    from coupang_analytics import settlement_wing_api as API
+    cfs = [{"settlementPeriodStartDate": "2026-01-25T15:00:00Z", "settlementPeriodEndDate": "2026-01-31T15:00:00Z",
+            "lastSettlementUnpaidCfsDeductionAmount": 13200.0}]
+    w1 = {"settlementDate": "2026-03-04T15:00:00.000Z", "settlementPeriodStartDate": "2026-02-01T15:00:00.000Z",
+          "settlementPeriodEndDate": "2026-02-07T15:00:00.000Z", "settlementRatio": 70, "settlementCycle": "WEEKLY",
+          "settlementGroupKey": "A0001-2026-02-02-2026-02-08", "finalSettlementAmount": 1000,
+          "settlementStatusReportDetail": {"totalStorageFeeDeductionAmount": 100, "cfsDeductionDetails": cfs}}
+    zero = {"정산일": "2026-03-12", "기간 시작": "2026-02-09", "기간 끝": "2026-02-15", "지급비율": 70, "최종지급액": 0,
+            "totalVreturnShippingFeeDeductionAmount": 5500}                # 지급 내역엔 있는데 정산현황 조회 일정에 없는 줄(*2)
+    plain0 = {**zero, "정산일": "2026-03-19", "기간 시작": "2026-02-16", "기간 끝": "2026-02-22",
+              "totalVreturnShippingFeeDeductionAmount": 0}                 # 비용도 없는 0원 줄 = 받을 것 없음
+    # 순수 규칙
+    miss = API.missing_week_events([w1], "A", D("2025-11-01"))
+    assert [(e.kind, e.ref, str(e.settle_date), e.reports) for e in miss] == [
+        (SJ.MISSING_KIND, "A0001-2026-01-26-2026-02-01", "2026-03-05", API.CFS_KINDS)], miss
+    assert API.missing_week_events([w1], "A", D("2026-02-01")) == [], "조회 시작 전 주는 정산 줄을 못 봤을 수 있어 만들지 않음"
+    have = API.rg_events({"settlementStatusReports": [w1]}, "A")
+    extra = API.unlisted_row_events([zero, plain0, API.amount_rows({"settlementStatusReports": [w1]}, "로켓그로스")[0]],
+                                    have, [w1], "A")
+    assert [(e.kind, e.ref, str(e.settle_date), e.reports) for e in extra] == [
+        ("주정산", "A0001-2026-02-09-2026-02-15", "2026-03-12", ("반출 배송 서비스비",))], extra
+    assert API.unlisted_row_events([zero], [], [w1, {**w1, "settlementGroupKey": "B9-2026-02-02-2026-02-08"}], "A") == [], \
+        "업체코드가 하나로 정해지지 않으면 요청 키를 만들지 않음(추측 금지)"
+    jobs: list = []
+    SJ.plan_requests(have + miss + extra, jobs, today=D("2026-04-01"), now=TD.datetime(2026, 4, 1, 9), per_account_cap=50)
+    by = {(j.kind, j.report) for j in jobs}
+    assert {(SJ.MISSING_KIND, k) for k in API.CFS_KINDS} <= by and (SJ.MISSING_KIND, "판매수수료") not in by, by
+    assert ("주정산", "반출 배송 서비스비") in by and ("주정산", "판매수수료") in by and ("주정산", "보관비") in by, by
+    j = next(j for j in jobs if j.kind == SJ.MISSING_KIND)
+    assert API.rg_request_body(j, 1)["settlementGroupKeys"] == ["A0001-2026-01-26-2026-02-01"]
+    # 정산 일정 조회에 붙임 + 응답 원문 하루 1번
+    old_cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            STORE.AMOUNTS.mkdir(parents=True)
+            (STORE.AMOUNTS / "A_로켓그로스.json").write_text(json.dumps([zero], ensure_ascii=False), encoding="utf-8")
+
+            def api(b, name, m, path, body):
+                return {"settlementStatusReports": [w1] if body["endDate"].startswith("2026-03-31") else []}
+            ahead = [(D("2026-04-01"), D("2026-04-30"), {"settlementStatusReports": []})]
+            run = lambda: TD.read_events(None, "A", D("2026-01-01"), D("2026-03-31"), amounts_from=D("2026-01-01"))  # noqa: E731
+            patches = [(TD, "goto", lambda *a: None), (TD, "api", api), (TD, "_read_forecast", lambda *a: ahead),
+                       (TD.time, "sleep", lambda s: None), (TD, "LOG", SimpleNamespace(record=lambda *a, **k: None)),
+                       (TD, "CHANNELS", ()), (TD, "_SOURCES", TD._SOURCES[1:])]
+            evs = _patched(patches, run)
+            assert sorted((e.kind, e.ref) for e in evs) == sorted([
+                ("주정산", "A0001-2026-02-02-2026-02-08"), (SJ.MISSING_KIND, "A0001-2026-01-26-2026-02-01"),
+                ("주정산", "A0001-2026-02-09-2026-02-15")]), evs
+            raw_dir = STORE.BASE / TD.RG_RAW_DIRNAME / "A"
+            files = sorted(raw_dir.glob("*.json.gz"))
+            assert len(files) == 1, files
+            rec = json.loads(gzip.open(files[0], "rt", encoding="utf-8").read())
+            assert [x["기간"] for x in rec["조회"]] == [["2026-01-01", "2026-01-31"], ["2026-02-01", "2026-02-28"],
+                                                     ["2026-03-01", "2026-03-31"]] and len(rec["예정"]) == 1, rec.keys()
+            _patched(patches, run)
+            assert len(sorted(raw_dir.glob("*.json.gz"))) == 1, "같은 날 다시 조회해도 원문은 하루 1번"
+        finally:
+            os.chdir(old_cwd)
+    ok("정산 줄 없는 주 = 물류비 5종만(판매수수료 없음)·조회에 없는 지급 줄 = 그 주 일정·업체코드 모르면 안 만듦 · 원문 하루 1번")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -1852,6 +2039,10 @@ def main():
     p43_collect_throttle_isolation()
     p44_adcenter_navigation()
     p45_ad_report_csv()
+    p46_verify_keep_previous()
+    p47_settle_sales_coupons()
+    p48_ads_from_december()
+    p49_rg_missing_costs()
     print("정산 런타임 오프라인 검증 통과")
 
 

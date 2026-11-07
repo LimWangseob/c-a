@@ -148,6 +148,34 @@ def collect(call, open_page, start: date, today: date, *, note=lambda m: None, g
     return scrub(data)
 
 
+_MONTHLY = ("purchase", "additional", "favorable", "pending")    # 달(또는 '전체')마다 따로 조회하는 항목
+_META = ("수집일", "기간", "조회 실패", "returns", "지난 값")
+
+
+def keep_previous(new: dict, old: dict) -> dict:
+    """오늘 조회에 실패한(None) 항목·달은 지난 수집 값을 그대로 둔다(D-161 — 매일 통째로 다시 써서 hide4u 1~4월 소실).
+    '지난 값' = {항목 또는 항목/달: 그 값을 받은 수집일}(이어서 실패하면 처음 받은 날 그대로) · 받은 응답은 지난 응답과 섞지 않음.
+    '조회 실패' 목록은 오늘 것 그대로(실패 사실은 남김) · 반품 조회(returns)는 호출부가 따로 누적."""
+    prev, kept = old.get("지난 값") or {}, {}
+
+    def keep(path: str, nv, ov):
+        if nv is None and ov is not None:
+            kept[path] = prev.get(path) or old.get("수집일") or ""
+            return ov
+        return nv
+    out = dict(new)
+    for k, nv in new.items():
+        if k in _META or k not in old:
+            continue
+        ov = old[k]
+        if k in _MONTHLY and isinstance(nv, dict) and isinstance(ov, dict):
+            out[k] = {ym: keep(f"{k}/{ym}", v, ov.get(ym)) for ym, v in nv.items()}
+        else:
+            out[k] = keep(k, nv, ov)
+    out["지난 값"] = kept
+    return out
+
+
 def _wallet(call, start: date, today: date) -> list:
     out: list = []
     page = 0

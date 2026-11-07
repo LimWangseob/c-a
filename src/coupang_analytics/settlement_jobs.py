@@ -26,6 +26,7 @@ ST_DONE = "받음"
 ST_FAILED = "실패"
 ST_SKIPPED = "생략(월별로 대체)"
 RG_ALWAYS = ("판매수수료",)
+MISSING_KIND = "정산줄없음"      # 정산 줄 없는 주의 물류비(미납 CFS 로만 보이는 주 — D-065·D-164) = 비용 리포트만(판매 없음)
 REQUEST_EXPIRE_DAYS = 3          # 요청 후 이만큼 지나도 완료 안 되면 재요청
 MAX_ATTEMPTS = 3
 WING_REQ_SLACK = timedelta(minutes=10)    # 윙: 같은 기간 목록 줄 중 우리 요청 이후 것(시계 차 여유)
@@ -83,6 +84,8 @@ class DownloadRow:
 def reports_for(ev: SettleEvent) -> list[str]:
     if ev.channel == "윙":
         return ["주문상세"]
+    if ev.kind == MISSING_KIND:
+        return list(ev.reports)
     return list(dict.fromkeys([*RG_ALWAYS, *ev.reports]))
 
 

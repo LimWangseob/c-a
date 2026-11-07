@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, timedelta
 
-from .settlement_jobs import DownloadRow, Job, SettleEvent
+from .settlement_jobs import MISSING_KIND, DownloadRow, Job, SettleEvent
 
 WING_URL = "https://wing.coupang.com/tenants/msf/wing/view/payment-report-view"
 RG_URL = "https://wing.coupang.com/tenants/rfm/settlements/status-new"
@@ -52,6 +52,8 @@ _COST_FIELDS = {"totalWarehousingFeeDeductionAmount": "입출고/배송비", "to
                 "totalVreturnHandlingFeeDeductionAmount": "반출비", "totalVreturnShippingFeeDeductionAmount": "반출 배송 서비스비",
                 "totalCfsInventoryCompensationAmount": "재고 손실 보상"}
 _COST_UNMAPPED = ("totalContainerUnloadingFeeDeductionAmount", "totalPostPurchaseDeductionAmount")   # 대응 리포트 미확인
+# 정산 줄 없는 주에 요청할 물류비 리포트 — 미납 CFS 상세(cfsDeductionDetails)엔 비용 종류가 없어 5종 모두(D-065 실측 니코에이블).
+CFS_KINDS = ("부가서비스비", "입출고/배송비", "보관비", "반품 회수/재입고 비용", "반출비")
 _KST = timedelta(hours=9)
 
 
@@ -121,6 +123,48 @@ def rg_events(resp: dict, account: str) -> list[SettleEvent]:
 def cost_reports(detail: dict) -> tuple:
     """정산현황 상세 → 그 주에 금액이 있는 비용 리포트 이름(요청 수를 줄이려 0원 리포트는 받지 않음)."""
     return tuple(sorted({rep for f, rep in _COST_FIELDS.items() if detail.get(f)}))
+
+
+def missing_week_events(reports: list, account: str, since: date) -> list[SettleEvent]:
+    """정산현황 줄들(조회한 모든 구간) → 정산 줄 없는 주의 물류비 일정(D-164 — 지금까진 증빙 전체 받기에서만·D-067).
+    키 = settlement_evidence.missing_cost_weeks · 정산일 = 그 비용을 처음 공제한 줄의 정산일 · 리포트 = CFS_KINDS.
+    조회 시작(since) 전에 시작한 주는 그 주의 정산 줄을 못 봤을 수 있어 만들지 않음."""
+    from .settlement_evidence import missing_cost_weeks
+    first: dict = {}
+    for r in reports:
+        vendor = (r.get("settlementGroupKey") or "").split("-")[0]
+        for d in (r.get("settlementStatusReportDetail") or {}).get("cfsDeductionDetails") or []:
+            k = f"{vendor}-{_kst_date(d['settlementPeriodStartDate'])}-{_kst_date(d['settlementPeriodEndDate'])}"
+            sd = _kst_date(r["settlementDate"])
+            first[k] = min(first.get(k, sd), sd)
+    out = []
+    for k in missing_cost_weeks(reports):
+        ps, pe = date.fromisoformat(k.split("-", 1)[1][:10]), date.fromisoformat(k.split("-", 1)[1][11:])
+        if ps >= since:
+            out.append(SettleEvent(account, "로켓그로스", MISSING_KIND, first[k], ps, pe, reports=CFS_KINDS, ref=k))
+    return out
+
+
+def unlisted_row_events(rows: list, events: list, reports: list, account: str) -> list[SettleEvent]:
+    """지급 내역(저장된 amount_rows)엔 있는데 오늘 정산현황 조회 일정엔 없는 로켓그로스 줄 중 비용 금액이 있는 것 → 그 주 일정
+    (D-164 — 0원 줄 113,054원 미수령·조사 *2). 요청 키 = 업체코드-시작-끝(정산 줄 키와 같은 모양 — missing_cost_weeks 와 같음).
+    업체코드가 조회 줄에서 하나로 정해지지 않으면 만들지 않는다(추측 키 금지). 같은 기간은 한 번만."""
+    vendors = {(r.get("settlementGroupKey") or "").split("-")[0] for r in reports} - {""}
+    if len(vendors) != 1:
+        return []
+    (vendor,) = vendors
+    seen = {(e.period_start, e.period_end) for e in events if e.channel == "로켓그로스"}
+    out = []
+    for r in rows:
+        ps, pe = date.fromisoformat(r["기간 시작"]), date.fromisoformat(r["기간 끝"])
+        reps = cost_reports(r)
+        if (ps, pe) in seen or not reps:
+            continue
+        seen.add((ps, pe))
+        kind = "월정산" if (pe - ps).days > 7 else ("최종액" if int(float(r.get("지급비율") or 0)) == 30 else "주정산")
+        out.append(SettleEvent(account, "로켓그로스", kind, date.fromisoformat(r["정산일"]), ps, pe, reports=reps,
+                               ref=f"{vendor}-{ps}-{pe}"))
+    return out
 
 
 def unsupported_cycles(resp: dict) -> list[str]:

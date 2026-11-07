@@ -285,10 +285,12 @@ def read_events(b, name: str, start: date, end: date, amounts_from: date | None 
         if CHANNELS and ch not in CHANNELS:
             continue
         goto(b, url, name)
+        raw: list = []
         for k, (ws, we) in enumerate(API.month_windows(min(start, amounts_from or start), end)):
             if k:
                 time.sleep(random.uniform(*LOOKUP_GAP_SEC))
             resp = api(b, name, "POST", path, body(ws, we))
+            raw.append((ws, we, resp))
             evs = [e for e in parse(resp, name) if ws <= e.settle_date <= we]   # 로켓그로스 끝 경계 하루 여유분 제외
             _save_amounts(name, ch, resp)
             costs = sum(len(e.reports) for e in evs)
@@ -299,13 +301,45 @@ def read_events(b, name: str, start: date, end: date, amounts_from: date | None 
             for n in API.unsupported_cycles(resp):
                 LOG.record(name, "조회", RL.WAIT, f"확인 필요 — 받기 방법 미확인 정산주기 {n} · 그 줄만 건너뜀", channel=ch)
             found += [e for e in evs if e.settle_date >= start]
-        _read_forecast(b, name, ch, path, body, end)
+        ahead = _read_forecast(b, name, ch, path, body, end) or []
+        if ch == "로켓그로스":
+            found += _rg_extra_events(name, raw, ahead, found, start, end, min(start, amounts_from or start))
     return found
 
 
-def _read_forecast(b, name: str, ch: str, path: str, body, end: date) -> None:
+RG_RAW_DIRNAME = "정산현황_원문"                         # output/정산/정산현황_원문/{계정}/{날짜}.json.gz (D-164 원인 확인용)
+RG_RAW_DAYS = 70                                        # 원문으로 남길 지난 조회 구간(최근 70일과 겹치는 달) — 예정 줄이 지난 줄이 되는 범위
+
+
+def _rg_extra_events(name: str, raw: list, ahead: list, events: list, start: date, end: date, since: date) -> list:
+    """로켓그로스 빠진 비용 리포트 일정(D-164): 정산 줄 없는 주 물류비 + 지급 내역엔 있는데 조회 일정엔 없는 줄(0원 줄·조사 *2).
+    받을 파일 계획(jobs)에 들어가 같은 주·리포트는 한 번만 요청된다. 원인 확인용 응답 원문은 하루 1번 남김."""
+    from coupang_analytics import daily_snapshot
+    tok = SF._token(name, "계정명")
+    reports = [r for _ws, _we, resp in raw for r in resp.get("settlementStatusReports") or []]
+    if not daily_snapshot.has_day(BASE, RG_RAW_DIRNAME, tok):
+        try:
+            cut = end - timedelta(days=RG_RAW_DAYS)
+            daily_snapshot.save(BASE, RG_RAW_DIRNAME, tok, {
+                "조회": [{"기간": [ws.isoformat(), we.isoformat()], "응답": resp} for ws, we, resp in raw if we >= cut],
+                "예정": [{"기간": [ws.isoformat(), we.isoformat()], "응답": resp} for ws, we, resp in ahead]})
+        except OSError as exc:                            # 원인 확인용 — 저장 실패해도 정산은 계속(로그로 명시)
+            LOG.record(name, "조회", RL.WAIT, f"정산현황 원문 저장 실패(진행) — {exc}", channel="로켓그로스")
+    p = AMOUNTS / f"{tok}_로켓그로스.json"
+    rows = [r for r in (json.loads(p.read_text(encoding="utf-8")) if p.exists() else []) if r["정산일"] <= end.isoformat()]
+    miss = API.missing_week_events(reports, name, since)
+    extra = [e for e in miss + API.unlisted_row_events(rows, events, reports, name) if e.settle_date >= start]
+    if extra:
+        n_miss = sum(e.kind == SJ.MISSING_KIND for e in extra)
+        LOG.record(name, "조회", RL.OK, f"빠진 비용 리포트 일정 {len(extra)}건(정산 줄 없는 주 {n_miss}·조회에 없는 지급 줄 "
+                   f"{len(extra) - n_miss}) — 받을 파일 계획에 넣음(이미 받은 주는 다시 요청 안 함)", channel="로켓그로스")
+    return extra
+
+
+def _read_forecast(b, name: str, ch: str, path: str, body, end: date) -> list:
     """오늘 뒤 AHEAD_DAYS 까지 정산현황 조회 → 쿠팡이 미리 만든 정산 줄을 예정 기록에만(D-078). 받을 파일 계획엔 안 씀.
-    쿠팡이 미래 날짜를 거부하는 등 실패해도 그 계정 정산은 계속(차단 신호만 그대로 올림)."""
+    쿠팡이 미래 날짜를 거부하는 등 실패해도 그 계정 정산은 계속(차단 신호만 그대로 올림). 반환 = 받은 [(시작, 끝, 응답)]."""
+    got: list = []
     for ws, we in API.month_windows(end + timedelta(days=1), end + timedelta(days=FC.AHEAD_DAYS)):
         time.sleep(random.uniform(*LOOKUP_GAP_SEC))
         try:
@@ -314,7 +348,9 @@ def _read_forecast(b, name: str, ch: str, path: str, body, end: date) -> None:
             LOG.record(name, "조회", RL.WAIT, f"정산 예정 조회 실패(진행) — {str(exc)[:120]}", channel=ch, period=f"{ws}~{we}")
             continue
         _save_amounts(name, ch, resp)
+        got.append((ws, we, resp))
         LOG.record(name, "조회", RL.OK, "정산 예정(쿠팡 미리 계산) 조회", channel=ch, period=f"{ws}~{we}")
+    return got
 
 
 def _save_amounts(name: str, ch: str, resp: dict) -> None:
@@ -470,6 +506,28 @@ def cmd_run(a, b, args, jobs: list) -> None:
         cmd_download(a, b, args, jobs)
         collect_verify(a, b, args)
         collect_ads(a, b, args)
+        if not past_until(args):
+            collect_sales(a, b, args)
+
+
+def collect_sales(a, b, args) -> None:
+    """판매분석 월·주 합계·일별 소급(2026-01-01부터 — D-161 ③) + 윙 할인쿠폰(D-160) — 정산 계정 전부(정산전용 포함)·조회만.
+    ① 판매수집과 같은 저장(output/판매분석_일별·_기간·쿠폰목록_일별)·같은 상한(계정당 하루 60일 — 오늘 ① 이 받은 날 포함)이라
+    이미 받은 날·오늘 완료본은 다시 부르지 않는다. 표시(결과 시트)는 4/1부터 그대로(FIRST_DAY). 실패는 그 단계만 기록(비치명)."""
+    from coupang_analytics import collector, wing_coupons
+    from coupang_analytics import pipeline_sales as PS
+    from coupang_analytics import sales_summary as SS
+    name = name_of(a)
+
+    def note(m: str) -> None:                             # 처리기록 + 실행 로그(record 가 로그 줄도 씀)
+        LOG.record(name, "판매분석·쿠폰", RL.WAIT if "⚠" in m else RL.OK, m.strip())
+    goto(b, API.WING_URL, name)                           # 윙 화면(같은 출처·XSRF) — 앞 단계가 다른 화면에서 끝났어도
+    try:
+        PS._record_sales_periods(b.page, a.account_id, "output", note, first=SS.COLLECT_FROM)
+        PS._record_sales_backfill(b.page, a.account_id, "output", note, first=SS.COLLECT_FROM)
+        wing_coupons.record_day(b.page, a.account_id, "output", note, gap=PS._PERIOD_GAP_SEC)
+    finally:
+        collector.reset_raw()                             # 응답 원문 버퍼(① 분석용)는 정산에선 안 씀 — 계정마다 비움
 
 
 def collect_verify(a, b, args) -> None:
@@ -486,11 +544,12 @@ def collect_verify(a, b, args) -> None:
     data = VC.collect(lambda m, p, body: api(b, name, m, p, body), lambda url: goto(b, url, name), args.start, today,
                       note=lambda m: LOG.record(name, "검증", RL.WAIT, m),
                       gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)), orders=orders, fatal=(BlockDetected,))
+    data = VC.keep_previous(data, old)                     # 조회 실패한 항목·달 = 지난 값 유지(D-161)
     data["returns"] = {**kept, **(data.get("returns") or {})}
     path.parent.mkdir(parents=True, exist_ok=True)
     STORE.write_json_atomic(path, data)
     LOG.record(name, "검증", RL.OK, f"검증 자료 저장 — 월렛 {len(data.get('wallet') or [])}건·반품 조회 {len(orders)}주문·"
-               f"조회 실패 {len(data['조회 실패'])}건")
+               f"조회 실패 {len(data['조회 실패'])}건" + (f"(지난 값 유지 {len(data['지난 값'])}건)" if data["지난 값"] else ""))
 
 
 def collect_ads(a, b, args) -> None:
@@ -505,7 +564,8 @@ def collect_ads(a, b, args) -> None:
             q = EW.open_adcenter(sys.modules[__name__], b, name)
         return API.call(q, method, path, body)
     try:
-        s = AD.collect(call, lambda url: _get_bytes(b, url), VERIFY / "광고", SF._token(name, "계정명"), args.start, date.today(),
+        s = AD.collect(call, lambda url: _get_bytes(b, url), VERIFY / "광고", SF._token(name, "계정명"), min(args.start, AD.FROM),
+                       date.today(),
                        gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)), get_report=lambda url: _get_bytes(b, url, text_ok=True))
         msg = [f"{k} {','.join(v)}" for k, v in s.items() if isinstance(v, list) and v and k != "받을 것"]
         if msg or s["남은 달"]:
