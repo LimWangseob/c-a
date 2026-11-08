@@ -3,8 +3,8 @@
 <!-- 누적 금지. 매 세션 종료 시 /session-close 가 전체 덮어쓰기. 100줄 이하. 핸드오프 SSOT. -->
 
 - BUILD_TAG: R103
-- 갱신: 2026-11-08 (정산 2단계 6단계 [실행 결과 종합] 로그 구현 R103 — 정산 쪽만 · 앱 쪽 `pipeline.py` 끝은 통제 세션)
-- 마지막 커밋: 이 커밋([R103] 실행 결과 종합) ← feca070 [R102] STATE ← 8b07f48 N8 부가세 상세.
+- 갱신: 2026-11-08 (세션 종료 — 정산 2단계 6단계 [실행 결과 종합] 로그 구현 R103 e81fb11 · 정산 쪽만 · 앱 쪽 `pipeline.py` 끝·zip 은 통제 세션)
+- 마지막 커밋: 이 커밋([R103] 세션 종료 STATE) ← e81fb11 [R103] 실행 결과 종합 ← feca070 [R102] STATE.
 - 배포본: `dist\쿠팡애널리틱스_배포.zip` 11-06 17:25(48f7bd4 기준) — **R99~R103 미포함**. 운용 PC 설치본 = 11-04 18:43(b6b39c4). 정산 1월 소급·D-164·2단계 수집은 새 zip 설치 뒤에만 동작.
 - 통제 세션 = 'Coupang Analytics'(`local_8d110fe9…`) — 배포 zip 생성·결과 구글시트 반영·`pipeline.py` 편집 담당.
 - 세션 핸드오프: STATE.md 단일. 시작 = STATE+`docs/DECISIONS_INDEX.md` 읽고 git log/status 대조 3줄 요약(DECISIONS.md 는 관련 항목만). 종료=`/session-close`.
