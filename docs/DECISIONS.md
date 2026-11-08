@@ -1252,3 +1252,10 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 감사 `docs/decisions/audit-2026-11-04.md` C절 13건까지 함께 반영(범위 확인이 필요해 이번엔 STATE 미해결로만 재등록) · 표기 안 함(`--check` 경고가 남음).
 - 영향 범위: `docs/DECISIONS.md` 상태 줄 2개 · 색인 `docs/DECISIONS_INDEX.md` 재생성. 코드 동작 변경 없음.
 - 상태: ACTIVE
+
+### D-175 [CURRENT_RULES_14] `docs/CURRENT_RULES.md` 도입 — 14묶음 주제별 현행 규칙 · 세션 시작은 이 파일 · 문서 7곳 낡은 규칙 구절을 링크로 (2026-11-08, R106)
+- 결정(소유자 2026-11-08 `D:\claude-global\docs\plans\NEXT_SESSION_PLAN.md` 세션 2 지시 · 링크화 AskUserQuestion '7곳 모두 바꿈'): ① `docs/CURRENT_RULES.md` = 14묶음(비밀번호·로그인 · ③ 노출순위·프록시 · 매칭·노출상품명 · 관리대장 입력·결과 계정목록 · 회사보유재고·그로스 재고 · 체험단 · 통합판매현황 구조·범위 · 통합판매현황 ① 요약 · 정산 기동·종료 · 정산 수집 범위 · 정산 증빙 원본 · 위탁정산서 구조·공제 · 추정 금지 · 실행 결과 종합)마다 현행 규칙 5줄 + 근거 D번호. 정책이 바뀌는 커밋에서 그 주제 줄을 함께 고친다. ② 세션 시작 = STATE.md + CURRENT_RULES(프로젝트 `CLAUDE.md` ⑤ 고침) · 색인은 검색용. ③ 낡은 규칙 구절 7곳(`docs/OPERATIONS_POLICY.md:9`·`:13` · `docs/ARCHITECTURE.md:63` · `designs/DESIGN.md:161`·`:523`·`:423` · `designs/DOMAIN_D4_PRODUCT_MANAGE.md:15` · `designs/IO_DEFINITION.md:223`)을 현행 구절 + 'CURRENT_RULES §N · D번호'로 바꾼다. 정책 문장은 지우지 않는다(DESIGN.md:161 은 문단 유지·'[폐기 …]' 머리표만).
+- 근거: 전역 `D:\claude-global` D-003(DECISIONS 30KB 넘는 저장소는 CURRENT_RULES). 이 저장소 DECISIONS 374,873B·색인 32,171B(11-08) · 세션 시작 첫 응답 입력 89,111(10-10)~105,140(11-05) 토큰(D-151 실측). 줄마다 원문 대조 = `docs/decisions/current-rules-2026-11-08.md`(하위 작업이 118블록 원문 읽고 초안 · 통합 세션이 6줄 근거 보정). 7곳 = 2026-11-08 분석 보고(`D:\claude-global\docs\plans\COUPANG_POLICY_CLEANUP.md`) — 유사도 매칭 5곳(`_best_inventory_match` 는 `src/` 에 없음·.pyc 만) · '순위조회 = 자동+반자동'(`docs/CONSTRAINTS.md:9` offscreen 자동 순위검색은 폐기) · DESIGN.md '그 키워드부터 다시'(보고 줄 422 → 실제 423 · D-053 '뒤로 미루고 다음 키워드'). `decisions-index.py . --check` 경고 0.
+- 버린 대안: 색인만 유지(제목만으로 현행을 알 수 없는 항목 약 26%) · 7곳 문단 통째 삭제(축소는 이동만 허용 규칙) · designs/ 는 그대로 둠(소유자 7곳 모두 선택).
+- 영향 범위: 문서만 — `docs/CURRENT_RULES.md`(신규 약 13KB) · `docs/decisions/current-rules-2026-11-08.md`(대조표) · `CLAUDE.md` ⑤ · 위 7곳. 코드 동작 변경 없음. 메모리 5건에 '현행 = D-xxx' 표시(57f6020 미러).
+- 상태: ACTIVE
