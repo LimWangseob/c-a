@@ -1819,7 +1819,91 @@ def p45_ad_report_csv():
         assert s["받음"] == ["202604"], s
         saved = folder / "꿈꾸는아재-t_매출성장광고_202604.xlsx"
         assert saved.read_bytes()[:2] == b"PK" and (folder / "꿈꾸는아재-t_밀크런_202604.xlsx").read_bytes() == b"PK-milk"
+        assert sorted(f.name for f in s["파일"]) == sorted(["꿈꾸는아재-t_밀크런_202604.xlsx", "꿈꾸는아재-t_광고정산_202604.json",
+                                                         saved.name]), s["파일"]      # D-168 받은 파일 = 이번에 쓴 3개
     ok("글자 보고서 → 엑셀(금액 숫자·따옴표·콤마) · 다른 모양 = 저장 안 하고 오류 · 밀크런·정산 원본은 엑셀만 · 받은 달 다시 안 받음")
+
+
+def p54_result_summary():
+    print("[P54] [실행 결과 종합](D-168) — 판정·전체 계정·비밀번호 오류·사람 조치·오류 현황·받은 파일 전부·남은 소급")
+    from datetime import datetime
+    from coupang_analytics import settlement_runlog as RLG
+    with tempfile.TemporaryDirectory() as tmp:
+        lg = RLG.RunLog(tmp, now=datetime(2026, 11, 8, 18, 0, 0), echo=lambda m: None)
+        lg.accounts = ["A-1", "B-2", "C-3", "D-4", "E-5"]
+        f1 = Path(tmp) / "파일" / "A-1_윙_주정산.xlsx"
+        lg.record("A-1", "로그인", RLG.OK, "success: 로그인 완료")
+        lg.saved("A-1", f1, "정산 파일")
+        lg.record("A-1", "받기", RLG.OK, "A-1_윙_주정산.xlsx", channel="윙", settle_date="2026-11-10")
+        lg.remaining("A-1", "판매분석", 120, "일")
+        lg.remaining("A-1", "월자료", 6, "달")
+        lg.record("B-2", "로그인", RLG.FAIL, "비밀번호 오류·잠금 의심 — 재시도 안 함 (b2)")
+        lg.record("B-2", "계정", RLG.SKIP, "비밀번호 오류(재시도 안 함)")
+        lg.record("C-3", "로그인", RLG.FAIL, "otp: 2차 인증(인증번호) 입력칸 — 열린 창에 휴대폰 인증번호를 직접 입력하세요")
+        lg.record("D-4", "받기", RLG.FAIL, "파일 받기 실패", channel="윙", settle_date="2026-11-10")
+        lg.record("D-4", "받기", RLG.OK, "다시 받음", channel="윙", settle_date="2026-11-10")      # 같은 일 = 풀림
+        lg.record("E-5", "조회", RLG.WAIT, "확인 필요 — 받기 방법 미확인 정산주기 1", channel="윙")
+        lg.remaining("E-5", "판매분석", 30, "일")
+        b = RLG.result_block(lg, pending=3)
+        j = " | ".join(b)
+        assert b[0] == "===== [실행 결과 종합] =====" and b[1] == "판정: 일부 실패 — 확인 필요", b[:2]
+        assert "전체 작업 계정: 5개 — A-1, B-2, C-3, D-4, E-5" in b
+        assert any(x.startswith("비밀번호 오류로 수집 안 된 계정: 1개 — B-2 (") and "24시간" in x for x in b), j
+        assert "사람 조치 필요: 1개" in b and any(x.startswith("  - C-3: otp: 2차 인증") for x in b), j
+        assert "오류 현황(실패·차단, 뒤에 풀린 것 제외): 2건" in b and "  - 로그인 실패 2건: B-2, C-3" in b, j   # D-4 = 뒤에 풀림
+        assert "D-4" not in j.split("오류 현황")[1].split("대기·확인 필요")[0]
+        assert "남은 소급: 판매분석 150일(2계정) · 월자료 6달(1계정) · 쿠팡 파일 생성·요청 대기 3건" in b, j
+        assert "이번 실행에서 받은 파일: 1개" in b and f"  - A-1: {f1.resolve()} (정산 파일)" in b, j   # 드라이브부터 전체 경로
+        assert b[-1].startswith("==> 일부 실패 — 확인 필요 · 계정 5 · 비밀번호 오류 1 · 사람 조치 1 · 오류 2 · 받은 파일 1"), b[-1]
+        lg.summary(pending=3)                                                        # 실행 로그 끝에 그대로 남음
+        txt = lg.text.read_text(encoding="utf-8")
+        assert "[실행 결과 종합]" in txt and "==> 일부 실패" in txt.splitlines()[-1]
+        # 정상 완료 · 남은 소급 0 = '없음' · 소급 기록 자체가 없으면 '확인 못 함'
+        ok_lg = RLG.RunLog(tmp, now=datetime(2026, 11, 8, 19), echo=lambda m: None)
+        ok_lg.record("A-1", "로그인", RLG.OK, "success")
+        assert RLG.result_block(ok_lg)[1] == "판정: 정상 완료" and "남은 소급: 확인 못 함(소급 단계를 돌지 않음)" in RLG.result_block(ok_lg)
+        ok_lg.remaining("A-1", "판매분석", 0, "일")
+        assert "남은 소급: 없음" in RLG.result_block(ok_lg) and "전체 작업 계정: 1개 — A-1" in RLG.result_block(ok_lg)
+        # 연속 실패 중단 = '중단' → 다음 바퀴가 다시 돌면 (전체) 중단은 풀리지만 계정 단위 차단은 남음(소급 정상 줄이 가리지 않음)
+        p1 = RLG.RunLog(tmp, now=datetime(2026, 11, 8, 20), echo=lambda m: None)
+        p1.accounts = ["A-1", "C-3"]
+        p1.record("C-3", "로그인", RLG.FAIL, "otp: 2단계 인증")
+        p1.record("A-1", "계정", RLG.BLOCK, "BlockDetected: 차단 화면")
+        p1.record("(전체)", "중단", RLG.BLOCK, "연속 2계정 실패/차단 — 전체 중단")
+        p1.remaining("A-1", "판매분석", 40, "일")
+        assert RLG.result_block(p1)[1] == "판정: 중단"
+        p2 = RLG.RunLog(tmp, now=datetime(2026, 11, 8, 21), echo=lambda m: None)
+        p2.accounts = ["A-1", "C-3"]
+        p2.record("C-3", "로그인", RLG.OK, "success")                                # 사람이 인증 → 뒤 바퀴 성공 = 사람 조치에서 빠짐
+        p2.record("A-1", "로그인", RLG.OK, "success")
+        p2.record("A-1", "소급", RLG.OK, "판매분석 40일")
+        p2.saved("A-1", Path(tmp) / "판매분석_일별" / "a1.json", "판매분석 일별 40일 추가")
+        p2.remaining("A-1", "판매분석", 0, "일")
+        cyc = RLG.Totals()
+        cyc.add(p1)
+        cyc.add(p2)
+        c = RLG.result_block(cyc, note="회차 종료 시각", title="실행 결과 종합 — 이번 회차 2바퀴")
+        assert c[0] == "===== [실행 결과 종합 — 이번 회차 2바퀴] =====" and c[1] == "판정: 일부 실패 — 확인 필요 — 회차 종료 시각", c[:2]
+        assert "사람 조치 필요: 0개" in c and "  - 계정 차단 1건: A-1" in c and "전체 작업 계정: 2개 — A-1, C-3" in c, c
+        assert "남은 소급: 없음" in c and "이번 실행에서 받은 파일: 1개" in c                    # 남은 수 = 마지막 바퀴 값
+        assert RLG.result_block(cyc, stopped=True)[1] == "판정: 중단"                             # 진전 없음 종료(giveup) 등
+        # 회차 끝(watch) — 마지막 실행 로그 끝에 회차 합계 블록 · 상태 카드에 한 줄 요약
+        import settlement_download as TD
+        last = RLG.RunLog(tmp, now=datetime(2026, 11, 9, 17, 55), echo=lambda m: None)
+        _patched([(TD, "CYCLE", cyc), (TD, "LOG", last), (TD, "_pending_jobs", lambda: 2)],
+                 lambda: TD._cycle_close("종료", "회차 종료 시각"))
+        tail = last.text.read_text(encoding="utf-8")
+        assert "[실행 결과 종합 — 이번 회차 2바퀴]" in tail and "쿠팡 파일 생성·요청 대기 2건" in tail, tail
+        card = last.status.read_text(encoding="utf-8")
+        assert "상태: 종료" in card and "결과 종합: 일부 실패 — 확인 필요 · 계정 2" in card, card
+    ok("판정 3종(정상 완료·일부 실패 확인 필요·중단) · 계정 이름 전부 · 비밀번호 오류/사람 조치 분리(마지막 로그인 기준) · "
+       "같은 일 재성공은 풀림·계정 단위 실패는 남음 · 받은 파일 전체 경로 · 남은 소급 합계·계정 수·대기 건 · 회차 합계")
+
+
+def _fake_log(record=lambda *a, **k: None):
+    """정산 실행 기록(RunLog) 가짜 — record 만 확인하고 받은 파일·남은 소급(D-168)은 버림."""
+    from types import SimpleNamespace
+    return SimpleNamespace(record=record, saved=lambda *a, **k: None, remaining=lambda *a, **k: None)
 
 
 def _patched(obj_attrs: list, fn):
@@ -1851,7 +1935,7 @@ def p46_verify_keep_previous():
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "A.json"
         p.write_text(json.dumps(old, ensure_ascii=False), encoding="utf-8")
-        _patched([(TD, "VERIFY", Path(tmp)), (TD, "LOG", SimpleNamespace(record=lambda *a, **k: None)),
+        _patched([(TD, "VERIFY", Path(tmp)), (TD, "LOG", _fake_log(record=lambda *a, **k: None)),
                   (TD, "name_of", lambda a: "A"), (TD, "_wing_files", lambda n: []),
                   (VC, "collect", lambda *a, **k: json.loads(json.dumps(new)))],
                  lambda: TD.collect_verify(None, None, SimpleNamespace(start=D("2026-01-01"))))
@@ -1902,7 +1986,7 @@ def p47_settle_sales_coupons():
             patches = [(collector, "fetch_sales_details", fetch), (PS.time, "sleep", lambda s: None),
                        (wing_coupons, "record_day", lambda page, aid, out, log, gap=(0, 0): coupons.append((aid, out))),
                        (TD, "goto", lambda b, url, who: None), (TD, "name_of", lambda a: "홍길동-가나-acc1"),
-                       (TD, "LOG", SimpleNamespace(record=lambda *a, **k: recs.append(a)))]
+                       (TD, "LOG", _fake_log(record=lambda *a, **k: recs.append(a)))]
             _patched(patches, lambda: PS._record_sales_backfill(object(), "acc1", "output", lambda m: None))
             assert fetched == [], "① 판매수집 소급은 4/1 기준 그대로(1~3월 안 부름)"
             _patched(patches, lambda: TD.collect_sales(SimpleNamespace(account_id="acc1"), SimpleNamespace(page=object()),
@@ -1931,7 +2015,7 @@ def p48_ads_from_december():
     def fake(call, get_bytes, folder, acct, start, today, **k):
         seen.append(start)
         return {"받을 것": [], "요청": [], "기다림": [], "받음": [], "캠페인 없음": [], "남은 달": 0}
-    _patched([(AD, "collect", fake), (TD, "name_of", lambda a: "A"), (TD, "LOG", SimpleNamespace(record=lambda *a, **k: None))],
+    _patched([(AD, "collect", fake), (TD, "name_of", lambda a: "A"), (TD, "LOG", _fake_log(record=lambda *a, **k: None))],
              lambda: TD.collect_ads(None, None, SimpleNamespace(start=D("2026-01-01"))))
     assert AD.FROM == D("2025-11-01") and seen == [D("2025-11-01")], seen
     assert AD.due_months(AD.FROM, D("2026-01-05"))[0][0] == "202511" and AD.MAX_MONTHS == 2
@@ -1943,7 +2027,6 @@ def p49_rg_missing_costs():
     import gzip
     import json
     import os
-    from types import SimpleNamespace
     sys.path.insert(0, str(ROOT / "tools"))
     import settlement_download as TD
     from coupang_analytics import settlement_jobs as SJ
@@ -1991,7 +2074,7 @@ def p49_rg_missing_costs():
             ahead = [(D("2026-04-01"), D("2026-04-30"), {"settlementStatusReports": []})]
             run = lambda: TD.read_events(None, "A", D("2026-01-01"), D("2026-03-31"), amounts_from=D("2026-01-01"))  # noqa: E731
             patches = [(TD, "goto", lambda *a: None), (TD, "api", api), (TD, "_read_forecast", lambda *a: ahead),
-                       (TD.time, "sleep", lambda s: None), (TD, "LOG", SimpleNamespace(record=lambda *a, **k: None)),
+                       (TD.time, "sleep", lambda s: None), (TD, "LOG", _fake_log(record=lambda *a, **k: None)),
                        (TD, "CHANNELS", ()), (TD, "_SOURCES", TD._SOURCES[1:])]
             evs = _patched(patches, run)
             assert sorted((e.kind, e.ref) for e in evs) == sorted([
@@ -2092,7 +2175,7 @@ def p51_regular_then_backfill():
     order: list = []
 
     class FakeLog:
-        run_id, rows = "t", []
+        run_id, rows, files, left, accounts = "t", [], [], {}, []
 
         def __init__(self, base):
             pass
@@ -2100,7 +2183,7 @@ def p51_regular_then_backfill():
         def heartbeat(self, *a):
             pass
 
-        def summary(self):
+        def summary(self, **k):
             pass
 
         def line(self, m):
@@ -2108,6 +2191,7 @@ def p51_regular_then_backfill():
     for rc_regular, want in ((0, ["cmd_run", "cmd_backfill"]), (1, ["cmd_run"])):
         order.clear()
         pat = [(TD.RL, "RunLog", FakeLog), (TD, "load_accounts", lambda only: ["a", "b"]), (TD, "cmd_stats", lambda: None),
+               (TD, "name_of", lambda a: a), (TD, "_pending_jobs", lambda: 0), (TD, "CYCLE", TD.RL.Totals()),
                (TD, "_run_accounts", lambda accts, run, a: (order.append(run.__name__), rc_regular if run is TD.cmd_run else 0)[1])]
         stopped, _work = _patched(pat, lambda: TD._one_pass(SimpleNamespace(start=D("2026-01-01"), until="", dry_run=False)))
         assert order == want and stopped == bool(rc_regular), (order, stopped)
@@ -2256,6 +2340,7 @@ def p52_settlement_docs():
                                 ("202609", "202608", "202607")]), names
         assert len(s1["실패"]) == 1 and s1["실패"][0].startswith("라이브정산 202609"), s1["실패"]
         assert s1["남은 달"] == 3 * 6 + 9, s1["남은 달"]          # 세 종류 6달씩 + 라이브 9달(실패 달 포함)
+        assert sorted(f.name for f in s1["파일"]) == names and all(f.exists() for f in s1["파일"])   # D-168 받은 파일 경로
         assert not got_urls, "업체코드 없으면 RG 재고변동·반품 안 부름"
         assert json.loads((folder / "매입세금계산서_202609.json").read_text(encoding="utf-8"))["공급가액 합"] == 473746
         s2 = run(vendor="A00434040")                              # 같은 회차 다시 = 예산 다 씀 · RG 만 새로
@@ -2279,7 +2364,6 @@ def p53_vat_detail_requests():
     import json
     from datetime import datetime
     from pathlib import Path
-    from types import SimpleNamespace
     import openpyxl
     from coupang_analytics import settlement_docs_request as DR
     from coupang_analytics import settlement_jobs as SJ
@@ -2394,7 +2478,7 @@ def p53_vat_detail_requests():
         jw.status = SJ.ST_REQUESTED
         row = SJ.DownloadRow("윙", datetime(2026, 9, 17, 17, 39), "FINISHED", "윙부가세상세", handle="u1")
         _patched([(TD, "VERIFY", Path(tmp)), (TD, "_get_bytes", lambda b_, url, text_ok=False: wing),
-                  (TD, "LOG", SimpleNamespace(record=lambda *a, **k: logs.append(a)))],
+                  (TD, "LOG", _fake_log(record=lambda *a, **k: logs.append(a)))],
                  lambda: TD._fetch_one(None, jw, row, "A"))
         assert logs and logs[-1][1] == "받기" and logs[-1][2] == TD.RL.FAIL and jw.status == SJ.ST_DONE, logs
     ok("부가세 상세 = 최근 달부터 회차 4건·정기와 분리 · 화면 본문 그대로 · 메뉴로 짝 · 칸·기간 판정 · 판매+환불 = 화면 월 합계(RG 기타−쿠폰)")
@@ -2445,6 +2529,7 @@ def main():
     p51_regular_then_backfill()
     p52_settlement_docs()
     p53_vat_detail_requests()
+    p54_result_summary()
     print("정산 런타임 오프라인 검증 통과")
 
 

@@ -304,12 +304,13 @@ class _Run:
         self.folder, self.note, self.fatal, self.now = folder, note, fatal, now
         self.lp = folder / LEDGER
         self.led: dict = json.loads(self.lp.read_text(encoding="utf-8")) if self.lp.exists() else {}
-        self.out: dict = {"받음": [], "실패": [], "남은 달": 0}
+        self.out: dict = {"받음": [], "실패": [], "남은 달": 0, "파일": []}
 
     def save(self, name: str, body: bytes, key: str, sub: str = "") -> None:
         tmp = self.folder / (name + ".tmp")
         tmp.write_bytes(body)
         tmp.replace(self.folder / name)
+        self.out["파일"].append(self.folder / name)
         stamp = self.now().isoformat(timespec="seconds")
         if sub:
             self.led.setdefault(key, {})[sub] = stamp
@@ -360,7 +361,7 @@ def collect(call, html_call, get_bytes, folder: Path, today: date, *, vendor: st
     """월자료 받기(소급 단계 · D-170). 종류마다 받은 기록에 없는 달을 최근부터 — **회차(since 이후) 계정당 종류별 BUDGET_MONTHS 달**.
     종류 하나가 실패하면 그 종류만 이번 회차 멈춤(다음 회차가 이어서)·차단(fatal)은 그대로 올림. RG 반품내역 = 업체코드 있는
     계정만 하루 1번 최신본 덮어쓰기. gap = 종류·달 사이 쉼 · page_gap = 한 자료 안 쪽 넘김 쉼(없으면 gap — 주문별 매출은 10건씩이라
-    큰 계정은 쪽이 많음). 반환 = {'받음': [파일 이름·요약], '실패': [...], '남은 달': n}."""
+    큰 계정은 쪽이 많음). 반환 = {'받음': [파일 이름·요약], '실패': [...], '남은 달': n, '파일': [저장 경로]}."""
     run = _Run(folder, note, fatal, now)
 
     def fetch(kind, ym, f, t):

@@ -438,6 +438,7 @@ def _fetch_one(b, j, row, name: str) -> None:
         from coupang_analytics import settlement_docs_request as DR
         tok = SF._token(name, "계정명")
         ok, msg = DR.keep(data, j, VERIFY / "월자료" / tok, VERIFY / f"{tok}.json")
+        LOG.saved(name, VERIFY / j.file, j.report)
         LOG.record(name, "받기", RL.OK if ok else RL.FAIL, msg, **_job_fields(j))
         return
     fname = SF.settle_file_name(name, date.fromisoformat(j.settle_date), j.channel, j.kind, j.report,
@@ -448,6 +449,7 @@ def _fetch_one(b, j, row, name: str) -> None:
     if ORIGINALS is not None:                              # 증빙용 원본(구매자명 포함·받은 그대로) — 아래 처리와 별개
         ORIGINALS.mkdir(parents=True, exist_ok=True)
         (ORIGINALS / fname).write_bytes(data)
+        LOG.saved(name, ORIGINALS / fname, "증빙용 원본")
     if j.channel == "로켓그로스" and j.report != "판매수수료":
         _keep_cost(raw, j, name, fname)
         return
@@ -455,6 +457,7 @@ def _fetch_one(b, j, row, name: str) -> None:
     raw.unlink()
     f = SF.load_settle_file(FILES / fname)                 # 내용 확인(로켓그로스 기간 대조 포함)
     j.status, j.file = SJ.ST_DONE, fname
+    LOG.saved(name, FILES / fname, "정산 파일")
     LOG.record(name, "받기", RL.OK, f"{fname} · 줄 {len(f.rows)} · 정산합 {f.settle_total:,} · 검산경고 "
                f"{len(f.warnings)}", **_job_fields(j))
 
@@ -467,6 +470,7 @@ def _keep_cost(raw: Path, j, name: str, fname: str) -> None:
     COSTS.mkdir(parents=True, exist_ok=True)
     os.replace(raw, COSTS / fname)
     j.status, j.file = SJ.ST_DONE, f"비용/{fname}"
+    LOG.saved(name, COSTS / fname, "비용 리포트")
     LOG.record(name, "받기", RL.OK, f"{fname} · " + " · ".join(f"{k} {v:,}" for k, v in totals.items()),
                **_job_fields(j))
 
@@ -562,6 +566,9 @@ def collect_docs(a, b, args) -> int:
                     since=getattr(args, "cycle_since", "") or f"{date.today()}T00:00:00",
                     gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)), page_gap=lambda: time.sleep(random.uniform(1, 2.5)),
                     note=lambda m: LOG.record(name, "월자료", RL.WAIT, m), fatal=(BlockDetected,))
+    for f in s["파일"]:
+        LOG.saved(name, f, "월자료")
+    LOG.remaining(name, "월자료", s["남은 달"], "달")
     if s["받음"] or s["남은 달"]:
         LOG.record(name, "월자료", RL.OK, f"받음 {len(s['받음'])}개 {' · '.join(s['받음'])}" + f" · 남은 달 {s['남은 달']}")
     return len(s["받음"])
@@ -592,10 +599,27 @@ def collect_sales(a, b, args) -> int:
         PS._record_sales_periods(b.page, a.account_id, "output", note, first=SS.COLLECT_FROM)
         since = getattr(args, "cycle_since", "") or f"{date.today()}T00:00:00"
         days = PS._record_sales_backfill(b.page, a.account_id, "output", note, first=SS.COLLECT_FROM, settle_since=since)
+        _sales_left(name, a.account_id, days)
         wing_coupons.record_day(b.page, a.account_id, "output", note, gap=PS._PERIOD_GAP_SEC)
         return days
     finally:
         collector.reset_raw()                             # 응답 원문 버퍼(① 분석용)는 정산에선 안 씀 — 계정마다 비움
+
+
+def _sales_left(name: str, account_id: str, days: int) -> None:
+    """판매분석 받은 파일·남은 소급 일수(1/1~어제 중 빠진 날) → [실행 결과 종합](D-168). 그 계정 파일만 읽음."""
+    from coupang_analytics import sales_history as SH
+    from coupang_analytics import sales_summary as SS
+    path = Path("output") / SH.DIRNAME / f"{account_id}.json"
+    try:
+        have = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, ValueError) as exc:                 # 남은 수 계산만 못 함 — 그 계정 나머지 소급은 계속(기록으로 명시)
+        LOG.record(name, "판매분석·쿠폰", RL.WAIT, f"남은 소급 계산 실패 — 확인 필요 ({exc.__class__.__name__})")
+        return
+    if days:
+        LOG.saved(name, path, f"판매분석 일별 {days}일 추가")
+    LOG.remaining(name, "판매분석", len(SS.plan_backfill(have, date.today() - timedelta(days=1), first=SS.COLLECT_FROM,
+                                                       limit=10 ** 6)), "일")
 
 
 def collect_verify(a, b, args) -> None:
@@ -616,6 +640,7 @@ def collect_verify(a, b, args) -> None:
     data["returns"] = {**kept, **(data.get("returns") or {})}
     path.parent.mkdir(parents=True, exist_ok=True)
     STORE.write_json_atomic(path, data)
+    LOG.saved(name, path, "검증 원자료")
     LOG.record(name, "검증", RL.OK, f"검증 자료 저장 — 월렛 {len(data.get('wallet') or [])}건·반품 조회 {len(orders)}주문·"
                f"조회 실패 {len(data['조회 실패'])}건" + (f"(지난 값 유지 {len(data['지난 값'])}건)" if data["지난 값"] else ""))
 
@@ -635,7 +660,10 @@ def collect_ads(a, b, args) -> None:
         s = AD.collect(call, lambda url: _get_bytes(b, url), VERIFY / "광고", SF._token(name, "계정명"), min(args.start, AD.FROM),
                        date.today(),
                        gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)), get_report=lambda url: _get_bytes(b, url, text_ok=True))
-        msg = [f"{k} {','.join(v)}" for k, v in s.items() if isinstance(v, list) and v and k != "받을 것"]
+        for f in s.get("파일", ()):
+            LOG.saved(name, f, "광고")
+        LOG.remaining(name, "광고", s["남은 달"], "달")
+        msg = [f"{k} {','.join(v)}" for k, v in s.items() if isinstance(v, list) and v and k not in ("받을 것", "파일")]
         if msg or s["남은 달"]:
             LOG.record(name, "광고비", RL.OK, " · ".join(msg + ([f"남은 달 {s['남은 달']}(다음 실행에)"] if s["남은 달"] else [])))
     except BlockDetected:
@@ -773,6 +801,7 @@ def cmd_stats() -> None:
     out = ST.write_stats(BASE / f"정산집계_{datetime.now():%y%m%d_%H%M%S}.xlsx", res, files=files, amounts=amounts,
                          costs=costs, verify=verify, inflows=SV.inflows_all(amounts, vdatas, today=date.today()),
                          forecast=acc)
+    LOG.saved(RL.ALL, out, "정산 집계")
     log(f"집계 정산 파일 {len(files)}개·비용 리포트 {len(costs)}시트·쿠팡 지급 내역 {len(amounts)}줄 → {out} "
         f"(경고 {len(res.warnings)}건)")
 
@@ -814,6 +843,7 @@ def _run_accounts(accts, run, args) -> int:
 WATCH_POLL_SEC = 300             # ①판매수집 진행 중 정지·파일 생성 대기 확인 간격
 WATCH_CATCHUP_REST_SEC = 60      # 소급(받을 게 남음) 중 한 바퀴와 다음 바퀴 사이 짧은 쉼
 DONE_FILE = BASE / "로그" / "_완료.json"   # 같은 ①완료 기준 '완료' 기록(중복 실행 방지·D-010)
+CYCLE = RL.Totals()                        # watch 한 회차의 바퀴 합계 — 회차 끝 [실행 결과 종합](D-168)
 
 
 def _sweep_work_count(lg) -> int:
@@ -845,6 +875,7 @@ def _one_pass(args) -> tuple[bool, int]:
         log(f"[자동] {reason}")
         LOG.heartbeat("종료", reason)
         raise
+    LOG.accounts = [name_of(a) for a in accts]
     try:
         rc = _run_both(accts, args)
         work = _sweep_work_count(LOG)
@@ -852,8 +883,22 @@ def _one_pass(args) -> tuple[bool, int]:
     except Exception as exc:                 # 그 바퀴만 실패 기록(다음 판단은 진전 없음으로)
         LOG.error("(전체)", "자동실행", exc)
         return False, 0
-    LOG.summary()
+    finally:
+        CYCLE.add(LOG)                       # 회차 [실행 결과 종합] 재료(D-168)
+    LOG.summary(pending=_pending_jobs())
     return rc == 1, work
+
+
+def _cycle_close(status: str, reason: str, *, stopped: bool = False) -> None:
+    """회차 끝 [실행 결과 종합](D-168) — 이번 회차 모든 바퀴를 합쳐 마지막 실행 로그 끝에 쓰고, 상태 카드에 한 줄 요약."""
+    if not CYCLE.passes:
+        LOG.heartbeat(status, reason)
+        return
+    lines = RL.result_block(CYCLE, pending=_pending_jobs(), stopped=stopped, note=reason,
+                            title=f"실행 결과 종합 — 이번 회차 {CYCLE.passes}바퀴")
+    for ln in lines:
+        LOG.line(ln)
+    LOG.heartbeat(status, reason, extra=(f"결과 종합: {lines[-1].removeprefix('==> ')}",))
 
 
 def _watch_app(parent_pid: int) -> None:
@@ -928,11 +973,11 @@ def cmd_watch(args) -> int:
                     _sleep_until(WATCH_CATCHUP_REST_SEC if action == "again" else WATCH_POLL_SEC, cycle_end)
                     continue
                 W.write_done(DONE_FILE, key, action, reason, failed=len(fails))
-                LOG.heartbeat(W.done_status(len(fails)) if action == "done" else "종료", reason)
+                _cycle_close(W.done_status(len(fails)) if action == "done" else "종료", reason, stopped=action != "done")
                 return 0 if action == "done" else 1
             reason = f"회차 종료 시각({cycle_end:%m-%d %H:%M}) — 정산 종료(남은 건 18:00 다음 회차에서 이어서 받음)"
             log(f"[자동] {reason}")
-            LOG.heartbeat("종료", reason)
+            _cycle_close("종료", reason)
             return 0
     except RegistryLockError:
         log("[자동] 정산 자동 실행이 이미 떠 있음 — 이 실행은 종료")
@@ -995,8 +1040,9 @@ def main() -> int:
         accts = _evidence_targets(accts, args)
     run = {"probe": cmd_probe, "request": cmd_request, "download": cmd_download, "run": cmd_run,
            "evidence": cmd_evidence}[args.command]
+    LOG.accounts = [name_of(a) for a in accts]
     rc = _run_both(accts, args) if run is cmd_run else _run_accounts(accts, run, args)
-    LOG.summary()
+    LOG.summary(pending=_pending_jobs())
     log(f"기록: {LOG.csv} · 오류 추적: {LOG.errors if LOG.errors.exists() else '없음'}")
     LOG.heartbeat("완료", f"명령 {args.command} · 종료코드 {rc}")
     return rc

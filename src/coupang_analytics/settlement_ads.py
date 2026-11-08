@@ -112,12 +112,12 @@ def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date, 
             max_months: int = MAX_MONTHS, get_report=None) -> dict:
     """call(method, path, body) = 광고센터 화면 안 호출(처음 부를 때 광고센터를 열도록 호출부가 늦게 연결) ·
     get_bytes(url) = 로그인 세션으로 파일 받기 · get_report(url) = 보고서 받기(글자 응답 허용, 없으면 get_bytes) · gap() = 원격 요청마다 먼저 쉼(차단 방지). 받을 게 남은 달은 최근 달부터
-    max_months 개만. 반환 = 요약 {받을 것, 요청, 기다림, 받음, 캠페인 없음, 남은 달}."""
+    max_months 개만. 반환 = 요약 {받을 것, 요청, 기다림, 받음, 캠페인 없음, 남은 달, 파일(이번에 저장한 경로)}."""
     folder.mkdir(parents=True, exist_ok=True)
     state_p = folder / f"{acct}_광고.json"
     state = json.loads(state_p.read_text(encoding="utf-8")) if state_p.exists() else {}
     none = set(state.get("캠페인 없음") or [])
-    out: dict = {"받을 것": [], "요청": [], "기다림": [], "받음": [], "캠페인 없음": [], "남은 달": 0}
+    out: dict = {"받을 것": [], "요청": [], "기다림": [], "받음": [], "캠페인 없음": [], "남은 달": 0, "파일": []}
     reports: list | None = None
 
     raw_call, raw_bytes, raw_report = call, get_bytes, get_report or get_bytes
@@ -144,10 +144,12 @@ def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date, 
         milk = folder / f"{acct}_밀크런_{ym}.xlsx"
         if not milk.exists():
             milk.write_bytes(get_bytes(MILK_EXCEL.format(y=f.year, m=f.month)))
+            out["파일"].append(milk)
         daily = folder / f"{acct}_광고정산_{ym}.json"
         if not daily.exists():
             d = _gql(call, _DAILY, {"startDate": _ymd(f), "endDate": _ymd(t), "settlementDomain": "SELLER"})["getDailySettlement"]
             daily.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+            out["파일"].append(daily)
         pa = folder / f"{acct}_매출성장광고_{ym}.xlsx"
         if pa.exists() or ym in none:
             continue
@@ -169,6 +171,7 @@ def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date, 
         elif rep.get("status") == "completed":
             pa.write_bytes(report_xlsx(report_(PA_EXCEL.format(id=rep["id"]))))
             out["받음"].append(ym)
+            out["파일"].append(pa)
         else:
             out["기다림"].append(ym)
     state_p.write_text(json.dumps({**state, "캠페인 없음": sorted(none)}, ensure_ascii=False), encoding="utf-8")
