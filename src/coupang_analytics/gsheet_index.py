@@ -58,21 +58,21 @@ def _band_fill(band: int) -> dict:
 
 @dataclass
 class IndexRow:
-    """계정목록 한 행의 **자동 열** 데이터(프로그램 산출). 마케팅 3열은 여기 없다(직원 소유)."""
+    """계정목록 한 행의 **자동 열** 데이터(프로그램 산출 — 9열 전부 자동·직원 입력 열 없음 D-109)."""
     business: str            # B
     product: str             # D 표시명(노출명)
     account_id: str          # C
-    status: str              # J 예: 예정/체험단중/모니터링/종료/미수집/⛔ 판매중지
+    status: str              # E 예: 예정/체험단중/모니터링/종료/미수집/⛔ 판매중지
     key: str                 # 안정 매칭 키(계정ID+vid 앵커). 노출명이 바뀌어도 불변
     link_gid: int | None = None   # D 하이퍼링크 대상 통계시트 gid
     link_row: int | None = None   # D 하이퍼링크 대상 행(상품 블록 헤더)
     band: int = 0            # 사업자 등장 순서 인덱스 → 바탕색 밴딩(사업자별 시각 구분)
     representative: str = ""  # A 대표자(관리대장 대표자명)
-    promo_effect: str = ""   # K 체험단효과 표시문자열(예 "판매 +38% · 순위 32→18 ↑"). 없으면 공란
+    promo_effect: str = ""   # I 체험단효과 표시문자열(예 "판매 +38% · 순위 32→18 ↑"). 없으면 공란
     promo_verdict: str = ""  # 판정: 'up'(개선=초록)·'down'(악화=적색)·''(혼조/무변화=밴드색)
-    company_stock: str = ""  # E 회사보유재고(판매자배송 자체재고 '창고 , 수량개'). 없으면 공란
-    growth_inv: object = ""  # F 그로스재고(로켓그로스 최신 숫자). 없으면 공란
-    promo_start: str = ""    # G 체험단 시작일(자동 — 관리대장 '체험단' 시트 체험단시작일 칸·D-087·D-122). 없으면 공란
+    company_stock: str = ""  # F 회사보유재고(판매자배송 자체재고 '창고 , 수량개'). 없으면 공란
+    growth_inv: object = ""  # G 그로스재고(로켓그로스 최신 숫자). 없으면 공란
+    promo_start: str = ""    # H 체험단 시작일(자동 — 관리대장 '체험단' 시트 체험단시작일 칸·D-087·D-122). 없으면 공란
 
 
 @dataclass

@@ -170,7 +170,7 @@ def unlisted_row_events(rows: list, events: list, reports: list, account: str) -
 
 
 def unsupported_cycles(resp: dict) -> list[str]:
-    """정산현황에서 받기 방법을 아직 모르는 주기 줄(윙 'M'·로켓그로스 'MONTHLY') — 처리기록에 '확인 필요'로 남긴다."""
+    """정산현황에서 받기 방법을 아직 모르는 주기 줄(지금은 윙 'B' 추가정산뿐·D-115 — 'M'·'MONTHLY' 는 D-075 로 받음) — 처리기록에 '확인 필요'로 남긴다."""
     wing = [f"{_WING_UNSUPPORTED[c]} 코드 {c!r} 지급일 {r.get('payDate')} ({r.get('recognitionFrom')}~{r.get('recognitionTo')})"
             for r in resp.get("paymentReports", []) if (c := r.get("transactionCycleCode")) in _WING_UNSUPPORTED]
     rg = [f"{_RG_UNSUPPORTED[c]} 주기 {c!r} 정산일 {r.get('settlementDate')} ({r.get('settlementGroupKey')})"

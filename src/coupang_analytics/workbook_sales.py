@@ -218,7 +218,7 @@ def _cell(ws, r, c, v, *, font=None, bold=False, fill=None, box=False, center=Fa
 
 def push_sales_sheet(client, owb, log=None) -> None:
     """결과 구글시트에 통합판매현황 반영 — 없으면 만들고 값·서식 통째 교체 후 맨 앞(index 0)으로 옮김.
-    차트 3개는 미러가 못 옮겨 옛 차트를 지우고 다시 추가(같은 숨긴 열 자료·hiddenDimensionStrategy SHOW_ALL)."""
+    차트 4개(②월별·③주간·④일별·⑤계정 순위)는 미러가 못 옮겨 옛 차트를 지우고 다시 추가(같은 숨긴 열 자료·hiddenDimensionStrategy SHOW_ALL)."""
     from .gsheet_stats import worksheet_to_requests
     if SALES_SHEET not in owb.wb.sheetnames:
         return
