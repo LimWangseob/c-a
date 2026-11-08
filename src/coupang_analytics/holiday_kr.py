@@ -18,6 +18,7 @@ from pathlib import Path
 KIND_NATIONAL = "national"    # 국경일·어린이날·성탄절·부처님오신날 — 토·일 겹침 대체
 KIND_LUNAR = "lunar"          # 설·추석 연휴 — 일요일·다른 공휴일 겹침만 대체
 KIND_OTHER = "other"          # 대체 규칙 없음(신정·현충일·선거일·임시공휴일 등)
+COUPANG_OFF_DAYS = ((5, 1), (7, 17))  # 쿠팡 정산 비영업일(근로자의날·제헌절) — API 결과와 무관하게 해마다 더함(D-004 실측·D-179 소유자)
 
 
 class HolidaySourceError(Exception):
@@ -101,13 +102,13 @@ def holidays(year: int, *, fetch=None, cache_dir="output", extra=()) -> set[date
     """그 해 공휴일(대체공휴일 포함) 집합. 캐시가 있으면 캐시, 없으면 fetch(year) 로 조회해 캐시에 저장.
 
     fetch(year) → 공휴일 날짜들(대체공휴일 포함, 특일정보 API 결과). fetch 없고 캐시도 없거나, fetch 실패·빈 결과면
-    HolidaySourceError(0일 가정 금지). extra = 임시공휴일 수동 추가(날짜 또는 'YYYY-MM-DD')."""
+    HolidaySourceError(0일 가정 금지). extra = 임시공휴일 수동 추가(날짜 또는 'YYYY-MM-DD') · COUPANG_OFF_DAYS(05-01·07-17)는 늘 포함(D-179)."""
     p = _cache_path(cache_dir, year)
     if p.exists():
         days = {date.fromisoformat(s) for s in json.loads(p.read_text(encoding="utf-8"))}
     else:
         days = _fetch_and_cache(year, fetch, p)
-    return days | {_as_date(d) for d in extra}
+    return days | {date(year, m, d) for m, d in COUPANG_OFF_DAYS} | {_as_date(d) for d in extra}
 
 
 def _as_date(d) -> date:

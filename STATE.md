@@ -2,9 +2,9 @@
 
 <!-- 누적 금지. 매 세션 종료 시 /session-close 가 전체 덮어쓰기. 100줄 이하. 핸드오프 SSOT. -->
 
-- BUILD_TAG: R110
-- 갱신: 2026-11-08 (R106 = 정책 문서 정리 · R107~R109 = DECISIONS 표기 D-176·D-177·D-178 · R110 = 낡은 문구 16곳(주석·안내문) — 동작 변경 없음)
-- 마지막 커밋: 이 커밋([R110] 낡은 문구) ← 00001bb [R109] D-178 ← a94d518 [R108] D-177 ← 9b17a34 [R107] D-176.
+- BUILD_TAG: R111
+- 갱신: 2026-11-08 (R106 = 정책 문서 정리 · R107~R109 = DECISIONS 표기 D-176~D-178 · R110 = 낡은 문구 16곳 · R111 = 감사 E절 소유자 답 D-179(공휴일 05-01·07-17 코드 · HANDOFF.md 삭제))
+- 마지막 커밋: 이 커밋([R111] D-179) ← 47ea0f1 [R110] 낡은 문구 ← 00001bb [R109] D-178 ← a94d518 [R108] D-177.
 - 직전 빌드: R105 ef72f74 — 배포 zip 11-08 19:43(R105 전부 포함 · R104 18:36 zip 설치 금지).
 - 배포본: `D:\coupang-analytics\dist\쿠팡애널리틱스_배포.zip` **11-08 19:43(ef72f74 기준·R105 전부 포함·174,039,949바이트 · exe 안 `_retry_blank_ranks`·'첫 회' 포함 확인)**. ⛔ 18:36 R104 zip 은 ③ 순위 줄 결함 있음 — 설치하지 말 것. 운용 PC 설치본 = 11-04 18:43(b6b39c4) → R99~R105 는 새 zip 설치 뒤에만 동작.
 - 세션 시작 = STATE.md + `docs/CURRENT_RULES.md`(주제별 현행 규칙 14묶음) 읽고 git log/status 대조 3줄 요약 · 색인 `docs/DECISIONS_INDEX.md` 는 검색용 · 종료 = `/session-close`.
@@ -15,6 +15,7 @@
 - R108: D-177 감사 C절 13건 원문 대조 — 부분 대체 표기 12건 · D-135 '본문 미결 해소 — D-139' 메모 · 표기 안 함 = D-088←D-116(뒤바뀐 규칙 없음).
 - R109: D-178 감사 D절 5건 원문 대조 — 5건 모두 부분 표기(D-012←D-022/023 · D-050←D-135 · D-052←D-103 · D-053←D-090 · D-117←D-126).
 - R110: 감사 F절·D-151 어긋남 중 통제 세션 전용이 아닌 파일 10개 16곳 문구 수정(ARCHITECTURE:67 프록시 범위·OPERATIONS_POLICY:22 지문 · 정산증빙 bat · promo_sheet·settlement_forecast·settlement_download:235 메시지·gsheet_index 열 글자·settlement_watch·settlement_wing_api·workbook_sales 차트 4개). 조사표 = 아래 미해결 줄의 파일.
+- R111: D-179 감사 E절 8건 소유자 답 — 판매 현황 탭 안 만듦 · 전환자 2단계 = 매일 18시 뒤(구현 전) · 10/18 정산서 안 보냄(정정 통보 종결) · 루트 HANDOFF.md 삭제 · `holiday_kr.COUPANG_OFF_DAYS` 05-01·07-17 늘 비영업일(시험 P1·P22 재현→통과) · AI 매칭 예외 유지 · PC 엑셀 계정ID 정리 안 함 · D-140 관리 시작 달 = 차이 표 뒤 결정.
 - 효과 측정(11-08): `py -3.12 ~/.claude/hooks/decisions-index.py . --check` 경고 1 → **0** · CURRENT_RULES 13,091B(색인 32,507B 대신 시작 때 읽음) · CLAUDE.md 12,089B · 게이트 --quick 15종 통과 2회.
 - **다음 새 세션 첫 응답 입력 토큰(미측정)**: `C:\Users\user\.claude\projects\D--coupang-analytics\` 의 그 세션 `.jsonl` 첫 assistant 줄 `message.usage` 의 input_tokens + cache_read_input_tokens + cache_creation_input_tokens 합 → 기준선 89,111(10-10)·105,140(11-05)(D-151)과 비교해 이 줄에 적기.
 
@@ -32,6 +33,8 @@
    - 정산 실행 로그 끝 블록 + 상태 카드 '결과 종합:' 줄 · 처리기록 '소급'·'월자료'·'요청(월자료·윙부가세상세/RG부가세상세)' → 다음 바퀴 '받기' · `output\정산\검증자료\월자료\{계정}\` 파일·`_받은기록.json`.
 3. 사람 조치: 로그인 막힌 7계정(lslfgh·plan_it·unipang·gbseller808·wavetech·seankim137·aehee5505) 비밀번호/인증번호 · gyi0101 셀러월렛 PIN '4회 남음' 경고(유라이프 대표 확인) · (DW)커머스 대장 비번 값 정리 · 운용 PC 옛 08:00 정산 예약 삭제.
 4. N11 요청 방법 확인(소유자 답 있으면).
+4-1. **(D-179) 위탁정산서 '관리 시작 달' 차이 표**: 계정별 자동 판정 달(첫 판매·첫 물류비 — git 밖 `output\_분석_261013\정산스크립트\managed_alloc.py`·`statement_managed.py`) vs 계약 시작일 달(계약 원장·D-159 판정표) → 소유자에게 보이고 정의 결정.
+4-2. **(D-179) 셀독 전환자 2단계 구현** — 103계정 정산 자료 받기 · 빈도 = 매일 18시 뒤(소유자 확정) · 설계 `designs/SETTLEMENT_MODULE.md §15` · 로그인 안전 규칙 D-111·D-112 그대로.
 5. **정산 대기 처리 방침 미확정** — `D:\coupang-analytics\output\_분석_261013\정산스크립트\쿠팡_정산대기_처리_조사_261106.md` · 후보 A/B/C 승인 전.
 6. **계약자 정산표 발송 판단** — 공제 미반영(4,766,325원) 상태로 보낼지.
 7. **9계정 이력 복구(소유자 답 대기)**: 재료 = `C:\Users\user\Downloads\output (29).zip` 안 `쿠팡데이타분석_통계_261029.xlsx`.
@@ -54,9 +57,8 @@
 - (사실) 매출성장광고 = `reportType:"pa"` 캠페인만 · 윙 주문상세 '판매가' = 수량 2개 이상 줄에서 줄 합계 · `output\정산\정산\` 옛 중첩 폴더 · 계정목록 105 vs 판매 중 101·관리 상품 144 > 109 원인 미확인.
 - **(재등록 R106 · 소유자 판단 대기) 끊겼던 미결** — 원문 = 각 파일:
   - (R108 새 미확인) D-088 (1) 예정액 차이 사유 6가지 문구 — 지금 정산서(`statement_managed.py`)에 'FORECAST_NOTE' 0건 · 어느 결정이 뺐는지 원문 없음 → 남았는지·뺀 것이 맞는지 정산 세션 확인.
-  - (통제 세션 'Coupang Analytics' 전용 — 감사 F절·D-151 남은 것) `config.py:82` `KW_MAX_TRACK(=7)`·'쿨다운 동반' → 10·D-030 · `config.py:88~89·106~108` `RANK_BACKFILL`·`_ROUNDS`·`_COOLDOWN_SEC` 사용처 0(b8dde4d 에서 사용 코드 삭제) → 물리 삭제 · `pipeline.py:695` '오늘은 같은 값을 다시 넣지 않음·D-068' → '24시간·D-123' · `designs/DESIGN.md:399·496` '상품별 판매 리포트' → '상품별 판매'(D-063) · `CLAUDE.md:18` 정의서 128칸 → 137칸. 덤(같은 '쿨다운' 잔재) `config.py:55·336~337`·`DESIGN.md:13`·`ui/app_qt.py:1636`·`pipeline_ranks.py:504`. 근거·제안 문장 = `docs/decisions/remaining-survey-2026-11-08.md` A-1·A-2.
+  - (통제 세션 'Coupang Analytics' 전용 — 감사 F절·D-151 남은 것) `config.py:82` `KW_MAX_TRACK(=7)`·'쿨다운 동반' → 10·D-030 · `config.py:88~89·106~108` `RANK_BACKFILL`·`_ROUNDS`·`_COOLDOWN_SEC` 사용처 0(b8dde4d 에서 사용 코드 삭제) → 물리 삭제 · `pipeline.py:695` '오늘은 같은 값을 다시 넣지 않음·D-068' → '24시간·D-123' · `designs/DESIGN.md:399·496` '상품별 판매 리포트' → '상품별 판매'(D-063) · `CLAUDE.md:18` 정의서 128칸 → 137칸 · HANDOFF.md 삭제(D-179) 뒤 남은 참조 `CLAUDE.md:87`·`designs/DOMAIN_D2_SOURCING.md:168` 'HANDOFF §4-1'(원래 없던 절) → "구현 보류 — CLAUDE.md '환경' 절" 식으로. 덤(같은 '쿨다운' 잔재) `config.py:55·336~337`·`DESIGN.md:13`·`ui/app_qt.py:1636`·`pipeline_ranks.py:504`. 근거·제안 문장 = `docs/decisions/remaining-survey-2026-11-08.md` A-1·A-2.
   - D-171 N11 사이즈 리포트 보류 — 요청 방법(소유자가 4월에 어디서 요청했는지) 답 대기(다음 작업 4).
-- (R106 · 범위 밖이라 재등록만) 감사 E절 '추적이 끊긴 미결' 8건 `docs/decisions/audit-2026-11-04.md:102` — D-064 단계 3·4 · D-111 2단계 빈도 · D-118 17계정 정정 통보 · 루트 `HANDOFF.md` · D-004 공휴일 · 전역 AI 매칭 규칙 범위(D-009·071·072) · D-093 PC 엑셀 · D-140 관리 시작 달.
 - (사실 · R105 참고·미수정) 앱 ② 예외 때도 종합 블록이 '② 키워드 선정: 함'(판정 줄은 '오류 발생 --> 중단').
 
 ## 주의
@@ -65,5 +67,5 @@
 - 빌드 = PowerShell 에서 `cmd /c "D:\coupang-analytics\build.bat"`(Git Bash 의 `cmd //c build.bat` 은 파일을 못 찾음). 'WinError 5 액세스 거부'(dist 폴더 삭제 실패) = `dist` 안 폴더 **읽기 전용 속성**(11-08 실측 162개·맨 위 `dist`·`dist\coupang-analytics` 포함) → 속성만 풀고 다시. `dist\coupang-analytics_old_stuck` = 옛 잔여(손대지 않음).
 - 무거운 작업(게이트·빌드·에이전트)은 하나씩 — 빌드 중 게이트 동시 실행 금지(10-10 BSOD). 커밋 훅(--quick ~4분)·푸시 훅(전체+복잡도 ~4분)도 무거운 작업.
 - 정산서 재생성 = 장부 기준일 고정 필수 · 통합판매현황 1행 숨긴 칸 '차트설정:' 지우지 말 것.
-- 병렬 세션 번호 — 다음 = **D-179·R111**.
+- 병렬 세션 번호 — 다음 = **D-180·R112**.
 - 사람 승인 대기열 금지 · 로그인·판매수집·정산 = 프록시 금지 · 배포 zip·결과 시트 반영 = 통제 세션만.

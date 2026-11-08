@@ -114,7 +114,7 @@ def p1_holidays():
         calls = []
         got = HK.holidays(2026, cache_dir=tmp, fetch=lambda y: calls.append(y) or ["2026-08-17", "2026-09-24"])
         again = HK.holidays(2026, cache_dir=tmp, fetch=lambda y: calls.append(y) or [], extra=["2026-06-03"])
-        assert got == {D("2026-08-17"), D("2026-09-24")} and calls == [2026]           # 두 번째는 캐시
+        assert got == {D("2026-08-17"), D("2026-09-24"), D("2026-05-01"), D("2026-07-17")} and calls == [2026]           # 두 번째는 캐시  # 05-01·07-17 = 늘 포함(D-179)
         assert again == got | {D("2026-06-03")}                                           # 임시공휴일 수동 추가
     ok("영업일 가산·다음 영업일·대체공휴일(광복절 토·추석 토 무대체·겹침·추석 일요일·설 토일)·실패=예외·캐시·수동 추가")
 

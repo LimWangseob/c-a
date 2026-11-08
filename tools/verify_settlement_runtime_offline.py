@@ -651,7 +651,7 @@ def p22_paydates_verify():
             (Path(tmp) / "output").mkdir()
             (Path(tmp) / "output" / "_holidays_2026.json").write_text('["2026-08-17", "2026-10-05"]', encoding="utf-8")
             got = TD.load_holidays([{"정산일": "2026-08-31"}])
-            assert got == {D("2026-08-17"), D("2026-10-05")}                                 # 캐시 우선(키 없어도)
+            assert got == {D("2026-08-17"), D("2026-10-05"), D("2026-05-01"), D("2026-07-17")}                                 # 캐시 우선(키 없어도)  # 쿠팡 비영업일 05-01·07-17 항상(D-179)
             assert TD.load_holidays([{"정산일": "2025-12-01"}]) is None                       # 캐시·키 없는 해 = None
             assert any("지급일 대조 건너뜀" in r for r in TD.LOG.text.read_text(encoding="utf-8").splitlines())
         finally:
