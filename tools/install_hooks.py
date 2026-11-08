@@ -3,9 +3,9 @@
 3계층(designs/CODE_HEALTH_PLAN.md §단계1):
   1) pre-commit  : **메모리 백업**(`sync_memory.py --stage`=외부 .claude 메모리를 docs/memory/ 로 미러링·스테이징,
                    세션·PC 바뀌어도 손실 방지) + **4묶음 알림**(코드 변경인데 DECISIONS.md 없으면 경고·비차단)
-                   + 스테이징된 .py 문법 컴파일 + `run_checks.py --quick`(오프라인 게이트 중 빠른 것 전부).
+                   + 스테이징된 .py 문법 컴파일 + `run_checks.py --quick --skip-if-passed`(빠른 것 전부·같은 내용 통과 기록 있으면 건너뜀).
   2) pre-push    : **메모리 백업**(`sync_memory.py --stage` + 미커밋 메모리 변경이면 자동 커밋=push 때에도 손실 방지)
-                   + `run_checks.py`(오프라인 게이트 전부) + `check_complexity.py`(MI 회귀 차단·괴물함수 경고).
+                   + `run_checks.py --skip-if-passed=push`(오프라인 게이트 전부·올라갈 커밋 내용 전체 통과 기록 있으면 건너뜀) + `check_complexity.py`(MI 회귀 차단·괴물함수 경고).
 
 훅 본문은 이 파일이 유일 출처(SSOT)다. 새 PC/재설치:
     python tools/install_hooks.py            # 설치(.git/hooks/ 에 기록)
@@ -45,12 +45,14 @@ files=$(git diff --cached --name-only --diff-filter=ACM -- '*.py')
 if [ -n "$files" ]; then
   python -m py_compile $files
 fi
-python tools/run_checks.py --quick
+# 같은 내용이 이미 통과했으면(/session-close 게이트 등) 다시 돌리지 않음 — 내용이 다르면 그대로 검사(D-180).
+python tools/run_checks.py --quick --skip-if-passed
 """
 
 PRE_PUSH = f"""#!/bin/sh
 {_MARK} pre-push — 4묶음(메모리 백업)+회귀 게이트(전체)+품질. 재설치: python tools/install_hooks.py
 set -e
+refs=$(cat)   # 올라갈 ref 목록(표준입력) — 아래 게이트 건너뛰기 판정에 씀
 # ① 메모리 백업 = push 때에도 손실 방지: 외부 .claude 메모리를 docs/memory/ 로 미러링·스테이징.
 python tools/sync_memory.py --stage
 # 메모리가 바뀌었는데 커밋 안 된 채 push 하려는 경우 → 자동 커밋(무손실). --no-verify 로 재귀 방지(게이트는 아래서 실행).
@@ -58,8 +60,8 @@ if ! git diff --cached --quiet -- docs/memory 2>/dev/null; then
   git commit -m "메모리 스냅샷 자동 동기화(pre-push)" --no-verify
   echo "⚠ [4묶음] 미커밋 메모리 변경을 자동 커밋했습니다 — 방금 push 에는 포함 안 됨. 완료 후 'git push' 를 한 번 더 실행하세요."
 fi
-# ② 회귀 게이트(전체)+품질.
-python tools/run_checks.py
+# ② 회귀 게이트(전체)+품질. 올라갈 커밋 내용이 이미 전체 통과했으면 건너뜀(D-180).
+printf '%s\\n' "$refs" | python tools/run_checks.py --skip-if-passed=push
 python tools/check_complexity.py
 """
 

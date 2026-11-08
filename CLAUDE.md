@@ -57,7 +57,8 @@ python ui/app_qt.py     # 기본 UI = PySide6(Qt) + Windows 11 Fluent 스타일
 > ✅ **정비 완료(2026-09-22)**: 4파일의 **D/E/F 괴물함수 전멸(전부 C 이하·헬퍼 분해·행동 불변)**, 핀 3종
 > 신설(pin_login_ranks·pin_apply_style·pin_run_plan). 남은=**모듈 분리로 MI C→B**(대형파일 포화·별도 단계)·**라이브 검증**. 상세=`designs/CODE_HEALTH_PLAN.md`.
 - **커밋/푸시 전 게이트 통과 필수**: `python tools/run_checks.py`(전체·오프라인·결정적 — 목록=`run_checks.CHECKS`, 개수는 실행 요약에 표시)가 초록이어야 함.
-  git 훅이 자동 검사(pre-commit=`--quick`[시뮬+핀3+구글시트+**정밀렌더검증**], pre-push=전체+`check_complexity.py`).
+  git 훅이 자동 검사(pre-commit=`--quick`[`CHECKS` 의 quick=True 전부], pre-push=전체+`check_complexity.py`). 검사는 동시 3개(`-j 1`=하나씩)이고,
+  **같은 내용이 이미 통과했으면 훅은 다시 안 돌림**(통과 기록 `tools/check_stamp.py` — 내용이 다르면 그대로 검사, D-180).
   구성 = 시뮬레이션·핀4(로그인발견/apply_style/실행모드+단계조립/L1계약)·구글시트오프라인·정밀렌더검증·셀독계정상품이력관리원장·소싱 원장(업무일지·계약·채권자·CS 원장 4종은 HQ 로 이전·R0 삭제 D-037)·정산2·오프라인실증.
   **새 PC/클론 후 `python tools/install_hooks.py` 1회**. 응급 우회(`--no-verify`)는 **상시 금지**(회귀 유입).
 - **테스트에서 실 API 금지**: 검증 3종은 로그인·OpenAI·네이버 **호출 없이** 돈다. `verify_offline`의 [6]

@@ -22,6 +22,7 @@ except AttributeError:
     pass
 
 from coupang_analytics import collector as C  # noqa: E402
+from coupang_analytics import config  # noqa: E402
 from coupang_analytics import daily_snapshot as DS  # noqa: E402
 from coupang_analytics import pipeline_sales as PS  # noqa: E402
 from coupang_analytics import wing_coupons as WC  # noqa: E402
@@ -370,18 +371,28 @@ def s7_wiring():
     ok("브라우저 닫기 전·부가 조회 뒤·실패 비치명·반환 그대로")
 
 
+def _stat(p: Path):
+    return (p.stat().st_size, p.stat().st_mtime_ns) if p.exists() else None
+
+
 def main():
     orig_now = DS._now
-    try:
-        s1_pages()
-        s2_end_detection()
-        s3_gap_and_period()
-        s4_save_and_accumulate()
-        s5_failures()
-        s6_inventory()
-        s7_wiring()
-    finally:
-        DS._now = orig_now
+    real_db, orig_db = Path(config.SESSION_STATE_DB), config.SESSION_STATE_DB
+    before = _stat(real_db)
+    with tempfile.TemporaryDirectory() as tmp:
+        config.SESSION_STATE_DB = str(Path(tmp) / "coupon_session_state.db")   # S7 로그인 관측을 임시 DB로
+        try:
+            s1_pages()
+            s2_end_detection()
+            s3_gap_and_period()
+            s4_save_and_accumulate()
+            s5_failures()
+            s6_inventory()
+            s7_wiring()
+        finally:
+            DS._now = orig_now
+            config.SESSION_STATE_DB = orig_db
+    assert _stat(real_db) == before, f"실 세션 상태 DB({real_db})를 건드림 — 검사는 임시 DB만 써야 함"
     print("쿠폰 목록·재고현황 날짜별 보관 오프라인 검증 통과")
 
 
