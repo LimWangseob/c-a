@@ -50,8 +50,10 @@ _COST_FIELDS = {"totalWarehousingFeeDeductionAmount": "입출고/배송비", "to
                 "totalCreturnGradingFeeDeductionAmount": "반품 회수/재입고 비용",
                 "totalCreturnReverseShippingFeeDeductionAmount": "반품 회수/재입고 비용",
                 "totalVreturnHandlingFeeDeductionAmount": "반출비", "totalVreturnShippingFeeDeductionAmount": "반출 배송 서비스비",
-                "totalCfsInventoryCompensationAmount": "재고 손실 보상"}
-_COST_UNMAPPED = ("totalContainerUnloadingFeeDeductionAmount", "totalPostPurchaseDeductionAmount")   # 대응 리포트 미확인
+                "totalCfsInventoryCompensationAmount": "재고 손실 보상",
+                "totalPostPurchaseDeductionAmount": "리뷰 이벤트 비용"}   # PPIR = 리뷰 이벤트(화면 코드 실측·D-171 N2)
+# BI·구독료·라이브·이월·과거 CFS 공제 칸은 대응 리포트가 없음 — 지급 내역(amount_rows)에 칸 그대로 저장되고 매입 세금계산서로 대사.
+_COST_UNMAPPED = ("totalContainerUnloadingFeeDeductionAmount",)   # 대응 리포트 미확인
 # 정산 줄 없는 주에 요청할 물류비 리포트 — 미납 CFS 상세(cfsDeductionDetails)엔 비용 종류가 없어 5종 모두(D-065 실측 니코에이블).
 CFS_KINDS = ("부가서비스비", "입출고/배송비", "보관비", "반품 회수/재입고 비용", "반출비")
 _KST = timedelta(hours=9)

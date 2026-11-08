@@ -12,6 +12,9 @@
 | 우대수수료 환급(주문별·결제/취소일 달마다) | 정산 > 우대수수료 환급조회 | GET …/favorablefee/refund/list/data?page&pageSize&from&to&dateType |
 | 로켓그로스 입고 내역(밀크런번호·상품 수량) | 로켓그로스 > 입고관리 | GET /tenants/rfm-inbound/data/inbound/search?pagingSize&pageIndex |
 | 상품 없는 배송비 주문의 반품(주문번호별) | 주문/배송 > 주문조회 > 주문상세 '반품정보' | GET /tenants/sfl-portal/return/delivery/{주문번호} |
+| 빠른정산 이용 여부(D-169) | 셀러월렛 빠른정산 메뉴 | GET /tenants/seller-wallet-web/fast-settlement/available-services |
+| 프로모션 추가 수수료(D-171) | 정산 현황 | GET /tenants/msf/wing/api/payment-report/promotion-fee |
+| 리뷰 이벤트 캠페인(D-171) | 문의/리뷰 > 리뷰 이벤트 관리 | GET /tenants/rfm-ss/api/manage-review-campaign/campaigns?startDate&endDate&pageSize |
 ⚠ 매출내역 등은 그 화면을 연 상태에서 불러야 한다(다른 화면에서 부르면 504 — 실측). 오늘 이후 날짜를 넣으면 504(실측)
 → 월 끝은 어제까지. 서버 일시 오류(ServerBusy)는 그 항목만 '조회 실패'로 남기고 다음 항목 진행.
 개인정보(계좌·예금주)는 저장하지 않는다.
@@ -56,6 +59,10 @@ RET_KEEP = ("cancelId", "orderId", "receiptDate", "returnDate", "returnStatus", 
             "faultType", "returnDeliveryPriceBurden", "deliveryChargeType", "returnDeliveryPrice", "estimatedRefundPrice",
             "cancelCountSum", "productShipmentType")
 RET_ITEM_KEEP = ("vendorItemId", "vendorItemName", "unitPrice", "price", "quantity", "cancelQuantity")
+# D-169·D-171 새 조회 3개 — 실측(gyi0101 2026-11-08): 다른 윙 화면에서 불러도 200 · 리뷰 캠페인 pageSize 100 허용·'hasMore' 로 남은 쪽 표시.
+FAST_SETTLEMENT = "/tenants/seller-wallet-web/fast-settlement/available-services"
+PROMOTION_FEE = "/tenants/msf/wing/api/payment-report/promotion-fee"
+REVIEW_CAMPAIGNS = "/tenants/rfm-ss/api/manage-review-campaign/campaigns"
 _PII = ("bank", "owner", "accountnumber")
 
 
@@ -143,6 +150,13 @@ def collect(call, open_page, start: date, today: date, *, note=lambda m: None, g
                                                                  "orderId": None, "page": 1, "pageSize": 100}))
     data["favorable"] = {ym: safe_new(f"우대수수료 환급 {ym}", lambda f=f, t=t: _favorable(call, f, t)) for ym, f, t in mlist}
     data["inbound"] = safe_new("입고 내역", lambda: _inbound(call))
+    data["fast_settlement"] = safe_new("빠른정산 이용 여부",
+                                       lambda: list(call("GET", FAST_SETTLEMENT, None)["content"]["availableServices"]))
+    data["promotion_fee"] = safe_new("프로모션 추가 수수료", lambda: call("GET", PROMOTION_FEE, None))
+    data["review_campaigns"] = safe_new("리뷰 이벤트 캠페인", lambda: _review_campaigns(call, start, today))
+    if (data["review_campaigns"] or {}).get("hasMore"):
+        data["조회 실패"].append("리뷰 이벤트 캠페인: 더 있음(100개 넘음 — 다음 쪽 방법 미확인)")
+        note("검증 자료 리뷰 이벤트 캠페인 100개 넘음 — 다 못 받음")
     if orders:
         data["returns"] = {o: safe_new(f"반품 조회 {o}", lambda o=o: _returns(call, o)) for o in orders}
     return scrub(data)
@@ -235,6 +249,13 @@ def _inbound(call) -> list:
         page += 1
         if page >= ((r.get("pagination") or {}).get("totalPages") or 0):
             return out
+
+
+def _review_campaigns(call, start: date, today: date) -> dict:
+    """리뷰 이벤트 캠페인 — 한국 날짜 [start, 어제] → 화면과 같은 UTC 시각 · 업체코드 칸은 빼고 저장."""
+    r = call("GET", f"{REVIEW_CAMPAIGNS}?startDate={start - timedelta(days=1)}T15:00:00.000Z"
+                    f"&endDate={today - timedelta(days=1)}T14:59:59.999Z&pageSize=100", None)
+    return {k: r[k] for k in ("count", "hasMore", "campaigns", "statusCounts")}
 
 
 def _returns(call, order: str) -> list:

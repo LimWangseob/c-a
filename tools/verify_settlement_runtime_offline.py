@@ -94,15 +94,21 @@ def p10_wing_api_parse():
     det = {"totalStorageFeeDeductionAmount": 201287, "totalFulfillmentFeeDeductionAmount": 843508,
            "totalWarehousingFeeDeductionAmount": 867526, "totalBarcodeLabelingFeeDeductionAmount": 0,
            "totalCfsInventoryCompensationAmount": 119770, "totalAdSalesDeductionAmount": 1003081,
-           "totalContainerUnloadingFeeDeductionAmount": 5000}
-    assert API.cost_reports(det) == ("보관비", "입출고/배송비", "재고 손실 보상")
+           "totalContainerUnloadingFeeDeductionAmount": 5000, "totalPostPurchaseDeductionAmount": 2220,
+           "totalBusinessInsightsDeductionAmount": 99000, "totalSubscriptionFeeDeductionAmount": 99000}
+    # 리뷰 이벤트(PPIR) 금액 → 리뷰 이벤트 비용 리포트(D-171·N2) · BI·구독료는 리포트 없음(지급 내역 JSON 칸으로만)
+    assert API.cost_reports(det) == ("리뷰 이벤트 비용", "보관비", "입출고/배송비", "재고 손실 보상")
     r70 = {**rresp["settlementStatusReports"][0], "settlementRatio": 70, "settlementStatusReportDetail": det}
     ev70 = API.rg_events({"settlementStatusReports": [r70]}, "계정A")[0]
-    assert ev70.reports == ("보관비", "입출고/배송비", "재고 손실 보상") and SJ.reports_for(ev70)[0] == "판매수수료"
+    assert ev70.reports == ("리뷰 이벤트 비용", "보관비", "입출고/배송비", "재고 손실 보상") and SJ.reports_for(ev70)[0] == "판매수수료"
     assert API.unmapped_costs({"settlementStatusReports": [r70]}) == [
         "V1-2026-07-27-2026-07-31: totalContainerUnloadingFeeDeductionAmount=5000"]
     cj = SJ.Job("a", "로켓그로스", "주정산", "입출고/배송비", "x", "y", "z", ref="k")
     assert API.rg_request_body(cj, 1)["sellerReportType"] == "WAREHOUSING_SHIPPING"
+    pj = SJ.Job("a", "로켓그로스", "주정산", "리뷰 이벤트 비용", "x", "y", "z", ref="k")
+    assert API.rg_request_body(pj, 1)["sellerReportType"] == "PPIR"
+    am_bi = API.amount_rows({"settlementStatusReports": [r70]}, "로켓그로스")[0]
+    assert am_bi["totalBusinessInsightsDeductionAmount"] == 99000 and am_bi["totalPostPurchaseDeductionAmount"] == 2220,         "리포트 없는 공제 칸도 지급 내역에 저장(N2)"
     am = API.amount_rows({"paymentReports": [{**wresp["paymentReports"][1], "finalPaidAmount": 19664,
                                               "bankAccountInfo": {"bank": "가림"}, "isAdditionalPayment": False,
                                               "detail": {"paidAmount": 19664, "isActualPayment": True,
@@ -476,7 +482,8 @@ def p18_verify_collect():
     assert "예금주" not in str(d) and "123" not in str(d)
     assert d["purchase"]["202609"] is None and d["purchase"]["202608"]["body"]["toDate"] == "2026-08-31"
     assert d["purchase"]["202610"]["body"]["toDate"] == "2026-10-07"                         # 오늘 이후 날짜 안 넣음
-    assert len(d["조회 실패"]) == 1 and "매출내역 202609" in d["조회 실패"][0]
+    old = [x for x in d["조회 실패"] if not x.startswith(("빠른정산", "리뷰 이벤트"))]   # 새 항목(P50)은 이 가짜 응답 모양으론 실패가 맞음
+    assert len(old) == 1 and "매출내역 202609" in old[0], d["조회 실패"]
     assert d["wing_vat"]["body"] == {"from": 202608, "to": 202610}
     assert d["rg_vat"]["ok"].endswith("?fromYearMonth=2026-08&toYearMonth=2026-10")
     pend = [x for x in log if x[:2] == ("POST", VC.PENDING)]
@@ -1913,7 +1920,7 @@ def p47_settle_sales_coupons():
 
 
 def p48_ads_from_december():
-    print("[P48] 광고·밀크런 = 2025-12분부터(2026-01 지급 공제 근거·D-161 ④) · 하루 계정당 2개월 상한 그대로(D-120)")
+    print("[P48] 광고·밀크런 = 2025-11분부터(D-166 — D-161 ④ 2025-12 에서 앞당김) · 하루 계정당 2개월 상한 그대로(D-120)")
     from types import SimpleNamespace
     sys.path.insert(0, str(ROOT / "tools"))
     import settlement_download as TD
@@ -1925,9 +1932,9 @@ def p48_ads_from_december():
         return {"받을 것": [], "요청": [], "기다림": [], "받음": [], "캠페인 없음": [], "남은 달": 0}
     _patched([(AD, "collect", fake), (TD, "name_of", lambda a: "A"), (TD, "LOG", SimpleNamespace(record=lambda *a, **k: None))],
              lambda: TD.collect_ads(None, None, SimpleNamespace(start=D("2026-01-01"))))
-    assert AD.FROM == D("2025-12-01") and seen == [D("2025-12-01")], seen
-    assert AD.due_months(AD.FROM, D("2026-01-05"))[0][0] == "202512" and AD.MAX_MONTHS == 2
-    ok("광고센터·밀크런 받는 시작 = 2025-12 · 상한 2개월 유지")
+    assert AD.FROM == D("2025-11-01") and seen == [D("2025-11-01")], seen
+    assert AD.due_months(AD.FROM, D("2026-01-05"))[0][0] == "202511" and AD.MAX_MONTHS == 2
+    ok("광고센터·밀크런 받는 시작 = 2025-11(D-166) · 상한 2개월 유지")
 
 
 def p49_rg_missing_costs():
@@ -2002,6 +2009,42 @@ def p49_rg_missing_costs():
     ok("정산 줄 없는 주 = 물류비 5종만(판매수수료 없음)·조회에 없는 지급 줄 = 그 주 일정·업체코드 모르면 안 만듦 · 원문 하루 1번")
 
 
+def p50_verify_new_items():
+    print("[P50] 검증 원자료 새 항목(D-169 N9·D-171 N12·N13) — 빠른정산 이용 여부·프로모션 추가 수수료·리뷰 이벤트 캠페인 · 실패 = 그 항목만")
+    from coupang_analytics import settlement_verify_collect as VC
+    # 실측(gyi0101 2026-11-08 라이브·조회만): available-services → {result, displayMessage, content:{availableServices:[…]}} ·
+    # promotion-fee → {participated:false, eventStartedAt, eventEndedAt, exitedAt, extraFeeRatio:7} · campaigns?startDate&endDate
+    # (한국 0시 = 전날 15시 UTC ISO)&pageSize(100 허용) → {vendorId, count, hasMore, campaigns[], statusCounts{…}} · 다른 화면에서 불러도 200.
+    seen: list = []
+    promo = {"participated": False, "eventStartedAt": None, "eventEndedAt": None, "exitedAt": None, "extraFeeRatio": 7}
+    sc = {"ACTIVE": 0, "COMPLETED": 1}
+
+    def call(method, path, body, more=False):
+        if path == VC.FAST_SETTLEMENT:
+            return {"result": "SUCCESS", "displayMessage": "", "content": {"availableServices": ["FAST_SETTLEMENT", "FACTORING"]}}
+        if path == VC.PROMOTION_FEE:
+            return dict(promo)
+        if path.startswith(VC.REVIEW_CAMPAIGNS):
+            seen.append(path)
+            return {"vendorId": "A00434040", "count": 1, "hasMore": more, "campaigns": [{"campaignId": 7}], "statusCounts": sc}
+        return {}
+    d = VC.collect(call, lambda url: None, D("2026-01-01"), D("2026-11-08"))
+    assert d["fast_settlement"] == ["FAST_SETTLEMENT", "FACTORING"], d["fast_settlement"]
+    assert d["promotion_fee"] == promo, d["promotion_fee"]
+    assert d["review_campaigns"] == {"count": 1, "hasMore": False, "campaigns": [{"campaignId": 7}], "statusCounts": sc},         "업체코드 칸은 저장 안 함(파일 이름이 계정)"
+    assert seen == [f"{VC.REVIEW_CAMPAIGNS}?startDate=2025-12-31T15:00:00.000Z&endDate=2026-11-07T14:59:59.999Z&pageSize=100"], seen
+    assert not d["조회 실패"], d["조회 실패"]
+    # 더 있음(hasMore) = 다 못 받음 → 받은 것은 저장하되 '조회 실패'에 남김(오류 정의 — 에러 없음 ≠ 다 받음)
+    d2 = VC.collect(lambda m, p, b: call(m, p, b, more=True), lambda url: None, D("2026-01-01"), D("2026-11-08"))
+    assert d2["review_campaigns"]["hasMore"] is True and any("리뷰 이벤트 캠페인" in x and "더 있음" in x for x in d2["조회 실패"]), d2
+    # 예상 못 한 오류(응답 모양) = 그 항목만 실패 · 다음 날 지난 값 유지(D-161)
+    d3 = VC.collect(lambda m, p, b: {"content": None} if p == VC.FAST_SETTLEMENT else call(m, p, b), lambda url: None,
+                    D("2026-01-01"), D("2026-11-08"))
+    assert d3["fast_settlement"] is None and any("빠른정산" in x for x in d3["조회 실패"]), d3["조회 실패"]
+    assert VC.keep_previous(d3, d)["fast_settlement"] == ["FAST_SETTLEMENT", "FACTORING"]
+    ok("빠른정산 이용 서비스 목록·프로모션 수수료 응답 그대로·리뷰 캠페인(1/1~어제·100개)·더 있음/모양 오류 = 그 항목만 실패")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -2043,6 +2086,7 @@ def main():
     p47_settle_sales_coupons()
     p48_ads_from_december()
     p49_rg_missing_costs()
+    p50_verify_new_items()
     print("정산 런타임 오프라인 검증 통과")
 
 
