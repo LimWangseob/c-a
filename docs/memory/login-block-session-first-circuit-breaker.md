@@ -8,6 +8,8 @@ metadata:
   modified: 2026-09-15T07:26:42.807Z
 ---
 
+**현행(2026-11-08 표시) = D-029**(로그인 서킷브레이커 폐지 — 차단돼도 전 계정 시도·① 끝에 미완료 계정 1회 재시도) · 비밀번호 = D-123·D-012·D-103 · 로그인 완료 판정·Chrome+CDP = `docs/CONSTRAINTS.md`. 아래 `LOGIN_BLOCK_CIRCUIT=3` 서술은 옛 구현. 주제 요약 = `D:\coupang-analytics\docs\CURRENT_RULES.md` §1.
+
 2026-09-09 라이브(28계정)에서 관측·구현. **관측상 Akamai 차단은 로그인 폼 제출(`xauth/login-actions/authenticate` POST) 단계에서 표면화** — 데이터 API(vi-detail-search·재고)와 세션 재사용(authenticated GET)에선 동일 현상 미관측. ⚠️ 단정 주의(2026-09-09 사용자 지적): "POST에서만/POST 자체가 원인"이라 단정 금지 — 원인이 누적 빈도·IP평판·인증실패횟수일 수도(관측=표면화 지점까지만). 실무 함의는 동일 = **인증 요청 총량을 줄인다**. 세션 만료 계정을 자동로그인하다 **~14회째부터 Access Denied**, 이후에도 자동제출해 IP를 더 태웠음. 지문위조 금지라 "위장 통과"는 불가.
 
 **구현(pipeline.run_full)**:
