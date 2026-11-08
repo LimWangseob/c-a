@@ -4,9 +4,9 @@
 
 - BUILD_TAG: R112
 - 갱신: 2026-11-08 (R106 = 정책 문서 정리 · R107~R109 = DECISIONS 표기 D-176~D-178 · R110 = 낡은 문구 16곳 · R111 = 감사 E절 소유자 답 D-179(공휴일 05-01·07-17 코드 · HANDOFF.md 삭제) · R112 = 회귀 게이트 속도 D-180)
-- 마지막 커밋: 이 커밋([R112] STATE) ← d2b4847 [R112] 병합 feat/gate-speed(D-180) ← 6122d15 [R112] 게이트 속도 ← 9982000 [R111] D-179. origin 푸시 완료(d2b4847까지).
-- 직전 빌드: R105 ef72f74 — 배포 zip 11-08 19:43(R105 전부 포함 · R104 18:36 zip 설치 금지).
-- 배포본: `D:\coupang-analytics\dist\쿠팡애널리틱스_배포.zip` **11-08 19:43(ef72f74 기준·R105 전부 포함·174,039,949바이트 · exe 안 `_retry_blank_ranks`·'첫 회' 포함 확인)**. ⛔ 18:36 R104 zip 은 ③ 순위 줄 결함 있음 — 설치하지 말 것. 운용 PC 설치본 = 11-04 18:43(b6b39c4) → R99~R105 는 새 zip 설치 뒤에만 동작.
+- 마지막 커밋: 이 커밋([R112] STATE zip) ← 32077e5 [R112] 통제 세션 전용 문구 5건 ← 7c4572f [R112] 세션 종료 ← d2b4847 [R112] 병합 feat/gate-speed(D-180). origin 푸시 완료.
+- 직전 빌드: R112 32077e5 — 배포 zip 11-08 23:15(R105·R111 공휴일·R112 문구 전부 포함 · 19:43·18:36 zip 설치 금지).
+- 배포본: `D:\coupang-analytics\dist\쿠팡애널리틱스_배포.zip` **11-08 23:15(32077e5 기준·174,037,768바이트 · exe 안 확인: 정산다운로드.exe `COUPANG_OFF_DAYS`((5,1),(7,17)) · 쿠팡애널리틱스.exe `_retry_blank_ranks`·'24시간·D-123'·`RANK_BACKFILL` 없음)**. ⛔ 19:43 zip 은 공휴일(D-179) 빠짐 · 18:36 zip 은 ③ 순위 줄 결함 — 설치하지 말 것. 운용 PC 설치본 = 11-04 18:43(b6b39c4) → R99~R112 는 새 zip 설치 뒤에만 동작.
 - 세션 시작 = STATE.md + `docs/CURRENT_RULES.md`(주제별 현행 규칙 14묶음) 읽고 git log/status 대조 3줄 요약 · 색인 `docs/DECISIONS_INDEX.md` 는 검색용 · 종료 = `/session-close`.
 
 ## R106 (11-08 밤) — 정책 문서 정리(`D:\claude-global\docs\plans\NEXT_SESSION_PLAN.md` 세션 2)
