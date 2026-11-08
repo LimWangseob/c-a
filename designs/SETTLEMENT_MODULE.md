@@ -340,15 +340,19 @@
 | N4 | 매출(위수탁) 세금계산서 | GET `/tenants/finance/wing/consignment/taxinvoice` → HTML 10칸 | 같음 | 같음 | 대부분 0건 [추정] |
 | N5 | 라이브 정산 | GET `…/live/api/marketplace/settlement/deduction/summary/list?month=` + `raw/list` | 같음 | 같음(JSON) | 상세 `creatorName` 저장 제외 |
 | N6 | RG 재고변동내역 | GET `/tenants/rfm-inventory/excel/reconciliation/report/{y}/{m}` xlsx(시트 2·2줄 머리글) | 같음 | 같음(원본 저장) | 수량만(금액 없음) · 재고 손실 보상 수량 근거 |
-| N7 | RG 반품내역 | GET `/tenants/rfm-inventory/excel/v2/skureturns/{업체코드}/{시작ms}/{끝ms}` xlsx(머리글 6행) | **기간 인자 무시 = 매번 전체 이력**[사실] → 하루/달 1번 최신본 덮어쓰기 **(주기 승인 필요)** | 같음 | 금액 없음 · 주문번호(개인정보 아님)·고객 사유 |
+| N7 | RG 반품내역 | GET `/tenants/rfm-inventory/excel/v2/skureturns/{업체코드}/{시작ms}/{끝ms}` xlsx(머리글 6행) | **기간 인자 무시 = 매번 전체 이력**[사실] → **하루 1번** 최신본 덮어쓰기(D-171) | 같음 | 금액 없음 · 주문번호(개인정보 아님)·고객 사유 |
 | N8 | 부가세 신고 상세(윙 `MSF_PAYMENT_METHOD_DETAIL`·RG `VAT`) | 요청형 엑셀 | 2026-01~ 달마다 채널별 1요청 | `settlement_jobs` 에 월 단위 작업(유형 '월자료') + **윙·RG 읽기 함수 분리** | [사실] 윙 환불 양수·화면=판매+환불·2번째 머리글 빈칸(값=옵션ID) / RG 환불 음수·빈 금액 `-`·머리글 2행 · RG API '기타'=파일 기타+판매자 쿠폰 |
 | N9 | 빠른정산 이용 여부 (D-169) | GET `/tenants/seller-wallet-web/fast-settlement/available-services` → `["FAST_SETTLEMENT","FACTORING"]` | 계정마다 하루 1번 | `collect_verify`(검증 원자료 한 항목) | 원금은 이미 받음(D-163) · 수수료·입금일은 셀러월렛(대표 PIN)뿐 — 세금계산서에 하나은행 줄 없음[사실 gyi0101 2026-01] |
+| N10 | 매출 주문별 JSON (D-171) | POST `/tenants/msf/wing/api/payment-report/order-detail-page-total`(쪽 수) → `order-detail` `{confirmStart,confirmEnd,searchDateType:"CONFIRM_DATE",searchDateStart,searchDateEnd,page,size:10,cursorToken}` — 2쪽부터 앞 응답 `cursorToken` 넘김 · 0건 쪽에서 끝 | 2026-01~ 지난 달 확정분 달마다 · 소급 예산 안 | `settlement_docs.py`(JSON) | ⛔**size 10 고정**[사실: 11·20·100 응답 없음·50=400] · `customerName` 저장 제외 · 주문 1줄=주문 단위(ORDER/CANCEL) · [사실] 2026-01 151줄 = 기존 주문상세와 주문·수수료·정산금액·판매액(상품+배송비) 일치 |
+| N11 | RG 상품별 사이즈 리포트 (D-171) | RG 요청형 `sellerReportType:"PRODUCT_SIZE_COMPARISON"` · 요청 주소 [추정] `request-download/api` | 달마다 1요청 · 소급 예산 안 | `settlement_jobs` 월자료(N8 과 같은 흐름) | [미확인] 칸·주소 — 첫 실행 결과 파일로 확인 |
+| N12 | 프로모션 추가 수수료 (D-171) | GET `/tenants/msf/wing/api/payment-report/promotion-fee` → `{participated, extraFeeRatio}` | 계정마다 하루 1번 | `collect_verify`(검증 원자료 한 항목) | [사실] gyi0101 `participated:false, extraFeeRatio:7` |
+| N13 | 리뷰 이벤트 캠페인 목록 (D-171) | GET `/tenants/rfm-ss/api/manage-review-campaign/campaigns?startDate&endDate&pageSize` | 계정마다 하루 1번(2026-01~오늘) | `collect_verify` | [사실] gyi0101 0건 · PPIR(`totalPostPurchaseDeductionAmount`) 대사 근거 |
 
-- **제외 제안(승인 필요)**: 매출내역 상세(`MSF_PURCHASE_REVENUE_DETAIL`) — [사실] gyi0101 2026-01 파일이 이미 받는 `윙_최종액_주문상세_20260101-20260131.xlsx` 와 449줄·주문 151·판매액 3,952,600·수수료 466,121·정산금액 3,480,779 동일(차이 = 구매자명 칸뿐) → 요청만 늘어남.
-- **보류**: 매출 주문별 JSON(`payment-report/order-detail` — 60초 넘게 응답 없음 2회·지급 줄 하나의 recognitionFrom/To 인자로 재시도 필요) · 상품 사이즈 비교(요청형)·프로모션 수수료·리뷰 캠페인 목록(조사 문서 C — 필요성 확인 필요).
+- **제외(D-171)**: 매출내역 상세(`MSF_PURCHASE_REVENUE_DETAIL`) — [사실] gyi0101 2026-01 파일이 이미 받는 `윙_최종액_주문상세_20260101-20260131.xlsx` 와 449줄·주문 151·판매액 3,952,600·수수료 466,121·정산금액 3,480,779 동일(차이 = 구매자명 칸뿐) → 요청만 늘어남.
+- **보류 없음(D-171)**: 보류 제안했던 4종(주문별 JSON·사이즈 리포트·프로모션 수수료·리뷰 캠페인)은 소유자 결정으로 모두 받음 = N10~N13. 주문별 JSON 응답 없음 원인 = 쪽 크기(size 100) — 2026-11-08 2차 실측으로 확정.
 - **불가**: 셀러월렛 내역(대표 본인 PIN·D-163) · 'B' 파일(엑셀 버튼 없음).
 
-### 16-3. 실행 구조 — 정기(그날 몫) + 소급(밀린 몫)을 **한 프로그램 안 두 단계**로 (승인 필요)
+### 16-3. 실행 구조 — 정기(그날 몫) + 소급(밀린 몫)을 **한 프로그램 안 두 단계**로 (D-170 확정 · 예산 = 판매 150일·월자료 종류별 3달·부가세 요청 4건)
 - **현재 [사실]**: `watch` 가 18:00 앱과 함께 떠서 ① 완료를 기다린 뒤 바퀴 반복 → 받을 게 없으면 '완료' 종료, 아니면 다음 날 17:55 종료 → 18:00 다음 회차가 기록 파일(`_요청기록.json`·판매분석 저장·광고 상태)로 **이어받음**. 즉 '18시 시작·17:55 종료·이어받기'는 이미 동작 중(D-021·D-091).
 - **속도를 정하는 것 = 실행 시간이 아니라 상한** [사실]: 판매분석 하루 60일(D-097·`plan_backfill` 은 '오늘 날짜' 기록 수로 셈 → 자정을 넘는 회차는 실제로 두 번 셀 수 있음) · 광고 한 번 실행 2달(D-120) · 요청 계정당 500. 상한을 다 쓰면 더 돌아도 할 일이 없어 '완료'로 끝남.
 - **문제 [추정·코드 근거]**: `cmd_run` 이 계정마다 [정산 파일 → 검증 → 광고 → 판매분석 소급]을 이어서 함 → 소급 150일(약 7분/계정 = 1~2.5초 쉼×150) 을 넣으면 1바퀴가 약 +6시간 → 뒤 계정의 그날 정산 파일이 늦어짐(지금 1바퀴 20:00~03:44).
@@ -365,5 +369,5 @@
 - 정산 = `settlement_runlog.RunLog.summary()` 확장 · 앱 = 파이프라인 끝(`pipeline.py` 공유 파일 — 통제 세션에서 편집).
 
 ### 16-5. 구현 순서(새 세션) · 완료 조건
-1. N1·N2(작은 수정) → 2. N9 → 3. 정기/소급 두 단계 + 회차 예산 + 150일(D-167·자동으로 60 복귀) → 4. N3~N7(`settlement_docs.py`) → 5. N8(요청형·읽기 분리) → 6. [실행 결과 종합](D-168) → 7. `python tools/run_checks.py` + `check_complexity.py` 초록 · 오프라인 검증 핀(받은 실제 파일 칸 구성 = 16-2 표 그대로, 파일에서 뽑은 기대값) → 8. 커밋 `[R{n}]` → 통제 세션 zip.
+1. N1·N2(작은 수정) → 2. N9 → 3. 정기/소급 두 단계 + 회차 예산 + 150일(D-167·자동으로 60 복귀) → 4. N3~N7·N10(`settlement_docs.py`)·N12·N13(`collect_verify`) → 5. N8·N11(요청형 월자료·읽기 분리) → 6. [실행 결과 종합](D-168) → 7. `python tools/run_checks.py` + `check_complexity.py` 초록 · 오프라인 검증 핀(받은 실제 파일 칸 구성 = 16-2 표 그대로, 파일에서 뽑은 기대값) → 8. 커밋 `[R{n}]` → 통제 세션 zip.
 - 받은 파일 판정 기준(오류 정의): 파일이 열리고 칸 구성이 16-2 와 같고 합계가 화면/JSON 과 맞아야 '받음'. 에러 없음만으로 완료 아님.
