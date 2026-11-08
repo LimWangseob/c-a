@@ -2072,17 +2072,19 @@ def p51_regular_then_backfill():
                (TD, "collect_verify", lambda *a: calls.append("검증")), (TD, "collect_ads", lambda *a: calls.append("광고")),
                (TD, "collect_sales", lambda *a: (calls.append("판매"), 37)[1]),
                (TD, "collect_docs", lambda *a: (calls.append("월자료"), 2)[1]), (TD.time, "sleep", lambda s: None),
+               (TD, "request_docs", lambda *a: (calls.append("월자료 요청"), 3)[1]),
                (TD, "name_of", lambda a: "A"), (TD, "LOG", fake_log)]
     args = SimpleNamespace(dry_run=False, until="", start=D("2026-01-01"))
     _patched(patches, lambda: TD.cmd_run(None, None, args, []))
     assert calls == ["요청", "받기", "검증", "광고"], calls
     calls.clear()
     _patched(patches, lambda: TD.cmd_backfill(None, None, args, []))
-    assert calls == ["판매", "월자료"] and recs and recs[-1][1] == "소급" and "판매분석 37일 · 월자료 2개" in recs[-1][3], (calls, recs)
+    assert calls == ["판매", "월자료", "월자료 요청"] and recs and recs[-1][1] == "소급"         and "판매분석 37일 · 월자료 2개 · 월자료 요청 3건" in recs[-1][3], (calls, recs)
     fake_log.rows = [{"단계": "소급", "결과": TD.RL.OK}, {"단계": "받기", "결과": TD.RL.OK}, {"단계": "검증", "결과": TD.RL.OK}]
     assert TD._sweep_work_count(fake_log) == 2, "요청·받기·소급만 '한 일'"
     recs.clear()
     _patched([(TD, "collect_sales", lambda *a: 0), (TD, "collect_docs", lambda *a: 0), (TD, "name_of", lambda a: "A"),
+              (TD, "request_docs", lambda *a: 0),
               (TD, "LOG", fake_log)],
              lambda: TD.cmd_backfill(None, None, args, []))
     assert not recs, "받은 게 없으면 '소급' 줄 없음(다 받았거나 이번 회차 상한 다 씀 → 완료로 끝남)"
@@ -2271,6 +2273,133 @@ def p52_settlement_docs():
     ok("세금계산서 HTML 12칸·10칸(합계)·라이브 상세=요약·주문별 size 10 쪽 수 대조·RG 엑셀 판정·업체코드 · 회차당 3달·실패 격리·반품 하루 1번")
 
 
+def p53_vat_detail_requests():
+    print("[P53] 요청형 월자료 = 부가세 신고 상세 윙·RG(D-171 N8) — 회차 계정당 4건(D-170)·화면 본문 그대로·메뉴로 짝·칸·기간 판정·화면 월 합계 대조")
+    import io
+    import json
+    from datetime import datetime
+    from pathlib import Path
+    from types import SimpleNamespace
+    import openpyxl
+    from coupang_analytics import settlement_docs_request as DR
+    from coupang_analytics import settlement_jobs as SJ
+    from coupang_analytics import settlement_wing_api as API
+    # ① 계획: 2026-01 부터 말일+15일 지난 달 · 최근 달부터 · 회차 4건 · RG 는 업체코드 있는 계정만 · 정기 요청 상한엔 안 섞임
+    jobs: list = []
+    now = datetime(2026, 11, 8, 19, 0)
+    pk = DR.plan(jobs, "A", D("2026-11-08"), now, "2026-11-08T18:00:00", rg=True)
+    assert len(jobs) == 18 and {j.kind for j in jobs} == {SJ.DOC_KIND}, len(jobs)        # 2026-01~09 × 2종(10월 = 11-15 부터)
+    assert [(j.report, j.period_start, j.period_end) for j in pk] == [
+        ("윙부가세상세", "2026-09-01", "2026-09-30"), ("RG부가세상세", "2026-09-01", "2026-09-30"),
+        ("윙부가세상세", "2026-08-01", "2026-08-31"), ("RG부가세상세", "2026-08-01", "2026-08-31")], pk
+    assert SJ.plan_requests([], jobs, today=D("2026-11-08"), now=now, per_account_cap=50) == [], "정기 단계는 월자료를 고르지 않음"
+    for j in pk:
+        SJ.mark_requested(j, now, "r")
+    assert DR.plan(jobs, "A", D("2026-11-08"), now, "2026-11-08T18:00:00", rg=True) == [], "같은 회차 예산 다 씀"
+    nxt = DR.plan(jobs, "A", D("2026-11-09"), datetime(2026, 11, 9, 19), "2026-11-09T18:00:00", rg=True)
+    assert [(j.report, j.period_start[:7]) for j in nxt] == [("윙부가세상세", "2026-07"), ("RG부가세상세", "2026-07"),
+                                                             ("윙부가세상세", "2026-06"), ("RG부가세상세", "2026-06")], nxt
+    assert {j.report for j in DR.plan([], "W", D("2026-11-08"), now, "", rg=False)} == {"윙부가세상세"}
+    # ② 요청 본문 = 화면 JS 그대로(실측 11-08) · RG 기간 = 실제 목록 완료본(2026-01)과 같은 UTC 시각
+    j1 = SJ.Job("A", "로켓그로스", SJ.DOC_KIND, "RG부가세상세", "2026-01-01", "2026-01-31", "2026-01-31")
+    assert DR.rg_body(j1, 5) == {"sellerReportType": "VAT", "requestTime": "5", "recognitionDateFrom": "2025-12-31T15:00:00.000Z",
+                                 "recognitionDateTo": "2026-01-31T14:59:59.999Z", "locale": "ko"}
+    jw = SJ.Job("A", "윙", SJ.DOC_KIND, "윙부가세상세", "2026-01-01", "2026-01-31", "2026-01-31")
+    assert DR.wing_body(jw) == {"excelType": "MSF_PAYMENT_METHOD_DETAIL", "searchDateType": "CONFIRM_DATE",
+                                "recognitionDateRange": {"start": "2026-01-01", "end": "2026-01-31"},
+                                "searchDateRange": {"start": "2026-01-01", "end": "2026-01-31"}}
+    # ③ 요청: 윙·RG 주소 · 요청번호 기록 · '잠시 후' = 이번 회차 멈춤 · 거절 = 기록하고 멈춤(정산 전체 안 막음)
+    sent, recs = [], []
+
+    def post(m, path, body):
+        sent.append(path)
+        if path == API.WING_REQUEST:
+            return {"success": True, "data": 77}
+        return {"requestId": "rq", "duplicateRequest": False, "remainingTime": 0}
+    a = SJ.Job("A", "윙", SJ.DOC_KIND, "윙부가세상세", "2026-02-01", "2026-02-28", "2026-02-28")
+    b = SJ.Job("A", "로켓그로스", SJ.DOC_KIND, "RG부가세상세", "2026-02-01", "2026-02-28", "2026-02-28")
+    n = DR.request([a, b], post, save=lambda: None, record=lambda j, r, m: recs.append((j.report, r)), now=lambda: now)
+    assert n == 2 and sent == [API.WING_REQUEST, API.RG_REQUEST] and (a.req_id, b.req_id) == ("77", "rq"), (sent, recs)
+    assert a.status == b.status == SJ.ST_REQUESTED and recs == [("윙부가세상세", "정상"), ("RG부가세상세", "정상")], recs
+    recs.clear()
+    c = SJ.Job("A", "로켓그로스", SJ.DOC_KIND, "RG부가세상세", "2026-03-01", "2026-03-31", "2026-03-31")
+    n = DR.request([c, a], lambda m, p, bd: {"requestId": "", "duplicateRequest": True, "remainingTime": 3}, save=lambda: None,
+                   record=lambda j, r, m: recs.append(r))
+    assert n == 0 and recs == ["대기"] and c.status == SJ.ST_PLANNED, recs
+    recs.clear()
+    n = DR.request([jw], lambda m, p, bd: {"success": False, "data": None, "reason": "x"}, save=lambda: None,
+                   record=lambda j, r, m: recs.append(r))
+    assert n == 0 and recs == ["실패"], recs
+    # ④ 목록: 윙 부가세 상세 줄 = 메뉴 '윙부가세상세' · 같은 달 월정산 주문상세와 섞이지 않게 메뉴로 짝
+    cond = '[{"key":"구매확정일", "value":"2026-01-01 - 2026-01-31", "view":true}]'
+    wl = API.wing_list_rows([
+        {"excelType": "MSF_PAYMENT_METHOD_DETAIL", "status": "FINISHED", "startedAt": "2026-09-17 17:39:05", "downloadUrl": "u1",
+         "jsonItems": cond},
+        {"excelType": "MSF_PAYMENT_REVENUE_DETAIL", "status": "FINISHED", "startedAt": "2026-09-17 17:40:00", "downloadUrl": "u2",
+         "jsonItems": cond}])
+    assert [(r.report, r.period_start, r.handle) for r in wl] == [("윙부가세상세", D("2026-01-01"), "u1"),
+                                                                 ("주문상세", D("2026-01-01"), "u2")], wl
+    jw.status, jw.requested_at = SJ.ST_REQUESTED, "2026-09-17T17:38:00"
+    pairs, _ = SJ.match_downloads(wl, [jw])
+    assert [r.handle for _j, r in pairs] == ["u1"], pairs
+
+    # ⑤ 받은 파일 판정 — 칸 구성 = 실파일(gyi0101 2026-01) · 합계 = 판매 + 환불(파일 부호) = 화면 월 합계(실측 값)
+    def xlsx(sheet, grid):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = sheet
+        for r in grid:
+            ws.append(list(r))
+        bio = io.BytesIO()
+        wb.save(bio)
+        return bio.getvalue()
+    wing = xlsx("Excel Data (1)", [DR.WING_HEAD,
+                                   ["8100161496144", "94332319057", "2026-01-01", "상품비", "TAX", 3436936, 372700, 88264, 0, 0, 0],
+                                   ["9100160864257", "94332319057", "2026-01-31", "배송비", "TAX", 21000, 0, 0, 21000, 7000, 0]])
+    got = DR.check(DR.WING_VAT, wing, D("2026-01-01"), D("2026-01-31"))
+    assert got["판매"] == {"카드": 3457936, "현금": 372700, "기타": 88264}, got
+    assert got["합계"] == {"카드": 3478936, "현금": 379700, "기타": 88264}, got
+    rg = xlsx("부가세 신고자료", [[None] * 11, DR.RG_HEAD,
+                               ["1", "9", "2026-01-01", "2026-01", "TAX", 22255835, 6323656, 833309, "-", "-", "-"],
+                               ["2", "9", "2026-01-31", "2026-01", "TAX", "-", "-", "-", -3843221, -773859, -147454],
+                               [None] * 11])
+    got = DR.check(DR.RG_VAT, rg, D("2026-01-01"), D("2026-01-31"))
+    assert got["줄"] == 2 and got["합계"] == {"카드": 18412614, "현금": 5549797, "기타": 685855}, got
+    expect(API.SiteChangedError, lambda: DR.check(DR.RG_VAT, rg, D("2026-02-01"), D("2026-02-28")), "다른 달 파일")
+    expect(API.SiteChangedError, lambda: DR.check(DR.WING_VAT, rg, D("2026-01-01"), D("2026-01-31")), "머리글 다름(RG 파일을 윙으로)")
+    expect(API.SiteChangedError, lambda: DR.check(DR.WING_VAT, b"<html>", D("2026-01-01"), D("2026-01-31")), "엑셀 아님")
+    with tempfile.TemporaryDirectory() as tmp:
+        folder, vp = Path(tmp) / "월자료" / "A", Path(tmp) / "A.json"
+        ref = {"wing_vat": {"paymentMethodReports": [{"yearMonth": "202601", "card": 3478936, "cash": 379700, "etc": 88264,
+                                                      "total": 3946900}]},
+               "rg_vat": {"vatResponseAggregatedDtos": [{"yearMonth": "2026-01", "creditCardPaymentAmountAgg": 18412614.0,
+                                                         "cashPaymentAmountAgg": 5549797.0, "otherPaymentAmountAgg": 1742829.0,
+                                                         "sellerFundedCouponAggAmount": 1056974.0}]}}
+        vp.write_text(json.dumps(ref), encoding="utf-8")
+        jw.status = j1.status = SJ.ST_REQUESTED
+        ok1, m1 = DR.keep(wing, jw, folder, vp)
+        ok2, m2 = DR.keep(rg, j1, folder, vp)
+        assert ok1 and ok2 and "일치" in m1 and "일치" in m2 and jw.status == j1.status == SJ.ST_DONE, (m1, m2)
+        assert (folder / "윙부가세상세_202601.xlsx").read_bytes() == wing and j1.file == "월자료/A/RG부가세상세_202601.xlsx"
+        vp.write_text(json.dumps({"wing_vat": {"paymentMethodReports": [{"yearMonth": "202601", "card": 1, "cash": 379700,
+                                                                          "etc": 88264}]}}), encoding="utf-8")
+        ok3, m3 = DR.keep(wing, jw, folder, vp)
+        assert not ok3 and "다름" in m3 and "확인 필요" in m3, m3
+        ok4, m4 = DR.keep(rg, j1, folder, vp)
+        assert ok4 and "대조 못 함" in m4, m4
+        # ⑥ 앱 받기 단계: 월자료 작업 = 판정·저장(정산 파일 처리 안 탐) · 합계 다르면 '실패' 줄
+        sys.path.insert(0, str(ROOT / "tools"))
+        import settlement_download as TD
+        logs: list = []
+        jw.status = SJ.ST_REQUESTED
+        row = SJ.DownloadRow("윙", datetime(2026, 9, 17, 17, 39), "FINISHED", "윙부가세상세", handle="u1")
+        _patched([(TD, "VERIFY", Path(tmp)), (TD, "_get_bytes", lambda b_, url, text_ok=False: wing),
+                  (TD, "LOG", SimpleNamespace(record=lambda *a, **k: logs.append(a)))],
+                 lambda: TD._fetch_one(None, jw, row, "A"))
+        assert logs and logs[-1][1] == "받기" and logs[-1][2] == TD.RL.FAIL and jw.status == SJ.ST_DONE, logs
+    ok("부가세 상세 = 최근 달부터 회차 4건·정기와 분리 · 화면 본문 그대로 · 메뉴로 짝 · 칸·기간 판정 · 판매+환불 = 화면 월 합계(RG 기타−쿠폰)")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -2315,6 +2444,7 @@ def main():
     p50_verify_new_items()
     p51_regular_then_backfill()
     p52_settlement_docs()
+    p53_vat_detail_requests()
     print("정산 런타임 오프라인 검증 통과")
 
 

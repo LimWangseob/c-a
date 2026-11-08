@@ -55,11 +55,16 @@ _KST = timedelta(hours=9)
 
 def due_months(kind: str, today: date) -> list[tuple[str, date, date]]:
     """받을 달 [(YYYYMM, 1일, 말일)] — FROM 부터 말일+LAG_DAYS 가 지난 달까지 · **최근 달부터**(소급과 같은 순서)."""
+    return months_after(LAG_DAYS[kind], today)
+
+
+def months_after(lag_days: int, today: date) -> list[tuple[str, date, date]]:
+    """FROM 부터 말일+lag_days 가 지난 달 [(YYYYMM, 1일, 말일)] · 최근 달부터(요청형 월자료도 같은 규칙)."""
     out: list[tuple[str, date, date]] = []
     y, m = FROM.year, FROM.month
     while True:
         last = date(y, m, calendar.monthrange(y, m)[1])
-        if last + timedelta(days=LAG_DAYS[kind]) >= today:
+        if last + timedelta(days=lag_days) >= today:
             return out[::-1]
         out.append((f"{y}{m:02d}", date(y, m, 1), last))
         y, m = (y + 1, 1) if m == 12 else (y, m + 1)

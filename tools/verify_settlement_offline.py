@@ -488,9 +488,11 @@ def p8_settle_jobs():
     wing_b = next(j for j in jobs if j.account == "B")
     rg_fee = next(j for j in jobs if j.report == "판매수수료")
     t_b, t_rg = datetime.fromisoformat(wing_b.requested_at), datetime.fromisoformat(rg_fee.requested_at)
-    rows = [SJ.DownloadRow("윙", t_b, "WAIT", period_start=D("2026-08-24"), period_end=D("2026-08-30")),
-            SJ.DownloadRow("윙", t_b + timedelta(minutes=1), "FINISHED", period_start=D("2026-08-24"),
+    rows = [SJ.DownloadRow("윙", t_b, "WAIT", report="주문상세", period_start=D("2026-08-24"), period_end=D("2026-08-30")),
+            SJ.DownloadRow("윙", t_b + timedelta(minutes=1), "FINISHED", report="주문상세", period_start=D("2026-08-24"),
                            period_end=D("2026-08-30")),
+            SJ.DownloadRow("윙", t_b + timedelta(minutes=2), "FINISHED", report="윙부가세상세", period_start=D("2026-08-24"),
+                           period_end=D("2026-08-30")),          # 같은 기간 다른 메뉴(부가세 상세) = 남의 줄(D-171 N8)
             SJ.DownloadRow("로켓그로스", t_rg + timedelta(seconds=4), "COMPLETED", report="판매수수료",
                            req_id=rg_fee.req_id)]
     pairs, notes = SJ.match_downloads(rows, [wing_b, rg_fee])

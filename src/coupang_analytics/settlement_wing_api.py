@@ -262,18 +262,21 @@ def rg_request_id(resp: dict) -> str:
     return str(rid)
 
 
+WING_LIST_REPORTS = {WING_EXCEL: "주문상세", "MSF_PAYMENT_METHOD_DETAIL": "윙부가세상세"}   # 부가세 상세 = D-171 N8(실측 11-08)
+
+
 def wing_list_rows(items: list) -> list[DownloadRow]:
-    """윙 다운로드 목록 → DownloadRow(handle=downloadUrl). 주문상세(MSF_PAYMENT_REVENUE_DETAIL) 외 메뉴는 무시."""
+    """윙 다운로드 목록 → DownloadRow(handle=downloadUrl · report=메뉴). 주문상세·부가세 상세 외 메뉴는 무시."""
     from .settlement_jobs import parse_condition
     out = []
     for it in items:
         typ, status, started, url, jitems = _need(it, "excelType", "status", "startedAt", "downloadUrl", "jsonItems",
                                                   where="윙 다운로드 목록 줄")
-        if typ != WING_EXCEL:
+        if typ not in WING_LIST_REPORTS:
             continue
         cond = " ".join(f"{x.get('key')}:{x.get('value')}" for x in json.loads(jitems or "[]"))
         ps, pe = parse_condition(cond)
-        out.append(DownloadRow("윙", datetime.fromisoformat(started), str(status), "주문상세", ps, pe, handle=url))
+        out.append(DownloadRow("윙", datetime.fromisoformat(started), str(status), WING_LIST_REPORTS[typ], ps, pe, handle=url))
     return out
 
 

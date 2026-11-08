@@ -27,6 +27,7 @@ ST_FAILED = "실패"
 ST_SKIPPED = "생략(월별로 대체)"
 RG_ALWAYS = ("판매수수료",)
 MISSING_KIND = "정산줄없음"      # 정산 줄 없는 주의 물류비(미납 CFS 로만 보이는 주 — D-065·D-164) = 비용 리포트만(판매 없음)
+DOC_KIND = "월자료"              # 요청형 월자료(부가세 상세 — D-171 N8) = 소급 단계가 계획·요청(settlement_docs_request) · 받기는 같은 흐름
 REQUEST_EXPIRE_DAYS = 3          # 요청 후 이만큼 지나도 완료 안 되면 재요청
 MAX_ATTEMPTS = 3
 WING_REQ_SLACK = timedelta(minutes=10)    # 윙: 같은 기간 목록 줄 중 우리 요청 이후 것(시계 차 여유)
@@ -116,6 +117,8 @@ def plan_requests(events, jobs: list[Job], *, today: date, now: datetime, per_ac
     picked: list[Job] = []
     used: dict[str, int] = {}
     for j in sorted(jobs, key=lambda j: (j.settle_date, j.account, j.channel, j.report)):
+        if j.kind == DOC_KIND:
+            continue                                   # 월자료는 소급 단계 몫(회차 예산·D-170) — 정기 요청 상한에 섞지 않음
         if j.status == ST_PLANNED and _covered_by_final(
                 j.account, j.channel, j.kind, date.fromisoformat(j.period_start), date.fromisoformat(j.period_end),
                 finals):
@@ -165,8 +168,8 @@ def _match_one(j: Job, rows: list[DownloadRow]) -> tuple[DownloadRow | None, str
     req = datetime.fromisoformat(j.requested_at)
     if j.channel == "윙":
         want = (date.fromisoformat(j.period_start), date.fromisoformat(j.period_end))
-        cands = [r for r in rows if r.channel == "윙" and (r.period_start, r.period_end) == want
-                 and r.requested_at >= req - WING_REQ_SLACK]
+        cands = [r for r in rows if r.channel == "윙" and r.report == j.report and (r.period_start, r.period_end) == want
+                 and r.requested_at >= req - WING_REQ_SLACK]       # 같은 달 월정산 주문상세·부가세 상세가 섞이지 않게 메뉴도 대조
     else:
         if not j.req_id:
             return None, "요청 번호(requestId) 기록 없음 — 목록과 짝지을 수 없어 재요청 대상"

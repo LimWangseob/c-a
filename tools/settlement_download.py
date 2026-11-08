@@ -434,6 +434,12 @@ def _fetch_one(b, j, row, name: str) -> None:
         if not url:
             raise API.SiteChangedError("로켓그로스 받기 응답에 url 없음")
         data = _get_bytes(b, url)
+    if j.kind == SJ.DOC_KIND:                              # 요청형 월자료(부가세 상세 — D-171 N8): 판정·저장·화면 월 합계 대조
+        from coupang_analytics import settlement_docs_request as DR
+        tok = SF._token(name, "계정명")
+        ok, msg = DR.keep(data, j, VERIFY / "월자료" / tok, VERIFY / f"{tok}.json")
+        LOG.record(name, "받기", RL.OK if ok else RL.FAIL, msg, **_job_fields(j))
+        return
     fname = SF.settle_file_name(name, date.fromisoformat(j.settle_date), j.channel, j.kind, j.report,
                                 date.fromisoformat(j.period_start), date.fromisoformat(j.period_end))
     raw = BASE / "_받는중" / fname
@@ -514,8 +520,27 @@ def cmd_backfill(a, b, args, jobs: list) -> None:
     다음 바퀴 판단(_sweep_work_count)에 셈 — 다 받았거나 이번 회차 상한을 다 쓰면 줄 없음 → '완료'로 끝남."""
     days = collect_sales(a, b, args)
     docs = collect_docs(a, b, args)
+    asked = request_docs(a, b, args, jobs)
     if days or docs:
-        LOG.record(name_of(a), "소급", RL.OK, f"판매분석 {days}일 · 월자료 {docs}개")
+        LOG.record(name_of(a), "소급", RL.OK, f"판매분석 {days}일 · 월자료 {docs}개" + (f" · 월자료 요청 {asked}건" if asked else ""))
+
+
+def request_docs(a, b, args, jobs: list) -> int:
+    """요청형 월자료(부가세 상세 윙·RG — D-171 N8) · 회차 계정당 4건(D-170) · 요청 사이 = 정산 요청 간격.
+    받기는 다음 바퀴 정기 단계의 cmd_download(같은 기록·같은 목록). 반환 = 요청 수('요청' 정상 줄 = 다음 바퀴 판단에 셈)."""
+    from coupang_analytics import settlement_docs as DOC
+    from coupang_analytics import settlement_docs_request as DR
+    name = name_of(a)
+    since = getattr(args, "cycle_since", "") or f"{date.today()}T00:00:00"
+    rg = bool(DOC.vendor_from_snapshots(BASE / RG_RAW_DIRNAME / SF._token(name, "계정명")))
+    picked = DR.plan(jobs, name, date.today(), datetime.now(), since, rg)
+    SJ.save_jobs(JOBS, jobs)
+    if not picked or past_until(args):
+        return 0
+    goto(b, API.WING_URL, name)
+    return DR.request(picked, lambda m, p, body: api(b, name, m, p, body), save=lambda: SJ.save_jobs(JOBS, jobs),
+                      record=lambda j, res, msg: LOG.record(name, "요청", res, msg, **_job_fields(j)),
+                      gap=lambda: time.sleep(random.uniform(*GAP_SEC)))
 
 
 def collect_docs(a, b, args) -> int:
