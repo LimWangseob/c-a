@@ -184,6 +184,114 @@ def pin_stage_assembly():
     _check(calls[-2:] == ["재고", "회사재고"] and marks == ["sales", "ranks"], "③ 중 중지 → 역기록은 함·'done' 없음")
 
 
+# ── [실행 결과 종합](D-168 앱 쪽 · D-172 '원인 --> 결과') + 순위 빈 칸 1회 재시도(소유자 11-08) ─────────────
+from coupang_analytics import run_result as _rr  # noqa: E402
+
+MASTER = Path("output") / "쿠팡데이타분석_통계.xlsx"
+
+
+def _fake_result_stages(*, unfilled=(0,), sales_fail=False, kw_fail=False, kw_raise=None, stop_at=None):
+    """가짜 단계 — ①은 LAST_SALES, ③은 LAST_RANK 를 실제처럼 채우고 로그를 남긴다(실 로그인·시트 없음)."""
+    calls, marks, stop, seq = [], [], {"v": False}, list(unfilled)
+
+    def fake_run_full(_il, **kw):
+        calls.append("①")
+        log = kw["on_log"]
+        log("  [자동입력] 실패(Timeout) — 창에서 직접 입력하세요")       # ① 도중 기록('❌' 아님) = 오류 아님
+        if sales_fail:
+            log("  [가-1] ❌ [상품명] 노출명 확인 실패: '상품' VID ['v1']")
+        _rr.LAST_SALES.update(accounts=["가-1", "나-2", "다-3"], pw=["나-2"] if sales_fail else [],
+                              missed={"다-3": "2단계 인증 필요"} if sales_fail else {},
+                              ok=1 if sales_fail else 3, total=3,
+                              files=[("통계 마스터", MASTER), ("그날 스냅샷", Path("output") / "snap_261108.xlsx")])
+        stop["v"] = stop["v"] or stop_at == "①"
+        return "snap"
+
+    def fake_kw(*_a, **k):
+        calls.append("②")
+        if kw_fail:
+            k["on_log"]("  [자동완성] 실패 — Timeout (이 소스만 건너뜀, 다른 소스로 계속)")
+        if kw_raise:
+            raise kw_raise
+
+    def fake_track(**k):
+        calls.append("③")
+        n = seq.pop(0) if seq else 0
+        if n:
+            k["on_log"]("  ❌ [순위] 가-1 · 상품 「kw」 — 검색결과가 두 바퀴 연속 안 나옴 → 공란, 확인 필요")
+        _st.LAST_RANK.clear()
+        _st.LAST_RANK.update(searched=5, blocked=1, conn=0, unfilled=n, novid=0, stopped=False)
+        stop["v"] = stop["v"] or stop_at == "③"
+        return MASTER
+    _st.run_full, _st.select_keywords_stage, _st.track_ranks_stage = fake_run_full, fake_kw, fake_track
+    _st.push_ledger_inventory = lambda *a: calls.append("재고")
+    _st.push_company_stock = lambda *a: calls.append("회사재고")
+    _st.write_run_stage = lambda s: marks.append(s)
+    return calls, marks, (lambda: stop["v"])
+
+
+def _block(logs: list) -> list:
+    i = max(i for i, m in enumerate(logs) if m == "===== [실행 결과 종합] =====")
+    return logs[i:]
+
+
+def pin_run_result():
+    print("[핀 P11] 실행 결과 종합 — 판정 '원인 --> 결과' · 빈 칸은 모든 처리 끝난 뒤 ③ 1회 재시도 · 예외·중지에도 블록")
+    logs: list = []
+    calls, marks, stop = _fake_result_stages(unfilled=(2, 0), sales_fail=True, kw_fail=True)
+    run_stages(
+        None, StagePlan(), ai_key="k", naver=None, date_from=DF, date_to=DT, date_label=DL, get_password=lambda a: None,
+        carry=True, should_stop=stop, on_log=logs.append, gsheet_output_url="https://docs.google.com/spreadsheets/d/OUT")
+    _check(calls == ["①", "②", "③", "재고", "회사재고", "③"], f"빈 칸 남음 → 재고 역기록까지 끝난 뒤 ③ 1회 재시도 {calls}")
+    _check(marks == ["sales", "ranks", "done"], f"단계 기록 'done' = 재시도 뒤 {marks}")
+    _check(any("[단계] ③ 순위 빈 칸 2개 — 모든 처리 끝난 뒤 1회 재시도" in m for m in logs), "재시도 안내 줄")
+    b = _block(logs)
+    j = " | ".join(b)
+    _check(b[1] == "판정: 일부 실패 --> 확인 필요", f"판정 {b[1]}")
+    _check("전체 작업 계정: 3개 — 가-1, 나-2, 다-3" in b, "계정 수·이름")
+    _check("① 판매수집: 수집 성공 1/3계정" in b, "① 수집 성공 수")
+    _check(any(x.startswith("비밀번호 오류로 수집 안 된 계정: 1개 — 나-2 (") and "24시간" in x for x in b), "비밀번호 오류 계정")
+    _check("사람 조치 필요: 1개" in b and "  - 다-3: 2단계 인증 필요" in b, "사람 조치(2단계 인증)")
+    _check("③ 순위: 측정 5건 · 빈 칸 0 · VID 없음 0 · 차단감지 1회 · 모든 처리 끝난 뒤 빈 칸 1회 재시도함" in b, "③ 요약(재시도 결과)")
+    err = j.split("오류 현황")[1].split("이번 실행에서 저장한 파일")[0]
+    _check("노출명 확인 실패" in err and "자동완성] 실패" in err, "오류 현황 = ① '❌' 줄 + ② '실패' 줄")
+    _check("두 바퀴 연속" not in err and "[자동입력] 실패" not in err, "재시도로 풀린 ③ 첫 회 ❌·① 도중 '실패'는 오류 아님")
+    _check(f"  - 통계 마스터: {MASTER.resolve()}" in b and "  - 결과 구글시트: https://docs.google.com/spreadsheets/d/OUT" in b,
+           "저장 파일 = 드라이브부터 전체 경로 + 결과 구글시트 링크(③ 같은 마스터는 한 번만)")
+    _check(sum("통계 마스터" in x for x in b) == 1, "같은 파일 중복 없음")
+    _check(b[-1].startswith("==> 일부 실패 --> 확인 필요 · 계정 3 · 비밀번호 오류 1 · 사람 조치 1 · 로그인 못 함 0 · 순위 빈 칸 0 · 오류 2"),
+           f"한 줄 요약 {b[-1]}")
+    for unfilled, judge, n3 in (((3, 3), "순위 빈 칸 --> 확인 필요", 2), ((0,), "정상 완료", 1)):
+        logs = []
+        calls, marks, stop = _fake_result_stages(unfilled=unfilled)
+        run_stages(
+            None, StagePlan(), ai_key="k", naver=None, date_from=DF, date_to=DT, date_label=DL,
+            get_password=lambda a: None, carry=True, should_stop=stop, on_log=logs.append)
+        _check(_block(logs)[1] == f"판정: {judge}" and calls.count("③") == n3, f"{judge} · ③ {n3}번(재시도는 1회만)")
+    logs = []
+    calls, marks, stop = _fake_result_stages(unfilled=(2,), stop_at="③")
+    run_stages(None, StagePlan(), ai_key="k", naver=None, date_from=DF, date_to=DT, date_label=DL,
+               get_password=lambda a: None, carry=True, should_stop=stop, on_log=logs.append)
+    _check(calls.count("③") == 1 and _block(logs)[1] == "판정: 사람 중지 --> 중단", "중지 → 재시도 없음·'사람 중지 --> 중단'")
+    logs = []
+    calls, marks, stop = _fake_result_stages(kw_raise=RuntimeError("boom"))
+    try:
+        run_stages(None, StagePlan(), ai_key="k", naver=None, date_from=DF, date_to=DT, date_label=DL,
+                   get_password=lambda a: None, carry=True, should_stop=stop, on_log=logs.append)
+        raised = False
+    except RuntimeError:
+        raised = True
+    b = _block(logs)
+    _check(raised and b[1] == "판정: 오류 발생 --> 중단" and "오류 내용: RuntimeError: boom" in b,
+           "예외 → 블록 찍고 예외는 그대로 올림·'오류 발생 --> 중단'")
+    _check("③ 순위: 이번 실행에서 안 돎" in b, "안 돈 단계 표시")
+    logs = []
+    calls, marks, stop = _fake_result_stages()
+    run_stages(None, StagePlan(keywords=False, ranks=False), ai_key="k", naver=None, date_from=DF, date_to=DT,
+               date_label=DL, get_password=lambda a: None, carry=True, should_stop=stop, on_log=logs.append)
+    _check(_block(logs)[1] == "판정: 정상 완료" and calls == ["①"], "① 단독 실행도 블록")
+
+
 def main() -> int:
     print("=" * 60)
     print("  핀 테스트 — plan_run_mode 실행모드 결정 + 단계 조립(run_stages)")
@@ -198,6 +306,7 @@ def main() -> int:
     pin_designated_date()
     pin_resume_plan()
     pin_stage_assembly()
+    pin_run_result()
     print("=" * 60)
     print("  [완료] 실행모드 핀 모두 통과")
     print("=" * 60)

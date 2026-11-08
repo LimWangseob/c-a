@@ -384,6 +384,7 @@ def _save_ctx_progress(ctx: _RunCtx) -> None:
 
 
 from .registry_model import COUPANG_CHECK_VALUES as _CCV  # noqa: E402  (2-2 쿠팡확인 값 정합)
+from .run_result import LAST_SALES  # noqa: E402  ([실행 결과 종합] ① 재료 D-168)
 # 순서=registry_model.COUPANG_CHECK_VALUES(SSOT). 순서 바뀌면 핀이 잡는다.
 _CC_OK, _CC_UNREG, _CC_MISMATCH, _CC_SUSPEND, _CC_LOGINFAIL, _CC_PWFAIL = _CCV
 _CC_ONSALE = ("판매중", "부분판매중")
@@ -664,6 +665,8 @@ def _finalize_run(ctx: _RunCtx, master: Path, prog: Path, now: datetime, gsheet_
     n_pw = len(_pw_failed(ctx))   # 비밀번호 오류 계정은 '처리됨'(done)이지만 수집은 못 함 → 성공에서 뺌
     log(f"== 완료: 마스터 {master.name} · 스냅샷 {snapshot.name} (수집 성공 {len(ctx.done) - n_pw}/{ctx.total} 계정"
         + (f" · 비밀번호 오류 {n_pw}" if n_pw else "") + ") ==")
+    LAST_SALES.update(ok=len(ctx.done) - n_pw, total=ctx.total,
+                      files=[("통계 마스터", master), ("그날 스냅샷", snapshot)])
     return snapshot
 
 
@@ -681,6 +684,8 @@ def _log_login_failures(ctx: _RunCtx, accounts, uncollected) -> None:
         ctx.log(f"  [로그인기록] ⚠ 그날 로그인 기록 읽기 실패 — 사유 없이 표시 · {exc.__class__.__name__}")
         why = {}
     pw = [a for a in accounts if a.account_id in _pw_failed(ctx)]
+    LAST_SALES.update(accounts=[a.label for a in accounts], pw=[a.label for a in pw],
+                      missed={a.label: why.get(a.account_id, login_today.UNFINISHED) for a in uncollected})
     if uncollected:
         ctx.log(f"== ⚠ 로그인 못한 계정 {len(uncollected)}개: "
                 + ", ".join(f"{a.label}({why.get(a.account_id, login_today.UNFINISHED)})" for a in uncollected)

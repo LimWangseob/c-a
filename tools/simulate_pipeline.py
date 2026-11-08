@@ -292,6 +292,10 @@ def scenario_login_fail():
                  resume=False)
     _check(_sheets(final) == {"비즈-a1", "비즈-c1"}, "정상 계정만 시트(a1,c1)")
     _check(f"비즈-{_LOGIN_FAIL_ID}" not in _sheets(final), "로그인 실패 계정 제외")
+    miss = P.LAST_SALES.get("missed", {})
+    _check(list(miss) == [f"비즈-{_LOGIN_FAIL_ID}"] and P.LAST_SALES.get("ok") == 2 and P.LAST_SALES.get("total") == 3,
+           f"[실행 결과 종합] ① 재료 — 로그인 못 한 계정·사유 {miss}·수집 성공 2/3(D-168)")
+    _check(("통계 마스터", P._master_path(d)) in P.LAST_SALES.get("files", []), "[실행 결과 종합] 저장 파일에 통계 마스터")
 
 
 def scenario_carry_forward():
@@ -849,6 +853,8 @@ def scenario_pwfail_still_ranked():
     finally:
         _STATE.update(pw_fail=set())
     wb = OutputWorkbook.load(master)
+    _check(P.LAST_SALES.get("pw") == ["비즈-b1"] and P.LAST_SALES.get("ok") == 1,
+           f"[실행 결과 종합] ① 재료 — 비밀번호 오류 계정 {P.LAST_SALES.get('pw')}·수집 성공 1(D-168)")
     _check("09.02" in wb._date_col.get("비즈-b1", {}), f"비번 오류 계정에도 그날 칸 {sorted(wb._date_col.get('비즈-b1', {}))}")
     _check(wb.is_rank_filled("비즈-b1", "상품-b1", "kw1", "09.02"), "비번 오류 계정 순위는 그날 칸에 측정됨(로그인 불필요)")
     srow = wb._metric_row.get(("비즈-b1", "상품-b1", config.M_SALES))
