@@ -499,21 +499,37 @@ def cmd_download(a, b, args, jobs: list) -> None:
 
 
 def cmd_run(a, b, args, jobs: list) -> None:
-    """한 세션에서 요청 → (생성 약 1분) → 받기. 요청이 길면 그 사이 앞선 파일은 이미 완료돼 있음."""
+    """정기 단계(D-170) — 한 세션에서 요청 → (생성 약 1분) → 받기 → 검증 원자료 → 광고(최근 달부터 2달·D-120).
+    그날 정산에 필요한 것만. 판매분석 소급 등 밀린 몫은 전 계정 정기가 끝난 뒤 cmd_backfill."""
     cmd_request(a, b, args, jobs)
     if not args.dry_run:
         time.sleep(90)
         cmd_download(a, b, args, jobs)
         collect_verify(a, b, args)
         collect_ads(a, b, args)
-        if not past_until(args):
-            collect_sales(a, b, args)
 
 
-def collect_sales(a, b, args) -> None:
+def cmd_backfill(a, b, args, jobs: list) -> None:
+    """소급 단계(D-170) — 판매분석 1/1~(회차 기준 상한 150일→60일·D-167). 한 일이 있으면 '소급' 줄을 남겨
+    다음 바퀴 판단(_sweep_work_count)에 셈 — 다 받았거나 이번 회차 상한을 다 쓰면 줄 없음 → '완료'로 끝남."""
+    days = collect_sales(a, b, args)
+    if days:
+        LOG.record(name_of(a), "소급", RL.OK, f"판매분석 {days}일")
+
+
+def _run_both(accts, args) -> int:
+    """전 계정 정기 → (중단·멈춤 시각·dry-run 아니면) 전 계정 소급. 반환 = 정기 단계 종료코드."""
+    rc = _run_accounts(accts, cmd_run, args)
+    if rc == 0 and not args.dry_run and not past_until(args):
+        _run_accounts(accts, cmd_backfill, args)
+    return rc
+
+
+def collect_sales(a, b, args) -> int:
     """판매분석 월·주 합계·일별 소급(2026-01-01부터 — D-161 ③) + 윙 할인쿠폰(D-160) — 정산 계정 전부(정산전용 포함)·조회만.
     ① 판매수집과 같은 저장(output/판매분석_일별·_기간·쿠폰목록_일별)·같은 상한(계정당 하루 60일 — 오늘 ① 이 받은 날 포함)이라
-    이미 받은 날·오늘 완료본은 다시 부르지 않는다. 표시(결과 시트)는 4/1부터 그대로(FIRST_DAY). 실패는 그 단계만 기록(비치명)."""
+    이미 받은 날·오늘 완료본은 다시 부르지 않는다. 표시(결과 시트)는 4/1부터 그대로(FIRST_DAY). 실패는 그 단계만 기록(비치명).
+    일별 소급 상한 = 회차(args.cycle_since — 수동 실행은 오늘 0시) 기준 150일 → 1/1 까지 받으면 60일(D-167·D-170). 반환 = 받은 날 수."""
     from coupang_analytics import collector, wing_coupons
     from coupang_analytics import pipeline_sales as PS
     from coupang_analytics import sales_summary as SS
@@ -524,8 +540,10 @@ def collect_sales(a, b, args) -> None:
     goto(b, API.WING_URL, name)                           # 윙 화면(같은 출처·XSRF) — 앞 단계가 다른 화면에서 끝났어도
     try:
         PS._record_sales_periods(b.page, a.account_id, "output", note, first=SS.COLLECT_FROM)
-        PS._record_sales_backfill(b.page, a.account_id, "output", note, first=SS.COLLECT_FROM)
+        since = getattr(args, "cycle_since", "") or f"{date.today()}T00:00:00"
+        days = PS._record_sales_backfill(b.page, a.account_id, "output", note, first=SS.COLLECT_FROM, settle_since=since)
         wing_coupons.record_day(b.page, a.account_id, "output", note, gap=PS._PERIOD_GAP_SEC)
+        return days
     finally:
         collector.reset_raw()                             # 응답 원문 버퍼(① 분석용)는 정산에선 안 씀 — 계정마다 비움
 
@@ -749,8 +767,8 @@ DONE_FILE = BASE / "로그" / "_완료.json"   # 같은 ①완료 기준 '완료
 
 
 def _sweep_work_count(lg) -> int:
-    """이번 한 바퀴에서 실제로 한 일(새 요청·받은 파일) 수."""
-    return sum(1 for r in lg.rows if r["단계"] in ("요청", "받기") and r["결과"] == RL.OK)
+    """이번 한 바퀴에서 실제로 한 일(새 요청·받은 파일·소급) 수."""
+    return sum(1 for r in lg.rows if r["단계"] in ("요청", "받기", "소급") and r["결과"] == RL.OK)
 
 
 def _wait_accounts(lg) -> int:
@@ -778,7 +796,7 @@ def _one_pass(args) -> tuple[bool, int]:
         LOG.heartbeat("종료", reason)
         raise
     try:
-        rc = _run_accounts(accts, cmd_run, args)
+        rc = _run_both(accts, args)
         work = _sweep_work_count(LOG)
         cmd_stats()
     except Exception as exc:                 # 그 바퀴만 실패 기록(다음 판단은 진전 없음으로)
@@ -827,6 +845,7 @@ def cmd_watch(args) -> int:
     try:
         with registry_lock(BASE / "_잠금" / "_watch.lock", wait_sec=0, on_log=log):
             cycle_start, cycle_end = W.cycle_window(datetime.now())
+            args.cycle_since = cycle_start.isoformat(timespec="seconds")   # 소급 상한 = 회차(18:00~) 단위(D-170) · --since 와 무관
             if getattr(args, "since", ""):    # 사람이 누른 전체실행 — 그 실행 뒤에 끝난 ①만 기다림(2026-10-13)
                 cycle_start = max(cycle_start, datetime.fromisoformat(args.since))
             args.until, args.until_at, args.hidden = f"{cycle_end:%H:%M}", cycle_end, True   # 17:55 뒤 새 요청·새 계정 안 함
@@ -926,7 +945,7 @@ def main() -> int:
         accts = _evidence_targets(accts, args)
     run = {"probe": cmd_probe, "request": cmd_request, "download": cmd_download, "run": cmd_run,
            "evidence": cmd_evidence}[args.command]
-    rc = _run_accounts(accts, run, args)
+    rc = _run_both(accts, args) if run is cmd_run else _run_accounts(accts, run, args)
     LOG.summary()
     log(f"기록: {LOG.csv} · 오류 추적: {LOG.errors if LOG.errors.exists() else '없음'}")
     LOG.heartbeat("완료", f"명령 {args.command} · 종료코드 {rc}")

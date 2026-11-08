@@ -17,6 +17,7 @@ COLLECT_FROM = date(2026, 1, 1)   # 정산 실행의 판매분석 수집 시작(
 WEEKS = 8                       # 주간 기간 수(기간 조회·대시보드 주간 선)
 DETAIL_DAYS = 31                # 상세표 일별 칸 수(최근 31일·최신이 왼쪽 — 소유자 2026-10-21)
 BACKFILL_PER_DAY = 60              # 계정당 하루 최대 조회 일수(같은 세션 API — 차단 위험 줄이기·D-097 30→60)
+SETTLE_BACKFILL_LIMIT = 150        # 정산 실행 소급의 한시 상한(D-167) — 1/1(COLLECT_FROM)까지 받으면 BACKFILL_PER_DAY 로 자동 복귀
 
 
 @dataclass(frozen=True)
@@ -105,12 +106,21 @@ def _before_inventory_id(rec: dict) -> bool:
     return any("등록상품ID" not in o for o in (rec.get("옵션") or {}).values())
 
 
+def settle_limit(existing: dict, first: date = COLLECT_FROM) -> int:
+    """정산 실행 소급 상한(D-167) — first 날 기록이 아직 없으면 한시 150일, 있으면(따라잡음) 60일."""
+    return BACKFILL_PER_DAY if first.isoformat() in existing else SETTLE_BACKFILL_LIMIT
+
+
 def plan_backfill(existing: dict, yesterday: date, today: date | None = None,
-                  first: date = FIRST_DAY, limit: int = BACKFILL_PER_DAY) -> list[str]:
+                  first: date = FIRST_DAY, limit: int = BACKFILL_PER_DAY, since: str | None = None) -> list[str]:
     """일별 기록이 없는 날 ['YYYY-MM-DD'] — **최근 날짜부터 거꾸로**(어제 → first), 이미 있는 날은 빼고 최대 limit 개.
-    오늘 이미 받은 기록(수집 시각이 오늘 — ① 하루치·앞선 실행의 소급 포함)만큼 limit 에서 빼서 '계정당 하루 최대'를 지킴."""
-    stamp = (today or yesterday + timedelta(days=1)).isoformat()
-    used = sum(1 for r in existing.values() if str((r or {}).get("수집", "")).startswith(stamp))
+    오늘 이미 받은 기록(수집 시각이 오늘 — ① 하루치·앞선 실행의 소급 포함)만큼 limit 에서 빼서 '계정당 하루 최대'를 지킴.
+    since(ISO 시각) = 정산 회차 시작(D-170) — 그 뒤 받은 기록으로 셈(자정을 넘는 회차를 두 번 세지 않게)."""
+    if since:
+        used = sum(1 for r in existing.values() if str((r or {}).get("수집", "")) >= since)
+    else:
+        stamp = (today or yesterday + timedelta(days=1)).isoformat()
+        used = sum(1 for r in existing.values() if str((r or {}).get("수집", "")).startswith(stamp))
     out: list[str] = []
     d = yesterday
     while d >= first and len(out) < limit - used:

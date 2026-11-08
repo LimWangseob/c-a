@@ -183,18 +183,21 @@ def _record_sales_periods(page, account_id: str, out_dir, log, yesterday: date |
 
 
 def _record_sales_backfill(page, account_id: str, out_dir, log, yesterday: date | None = None,
-                           first: date | None = None) -> None:
+                           first: date | None = None, settle_since: str | None = None) -> int:
     """통합 판매현황 일별 소급(소유자 2026-10-21) — first(기본 2026-04-01)~어제 중 **빠진 날**을 최근부터 거꾸로 하루씩 조회·저장.
     계정당 하루 최대 sales_summary.BACKFILL_PER_DAY 일·조회 사이 쉼. 실패면 그 계정 소급 멈춤(다음 실행이 이어서·비치명).
-    first = 정산 실행이 1월부터 받을 때(D-161 COLLECT_FROM)만 넘김."""
+    first = 정산 실행이 1월부터 받을 때(D-161 COLLECT_FROM)만 넘김 · settle_since = 정산 회차 시작(D-167 상한 150→60·D-170
+    회차 기준 — 정산 실행만 넘김). 반환 = 이번에 받은 날 수."""
     from . import collector, sales_history, sales_summary
     y = yesterday or (date.today() - timedelta(days=1))
     try:
-        plan = sales_summary.plan_backfill(sales_history.load_daily(out_dir).get(account_id, {}), y,
-                                           first=first or sales_summary.FIRST_DAY)
+        have = sales_history.load_daily(out_dir).get(account_id, {})
+        first = first or sales_summary.FIRST_DAY
+        kw = {"limit": sales_summary.settle_limit(have, first), "since": settle_since} if settle_since else {}
+        plan = sales_summary.plan_backfill(have, y, first=first, **kw)
     except (OSError, ValueError) as exc:
         log(f"  [판매현황] ⚠ {account_id} 일별 기록 읽기 실패(비치명) — {exc.__class__.__name__}: {str(exc)[:80]}")
-        return
+        return 0
     done = 0
     for d in plan:
         if done:
@@ -208,6 +211,7 @@ def _record_sales_backfill(page, account_id: str, out_dir, log, yesterday: date 
         done += 1
     if plan:
         log(f"  [판매현황] {account_id} 일별 소급 {done}/{len(plan)}일({plan[0]}부터 거꾸로)")
+    return done
 
 
 PW_MAX_TRIES = 2   # 관리대장 한 계정 여러 줄의 비번이 서로 다를 때 실행당 시도할 최대 값 수(D-012·잠금 5회 대비)

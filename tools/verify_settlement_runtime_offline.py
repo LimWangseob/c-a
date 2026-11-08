@@ -1909,14 +1909,15 @@ def p47_settle_sales_coupons():
                                                        SimpleNamespace(start=D("2026-01-01"))))
             days = [f for f, t in fetched if f == t]
             periods = [(f, t) for f, t in fetched if f != t]
-            assert days[0] == "2026-03-31" and len(days) == SS.BACKFILL_PER_DAY and days[-1] == "2026-01-31", days[:3]
+            # D-167: 1/1 이 아직 없는 계정 = 한시 150일 → 1~3월 90일 한 번에(최근부터)
+            assert days[0] == "2026-03-31" and len(days) == 90 and days[-1] == "2026-01-01", (len(days), days[:3])
             assert ("2026-01-01", "2026-01-31") in periods and ("2026-03-01", "2026-03-31") in periods, periods
             assert coupons == [("acc1", "output")], coupons
             assert any(r[1] == "판매분석·쿠폰" for r in recs), recs
             assert "2026-01-31" in json.loads((d / "acc1.json").read_text(encoding="utf-8")), "1~3월 일별 저장"
         finally:
             os.chdir(old_cwd)
-    ok("정산 실행 = 1/1부터 빠진 날(계정당 하루 60일·최근부터)·1~3월 월 합계·쿠폰(계정ID) · ① 판매수집은 4/1 그대로")
+    ok("정산 실행 = 1/1부터 빠진 날(1/1 받기 전 150일 D-167·최근부터)·1~3월 월 합계·쿠폰(계정ID) · ① 판매수집은 4/1 그대로")
 
 
 def p48_ads_from_december():
@@ -2045,6 +2046,70 @@ def p50_verify_new_items():
     ok("빠른정산 이용 서비스 목록·프로모션 수수료 응답 그대로·리뷰 캠페인(1/1~어제·100개)·더 있음/모양 오류 = 그 항목만 실패")
 
 
+def p51_regular_then_backfill():
+    print("[P51] 정산 실행 = 정기(전 계정) → 소급(전 계정 다시) 두 단계(D-170) · 판매분석 소급 = 회차 기준 150일 → 1/1 받으면 60일(D-167)")
+    from types import SimpleNamespace
+    sys.path.insert(0, str(ROOT / "tools"))
+    import settlement_download as TD
+    from coupang_analytics import sales_summary as SS
+    # ① 상한: 1/1 이 없으면 150(한시) · 1/1 까지 받았으면 60(자동 복귀 — 사람이 되돌릴 필요 없음)
+    assert SS.SETTLE_BACKFILL_LIMIT == 150 and SS.BACKFILL_PER_DAY == 60
+    assert SS.settle_limit({}, SS.COLLECT_FROM) == 150
+    assert SS.settle_limit({"2026-01-01": {"수집": "x"}}, SS.COLLECT_FROM) == 60
+    # ② 회차 기준(18:00~17:55): 이번 회차 시작 뒤 받은 날만 상한에서 뺀다 — 자정을 넘어도 한 회차는 한 번만 셈
+    have = {f"2026-10-{i:02d}": {"수집": "2026-11-08T19:00:00"} for i in range(1, 21)}          # 회차 시작 뒤(전날 밤) 20일
+    have.update({f"2026-09-{i:02d}": {"수집": "2026-11-09T01:00:00"} for i in range(1, 11)})    # 자정 넘어 10일
+    have.update({f"2026-08-{i:02d}": {"수집": "2026-11-08T10:00:00"} for i in range(1, 6)})     # 회차 전(그날 오전 ①) 5일
+    plan = SS.plan_backfill(have, D("2026-11-08"), today=D("2026-11-09"), first=SS.COLLECT_FROM, limit=150,
+                            since="2026-11-08T18:00:00")
+    assert len(plan) == 150 - 30 and plan[0] == "2026-11-08", (len(plan), plan[:2])
+    assert len(SS.plan_backfill(have, D("2026-11-08"), today=D("2026-11-09"), first=SS.COLLECT_FROM, limit=150)) == 140,         "since 없으면 지금처럼 '오늘 날짜' 기준(① 판매수집 그대로)"
+    # ③ 정기 단계엔 판매분석 소급이 없고, 소급 단계가 받는다 · 소급에서 한 일은 '소급' 줄로 남아 다음 바퀴 판단에 셈
+    calls: list = []
+    recs: list = []
+    fake_log = SimpleNamespace(record=lambda *a, **k: recs.append(a), rows=[])
+    patches = [(TD, "cmd_request", lambda *a: calls.append("요청")), (TD, "cmd_download", lambda *a: calls.append("받기")),
+               (TD, "collect_verify", lambda *a: calls.append("검증")), (TD, "collect_ads", lambda *a: calls.append("광고")),
+               (TD, "collect_sales", lambda *a: (calls.append("판매"), 37)[1]), (TD.time, "sleep", lambda s: None),
+               (TD, "name_of", lambda a: "A"), (TD, "LOG", fake_log)]
+    args = SimpleNamespace(dry_run=False, until="", start=D("2026-01-01"))
+    _patched(patches, lambda: TD.cmd_run(None, None, args, []))
+    assert calls == ["요청", "받기", "검증", "광고"], calls
+    calls.clear()
+    _patched(patches, lambda: TD.cmd_backfill(None, None, args, []))
+    assert calls == ["판매"] and recs and recs[-1][1] == "소급" and "판매분석 37일" in recs[-1][3], (calls, recs)
+    fake_log.rows = [{"단계": "소급", "결과": TD.RL.OK}, {"단계": "받기", "결과": TD.RL.OK}, {"단계": "검증", "결과": TD.RL.OK}]
+    assert TD._sweep_work_count(fake_log) == 2, "요청·받기·소급만 '한 일'"
+    recs.clear()
+    _patched([(TD, "collect_sales", lambda *a: 0), (TD, "name_of", lambda a: "A"), (TD, "LOG", fake_log)],
+             lambda: TD.cmd_backfill(None, None, args, []))
+    assert not recs, "받은 게 없으면 '소급' 줄 없음(다 받았거나 이번 회차 상한 다 씀 → 완료로 끝남)"
+    # ④ 한 바퀴 = 전 계정 정기 → 전 계정 소급 · 정기가 중단(연속 실패)이면 소급 안 함
+    order: list = []
+
+    class FakeLog:
+        run_id, rows = "t", []
+
+        def __init__(self, base):
+            pass
+
+        def heartbeat(self, *a):
+            pass
+
+        def summary(self):
+            pass
+
+        def line(self, m):
+            pass
+    for rc_regular, want in ((0, ["cmd_run", "cmd_backfill"]), (1, ["cmd_run"])):
+        order.clear()
+        pat = [(TD.RL, "RunLog", FakeLog), (TD, "load_accounts", lambda only: ["a", "b"]), (TD, "cmd_stats", lambda: None),
+               (TD, "_run_accounts", lambda accts, run, a: (order.append(run.__name__), rc_regular if run is TD.cmd_run else 0)[1])]
+        stopped, _work = _patched(pat, lambda: TD._one_pass(SimpleNamespace(start=D("2026-01-01"), until="", dry_run=False)))
+        assert order == want and stopped == bool(rc_regular), (order, stopped)
+    ok("정기 = 요청·받기·검증·광고 · 소급 = 판매분석(회차 기준 150일→60) · 전 계정 정기 끝난 뒤 소급 · 소급 한 일도 '다음 바퀴' 판단에 셈")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -2087,6 +2152,7 @@ def main():
     p48_ads_from_december()
     p49_rg_missing_costs()
     p50_verify_new_items()
+    p51_regular_then_backfill()
     print("정산 런타임 오프라인 검증 통과")
 
 
