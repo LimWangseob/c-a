@@ -2,9 +2,9 @@
 
 <!-- 누적 금지. 매 세션 종료 시 /session-close 가 전체 덮어쓰기. 100줄 이하. 핸드오프 SSOT. -->
 
-- BUILD_TAG: R111
-- 갱신: 2026-11-08 (R106 = 정책 문서 정리 · R107~R109 = DECISIONS 표기 D-176~D-178 · R110 = 낡은 문구 16곳 · R111 = 감사 E절 소유자 답 D-179(공휴일 05-01·07-17 코드 · HANDOFF.md 삭제))
-- 마지막 커밋: 이 커밋([R111] D-179) ← 47ea0f1 [R110] 낡은 문구 ← 00001bb [R109] D-178 ← a94d518 [R108] D-177.
+- BUILD_TAG: R112
+- 갱신: 2026-11-08 (R106 = 정책 문서 정리 · R107~R109 = DECISIONS 표기 D-176~D-178 · R110 = 낡은 문구 16곳 · R111 = 감사 E절 소유자 답 D-179(공휴일 05-01·07-17 코드 · HANDOFF.md 삭제) · R112 = 회귀 게이트 속도 D-180)
+- 마지막 커밋: 이 커밋([R112] STATE) ← d2b4847 [R112] 병합 feat/gate-speed(D-180) ← 6122d15 [R112] 게이트 속도 ← 9982000 [R111] D-179. origin 푸시 완료(d2b4847까지).
 - 직전 빌드: R105 ef72f74 — 배포 zip 11-08 19:43(R105 전부 포함 · R104 18:36 zip 설치 금지).
 - 배포본: `D:\coupang-analytics\dist\쿠팡애널리틱스_배포.zip` **11-08 19:43(ef72f74 기준·R105 전부 포함·174,039,949바이트 · exe 안 `_retry_blank_ranks`·'첫 회' 포함 확인)**. ⛔ 18:36 R104 zip 은 ③ 순위 줄 결함 있음 — 설치하지 말 것. 운용 PC 설치본 = 11-04 18:43(b6b39c4) → R99~R105 는 새 zip 설치 뒤에만 동작.
 - 세션 시작 = STATE.md + `docs/CURRENT_RULES.md`(주제별 현행 규칙 14묶음) 읽고 git log/status 대조 3줄 요약 · 색인 `docs/DECISIONS_INDEX.md` 는 검색용 · 종료 = `/session-close`.
@@ -18,6 +18,8 @@
 - R111: D-179 감사 E절 8건 소유자 답 — 판매 현황 탭 안 만듦 · 전환자 2단계 = 매일 18시 뒤(구현 전) · 10/18 정산서 안 보냄(정정 통보 종결) · 루트 HANDOFF.md 삭제 · `holiday_kr.COUPANG_OFF_DAYS` 05-01·07-17 늘 비영업일(시험 P1·P22 재현→통과) · AI 매칭 예외 유지 · PC 엑셀 계정ID 정리 안 함 · D-140 관리 시작 달 = 차이 표 뒤 결정.
 - 효과 측정(11-08): `py -3.12 ~/.claude/hooks/decisions-index.py . --check` 경고 1 → **0** · CURRENT_RULES 13,091B(색인 32,507B 대신 시작 때 읽음) · CLAUDE.md 12,089B · 게이트 --quick 15종 통과 2회.
 - **다음 새 세션 첫 응답 입력 토큰(미측정)**: `C:\Users\user\.claude\projects\D--coupang-analytics\` 의 그 세션 `.jsonl` 첫 assistant 줄 `message.usage` 의 input_tokens + cache_read_input_tokens + cache_creation_input_tokens 합 → 기준선 89,111(10-10)·105,140(11-05)(D-151)과 비교해 이 줄에 적기.
+
+- R112: D-180 회귀 게이트 속도 — `run_checks.py` 동시 3개(`-j 1`=하나씩·전체 17종 약 209초 → 87~93초) · 통과 기록 `tools/check_stamp.py`(같은 내용이면 pre-commit·pre-push 가 건너뜀 → 커밋 4초·푸시 8초 실측) · 자체 검증 `tools/verify_run_checks_offline.py` · 쿠폰 검사가 실 `data/session_state.db` 고치던 버그 수정 · 훅 재설치 완료(`.git/hooks` 공유). 사고 1건: 첫 커밋 시도 때 검사가 훅 환경 변수를 물려받아 공유 설정 core.bare=true·작업 폴더 인덱스 덮어씀 → 즉시 복구(섞인 커밋 0)·원인 수정·S7 시험.
 
 ## 현재 Step — 정산 자료 100% 받기 2단계 = 구현 끝(N11 만 보류) → **운용 PC 설치·첫 회차 로그 확인**
 - 끝남(요약): R101 N1·N2·N9·N12·N13·정기→소급(D-170)·월자료 N3~N7·N10 · R102 N8 부가세 상세 · R103 정산 [실행 결과 종합](D-168) · R104 판정 '원인 --> 결과'(D-172)·앱 [실행 결과 종합]·③ 빈 칸 1회 재시도(D-173) — 상세 = DECISIONS·git.
@@ -59,13 +61,14 @@
   - (R108 새 미확인) D-088 (1) 예정액 차이 사유 6가지 문구 — 지금 정산서(`statement_managed.py`)에 'FORECAST_NOTE' 0건 · 어느 결정이 뺐는지 원문 없음 → 남았는지·뺀 것이 맞는지 정산 세션 확인.
   - (통제 세션 'Coupang Analytics' 전용 — 감사 F절·D-151 남은 것) `config.py:82` `KW_MAX_TRACK(=7)`·'쿨다운 동반' → 10·D-030 · `config.py:88~89·106~108` `RANK_BACKFILL`·`_ROUNDS`·`_COOLDOWN_SEC` 사용처 0(b8dde4d 에서 사용 코드 삭제) → 물리 삭제 · `pipeline.py:695` '오늘은 같은 값을 다시 넣지 않음·D-068' → '24시간·D-123' · `designs/DESIGN.md:399·496` '상품별 판매 리포트' → '상품별 판매'(D-063) · `CLAUDE.md:18` 정의서 128칸 → 137칸 · HANDOFF.md 삭제(D-179) 뒤 남은 참조 `CLAUDE.md:87`·`designs/DOMAIN_D2_SOURCING.md:168` 'HANDOFF §4-1'(원래 없던 절) → "구현 보류 — CLAUDE.md '환경' 절" 식으로. 덤(같은 '쿨다운' 잔재) `config.py:55·336~337`·`DESIGN.md:13`·`ui/app_qt.py:1636`·`pipeline_ranks.py:504`. 근거·제안 문장 = `docs/decisions/remaining-survey-2026-11-08.md` A-1·A-2.
   - D-171 N11 사이즈 리포트 보류 — 요청 방법(소유자가 4월에 어디서 요청했는지) 답 대기(다음 작업 4).
+- (사실 · R112) `D:\ca-wt-dash`·`D:\ca-wt-settle` 은 옛 `run_checks.py` — 새 훅에서도 매번 검사(고장 아님·master 받으면 빨라짐). 병합된 브랜치 `feat/gate-speed` 남아 있음(삭제 안 함).
 - (사실 · R105 참고·미수정) 앱 ② 예외 때도 종합 블록이 '② 키워드 선정: 함'(판정 줄은 '오류 발생 --> 중단').
 
 ## 주의
 - 통제 세션 = 'Coupang Analytics' — 배포 zip 생성·결과 구글시트 반영·`pipeline.py` 편집 담당(`ListAgents` 첫 줄 "This session is …" 로 확인).
 - ⛔ Claude 는 비밀번호를 넣는 로그인을 하지 않음. 실측은 소유자가 로그인한 Chrome 에서 조회만 · 요청/신청/발행/동의 버튼 금지 · 셀러월렛 PIN 입력 금지 · 파일 다운로드는 소유자 허락 후. 주문별 JSON 은 size 10 외 값으로 부르지 말 것.
 - 빌드 = PowerShell 에서 `cmd /c "D:\coupang-analytics\build.bat"`(Git Bash 의 `cmd //c build.bat` 은 파일을 못 찾음). 'WinError 5 액세스 거부'(dist 폴더 삭제 실패) = `dist` 안 폴더 **읽기 전용 속성**(11-08 실측 162개·맨 위 `dist`·`dist\coupang-analytics` 포함) → 속성만 풀고 다시. `dist\coupang-analytics_old_stuck` = 옛 잔여(손대지 않음).
-- 무거운 작업(게이트·빌드·에이전트)은 하나씩 — 빌드 중 게이트 동시 실행 금지(10-10 BSOD). 커밋 훅(--quick ~4분)·푸시 훅(전체+복잡도 ~4분)도 무거운 작업.
+- 무거운 작업(게이트·빌드·에이전트)은 하나씩 — 빌드 중 게이트 동시 실행 금지(10-10 BSOD). 커밋 훅·푸시 훅 = 내용이 바뀌었으면 동시 3개로 약 1.5분(같은 내용 통과 기록 있으면 건너뜀·D-180). 게이트는 안에서 검사 3개를 동시에 돌리므로 빌드와 겹치지 말 것.
 - 정산서 재생성 = 장부 기준일 고정 필수 · 통합판매현황 1행 숨긴 칸 '차트설정:' 지우지 말 것.
-- 병렬 세션 번호 — 다음 = **D-180·R112**.
+- 병렬 세션 번호 — 다음 = **D-181·R113**.
 - 사람 승인 대기열 금지 · 로그인·판매수집·정산 = 프록시 금지 · 배포 zip·결과 시트 반영 = 통제 세션만.
