@@ -2,29 +2,21 @@
 
 <!-- 누적 금지. 매 세션 종료 시 /session-close 가 전체 덮어쓰기. 100줄 이하. 핸드오프 SSOT. -->
 
-- BUILD_TAG: R105
-- 갱신: 2026-11-08 (R105 = 오늘 반영분 시뮬레이션 검증 → ③ 순위 줄 재시도 합산 결함 수정 + 관리대장 링크 안내 문구 D-134 정합 + 배포 zip 재생성)
-- 마지막 커밋: 이 커밋([R105] STATE) ← ef72f74 [R105] ③ 순위 줄 재시도 합산 ← dd4aec5 [R105] 관리대장 링크 안내 문구 ← af7e189 [R104] 세션 종료.
+- BUILD_TAG: R106
+- 갱신: 2026-11-08 (R106 = 정책 문서 정리 — 코드 변경 없음)
+- 마지막 커밋: 이 커밋([R106] 세션 종료) ← b8d8afb CURRENT_RULES·7곳 링크(D-175) ← 57f6020 상태 표기 2건(D-174)·미결 재등록 ← d49c81e 색인 재생성.
+- 직전 빌드: R105 ef72f74 — 배포 zip 11-08 19:43(R105 전부 포함 · R104 18:36 zip 설치 금지).
 - 배포본: `D:\coupang-analytics\dist\쿠팡애널리틱스_배포.zip` **11-08 19:43(ef72f74 기준·R105 전부 포함·174,039,949바이트 · exe 안 `_retry_blank_ranks`·'첫 회' 포함 확인)**. ⛔ 18:36 R104 zip 은 ③ 순위 줄 결함 있음 — 설치하지 말 것. 운용 PC 설치본 = 11-04 18:43(b6b39c4) → R99~R105 는 새 zip 설치 뒤에만 동작.
+- 세션 시작 = STATE.md + `docs/CURRENT_RULES.md`(주제별 현행 규칙 14묶음) 읽고 git log/status 대조 3줄 요약 · 색인 `docs/DECISIONS_INDEX.md` 는 검색용 · 종료 = `/session-close`.
 
-## R105 (11-08 저녁) — 오늘 반영분 시뮬레이션 검증
-- 검증 = 전체 게이트 16종·복잡도 경고 0 + 실제 순위 로직(`_track_ranks_semi`·가짜 화면) 시뮬 7경우 26/26(스크립트 `C:\Users\user\AppData\Local\Temp\claude\baadfd9cd5410c86\43d131d9-5a01-4a48-b52e-98c0b344aebd\scratchpad\verify_today.py`).
-- 찾은 결함(수정 ef72f74): ③ 재시도 때 `track_ranks_stage` 가 LAST_RANK 를 비워 블록 ③ 줄이 재시도분만('측정 1건·차단 0') → 측정·차단·연결 장애 = 첫 회 + 재시도 합산 `측정 3건(첫 회 2 + 재시도 1)` · 빈 칸·VID 없음 = 재시도 결과 · 재시도가 요약 없이 끝나면 첫 회 빈 칸 유지. `pipeline_stages._retry_blank_ranks`(run_stages CC 15→11) · 핀 P11 2건 추가.
-- (참고·미수정) ② 예외 때도 블록 '② 키워드 선정: 함'(판정 줄은 '오류 발생 --> 중단').
-- 통제 세션 = 'Coupang Analytics' — 배포 zip 생성·결과 구글시트 반영·`pipeline.py` 편집 담당(11-08 세션이 통제 세션이었음 — `ListAgents` 첫 줄 "This session is …" 로 확인).
-- 세션 핸드오프: STATE.md 단일. 시작 = STATE+`docs/DECISIONS_INDEX.md` 읽고 git log/status 대조 3줄 요약(DECISIONS.md 는 관련 항목만). 종료=`/session-close`.
+## R106 (11-08 밤) — 정책 문서 정리(`D:\claude-global\docs\plans\NEXT_SESSION_PLAN.md` 세션 2)
+- D-174 상태 표기 2건(D-141←D-156 · D-152←D-155) · D-175 `docs/CURRENT_RULES.md`(14묶음×5줄 + 근거 D) · 대조표 `docs/decisions/current-rules-2026-11-08.md` · 7곳 링크화(OPERATIONS_POLICY:9·13 · ARCHITECTURE:63 · DESIGN:161·423·523 · DOMAIN_D4:15 · IO_DEFINITION:223) · CLAUDE.md ⑤ · 메모리 5건 '현행 = D-xxx'.
+- 효과 측정(11-08): `py -3.12 ~/.claude/hooks/decisions-index.py . --check` 경고 1 → **0** · CURRENT_RULES 13,091B(색인 32,507B 대신 시작 때 읽음) · CLAUDE.md 12,089B · 게이트 --quick 15종 통과 2회.
+- **다음 새 세션 첫 응답 입력 토큰(미측정)**: `C:\Users\user\.claude\projects\D--coupang-analytics\` 의 그 세션 `.jsonl` 첫 assistant 줄 `message.usage` 의 input_tokens + cache_read_input_tokens + cache_creation_input_tokens 합 → 기준선 89,111(10-10)·105,140(11-05)(D-151)과 비교해 이 줄에 적기.
 
 ## 현재 Step — 정산 자료 100% 받기 2단계 = 구현 끝(N11 만 보류) → **운용 PC 설치·첫 회차 로그 확인**
+- 끝남(요약): R101 N1·N2·N9·N12·N13·정기→소급(D-170)·월자료 N3~N7·N10 · R102 N8 부가세 상세 · R103 정산 [실행 결과 종합](D-168) · R104 판정 '원인 --> 결과'(D-172)·앱 [실행 결과 종합]·③ 빈 칸 1회 재시도(D-173) — 상세 = DECISIONS·git.
 - 설계 = `designs/SETTLEMENT_MODULE.md` §16(16-4 종합 로그·16-5 순서).
-- 끝남(R101): ① N1·N2 ② N9·N12·N13 ③ 정기→소급 두 단계 + 판매분석 150일 ④ 월자료 N3~N7·N10(`settlement_docs.py`).
-- 끝남(R102): ⑤ N8 부가세 신고 상세(윙 `MSF_PAYMENT_METHOD_DETAIL`·RG `VAT`) = `settlement_docs_request.py` · 소급 단계에서 요청 → 다음 바퀴에 받기 · 저장 `output\정산\검증자료\월자료\{계정}\{윙|RG}부가세상세_{YYYYMM}.xlsx` · gyi0101 2026-01 실파일 = 화면 합계와 원 단위 일치(사실).
-- 끝남(R103): ⑥ 정산 [실행 결과 종합](D-168) = `settlement_runlog.result_block` · 바퀴 끝 + watch 회차 끝 · 상태 카드 '결과 종합:' 줄 · 핀 P54.
-- 끝남(R104, 이 세션):
-  - 판정 문구 '원인 --> 결과'(D-172·소유자 11-08) — 정산: `일부 실패 --> 확인 필요` · `진전 없음 --> 중단`(watch giveup) · `연속 실패 --> 중단`('(전체)' 중단 안 풀림 — 원인 이름은 Claude 가 붙임) · `정상 완료`. `settlement_runlog.verdict`.
-  - 앱 [실행 결과 종합](D-168 앱 쪽·D-173) = 새 모듈 `src/coupang_analytics/run_result.py`(`RunSummary` 로그 탭+끝 블록 · `LAST_SALES` = ① 끝 정보, `pipeline.py` `_log_login_failures`·`_finalize_run` 이 채움) · 단일 구현 `pipeline_stages.run_stages`(전체실행·무인·재부팅 복구·예외·중지 포함·① 단독도). 판정 `정상 완료`/`일부 실패 --> 확인 필요`/`순위 빈 칸 --> 확인 필요`(둘 다 `일부 실패·순위 빈 칸 --> 확인 필요`)/`사람 중지 --> 중단`/`오류 발생 --> 중단`.
-  - ③ 빈 칸 남으면 **재고 역기록까지 끝난 뒤 ③ 1회만 재시도**(소유자 11-08 · 중지 요청이면 안 함 · 'done' 기록은 재시도 뒤).
-  - 핀 P11(`tools/pin_run_plan.py`) · simulate 시나리오 3·26 에 ① 재료 확인 · 게이트 16종 + check_complexity 경고 0(11-08).
-  - R104 배포 zip 11-08 18:36. 빌드 실패 원인 = `dist` 폴더 읽기 전용 속성(아래 주의).
 - **N11 사이즈 리포트 = 보류**: [사실] 완료본 3건 모두 기간 키 null(요청 시점 스냅샷) · RG 정산 화면 JS 에 요청 버튼·본문 없음. 남은 것 = 요청 방법(소유자가 4월에 어디서 요청했는지).
 - 근거 문서(git 밖): `D:\coupang-analytics\output\_분석_261013\정산스크립트\` — `쿠팡_정산자료_실측_261108.md` · `쿠팡_정산파일_내용검증_261108.md` · `쿠팡_정산자료_수집누락_조사_261107.md` · `쿠팡_판매내역_빠른정산_점검_261108.md`.
 - 실측 원본(개인정보 포함·스크래치·소유자 확인 전 미삭제): `C:\Users\user\AppData\Local\Temp\claude\baadfd9cd5410c86\dd177ad9-dc9b-4a73-b1b2-28e51cc57508\scratchpad\verify_files\dl\` 5개 · 사이즈 리포트 `C:\Users\user\AppData\Local\Temp\claude\baadfd9cd5410c86\d0ee3377-ce70-49bb-ba7c-4544cedcb477\scratchpad\size_dl\gyi0101_RG_사이즈리포트_260421.xlsx`(개인정보 없음).
@@ -62,11 +54,15 @@
   - 감사 F절(문구만 낡음) `:115` — `config.py:82` 주석 `KW_MAX_TRACK(=7)`(실제 10·D-034) · 옛 `CLAUDE.md:27` '③순위 전용·기본 OFF'(지금 `docs/ARCHITECTURE.md:67`) · `RANK_BACKFILL_COOLDOWN_SEC`(`config.py:108`) 사용처 0 · 주석 목록. [사실] `ui/app_qt.py:560` 안내 문구는 dd4aec5 로 고쳐짐.
   - D-151 옮기며 발견한 어긋남 5건 `docs/decisions/claudemd-move-2026-11-05.md:49` — 그로스 재고 매칭키 '유사도'(D-047·D-048 로 삭제) · 프록시 '기본 OFF'(`config.py` 빈값=ON) · '지문위조 금지'(상시 규칙 = 소유자 판단) · 정의서 128칸 vs 137칸 · 체험단 시작일 = 요청일(D-122 로 '체험단시작일' 칸).
   - D-171 N11 사이즈 리포트 보류 — 요청 방법(소유자가 4월에 어디서 요청했는지) 답 대기(다음 작업 4).
+- (R106 발견 · 소유자 판단 대기) `--check` 가 못 잡는 표기 누락 후보 2건(`docs/decisions/current-rules-2026-11-08.md` 발견 모음) — D-165 상태 줄에 D-167 없음(판매분석 소급 60일 → 정산 실행만 한시 150일) · D-105 '1~3월 조회하지 않음' vs D-161·D-165 정산 실행 2026-01부터 조회(D-105 상태 줄 표기 없음 · CURRENT_RULES §8 은 D-165 기준으로 적음).
+- (R106 · 범위 밖이라 재등록만) 감사 E절 '추적이 끊긴 미결' 8건 `docs/decisions/audit-2026-11-04.md:102` — D-064 단계 3·4 · D-111 2단계 빈도 · D-118 17계정 정정 통보 · 루트 `HANDOFF.md` · D-004 공휴일 · 전역 AI 매칭 규칙 범위(D-009·071·072) · D-093 PC 엑셀 · D-140 관리 시작 달.
+- (사실 · R105 참고·미수정) 앱 ② 예외 때도 종합 블록이 '② 키워드 선정: 함'(판정 줄은 '오류 발생 --> 중단').
 
 ## 주의
+- 통제 세션 = 'Coupang Analytics' — 배포 zip 생성·결과 구글시트 반영·`pipeline.py` 편집 담당(`ListAgents` 첫 줄 "This session is …" 로 확인).
 - ⛔ Claude 는 비밀번호를 넣는 로그인을 하지 않음. 실측은 소유자가 로그인한 Chrome 에서 조회만 · 요청/신청/발행/동의 버튼 금지 · 셀러월렛 PIN 입력 금지 · 파일 다운로드는 소유자 허락 후. 주문별 JSON 은 size 10 외 값으로 부르지 말 것.
 - 빌드 = PowerShell 에서 `cmd /c "D:\coupang-analytics\build.bat"`(Git Bash 의 `cmd //c build.bat` 은 파일을 못 찾음). 'WinError 5 액세스 거부'(dist 폴더 삭제 실패) = `dist` 안 폴더 **읽기 전용 속성**(11-08 실측 162개·맨 위 `dist`·`dist\coupang-analytics` 포함) → 속성만 풀고 다시. `dist\coupang-analytics_old_stuck` = 옛 잔여(손대지 않음).
 - 무거운 작업(게이트·빌드·에이전트)은 하나씩 — 빌드 중 게이트 동시 실행 금지(10-10 BSOD). 커밋 훅(--quick ~4분)·푸시 훅(전체+복잡도 ~4분)도 무거운 작업.
 - 정산서 재생성 = 장부 기준일 고정 필수 · 통합판매현황 1행 숨긴 칸 '차트설정:' 지우지 말 것.
-- 병렬 세션 번호 — 다음 = **D-174·R106**.
+- 병렬 세션 번호 — 다음 = **D-176·R107**.
 - 사람 승인 대기열 금지 · 로그인·판매수집·정산 = 프록시 금지 · 배포 zip·결과 시트 반영 = 통제 세션만.
