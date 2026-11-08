@@ -59,7 +59,7 @@
 - (사실) 매출성장광고 = `reportType:"pa"` 캠페인만 · 윙 주문상세 '판매가' = 수량 2개 이상 줄에서 줄 합계 · `output\정산\정산\` 옛 중첩 폴더 · 계정목록 105 vs 판매 중 101·관리 상품 144 > 109 원인 미확인.
 - **(재등록 R106 · 소유자 판단 대기) 끊겼던 미결** — 원문 = 각 파일:
   - (R108 새 미확인) D-088 (1) 예정액 차이 사유 6가지 문구 — 지금 정산서(`statement_managed.py`)에 'FORECAST_NOTE' 0건 · 어느 결정이 뺐는지 원문 없음 → 남았는지·뺀 것이 맞는지 정산 세션 확인.
-  - (통제 세션 'Coupang Analytics' 전용 — 감사 F절·D-151 남은 것) `config.py:82` `KW_MAX_TRACK(=7)`·'쿨다운 동반' → 10·D-030 · `config.py:88~89·106~108` `RANK_BACKFILL`·`_ROUNDS`·`_COOLDOWN_SEC` 사용처 0(b8dde4d 에서 사용 코드 삭제) → 물리 삭제 · `pipeline.py:695` '오늘은 같은 값을 다시 넣지 않음·D-068' → '24시간·D-123' · `designs/DESIGN.md:399·496` '상품별 판매 리포트' → '상품별 판매'(D-063) · `CLAUDE.md:18` 정의서 128칸 → 137칸 · HANDOFF.md 삭제(D-179) 뒤 남은 참조 `CLAUDE.md:87`·`designs/DOMAIN_D2_SOURCING.md:168` 'HANDOFF §4-1'(원래 없던 절) → "구현 보류 — CLAUDE.md '환경' 절" 식으로. 덤(같은 '쿨다운' 잔재) `config.py:55·336~337`·`DESIGN.md:13`·`ui/app_qt.py:1636`·`pipeline_ranks.py:504`. 근거·제안 문장 = `docs/decisions/remaining-survey-2026-11-08.md` A-1·A-2.
+  - (통제 세션 전용 — 감사 F절·D-151) 5건은 R112 통제 세션에서 고침(config KW_MAX_TRACK 주석·RANK_BACKFILL 3개 삭제·pipeline:695 24시간·DESIGN '상품별 판매'·CLAUDE.md 137칸·HANDOFF §4-1 참조). 남은 덤(같은 '쿨다운' 잔재) `config.py:55·336~337`·`DESIGN.md:13`·`ui/app_qt.py:1636`·`pipeline_ranks.py:504`. 근거·제안 문장 = `docs/decisions/remaining-survey-2026-11-08.md` A-1·A-2.
   - D-171 N11 사이즈 리포트 보류 — 요청 방법(소유자가 4월에 어디서 요청했는지) 답 대기(다음 작업 4).
 - (사실 · R112) `D:\ca-wt-dash`·`D:\ca-wt-settle` 은 옛 `run_checks.py` — 새 훅에서도 매번 검사(고장 아님·master 받으면 빨라짐). 병합된 브랜치 `feat/gate-speed` 남아 있음(삭제 안 함).
 - (사실 · R105 참고·미수정) 앱 ② 예외 때도 종합 블록이 '② 키워드 선정: 함'(판정 줄은 '오류 발생 --> 중단').

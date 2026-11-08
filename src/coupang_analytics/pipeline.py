@@ -692,7 +692,7 @@ def _log_login_failures(ctx: _RunCtx, accounts, uncollected) -> None:
                 + " — 다음 실행에서 다시 시도 ==")
     if pw:
         ctx.log(f"== ⚠ 비밀번호 오류로 수집 못한 계정 {len(pw)}개: {', '.join(a.label for a in pw)} — 관리대장 비밀번호 "
-                "수정 필요(오늘은 같은 값을 다시 넣지 않음·D-068) ==")
+                "수정 필요(거부된 같은 값은 24시간 다시 넣지 않음·D-123) ==")
 
 
 def run_full(input_list: InputList, out_dir: str = "output",

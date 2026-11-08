@@ -15,7 +15,7 @@
 cd D:\coupang-analytics
 python ui/app_qt.py     # 기본 UI = PySide6(Qt) + Windows 11 Fluent 스타일
 ```
-설계 SSOT: `designs/DESIGN.md`, `designs/KEYWORD_SELECTION.md`, `designs/GSHEET_UNIFIED.md`, `designs/IO_DEFINITION.md`(입출력 정의서 v1 — 파일 칸↔화면 칸 1:1·128칸·구현 시 기준·2026-10-05).
+설계 SSOT: `designs/DESIGN.md`, `designs/KEYWORD_SELECTION.md`, `designs/GSHEET_UNIFIED.md`, `designs/IO_DEFINITION.md`(입출력 정의서 v1 — 파일 칸↔화면 칸 1:1·137칸·구현 시 기준·2026-10-05).
 
 ## 문서 지도 (⛔자동으로 안 읽힘 — 해당 작업 전에 먼저 읽는다)
 > 20KB 상한(소유자 2026-11-05)에 맞춰 상세를 원문 그대로 옮겼다(삭제 0·D-151·대조표=`docs/decisions/claudemd-move-2026-11-05.md`). 다른 문서의 "CLAUDE.md 제약·함정·운영 정책·현재 상태" 참조 = 아래 문서.
@@ -85,4 +85,4 @@ python ui/app_qt.py     # 기본 UI = PySide6(Qt) + Windows 11 Fluent 스타일
 
 ## 환경
 - Windows, Python, Playwright(sync) + 실제 Google Chrome. 키(설정 탭에서 1회 입력→credstore 자동 로드): **필수** 네이버 검색광고 API + **OpenAI(ChatGPT) API**(키워드 AI 필수, 없으면 실행 중단).
-- ⛔ **네이버쇼핑 검색 API(shop.json)는 2026-07-31자로 완전 종료**(대체 없음) — 경쟁강도 소스 소멸. 설정 탭 "(선택) 네이버쇼핑 키"는 무의미(발급 불필요), `kw_shopping.py`는 죽은 엔드포인트. 경쟁강도 대안=쿠팡 검색결과 총 상품수(구현 보류, HANDOFF §4-1).
+- ⛔ **네이버쇼핑 검색 API(shop.json)는 2026-07-31자로 완전 종료**(대체 없음) — 경쟁강도 소스 소멸. 설정 탭 "(선택) 네이버쇼핑 키"는 무의미(발급 불필요), `kw_shopping.py`는 죽은 엔드포인트. 경쟁강도 대안=쿠팡 검색결과 총 상품수(구현 보류).
