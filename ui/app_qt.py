@@ -557,7 +557,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
 
         # 2) 관리대장(입력) 링크
         self.gs_input_edit = QtWidgets.QLineEdit(st.value("gsheet/input_url", "", type=str))
-        self.gs_input_edit.setPlaceholderText("「토탈셀러_셀독 관리 대장」 구글시트 링크 또는 ID — 비우면 PC 엑셀 사용")
+        self.gs_input_edit.setPlaceholderText("「토탈셀러_셀독 관리 대장」 구글시트 링크 또는 ID — 못 읽으면(비어 있음 포함) 실행 중단·PC 엑셀로 대신 돌리지 않음")
         self.gs_input_edit.editingFinished.connect(lambda: self._on_gs_link_edited("input"))
         in_btns = QtWidgets.QHBoxLayout()
         in_chk = QtWidgets.QPushButton("연결 확인")
