@@ -97,7 +97,9 @@ class RunSummary:
             self.errors.setdefault(RANKS, []).append("③ 순위 결과 없음(결과 워크북 없음 등 — 위 로그 확인)")
             return "③ 순위: 결과 없음"
         tail = " · 모든 처리 끝난 뒤 빈 칸 1회 재시도함" if self.retried else ""
-        return (f"③ 순위: 측정 {r.get('searched', 0)}건 · 빈 칸 {r.get('unfilled', 0)} · VID 없음 {r.get('novid', 0)} · "
+        n, first = int(r.get("searched") or 0), r.get("first_searched")
+        split = f"(첫 회 {first} + 재시도 {n - first})" if self.retried and first is not None else ""
+        return (f"③ 순위: 측정 {n}건{split} · 빈 칸 {r.get('unfilled', 0)} · VID 없음 {r.get('novid', 0)} · "
                 f"차단감지 {r.get('blocked', 0)}회{tail}")
 
     def _error_lines(self) -> list[str]:

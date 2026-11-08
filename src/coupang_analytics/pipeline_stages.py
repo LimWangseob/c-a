@@ -41,6 +41,26 @@ def plan_resume_stages(marker: dict | None, prog: dict | None) -> StagePlan | No
     return StagePlan(sales=do_sales, keywords=do_sales or stage == "sales", ranks=True, resume=True)
 
 
+def _retry_blank_ranks(ranks: dict, log, should_stop, result):
+    """③ 빈 칸이 남았으면 모든 처리 끝난 뒤 빈 칸만 1회 더(소유자 11-08 D-173 · 채운 칸은 ③이 건너뜀 · 중지면 안 함).
+
+    ③은 부를 때마다 LAST_RANK 를 새로 채운다 → 재시도분만 남아 첫 회 측정·차단이 사라지던 결함(11-08 시뮬 재현)
+    → 측정·차단·연결 장애 = 첫 회 + 재시도 합산(첫 회 측정 수 따로 보관) · 빈 칸·VID 없음 = 재시도 결과."""
+    left = int(LAST_RANK.get("unfilled") or 0)
+    if not left or should_stop():
+        return result
+    first = dict(LAST_RANK)
+    log.enter(RANKS, again=True)
+    log(f"[단계] ③ 순위 빈 칸 {left}개 — 모든 처리 끝난 뒤 1회 재시도")
+    result = track_ranks_stage(**ranks) or result
+    for k in ("unfilled", "novid", "stopped"):   # 재시도가 요약 없이 끝남(워크북 못 읽음 등) → 첫 회 빈 칸 유지
+        LAST_RANK.setdefault(k, first.get(k))
+    for k in ("searched", "blocked", "conn"):
+        LAST_RANK[k] = int(first.get(k) or 0) + int(LAST_RANK.get(k) or 0)
+    LAST_RANK["first_searched"] = int(first.get("searched") or 0)
+    return result
+
+
 def run_stages(input_list, plan: StagePlan, *, ai_key, naver, date_from: str, date_to: str, date_label: str,
                get_password, carry: bool, redo_today: bool = False, designated: bool = False,
                grow: bool = False, rank_date_label: str | None = None, should_stop=lambda: False,
@@ -80,11 +100,7 @@ def run_stages(input_list, plan: StagePlan, *, ai_key, naver, date_from: str, da
             log.enter(STOCK)
             push_ledger_inventory(gsheet_input_url, log)
             push_company_stock(stock_url, gsheet_input_url, log)
-            left = int(LAST_RANK.get("unfilled") or 0)
-            if left and not should_stop():   # 소유자 11-08: 모든 처리 끝난 뒤 빈 칸만 1회 더(채운 칸은 ③이 건너뜀)
-                log.enter(RANKS, again=True)
-                log(f"[단계] ③ 순위 빈 칸 {left}개 — 모든 처리 끝난 뒤 1회 재시도")
-                result = track_ranks_stage(**ranks) or result
+            result = _retry_blank_ranks(ranks, log, should_stop, result)
             if not should_stop():
                 write_run_stage("done")
         return result

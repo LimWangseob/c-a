@@ -190,9 +190,11 @@ from coupang_analytics import run_result as _rr  # noqa: E402
 MASTER = Path("output") / "쿠팡데이타분석_통계.xlsx"
 
 
-def _fake_result_stages(*, unfilled=(0,), sales_fail=False, kw_fail=False, kw_raise=None, stop_at=None):
-    """가짜 단계 — ①은 LAST_SALES, ③은 LAST_RANK 를 실제처럼 채우고 로그를 남긴다(실 로그인·시트 없음)."""
-    calls, marks, stop, seq = [], [], {"v": False}, list(unfilled)
+def _fake_result_stages(*, unfilled=(0,), searched=(5,), sales_fail=False, kw_fail=False, kw_raise=None, stop_at=None,
+                        retry_empty=False):
+    """가짜 단계 — ①은 LAST_SALES, ③은 LAST_RANK 를 실제처럼 채우고 로그를 남긴다(실 로그인·시트 없음).
+    unfilled·searched = ③ 회차마다 값(실제 ③처럼 부를 때마다 LAST_RANK 를 새로 채움) · retry_empty = 재시도 ③이 요약 없이 끝남."""
+    calls, marks, stop, seq, sseq = [], [], {"v": False}, list(unfilled), list(searched)
 
     def fake_run_full(_il, **kw):
         calls.append("①")
@@ -217,10 +219,13 @@ def _fake_result_stages(*, unfilled=(0,), sales_fail=False, kw_fail=False, kw_ra
     def fake_track(**k):
         calls.append("③")
         n = seq.pop(0) if seq else 0
+        s = sseq.pop(0) if len(sseq) > 1 else sseq[0]
         if n:
             k["on_log"]("  ❌ [순위] 가-1 · 상품 「kw」 — 검색결과가 두 바퀴 연속 안 나옴 → 공란, 확인 필요")
         _st.LAST_RANK.clear()
-        _st.LAST_RANK.update(searched=5, blocked=1, conn=0, unfilled=n, novid=0, stopped=False)
+        if retry_empty and calls.count("③") > 1:   # 재시도 ③이 워크북을 못 읽고 끝남(요약 없음)
+            return None
+        _st.LAST_RANK.update(searched=s, blocked=1, conn=0, unfilled=n, novid=0, stopped=False)
         stop["v"] = stop["v"] or stop_at == "③"
         return MASTER
     _st.run_full, _st.select_keywords_stage, _st.track_ranks_stage = fake_run_full, fake_kw, fake_track
@@ -238,7 +243,7 @@ def _block(logs: list) -> list:
 def pin_run_result():
     print("[핀 P11] 실행 결과 종합 — 판정 '원인 --> 결과' · 빈 칸은 모든 처리 끝난 뒤 ③ 1회 재시도 · 예외·중지에도 블록")
     logs: list = []
-    calls, marks, stop = _fake_result_stages(unfilled=(2, 0), sales_fail=True, kw_fail=True)
+    calls, marks, stop = _fake_result_stages(unfilled=(2, 0), searched=(3, 2), sales_fail=True, kw_fail=True)
     run_stages(
         None, StagePlan(), ai_key="k", naver=None, date_from=DF, date_to=DT, date_label=DL, get_password=lambda a: None,
         carry=True, should_stop=stop, on_log=logs.append, gsheet_output_url="https://docs.google.com/spreadsheets/d/OUT")
@@ -252,7 +257,8 @@ def pin_run_result():
     _check("① 판매수집: 수집 성공 1/3계정" in b, "① 수집 성공 수")
     _check(any(x.startswith("비밀번호 오류로 수집 안 된 계정: 1개 — 나-2 (") and "24시간" in x for x in b), "비밀번호 오류 계정")
     _check("사람 조치 필요: 1개" in b and "  - 다-3: 2단계 인증 필요" in b, "사람 조치(2단계 인증)")
-    _check("③ 순위: 측정 5건 · 빈 칸 0 · VID 없음 0 · 차단감지 1회 · 모든 처리 끝난 뒤 빈 칸 1회 재시도함" in b, "③ 요약(재시도 결과)")
+    _check("③ 순위: 측정 5건(첫 회 3 + 재시도 2) · 빈 칸 0 · VID 없음 0 · 차단감지 2회 · 모든 처리 끝난 뒤 빈 칸 1회 재시도함" in b,
+           "③ 요약 = 첫 회 + 재시도 합산(측정·차단) · 빈 칸은 재시도 결과(11-08 시뮬 재현: 재시도분만 남던 결함)")
     err = j.split("오류 현황")[1].split("이번 실행에서 저장한 파일")[0]
     _check("노출명 확인 실패" in err and "자동완성] 실패" in err, "오류 현황 = ① '❌' 줄 + ② '실패' 줄")
     _check("두 바퀴 연속" not in err and "[자동입력] 실패" not in err, "재시도로 풀린 ③ 첫 회 ❌·① 도중 '실패'는 오류 아님")
@@ -285,6 +291,13 @@ def pin_run_result():
     _check(raised and b[1] == "판정: 오류 발생 --> 중단" and "오류 내용: RuntimeError: boom" in b,
            "예외 → 블록 찍고 예외는 그대로 올림·'오류 발생 --> 중단'")
     _check("③ 순위: 이번 실행에서 안 돎" in b, "안 돈 단계 표시")
+    logs = []
+    calls, marks, stop = _fake_result_stages(unfilled=(2,), searched=(3,), retry_empty=True)
+    run_stages(None, StagePlan(), ai_key="k", naver=None, date_from=DF, date_to=DT, date_label=DL,
+               get_password=lambda a: None, carry=True, should_stop=stop, on_log=logs.append)
+    b = _block(logs)
+    _check(b[1] == "판정: 순위 빈 칸 --> 확인 필요" and any("측정 3건(첫 회 3 + 재시도 0) · 빈 칸 2" in x for x in b),
+           f"재시도 ③이 요약 없이 끝나도 첫 회 빈 칸 유지(정상 완료로 오판 안 함) {b[1]}")
     logs = []
     calls, marks, stop = _fake_result_stages()
     run_stages(None, StagePlan(keywords=False, ranks=False), ai_key="k", naver=None, date_from=DF, date_to=DT,
