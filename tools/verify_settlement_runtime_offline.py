@@ -1846,7 +1846,7 @@ def p54_result_summary():
         lg.remaining("E-5", "판매분석", 30, "일")
         b = RLG.result_block(lg, pending=3)
         j = " | ".join(b)
-        assert b[0] == "===== [실행 결과 종합] =====" and b[1] == "판정: 일부 실패 — 확인 필요", b[:2]
+        assert b[0] == "===== [실행 결과 종합] =====" and b[1] == "판정: 일부 실패 --> 확인 필요", b[:2]
         assert "전체 작업 계정: 5개 — A-1, B-2, C-3, D-4, E-5" in b
         assert any(x.startswith("비밀번호 오류로 수집 안 된 계정: 1개 — B-2 (") and "24시간" in x for x in b), j
         assert "사람 조치 필요: 1개" in b and any(x.startswith("  - C-3: otp: 2차 인증") for x in b), j
@@ -1854,10 +1854,10 @@ def p54_result_summary():
         assert "D-4" not in j.split("오류 현황")[1].split("대기·확인 필요")[0]
         assert "남은 소급: 판매분석 150일(2계정) · 월자료 6달(1계정) · 쿠팡 파일 생성·요청 대기 3건" in b, j
         assert "이번 실행에서 받은 파일: 1개" in b and f"  - A-1: {f1.resolve()} (정산 파일)" in b, j   # 드라이브부터 전체 경로
-        assert b[-1].startswith("==> 일부 실패 — 확인 필요 · 계정 5 · 비밀번호 오류 1 · 사람 조치 1 · 오류 2 · 받은 파일 1"), b[-1]
+        assert b[-1].startswith("==> 일부 실패 --> 확인 필요 · 계정 5 · 비밀번호 오류 1 · 사람 조치 1 · 오류 2 · 받은 파일 1"), b[-1]
         lg.summary(pending=3)                                                        # 실행 로그 끝에 그대로 남음
         txt = lg.text.read_text(encoding="utf-8")
-        assert "[실행 결과 종합]" in txt and "==> 일부 실패" in txt.splitlines()[-1]
+        assert "[실행 결과 종합]" in txt and "==> 일부 실패 --> 확인 필요" in txt.splitlines()[-1]
         # 정상 완료 · 남은 소급 0 = '없음' · 소급 기록 자체가 없으면 '확인 못 함'
         ok_lg = RLG.RunLog(tmp, now=datetime(2026, 11, 8, 19), echo=lambda m: None)
         ok_lg.record("A-1", "로그인", RLG.OK, "success")
@@ -1871,7 +1871,7 @@ def p54_result_summary():
         p1.record("A-1", "계정", RLG.BLOCK, "BlockDetected: 차단 화면")
         p1.record("(전체)", "중단", RLG.BLOCK, "연속 2계정 실패/차단 — 전체 중단")
         p1.remaining("A-1", "판매분석", 40, "일")
-        assert RLG.result_block(p1)[1] == "판정: 중단"
+        assert RLG.result_block(p1)[1] == "판정: 연속 실패 --> 중단"                          # 원인 --> 결과(소유자 11-08)
         p2 = RLG.RunLog(tmp, now=datetime(2026, 11, 8, 21), echo=lambda m: None)
         p2.accounts = ["A-1", "C-3"]
         p2.record("C-3", "로그인", RLG.OK, "success")                                # 사람이 인증 → 뒤 바퀴 성공 = 사람 조치에서 빠짐
@@ -1883,10 +1883,10 @@ def p54_result_summary():
         cyc.add(p1)
         cyc.add(p2)
         c = RLG.result_block(cyc, note="회차 종료 시각", title="실행 결과 종합 — 이번 회차 2바퀴")
-        assert c[0] == "===== [실행 결과 종합 — 이번 회차 2바퀴] =====" and c[1] == "판정: 일부 실패 — 확인 필요 — 회차 종료 시각", c[:2]
+        assert c[0] == "===== [실행 결과 종합 — 이번 회차 2바퀴] =====" and c[1] == "판정: 일부 실패 --> 확인 필요 — 회차 종료 시각", c[:2]
         assert "사람 조치 필요: 0개" in c and "  - 계정 차단 1건: A-1" in c and "전체 작업 계정: 2개 — A-1, C-3" in c, c
         assert "남은 소급: 없음" in c and "이번 실행에서 받은 파일: 1개" in c                    # 남은 수 = 마지막 바퀴 값
-        assert RLG.result_block(cyc, stopped=True)[1] == "판정: 중단"                             # 진전 없음 종료(giveup) 등
+        assert RLG.result_block(cyc, stopped=True)[1] == "판정: 진전 없음 --> 중단"               # watch 진전 없음 종료(giveup)
         # 회차 끝(watch) — 마지막 실행 로그 끝에 회차 합계 블록 · 상태 카드에 한 줄 요약
         import settlement_download as TD
         last = RLG.RunLog(tmp, now=datetime(2026, 11, 9, 17, 55), echo=lambda m: None)
@@ -1895,8 +1895,8 @@ def p54_result_summary():
         tail = last.text.read_text(encoding="utf-8")
         assert "[실행 결과 종합 — 이번 회차 2바퀴]" in tail and "쿠팡 파일 생성·요청 대기 2건" in tail, tail
         card = last.status.read_text(encoding="utf-8")
-        assert "상태: 종료" in card and "결과 종합: 일부 실패 — 확인 필요 · 계정 2" in card, card
-    ok("판정 3종(정상 완료·일부 실패 확인 필요·중단) · 계정 이름 전부 · 비밀번호 오류/사람 조치 분리(마지막 로그인 기준) · "
+        assert "상태: 종료" in card and "결과 종합: 일부 실패 --> 확인 필요 · 계정 2" in card, card
+    ok("판정(정상 완료·일부 실패 --> 확인 필요·연속 실패/진전 없음 --> 중단) · 계정 이름 전부 · 비밀번호 오류/사람 조치 분리(마지막 로그인 기준) · "
        "같은 일 재성공은 풀림·계정 단위 실패는 남음 · 받은 파일 전체 경로 · 남은 소급 합계·계정 수·대기 건 · 회차 합계")
 
 

@@ -183,12 +183,15 @@ def login_problems(rows: list[dict]) -> tuple[list[str], dict[str, str]]:
 
 
 def verdict(rows: list[dict], stopped: bool = False) -> str:
-    """판정 — 중단(호출부 중단·'(전체)' 실패가 안 풀림) > 일부 실패 확인 필요(안 풀린 실패·'확인 필요' 대기) > 정상 완료."""
+    """판정 = '원인 --> 결과'(소유자 11-08 — 결과만 쓰지 말고 원인까지). 진전 없음 --> 중단(stopped = watch 가 진전 없이 끝남)
+    > 연속 실패 --> 중단('(전체)' 중단이 안 풀림) > 일부 실패 --> 확인 필요(안 풀린 실패·'확인 필요' 대기) > 정상 완료."""
     fails = open_failures(rows)
-    if stopped or any(r["계정"] == ALL for r in fails):
-        return "중단"
+    if stopped:
+        return "진전 없음 --> 중단"
+    if any(r["계정"] == ALL for r in fails):
+        return "연속 실패 --> 중단"
     if fails or any(r["결과"] == WAIT and "확인 필요" in r["사유"] for r in rows):
-        return "일부 실패 — 확인 필요"
+        return "일부 실패 --> 확인 필요"
     return "정상 완료"
 
 
