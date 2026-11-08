@@ -348,6 +348,8 @@
 | N12 | 프로모션 추가 수수료 (D-171) | GET `/tenants/msf/wing/api/payment-report/promotion-fee` → `{participated, extraFeeRatio}` | 계정마다 하루 1번 | `collect_verify`(검증 원자료 한 항목) | [사실] gyi0101 `participated:false, extraFeeRatio:7` |
 | N13 | 리뷰 이벤트 캠페인 목록 (D-171) | GET `/tenants/rfm-ss/api/manage-review-campaign/campaigns?startDate&endDate&pageSize` | 계정마다 하루 1번(2026-01~오늘) | `collect_verify` | [사실] gyi0101 0건 · PPIR(`totalPostPurchaseDeductionAmount`) 대사 근거 |
 
+- **구현(R101 · N3~N7·N10 = `settlement_docs.py` · 정산 실행 소급 단계 `collect_docs`)**: 저장 = `output\정산\검증자료\월자료\{계정}\{종류}_{YYYYMM}.json|xlsx` + `_받은기록.json`(받은 달·시각 — 받은 달은 다시 안 받음) · RG 반품 = `RG반품내역_최신.xlsx` 하루 1번 덮어쓰기 · 회차(18:00~) 계정당 종류별 3달·최근 달부터 · 받는 시점 = 말일 + 15일(라이브 35일 — 계산일 다음 달 25일 실측) [추정·지연일] · 업체코드 = RG 정산현황 원문(`정산현황_원문\{계정}`)의 settlementGroupKey 앞부분(하나일 때만 · 없으면 RG 2종 안 받음) · 세금계산서 화면은 HTML 이라 `call_html`(403·429·Access Denied = 차단) · 주문별 매출 쪽 사이 1~2.5초.
+- **'받음' 판정(오류 정의)**: 세금계산서 = 머리글 12칸/10칸 그대로 · 라이브 = 상세 합 = 요약 합(netGmv·amount — 실측 97,300·4,865 일치) · 주문별 = 10×(쪽−1) < 줄 ≤ 10×쪽·중복 없음·마지막 빈 쪽 · 재고변동 = 시트 2개·'내역 발생 일자' = 그 달·머리글(실파일 gyi0101 2026-01 → 상품 340줄) · 반품 = 'Excel Data' 머리글 10칸(실파일 → 3,515줄). 판정 실패 = 저장 안 함·그 종류만 이번 회차 멈춤·처리기록 '월자료' 대기 줄. 위수탁 세금계산서 쪽 넘김은 실측 없음(빈 쪽·같은 줄 반복에서 멈춤)[추정].
 - **제외(D-171)**: 매출내역 상세(`MSF_PURCHASE_REVENUE_DETAIL`) — [사실] gyi0101 2026-01 파일이 이미 받는 `윙_최종액_주문상세_20260101-20260131.xlsx` 와 449줄·주문 151·판매액 3,952,600·수수료 466,121·정산금액 3,480,779 동일(차이 = 구매자명 칸뿐) → 요청만 늘어남.
 - **보류 없음(D-171)**: 보류 제안했던 4종(주문별 JSON·사이즈 리포트·프로모션 수수료·리뷰 캠페인)은 소유자 결정으로 모두 받음 = N10~N13. 주문별 JSON 응답 없음 원인 = 쪽 크기(size 100) — 2026-11-08 2차 실측으로 확정.
 - **불가**: 셀러월렛 내역(대표 본인 PIN·D-163) · 'B' 파일(엑셀 버튼 없음).

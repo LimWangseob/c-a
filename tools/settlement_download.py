@@ -510,11 +510,36 @@ def cmd_run(a, b, args, jobs: list) -> None:
 
 
 def cmd_backfill(a, b, args, jobs: list) -> None:
-    """소급 단계(D-170) — 판매분석 1/1~(회차 기준 상한 150일→60일·D-167). 한 일이 있으면 '소급' 줄을 남겨
+    """소급 단계(D-170) — 판매분석 1/1~(회차 기준 상한 150일→60일·D-167) + 월자료(D-171). 한 일이 있으면 '소급' 줄을 남겨
     다음 바퀴 판단(_sweep_work_count)에 셈 — 다 받았거나 이번 회차 상한을 다 쓰면 줄 없음 → '완료'로 끝남."""
     days = collect_sales(a, b, args)
-    if days:
-        LOG.record(name_of(a), "소급", RL.OK, f"판매분석 {days}일")
+    docs = collect_docs(a, b, args)
+    if days or docs:
+        LOG.record(name_of(a), "소급", RL.OK, f"판매분석 {days}일 · 월자료 {docs}개")
+
+
+def collect_docs(a, b, args) -> int:
+    """월자료(D-171 — 세금계산서 2종·라이브·주문별 매출·RG 재고변동 + RG 반품내역 하루 1번) · 회차 계정당 종류별 3달(D-170).
+    조회만. 종류 하나 실패 = 그 종류만 기록하고 계속(차단만 중단). 반환 = 받은 파일 수. 저장 = 검증자료/월자료/{계정}/."""
+    from coupang_analytics import settlement_docs as DOC
+    name = name_of(a)
+    tok = SF._token(name, "계정명")
+
+    def html(method: str, path: str, body):
+        try:
+            return DOC.call_html(b.page, method, path, body)
+        except API.ApiBlocked as exc:
+            LOG.record(name, "차단감지", RL.BLOCK, str(exc))
+            raise BlockDetected(str(exc)) from exc
+    goto(b, API.WING_URL, name)
+    s = DOC.collect(lambda m, p, body: api(b, name, m, p, body), html, lambda url: _get_bytes(b, url), VERIFY / "월자료" / tok,
+                    date.today(), vendor=DOC.vendor_from_snapshots(BASE / RG_RAW_DIRNAME / tok),
+                    since=getattr(args, "cycle_since", "") or f"{date.today()}T00:00:00",
+                    gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)), page_gap=lambda: time.sleep(random.uniform(1, 2.5)),
+                    note=lambda m: LOG.record(name, "월자료", RL.WAIT, m), fatal=(BlockDetected,))
+    if s["받음"] or s["남은 달"]:
+        LOG.record(name, "월자료", RL.OK, f"받음 {len(s['받음'])}개 {' · '.join(s['받음'])}" + f" · 남은 달 {s['남은 달']}")
+    return len(s["받음"])
 
 
 def _run_both(accts, args) -> int:

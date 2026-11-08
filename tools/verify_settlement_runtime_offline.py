@@ -2070,18 +2070,20 @@ def p51_regular_then_backfill():
     fake_log = SimpleNamespace(record=lambda *a, **k: recs.append(a), rows=[])
     patches = [(TD, "cmd_request", lambda *a: calls.append("요청")), (TD, "cmd_download", lambda *a: calls.append("받기")),
                (TD, "collect_verify", lambda *a: calls.append("검증")), (TD, "collect_ads", lambda *a: calls.append("광고")),
-               (TD, "collect_sales", lambda *a: (calls.append("판매"), 37)[1]), (TD.time, "sleep", lambda s: None),
+               (TD, "collect_sales", lambda *a: (calls.append("판매"), 37)[1]),
+               (TD, "collect_docs", lambda *a: (calls.append("월자료"), 2)[1]), (TD.time, "sleep", lambda s: None),
                (TD, "name_of", lambda a: "A"), (TD, "LOG", fake_log)]
     args = SimpleNamespace(dry_run=False, until="", start=D("2026-01-01"))
     _patched(patches, lambda: TD.cmd_run(None, None, args, []))
     assert calls == ["요청", "받기", "검증", "광고"], calls
     calls.clear()
     _patched(patches, lambda: TD.cmd_backfill(None, None, args, []))
-    assert calls == ["판매"] and recs and recs[-1][1] == "소급" and "판매분석 37일" in recs[-1][3], (calls, recs)
+    assert calls == ["판매", "월자료"] and recs and recs[-1][1] == "소급" and "판매분석 37일 · 월자료 2개" in recs[-1][3], (calls, recs)
     fake_log.rows = [{"단계": "소급", "결과": TD.RL.OK}, {"단계": "받기", "결과": TD.RL.OK}, {"단계": "검증", "결과": TD.RL.OK}]
     assert TD._sweep_work_count(fake_log) == 2, "요청·받기·소급만 '한 일'"
     recs.clear()
-    _patched([(TD, "collect_sales", lambda *a: 0), (TD, "name_of", lambda a: "A"), (TD, "LOG", fake_log)],
+    _patched([(TD, "collect_sales", lambda *a: 0), (TD, "collect_docs", lambda *a: 0), (TD, "name_of", lambda a: "A"),
+              (TD, "LOG", fake_log)],
              lambda: TD.cmd_backfill(None, None, args, []))
     assert not recs, "받은 게 없으면 '소급' 줄 없음(다 받았거나 이번 회차 상한 다 씀 → 완료로 끝남)"
     # ④ 한 바퀴 = 전 계정 정기 → 전 계정 소급 · 정기가 중단(연속 실패)이면 소급 안 함
@@ -2108,6 +2110,165 @@ def p51_regular_then_backfill():
         stopped, _work = _patched(pat, lambda: TD._one_pass(SimpleNamespace(start=D("2026-01-01"), until="", dry_run=False)))
         assert order == want and stopped == bool(rc_regular), (order, stopped)
     ok("정기 = 요청·받기·검증·광고 · 소급 = 판매분석(회차 기준 150일→60) · 전 계정 정기 끝난 뒤 소급 · 소급 한 일도 '다음 바퀴' 판단에 셈")
+
+
+def p52_settlement_docs():
+    print("[P52] 정산 월자료(D-171 N3~N7·N10) — 세금계산서 2종·라이브·주문별 매출(size 10)·RG 재고변동·RG 반품 하루 1번 · 회차당 종류별 3달")
+    import calendar
+    import gzip
+    import io
+    import json
+    import tempfile
+    from datetime import datetime
+    from pathlib import Path
+    import openpyxl
+    from coupang_analytics import settlement_docs as DOC
+    from coupang_analytics import settlement_wing_api as API
+    # ① 받을 달: 2026-01 부터 · 말일+지연일이 지난 달 · 최근부터
+    assert [m[0] for m in DOC.due_months("매입세금계산서", D("2026-11-08"))] == [f"2026{m:02d}" for m in range(9, 0, -1)]
+    assert DOC.due_months("라이브정산", D("2026-03-08"))[0][0] == "202601", "라이브 계산일 = 다음 달 25일 → 35일 뒤"
+    assert DOC.due_months("라이브정산", D("2026-03-07")) == []
+
+    # ② 매입 세금계산서 HTML(실측 12칸) → 줄·공급가액 합 · 머리글 바뀌면 화면 변경 · '발행 내역이 없습니다' = 0줄
+    def table(head, rows):
+        def tr(cells, t):
+            return "<tr>" + "".join(f"<{t}> {c} </{t}>" for c in cells) + "</tr>"
+        return ("<html><table class='x'><tr><td>달력</td></tr></table><table class='table table-bordered'><thead>" + tr(head, "th")
+                + "</thead><tbody>" + "".join(tr(r, "td") for r in rows) + "</tbody></table></html>")
+    r1 = ["쿠팡 주식회사", "1208800767", "유라이프", "000", "판매수수료 판매자서비스이용료", "1", "473,746", "47,375", "521,121",
+          "2026-01-31", "전송완료", "보기"]
+    r2 = r1[:5] + ["2", "-182,748", "-18,274", "-201,022"] + r1[9:]
+    seen: list = []
+
+    def hc(m, p, b):
+        seen.append((m, p, b))
+        return table(DOC.TAX_HEAD, [r1, r2])
+    d = DOC.fetch_purchase_tax(hc, D("2026-01-01"), D("2026-01-31"))
+    assert seen == [("POST", DOC.TAX, "from=2026-01-01&to=2026-01-31&year=2026&month=01")], seen
+    assert d["공급가액 합"] == 473746 - 182748 and d["세액 합"] == 47375 - 18274 and d["줄"][0]["발행내용"] == r1[4], d
+    expect(API.SiteChangedError, lambda: DOC.parse_invoice_table(table(DOC.TAX_HEAD[:-1], [r1[:-1]]), DOC.TAX_HEAD), "머리글 변경")
+    assert DOC.parse_invoice_table(table(DOC.CONSIGN_HEAD, [["발행 내역이 없습니다."]]), DOC.CONSIGN_HEAD) == []
+    # 위수탁: 쪽 넘김 — 같은 줄이 다시 오거나 빈 쪽이면 멈춤
+    c1 = ["11", "유라이프", "000", "x", "A1", "1,000", "100", "1,100", "2026-01-31", "보기"]
+    pages = {1: [c1], 2: [c1[:4] + ["A2"] + c1[5:]], 3: [c1]}
+    cs = DOC.fetch_consign_tax(lambda m, p, b: table(DOC.CONSIGN_HEAD, pages[int(p.split("page=")[1].split("&")[0])]),
+                               D("2026-01-01"), D("2026-01-31"))
+    assert cs["공급가액 합"] == 2000 and len(cs["줄"]) == 2, cs
+
+    # ③ 라이브: 요약·상세(쪽 끝까지)·크리에이터 칸 제외 · 상세 합 ≠ 요약 합 = 다 못 받음
+    summ = {"successful": True, "rData": [{"netGmv": 97300, "amount": 4865, "platformFeeVat": 487}]}
+
+    def raw(i):
+        return {"successful": True, "rData": {"page": {"pageTotal": 2, "pageIndex": i}, "data": [
+            {"orderId": i, "netGmv": 48650, "amount": 2432 + (i == 2), "creatorName": "누구", "creatorNameToken": "t", "creatorId": 9}]}}
+
+    def lc(m, p, b):
+        return summ if "/summary/" in p else raw(int(p.rsplit("=", 1)[1]))
+    lv = DOC.fetch_live(lc, "202601")
+    assert len(lv["상세"]) == 2 and "creatorName" not in str(lv) and lv["요약"] == summ["rData"], lv
+    expect(API.SiteChangedError, lambda: DOC.fetch_live(lambda m, p, b: summ if "/summary/" in p else
+                                                        {"successful": True, "rData": {"page": {"pageTotal": 1}, "data": []}}, "202601"),
+           "라이브 합 불일치")
+
+    # ④ 주문별 매출: 쪽 수 16 → 1~16쪽 151줄 + 17쪽 빈 쪽 · size 10 · cursorToken 이어받기 · 고객 이름 제외
+    bodies: list = []
+
+    def oc(m, p, b, total=151, pages_=16):
+        if p.endswith("-page-total"):
+            assert b["size"] == 10
+            return pages_
+        bodies.append(b)
+        lo = (b["page"] - 1) * 10
+        return {"orderDetails": [{"orderId": i, "transactionType": "ORDER", "customerName": "고객", "productGmv": 100, "apAmount": 90,
+                                  "deliveryGmv": 0, "trAmountIncVat": 10} for i in range(lo, min(lo + 10, total))],
+                "cursorToken": f"c{b['page']}"}
+    od = DOC.fetch_order_detail(oc, D("2026-01-01"), D("2026-01-31"))
+    assert od["줄 수"] == 151 and od["쪽 수"] == 16 and od["합계"]["apAmount"] == 151 * 90 and "customerName" not in str(od["줄"][0])
+    assert [b["page"] for b in bodies] == list(range(1, 18)) and all(b["size"] == 10 for b in bodies)
+    assert bodies[0]["cursorToken"] == "" and bodies[1]["cursorToken"] == "c1" and bodies[0]["searchDateType"] == "CONFIRM_DATE"
+    expect(API.SiteChangedError, lambda: DOC.fetch_order_detail(lambda m, p, b: oc(m, p, b, total=130), D("2026-01-01"),
+                                                                D("2026-01-31")), "줄 수가 쪽 수와 안 맞음")
+
+    # ⑤ RG 재고변동·반품 엑셀 판정
+    def wb_bytes(sheets):
+        wb = openpyxl.Workbook()
+        wb.remove(wb.active)
+        for name, rows in sheets:
+            ws = wb.create_sheet(name)
+            for r in rows:
+                ws.append(r)
+        b = io.BytesIO()
+        wb.save(b)
+        return b.getvalue()
+    per = ["", "내역 발생 일자 : 2026.01.01 ~ 2026.01.31"]
+    recon = wb_bytes([("1. 재고이관 상세", [per, [], ["등록상품 ID", "옵션 ID", "SKU ID", "등록상품명，옵션명"], ["설명"],
+                                          ["15991608281", "94595392275", "69078539", "건조대"]]),
+                      ("2. 입고관련", [per, ["등록상품 ID", "옵션 ID", "SKU ID", "입고요청 ID"]])])
+    assert DOC.check_recon(recon, D("2026-01-01"), D("2026-01-31")) == 1
+    expect(API.SiteChangedError, lambda: DOC.check_recon(recon, D("2026-02-01"), D("2026-02-28")), "다른 달")
+    expect(API.SiteChangedError, lambda: DOC.check_recon(b"<html>", D("2026-01-01"), D("2026-01-31")), "엑셀 아님")
+    rets = wb_bytes([("Excel Data", [["", "안내"], [], ["", *DOC.RETURNS_HEAD], ["", "* 설명"],
+                                     ["", "2026-05-17", "배송중단", "0", "41", "95", "식기건조대", "-", "Q1", "판매불가", "검수진행중"]])])
+    assert DOC.check_returns(rets) == 1
+    assert DOC.returns_url("A00434040", D("2026-11-08")).endswith("/A00434040/1735657200000/1794063599999")
+
+    # ⑥ 업체코드 = RG 원문 settlementGroupKey 앞부분(하나일 때만)
+    with tempfile.TemporaryDirectory() as tmp:
+        sd = Path(tmp)
+        assert DOC.vendor_from_snapshots(sd / "없음") == ""
+        with gzip.open(sd / "2026-11-08.json.gz", "wt", encoding="utf-8") as fh:
+            json.dump({"조회": [{"응답": {"settlementStatusReports": [{"settlementGroupKey": "A00434040-2026-10-27-2026-11-02"}]}}],
+                       "예정": []}, fh)
+        assert DOC.vendor_from_snapshots(sd) == "A00434040"
+
+    # ⑦ collect: 회차당 종류별 3달 · 받은 달 다시 안 받음 · 한 종류 실패 = 그 종류만 · 업체코드 없으면 RG 안 함 · 반품 하루 1번
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = Path(tmp) / "월자료" / "A"
+        clock = {"now": datetime(2026, 11, 8, 20, 0, 0)}
+        got_urls: list = []
+
+        def gb(url):
+            got_urls.append(url)
+            if "reconciliation" in url:
+                y, m = url.rsplit("/", 2)[1:]
+                last = calendar.monthrange(int(y), int(m))[1]
+                p_ = ["", f"내역 발생 일자 : {y}.{int(m):02d}.01 ~ {y}.{int(m):02d}.{last}"]
+                return wb_bytes([("1. 재고이관 상세", [p_, ["등록상품 ID", "옵션 ID", "SKU ID"]]),
+                                 ("2. 입고관련", [p_, ["등록상품 ID", "옵션 ID", "SKU ID"]])])
+            return rets
+
+        def api_(m, p, b):
+            if "/live/" in p:
+                return lc(m, p, b) if "202609" not in p else {"successful": False}
+            return oc(m, p, b)
+
+        def hc2(m, p, b):
+            return table(DOC.TAX_HEAD, [r1]) if p == DOC.TAX else table(DOC.CONSIGN_HEAD, [["발행 내역이 없습니다."]])
+
+        def run(vendor=""):
+            return DOC.collect(api_, hc2, gb, folder, D("2026-11-08"), vendor=vendor, since="2026-11-08T18:00:00",
+                               now=lambda: clock["now"])
+        s1 = run()
+        names = sorted(x.split("(")[0] for x in s1["받음"])
+        assert names == sorted([f"{k}_{ym}.json" for k in ("매입세금계산서", "위수탁세금계산서", "주문별매출") for ym in
+                                ("202609", "202608", "202607")]), names
+        assert len(s1["실패"]) == 1 and s1["실패"][0].startswith("라이브정산 202609"), s1["실패"]
+        assert s1["남은 달"] == 3 * 6 + 9, s1["남은 달"]          # 세 종류 6달씩 + 라이브 9달(실패 달 포함)
+        assert not got_urls, "업체코드 없으면 RG 재고변동·반품 안 부름"
+        assert json.loads((folder / "매입세금계산서_202609.json").read_text(encoding="utf-8"))["공급가액 합"] == 473746
+        s2 = run(vendor="A00434040")                              # 같은 회차 다시 = 예산 다 씀 · RG 만 새로
+        assert sorted(x.split("(")[0] for x in s2["받음"]) == sorted(
+            [f"RG재고변동_{ym}.xlsx" for ym in ("202609", "202608", "202607")] + ["RG반품내역_최신.xlsx"]), s2["받음"]
+        assert run(vendor="A00434040")["받음"] == [], "반품내역은 하루 1번"
+        clock["now"] = datetime(2026, 11, 9, 18, 30, 0)          # 다음 회차 = 다음 3달
+        s4 = DOC.collect(api_, hc2, gb, folder, D("2026-11-09"), vendor="A00434040", since="2026-11-09T18:00:00",
+                         now=lambda: clock["now"])
+        assert "매입세금계산서_202606.json" in " ".join(s4["받음"]) and "RG반품내역_최신.xlsx" in " ".join(s4["받음"]), s4
+
+        def blocked(m, p, b):
+            raise API.ApiBlocked("x")
+        expect(API.ApiBlocked, lambda: DOC.collect(blocked, hc2, gb, Path(tmp) / "B", D("2026-11-08")), "차단은 그대로")
+    ok("세금계산서 HTML 12칸·10칸(합계)·라이브 상세=요약·주문별 size 10 쪽 수 대조·RG 엑셀 판정·업체코드 · 회차당 3달·실패 격리·반품 하루 1번")
 
 
 def main():
@@ -2153,6 +2314,7 @@ def main():
     p49_rg_missing_costs()
     p50_verify_new_items()
     p51_regular_then_backfill()
+    p52_settlement_docs()
     print("정산 런타임 오프라인 검증 통과")
 
 
