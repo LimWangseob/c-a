@@ -5,8 +5,8 @@
 - BUILD_TAG: R115
 - 갱신: 2026-11-09 (R113 = 직원 키워드 429 D-181 · 주문별매출 실패 12건 D-182 · R114 = 회사보유재고 첫 탭 D-183 · R115 = 리뷰 이벤트 리포트 D-184)
 - 마지막 커밋: 이 커밋([R113] 세션 종료) ← b927fcc [R112] STATE zip ← 32077e5 [R112] 문구 5건. origin 푸시 = 이 커밋에서.
-- 직전 빌드: R112 32077e5 — 배포 zip 11-08 23:15. ⚠ **R113(D-181·D-182)은 이 zip 에 없음 → 통제 세션에서 zip 다시 만들어야 운용 PC 에 들어감.**
-- 배포본: `D:\coupang-analytics\dist\쿠팡애널리틱스_배포.zip` 11-08 23:15(32077e5 · 174,037,768바이트). ⛔ 19:43·18:36 zip 설치 금지. 운용 PC 설치본 = 11-04 18:43(b6b39c4) → R99~R113 은 새 zip 설치 뒤에만 동작.
+- 직전 빌드: R115 ce0baa2 — 배포 zip 11-09 15:28(R113 D-181·D-182 · R114 D-183 · R115 D-184 포함 · exe 안 확인 완료).
+- 배포본: `D:\coupang-analytics\dist\쿠팡애널리틱스_배포.zip` 11-09 15:28(ce0baa2 · 174,045,536바이트) · exe 확인 = 쿠팡애널리틱스 `read_values_batch` 있음·`company_stock._GID` 없음 · 정산다운로드 `_raw_size`·`_review_rows`·`review_gap` 있음. ⛔ 11-08 이전 zip 설치 금지. 운용 PC 설치본 = 11-04 18:43(b6b39c4) → R99~R115 는 새 zip 설치 뒤에만 동작.
 - 세션 시작 = STATE.md + `docs/CURRENT_RULES.md`(주제별 현행 규칙) 읽고 git log/status 대조 3줄 요약 · 색인 `docs/DECISIONS_INDEX.md` 는 검색용 · 종료 = `/session-close`.
 
 ## R113 (11-09) — 11-08 실행 출력(`C:\Users\user\Downloads\output (33).zip`) 분석·수정
@@ -25,7 +25,7 @@
 - (미측정 · R106부터) 새 세션 첫 응답 입력 토큰: `C:\Users\user\.claude\projects\D--coupang-analytics\` 의 그 세션 `.jsonl` 첫 assistant 줄 `message.usage` 의 input + cache_read + cache_creation 합 → 기준선 89,111(10-10)·105,140(11-05)(D-151)과 비교해 여기 적기.
 
 ## 다음 작업 (우선순위)
-1. **(통제 세션 'Coupang Analytics' 만) 배포 zip 재생성** — R113 포함 · PowerShell `cmd /c "D:\coupang-analytics\build.bat"` · exe 안 확인: 정산다운로드.exe `_raw_size` · 쿠팡애널리틱스.exe `read_values_batch`.
+1. **(완료 11-09 15:28) 배포 zip 재생성** — R115 기준. 관리대장 회사보유재고도 11-09 이 PC 에서 첫 탭으로 다시 반영(매칭 92·변경 78·재고원장 없음 24·메모 유지 10 · '검단' 남은 칸 = 127행 김앤코 사람 메모 1칸). ⚠ 운용 PC 새 zip 설치 전엔 다음 실행이 참고용 탭으로 다시 덮을 수 있음 → 설치 전까지 운용 PC 설정 재고 링크를 `…gid=1090789433` 로.
 2. **11-08 출력 남은 이상** — 근거 노트 `C:\Users\user\AppData\Local\Claude-Data\claude_pzs8sxrjxfjjc\side-session-notes\local_8d110fe9-77c6-4e1d-93b1-427ffdd7e35a\output33-remaining-3-analysis.md`
    - (a) 리뷰 이벤트 = **R115 D-184 수정 끝**(빈 리포트 0원 받기·차감액 다르면 확인 필요 · 상품 배분 방식 = 소유자 결정 대기).
    - (b) 광고비 500 = hide4u·hellojin 두 계정만 10-27부터 매번(31건 전부) · 광고센터 첫 조회 `getDailySettlement` · [추정] 광고센터 미개설 → **hide4u 또는 hellojin 소유자 로그인 후 조회만으로 확정** → 응답 본문 기록·'광고 이용 없음' 처리안.
@@ -59,5 +59,5 @@
 - 빌드 = PowerShell 에서 `cmd /c "D:\coupang-analytics\build.bat"`. 'WinError 5 액세스 거부' = `dist` 안 폴더 읽기 전용 속성 → 속성만 풀고 다시. `dist\coupang-analytics_old_stuck` = 옛 잔여(손대지 않음).
 - 무거운 작업(게이트·빌드·에이전트)은 하나씩 — 빌드 중 게이트 동시 실행 금지(10-10 BSOD). 커밋·푸시 훅 = 내용이 바뀌었으면 약 1.5분(같은 내용 통과 기록 있으면 건너뜀·D-180).
 - 정산서 재생성 = 장부 기준일 고정 필수 · 통합판매현황 1행 숨긴 칸 '차트설정:' 지우지 말 것.
-- 병렬 세션 번호 — 다음 = **D-185·R116** (R114 = D-183 회사보유재고 늘 첫 탭 · R115 = D-184 리뷰 이벤트 리포트 · 11-09 · 이 커밋 뒤 zip 재생성 필요).
+- 병렬 세션 번호 — 다음 = **D-185·R116** (R114 = D-183 회사보유재고 늘 첫 탭 · R115 = D-184 리뷰 이벤트 리포트 · 11-09 · zip 11-09 15:28 에 둘 다 포함).
 - 사람 승인 대기열 금지 · 로그인·판매수집·정산 = 프록시 금지 · 배포 zip·결과 시트 반영 = 통제 세션만.
