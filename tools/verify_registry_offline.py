@@ -838,7 +838,7 @@ def t20_write_lock():
 
 
 def t21_company_stock():
-    print("[R21] 회사보유재고 — 링크 탭·'창고 , 수량개' 표기·'-'=0·음수 경고·동일상품명(공백/대소문자 무시)·그 열만·미매칭 보존")
+    print("[R21] 회사보유재고 — 늘 첫 탭(D-183)·'창고 , 수량개' 표기·'-'=0·음수 경고·동일상품명(공백/대소문자 무시)·그 열만·미매칭 보존")
     from coupang_analytics import company_stock as CS
     assert [CS.parse_qty(v) for v in ("  5,670 ", "-", "- 1", " ", "abc", 12)] == [5670, 0, -1, None, None, 12]
     stock_cli = FakeClient()
@@ -852,10 +852,12 @@ def t21_company_stock():
                                  ["", "공산품", "", "창고미상", "5"]]                        # 창고 없음 → 제외
     stock_cli.grids["건기식_260929"] = [[], [], ["", "", "창고", "상품명", "현재고"],
                                         ["", "", "검단", "웰빙곳간 알부민 120정", "1203"]]
-    assert CS.resolve_tab(stock_cli, "https://x/edit?gid=1#gid=1") == "Sheet1"
-    assert CS.resolve_tab(stock_cli, "https://x/edit?gid=2") == "건기식_260929"
-    assert CS.resolve_tab(stock_cli, "https://x/edit") == "Sheet1"                  # gid 없음 = 첫 탭
-    _expect(ValueError, lambda: CS.resolve_tab(stock_cli, "https://x/edit#gid=99"), "없는 gid")
+    assert CS.resolve_tab(stock_cli) == "Sheet1"                                   # 늘 첫 탭(D-183 · 링크 gid 안 씀)
+    led0 = FakeClient()
+    led0.grids["셀독리스트"] = [["사업자명", "계정아이디", "상품명", "회사보유재고"]]
+    res0 = CS.run_company_stock("https://x/edit?gid=2#gid=2", "L", dry_run=True,          # 둘째 탭 링크도 첫 탭
+                                stock_client=stock_cli, ledger_client=led0)
+    assert res0.stock_sheet == "Sheet1", res0.stock_sheet                           # 11-06~09 옛 참고용 탭 읽던 오류
     stock, warns = CS.read_stock(stock_cli.grids["Sheet1"])
     assert stock[CS.name_key("햄스트링기구 R010")] == ("햄스트링기구 R010", {"김포1": 2400, "검단": 24}), stock
     assert CS.stock_text(stock[CS.name_key("햄스트링기구 R010")][1]) == "김포1 , 2,400개 / 검단 , 24개"

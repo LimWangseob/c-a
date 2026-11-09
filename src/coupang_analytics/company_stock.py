@@ -2,7 +2,7 @@
 
 재고는 두 가지: 로켓그로스 재고(쿠팡 재고현황 API → '그로스 재고' 열, input_list.write_ledger_inventory)와
 **판매자배송용 회사 자체 재고**(이 모듈). 소유자 결정(2026-09-29):
-- 읽을 탭 = 설정에 넣은 **링크의 gid 탭**(gid 없는 링크면 구글시트가 여는 첫 탭). 양식 2가지 — 상품별 '상품명·현재고' ·
+- 읽을 탭 = **늘 첫 탭**(링크의 gid 안 씀·D-183 — 새 재고 탭은 맨 앞에 둠). 양식 2가지 — 상품별 '상품명·현재고' ·
   팔래트/박스 줄 '제품명(판매처 제품명)·총입고수량'(창고별 합산·한 팔래트 두 상품 줄 '가 / 나'·'45 / 96' 나눔·D-141).
 - 대장 표기 = **'창고 , 수량개'**(예 '김포2 , 150개'). 여러 창고면 ' / ' 로 이어 씀(파일 순서), 같은 창고가 여러
   줄이면 그 창고 안에서 합산. '-' = 0, 음수는 그대로 쓰고 경고.
@@ -27,7 +27,6 @@ from .input_list import (_REQUIRED, _cell, _find_header_row, _is_real_product_na
 STOCK_COL = "회사보유재고"            # 관리대장 대상 열(헤더 이름으로 찾음)
 STOCK_NONE = "재고원장 없음"          # 재고현황에 없다고 판정한 상품 표기(D-156)
 _HEADER_SCAN = 15
-_GID = re.compile(r"[#?&]gid=(\d+)")
 _AUTO_TEXT = re.compile(r"(\([^)]*\) )?[^,/]+ , -?[\d,]+개")   # 앱이 쓰는 표기 한 조각(stock_text·text_of)
 
 
@@ -57,17 +56,9 @@ def parse_qty(v) -> int | None:
     return int(s) if re.fullmatch(r"-?\d+", s) else None
 
 
-def resolve_tab(client, url: str) -> str:
-    """링크의 gid 탭 이름. gid 없는 링크면 첫 탭(구글시트가 그 링크로 여는 탭). 없는 gid 면 ValueError."""
-    titles = client.sheet_titles()
-    m = _GID.search(url or "")
-    if not m:
-        return titles[0]
-    gid = int(m.group(1))
-    for t in titles:
-        if client.sheet_id(t) == gid:
-            return t
-    raise ValueError(f"재고현황 링크의 탭(gid={gid})이 파일에 없음 — 링크를 다시 복사해 주세요")
+def resolve_tab(client) -> str:
+    """읽을 탭 = 늘 첫 탭(D-183) — 링크의 gid 는 안 씀(둘째 탭 '재고현황 1022기준(참고용)' 링크로 옛 재고를 적던 11-06~09 오류)."""
+    return client.sheet_titles()[0]
 
 
 def _stock_columns(rows: list) -> tuple[int, int, int, int]:
@@ -244,7 +235,7 @@ def run_company_stock(stock_url: str, input_url: str, *, dry_run: bool = False, 
         from .gsheet_api import GSheetClient                 # 지연 import(구글 라이브러리)
         stock_client = stock_client or GSheetClient(stock_url, on_log=log)
         ledger_client = ledger_client or GSheetClient(input_url, on_log=log)
-    tab = resolve_tab(stock_client, stock_url)
+    tab = resolve_tab(stock_client)
     stock, warnings = read_stock(stock_client.read_values(tab))
     from . import company_stock_match as M
     cache = M.load_cache(out_dir) if out_dir else {}

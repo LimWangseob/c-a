@@ -281,7 +281,7 @@ def inject_company_stock(wb, stock_url: str | None, log) -> None:
             log("== [회사재고] 구글 서비스계정 키 미등록 — 계정목록 회사보유재고 표기 생략(공란) ==")
             return
         client = gsheet_api.GSheetClient(stock_url, on_log=log)
-        tab = company_stock.resolve_tab(client, stock_url)
+        tab = company_stock.resolve_tab(client)
         stock, _warnings = company_stock.read_stock(client.read_values(tab))
         title_of, out_dir = _stock_match_aids(log)
         n = company_stock.apply_to_workbook(wb, stock, cache=_stock_cache(out_dir, log), title_of=title_of)
