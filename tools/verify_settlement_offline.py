@@ -634,6 +634,32 @@ def p10_settle_dup_rows():
     ok("한 파일 반복 취소 줄 전부 반영·주정산↔월별 겹친 줄 1회(집계·검증 월합 같은 규칙)·월 경계 주(8/31) 누락 없음·월정산 100%")
 
 
+REVIEW_HDR = ["정산유형", "정산주기(종료일)", "발생일", "매출인식일", "거래유형", "이벤트 ID", "제품명", "노출상품 ID", "주문ID",
+              "주문일", "리뷰 ID", "리뷰생성일", "리뷰유형", "세금계산서 발행월", "리뷰 이벤트 수수료", None, None, None]
+REVIEW_SUB = [None] * 14 + ["발생금액(A)", "할인금액(B)", "무료 프로모션 금액(C)", "할인적용금액(A-B-C)"]
+
+
+def p11_review_event_report():
+    print("[P11] 리뷰 이벤트 비용 리포트(PPIR) — 실측 모양(1~5행 빈칸·6~7행 머리글) · 줄 0 = 0원 · 줄 있음 = 미실측 오류 · 정산 차감 대조")
+    from coupang_analytics import settlement_files as SF
+    end = D("2026-10-11")
+    empty = [[None] * 18 for _ in range(5)] + [REVIEW_HDR, REVIEW_SUB]      # 운용 PC 11-08 91white·sg0141n 그대로
+    assert SF.rg_cost_totals({"리뷰 이벤트": empty}, end) == {"리뷰 이벤트": 0}
+    assert SF.rg_cost_lines({"리뷰 이벤트": empty}, "A", end) == []
+    row = ["주정산", "2026-10-11", "2026-10-06", "2026-10-06", "차감", "e1", "타프", "9685019160", "1", "2026-10-01", "r1",
+           "2026-10-06", "텍스트", "2026-10", 2220, 0, 0, 2220]
+    expect(SF.SettlementParseError, lambda: SF.rg_cost_totals({"리뷰 이벤트": [*empty, row]}, end), "줄 있는 리뷰 이벤트(미실측)")
+    expect(SF.SettlementParseError, lambda: SF.rg_cost_lines({"리뷰 이벤트": [*empty, row]}, "A", end), "줄 있는 리뷰 이벤트 상품별")
+    amounts = [{"정산일": "2026-11-06", "기간 시작": "2026-10-05", "기간 끝": "2026-10-11", "totalPostPurchaseDeductionAmount": 6660.0},
+               {"정산일": "2026-11-20", "기간 시작": "2026-10-05", "기간 끝": "2026-10-11", "totalPostPurchaseDeductionAmount": 0.0}]
+    gap = SF.review_gap(0, amounts, "2026-11-06", "2026-10-05", "2026-10-11")
+    assert "확인 필요" in gap and "6,660" in gap and "0원" in gap, gap
+    assert SF.review_gap(6660, amounts, "2026-11-06", "2026-10-05", "2026-10-11") == ""
+    assert SF.review_gap(0, amounts, "2026-11-20", "2026-10-05", "2026-10-11") == ""          # 30% 줄 = 차감 0
+    assert "지급 내역 줄 없음" in SF.review_gap(0, amounts, "2026-12-01", "2026-10-05", "2026-10-11")
+    ok("PPIR 빈 리포트 0원·상품 줄 0 · 줄 있으면 오류 · 차감 6,660 ≠ 0 → 확인 필요 문구")
+
+
 def main():
     g1_payout_dates()
     g2_amounts()
@@ -648,6 +674,7 @@ def main():
     p8_settle_jobs()
     p9_settle_stats()
     p10_settle_dup_rows()
+    p11_review_event_report()
     print("정산 계산 모듈 오프라인 검증 통과(골든 payout 9·amount 2·불변식 4행/3식 100%)")
 
 

@@ -473,6 +473,12 @@ def _keep_cost(raw: Path, j, name: str, fname: str) -> None:
     LOG.saved(name, COSTS / fname, "비용 리포트")
     LOG.record(name, "받기", RL.OK, f"{fname} · " + " · ".join(f"{k} {v:,}" for k, v in totals.items()),
                **_job_fields(j))
+    if j.report == "리뷰 이벤트 비용":                     # 리포트 합 ↔ 그 정산 줄 차감액(D-183) — 다르면 확인 필요(파일은 받음)
+        p = AMOUNTS / f"{SF._token(name, '계정명')}_로켓그로스.json"
+        gap = SF.review_gap(sum(totals.values()), json.loads(p.read_text(encoding="utf-8")) if p.exists() else [],
+                            j.settle_date, j.period_start, j.period_end)
+        if gap:
+            LOG.record(name, "받기", RL.WAIT, gap, **_job_fields(j))
 
 
 def _list_rows(b, ch: str, want: list, name: str) -> list:

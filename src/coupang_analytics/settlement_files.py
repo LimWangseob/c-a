@@ -228,15 +228,47 @@ def rg_cost_totals(sheets: dict, period_end: date) -> dict:
     ② 건별 목록(머리글에 '보상 금액') — 재고 손실 보상: 그 열 합.
     ③ 금액 없는 수량 안내 시트(머리글 '반출비 청구 제외 수량(B)') — 반출비 리포트의 '자동반출(고객반품) - 쿠팡귀책'
        (실측 2026-10-08 운용 PC 16개: 반출비 시트 최종비용이 쿠팡 차감액과 16/16 일치, 이 시트는 금액 칸 없음) → 제외.
+    ④ 리뷰 이벤트(PPIR) — 요약 없이 6·7행 2줄 머리글만(운용 PC 2026-11-08 91white·sg0141n 실측 2건 모두 자료 줄 0) → 0원.
     그 밖의 모양은 오류. 정산주기(종료일)가 요청 기간 끝과 다르면 오류(엉뚱한 주 파일)."""
     out = {}
     for name, rows in sheets.items():
         if any(_QTY_NOTICE in {_norm(c) for c in r} for r in rows[:20]):
             continue
+        if _review_rows(name, rows) is not None:
+            out[name] = 0
+            continue
         head = next((i for i, r in enumerate(rows[:5]) if "보상금액" in {_norm(c) for c in r}), None)
         out[name] = (_summary_cost(name, rows, period_end) if head is None
                      else _listed_cost(name, rows, head, period_end))
     return out
+
+
+_REVIEW_FEE = _norm("리뷰 이벤트 수수료")
+REVIEW_FIELD = "totalPostPurchaseDeductionAmount"     # 정산현황 상세 '리뷰 이벤트' 칸(화면 JS 실측·D-171 N2)
+
+
+def _review_rows(name: str, rows: list) -> list | None:
+    """리뷰 이벤트 리포트면 자료 줄 목록(지금은 [] 만 허용), 아니면 None. 자료 줄이 있는 리포트는 아직 본 적이 없어
+    금액 칸(할인적용금액·VAT 포함 여부)·상품 칸을 추측하지 않고 오류(D-183)."""
+    hi = next((i for i, r in enumerate(rows[:10]) if r and _norm(r[0]) == "정산유형"
+               and _REVIEW_FEE in {_norm(c) for c in r}), None)
+    if hi is None:
+        return None
+    data = [r for r in rows[hi + 2:] if any(str(c or "").strip() for c in r)]
+    if data:
+        raise SettlementParseError(f"비용 리포트 '{name}': 리뷰 이벤트 자료 줄 {len(data)}개 — 처음 보는 내용(금액·상품 칸 확인 필요)")
+    return data
+
+
+def review_gap(total: int, amounts: list, settle_date: str, start: str, end: str) -> str:
+    """리뷰 이벤트 리포트 합계 ↔ 그 정산 줄(지급 내역)의 리뷰 이벤트 차감액. 같으면 '', 다르면 '확인 필요' 문구(D-183)."""
+    hit = [r for r in amounts if (r.get("정산일"), r.get("기간 시작"), r.get("기간 끝")) == (settle_date, start, end)]
+    if not hit:
+        return f"확인 필요 — 리뷰 이벤트 리포트 {total:,}원 · 대조할 지급 내역 줄 없음(정산일 {settle_date})"
+    want = sum(int(r.get(REVIEW_FIELD) or 0) for r in hit)
+    if want == total:
+        return ""
+    return f"확인 필요 — 리뷰 이벤트 리포트 {total:,}원 ≠ 정산 차감 {want:,}원(쿠팡 리포트 줄 없음·상품별 금액 모름)"
 
 
 def _listed_cost(name: str, rows: list, head: int, period_end: date) -> int:
@@ -361,6 +393,8 @@ def rg_cost_lines(sheets: dict, account: str, period_end: date) -> list[CostLine
     for name, rows in sheets.items():
         if any(_QTY_NOTICE in {_norm(c) for c in r} for r in rows[:20]):
             continue
+        if _review_rows(name, rows) is not None:
+            continue                                         # 리뷰 이벤트 = 자료 줄 0(줄 있으면 위에서 오류)
         listed = any("보상금액" in {_norm(c) for c in r} for r in rows[:5])
         out += (_compensation_lines if listed else _summary_lines)(name, rows, account, period_end)
     return out
