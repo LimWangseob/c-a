@@ -113,6 +113,10 @@ def hidden_rows_from_response(resp: dict) -> set[int]:
 # 구글 Sheets API 공통 재시도(일시적 오류만) — read timeout·429·5xx 지수백오프.
 _GSHEET_MAX_RETRIES = 4
 _RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
+# 429 = 분당 한도(서비스계정 1개 읽기 60회/분) — 1~8초(합 15초)로는 그 1분이 안 지나 4번 다 실패했다(11-09 재현:
+# 백업 37회 + 직원 키워드 28회째 429). 429 만 합 100초 동안 기다린다(한도 1분이 확실히 지나게).
+_QUOTA_WAIT_SEC = (10, 20, 30, 40)
+_BATCH_SHEETS = 20     # values.batchGet 한 번에 묶는 시트 수(시트 이름 한글이 주소에 들어가 길이 여유)
 
 
 class GSheetClient:
@@ -190,7 +194,8 @@ class GSheetClient:
             except Exception as exc:
                 last = exc
                 if attempt < _GSHEET_MAX_RETRIES and self._is_transient(exc):
-                    wait = min(2 ** attempt, 8) + random.uniform(0, 0.4)
+                    quota = getattr(getattr(exc, "resp", None), "status", None) == 429
+                    wait = (_QUOTA_WAIT_SEC[attempt] if quota else min(2 ** attempt, 8)) + random.uniform(0, 0.4)
                     self._log(f"  [구글시트] {what} 일시 오류({str(exc)[:60]}) — "
                               f"{wait:.1f}s 후 재시도 {attempt + 1}/{_GSHEET_MAX_RETRIES}")
                     time.sleep(wait)
@@ -296,6 +301,24 @@ class GSheetClient:
             valueRenderOption="UNFORMATTED_VALUE" if unformatted else "FORMATTED_VALUE",
             dateTimeRenderOption="FORMATTED_STRING"), f"값 읽기({sheet})")
         return resp.get("values", [])
+
+    def read_values_batch(self, sheets: list[str], *, unformatted: bool = False) -> dict[str, list[list[Any]]]:
+        """여러 시트 값을 **묶어** 읽는다(values.batchGet · 시트 `_BATCH_SHEETS` 개당 요청 1번) → {시트: 값 격자}.
+
+        시트마다 read_values/read_grid 를 부르면 실행 시작 1분 안에 읽기가 60회를 넘어 429(분당 한도)로 직원 키워드
+        읽기가 10-11 부터 거의 매일 실패했다(11-09 재현: 백업 37회 + 키워드 28회째). 값 모양은 read_values 와 같다."""
+        out: dict[str, list[list[Any]]] = {}
+        for i in range(0, len(sheets), _BATCH_SHEETS):
+            part = list(sheets[i:i + _BATCH_SHEETS])
+            resp = self._exec(self._sheets().values().batchGet(
+                spreadsheetId=self.spreadsheet_id, ranges=[f"'{s}'" for s in part],
+                valueRenderOption="UNFORMATTED_VALUE" if unformatted else "FORMATTED_VALUE",
+                dateTimeRenderOption="FORMATTED_STRING"), f"값 묶어 읽기({len(part)}시트)")
+            got = resp.get("valueRanges", [])
+            if len(got) != len(part):
+                raise GSheetError(f"묶어 읽기 응답 시트 수 {len(got)} ≠ 요청 {len(part)}")
+            out.update((s, vr.get("values", [])) for s, vr in zip(part, got))
+        return out
 
     def write_values(self, sheet: str, rows: list[list[Any]], start: str = "A1", raw: bool = False) -> None:
         """rows 를 start(예 'A1')부터 덮어쓴다(USER_ENTERED — 수식/하이퍼링크 반영).

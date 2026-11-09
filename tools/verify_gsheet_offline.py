@@ -779,11 +779,11 @@ def _growA(a="", c="", g=""):
 
 class _StatsFake:
     """사업자 시트명→격자 매핑을 돌려주는 최소 클라이언트(merge_staff_keywords 용)."""
-    def __init__(self, grids): self._g = grids
+    def __init__(self, grids): self._g, self.calls = grids, 0
     def sheet_titles(self): return list(self._g)
-    def read_grid(self, sheet, notes=False):
-        v = self._g.get(sheet, [])
-        return v, [[None] * len(r) for r in v]
+    def read_values_batch(self, sheets, unformatted=False):
+        self.calls += 1                                   # 묶어 읽기 1번 = 요청 1번(분당 한도 429 회피 — 11-09)
+        return {s: self._g.get(s, []) for s in sheets}
 
 
 def t7_staff_keywords_merge() -> None:
@@ -869,6 +869,82 @@ def t8_exec_retry() -> None:
     finally:
         _t.sleep = orig_sleep
     _ok("공통 재시도(_exec): 일시적 timeout 흡수·영구 timeout 소진 실패·비일시적 즉시 실패")
+
+
+def t8b_quota_429_batch() -> None:
+    """[8b] 분당 읽기 한도(429) — 11-09 재현: 백업이 시트마다 37회 + 직원 키워드 28회째 429·재시도 합 15초로는 1분이 안 지나
+    10-11 부터 거의 매일 직원 키워드 미반영. ① 여러 시트 = 묶어 읽기(20시트당 요청 1번) ② 429 는 합 100초 기다림."""
+    import time as _t
+    from coupang_analytics.gsheet_api import GSheetClient, GSheetError
+
+    class _Http(Exception):
+        def __init__(self, status):
+            super().__init__(f"HttpError {status}")
+            self.resp = type("R", (), {"status": status})()
+
+    class _Svc:                       # 분당 60회 넘으면 429 를 내는 가짜 구글(1분 안 = 이 시험 전체)
+        def __init__(self):
+            self.n, self.asked = 0, []
+
+        def spreadsheets(self):
+            return self
+
+        def values(self):
+            return self
+
+        def batchGet(self, spreadsheetId, ranges, valueRenderOption, dateTimeRenderOption):
+            svc = self
+            self.asked.append(list(ranges))
+
+            class _R:
+                def execute(self_):
+                    svc.n += 1
+                    if svc.n > 60:
+                        raise _Http(429)
+                    return {"valueRanges": [{"values": [[r.strip("'"), "값"]]} for r in ranges]}
+            return _R()
+
+    c = GSheetClient("https://docs.google.com/spreadsheets/d/ABC123def456/edit", sa_info={"client_email": "x@y.z"})
+    c._svc, c._HttpError = _Svc(), _Http
+    names = [f"계정{i}" for i in range(37)]
+    got = c.read_values_batch(names)
+    assert c._svc.n == 2 and [len(a) for a in c._svc.asked] == [20, 17], (c._svc.n, c._svc.asked)
+    assert list(got) == names and got["계정36"] == [["계정36", "값"]], got
+    # 직원 키워드 34시트 = 요청 1~2번(시트마다 읽지 않음)
+    wb = _sample_workbook()
+    fake = _StatsFake({b: [] for b in wb.account_sheets()})
+    gsheet_stats.read_staff_keywords(fake, wb)
+    assert fake.calls == 1, fake.calls
+    # 429 = 합 100초 기다림(분당 한도 1분이 지나게) · 다른 일시 오류는 그대로 1~8초
+    waits: list[float] = []
+    orig_sleep = _t.sleep
+    _t.sleep = waits.append
+
+    class _Req:
+        def __init__(self, status, fail_n):
+            self.status, self.fail_n, self.k = status, fail_n, 0
+
+        def execute(self):
+            self.k += 1
+            if self.k <= self.fail_n:
+                raise _Http(self.status)
+            return {"ok": self.k}
+    try:
+        assert c._exec(_Req(429, 3), "묶어 읽기") == {"ok": 4}
+        assert [int(w) for w in waits] == [10, 20, 30] and sum(waits) >= 60, waits
+        waits.clear()
+        try:
+            c._exec(_Req(429, 99), "계속 429")
+            raise AssertionError("429 가 계속인데 예외 안 남")
+        except GSheetError as exc:
+            assert "429" in str(exc), exc
+        assert sum(waits) >= 100, waits
+        waits.clear()
+        c._exec(_Req(503, 2), "서버 일시 오류")
+        assert [int(w) for w in waits] == [1, 2], waits
+    finally:
+        _t.sleep = orig_sleep
+    _ok("묶어 읽기 37시트=요청 2번·직원 키워드=1번 · 429 기다림 합 100초(10·20·30·40)·5xx 는 1·2·4·8초 그대로")
 
 
 def t9_legacy_format_mismatch() -> None:
@@ -1018,9 +1094,9 @@ def t13_backup_result_via_sa() -> None:
         def sheet_titles(self):
             return ["계정목록", "가게A"]
 
-        def read_values(self, sheet, cell_range=None, unformatted=False):
-            return {"계정목록": [["대표", "사업자"], ["대표A", "biz_A"]],
-                    "가게A": [["키워드", "순위"], ["텀블러", "3"]]}.get(sheet, [])
+        def read_values_batch(self, sheets, unformatted=False):
+            g = {"계정목록": [["대표", "사업자"], ["대표A", "biz_A"]], "가게A": [["키워드", "순위"], ["텀블러", "3"]]}
+            return {s: g.get(s, []) for s in sheets}
 
     orig = ga.GSheetClient
     ga.GSheetClient = _FakeBackupClient   # 백업 헬퍼가 gsheet_api.GSheetClient 를 쓰므로 여기 패치
@@ -1122,10 +1198,10 @@ def t17_restore_master_via_sa() -> None:
         def sheet_titles(self):
             return list(grids)
 
-        def read_values(self, sheet, cell_range=None, unformatted=False):
+        def read_values_batch(self, sheets, unformatted=False):
             asked.append(unformatted)
-            rows = grids.get(sheet, [])
-            return rows if unformatted else [["" if v is None else str(v) for v in r] for r in rows]
+            return {s: grids.get(s, []) if unformatted else [["" if v is None else str(v) for v in r] for r in grids.get(s, [])]
+                    for s in sheets}
 
     orig = ga.GSheetClient
     ga.GSheetClient = _FakeRestoreClient
@@ -1152,7 +1228,7 @@ def main() -> int:
     for fn in (t1_ledger_rows, t1b_ledger_strike, t1d_ledger_hidden_rows, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
                t3d_grid_autogrow, t3c_delete_accounts, t3e_delete_renamed, t3f_find_renamed_orphans, t4_marketing_merge, t5_stats_mirror, t6_roster_from_workbook,
                t6b_multi_account_roster, t6c_content_col_widths, t6d_status_layout_migration, t7_staff_keywords_merge,
-               t8_exec_retry, t9_legacy_format_mismatch, t10_stats_full_replace_mismatch,
+               t8_exec_retry, t8b_quota_429_batch, t9_legacy_format_mismatch, t10_stats_full_replace_mismatch,
                t11_move_across_title_merge, t11b_merge_failure_nonfatal, t11c_stock_migration_frozen_cols,
                t12_delete_ghost_product_rows, t13_backup_result_via_sa, t14_sheet_id_robust,
                t15_password_candidates, t16_password_trim, t17_restore_master_via_sa):

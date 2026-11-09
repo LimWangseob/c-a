@@ -272,11 +272,11 @@ def read_staff_keywords(client, wb) -> dict[tuple[str, str], list[str]]:
         return rw[i].strip() if len(rw) > i and rw[i] else ""
 
     titles = set(client.sheet_titles())
+    names = [b for b in wb.account_sheets() if b not in _SPECIAL_SHEETS and b in titles]
+    grids = client.read_values_batch(names)     # 묶어 읽기 — 시트마다 읽으면 분당 한도 429(11-09 재현)
     out: dict[tuple[str, str], list[str]] = {}
-    for biz in wb.account_sheets():
-        if biz in _SPECIAL_SHEETS or biz not in titles:
-            continue
-        values, _notes = client.read_grid(biz)
+    for biz in names:
+        values = grids.get(biz, [])
         cur: str | None = None
         in_kw = False
         for row in values:

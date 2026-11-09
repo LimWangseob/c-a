@@ -2265,15 +2265,47 @@ def p52_settlement_docs():
             return pages_
         bodies.append(b)
         lo = (b["page"] - 1) * 10
-        return {"orderDetails": [{"orderId": i, "transactionType": "ORDER", "customerName": "고객", "productGmv": 100, "apAmount": 90,
-                                  "deliveryGmv": 0, "trAmountIncVat": 10} for i in range(lo, min(lo + 10, total))],
-                "cursorToken": f"c{b['page']}"}
+        got = [{"orderId": i, "transactionType": "ORDER", "customerName": "고객", "productGmv": 100, "apAmount": 90,
+                "deliveryGmv": 0, "trAmountIncVat": 10} for i in range(lo, min(lo + 10, total))]
+        return {"orderDetails": got, "rawRecordSize": len(got), "cursorToken": f"c{b['page']}"}
     od = DOC.fetch_order_detail(oc, D("2026-01-01"), D("2026-01-31"))
     assert od["줄 수"] == 151 and od["쪽 수"] == 16 and od["합계"]["apAmount"] == 151 * 90 and "customerName" not in str(od["줄"][0])
     assert [b["page"] for b in bodies] == list(range(1, 18)) and all(b["size"] == 10 for b in bodies)
     assert bodies[0]["cursorToken"] == "" and bodies[1]["cursorToken"] == "c1" and bodies[0]["searchDateType"] == "CONFIRM_DATE"
     expect(API.SiteChangedError, lambda: DOC.fetch_order_detail(lambda m, p, b: oc(m, p, b, total=130), D("2026-01-01"),
                                                                 D("2026-01-31")), "줄 수가 쪽 수와 안 맞음")
+    # ④-b 마지막 쪽 cursorToken '' = 다음 쪽 없음(실측 11-09 bf0621 2026-09: 쪽 수 1 · 1쪽 3줄 cursor '' · 2쪽을 ''로 부르면
+    #      서버가 처음부터 다시 시작해 1쪽 3줄을 또 줌 → 옛 코드 '같은 줄 두 번' SiteChangedError — 11-08 1쪽 달 10/10 실패)
+    def real(total, last_cursor_empty=True, merged=frozenset(), raw_size=True):
+        """total = 원본 건수(쪽 수·rawRecordSize 기준) · merged = 앞 줄에 합쳐져 줄로 안 오는 원본 번호(추가배송료 — ④-c)."""
+        sent: list = []
+
+        def c(m, p, b):
+            if p.endswith("-page-total"):
+                return -(-total // 10)
+            sent.append(b)
+            pg = b["page"] if b["cursorToken"] else 1          # 커서 없으면 서버는 처음부터(실측)
+            lo = (pg - 1) * 10
+            raw = range(lo, min(lo + 10, total))
+            r = {"orderDetails": [{"orderId": i, "transactionType": "ORDER", "apAmount": 1} for i in raw if i not in merged],
+                 "cursorToken": "" if lo + 10 >= total and last_cursor_empty else f"c{pg}"}
+            if raw_size:
+                r["rawRecordSize"] = len(raw)
+            return r
+        return c, sent
+    for total, want_calls in ((3, 1), (10, 1), (27, 3)):
+        c, sent = real(total)
+        od = DOC.fetch_order_detail(c, D("2026-09-01"), D("2026-09-30"))
+        assert od["줄 수"] == total and [b["page"] for b in sent] == list(range(1, want_calls + 1)), (total, od["줄 수"], sent)
+    c, sent = real(27, last_cursor_empty=False)                 # 마지막 쪽에도 커서가 오면 빈 쪽까지(옛 방식 그대로)
+    assert DOC.fetch_order_detail(c, D("2026-09-01"), D("2026-09-30"))["줄 수"] == 27 and len(sent) == 4, sent
+    # ④-c 상품+추가배송료 = 서버가 한 줄로 합쳐 줌(금액 합산) · 쪽 수·rawRecordSize 는 합치기 전 건수(실측 11-09 oopean 2026-08: 쪽 수 49 ·
+    #      5·29·31쪽 rawRecordSize 10 인데 9줄 · 원본 481·줄 478 · 정산금액 = 엑셀 상품+추가배송료와 같음) → 옛 확인(줄 수 > 480) 실패
+    c, sent = real(481, merged={45, 285, 305})
+    od = DOC.fetch_order_detail(c, D("2026-08-01"), D("2026-08-31"))
+    assert od["쪽 수"] == 49 and od["줄 수"] == 478 and od["원본 건수"] == 481 and len(sent) == 49, (od["줄 수"], len(sent))
+    expect(API.SiteChangedError, lambda: DOC.fetch_order_detail(real(27, raw_size=False)[0], D("2026-09-01"), D("2026-09-30")),
+           "rawRecordSize 없음")
 
     # ⑤ RG 재고변동·반품 엑셀 판정
     def wb_bytes(sheets):

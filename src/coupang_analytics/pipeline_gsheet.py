@@ -98,9 +98,11 @@ def _download_gsheet_via_sa(url: str, dest: Path, *, log, unformatted: bool = Fa
     wb = openpyxl.Workbook()
     wb.remove(wb.active)                 # 기본 빈 시트 제거(각 구글 시트로 다시 채움)
     used: set[str] = set()
-    for title in client.sheet_titles():
+    titles = client.sheet_titles()
+    grids = client.read_values_batch(titles, unformatted=unformatted)   # 묶어 읽기(시트마다 읽으면 429 — 11-09 재현)
+    for title in titles:
         ws = wb.create_sheet(_safe_sheet_name(title, used))
-        for row in client.read_values(title, unformatted=unformatted):
+        for row in grids.get(title, []):
             ws.append(list(row))
     if not wb.sheetnames:                # 시트가 하나도 없으면(이례) 빈 파일 저장 방지
         wb.create_sheet("빈")

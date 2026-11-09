@@ -190,29 +190,40 @@ def _live_data(r: dict):
 
 
 def fetch_order_detail(call, f: date, t: date, gap=lambda: None) -> dict:
-    """주문별 매출(구매확정일 기준 한 달) — 쪽 수 조회 → 1쪽부터 빈 쪽까지(size 10) · 고객 이름 칸 제외.
-    받은 줄 수가 쪽 수와 맞고(10×(쪽−1) < 줄 ≤ 10×쪽) 같은 주문·유형이 두 번 없어야 받음."""
+    """주문별 매출(구매확정일 기준 한 달) — 쪽 수 조회 → 1쪽부터 빈 쪽 또는 커서 '' 까지(size 10) · 고객 이름 칸 제외.
+    원본 건수(쪽마다 rawRecordSize 합)가 쪽 수와 맞고(10×(쪽−1) < 원본 ≤ 10×쪽) 같은 주문·유형이 두 번 없어야 받음.
+    줄 수 ≤ 원본 건수 — 상품+추가배송료는 서버가 한 줄로 합쳐 줌(금액 합산 · 실측 11-09 oopean 2026-08 원본 481·줄 478)."""
     q = {"confirmStart": f.isoformat(), "confirmEnd": t.isoformat(), "searchDateType": "CONFIRM_DATE",
          "searchDateStart": f.isoformat(), "searchDateEnd": t.isoformat()}
     pages = int(call("POST", f"{ORDER}-page-total", {**q, "size": ORDER_PAGE_SIZE}))
     rows: list = []
-    cursor = ""
+    raw, cursor = 0, ""
     for page in range(1, pages + 2):
         gap()
         r = call("POST", ORDER, {**q, "page": page, "size": ORDER_PAGE_SIZE, "cursorToken": cursor})
         got = r.get("orderDetails") or []
         if not got:
             break
+        raw += _raw_size(r, len(got), f"{f:%Y%m} {page}쪽")
         rows += [{k: v for k, v in x.items() if k != "customerName"} for x in got]
         cursor = r.get("cursorToken") or ""
+        if not cursor:      # 커서 '' = 다음 쪽 없음 — ''로 또 부르면 서버가 처음부터 다시 줌(실측 11-09 bf0621 1쪽 달 3개)
+            break
     else:
         raise SiteChangedError(f"주문별 매출 {f:%Y%m} 쪽 수({pages}) 뒤에도 줄이 더 옴 — 다 받았는지 모름")
     keys = {(x.get("orderId"), x.get("transactionType"), x.get("vendorItemId"), x.get("shippingFeeId")) for x in rows}
-    if not (ORDER_PAGE_SIZE * (pages - 1) < len(rows) <= ORDER_PAGE_SIZE * pages or pages == len(rows) == 0) \
-            or len(keys) != len(rows):
-        raise SiteChangedError(f"주문별 매출 {f:%Y%m} 쪽 수 {pages} · 줄 {len(rows)} · 서로 다른 줄 {len(keys)} — 맞지 않음")
+    if not (ORDER_PAGE_SIZE * (pages - 1) < raw <= ORDER_PAGE_SIZE * pages or pages == raw == 0) or len(keys) != len(rows):
+        raise SiteChangedError(f"주문별 매출 {f:%Y%m} 쪽 수 {pages} · 원본 {raw} · 줄 {len(rows)} · 서로 다른 줄 {len(keys)} — 맞지 않음")
     total = {k: sum(x.get(k) or 0 for x in rows) for k in ("productGmv", "deliveryGmv", "trAmountIncVat", "apAmount")}
-    return {"쪽 수": pages, "줄 수": len(rows), "합계": total, "줄": rows}
+    return {"쪽 수": pages, "원본 건수": raw, "줄 수": len(rows), "합계": total, "줄": rows}
+
+
+def _raw_size(r: dict, n_rows: int, where: str) -> int:
+    """한 쪽의 원본 건수(rawRecordSize) — 없거나 받은 줄보다 적으면 응답 모양이 바뀐 것."""
+    n = r.get("rawRecordSize")
+    if not isinstance(n, int) or n < n_rows:
+        raise SiteChangedError(f"주문별 매출 {where} 원본 건수 {n!r} · 줄 {n_rows} — 응답 모양 다름")
+    return n
 
 
 def _xlsx(body: bytes):
@@ -327,7 +338,7 @@ class _Run:
             raise
         except Exception as exc:  # noqa: BLE001 — 위 설명
             self.out["실패"].append(f"{label}: {exc.__class__.__name__}: {str(exc)[:120]}")
-            self.note(f"월자료 {label} 실패 — {exc.__class__.__name__}")
+            self.note(f"월자료 {label} 실패 — {exc.__class__.__name__}: {str(exc)[:120]}")   # 본문까지(11-08 이름만 남아 원인 못 봄)
             return None
 
     def kind(self, kind: str, today: date, since: str, fetch, gap) -> None:
