@@ -29,6 +29,7 @@ VAT_BUDGET = 4                    # 회차(18:00~) 계정당 부가세 상세 �
 LAG_DAYS = 15                     # 말일 + 며칠 뒤부터 요청 [추정 — 세금계산서와 같은 값]
 WING_HEAD = ("주문번호", "", "매출인식일", "항목유형", "과세유형", "신용카드(판매)", "현금(판매)", "기타(판매)", "신용카드(환불)",
              "현금(환불)", "기타(환불)")
+WING_HEADS = (WING_HEAD, (WING_HEAD[0], "옵션 ID") + WING_HEAD[2:])  # 2026-05 이후 달 파일 = 둘째 칸 '옵션 ID'(실측 D-188)
 RG_HEAD = ("주문번호", "옵션ID", "결제완료일", "매출인식월", "과세유형", "신용/체크카드(판매)", "현금(판매)", "기타(판매)",
            "신용/체크카드(환불)", "현금(환불)", "기타(환불)")
 RG_SHEET = "부가세 신고자료"
@@ -105,8 +106,8 @@ def _num(v) -> float:
     return v if isinstance(v, (int, float)) and not isinstance(v, bool) else 0
 
 
-def _rows(body: bytes, sheet: str | None, head: tuple) -> list[tuple]:
-    """시트(없으면 첫 시트)에서 머리글 줄(head 와 같음)을 찾아 그 아래 빈 줄 아닌 줄들. 열리지 않거나 머리글이 다르면 SiteChangedError."""
+def _rows(body: bytes, sheet: str | None, heads: tuple[tuple, ...]) -> list[tuple]:
+    """시트(없으면 첫 시트)에서 머리글 줄(heads 중 하나와 같음)을 찾아 그 아래 빈 줄 아닌 줄들. 열리지 않거나 머리글이 다르면 SiteChangedError."""
     import openpyxl
     try:
         wb = openpyxl.load_workbook(io.BytesIO(body), read_only=True, data_only=True)
@@ -119,9 +120,9 @@ def _rows(body: bytes, sheet: str | None, head: tuple) -> list[tuple]:
         grid = [tuple("" if c is None else c for c in r) for r in wb[name].iter_rows(values_only=True)]
     finally:
         wb.close()
-    at = next((i for i, r in enumerate(grid[:5]) if tuple(str(c).strip() for c in r[:len(head)]) == head), None)
+    at = next((i for i, r in enumerate(grid[:5]) for h in heads if tuple(str(c).strip() for c in r[:len(h)]) == h), None)
     if at is None:
-        raise SiteChangedError(f"부가세 상세 머리글이 예상과 다름: {[r[:6] for r in grid[:3]]}")
+        raise SiteChangedError(f"부가세 상세 머리글이 예상과 다름: {[r[:len(heads[0])] for r in grid[:3]]}")
     return [r for r in grid[at + 1:] if any(c != "" for c in r)]
 
 
@@ -129,9 +130,9 @@ def check(report: str, body: bytes, f: date, t: date) -> dict:
     """부가세 상세 파일 → {줄, 판매·환불·합계(카드·현금·기타)}. 머리글·기간(윙 매출인식일·RG 매출인식월)이 그 달 아니면 SiteChangedError.
     합계 = 판매 + 환불(파일 부호 그대로 — 윙 환불 양수·RG 환불 음수) = 화면 월 합계(실측)."""
     if report == WING_VAT:
-        rows, when, ok = _rows(body, None, WING_HEAD), 2, (lambda v: f.isoformat() <= str(v)[:10] <= t.isoformat())
+        rows, when, ok = _rows(body, None, WING_HEADS), 2, (lambda v: f.isoformat() <= str(v)[:10] <= t.isoformat())
     elif report == RG_VAT:
-        rows, when, ok = _rows(body, RG_SHEET, RG_HEAD), 3, (lambda v: str(v)[:7] == f"{f:%Y-%m}")
+        rows, when, ok = _rows(body, RG_SHEET, (RG_HEAD,)), 3, (lambda v: str(v)[:7] == f"{f:%Y-%m}")
     else:
         raise SiteChangedError(f"모르는 월자료 종류: {report}")
     bad = [r[when] for r in rows if not ok(r[when])]

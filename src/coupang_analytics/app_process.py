@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import base64
 import ctypes
 import json
 import os
@@ -166,11 +167,11 @@ def kill_self_tree() -> None:
                    creationflags=_NO_CONSOLE)
 
 
-def _ps(script: str, env_extra: dict[str, str]) -> str:
+def _ps(script: str, env_extra: dict[str, str], timeout: int = 30) -> str:
     env = dict(os.environ)
     env.update(env_extra)
     r = subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True, text=True,
-                       timeout=30, env=env, creationflags=_NO_CONSOLE)
+                       timeout=timeout, env=env, creationflags=_NO_CONSOLE)
     return r.stdout or ""
 
 
@@ -205,24 +206,59 @@ def stop_other_apps(log) -> int:
 
 # 옛 정산 예약작업(로그온+매일 08:00, 인자 'watch') 제거 — install.ps1 은 '자동실행 등록=Y' 때만 지워서, 폴더 덮어쓰기
 # 업데이트로는 남는다(실측 10-19·20·21 매일 08:00:02 앱 없이 정산 재실행 → 35계정 재로그인·압축 시 잠금 파일 사용 중).
-_LEGACY_WATCH_PS = ("Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { "
-                    "((($_.Actions | ForEach-Object { [string]$_.Arguments }) -join ' ') -match '(^|\\s)watch(\\s|$)') } | "
-                    "ForEach-Object { try { Unregister-ScheduledTask -TaskName $_.TaskName -TaskPath $_.TaskPath "
-                    "-Confirm:$false -ErrorAction Stop; 'R' } catch { 'F' } }")
+_LEGACY_MATCH = ("Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { "
+                 "((($_.Actions | ForEach-Object { [string]$_.Arguments }) -join ' ') -match '(^|\\s)watch(\\s|$)') }")
+_LEGACY_WATCH_PS = (_LEGACY_MATCH + " | ForEach-Object { try { Unregister-ScheduledTask -TaskName $_.TaskName "
+                    "-TaskPath $_.TaskPath -Confirm:$false -ErrorAction Stop; 'R' } catch { 'F:' + $_.Exception.Message } }")
+_LEGACY_COUNT_PS = _LEGACY_MATCH + " | Measure-Object | ForEach-Object { 'N' + $_.Count }"
 
 
-def remove_legacy_settlement_task(log) -> int:
-    """옛 정산 예약작업이 남아 있으면 지운다(D-091). 지운 수 반환 · 실패는 로그 후 0(18:00 실행은 계속)."""
+def _elevated_ps(script: str) -> str:
+    """script 를 관리자 PowerShell 로 실행(UAC 확인 창 · 끝날 때까지 대기). 'X종료코드' 또는 'C:취소·오류 문구'."""
+    enc = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    outer = ("try { $p = Start-Process -FilePath powershell -Verb RunAs -WindowStyle Hidden -Wait -PassThru "
+             f"-ArgumentList '-NoProfile','-EncodedCommand','{enc}'; 'X' + $p.ExitCode }} "
+             "catch { 'C:' + $_.Exception.Message }")
+    return _ps(outer, {}, timeout=300)
+
+
+def _remove_legacy_elevated(log, failed: int) -> int:
+    """일반 권한으로 못 지운 옛 정산 예약작업(관리자 PowerShell 로 등록된 것 — 옛 settlement_watch_register.ps1)을
+    관리자 확인 창으로 지우고 남은 수를 다시 센다(D-189). 지운 수 반환."""
+    log("[시작] 옛 정산 예약작업이 관리자 권한으로 등록돼 있어 관리자 확인 창(UAC)으로 지웁니다 — 창이 뜨면 '예'를 눌러 주세요")
+    try:
+        res = _elevated_ps(_LEGACY_WATCH_PS).strip()
+        left = _ps(_LEGACY_COUNT_PS, {}).strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        log(f"[시작] ⚠ 옛 정산 예약작업 관리자 삭제 확인 실패({exc.__class__.__name__}) — 계속")
+        return 0
+    remain = int(left[1:]) if left[:1] == "N" and left[1:].isdigit() else failed
+    done = max(failed - remain, 0)
+    if done:
+        log(f"[시작] 옛 정산 예약작업(매일 08:00) {done}개 삭제(관리자 확인) — 정산은 18:00 앱과 함께만 돎(D-021)")
+    if remain:
+        log(f"[시작] ⚠ 옛 정산 예약작업 {remain}개 남음({res[:120]}) — 작업 스케줄러에서 인자 'watch' 작업을 지워 주세요")
+    return done
+
+
+def remove_legacy_settlement_task(log, elevate: bool = False) -> int:
+    """옛 정산 예약작업이 남아 있으면 지운다(D-091). 지운 수 반환 · 실패는 사유 그대로 로그(18:00 실행은 계속).
+    elevate = 사람이 직접 켠 실행 — 일반 권한으로 못 지우면 관리자 확인 창으로 지움(D-189). 무인(18:00·재부팅 복구)은
+    확인 창을 누를 사람이 없어 띄우지 않는다."""
     try:
         out = _ps(_LEGACY_WATCH_PS, {})
     except (OSError, subprocess.SubprocessError) as exc:
         log(f"[시작] ⚠ 옛 정산 예약작업 확인 실패({exc.__class__.__name__}) — 계속")
         return 0
-    n, failed = out.count("R"), out.count("F")
+    lines = [s.strip() for s in out.splitlines() if s.strip()]
+    n, fails = lines.count("R"), [s[2:].strip() for s in lines if s.startswith("F:")]
     if n:
         log(f"[시작] 옛 정산 예약작업(매일 08:00) {n}개 삭제 — 정산은 18:00 앱과 함께만 돎(D-021)")
-    if failed:
-        log(f"[시작] ⚠ 옛 정산 예약작업 {failed}개 삭제 실패(권한) — 작업 스케줄러에서 인자 'watch' 작업을 지워 주세요")
+    if fails and elevate:
+        return n + _remove_legacy_elevated(log, len(fails))
+    if fails:
+        log(f"[시작] ⚠ 옛 정산 예약작업 {len(fails)}개 삭제 실패({fails[0][:120]}) — 앱을 직접 실행하면 관리자 확인 창으로 "
+            "지웁니다(무인 실행은 확인 창을 띄우지 않음)")
     return n
 
 

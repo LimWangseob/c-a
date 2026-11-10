@@ -24,7 +24,8 @@ from coupang_analytics import appconfig, config, power, proxy_pool  # noqa: E402
 from coupang_analytics.manual_keywords import ManualKeywordError, apply_manual_keywords  # noqa: E402
 from coupang_analytics.apppaths import output_dir as app_output_dir, set_workdir  # noqa: E402
 from coupang_analytics.app_process import (mark_app_finished, prepare_auto_start,  # noqa: E402
-                                           start_settlement_watch, start_transfer_settle)
+                                           remove_legacy_settlement_task, start_settlement_watch,
+                                           start_transfer_settle)
 from coupang_analytics import transfer_settle  # noqa: E402
 from coupang_analytics.browser import WingBrowser, find_chrome, reap_orphan_chrome  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
@@ -2061,6 +2062,8 @@ def main():
     pre_logs: list[str] = []
     if auto:                        # 18:00 무인 = 이전 앱·정산 프로그램 종료(트리째·D-024) — 남은 Chrome 은 아래 reap
         prepare_auto_start(pre_logs.append)
+    elif not resume:                # 사람이 켠 실행 = 옛 정산 예약작업 제거(못 지우면 관리자 확인 창 · 무인은 창 없음 D-189)
+        remove_legacy_settlement_task(pre_logs.append, elevate=True)
     reaped = reap_orphan_chrome()   # 이전 실행이 강제종료·크래시로 남긴 좀비 Chrome 정리(누적 원천 차단)
     if reaped:
         pre_logs.append(f"[시작] 잔여(좀비) Chrome {reaped}개 정리함")

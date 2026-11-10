@@ -1166,6 +1166,30 @@ def p36_same_cycle_done():
         assert AP.remove_legacy_settlement_task(logs.append) == 1 and "삭제" in logs[-1], logs
         AP._ps = lambda script, env: ""
         assert AP.remove_legacy_settlement_task(logs.append) == 0
+        # D-189: 관리자로 만든 작업은 일반 권한으로 못 지움 → 실패 사유를 그대로 남김('권한' 단정 금지) ·
+        # 사람이 켠 실행(elevate)만 관리자 확인 창(UAC)으로 지우고 남은 수를 다시 셈 · 무인은 창을 띄우지 않음
+        deny = "F:액세스가 거부되었습니다.\n"
+        AP._ps = lambda script, env, timeout=30: deny
+        logs.clear()
+        assert AP.remove_legacy_settlement_task(logs.append) == 0 and "액세스가 거부" in logs[-1] and "관리자" in logs[-1], logs
+        calls: list = []
+
+        def fake(outs):
+            def _f(script, env, timeout=30):
+                calls.append(("RunAs" in script, timeout))
+                return outs.pop(0)
+            return _f
+        AP._ps = fake([deny, "X0\n", "N0\n"])
+        logs.clear()
+        assert AP.remove_legacy_settlement_task(logs.append, elevate=True) == 1, logs
+        assert calls[1][0] and calls[1][1] >= 120 and not calls[2][0], calls    # 둘째 = 관리자 실행(대기 넉넉히) · 셋째 = 남은 수 확인
+        assert any("UAC" in m for m in logs) and "1개 삭제" in logs[-1], logs
+        AP._ps = fake([deny, "C:작업을 취소했습니다.\n", "N1\n"])
+        logs.clear()
+        assert AP.remove_legacy_settlement_task(logs.append, elevate=True) == 0 and "1개 남음" in logs[-1] \
+            and "취소" in logs[-1], logs
+        app_src = (Path(__file__).resolve().parent.parent / "ui" / "app_qt.py").read_text(encoding="utf-8")
+        assert "remove_legacy_settlement_task(pre_logs.append, elevate=True)" in app_src, "사람이 켠 실행에서 제거 안 함"
     finally:
         AP._ps = old_ps
 
@@ -2476,6 +2500,15 @@ def p53_vat_detail_requests():
     got = DR.check(DR.WING_VAT, wing, D("2026-01-01"), D("2026-01-31"))
     assert got["판매"] == {"카드": 3457936, "현금": 372700, "기타": 88264}, got
     assert got["합계"] == {"카드": 3478936, "현금": 379700, "기타": 88264}, got
+    # 2026-05 이후 달 파일 = 둘째 칸 머리글 '옵션 ID'(빈칸 아님 — output (34) 11-09~10 실측 158건) · 칸 순서 같음 → 같이 읽음(D-188)
+    head05 = (DR.WING_HEAD[0], "옵션 ID") + DR.WING_HEAD[2:]
+    wing05 = xlsx("Excel Data (1)", [head05, ["13103037814653", "95907631792", "2026-05-26", "상품비", "TAX", 12700, 0, 0, 0, 0, 0]])
+    got = DR.check(DR.WING_VAT, wing05, D("2026-05-01"), D("2026-05-31"))
+    assert got["줄"] == 1 and got["합계"] == {"카드": 12700, "현금": 0, "기타": 0}, got
+    got = DR.check(DR.WING_VAT, xlsx("Excel Data (1)", [head05]), D("2026-06-01"), D("2026-06-30"))
+    assert got["줄"] == 0 and got["합계"] == {"카드": 0, "현금": 0, "기타": 0}, got     # 판매 없는 달 = 머리글만
+    expect(API.SiteChangedError, lambda: DR.check(DR.WING_VAT, xlsx("Excel Data (1)", [(DR.WING_HEAD[0], "상품 ID") + DR.WING_HEAD[2:]]),
+                                                  D("2026-05-01"), D("2026-05-31")), "둘째 칸이 다른 이름")
     rg = xlsx("부가세 신고자료", [[None] * 11, DR.RG_HEAD,
                                ["1", "9", "2026-01-01", "2026-01", "TAX", 22255835, 6323656, 833309, "-", "-", "-"],
                                ["2", "9", "2026-01-31", "2026-01", "TAX", "-", "-", "-", -3843221, -773859, -147454],
