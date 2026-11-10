@@ -1991,8 +1991,9 @@ def p47_settle_sales_coupons():
             assert fetched == [], "① 판매수집 소급은 4/1 기준 그대로(1~3월 안 부름)"
             _patched(patches, lambda: TD.collect_sales(SimpleNamespace(account_id="acc1"), SimpleNamespace(page=object()),
                                                        SimpleNamespace(start=D("2026-01-01"))))
-            days = [f for f, t in fetched if f == t]
-            periods = [(f, t) for f, t in fetched if f != t]
+            first = SS.FIRST_DAY.isoformat()                 # 하루짜리 기간(어제가 월요일 = 이번 주 · 1일 = 이번 달)과 구분 — 소급 = 4/1 전 날
+            days = [f for f, t in fetched if f == t and f < first]
+            periods = [(f, t) for f, t in fetched if not (f == t and f < first)]
             # D-167: 1/1 이 아직 없는 계정 = 한시 150일 → 1~3월 90일 한 번에(최근부터)
             assert days[0] == "2026-03-31" and len(days) == 90 and days[-1] == "2026-01-01", (len(days), days[:3])
             assert ("2026-01-01", "2026-01-31") in periods and ("2026-03-01", "2026-03-31") in periods, periods
