@@ -132,6 +132,27 @@ def test_updates_plan():
     ok("갱신 계획 — 빈 값/같음/샵마인전용 제외 · 여러 줄 통일")
 
 
+def test_unify_all_rows_when_partial_match():
+    # (DW)커머스처럼 한 계정이 여러 줄: 일부 줄만 샵마인 현재값, 나머지는 옛값 → '다름'으로 보고 모든 줄 통일(모두 변경)
+    rows = [
+        ["대표자명", "사업자명", "계정아이디", "비밀번호", "상품명"],
+        ["", "DW", "dw1849", "cur!", "상품1"],      # row2 이미 현재값
+        ["", "DW", "dw1849", "old!", "상품2"],      # row3 옛값
+        ["", "DW", "dw1849", "old!", "상품3"],      # row4 옛값
+        ["", "온", "same1", "ok!", "상품1"],        # row5·6 모든 줄 현재값 → 같음(안 바꿈)
+        ["", "온", "same1", "ok!", "상품2"],
+    ]
+    cands, pw_col = sm.ledger_password_map(rows)
+    shopmine = {"dw1849": "cur!", "same1": "ok!"}
+    st = dict(sm.classify(shopmine, cands))
+    assert st["dw1849"] == sm.ST_DIFF, "한 줄만 맞고 나머지 다르면 '다름'(통일 필요)"
+    assert st["same1"] == sm.ST_MATCH, "모든 줄이 현재값이면 '같음'(안 바꿈)"
+    plan = dict((aid, (pw, r)) for aid, pw, r in sm.updates_to_apply(shopmine, cands))
+    assert set(plan) == {"dw1849"}, "모든 줄이 현재값인 계정은 갱신 안 함"
+    assert plan["dw1849"] == ("cur!", [2, 3, 4]), "여러 줄 전부(이미 맞은 줄 포함) 현재값으로 통일"
+    ok("여러 줄 통일 — 일부만 맞아도 모든 줄 현재값으로('모두 변경') · 전부 맞으면 안 바꿈")
+
+
 def test_apply_updates():
     store = CredStore(Path(tempfile.mkdtemp()) / "creds.json")
     store.set_password(SA.alt_key("shopD"), "d2")        # 값2(D-190) 존재 → 통일 후 비워져야
@@ -239,6 +260,7 @@ def main():
     test_ledger_map()
     test_classify()
     test_updates_plan()
+    test_unify_all_rows_when_partial_match()
     test_apply_updates()
     test_run_daily_sync_end_to_end()
     test_login_rejected_message()

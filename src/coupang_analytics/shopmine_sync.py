@@ -257,7 +257,11 @@ def ledger_password_map(rows: list):
 
 
 def classify(shopmine: dict[str, str], ledger_cands: dict[str, list]) -> list[tuple[str, str]]:
-    """계정별 대조 상태(계정ID·상태만·비번 값 없음). 샵마인 현재값이 관리대장 후보 중 하나와 같으면 '같음'."""
+    """계정별 대조 상태(계정ID·상태만·비번 값 없음).
+
+    '같음' = **그 계정의 모든 대장 줄이 이미 샵마인 현재값**일 때만. 한 계정이 여러 줄에 걸쳐 있고 일부 줄만
+    현재값이면(담당자가 한 줄만 고친 경우·D-012·D-190) '다름→대장갱신'으로 봐서 **모든 줄을 현재값으로 통일**한다
+    (옛값 줄이 남아 로그인이 옛값을 집는 것을 막음)."""
     led_pw = {aid: {c.password for c in cs} for aid, cs in ledger_cands.items()}
     out: list[tuple[str, str]] = []
     for aid in sorted(set(shopmine) | set(led_pw)):
@@ -268,9 +272,9 @@ def classify(shopmine: dict[str, str], ledger_cands: dict[str, list]) -> list[tu
             st = ST_LED_ONLY
         elif not sm:
             st = ST_SM_EMPTY
-        elif sm in led_pw[aid]:
+        elif led_pw[aid] == {sm}:          # 모든 줄이 이미 현재값일 때만 '같음'
             st = ST_MATCH
-        else:
+        else:                               # 일부 줄만 맞거나 전부 다름 → 모든 줄 통일
             st = ST_DIFF
         out.append((aid, st))
     return out
@@ -278,12 +282,13 @@ def classify(shopmine: dict[str, str], ledger_cands: dict[str, list]) -> list[tu
 
 def updates_to_apply(shopmine: dict[str, str], ledger_cands: dict[str, list]) -> list[tuple[str, str, list[int]]]:
     """갱신할 계정 목록 [(계정ID, 샵마인현재값, 되쓸 대장 행들)]. 조건 = 대장에 있고 · 샵마인값이 비어있지 않고 ·
-    대장 어느 후보와도 다름. 되쓸 행 = 그 계정 비번이 적힌 모든 대장 행(여러 줄 값 통일)."""
+    **대장의 모든 줄이 현재값인 것은 아님**(한 줄이라도 다르면 갱신). 되쓸 행 = 그 계정 비번이 적힌 **모든 대장 행**
+    (여러 줄 중 일부만 고쳐져 있어도 전부 현재값으로 통일 — '모두 변경')."""
     led_pw = {aid: {c.password for c in cs} for aid, cs in ledger_cands.items()}
     plan: list[tuple[str, str, list[int]]] = []
     for aid, cs in ledger_cands.items():
         sm = (shopmine.get(aid) or "").strip()
-        if sm and aid in shopmine and sm not in led_pw[aid]:
+        if sm and aid in shopmine and led_pw[aid] != {sm}:
             plan.append((aid, sm, sorted({r for c in cs for r in c.rows})))
     return plan
 

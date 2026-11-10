@@ -5,10 +5,12 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 10a1299d-23ca-4c80-9194-125bb6a08ef3
-  modified: 2026-11-10T15:12:11.480Z
+  modified: 2026-11-10T15:31:33.496Z
 ---
 
-현행 = **D-195 + D-196 + D-197**(docs/DECISIONS.md) · 현행 규칙 요약 = `docs/CURRENT_RULES.md` 1절(비밀번호·로그인).
+현행 = **D-195 + D-196 + D-197 + D-198**(docs/DECISIONS.md) · 현행 규칙 요약 = `docs/CURRENT_RULES.md` 1절(비밀번호·로그인).
+
+여러 줄 통일(D-198·R128): 한 계정이 여러 줄이면 **모든 줄을 샵마인 현재값으로 통일** — '같음'은 전 줄이 현재값일 때만, 한 줄만 맞고 나머지 다르면 전부 갱신(옛값 줄 잔존→로그인 거부 방지·D-012·D-190). 제약 = 계속 줄 계정ID가 비면(병합) 못 잡음(현재 대장은 줄마다 반복).
 
 백업(D-197·R127): 비번 되쓰기 직전 관리대장 탭을 **구글시트 안**에서 복제(`백업_비번동기화_날짜시각`) — ⛔로컬 백업 금지(평문 비번)와 양립. 변경 있을 때만·dry-run 제외. `GSheetClient.duplicate_sheet`·`shopmine_sync.backup_ledger`.
 
