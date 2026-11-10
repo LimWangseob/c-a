@@ -56,6 +56,11 @@ def ok(msg):
 class FakeClient:
     def __init__(self):
         self.writes = []
+        self.backups = []                       # (source, new_title, 그 시점까지의 쓰기 수)
+
+    def duplicate_sheet(self, source_title, new_title):
+        self.backups.append((source_title, new_title, len(self.writes)))   # 쓰기 전이면 셋째=0
+        return 999
 
     def write_values(self, sheet, rows, start, raw=False):
         self.writes.append((sheet, start, rows[0][0], raw))
@@ -154,6 +159,10 @@ def test_run_daily_sync_end_to_end():
             now=datetime(2026, 11, 10, 18, 0, 0), out_dir=str(Path(d) / "rep"))
         assert out == {"accounts": 6, "updated": 2, "cells": 4, "report": out["report"]}, out
         assert len(cl.writes) == 4
+        assert len(cl.backups) == 1, "변경 전 관리대장 백업(탭 복제) 1회"
+        src, name, writes_at_backup = cl.backups[0]
+        assert src == "Sheet1" and name.startswith("백업_비번동기화_"), cl.backups
+        assert writes_at_backup == 0, "백업은 어떤 되쓰기보다 먼저여야 함(복구 안전)"
         report = Path(out["report"])
         assert report.exists()
         text = report.read_text(encoding="utf-8-sig")
@@ -208,9 +217,10 @@ def test_dry_run_no_write():
             now=datetime(2026, 11, 10), out_dir=str(Path(d) / "rep"), apply=False)
         assert out == {"accounts": 6, "updated": 2, "cells": 0, "report": out["report"]}, out
         assert cl.writes == [], "dry-run 은 관리대장에 쓰지 않아야 함"
+        assert cl.backups == [], "dry-run 은 백업 탭도 안 만든다(변경 안 하니까)"
         assert not store.get_password("shopA"), "dry-run 은 credstore 도 안 건드림"
         assert Path(out["report"]).exists(), "리포트는 생성(대조 결과 미리보기)"
-    ok("dry-run — 대조·리포트만 · 관리대장/credstore 쓰기 0 · 갱신 예정 건수 보고")
+    ok("dry-run — 대조·리포트만 · 관리대장/credstore 쓰기 0 · 백업 0 · 갱신 예정 건수 보고")
 
 
 def test_no_pw_col_skips():

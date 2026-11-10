@@ -304,6 +304,17 @@ def apply_updates(client, sheet: str, pw_col: str, plan: list, store, log=lambda
     return n_cell
 
 
+def backup_ledger(client, sheet: str, now: datetime, log=lambda m: None) -> str:
+    """비번 되쓰기 **직전에** 관리대장(비번 포함) 탭을 **구글시트 안에서** 복제해 백업 탭을 만든다.
+
+    로컬 파일 백업은 금지(평문 비번 유출·CLAUDE.md)라 구글 안에서만 백업한다 — 비번이 구글 밖으로 안 나간다.
+    되돌리려면 이 백업 탭의 비번 열을 원래 탭에 되쓰면 된다. 변경이 있을 때만 호출(apply·plan 있을 때). 반환 = 백업 탭 이름."""
+    name = f"백업_비번동기화_{now:%Y%m%d_%H%M%S}"
+    client.duplicate_sheet(sheet, name)
+    log(f"[샵마인] 변경 전 관리대장 백업 탭 생성: '{name}'(구글시트 안·로컬 저장 없음)")
+    return name
+
+
 def write_report(classified: list[tuple[str, str]], out_dir: str, now: datetime) -> Path:
     """대조 리포트 CSV(계정ID·상태만·비번 값 없음) 저장 → 경로."""
     p = Path(out_dir)
@@ -348,7 +359,9 @@ def run_daily_sync(url: str, sheet: str, rows: list, *, store, client=None, fetc
     plan = updates_to_apply(shopmine, cands)
     n_cell = 0
     if plan and apply:
-        n_cell = apply_updates(client or _gsheet_client(url, store), sheet, pw_col, plan, store, log)
+        cl = client or _gsheet_client(url, store)
+        backup_ledger(cl, sheet, now, log)                 # 되쓰기 전 관리대장 백업(구글시트 안)
+        n_cell = apply_updates(cl, sheet, pw_col, plan, store, log)
     note = "" if apply else f"  ※ 미리보기(dry-run) — 관리대장에 쓰지 않음(갱신 예정 {len(plan)}건)"
     log(_summary_line(classified, n_cell, report) + note)
     return {"accounts": len(classified), "updated": len(plan), "cells": n_cell, "report": str(report)}

@@ -1479,4 +1479,11 @@ un_log_*.log`)로 확인 필요.
 - 근거(실측): pktmon 캡처 `C:\Temp\sm.pcapng`(파싱 `D:\rea\evidence\shopmine\parse_capture.py`) → 성공 로그인 본문 = 우리 코드와 동일 · discover 출력(로그인 키 AuthenticationKey·AuthorizationCode·IsSuccess · market_account 응답 DataTable·TotalCount·PageCount 등 · 59건 · 필드 MarketId·MarketPassword 존재) · 게이트 `test_dry_run_no_write` 추가 후 run_checks 19종 초록·check_complexity 0.
 - 버린 대안: ①비번 변환(해시) — REA IL·캡처 둘 다 평문 확정이라 폐기(옛 `--pw-hash` 제거 0a61d4f) ②사이드 세션이 실 sync 로 관리대장 바로 갱신 — 통제 세션 전용·마스터 오쓰기 위험으로 폐기(dry-run 까지만).
 - 영향 범위: `shopmine_sync.run_daily_sync`(`apply` 매개변수 추가·기본 True·행동 불변) · `tools/shopmine_sync.py`(`--dry-run`) · 게이트 `test_dry_run_no_write`. 로그인·계정조회·필드명 코드는 변경 0(실서버에서 그대로 맞았음).
+- 상태: ACTIVE (백업 추가 = D-197)
+
+### D-197 [SHOPMINE_PW_SYNC] 비번 되쓰기 전 관리대장 백업 = 구글시트 안 탭 복제(로컬 백업 금지와 양립) (2026-11-10, R127)
+- 결정: 샵마인 동기화가 관리대장(구글시트) 비밀번호 열을 **쓰기 직전에**, 그 관리대장 탭을 **같은 스프레드시트 안에** `백업_비번동기화_YYYYMMDD_HHMMSS` 로 복제해 백업한다(값·서식 그대로). 복제는 **변경이 있을 때만**(갱신 계획 비어있지 않고 `apply=True`일 때) · 변경 없는 날·`--dry-run`은 백업 안 함.
+- 근거/제약: ⛔ 관리대장에는 **평문 비밀번호**가 있어 **로컬 파일 백업 금지**(공유·유출 위험·전역 CLAUDE.md). 그래서 백업을 **구글시트 안**(복제 탭)으로만 한다 — 비번이 구글 밖으로 나가지 않아 '로컬 백업 금지'와 양립. 되돌리려면 백업 탭의 비번 열을 원래 탭에 되쓰면 됨. 구현 = `GSheetClient.duplicate_sheet`(Sheets API `duplicateSheet`) · `shopmine_sync.backup_ledger`(되쓰기 직전 1회) · 게이트가 '백업이 모든 되쓰기보다 먼저·dry-run은 백업 0' 검증.
+- 버린 대안: ①로컬 CSV/JSON 백업(평문 비번 유출 — 정책 위반) ②변경 셀만 로그로 적재(감사용이나 '관리대장 백업' 요청엔 전체 스냅샷이 명확) ③구글 자체 버전기록에만 의존(명시적 복제가 발견·복구 쉬움) ④오래된 백업 탭 자동 삭제(탭 삭제는 파괴적·위험 → 안 함, 소유자가 수동 정리).
+- 영향 범위: `src/coupang_analytics/gsheet_api.py`(`duplicate_sheet` 1개 추가) · `src/coupang_analytics/shopmine_sync.py`(`backup_ledger` + `run_daily_sync` 되쓰기 직전 1줄) · 게이트 `tools/verify_shopmine_sync_offline.py`(FakeClient `duplicate_sheet`·순서 검증). 일상 자동(앱 훅)·수동 `sync` 모두 적용 · `--dry-run`은 백업 안 함.
 - 상태: ACTIVE
