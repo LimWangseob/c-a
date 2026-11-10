@@ -163,6 +163,27 @@ def test_run_daily_sync_end_to_end():
     ok("end-to-end — 요약 숫자 · 갱신 4셀 · 리포트에 비번 값 0 · 상태 기록")
 
 
+def test_login_rejected_message():
+    # 서버가 응답은 주되 로그인 거부(IsSuccess=False·AuthenticationKey 빈 값) → 필드 문제 아닌 '거부'로 또렷이 알림
+    real = sm.post_failover
+    try:
+        sm.post_failover = lambda path, body, log=None: (
+            "srv", {"AuthenticationKey": "", "AuthorizationCode": "", "IsSuccess": False})
+        try:
+            sm.do_login({"CompanyId": "c", "UserId": "c", "UserPassword": "x"}, lambda m: None)
+            assert False, "거부 시 ShopmineError 를 올려야 함"
+        except sm.ShopmineError as exc:
+            assert "거부" in str(exc) and "UserId" in str(exc), str(exc)
+        # 성공(IsSuccess=True·인증키 있음) → 인증키 반환
+        sm.post_failover = lambda path, body, log=None: (
+            "srv", {"AuthenticationKey": "KEY123", "IsSuccess": True})
+        srv, key, _ = sm.do_login({"CompanyId": "c"}, lambda m: None)
+        assert key == "KEY123"
+    finally:
+        sm.post_failover = real
+    ok("로그인 거부(IsSuccess=False) → 또렷한 안내 · 성공 → 인증키 반환")
+
+
 def test_no_pw_col_skips():
     out = sm.run_daily_sync("URL", "S", [["대표자명", "상품명"]], store=None,
                             client=FakeClient(), fetch=lambda s, log: {"x": "y"}, log=lambda m: None,
@@ -181,6 +202,7 @@ def main():
     test_updates_plan()
     test_apply_updates()
     test_run_daily_sync_end_to_end()
+    test_login_rejected_message()
     test_no_pw_col_skips()
     print("통과 — 실 API·실 자격 없이 결정적. 비번 평문 비노출 확인.")
 

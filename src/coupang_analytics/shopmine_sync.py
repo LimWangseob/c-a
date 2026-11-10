@@ -47,6 +47,7 @@ COMMON_HEADERS = {
 
 SHOPMINE_KEY = "__shopmine_login__"     # credstore(DPAPI) 안 샵마인 로그인 자격 블록 키
 AUTHKEY_NAMES = frozenset({"authenticationkey", "authkey", "auth_key"})
+SUCCESS_NAMES = frozenset({"issuccess", "success", "result"})   # 로그인 성공 플래그(실측 응답 키 = IsSuccess)
 ID_KEY_DEFAULT = "MarketId"             # 계정 레코드의 계정ID 필드(정적분석 추정 · discover 로 확정)
 PW_KEY_DEFAULT = "MarketPassword"       # 계정 레코드의 비번 필드(정적분석 추정 · discover 로 확정)
 PAGE_SIZE_DEFAULT = 100
@@ -178,7 +179,13 @@ def do_login(creds: dict, log=lambda m: None):
     authkey = find_value_by_keyname(resp, AUTHKEY_NAMES)
     if not authkey:
         keys = sorted(resp.keys()) if isinstance(resp, dict) else "(리스트 응답)"
-        raise ShopmineError(f"로그인 응답에 AuthenticationKey 없음(서버 {srv}·최상위 키 {keys}) — "
+        success = find_value_by_keyname(resp, SUCCESS_NAMES)
+        if success is not None and not success:   # 응답은 왔으나 서버가 로그인 거부(IsSuccess=False·인증키 빈 값)
+            raise ShopmineError(
+                f"샵마인 로그인 거부(서버 {srv}·IsSuccess={success}·인증키 빈 값). 필드명은 맞음(최상위 키 {keys}). "
+                "업체ID·비번이 맞는지 · 대표(업체) 계정이면 UserId 를 비워야 하는지 · ShopmineVersion 이 필요한지 "
+                "확인해 setup 다시. ⚠ 거듭 틀리면 샵마인 계정이 잠길 수 있으니 2~3회만 시도.")
+        raise ShopmineError(f"로그인 응답에 AuthenticationKey 없음(서버 {srv}·최상위 키 {keys}·IsSuccess={success}) — "
                             "ShopmineVersion/필드명 확인(discover)")
     return srv, authkey, resp
 
