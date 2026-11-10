@@ -42,6 +42,20 @@ def settlement_watch_cmd(parent_pid: int, since: datetime | None = None) -> tupl
     return [sys.executable, str(root / "tools" / "settlement_download.py"), *tail], str(root)
 
 
+def _spawn_detached(cmd: list[str], cwd: str) -> tuple[subprocess.Popen | None, OSError | None, str]:
+    """창 없이 띄움. 앱(작업 스케줄러 작업)이 ③ 뒤 끝나도 정산은 계속 돌아야 한다 → 작업 묶음(job)에서 분리해 띄운다
+    (CREATE_BREAKAWAY_FROM_JOB). 그 묶음이 분리를 막으면 분리 없이 띄우고 알린다(note). 반환 = (프로세스, 오류, 알림)."""
+    err = None
+    for flags, note in ((_NO_CONSOLE | _BREAKAWAY | _NEW_GROUP, ""),
+                        (_NO_CONSOLE | _NEW_GROUP, " — ⚠ 작업 묶음 분리 불가: 앱이 끝날 때 정산도 끝날 수 있음")):
+        try:
+            return subprocess.Popen(cmd, cwd=cwd, creationflags=flags, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL), None, note
+        except OSError as exc:
+            err = exc
+    return None, err, ""
+
+
 def start_settlement_watch(log, since: datetime | None = None) -> subprocess.Popen | None:
     """정산 프로그램을 창 없이 띄운다(이미 돌면 정산 쪽 잠금이 둘째를 바로 끝냄). 실패는 로그 후 None.
     since = 사람이 누른 전체실행 시각(그 실행의 ① 완료를 기다림) — 18:00 무인·정산 탭 버튼은 None."""
@@ -49,17 +63,7 @@ def start_settlement_watch(log, since: datetime | None = None) -> subprocess.Pop
     if getattr(sys, "frozen", False) and not Path(cmd[0]).exists():
         log(f"[정산] ⚠ {SETTLE_EXE} 를 찾을 수 없어 정산 자동 수집을 못 띄움: {cmd[0]}")
         return None
-    # 앱(작업 스케줄러 작업)이 ③ 뒤 끝나도 정산은 계속 돌아야 한다 → 작업 묶음(job)에서 분리해 띄운다
-    # (CREATE_BREAKAWAY_FROM_JOB). 그 묶음이 분리를 막으면 분리 없이 띄우고 알린다.
-    proc, err = None, None
-    for flags, note in ((_NO_CONSOLE | _BREAKAWAY | _NEW_GROUP, ""),
-                        (_NO_CONSOLE | _NEW_GROUP, " — ⚠ 작업 묶음 분리 불가: 앱이 끝날 때 정산도 끝날 수 있음")):
-        try:
-            proc = subprocess.Popen(cmd, cwd=cwd, creationflags=flags, stdin=subprocess.DEVNULL,
-                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            break
-        except OSError as exc:
-            err = exc
+    proc, err, note = _spawn_detached(cmd, cwd)
     if proc is None:
         log(f"[정산] ⚠ 정산 자동 수집 시작 실패: {err}")
         return None
@@ -68,14 +72,38 @@ def start_settlement_watch(log, since: datetime | None = None) -> subprocess.Pop
     return proc
 
 
-def transfer_login_cmd(retry: bool = False, file: str = "") -> tuple[list[str], str]:
-    """셀독전환자 로그인 확인(D-111)을 띄울 명령 + 작업 폴더 — 정산 프로그램의 transfer-login 명령(배포=정산다운로드.exe)."""
-    tail = ["transfer-login", *(["--retry"] if retry else []), *(["--file", file] if file else [])]
+def _settle_program_cmd(tail: list[str]) -> tuple[list[str], str]:
+    """정산 프로그램 명령 + 작업 폴더 — 배포=정산다운로드.exe(형제)·개발=python tools/settlement_download.py."""
     if getattr(sys, "frozen", False):
         folder = Path(sys.executable).parent
         return [str(folder / SETTLE_EXE), *tail], str(folder)
     root = Path(__file__).resolve().parents[2]
     return [sys.executable, str(root / "tools" / "settlement_download.py"), *tail], str(root)
+
+
+def transfer_login_cmd(retry: bool = False, file: str = "") -> tuple[list[str], str]:
+    """셀독전환자 로그인 확인(D-111)을 띄울 명령 + 작업 폴더 — 정산 프로그램의 transfer-login 명령(배포=정산다운로드.exe)."""
+    return _settle_program_cmd(["transfer-login", *(["--retry"] if retry else []), *(["--file", file] if file else [])])
+
+
+def transfer_settle_cmd(parent_pid: int) -> tuple[list[str], str]:
+    """셀독전환자 정산 자료 받기(D-187 · 매일 18시 뒤) — `--parent` = 앱 PID(사람이 앱을 끄면 함께 종료 D-020)."""
+    return _settle_program_cmd(["transfer-settle", "--parent", str(parent_pid)])
+
+
+def start_transfer_settle(log, parent_pid: int) -> subprocess.Popen | None:
+    """창 없이·작업 묶음에서 분리해 띄움(18:00 앱이 ③ 뒤 끝나도 계속) — 앱 실행·정산 자동 수집이 끝날 때까지 스스로 기다림.
+    [정산 중지]·18:00 시작 정리가 정산 프로그램을 끝낼 때 함께 끝난다(같은 exe). 실패는 로그 후 None."""
+    cmd, cwd = transfer_settle_cmd(parent_pid)
+    if getattr(sys, "frozen", False) and not Path(cmd[0]).exists():
+        log(f"[셀독전환] ⚠ {SETTLE_EXE} 를 찾을 수 없어 정산 자료 받기를 못 띄움: {cmd[0]}")
+        return None
+    proc, err, note = _spawn_detached(cmd, cwd)
+    if proc is None:
+        log(f"[셀독전환] ⚠ 정산 자료 받기 시작 실패: {err}")
+        return None
+    log("[셀독전환] 셀독전환자 정산 자료 받기 시작 — 앱 실행·정산 자동 수집이 끝난 뒤(20:40 이후) 받고 17:40 에 멈춤" + note)
+    return proc
 
 
 def start_transfer_login(log, retry: bool = False, file: str = "") -> subprocess.Popen | None:

@@ -23,6 +23,14 @@ FORECAST = BASE / "정산예정기록.jsonl"                     # 앞으로의 
 VERIFY = BASE / "검증자료"                                # 월렛·매출내역·부가세·보류·추가지급(계정별 JSON·하루 1회)
 
 
+def use_base(base: Path) -> None:
+    """이 실행의 정산 기록 위치를 바꿈(셀독전환자 정산 자료 = output/정산_셀독전환/정산 · D-187) — 실행 시작에 한 번만."""
+    global BASE, JOBS, FILES, COSTS, AMOUNTS, FORECAST, VERIFY
+    BASE = Path(base)
+    JOBS, FILES, AMOUNTS = BASE / "_요청기록.json", BASE / "파일", BASE / "쿠팡지급내역"
+    COSTS, FORECAST, VERIFY = FILES / "비용", BASE / "정산예정기록.jsonl", BASE / "검증자료"
+
+
 def _amount_key(r: dict) -> tuple:
     return r["정산일"], r["기간 시작"], r["기간 끝"], r["지급비율"]
 

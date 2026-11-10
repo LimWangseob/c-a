@@ -28,6 +28,7 @@ import argparse
 import json
 import os
 import random
+import shutil
 import subprocess
 import sys
 import time
@@ -58,6 +59,7 @@ AMOUNTS_FROM = date(2025, 11, 1)                        # 지급 내역 기록 �
 LOG: RL.RunLog = None  # type: ignore[assignment]   # main() 에서 실행 시작 시 생성
 CHANNELS: tuple = ()                                    # --channel 로 제한(비우면 윙·로켓그로스 둘 다)
 ORIGINALS: Path | None = None                           # --originals: 받은 쿠팡 원본 그대로 복사할 증빙 폴더(D-062)
+REUSE_FROM: Path | None = None                          # transfer-settle 만: 원장 정산 파일 폴더 — 같은 파일이면 요청 안 하고 복사(D-187)
 
 
 def log(m: str) -> None:
@@ -386,6 +388,8 @@ def _request_one(b, j, name: str) -> str:
 def cmd_request(a, b, args, jobs: list) -> None:
     name = name_of(a)
     events = read_events(b, name, args.start, args.end, amounts_from=AMOUNTS_FROM)
+    if REUSE_FROM is not None:                            # 셀독전환자(D-187) — 원장 정산 기록에 있는 파일은 요청 상한 전에 복사
+        _reuse_main(a, name, events, jobs)
     picked = [j for j in SJ.plan_requests(events, jobs, today=date.today(), now=datetime.now(),
                                           per_account_cap=args.cap)
               if j.account == name and args.start.isoformat() <= j.settle_date <= args.end.isoformat()]   # 이번 기간만
@@ -415,6 +419,27 @@ def cmd_request(a, b, args, jobs: list) -> None:
         SJ.mark_requested(j, datetime.now(), rid)
         SJ.save_jobs(JOBS, jobs)
         LOG.record(name, "요청", RL.OK, f"다운로드 요청함(요청번호 {rid})", **_job_fields(j))
+
+
+def _reuse_main(a, name: str, events: list, jobs: list) -> None:
+    """D-187 셀독전환자: 받을 파일이 원장 정산 기록(REUSE_FROM)에 이미 있으면 요청하지 않고 복사(같은 계정 두 번 요청 방지).
+    같은 계정 판단 = transfer_settle.find_reusable(이름 끝 계정ID + 대표자명·사업자명)."""
+    from coupang_analytics import transfer_settle as TS
+    for j in SJ.plan_requests(events, jobs, today=date.today(), now=datetime.now(), per_account_cap=10 ** 9):
+        if j.account != name or j.kind == SJ.DOC_KIND:
+            continue
+        fname = SF.settle_file_name(name, date.fromisoformat(j.settle_date), j.channel, j.kind, j.report,
+                                    date.fromisoformat(j.period_start), date.fromisoformat(j.period_end))
+        cost = j.channel == "로켓그로스" and j.report != "판매수수료"
+        src = TS.find_reusable(REUSE_FROM / "비용" if cost else REUSE_FROM, a.account_id, a.names, fname)
+        if src is None:
+            continue
+        dst = (COSTS if cost else FILES) / fname
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        j.status, j.file = SJ.ST_DONE, f"비용/{fname}" if cost else fname
+        LOG.saved(name, dst, "원장 정산 기록에서 복사")
+        LOG.record(name, "받기", RL.OK, f"원장 정산 기록에 같은 파일 — 요청 안 하고 복사({src.name})", **_job_fields(j))
 
 
 def _get_bytes(b, url: str, text_ok: bool = False) -> bytes:
@@ -990,11 +1015,77 @@ def cmd_watch(args) -> int:
         return 0
 
 
+def _use_transfer_store() -> None:
+    """D-187 — 이 실행의 정산 기록 위치 = 셀독전환자 몫(output/정산_셀독전환/정산 · 원장 정산 기록과 섞지 않음 D-111 ⑥).
+    증빙(evidence)의 JOBS 전환과 같은 방식 · 바꾸기 전 파일 폴더 = 재사용할 원장 정산 파일."""
+    global BASE, JOBS, FILES, COSTS, AMOUNTS, VERIFY, AMOUNTS_FROM, REUSE_FROM
+    from coupang_analytics import transfer_settle as TS
+    REUSE_FROM = FILES
+    STORE.use_base(TS.STORE_DIR)
+    BASE, JOBS, FILES, COSTS, AMOUNTS, VERIFY = STORE.BASE, STORE.JOBS, STORE.FILES, STORE.COSTS, STORE.AMOUNTS, STORE.VERIFY
+    AMOUNTS_FROM = TS.FROM
+
+
+def _transfer_work(args):
+    """D-187 셀독전환자 한 계정 = 1단계와 같은 로그인·판정 → 원장 정산과 같은 요청(계정당 30건)·90초·받기 → (결과, 사유).
+    잠금·사용 중 확인은 원장 정산과 같은 계정 잠금(output/정산/_잠금/{계정ID}.lock)·같은 Chrome 프로필 확인."""
+    from coupang_analytics import transfer_login as TL
+    from coupang_analytics import transfer_settle as TS
+    from coupang_analytics.pipeline_sales import account_profile
+    from coupang_analytics.registry_lock import RegistryLockError, registry_lock
+    locks = REUSE_FROM.parent / "_잠금"
+
+    def work(a, pws: list, stop_at) -> tuple[str, str]:
+        acct, args.until_at = TS.settle_account(a), stop_at
+        name = name_of(acct)
+        LOG.heartbeat("작동중", f"실행 중: {name}")
+        if _profile_busy(account_profile(a.account_id), until=stop_at):
+            return TL.SKIP, "이 계정 Chrome 이 계속 실행 중(앱·원장 정산) — 다음 실행에서 다시"
+        try:
+            with registry_lock(locks / f"{a.account_id}.lock", wait_sec=5, on_log=log),                     TL.logged_in(a, pws, args.hidden, log) as (status, reason, b):
+                LOG.record(name, "로그인", {TL.OK: RL.OK, TL.BLOCK: RL.BLOCK}.get(status, RL.FAIL), reason)
+                if status != TL.OK:
+                    return status, reason
+                jobs = SJ.load_jobs(JOBS)
+                cmd_request(acct, b, args, jobs)
+                time.sleep(90)
+                cmd_download(acct, b, args, jobs)
+                return TL.OK, "로그인 됨 · 정산 자료 받기 끝(받은 파일 = 처리기록)"
+        except RegistryLockError:
+            return TL.SKIP, "원장 정산이 이 계정을 쓰는 중 — 다음 실행에서 다시"
+        except BlockDetected as exc:
+            LOG.error(name, "계정", exc, RL.BLOCK)
+            return TL.BLOCK, f"정산 화면 차단 — {str(exc)[:80]}"
+        except API.ServerBusy as exc:
+            LOG.record(name, "계정", RL.WAIT, str(exc))
+            return TL.SKIP, "쿠팡 서버 일시 오류 — 다음 실행에서 다시"
+        except Exception as exc:                          # 처리기록·오류 로그(전체 추적) 남기고 '건너뜀'(transfer_settle)
+            LOG.error(name, "계정", exc)
+            raise
+    return work
+
+
+def _transfer_settle(args) -> int:
+    """D-187 셀독전환자 정산 자료 받기(매일 18시 뒤 · §15 2단계) — 기록 위치 전환 → 기다림·계정 반복 → 누적 파일."""
+    global LOG
+    from coupang_analytics import transfer_settle as TS
+    _use_transfer_store()
+    TS.apply_args(args)
+    LOG = RL.RunLog(BASE)
+    LOG.heartbeat("작동중", "셀독전환자 정산 자료 받기")
+    if args.parent:
+        _watch_app(args.parent)
+    rc = TS.main_cli(args, _transfer_work(args), log)
+    LOG.summary(pending=_pending_jobs())
+    LOG.heartbeat("완료" if rc == 0 else "종료", f"셀독전환자 정산 자료 받기 · 종료코드 {rc}")
+    return rc
+
+
 def main() -> int:
     global LOG
     ap = argparse.ArgumentParser(description="쿠팡 정산 파일 배치 다운로드")
     ap.add_argument("command", choices=("probe", "request", "download", "run", "watch", "stats", "merge", "evidence",
-                                        "transfer-login"))
+                                        "transfer-login", "transfer-settle"))
     ap.add_argument("--accounts", default="", help="계정ID 쉼표 구분(비우면 관리대장 전체)")
     ap.add_argument("--from", dest="start", type=date.fromisoformat, default=date(2026, 1, 1))
     ap.add_argument("--to", dest="end", type=date.fromisoformat, default=date.today())
@@ -1004,7 +1095,7 @@ def main() -> int:
     ap.add_argument("--channel", choices=("윙", "로켓그로스"), default="", help="한 채널만")
     ap.add_argument("--src", default="", help="merge: 합칠 정산 폴더(예: output\정산\정산 — 노트북에서 옮겨 온 것)")
     ap.add_argument("--until", default="", help="HH:MM 이후엔 새 요청·새 계정 시작 안 함(앱 18:00 무인 실행 전 멈춤)")
-    ap.add_argument("--parent", type=int, default=0, help="watch: 앱 PID — 사람이 앱을 끄면 정산도 종료(D-020)")
+    ap.add_argument("--parent", type=int, default=0, help="watch·transfer-settle: 앱 PID — 사람이 앱을 끄면 정산도 종료(D-020)")
     ap.add_argument("--originals", default="", help="받은 쿠팡 원본(구매자명 포함)을 그대로 복사해 둘 폴더(증빙용·D-062)")
     ap.add_argument("--since", default="", help="watch: 이 시각(ISO) 뒤에 끝난 ①판매수집만 기다림(앱 전체실행 버튼)")
     ap.add_argument("--out", default="", help="evidence: 증빙 상위 폴더(계정마다 증빙_{사업자}_쿠팡원본 — D-067)")
@@ -1022,6 +1113,8 @@ def main() -> int:
         from coupang_analytics import transfer_login
         args.until = args.until or transfer_login.UNTIL_DEFAULT
         return transfer_login.main_cli(args)
+    if args.command == "transfer-settle":   # D-187 셀독전환자 정산 자료 받기 — output/정산_셀독전환/정산(원장 정산 기록과 따로)
+        return _transfer_settle(args)
     LOG = RL.RunLog(BASE)
     log(f"실행 {LOG.run_id} · 명령 {args.command} · 기간 {args.start}~{args.end} · 데이터 폴더 {Path.cwd()}")
     if args.command != "watch":   # watch 는 잠금을 얻은 뒤 cmd_watch 가 상태를 쓴다 — 2중 실행(잠금 실패로 즉시

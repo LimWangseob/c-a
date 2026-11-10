@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import random
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -30,6 +31,7 @@ QUIET_HOURS = 3                # 멈춤 시각부터 이 시간 동안은 시작
 BLOCK_STOP = 2                 # 차단·미완료·오류 연속 이만큼이면 전체 중단
 PW_WRONG_TAG, OTP_TAG = "비밀번호 오류", "2단계 인증"
 BUSY_LOCKS = (Path("output") / "_잠금" / "파이프라인.lock", Path("output") / "정산" / "_잠금" / "_watch.lock")
+RUN_LOCK = OUT_DIR / "_잠금" / "_실행.lock"   # 1단계(로그인 확인)·2단계(정산 자료 받기 transfer_settle) 한 번에 하나(D-187)
 
 OK, FAIL, BLOCK, SKIP = "성공", "실패", "차단", "건너뜀"
 CONTACT = "연락 필요"          # 사람이 계약자에게 연락해 고칠 실패(비밀번호·2단계 인증·계정 상태·비밀번호 없음)
@@ -162,28 +164,41 @@ def pick(accts, state: dict, retry: bool, passwords=None, fp=None) -> list:
 
 
 # ── 계정 하나 ─────────────────────────────────────────────────
-def check_one(a, pws: list, hidden: bool, log) -> tuple[str, str]:
-    """실제 Chrome 으로 로그인만 해 보고 닫음 → (결과, 사유). 로그인 코드·판정은 앱 ①과 같음."""
-    from . import login_today
+@contextmanager
+def logged_in(a, pws: list, hidden: bool, log):
+    """실제 Chrome 으로 로그인 → (결과, 사유, 브라우저) — 나올 때 창을 닫음. 1단계(check_one)·2단계(정산 자료 받기 D-187) 공용."""
     from .browser import WingBrowser
-    from .pipeline_sales import LoginBlocked, LoginCredentialError, _login_with_candidates, account_profile
+    from .pipeline_sales import account_profile
     with WingBrowser(profile_dir=account_profile(a.account_id), offscreen=hidden) as b:
-        try:
-            ok = _login_with_candidates(b, a, pws, log, login=True, semi=not hidden)
-        except LoginBlocked:
-            return BLOCK, "로그인 차단(Akamai) — 사무실 IP 차단 의심·나중에 다시"
-        except LoginCredentialError:
-            code, detail = b.classify_login()
-            why = login_today.reasons_today().get(a.account_id) or login_today.PW_WRONG
-            return FAIL, f"{why}" + (f" — 쿠팡 안내: {detail[:80]}" if code == "error" and detail else "")
+        yield (*_judge(b, a, pws, hidden, log), b)
+
+
+def _judge(b, a, pws: list, hidden: bool, log) -> tuple[str, str]:
+    """로그인 코드·판정은 앱 ①과 같음 → (결과, 사유)."""
+    from . import login_today
+    from .pipeline_sales import LoginBlocked, LoginCredentialError, _login_with_candidates
+    try:
+        ok = _login_with_candidates(b, a, pws, log, login=True, semi=not hidden)
+    except LoginBlocked:
+        return BLOCK, "로그인 차단(Akamai) — 사무실 IP 차단 의심·나중에 다시"
+    except LoginCredentialError:
         code, detail = b.classify_login()
-        if ok:
-            return OK, "로그인 됨"
-        if code == "otp":
-            return FAIL, f"비밀번호 맞음 — {login_today.OTP}(계약자 휴대폰 인증번호 — 연락 필요)"
-        if code in ("blocked", "akamai"):
-            return BLOCK, f"로그인 차단({code}) — 나중에 다시"
-        return SKIP, f"{login_today.UNFINISHED}({code}: {detail[:60]}) — 다음 실행에서 다시"
+        why = login_today.reasons_today().get(a.account_id) or login_today.PW_WRONG
+        return FAIL, f"{why}" + (f" — 쿠팡 안내: {detail[:80]}" if code == "error" and detail else "")
+    code, detail = b.classify_login()
+    if ok:
+        return OK, "로그인 됨"
+    if code == "otp":
+        return FAIL, f"비밀번호 맞음 — {login_today.OTP}(계약자 휴대폰 인증번호 — 연락 필요)"
+    if code in ("blocked", "akamai"):
+        return BLOCK, f"로그인 차단({code}) — 나중에 다시"
+    return SKIP, f"{login_today.UNFINISHED}({code}: {detail[:60]}) — 다음 실행에서 다시"
+
+
+def check_one(a, pws: list, hidden: bool, log) -> tuple[str, str]:
+    """실제 Chrome 으로 로그인만 해 보고 닫음 → (결과, 사유)."""
+    with logged_in(a, pws, hidden, log) as (status, reason, _b):
+        return status, reason
 
 
 # ── 전체 ─────────────────────────────────────────────────────
@@ -240,10 +255,9 @@ def run(accts, log, *, hidden: bool = False, until: str = UNTIL_DEFAULT, retry: 
 
 # ── 명령줄(정산다운로드.exe transfer-login — 앱 '셀독전환 정산' 탭이 띄움) ────────────────────────
 def main_cli(args) -> int:
-    """args: file·retry·until·hidden·accounts. 로그 = 화면 + output/정산_셀독전환/로그/로그인확인_YYMMDD_HHMMSS.log."""
-    import sys
-    from . import appconfig
-    from . import transfer_accounts as TA
+    """args: file·retry·until·hidden·accounts. 로그 = 화면 + output/정산_셀독전환/로그/로그인확인_YYMMDD_HHMMSS.log.
+    2단계(정산 자료 받기)와 같은 잠금(RUN_LOCK) — 한쪽이 돌면 시작 안 함(종료 코드 2)."""
+    from .registry_lock import RegistryLockError, registry_lock
     log_path = OUT_DIR / "로그" / f"로그인확인_{datetime.now():%y%m%d_%H%M%S}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -252,6 +266,18 @@ def main_cli(args) -> int:
         print(line, flush=True)
         with log_path.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
+    try:
+        with registry_lock(RUN_LOCK, wait_sec=0):
+            return _main_locked(args, log)
+    except RegistryLockError:
+        log("[셀독전환] ⛔ 다른 셀독전환 실행(로그인 확인·정산 자료 받기)이 도는 중 — 끝난 뒤 다시 실행하세요")
+        return 2
+
+
+def _main_locked(args, log) -> int:
+    import sys
+    from . import appconfig
+    from . import transfer_accounts as TA
     path = args.file or appconfig.get(TA.CONFIG_KEY, "") or TA.DEFAULT_PATH
     try:
         accts, warns = TA.read_transfer_file(path)

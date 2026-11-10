@@ -24,7 +24,8 @@ from coupang_analytics import appconfig, config, power, proxy_pool  # noqa: E402
 from coupang_analytics.manual_keywords import ManualKeywordError, apply_manual_keywords  # noqa: E402
 from coupang_analytics.apppaths import output_dir as app_output_dir, set_workdir  # noqa: E402
 from coupang_analytics.app_process import (mark_app_finished, prepare_auto_start,  # noqa: E402
-                                           start_settlement_watch)
+                                           start_settlement_watch, start_transfer_settle)
+from coupang_analytics import transfer_settle  # noqa: E402
 from coupang_analytics.browser import WingBrowser, find_chrome, reap_orphan_chrome  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics import detail_images  # noqa: E402
@@ -2065,6 +2066,8 @@ def main():
         pre_logs.append(f"[시작] 잔여(좀비) Chrome {reaped}개 정리함")
     if auto or resume:              # D-021: 18:00(·재부팅 복구) 앱과 함께 정산 기동 — 정산은 ① 완료까지 대기
         start_settlement_watch(pre_logs.append)
+        if transfer_settle.daily_on():   # D-187: 셀독전환자 정산 자료 — 매일 18시 뒤(앱·정산 자동 수집이 끝난 뒤 받음)
+            start_transfer_settle(pre_logs.append, os.getpid())
     win = App(auto=(auto or resume))
     win.show()
     for m in pre_logs:
