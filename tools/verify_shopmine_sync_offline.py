@@ -184,6 +184,20 @@ def test_login_rejected_message():
     ok("로그인 거부(IsSuccess=False) → 또렷한 안내 · 성공 → 인증키 반환")
 
 
+def test_transform_password():
+    import hashlib
+    assert sm.transform_password("abc", "") == "abc", "빈값 = 평문 그대로"
+    assert sm.transform_password("abc", "md5") == hashlib.md5(b"abc").hexdigest()
+    assert sm.transform_password("abc", "sha256") == hashlib.sha256(b"abc").hexdigest()
+    assert sm.transform_password("abc", "md5-upper") == hashlib.md5(b"abc").hexdigest().upper()
+    try:
+        sm.transform_password("abc", "bogus")
+        assert False, "알 수 없는 변환은 오류"
+    except sm.ShopmineError:
+        pass
+    ok("비밀번호 변환 — 평문/md5/sha256/대문자/오류")
+
+
 def test_no_pw_col_skips():
     out = sm.run_daily_sync("URL", "S", [["대표자명", "상품명"]], store=None,
                             client=FakeClient(), fetch=lambda s, log: {"x": "y"}, log=lambda m: None,
@@ -203,6 +217,7 @@ def main():
     test_apply_updates()
     test_run_daily_sync_end_to_end()
     test_login_rejected_message()
+    test_transform_password()
     test_no_pw_col_skips()
     print("통과 — 실 API·실 자격 없이 결정적. 비번 평문 비노출 확인.")
 
