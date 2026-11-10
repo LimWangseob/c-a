@@ -1851,7 +1851,7 @@ def p45_ad_report_csv():
         raise AssertionError("글자 응답을 받음")
     except API.SiteChangedError:
         pass
-    # D-191: 받기 실패(실측 '500 text/html' 20건 — 같은 계정·달이 이틀 연속) = 원인 판정 근거를 남김 —
+    # D-191: 받기 실패(실측 '500 text/html' = hide4u 윙 부가세 상세 8달 · 3회차 연속 · D-193) = 원인 판정 근거를 남김 —
     #   오류 화면 제목·본문 글자 · 받은 주소(호스트·경로만, 물음표 뒤 값 없음) · 목록 줄 상태·생성 시각
     page = ("<!DOCTYPE html>\n<html lang=\"ko\"><head><meta charset=\"utf-8\"><title>WING - 오류</title>"
             "<style>.x{color:red}</style><script>var t='secret';</script></head><body><div class=\"err\">"
