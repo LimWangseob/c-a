@@ -330,11 +330,13 @@ def _gsheet_client(url: str, store):
 
 
 def run_daily_sync(url: str, sheet: str, rows: list, *, store, client=None, fetch=None,
-                   log=print, now: datetime | None = None, out_dir: str = REPORT_DIR) -> dict:
+                   log=print, now: datetime | None = None, out_dir: str = REPORT_DIR,
+                   apply: bool = True) -> dict:
     """하루 1회 동기화 본체 — 샵마인 현재 비번 수신 → 관리대장 대조 → 리포트 + 불일치 자동 갱신.
 
     fetch: 테스트/주입용 `fetch(store, log) -> {계정ID: 비번}`(None 이면 실 서버). client: 구글시트 클라이언트
-    (None 이면 url 로 생성). 반환 = 요약 숫자(비번 값 없음). 실패는 예외로 올림(호출부가 비치명 처리)."""
+    (None 이면 url 로 생성). apply=False 면 **대조·리포트만** 하고 관리대장·credstore 에 쓰지 않는다(미리보기·dry-run —
+    첫 수동 실행 때 몇 계정이 바뀔지 먼저 확인용). 반환 = 요약 숫자(비번 값 없음). 실패는 예외로 올림(호출부가 비치명 처리)."""
     now = now or datetime.now()
     shopmine = (fetch or fetch_shopmine_passwords)(store, log)
     cands, pw_col = ledger_password_map(rows)
@@ -345,7 +347,8 @@ def run_daily_sync(url: str, sheet: str, rows: list, *, store, client=None, fetc
     report = write_report(classified, out_dir, now)
     plan = updates_to_apply(shopmine, cands)
     n_cell = 0
-    if plan:
+    if plan and apply:
         n_cell = apply_updates(client or _gsheet_client(url, store), sheet, pw_col, plan, store, log)
-    log(_summary_line(classified, n_cell, report))
+    note = "" if apply else f"  ※ 미리보기(dry-run) — 관리대장에 쓰지 않음(갱신 예정 {len(plan)}건)"
+    log(_summary_line(classified, n_cell, report) + note)
     return {"accounts": len(classified), "updated": len(plan), "cells": n_cell, "report": str(report)}

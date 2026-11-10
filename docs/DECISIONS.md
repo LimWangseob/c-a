@@ -1468,4 +1468,15 @@ un_log_*.log`)로 확인 필요.
 - 근거(사실): 참조 분석 `D:\rea\evidence\shopmine`(PASSWORD_STORAGE.md — MarketPassword 는 클라이언트 암호화 없이 http 로 샵마인 서버에 저장·계정 조회 API 가 비번 반환 · LOGIN.md · AUTOMATION_PLAN.md pktmon 캡처로 요청 형식 확인) · 기존 비번 흐름 재사용(`input_list.parse_password_candidates`→`app_qt._apply_pw_candidates`→credstore · `settlement_accounts.login_passwords`·`alt_key` D-190) · 관리대장 = 마스터(D-134). 미확정 = ShopmineVersion 실제값·CurrentPageNumber 1-based 여부·계정 필드명(정적분석 추정 MarketId/MarketPassword) → 사용자 자격으로 discover 1회 확정.
 - 버린 대안: ①리포트만(소유자가 자동반영 선택) ②openpyxl(xlsx) 로 대장 수정(참조 스크립트 방식 — 우리 마스터는 구글시트라 gsheet_api 로 교체) ③별도 스크립트/스케줄러(앱 18시 흐름에 통합) ④샵마인 로컬 DB·캐시·엑셀에서 비번 추출(비번 없음 — 엑셀 별표 마스킹·로컬 SQLite 없음·크롬 저장소 0건, 유일 경로 = 서버 API) ⑤별도 DPAPI 저장소(앱 credstore 재사용).
 - 영향 범위: 새 `src/coupang_analytics/shopmine_sync.py`(코어) · `tools/shopmine_sync.py`(CLI setup/discover/sync/selftest) · `input_list.password_column`(공개 헬퍼 추가) · `ui/app_qt.py`(`_maybe_shopmine_sync` 훅 1곳) · 게이트 `tools/verify_shopmine_sync_offline.py`(run_checks 등록). 실서버 discover/sync 는 사용자 자격으로 1회 확인(비번 미노출).
+- 상태: ACTIVE (실서버 검증·로그인 원인 = D-196)
+
+### D-196 [SHOPMINE_PW_SYNC] 샵마인 실서버 검증 완료(로그인 원인 = 비번 값 오차) · sync `--dry-run` 추가 · 마스터 실쓰기는 앱 훅/소유자만 (2026-11-10, R126)
+- 결정: D-195 구현의 **실서버 로그인 거부(IsSuccess=False) 원인 = 비밀번호 '값' 오차 하나**로 확정하고(코드·요청 형식은 정답), 마무리 방식을 정한다.
+  - **실서버 검증 결과(사실)**: pktmon 으로 사장님의 **정상 성공 로그인 1회**를 캡처(관리자 PowerShell `pktmon start/stop` → `etl2pcap` → `parse_capture.py`, 비번 값 마스킹) → 실제 성공 `POST /sm/api/login` 본문이 우리 `do_login` 과 **완전 일치**: 필드 5개(CompanyId·UserId·UserPassword·OsVersion·ShopmineVersion) · CompanyId=업체ID · UserId=사용자ID(비우지 않음) · OsVersion="" · ShopmineVersion=26.8.24.866 · 평문(해시·AES·salt·prefix·추가필드 없음). 유일한 차이 = UserPassword **값**(샵마인 자동로그인이라 사장님이 평소 안 치는 값 · 실제 길이 4자 ≠ 추정 12자). 계정조회 응답 필드명 `MarketId`/`MarketPassword` 확정(우리 기본값과 일치) · 계정 59건.
+  - **마무리 방식**: 캡처(평문 http)의 실제 비번을 **화면 미출력로 곧장 credstore(DPAPI)에 심는 1회용 스크립트**로 심어 discover 성공 확인(비번 값은 Claude·로그·커밋에 안 남고 길이만 표기). 블라인드 재시도 금지(잠금) 원칙은 유지했고, 캡처는 성공 로그인이라 추가 실패 0.
+  - **sync `--dry-run` 추가**: `run_daily_sync(..., apply=True 기본)` 에 `apply=False` 경로 · CLI `sync --dry-run` → 대조·리포트만, 관리대장·credstore 에 **쓰지 않고** 갱신 예정 건수만 보고(첫 수동 실행 안전 미리보기). 일상 자동(앱 훅)은 `apply=True` 그대로.
+  - **마스터(관리대장) 실 쓰기 주체**: 사이드 세션은 실 sync 쓰기를 하지 않는다(통제 세션 전용 취지 [[feedback-control-session-only]]). 실 쓰기 = 배포 후 **앱 훅이 매일 자동**(소유자 '리포트+관리대장 자동반영' 승인 D-195) 또는 소유자/통제 세션이 수동. 첫 확인은 `sync --dry-run` 권장.
+- 근거(실측): pktmon 캡처 `C:\Temp\sm.pcapng`(파싱 `D:\rea\evidence\shopmine\parse_capture.py`) → 성공 로그인 본문 = 우리 코드와 동일 · discover 출력(로그인 키 AuthenticationKey·AuthorizationCode·IsSuccess · market_account 응답 DataTable·TotalCount·PageCount 등 · 59건 · 필드 MarketId·MarketPassword 존재) · 게이트 `test_dry_run_no_write` 추가 후 run_checks 19종 초록·check_complexity 0.
+- 버린 대안: ①비번 변환(해시) — REA IL·캡처 둘 다 평문 확정이라 폐기(옛 `--pw-hash` 제거 0a61d4f) ②사이드 세션이 실 sync 로 관리대장 바로 갱신 — 통제 세션 전용·마스터 오쓰기 위험으로 폐기(dry-run 까지만).
+- 영향 범위: `shopmine_sync.run_daily_sync`(`apply` 매개변수 추가·기본 True·행동 불변) · `tools/shopmine_sync.py`(`--dry-run`) · 게이트 `test_dry_run_no_write`. 로그인·계정조회·필드명 코드는 변경 0(실서버에서 그대로 맞았음).
 - 상태: ACTIVE

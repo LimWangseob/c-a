@@ -197,6 +197,22 @@ def test_login_strips_fields():
     ok("로그인 본문 — 업체ID·사용자ID·비번 앞뒤 공백 제거(앱 Trim 과 동일·평문)")
 
 
+def test_dry_run_no_write():
+    # apply=False(미리보기) → 대조·리포트는 하되 관리대장·credstore 에 아무것도 안 쓴다(갱신 예정 건수는 그대로 보고)
+    with tempfile.TemporaryDirectory() as d:
+        store = CredStore(Path(d) / "creds.json")
+        cl = FakeClient()
+        out = sm.run_daily_sync(
+            "URL", "Sheet1", LEDGER_ROWS, store=store, client=cl,
+            fetch=lambda s, log: dict(SHOPMINE), log=lambda m: None,
+            now=datetime(2026, 11, 10), out_dir=str(Path(d) / "rep"), apply=False)
+        assert out == {"accounts": 6, "updated": 2, "cells": 0, "report": out["report"]}, out
+        assert cl.writes == [], "dry-run 은 관리대장에 쓰지 않아야 함"
+        assert not store.get_password("shopA"), "dry-run 은 credstore 도 안 건드림"
+        assert Path(out["report"]).exists(), "리포트는 생성(대조 결과 미리보기)"
+    ok("dry-run — 대조·리포트만 · 관리대장/credstore 쓰기 0 · 갱신 예정 건수 보고")
+
+
 def test_no_pw_col_skips():
     out = sm.run_daily_sync("URL", "S", [["대표자명", "상품명"]], store=None,
                             client=FakeClient(), fetch=lambda s, log: {"x": "y"}, log=lambda m: None,
@@ -217,6 +233,7 @@ def main():
     test_run_daily_sync_end_to_end()
     test_login_rejected_message()
     test_login_strips_fields()
+    test_dry_run_no_write()
     test_no_pw_col_skips()
     print("통과 — 실 API·실 자격 없이 결정적. 비번 평문 비노출 확인.")
 
