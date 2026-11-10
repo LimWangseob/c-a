@@ -143,8 +143,14 @@ def from_cache(cache: dict, stock: dict, ledger_name: str, title: str = "", rule
     if rec.get("stock"):
         keys = [name_key(s) for s in rec["stock"]]
         same = rec.get("rule") is None or rec["rule"] == sorted(rule)
-        return (keys, f"AI — {rec.get('why', '')}") if same and all(k in stock for k in keys) else None
+        ok = same and all(k in stock for k in keys) and _korean_why(rec.get("why", ""))
+        return (keys, f"AI — {rec.get('why', '')}") if ok else None
     return ([], "") if rec.get("date") == date.today().isoformat() else None
+
+
+def _korean_why(why: str) -> bool:
+    """근거가 한국어인가(따옴표 안 상품명은 빼고 봄) — 아니면 '근거 한국어' 지시 전 판정이라 다시 물음(D-192). 빈 근거 = 그대로."""
+    return not why or bool(re.search(r"[가-힣]", re.sub(r"'[^']*'", "", why)))
 
 
 def judged_none(cache: dict, ledger_name: str, title: str = "") -> bool:

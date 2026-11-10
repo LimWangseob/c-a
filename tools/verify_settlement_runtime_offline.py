@@ -1350,7 +1350,32 @@ def p33_login_password_source():
     assert SA.login_passwords(acc("diff", " pw-new  "), st) == (["pw-new"], "관리대장"), "공백만 다르면 같은 값 1개"
     assert SA.login_passwords(acc("nofile", " pw-f "), st)[0] == ["pw-f"], "원장 값 앞뒤 공백 뗌"
     assert "원장" in SA.login_passwords(acc("diff", "pw-old"), st)[1], "설명 = 원장(옛 '계정 파일' 문구 아님)"
-    ok("관리대장 값 우선·다르면 대장→원장 순서(최대 2)·대장에 없는 계정은 원장 값·앞뒤 공백 뗌·값 노출 없음")
+    # D-190: 대장 줄마다 값이 다른 계정의 값2 도 정산 후보(실측 wavetech — 앱은 값2 로 성공·정산은 값1 만 알아 거부 반복)
+    #   순서 = 대장 값1 → 원장 값 → 대장 값2 · 최대 2(D-012) → 원장이 값1 과 같거나 비면 값2 가 둘째(옛 동작은 그대로)
+    st2 = Store({"wt": "pw-1", SA.alt_key("wt"): "pw-2", "db": "pw-1", SA.alt_key("db"): "pw-2"})
+    pws, note = SA.login_passwords(acc("wt", "pw-1"), st2)
+    assert pws == ["pw-1", "pw-2"] and "값2" in note and "pw" not in note, (pws, note)
+    assert SA.login_passwords(acc("wt", ""), st2)[0] == ["pw-1", "pw-2"], "원장 빈 칸"
+    pws, note = SA.login_passwords(acc("db", "pw-l"), st2)
+    assert pws == ["pw-1", "pw-l"] and "원장" in note, (pws, note)            # 원장이 다르면 지금처럼 원장이 둘째(dalbong1849)
+    assert SA.login_passwords(acc("db", "pw-2"), st2)[0] == ["pw-1", "pw-2"], "원장 = 값2 → 같은 값 1개"
+
+    class WStore(Store):
+        def set_password(self, aid, pw):
+            self.d[aid] = pw
+    from types import SimpleNamespace as Cand
+    ws = WStore({SA.alt_key("one"): "old-2"})
+    SA.save_ledger_alternates(ws, {"two": [Cand(password="a"), Cand(password=" b ")], "one": [Cand(password="a")],
+                                   "single": [Cand(password="c")]})
+    assert ws.d[SA.alt_key("two")] == "b" and ws.d[SA.alt_key("one")] == "" and SA.alt_key("single") not in ws.d, ws.d
+    from coupang_analytics.credstore import CredStore                 # 실제 이 PC 암호 저장소(DPAPI)·한글 키 왕복
+    with tempfile.TemporaryDirectory() as tmp:
+        cs = CredStore(Path(tmp) / "creds.json")
+        cs.set_password("wt", "pw-1")
+        SA.save_ledger_alternates(cs, {"wt": [Cand(password="pw-1"), Cand(password="pw-2")]})
+        assert SA.login_passwords(acc("wt", "pw-1"), CredStore(Path(tmp) / "creds.json"))[0] == ["pw-1", "pw-2"]
+    ok("관리대장 값 우선·다르면 대장→원장 순서(최대 2)·대장에 없는 계정은 원장 값·앞뒤 공백 뗌·값 노출 없음"
+       " · 대장 값2 = 원장이 값1 과 같거나 빌 때 둘째(D-190)")
 
 
 def p32_evidence_rules():
@@ -1826,6 +1851,45 @@ def p45_ad_report_csv():
         raise AssertionError("글자 응답을 받음")
     except API.SiteChangedError:
         pass
+    # D-191: 받기 실패(실측 '500 text/html' 20건 — 같은 계정·달이 이틀 연속) = 원인 판정 근거를 남김 —
+    #   오류 화면 제목·본문 글자 · 받은 주소(호스트·경로만, 물음표 뒤 값 없음) · 목록 줄 상태·생성 시각
+    page = ("<!DOCTYPE html>\n<html lang=\"ko\"><head><meta charset=\"utf-8\"><title>WING - 오류</title>"
+            "<style>.x{color:red}</style><script>var t='secret';</script></head><body><div class=\"err\">"
+            "요청하신 파일을 찾을 수 없습니다.&nbsp;잠시 후 다시 시도해 주세요.</div></body></html>").encode("utf-8")
+
+    class R500:
+        status = 500
+        headers = {"content-type": "text/html;charset=UTF-8"}
+
+        def body(self):
+            return page
+
+    class B500:
+        class context:
+            class request:
+                @staticmethod
+                def get(url, timeout):
+                    return R500()
+    try:
+        TD._get_bytes(B500, "https://wing.coupang.com/tenants/x/download/123?token=SECRET&e=1")
+        raise AssertionError("500 을 받음")
+    except API.SiteChangedError as exc:
+        m = str(exc)
+        assert "500" in m and "WING - 오류" in m and "요청하신 파일을 찾을 수 없습니다. 잠시 후" in m, m
+        assert "wing.coupang.com/tenants/x/download/123" in m and "SECRET" not in m and "secret" not in m, m
+    from datetime import datetime
+    from coupang_analytics import settlement_jobs as SJ
+    row5 = SJ.DownloadRow("윙", datetime(2026, 11, 9, 8, 6), "FINISHED", "윙부가세상세", handle="https://h/p?token=SECRET")
+    j5 = SJ.Job("A", "윙", SJ.DOC_KIND, "윙부가세상세", "2026-07-01", "2026-07-31", "2026-07-31")
+    old_get = TD._get_bytes
+    try:
+        TD._get_bytes = lambda b, url, text_ok=False: (_ for _ in ()).throw(API.SiteChangedError("파일 받기 실패: 500"))
+        TD._fetch_one(None, j5, row5, "A")
+        raise AssertionError("실패를 넘김")
+    except API.SiteChangedError as exc:
+        assert "목록 줄 상태 FINISHED" in str(exc) and "11-09 08:06" in str(exc) and "SECRET" not in str(exc), exc
+    finally:
+        TD._get_bytes = old_get
     rep = {"id": "7", "startDate": 20260401, "endDate": 20260430, "dateGroup": "daily", "granularity": "keyword",
            "campaignCount": 1, "status": "completed"}
 

@@ -26,7 +26,7 @@ from coupang_analytics.apppaths import output_dir as app_output_dir, set_workdir
 from coupang_analytics.app_process import (mark_app_finished, prepare_auto_start,  # noqa: E402
                                            remove_legacy_settlement_task, start_settlement_watch,
                                            start_transfer_settle)
-from coupang_analytics import transfer_settle  # noqa: E402
+from coupang_analytics import settlement_accounts, transfer_settle  # noqa: E402
 from coupang_analytics.browser import WingBrowser, find_chrome, reap_orphan_chrome  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics import detail_images  # noqa: E402
@@ -1163,6 +1163,10 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         한 계정 여러 줄의 값이 다르면 경고(행 번호·값 순서)하고 로그인 때 차례로 시도."""
         self._pw_cands = cands
         self._store_passwords_map({aid: c[0].password for aid, c in cands.items()}, quiet=True)
+        try:                                  # D-190: 줄마다 다른 계정의 값2 도 저장(정산이 같은 값 차례로)
+            settlement_accounts.save_ledger_alternates(self.creds_store, cands)
+        except Exception as exc:              # 저장 실패 = 정산이 값1·원장만 씀(사유 남김·앱 로그인은 대장 후보 그대로)
+            self.log(f"[비번] ⚠ 대장 둘째 비밀번호 값 저장 실패({exc.__class__.__name__}) — 정산은 값1·원장 값만 씀")
         for aid, cs in cands.items():
             if len(cs) > 1:
                 order = " · ".join(f"값{k + 1}=행 {','.join(map(str, c.rows))}" for k, c in enumerate(cs))

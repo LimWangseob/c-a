@@ -25,9 +25,11 @@ reap_orphan_chrome 미호출. 기록: output/정산/로그/(실행·처리기록
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -35,6 +37,7 @@ import time
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -447,18 +450,32 @@ def _get_bytes(b, url: str, text_ok: bool = False) -> bytes:
     body = r.body()
     is_text = text_ok and "text/csv" in (r.headers.get("content-type") or "")   # 큰 광고 보고서(AD.report_xlsx 가 엑셀로 바꿈)
     if r.status != 200 or (body[:2] != b"PK" and not is_text):                # xlsx = zip
-        raise API.SiteChangedError(f"파일 받기 실패: {r.status} {r.headers.get('content-type')} {body[:60]!r}")
+        u = urlsplit(url)
+        raise API.SiteChangedError(f"파일 받기 실패: {r.status} {r.headers.get('content-type')} · 주소 {u.netloc}{u.path[:100]}"
+                                   f" · {_fail_text(body)}")
     return body
 
 
+def _fail_text(body: bytes) -> str:
+    """받기 실패 응답 → 오류 화면 제목·본문 글자 앞 300자(스크립트·스타일 뺌) — 원인 판정 근거(D-191 · 옛 기록 = 앞 60바이트)."""
+    t = body[:200000].decode("utf-8", "replace")
+    title = re.search(r"<title[^>]*>(.*?)</title>", t, re.S | re.I)
+    text = re.sub(r"<(script|style|title)[^>]*>.*?</\1>", " ", t, flags=re.S | re.I)
+    text = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", text)).replace("\xa0", " ")).strip()
+    return f"제목 '{(title.group(1).strip() if title else '')[:80]}' · 본문 '{text[:300]}'"
+
+
 def _fetch_one(b, j, row, name: str) -> None:
-    if j.channel == "윙":
-        data = _get_bytes(b, row.handle)
-    else:
-        url = api(b, name, "POST", API.RG_GET, {"requestTime": row.handle, "locale": "ko"}).get("url")
-        if not url:
-            raise API.SiteChangedError("로켓그로스 받기 응답에 url 없음")
-        data = _get_bytes(b, url)
+    try:
+        if j.channel == "윙":
+            data = _get_bytes(b, row.handle)
+        else:
+            url = api(b, name, "POST", API.RG_GET, {"requestTime": row.handle, "locale": "ko"}).get("url")
+            if not url:
+                raise API.SiteChangedError("로켓그로스 받기 응답에 url 없음")
+            data = _get_bytes(b, url)
+    except API.SiteChangedError as exc:                    # D-191: 목록 줄(상태·생성 시각)도 함께 — 같은 줄 반복 실패 판정용
+        raise API.SiteChangedError(f"목록 줄 상태 {row.status} · 생성 {row.requested_at:%m-%d %H:%M} · {exc}") from exc  # 처리기록 200자 안
     if j.kind == SJ.DOC_KIND:                              # 요청형 월자료(부가세 상세 — D-171 N8): 판정·저장·화면 월 합계 대조
         from coupang_analytics import settlement_docs_request as DR
         tok = SF._token(name, "계정명")

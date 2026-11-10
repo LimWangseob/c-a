@@ -74,14 +74,31 @@ def login_passwords(a: SettleAccount, store=None) -> tuple[list[str], str]:
         from .credstore import CredStore
         store = CredStore()
     ledger, file_pw = (store.get_password(a.account_id) or "").strip(), (a.password or "").strip()
-    pws = list(dict.fromkeys(p for p in (ledger, file_pw) if p))
+    ledger2 = (store.get_password(alt_key(a.account_id)) or "").strip() if ledger else ""
+    pws = list(dict.fromkeys(p for p in (ledger, file_pw, ledger2) if p))[:2]   # 대장 값1 → 원장 → 대장 값2 · 최대 2(D-012·D-190)
     if not pws:
         return [], "비밀번호 없음"
     if not ledger:
         return pws, "관리대장에 없음 — 원장 값"
     if file_pw and file_pw != ledger:
         return pws, "관리대장·원장 값이 다름 — 관리대장 먼저(거부되면 원장 값 1회)"
+    if len(pws) > 1:
+        return pws, "관리대장 줄마다 값이 다름 — 값1 먼저(거부되면 값2 1회)"
     return pws, "관리대장"
+
+
+def alt_key(account_id: str) -> str:
+    """관리대장 줄마다 비밀번호가 다른 계정의 둘째 값을 이 PC 암호 저장소에 두는 키(D-190)."""
+    return f"{account_id}#대장값2"
+
+
+def save_ledger_alternates(store, cands: dict) -> None:
+    """앱이 대장을 읽을 때(_apply_pw_candidates) — 줄마다 값이 다른 계정의 둘째 값을 저장(정산이 앱과 같은 값을 알게 · D-190).
+    한 값이 된 계정의 옛 둘째 값은 지움(빈 값). cands = {계정ID: [후보(.password), …]}(대장 순서)."""
+    for aid, cs in cands.items():
+        second = cs[1].password.strip() if len(cs) > 1 else ""
+        if second or store.get_password(alt_key(aid)):
+            store.set_password(alt_key(aid), second)
 
 
 def display_name(a: SettleAccount) -> str:

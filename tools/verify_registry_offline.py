@@ -990,6 +990,13 @@ def t21d_company_stock_ai_decides():
     keys = M.match_rules(stock, idx, "신형타프 R008 (블랙 Free)")[0]
     assert M.from_cache(cache, stock, "신형타프 R008 (블랙 Free)", "", keys)[0] == keys
     assert M.from_cache(cache, stock, "신형타프 R008 (블랙 Free)", "", keys + ["신형타프r008(블랙2)"]) is None
+    # D-192: 근거가 한국어가 아닌 저장 판정(실측 13건 · 모두 '근거 한국어' 지시 전 10-17~11-04) = 다시 판정(로그·결과 한국어)
+    ck = M._cache_key("신형타프 R008 (블랙 Free)", "")
+    eng = dict(cache)
+    eng[ck] = {**cache[ck], "why": "Candidate 1 '신형타프 R008 (블랙)' matches the product '신형타프 R008'."}
+    assert M.from_cache(eng, stock, "신형타프 R008 (블랙 Free)", "", keys) is None, "영어 근거 재사용"
+    eng[ck] = {**cache[ck], "why": "후보 1 '신형타프 R008 (블랙)'과 모델번호 일치"}
+    assert M.from_cache(eng, stock, "신형타프 R008 (블랙 Free)", "", keys)[0] == keys, "한국어 근거는 그대로"
     # 묶음 답(번호 범위 밖)·많은 줄 = 나눠 물음(응답 잘림 방지)
     calls: list = []
     many = [(i, f"상품{i}", "") for i in range(1, 62)]
