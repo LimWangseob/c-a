@@ -14,7 +14,8 @@
   - 새 모듈 `src/coupang_analytics/shopmine_sync.py`(로그인·계정수신·필드탐색·서버16 failover·대조·되쓰기·리포트) · `tools/shopmine_sync.py`(CLI setup/discover/sync/selftest) · `input_list.password_column`(공개 헬퍼) · `ui/app_qt.py` `_maybe_shopmine_sync` 훅(관리대장 로드 직후·하루 1회·비치명) · 게이트 `tools/verify_shopmine_sync_offline.py`(run_checks 등록 → 19종).
   - 자격 = credstore `__shopmine_login__`(DPAPI·사용자 getpass) · 비번 평문은 로그·리포트·화면·커밋 어디에도 안 씀(리포트 = 계정ID·상태만) · 리포트 `output/샵마인동기화/대조_*.csv`.
   - **run_checks 19종 초록** · check_complexity 경고 0. 실 서버·실 자격 호출 없이 결정적(DPAPI 왕복·필드탐색·대조분류·되쓰기·credstore 갱신·리포트 비노출).
-  - ⚠ **남은 = 사용자 1회 실서버 확인**: `py -3.12 tools/shopmine_sync.py setup`(getpass) → `discover`(필드명·건수 확정 — MarketId/MarketPassword·AuthenticationKey·ShopmineVersion·CurrentPageNumber 1-based 여부) → `sync` 1회. 필드명이 추정과 다르면 `setup --id-key/--pw-key` 재저장.
+  - ⚠ **남은 = 실서버 로그인 블로커(비번 전송 변환)**: 실서버 discover 로 **필드명·서버·버전 확정**(응답 최상위 키 AuthenticationKey·AuthorizationCode·IsSuccess · 설치 버전 26.8.24.866 = shopmine_version.txt). 그러나 **정확 자격·버전·OsVersion""·앱 종료(동시접속 배제)에도 IsSuccess=False** → 앱이 **상류(LoginForm.DoLoginAsync→LoginAdapter.LoginAsync)에서 비번을 변환(해시)해 보낼** 가능성. REA(local_41625313) 가 그 IL 추적 중(path B). 변환식 확정 후 `setup --pw-hash <md5|sha1|sha256|sha512[-upper]>` 1회로 마무리. 안 되면 pktmon 성공 로그인 1회 캡처로 비번 필드 길이·hex 판별.
+  - 코드 준비 완료: `shopmine_sync.transform_password`·setup `--pw-hash`·do_login 배선(변환식만 넣으면 됨). ⛔블라인드 해시 재시도 금지(잠금) — REA 확정 후 1회만. 로그인 자격 ID 는 git/문서에 안 적음(사장님 PC credstore 에만).
   - **게이트 선재 결함 수정(테스트 전용·동작 불변)**: `tools/verify_transfer_settle_offline.py` S5 가 벽시계 `past_until`(멈춤 17:40)을 모킹 안 해 **17:40 이후 돌면 requested 빈 리스트로 실패**(실측 11-10 17:54 재현·깨끗한 HEAD R124 에서도 동일 실패 확인) → S5 구간에서 `past_until` 모킹(멈춤 로직은 S3 가 모킹된 now 로 덮음). production 코드 변경 없음.
 
 ## 이번 세션 완료 (R122 · 11-10 · 통제 세션)

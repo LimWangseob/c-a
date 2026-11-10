@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import csv
 import gzip
-import hashlib
 import json
 import urllib.error
 import urllib.request
@@ -167,28 +166,15 @@ def masked_keys(records: list) -> list:
 
 
 # ─────────────────────────────────────────────── 로그인·계정 조회
-PW_HASHES = ("md5", "sha1", "sha256", "sha512")   # setup --pw-hash 로 지정(실측: 평문 거부 → 상류 해시 추정 D-195)
-
-
-def transform_password(pw: str, how: str) -> str:
-    """로그인에 보낼 비밀번호 변환. how='' → 평문 그대로. 'md5|sha1|sha256|sha512' → 그 해시의 **소문자 hex**,
-    '…-upper' 접미 → 대문자 hex. 샵마인 앱이 상류(LoginForm/Adapter)에서 비번을 해시해 보내는 경우에 맞춘다
-    (실측: 평문·정확 자격이 거부됨 → 변환 필요). 변환식은 정적 분석(IL)·캡처로 확정한 뒤 지정한다."""
-    if not how:
-        return pw
-    algo, upper = (how[:-6], True) if how.endswith("-upper") else (how, False)
-    if algo not in PW_HASHES:
-        raise ShopmineError(f"알 수 없는 비밀번호 변환 '{how}' — {'·'.join(PW_HASHES)}(또는 …-upper)")
-    hx = hashlib.new(algo, pw.encode("utf-8")).hexdigest()
-    return hx.upper() if upper else hx
-
-
 def do_login(creds: dict, log=lambda m: None):
-    """api/login → (서버, AuthenticationKey, 응답). 인증키 못 찾으면 ShopmineError(값은 안 보임·키만)."""
+    """api/login → (서버, AuthenticationKey, 응답). 인증키 못 찾으면 ShopmineError(값은 안 보임·키만).
+
+    업체ID·사용자ID·비번은 **앞뒤 공백을 떼고** 보낸다 — 샵마인 앱이 입력칸을 .Trim() 한 뒤 평문 그대로 전송하기
+    때문(REA IL 정적 추적 확정: 해시·AES·salt·prefix 없음, 변형은 Trim 뿐 · D-195)."""
     body = {
-        "CompanyId": creds.get("CompanyId", ""),
-        "UserId": creds.get("UserId", ""),
-        "UserPassword": transform_password(creds.get("UserPassword", ""), creds.get("PwHash", "")),
+        "CompanyId": creds.get("CompanyId", "").strip(),
+        "UserId": creds.get("UserId", "").strip(),
+        "UserPassword": creds.get("UserPassword", "").strip(),
         "OsVersion": creds.get("OsVersion", "Windows"),
         "ShopmineVersion": creds.get("ShopmineVersion", ""),
     }

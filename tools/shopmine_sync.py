@@ -42,7 +42,7 @@ def cmd_setup(a) -> None:
         "CompanyId": company, "UserId": user, "UserPassword": pw,
         "OsVersion": a.os_version, "ShopmineVersion": a.shopmine_version,
         "IdKey": a.id_key, "PwKey": a.pw_key,
-        "StartPage": a.start_page, "PageSize": a.page_size, "PwHash": a.pw_hash,
+        "StartPage": a.start_page, "PageSize": a.page_size,
     }
     sm.store_login(creds, CredStore())
     del pw, creds
@@ -100,8 +100,6 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--pw-key", default=sm.PW_KEY_DEFAULT)
     sp.add_argument("--start-page", type=int, default=sm.START_PAGE_DEFAULT)
     sp.add_argument("--page-size", type=int, default=sm.PAGE_SIZE_DEFAULT)
-    sp.add_argument("--pw-hash", default="",
-                    help="비번 전송 변환(앱이 해시해 보낼 때): md5·sha1·sha256·sha512(또는 …-upper). 기본 빈값=평문")
 
     sub.add_parser("discover", help="응답 필드명·건수만 확인(값 숨김)")
 

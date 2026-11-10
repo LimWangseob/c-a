@@ -184,18 +184,17 @@ def test_login_rejected_message():
     ok("로그인 거부(IsSuccess=False) → 또렷한 안내 · 성공 → 인증키 반환")
 
 
-def test_transform_password():
-    import hashlib
-    assert sm.transform_password("abc", "") == "abc", "빈값 = 평문 그대로"
-    assert sm.transform_password("abc", "md5") == hashlib.md5(b"abc").hexdigest()
-    assert sm.transform_password("abc", "sha256") == hashlib.sha256(b"abc").hexdigest()
-    assert sm.transform_password("abc", "md5-upper") == hashlib.md5(b"abc").hexdigest().upper()
+def test_login_strips_fields():
+    # 샵마인 앱이 입력칸을 .Trim() 하므로(REA IL 확정) 보내는 본문도 공백을 떼야 동일(평문 그대로·해시 없음)
+    sent = {}
+    real = sm.post_failover
     try:
-        sm.transform_password("abc", "bogus")
-        assert False, "알 수 없는 변환은 오류"
-    except sm.ShopmineError:
-        pass
-    ok("비밀번호 변환 — 평문/md5/sha256/대문자/오류")
+        sm.post_failover = lambda path, body, log=None: (sent.update(body), ("srv", {"AuthenticationKey": "K", "IsSuccess": True}))[1]
+        sm.do_login({"CompanyId": " co ", "UserId": " u\t", "UserPassword": "  pw!! "}, lambda m: None)
+    finally:
+        sm.post_failover = real
+    assert sent["CompanyId"] == "co" and sent["UserId"] == "u" and sent["UserPassword"] == "pw!!", sent
+    ok("로그인 본문 — 업체ID·사용자ID·비번 앞뒤 공백 제거(앱 Trim 과 동일·평문)")
 
 
 def test_no_pw_col_skips():
@@ -217,7 +216,7 @@ def main():
     test_apply_updates()
     test_run_daily_sync_end_to_end()
     test_login_rejected_message()
-    test_transform_password()
+    test_login_strips_fields()
     test_no_pw_col_skips()
     print("통과 — 실 API·실 자격 없이 결정적. 비번 평문 비노출 확인.")
 
