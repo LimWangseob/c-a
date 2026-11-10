@@ -254,6 +254,19 @@ def parse_password_candidates(rows: list) -> dict[str, list[PwCandidate]]:
             for aid, vals in seen.items()}
 
 
+def password_column(rows: list) -> int | None:
+    """관리대장 값 격자 → **비밀번호 열의 0-based 인덱스**(없으면 None). parse_password_candidates 와 같은 헤더·별칭
+    규칙(계정아이디+비밀번호 둘 다 있는 첫 헤더 행). 샵마인 동기화가 그 열의 셀 주소로 비번을 되써야 해 공개한다(D-195)."""
+    def _match(header: list[str]) -> bool:
+        norm = [h.lower().replace(" ", "") for h in header]
+        return _alias_index(norm, _ID_ALIASES) is not None and _alias_index(norm, _PW_ALIASES) is not None
+
+    header, hrow = _find_header_row(rows, _match)
+    if hrow < 0:
+        return None
+    return _alias_index([h.lower().replace(" ", "") for h in header], _PW_ALIASES)
+
+
 _DISCONTINUED = ("판매중지", "판매중단", "판매종료", "판매불가")   # 대장 텍스트 마커(판매부진=계속 판매라 제외)
 
 

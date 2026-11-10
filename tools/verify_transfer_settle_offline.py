@@ -272,10 +272,14 @@ def s5_store_and_request():
             jobs: list = []
             import time as _t
             real_sleep, TD.time.sleep = _t.sleep, lambda s: None
+            # S5 는 요청·재사용 로직만 검증(멈춤 시각 past_until 은 S3 가 모킹된 now 로 덮음) → 여기선 벽시계 의존을 없앤다.
+            # 안 그러면 게이트가 17:40(UNTIL_DEFAULT) 이후에 돌 때 cmd_request 가 첫 요청 전 break 해 requested 가 빈다(실측 11-10 17:54).
+            real_past_until, TD.past_until = TD.past_until, lambda a: False
             try:
                 TD.cmd_request(TS.settle_account(_accts(1)[0]), None, args, jobs)
             finally:
                 TD.time.sleep = real_sleep
+                TD.past_until = real_past_until
             assert asked_range == [(date(2026, 1, 1), date(2026, 1, 1))], asked_range
             assert len(requested) == 30 and "2026-01-05" not in requested, (len(requested), requested[:3])
             reused = [j for j in jobs if j.period_start == "2026-01-05"]

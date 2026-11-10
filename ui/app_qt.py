@@ -26,7 +26,7 @@ from coupang_analytics.apppaths import output_dir as app_output_dir, set_workdir
 from coupang_analytics.app_process import (mark_app_finished, prepare_auto_start,  # noqa: E402
                                            remove_legacy_settlement_task, start_settlement_watch,
                                            start_transfer_settle)
-from coupang_analytics import settlement_accounts, transfer_settle  # noqa: E402
+from coupang_analytics import settlement_accounts, shopmine_sync, transfer_settle  # noqa: E402
 from coupang_analytics.browser import WingBrowser, find_chrome, reap_orphan_chrome  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics import detail_images  # noqa: E402
@@ -1221,6 +1221,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             self.log(f"[입력] ⚠ 체험단 시트 읽기 실패 — 체험단 시작일은 지난 값 유지({exc.__class__.__name__}): {exc}")
         self._set_input_list(il, f"[구글시트] {title}")
         self._apply_pw_candidates(parse_password_candidates(rows))
+        self._maybe_shopmine_sync(url, title, rows)   # 하루 1회 샵마인 서버 현재 비번 대조·갱신(D-195·비치명)
         if not persist:
             return True
         _cfg_save_shared("gsheet/input_url", url)
@@ -1228,6 +1229,25 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         if getattr(self, "src_gsheet_radio", None) is not None:
             self.src_gsheet_radio.setChecked(True)   # 기본 입력 소스 라디오도 구글시트로 동기화
         return True
+
+    def _maybe_shopmine_sync(self, url: str, sheet: str, rows: list) -> None:
+        """하루 1회 샵마인 서버에서 쿠팡 위탁 계정 '현재 비밀번호'를 받아 관리대장과 대조·갱신(D-195).
+
+        담당자가 샵마인만 고쳐 어긋난 대장 비번을 샵마인 현재값(진실 소스)으로 맞춘다. 샵마인 로그인 자격이
+        없으면(미설정) 조용히 건너뛰고, 오늘 이미 돌았으면 재실행 안 함. 실패는 **비치명** — 로그만 남기고
+        ①②③·정산은 그대로 진행한다(보조 기능이 그날 수집을 막지 않게). 자격 저장 = tools/shopmine_sync.py setup."""
+        try:
+            if shopmine_sync.load_login(self.creds_store) is None:
+                return                                   # 미설정 → 설정 탭 안내로 1회 setup(조용히)
+            st = QtCore.QSettings("coupang-analytics", "ui")
+            today = datetime.now().strftime("%Y-%m-%d")
+            if st.value("shopmine/last_sync_date", "", type=str) == today:
+                return                                   # 오늘 이미 동기화함(하루 1회)
+            self.log("[샵마인] 서버에서 현재 비밀번호를 받아 관리대장과 대조 중…(하루 1회·값은 화면에 안 보임)")
+            shopmine_sync.run_daily_sync(url, sheet, rows, store=self.creds_store, log=self.log)
+            _cfg_save_shared("shopmine/last_sync_date", today)
+        except Exception as exc:                         # noqa: BLE001  보조 기능 — 사유만 남기고 본 실행 계속
+            self.log(f"[샵마인] 동기화 건너뜀(비치명·{exc.__class__.__name__}): {exc}")
 
     def _auto_load_input(self) -> bool:
         """입력 자동 로드(무인 실행·재시작 후) — 구글 소스 실패 = 오류·실행 안 함(registry_ui.auto_load_input·D-134)."""

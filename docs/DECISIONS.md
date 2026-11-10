@@ -1455,3 +1455,17 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: '사용 불가 계정' 목록을 새로 만들어 정산·로그인 대상에서 바로 빼기(소유자 선택 안 함).
 - 영향 범위: 없음(문서만). 같은 처리는 다른 사용 불가 계정에도 적용할지 따로 정하지 않음.
 - 상태: ACTIVE
+
+### D-195 [SHOPMINE_PW_SYNC] 샵마인 서버에서 쿠팡 위탁 계정 '현재 비번'을 하루 1회 받아 관리대장과 대조·자동 갱신 (2026-11-10, R125)
+- 결정(소유자 2026-11-10 '앱에 통합' + '리포트+관리대장 자동반영' 선택): 비번을 ①구글 관리대장과 ②샵마인 서버에 이중 관리하는데 담당 직원이 샵마인만 고쳐 대장이 어긋남 → 샵마인에 저장된 값(= 실제 쿠팡에 로그인되는 현재 비번 = 진실 소스)을 **하루 1회** 받아 관리대장과 대조하고, 다를 때 **관리대장(구글시트)의 비밀번호 열을 샵마인 현재값으로 자동 갱신**한다. 경로 = 샵마인 앱과 동일한 서버 API(`POST /sm/api/login` → AuthenticationKey → `POST /sm/api/read/market_account`). 샵마인은 시스템 프록시를 무시하고 서버 IP 16개에 직접 http 접속 → 스크립트도 ProxyHandler({})로 서버 순회(failover).
+- 적용 규칙:
+  - 샵마인 현재값이 **비어 있지 않을 때만** 쓴다(빈 값으로 대장을 덮지 않음). 한 계정의 비번이 적힌 **모든 대장 행**에 RAW(값 그대로)로 써서 줄마다 달랐던 값(D-190)도 한 값으로 통일 · credstore(대장값1)도 함께 갱신해 **그날 ①·정산 로그인이 바로 새 값 사용** · 값2(D-190)는 비움.
+  - 샵마인에만 있는 계정(대장에 없음)은 **행을 자동 추가하지 않고 리포트만**(관리대장은 상품별 구조라 계정 행 자동 추가 금지) · 대장에만 있는 계정(샵마인 없음)도 리포트만.
+  - 리포트(`output/샵마인동기화/대조_YYYYMMDD_HHMMSS.csv`) = **계정ID·상태만**(같음/다름→대장갱신/샵마인에만/대장에만/샵마인 비번 없음) · **비번 값은 로그·커밋·화면·대화·리포트 어디에도 안 씀**.
+  - 샵마인 로그인 자격 = 이 PC credstore(DPAPI·사용자 전용) 키 `__shopmine_login__`(기존 `__gsheet_sa__` 와 같은 방식) · 입력은 사용자가 직접(getpass·`tools/shopmine_sync.py setup`) — Claude 는 비번을 보거나 입력하지 않음(discover 는 필드명·건수만).
+  - 호출 하루 1회(QSettings `shopmine/last_sync_date` 게이트) · 앱 관리대장(구글시트) 로드 직후 실행(①·정산 로그인 전) · **실패는 비치명**(로그만 · ①②③·정산 계속) · 미설정이면 조용히 건너뜀.
+  - ⚠ 샵마인 약관상 비공식 접근 제한 가능성 1회 안내함(본인 계정·본인 데이터·저빈도).
+- 근거(사실): 참조 분석 `D:\rea\evidence\shopmine`(PASSWORD_STORAGE.md — MarketPassword 는 클라이언트 암호화 없이 http 로 샵마인 서버에 저장·계정 조회 API 가 비번 반환 · LOGIN.md · AUTOMATION_PLAN.md pktmon 캡처로 요청 형식 확인) · 기존 비번 흐름 재사용(`input_list.parse_password_candidates`→`app_qt._apply_pw_candidates`→credstore · `settlement_accounts.login_passwords`·`alt_key` D-190) · 관리대장 = 마스터(D-134). 미확정 = ShopmineVersion 실제값·CurrentPageNumber 1-based 여부·계정 필드명(정적분석 추정 MarketId/MarketPassword) → 사용자 자격으로 discover 1회 확정.
+- 버린 대안: ①리포트만(소유자가 자동반영 선택) ②openpyxl(xlsx) 로 대장 수정(참조 스크립트 방식 — 우리 마스터는 구글시트라 gsheet_api 로 교체) ③별도 스크립트/스케줄러(앱 18시 흐름에 통합) ④샵마인 로컬 DB·캐시·엑셀에서 비번 추출(비번 없음 — 엑셀 별표 마스킹·로컬 SQLite 없음·크롬 저장소 0건, 유일 경로 = 서버 API) ⑤별도 DPAPI 저장소(앱 credstore 재사용).
+- 영향 범위: 새 `src/coupang_analytics/shopmine_sync.py`(코어) · `tools/shopmine_sync.py`(CLI setup/discover/sync/selftest) · `input_list.password_column`(공개 헬퍼 추가) · `ui/app_qt.py`(`_maybe_shopmine_sync` 훅 1곳) · 게이트 `tools/verify_shopmine_sync_offline.py`(run_checks 등록). 실서버 discover/sync 는 사용자 자격으로 1회 확인(비번 미노출).
+- 상태: ACTIVE

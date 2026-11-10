@@ -9,6 +9,14 @@
 - 배포본: `D:\coupang-analytics\dist\쿠팡애널리틱스_배포.zip` 11-10 12:15(fa681a1 · 174,142,204바이트). ⛔ 11-08 이전 zip 설치 금지.
 - 세션 시작 = STATE.md + `docs/CURRENT_RULES.md` 읽고 git log/status 대조 3줄 요약 · 색인 `docs/DECISIONS_INDEX.md` 는 검색용 · 종료 = `/session-close`.
 
+## R125 완료 (11-10 · 사이드 세션 — 샵마인 비번 동기화 D-195)
+- **샵마인 서버 비번 ↔ 관리대장 하루 1회 대조·자동 갱신(D-195)**: 담당자가 샵마인만 고쳐 어긋난 대장 비번을 샵마인 현재값(진실 소스)으로 맞춤. 소유자 선택 = '앱 통합' + '리포트+관리대장 자동반영'.
+  - 새 모듈 `src/coupang_analytics/shopmine_sync.py`(로그인·계정수신·필드탐색·서버16 failover·대조·되쓰기·리포트) · `tools/shopmine_sync.py`(CLI setup/discover/sync/selftest) · `input_list.password_column`(공개 헬퍼) · `ui/app_qt.py` `_maybe_shopmine_sync` 훅(관리대장 로드 직후·하루 1회·비치명) · 게이트 `tools/verify_shopmine_sync_offline.py`(run_checks 등록 → 19종).
+  - 자격 = credstore `__shopmine_login__`(DPAPI·사용자 getpass) · 비번 평문은 로그·리포트·화면·커밋 어디에도 안 씀(리포트 = 계정ID·상태만) · 리포트 `output/샵마인동기화/대조_*.csv`.
+  - **run_checks 19종 초록** · check_complexity 경고 0. 실 서버·실 자격 호출 없이 결정적(DPAPI 왕복·필드탐색·대조분류·되쓰기·credstore 갱신·리포트 비노출).
+  - ⚠ **남은 = 사용자 1회 실서버 확인**: `py -3.12 tools/shopmine_sync.py setup`(getpass) → `discover`(필드명·건수 확정 — MarketId/MarketPassword·AuthenticationKey·ShopmineVersion·CurrentPageNumber 1-based 여부) → `sync` 1회. 필드명이 추정과 다르면 `setup --id-key/--pw-key` 재저장.
+  - **게이트 선재 결함 수정(테스트 전용·동작 불변)**: `tools/verify_transfer_settle_offline.py` S5 가 벽시계 `past_until`(멈춤 17:40)을 모킹 안 해 **17:40 이후 돌면 requested 빈 리스트로 실패**(실측 11-10 17:54 재현·깨끗한 HEAD R124 에서도 동일 실패 확인) → S5 구간에서 `past_until` 모킹(멈춤 로직은 S3 가 모킹된 now 로 덮음). production 코드 변경 없음.
+
 ## 이번 세션 완료 (R122 · 11-10 · 통제 세션)
 - **`C:\Users\user\Downloads\output (34).zip`(11-09 18:00~11-10 09:49) 분석**: 앱 ①②③ 완주(33/34 · 55마켓 비번 오류 · 순위 353건 빈 칸 0 · 차단 43) · D-181·D-182·D-183·D-184 운용 정상 확인 · 정산 오류 119건 중 106건 = 윙 부가세 상세 머리글.
 - **D-188** 윙 부가세 상세 = 2026-05 달부터 둘째 칸 '옵션 ID'도 받음(P53 재현→통과) · **D-189** 사람이 켠 앱 시작 때 옛 정산 예약작업(watch) 삭제 · 못 지우면 UAC · 실패 사유 그대로(P36 재현→통과 · **실측 UAC 시험 11-10**: 관리자로 만든 watch 작업 → 일반 권한 '액세스가 거부되었습니다.' → UAC 삭제 1·남은 0).
@@ -96,5 +104,5 @@
 - 무거운 작업(게이트·빌드·정산서 재생성 약 20분)은 하나씩 — 빌드 중 게이트 동시 실행 금지(10-10 BSOD).
 - 정산서 재생성 = 장부 기준일 고정 · 입력 `C:\Users\user\AppData\Local\Temp\claude\baadfd9cd5410c86\4381331a-2d4c-4ed7-849b-7a91cf1d34ad\scratchpad\o30\output\`(임시 — 지워지면 `C:\Users\user\Downloads\output (30).zip` 다시 풀기) · 방법 `재생성_안내.md`. 검산 도구는 1쪽 칸 위치를 읽으므로 정산서 머리 줄 수를 바꾸지 말 것.
 - 재고현황 시트 = 앱은 늘 첫 탭만 읽음(D-183) · 통합판매현황 1행 숨긴 칸 '차트설정:' 지우지 말 것.
-- 병렬 세션 번호 — 다음 = **D-195·R125**.
+- 병렬 세션 번호 — 다음 = **D-196·R126**.
 - 사람 승인 대기열 금지 · 로그인·판매수집·정산 = 프록시 금지 · 배포 zip·결과 시트 반영 = 통제 세션만.

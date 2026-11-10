@@ -29,7 +29,7 @@
 ## 실행·로그인
 - [실행 UI=app_qt·상시가동·설정일원화](runtime-ui-and-always-on.md) · [재부팅 복구 --resume](reboot-recovery.md) · [파이프라인 동시실행 방지(교차프로세스잠금)](feature-pipeline-single-run-lock.md)
 - [로그인=실제 Chrome+CDP만](login-policy-real-browser-only.md) · [2차인증=위치기반](login-2fa-location-based.md) · [차단=세션우선+서킷브레이커](login-block-session-first-circuit-breaker.md) · [세션 하루내 만료](coupang-session-short-lived.md)
-- [OpenAPI 불가→WING 세션](coupang-openapi-not-available-consignment.md) · [샵마인=WebView2](shopmine-architecture.md)
+- [OpenAPI 불가→WING 세션](coupang-openapi-not-available-consignment.md) · [샵마인=WebView2](shopmine-architecture.md) · [샵마인 비번 하루1회 대조·대장 자동갱신=D-195](feature-shopmine-pw-sync.md)
 
 ## 입력·수집
 - [입력=셀독 관리대장(헤더2행·첫줄·괄호=AI판단·10-19 개편 헤더·숨긴 행=판매중지·체험단 시트=시작일·회사보유재고 열 접두·오입력 계정ID 제거 D-092·093)](input-ledger-format.md) · [대장 스코핑·AI 매칭+VID 고정(D-009)](ledger-scoped-tracking.md) · [판매 API vi-detail-search](sales-data-api-vi-detail-search.md) · [재고 API orderableQuantity](inventory-api-rfm-search.md)
