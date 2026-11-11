@@ -26,7 +26,7 @@ from coupang_analytics.apppaths import output_dir as app_output_dir, set_workdir
 from coupang_analytics.app_process import (mark_app_finished, prepare_auto_start,  # noqa: E402
                                            remove_legacy_settlement_task, start_settlement_watch,
                                            start_transfer_settle)
-from coupang_analytics import settlement_accounts, shopmine_sync, transfer_settle  # noqa: E402
+from coupang_analytics import account_suspend, settlement_accounts, shopmine_sync, transfer_settle  # noqa: E402
 from coupang_analytics.browser import WingBrowser, find_chrome, reap_orphan_chrome  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
 from coupang_analytics import detail_images  # noqa: E402
@@ -1222,6 +1222,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self._set_input_list(il, f"[구글시트] {title}")
         self._apply_pw_candidates(parse_password_candidates(rows))
         self._maybe_shopmine_sync(url, title, rows)   # 하루 1회 샵마인 서버 현재 비번 대조·갱신(D-195·비치명)
+        self._maybe_account_suspend(url, title, rows, strike_grid)   # 정지 계정 대장 취소선 표기(D-199·비치명)
         if not persist:
             return True
         _cfg_save_shared("gsheet/input_url", url)
@@ -1248,6 +1249,24 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             _cfg_save_shared("shopmine/last_sync_date", today)
         except Exception as exc:                         # noqa: BLE001  보조 기능 — 사유만 남기고 본 실행 계속
             self.log(f"[샵마인] 동기화 건너뜀(비치명·{exc.__class__.__name__}): {exc}")
+
+    def _maybe_account_suspend(self, url: str, sheet: str, rows: list, strike_grid: list) -> None:
+        """로그인 때 감지해 둔 정지(승인 반려) 계정을 관리대장 계정아이디 취소선으로 표기(D-199·비치명).
+
+        앱이 ① 로그인 직후 b.is_suspended()로 감지한 정지 계정을 `_계정정지.json`에 쌓아 둔다. 여기서는 관리대장
+        현재 취소선 상태(struck)를 보고 **아직 안 친 계정만** 친다(멱등·사람이 떼면 자동 재표기). 되쓰기 전 구글시트
+        탭 백업 먼저. 정상 전환 해제는 런타임 게이트가 상태 파일에서 빼고, 사람이 취소선을 떼면 다음 회차 수집 재개.
+        정지 계정이 없으면(흔한 경우) 아무것도 안 한다. 실패는 **비치명**(로그만·본 실행 계속)."""
+        try:
+            if not account_suspend.suspended_ids():
+                return
+            struck = account_suspend.struck_accounts(rows, strike_grid)
+            client = gsheet_api.GSheetClient(url, store=self.creds_store)
+            res = account_suspend.apply_strikes(client, sheet, rows, struck_now=struck, log=self.log)
+            if res.get("strike"):
+                self.log(f"[계정정지] 관리대장 취소선 표기 {len(res['strike'])}계정 — 다음 회차부터 수집 제외")
+        except Exception as exc:                         # noqa: BLE001  보조 기능 — 사유만 남기고 본 실행 계속
+            self.log(f"[계정정지] 취소선 표기 건너뜀(비치명·{exc.__class__.__name__}): {exc}")
 
     def _auto_load_input(self) -> bool:
         """입력 자동 로드(무인 실행·재시작 후) — 구글 소스 실패 = 오류·실행 안 함(registry_ui.auto_load_input·D-134)."""

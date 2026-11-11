@@ -94,40 +94,51 @@ def test_state_file_roundtrip():
     with tempfile.TemporaryDirectory() as d:
         susp.mark_suspended("hide4u", "A01781927", out_dir=d)
         assert susp.suspended_ids(d) == {"hide4u"}
-        data = susp._load(d)["hide4u"]
-        assert data["업체코드"] == "A01781927" and data["applied"] is False
+        assert susp._load(d)["hide4u"]["업체코드"] == "A01781927"
         susp.clear_suspended("hide4u", out_dir=d)
         assert susp.suspended_ids(d) == set()
-    ok("상태 파일 왕복: mark→suspended_ids·applied=False → clear→빔")
+    ok("상태 파일 왕복: mark→suspended_ids(업체코드) → clear→빔")
+
+
+def test_struck_accounts():
+    # strike_grid: 행 2,3(hide4u) 계정아이디 열(2) 취소선 → hide4u struck, normal1 아님
+    grid = [[False] * 5, [False, False, True, False, False], [False, False, True, False, False], [False] * 5]
+    assert susp.struck_accounts(LEDGER, grid) == {"hide4u"}
+    # 한 행만 취소선이면 '모든 행' 기준 미충족 → struck 아님
+    grid2 = [[False] * 5, [False, False, True, False, False], [False] * 5, [False] * 5]
+    assert susp.struck_accounts(LEDGER, grid2) == set()
+    assert susp.struck_accounts(LEDGER, []) == set()
+    ok("struck_accounts: 계정 모든 행 취소선일 때만 struck(hide4u) · 부분/빈 격자=없음")
 
 
 def test_apply_strikes_set_and_backup_first():
     with tempfile.TemporaryDirectory() as d:
         susp.mark_suspended("hide4u", "A01781927", out_dir=d)
         c = FakeClient()
-        res = susp.apply_strikes(c, "셀독리스트", LEDGER, out_dir=d)
-        # 백업이 모든 취소선 쓰기보다 먼저
-        assert c.backups and c.backups[0][2] == 0, c.backups
+        res = susp.apply_strikes(c, "셀독리스트", LEDGER, out_dir=d)   # struck_now 빔 → 쳐야 함
+        assert c.backups and c.backups[0][2] == 0, c.backups   # 백업이 모든 취소선 쓰기보다 먼저
         assert c.strikes == [("셀독리스트", 2, (2, 3), True)], c.strikes
         assert res["strike"] == {"hide4u": 2}
-        # applied=True 기록 → 재호출 시 재쓰기 없음
-        assert susp._load(d)["hide4u"]["applied"] is True
+        # 이미 struck(멱등) → 재호출 시 재쓰기 없음
         c2 = FakeClient()
-        susp.apply_strikes(c2, "셀독리스트", LEDGER, out_dir=d)
+        susp.apply_strikes(c2, "셀독리스트", LEDGER, out_dir=d, struck_now={"hide4u"})
         assert c2.strikes == [] and c2.backups == []
-    ok("apply_strikes: 백업 먼저 → 계정아이디 2행 취소선 ON · applied=True → 재호출 미쓰기")
+    ok("apply_strikes: 백업 먼저 → 2행 취소선 ON · 이미 struck(멱등) → 재호출 미쓰기")
 
 
 def test_apply_strikes_unstrike_reverts():
     with tempfile.TemporaryDirectory() as d:
         susp.mark_suspended("hide4u", out_dir=d)
-        susp.apply_strikes(FakeClient(), "셀독리스트", LEDGER, out_dir=d)   # 취소선 ON·applied
-        c = FakeClient()
-        res = susp.apply_strikes(c, "셀독리스트", LEDGER, out_dir=d, unstrike={"hide4u"})
+        c = susp_apply(d, struck={"hide4u"}, unstrike={"hide4u"})   # 현재 struck 인 걸 원복
         assert c.strikes == [("셀독리스트", 2, (2, 3), False)], c.strikes
-        assert res["unstrike"] == {"hide4u": 2}
         assert susp.suspended_ids(d) == set()   # 정상화 → 상태 파일에서 제거
-    ok("정상화 원복: unstrike → 취소선 OFF(2행) + 상태 파일 제거")
+    ok("정상화 원복: 현재 struck 인 계정 unstrike → OFF(2행) + 상태 파일 제거")
+
+
+def susp_apply(d, *, struck=frozenset(), unstrike=frozenset()):
+    c = FakeClient()
+    susp.apply_strikes(c, "셀독리스트", LEDGER, out_dir=d, struck_now=struck, unstrike=unstrike)
+    return c
 
 
 def test_dry_run_and_normal_untouched():
@@ -136,12 +147,12 @@ def test_dry_run_and_normal_untouched():
         c = FakeClient()
         susp.apply_strikes(c, "셀독리스트", LEDGER, out_dir=d, dry_run=True)
         assert c.strikes == [] and c.backups == []
-        assert susp._load(d)["hide4u"]["applied"] is False   # dry-run 은 applied 안 바꿈
+        assert susp.suspended_ids(d) == {"hide4u"}   # dry-run 은 상태 파일 안 바꿈
         # normal1 은 상태 파일에 없으니 손대지 않음
         c2 = FakeClient()
         susp.apply_strikes(c2, "셀독리스트", LEDGER, out_dir=d)
         assert all("normal1" not in str(s) for s in c2.strikes)
-    ok("dry-run 미기록(applied 불변) · 정상 계정(normal1) 손 안 댐")
+    ok("dry-run 미기록 · 정상 계정(normal1) 손 안 댐")
 
 
 def test_no_id_col_skips():
@@ -159,6 +170,7 @@ def main():
     test_is_suspended_fakepage()
     test_id_column_rows()
     test_state_file_roundtrip()
+    test_struck_accounts()
     test_apply_strikes_set_and_backup_first()
     test_apply_strikes_unstrike_reverts()
     test_dry_run_and_normal_untouched()

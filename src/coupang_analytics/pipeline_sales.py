@@ -127,11 +127,14 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
     with WingBrowser(profile_dir=account_profile(a.account_id), offscreen=not semi) as b:
         if not _login_with_candidates(b, a, pws, log, login=login, semi=semi):
             return None, {}, {}, {}, set(), set(), {}, {}   # 이 계정 건너뜀(무인 비번없음·otp·로그인 미완료)
+        from . import account_suspend
         if b.is_suspended():                 # 로그인은 됐으나 계정 정지(승인 반려) → 수집 건너뜀·대장 취소선 예정
-            from . import account_suspend
             account_suspend.mark_suspended(a.account_id)
             log(f"[정지] {a.business_name or a.account_id} — 계정 정지(승인 반려) 감지: 수집 건너뜀, 관리대장 취소선 표기 예정")
             raise AccountSuspended(a.account_id)
+        if a.account_id in account_suspend.suspended_ids():   # 여기 도달 = 정상 · 전에 정지였으면 해제(정상 전환)
+            account_suspend.clear_suspended(a.account_id)
+            log(f"[정지해제] {a.business_name or a.account_id} — 계정 정상 전환 → 정지 표기 해제·수집 재개")
         collector.reset_raw()                # 계정별 응답 원문 버퍼 초기화(파일 분리)
         found = _discover_products(b, a, date_from, date_to, log, ai_key=ai_key, anchor_file=anchor_file)
         _dump_raw(a.account_id, log)         # 3 API 응답 원문 저장(가공 없음·분석용). found None(데이터없음)이어도 남김
