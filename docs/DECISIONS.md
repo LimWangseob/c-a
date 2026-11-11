@@ -1468,4 +1468,30 @@ un_log_*.log`)로 확인 필요.
 - 근거(사실): 참조 분석 `D:\rea\evidence\shopmine`(PASSWORD_STORAGE.md — MarketPassword 는 클라이언트 암호화 없이 http 로 샵마인 서버에 저장·계정 조회 API 가 비번 반환 · LOGIN.md · AUTOMATION_PLAN.md pktmon 캡처로 요청 형식 확인) · 기존 비번 흐름 재사용(`input_list.parse_password_candidates`→`app_qt._apply_pw_candidates`→credstore · `settlement_accounts.login_passwords`·`alt_key` D-190) · 관리대장 = 마스터(D-134). 미확정 = ShopmineVersion 실제값·CurrentPageNumber 1-based 여부·계정 필드명(정적분석 추정 MarketId/MarketPassword) → 사용자 자격으로 discover 1회 확정.
 - 버린 대안: ①리포트만(소유자가 자동반영 선택) ②openpyxl(xlsx) 로 대장 수정(참조 스크립트 방식 — 우리 마스터는 구글시트라 gsheet_api 로 교체) ③별도 스크립트/스케줄러(앱 18시 흐름에 통합) ④샵마인 로컬 DB·캐시·엑셀에서 비번 추출(비번 없음 — 엑셀 별표 마스킹·로컬 SQLite 없음·크롬 저장소 0건, 유일 경로 = 서버 API) ⑤별도 DPAPI 저장소(앱 credstore 재사용).
 - 영향 범위: 새 `src/coupang_analytics/shopmine_sync.py`(코어) · `tools/shopmine_sync.py`(CLI setup/discover/sync/selftest) · `input_list.password_column`(공개 헬퍼 추가) · `ui/app_qt.py`(`_maybe_shopmine_sync` 훅 1곳) · 게이트 `tools/verify_shopmine_sync_offline.py`(run_checks 등록). 실서버 discover/sync 는 사용자 자격으로 1회 확인(비번 미노출).
+- 상태: ACTIVE (실서버 검증·로그인 원인 = D-196)
+
+### D-196 [SHOPMINE_PW_SYNC] 샵마인 실서버 검증 완료(로그인 원인 = 비번 값 오차) · sync `--dry-run` 추가 · 마스터 실쓰기는 앱 훅/소유자만 (2026-11-10, R126)
+- 결정: D-195 구현의 **실서버 로그인 거부(IsSuccess=False) 원인 = 비밀번호 '값' 오차 하나**로 확정하고(코드·요청 형식은 정답), 마무리 방식을 정한다.
+  - **실서버 검증 결과(사실)**: pktmon 으로 사장님의 **정상 성공 로그인 1회**를 캡처(관리자 PowerShell `pktmon start/stop` → `etl2pcap` → `parse_capture.py`, 비번 값 마스킹) → 실제 성공 `POST /sm/api/login` 본문이 우리 `do_login` 과 **완전 일치**: 필드 5개(CompanyId·UserId·UserPassword·OsVersion·ShopmineVersion) · CompanyId=업체ID · UserId=사용자ID(비우지 않음) · OsVersion="" · ShopmineVersion=26.8.24.866 · 평문(해시·AES·salt·prefix·추가필드 없음). 유일한 차이 = UserPassword **값**(샵마인 자동로그인이라 사장님이 평소 안 치는 값 · 실제 길이 4자 ≠ 추정 12자). 계정조회 응답 필드명 `MarketId`/`MarketPassword` 확정(우리 기본값과 일치) · 계정 59건.
+  - **마무리 방식**: 캡처(평문 http)의 실제 비번을 **화면 미출력로 곧장 credstore(DPAPI)에 심는 1회용 스크립트**로 심어 discover 성공 확인(비번 값은 Claude·로그·커밋에 안 남고 길이만 표기). 블라인드 재시도 금지(잠금) 원칙은 유지했고, 캡처는 성공 로그인이라 추가 실패 0.
+  - **sync `--dry-run` 추가**: `run_daily_sync(..., apply=True 기본)` 에 `apply=False` 경로 · CLI `sync --dry-run` → 대조·리포트만, 관리대장·credstore 에 **쓰지 않고** 갱신 예정 건수만 보고(첫 수동 실행 안전 미리보기). 일상 자동(앱 훅)은 `apply=True` 그대로.
+  - **마스터(관리대장) 실 쓰기 주체**: 사이드 세션은 실 sync 쓰기를 하지 않는다(통제 세션 전용 취지 [[feedback-control-session-only]]). 실 쓰기 = 배포 후 **앱 훅이 매일 자동**(소유자 '리포트+관리대장 자동반영' 승인 D-195) 또는 소유자/통제 세션이 수동. 첫 확인은 `sync --dry-run` 권장.
+- 근거(실측): pktmon 캡처 `C:\Temp\sm.pcapng`(파싱 `D:\rea\evidence\shopmine\parse_capture.py`) → 성공 로그인 본문 = 우리 코드와 동일 · discover 출력(로그인 키 AuthenticationKey·AuthorizationCode·IsSuccess · market_account 응답 DataTable·TotalCount·PageCount 등 · 59건 · 필드 MarketId·MarketPassword 존재) · 게이트 `test_dry_run_no_write` 추가 후 run_checks 19종 초록·check_complexity 0.
+- 버린 대안: ①비번 변환(해시) — REA IL·캡처 둘 다 평문 확정이라 폐기(옛 `--pw-hash` 제거 0a61d4f) ②사이드 세션이 실 sync 로 관리대장 바로 갱신 — 통제 세션 전용·마스터 오쓰기 위험으로 폐기(dry-run 까지만).
+- 영향 범위: `shopmine_sync.run_daily_sync`(`apply` 매개변수 추가·기본 True·행동 불변) · `tools/shopmine_sync.py`(`--dry-run`) · 게이트 `test_dry_run_no_write`. 로그인·계정조회·필드명 코드는 변경 0(실서버에서 그대로 맞았음).
+- 상태: ACTIVE (백업 추가 = D-197)
+
+### D-197 [SHOPMINE_PW_SYNC] 비번 되쓰기 전 관리대장 백업 = 구글시트 안 탭 복제(로컬 백업 금지와 양립) (2026-11-10, R127)
+- 결정: 샵마인 동기화가 관리대장(구글시트) 비밀번호 열을 **쓰기 직전에**, 그 관리대장 탭을 **같은 스프레드시트 안에** `백업_비번동기화_YYYYMMDD_HHMMSS` 로 복제해 백업한다(값·서식 그대로). 복제는 **변경이 있을 때만**(갱신 계획 비어있지 않고 `apply=True`일 때) · 변경 없는 날·`--dry-run`은 백업 안 함.
+- 근거/제약: ⛔ 관리대장에는 **평문 비밀번호**가 있어 **로컬 파일 백업 금지**(공유·유출 위험·전역 CLAUDE.md). 그래서 백업을 **구글시트 안**(복제 탭)으로만 한다 — 비번이 구글 밖으로 나가지 않아 '로컬 백업 금지'와 양립. 되돌리려면 백업 탭의 비번 열을 원래 탭에 되쓰면 됨. 구현 = `GSheetClient.duplicate_sheet`(Sheets API `duplicateSheet`) · `shopmine_sync.backup_ledger`(되쓰기 직전 1회) · 게이트가 '백업이 모든 되쓰기보다 먼저·dry-run은 백업 0' 검증.
+- 버린 대안: ①로컬 CSV/JSON 백업(평문 비번 유출 — 정책 위반) ②변경 셀만 로그로 적재(감사용이나 '관리대장 백업' 요청엔 전체 스냅샷이 명확) ③구글 자체 버전기록에만 의존(명시적 복제가 발견·복구 쉬움) ④오래된 백업 탭 자동 삭제(탭 삭제는 파괴적·위험 → 안 함, 소유자가 수동 정리).
+- 영향 범위: `src/coupang_analytics/gsheet_api.py`(`duplicate_sheet` 1개 추가) · `src/coupang_analytics/shopmine_sync.py`(`backup_ledger` + `run_daily_sync` 되쓰기 직전 1줄) · 게이트 `tools/verify_shopmine_sync_offline.py`(FakeClient `duplicate_sheet`·순서 검증). 일상 자동(앱 훅)·수동 `sync` 모두 적용 · `--dry-run`은 백업 안 함.
+- 상태: ACTIVE
+
+### D-198 [SHOPMINE_PW_SYNC] 한 계정이 여러 줄이면 '모든 줄'을 현재값으로 통일 — '같음'은 모든 줄이 이미 현재값일 때만 (2026-11-10, R128)
+- 결정: 관리대장은 한 계정의 계정ID·비번이 **여러 줄(상품마다 한 줄)에 걸쳐** 적히는 경우가 많다. 샵마인 현재값과 대조할 때, 그 계정의 **모든 줄이 이미 현재값일 때만 '같음'**으로 보고, **한 줄이라도 다르면 '다름→대장갱신'**으로 보아 그 계정의 **모든 줄을 현재값으로 통일**한다(이미 맞은 줄 포함해 그 계정 비번이 적힌 전 행에 되씀).
+- 근거(사실): 담당자가 여러 줄 중 **한 줄만 새 비번으로 고치는 경우**가 실측(D-012·D-190 — DW커머스 9줄 중 일부만 다름·반달 57행≠60행). 이전 로직은 '현재값이 여러 후보 중 하나와만 같아도 같음'으로 보아 **나머지 옛값 줄을 그대로 둬**, 로그인이 옛값 줄을 집어 막힐 수 있었다('모두 변경' 요청·소유자 2026-11-10 스크린샷 (DW)커머스 3줄). `classify`: `led_pw[aid] == {sm}` 일 때만 '같음' · `updates_to_apply`: `led_pw[aid] != {sm}` 면 갱신(되쓸 행 = 그 계정의 모든 후보 행).
+- 적용 제약: '모든 줄' = 계정ID·비번이 **둘 다 적힌** 행(파서 `parse_password_candidates`). 계속 줄에서 **계정ID 칸이 비어 있는(병합·생략)** 배치는 그 줄을 못 잡는다 — 현재 대장(셀독리스트)은 줄마다 계정ID를 반복(스크린샷)하므로 해당 없음. 그런 배치가 생기면 ID 전방 채움(forward-fill)을 별도로 추가해야 함(미구현·소유자 확인 대상).
+- 버린 대안: ①한 줄이라도 맞으면 '같음'(기존 — 옛값 줄 잔존·로그인 거부 위험) ②계정ID가 나온 모든 행에 무조건 되씀(비번 칸이 의도적으로 빈 줄까지 채울 위험 — 현재 대장은 줄마다 채워져 있어 후보 행으로 충분).
+- 영향 범위: `src/coupang_analytics/shopmine_sync.py`(`classify`·`updates_to_apply` 조건 2줄 · 행동 변경) · 게이트 `test_unify_all_rows_when_partial_match` 추가. 기존 테스트(단일/다중 줄 전부 다름)는 그대로 통과. ⚠ 실데이터 '다름' 건수가 이전 dry-run(34같음·1다름)보다 늘 수 있음(옛값 줄이 남아 있던 계정이 '다름'으로 잡힘) → 배포 전 `sync --dry-run` 재실행 권장.
 - 상태: ACTIVE

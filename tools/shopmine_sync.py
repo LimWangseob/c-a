@@ -75,8 +75,9 @@ def cmd_sync(a) -> None:
     from coupang_analytics.input_list import read_ledger_rows
     store = CredStore()
     sheet, rows, _ = read_ledger_rows(url, store=store)
-    print(f"관리대장 '{sheet}' {len(rows)}행 읽음. 샵마인 서버에서 현재 비번 받아 대조·갱신…")
-    out = sm.run_daily_sync(url, sheet, rows, store=store, log=print)
+    mode = "대조·리포트만(미리보기·쓰지 않음)" if a.dry_run else "대조·갱신"
+    print(f"관리대장 '{sheet}' {len(rows)}행 읽음. 샵마인 서버에서 현재 비번 받아 {mode}…")
+    out = sm.run_daily_sync(url, sheet, rows, store=store, log=print, apply=not a.dry_run)
     print(f"완료: {out}")
 
 
@@ -105,6 +106,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("sync", help="관리대장 대조·갱신 1회")
     sp.add_argument("--url", default="", help="관리대장 URL/ID(생략 시 설정 탭 gsheet/input_url)")
+    sp.add_argument("--dry-run", action="store_true",
+                    help="대조·리포트만, 관리대장·credstore 에 쓰지 않음(첫 실행 미리보기)")
 
     sub.add_parser("selftest", help="네트워크 없이 오프라인 검증 실행")
     return p

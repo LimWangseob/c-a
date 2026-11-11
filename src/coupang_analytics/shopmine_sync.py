@@ -257,7 +257,11 @@ def ledger_password_map(rows: list):
 
 
 def classify(shopmine: dict[str, str], ledger_cands: dict[str, list]) -> list[tuple[str, str]]:
-    """계정별 대조 상태(계정ID·상태만·비번 값 없음). 샵마인 현재값이 관리대장 후보 중 하나와 같으면 '같음'."""
+    """계정별 대조 상태(계정ID·상태만·비번 값 없음).
+
+    '같음' = **그 계정의 모든 대장 줄이 이미 샵마인 현재값**일 때만. 한 계정이 여러 줄에 걸쳐 있고 일부 줄만
+    현재값이면(담당자가 한 줄만 고친 경우·D-012·D-190) '다름→대장갱신'으로 봐서 **모든 줄을 현재값으로 통일**한다
+    (옛값 줄이 남아 로그인이 옛값을 집는 것을 막음)."""
     led_pw = {aid: {c.password for c in cs} for aid, cs in ledger_cands.items()}
     out: list[tuple[str, str]] = []
     for aid in sorted(set(shopmine) | set(led_pw)):
@@ -268,9 +272,9 @@ def classify(shopmine: dict[str, str], ledger_cands: dict[str, list]) -> list[tu
             st = ST_LED_ONLY
         elif not sm:
             st = ST_SM_EMPTY
-        elif sm in led_pw[aid]:
+        elif led_pw[aid] == {sm}:          # 모든 줄이 이미 현재값일 때만 '같음'
             st = ST_MATCH
-        else:
+        else:                               # 일부 줄만 맞거나 전부 다름 → 모든 줄 통일
             st = ST_DIFF
         out.append((aid, st))
     return out
@@ -278,12 +282,13 @@ def classify(shopmine: dict[str, str], ledger_cands: dict[str, list]) -> list[tu
 
 def updates_to_apply(shopmine: dict[str, str], ledger_cands: dict[str, list]) -> list[tuple[str, str, list[int]]]:
     """갱신할 계정 목록 [(계정ID, 샵마인현재값, 되쓸 대장 행들)]. 조건 = 대장에 있고 · 샵마인값이 비어있지 않고 ·
-    대장 어느 후보와도 다름. 되쓸 행 = 그 계정 비번이 적힌 모든 대장 행(여러 줄 값 통일)."""
+    **대장의 모든 줄이 현재값인 것은 아님**(한 줄이라도 다르면 갱신). 되쓸 행 = 그 계정 비번이 적힌 **모든 대장 행**
+    (여러 줄 중 일부만 고쳐져 있어도 전부 현재값으로 통일 — '모두 변경')."""
     led_pw = {aid: {c.password for c in cs} for aid, cs in ledger_cands.items()}
     plan: list[tuple[str, str, list[int]]] = []
     for aid, cs in ledger_cands.items():
         sm = (shopmine.get(aid) or "").strip()
-        if sm and aid in shopmine and sm not in led_pw[aid]:
+        if sm and aid in shopmine and led_pw[aid] != {sm}:
             plan.append((aid, sm, sorted({r for c in cs for r in c.rows})))
     return plan
 
@@ -302,6 +307,17 @@ def apply_updates(client, sheet: str, pw_col: str, plan: list, store, log=lambda
             store.set_password(settlement_accounts.alt_key(aid), "")   # 값2 비움(한 값 통일)
         log(f"[샵마인] {aid}: 관리대장 비밀번호 {len(rows)}행 갱신(샵마인 현재값) · 로그인 후보도 갱신")
     return n_cell
+
+
+def backup_ledger(client, sheet: str, now: datetime, log=lambda m: None) -> str:
+    """비번 되쓰기 **직전에** 관리대장(비번 포함) 탭을 **구글시트 안에서** 복제해 백업 탭을 만든다.
+
+    로컬 파일 백업은 금지(평문 비번 유출·CLAUDE.md)라 구글 안에서만 백업한다 — 비번이 구글 밖으로 안 나간다.
+    되돌리려면 이 백업 탭의 비번 열을 원래 탭에 되쓰면 된다. 변경이 있을 때만 호출(apply·plan 있을 때). 반환 = 백업 탭 이름."""
+    name = f"백업_비번동기화_{now:%Y%m%d_%H%M%S}"
+    client.duplicate_sheet(sheet, name)
+    log(f"[샵마인] 변경 전 관리대장 백업 탭 생성: '{name}'(구글시트 안·로컬 저장 없음)")
+    return name
 
 
 def write_report(classified: list[tuple[str, str]], out_dir: str, now: datetime) -> Path:
@@ -330,11 +346,13 @@ def _gsheet_client(url: str, store):
 
 
 def run_daily_sync(url: str, sheet: str, rows: list, *, store, client=None, fetch=None,
-                   log=print, now: datetime | None = None, out_dir: str = REPORT_DIR) -> dict:
+                   log=print, now: datetime | None = None, out_dir: str = REPORT_DIR,
+                   apply: bool = True) -> dict:
     """하루 1회 동기화 본체 — 샵마인 현재 비번 수신 → 관리대장 대조 → 리포트 + 불일치 자동 갱신.
 
     fetch: 테스트/주입용 `fetch(store, log) -> {계정ID: 비번}`(None 이면 실 서버). client: 구글시트 클라이언트
-    (None 이면 url 로 생성). 반환 = 요약 숫자(비번 값 없음). 실패는 예외로 올림(호출부가 비치명 처리)."""
+    (None 이면 url 로 생성). apply=False 면 **대조·리포트만** 하고 관리대장·credstore 에 쓰지 않는다(미리보기·dry-run —
+    첫 수동 실행 때 몇 계정이 바뀔지 먼저 확인용). 반환 = 요약 숫자(비번 값 없음). 실패는 예외로 올림(호출부가 비치명 처리)."""
     now = now or datetime.now()
     shopmine = (fetch or fetch_shopmine_passwords)(store, log)
     cands, pw_col = ledger_password_map(rows)
@@ -345,7 +363,10 @@ def run_daily_sync(url: str, sheet: str, rows: list, *, store, client=None, fetc
     report = write_report(classified, out_dir, now)
     plan = updates_to_apply(shopmine, cands)
     n_cell = 0
-    if plan:
-        n_cell = apply_updates(client or _gsheet_client(url, store), sheet, pw_col, plan, store, log)
-    log(_summary_line(classified, n_cell, report))
+    if plan and apply:
+        cl = client or _gsheet_client(url, store)
+        backup_ledger(cl, sheet, now, log)                 # 되쓰기 전 관리대장 백업(구글시트 안)
+        n_cell = apply_updates(cl, sheet, pw_col, plan, store, log)
+    note = "" if apply else f"  ※ 미리보기(dry-run) — 관리대장에 쓰지 않음(갱신 예정 {len(plan)}건)"
+    log(_summary_line(classified, n_cell, report) + note)
     return {"accounts": len(classified), "updated": len(plan), "cells": n_cell, "report": str(report)}

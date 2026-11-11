@@ -286,6 +286,19 @@ class GSheetClient:
                 existing[t] = self.sheet_id(t)             # 새 메타 1회 재조회 후 gid 채움
         return existing
 
+    def duplicate_sheet(self, source_title: str, new_title: str) -> int:
+        """source 탭을 **같은 스프레드시트 안에** new_title 로 복제(값·서식 그대로) → 새 탭 gid.
+
+        비번 평문이 든 관리대장을 로컬 파일이 아니라 **구글시트 안**에서 백업하기 위한 것(평문이 구글 밖으로
+        나가지 않음 — CLAUDE.md '관리대장 로컬 백업 금지'와 양립). 비번 되쓰기 직전에 1회 호출한다."""
+        gid = self.sheet_id(source_title)
+        if gid is None:
+            raise GSheetError(f"복제할 시트를 찾을 수 없습니다: {source_title}")
+        resp = self.batch_update([{"duplicateSheet": {
+            "sourceSheetId": gid, "newSheetName": new_title}}])
+        self._meta = None   # 캐시 무효화(새 탭 반영)
+        return resp["replies"][0]["duplicateSheet"]["properties"]["sheetId"]
+
     # ── 값 읽기/쓰기 ─────────────────────────────────────────────
     def read_values(self, sheet: str, cell_range: str | None = None, *, unformatted: bool = False) -> list[list[Any]]:
         """시트(또는 'Sheet!A1:D')의 값 격자 반환. 빈 뒤쪽 셀은 잘려 행 길이가 다를 수 있다.

@@ -2,20 +2,35 @@
 
 <!-- 누적 금지. 매 세션 종료 시 /session-close 가 전체 덮어쓰기. 100줄 이하. 핸드오프 SSOT. -->
 
-- BUILD_TAG: R125
-- 갱신: 2026-11-11 (R117~R120 = 위탁정산서 D-185·D-186 · R121 = 셀독전환자 정산 2단계 D-187 · R122 = 윙 부가세 상세 머리글 D-188·D-189 · R123 = 정산 비번 대장 값2 D-190~D-192 · R124 = 500 근거 정정 D-193·계정 사용 불가 D-194 · **R125 = 샵마인 비번 동기화 D-195 · 배포 zip 재빌드**)
-- 마지막 커밋: 이 커밋([R125] STATE — 배포 zip 0a61d4f 빌드 기록) ← 0a61d4f [R125] 샵마인 로그인 평문+Trim 확정 ← e9edc86·51b9441 [R125] 로그인 수정 ← be5fc27 [R125] 샵마인 D-195. origin 푸시 = 이 커밋에서.
-- 직전 빌드: **R125 0a61d4f — 배포 zip 11-11 07:36 재빌드**(R124 D-193·D-194 + R125 샵마인 D-195 + 로그인 평문+Trim 확정 51b9441·e9edc86·0a61d4f 포함 · PyInstaller 분석 TOC 에 `coupang_analytics.shopmine_sync` 양성 확인 · exe 16,731,505바이트). 사장님 하위 세션에서 샵마인 로그인 확인(11-11). 어제 zip(11-10 12:15 fa681a1)은 R123 코드라 재빌드. 운용 PC 현재 = 11-09 15:28 zip(R115 · 11-09 18:20 쯤 설치).
-- 배포본: `D:\coupang-analytics\dist\쿠팡애널리틱스_배포.zip` 11-11 07:36(0a61d4f · 174,157,123바이트 · shopmine_sync 포함). ⛔ 11-08 이전 zip 설치 금지.
+- BUILD_TAG: R128
+- 갱신: 2026-11-11 (R117~R120 = 위탁정산서 D-185·D-186 · R121 = 셀독전환자 정산 2단계 D-187 · R122 = 윙 부가세 상세 머리글 D-188·D-189 · R123 = 정산 비번 대장 값2 D-190~D-192 · R124 = 500 근거 정정 D-193·계정 사용 불가 D-194 · R125 = 샵마인 비번 동기화 D-195 · R126 = 샵마인 로그인 해결·실서버 검증·dry-run D-196 · R127 = 되쓰기 전 관리대장 백업 D-197 · **R128 = 여러 줄 모두 통일 D-198 · 배포 zip R128 재빌드**)
+- 마지막 커밋: 이 커밋([R128] merge 샵마인 R126~128 → master · 배포 zip 재빌드) ← d2ef954 [R128] D-198 ← a16d8d3 [R127] D-197 ← 5d58629 [R126] D-196 ← 60b77e1 [R125] 배포 기록 ← 0a61d4f [R125] 로그인 확정. origin 푸시 = 이 커밋에서.
+- 직전 빌드: **R128 d2ef954 — 배포 zip 11-11 13:59 재빌드**(R124 D-193·D-194 + R125 샵마인 D-195 + R126~128 로그인 해결·dry-run·되쓰기 전 백업·여러 줄 통일 D-196~D-198 포함 · 사장님 하위 세션 로그인 확인 11-11 · exe 16,732,984바이트 · PyInstaller TOC 에 shopmine_sync 양성 확인 · zip 1943항목·구조 정상·old_stuck 혼입 0). ⚠ build.bat 의 Compress-Archive 가 170MB 에서 13분+ 행 → **tar -a 압축으로 대체**(76초). 운용 PC 현재 = 11-09 15:28 zip(R115 · 11-09 18:20 쯤 설치).
+- 배포본: `D:\coupang-analytics\dist\쿠팡애널리틱스_배포.zip` 11-11 13:59(d2ef954 · 174,265,448바이트 · R126~128 포함). ⛔ 11-08 이전 zip 설치 금지.
 - 세션 시작 = STATE.md + `docs/CURRENT_RULES.md` 읽고 git log/status 대조 3줄 요약 · 색인 `docs/DECISIONS_INDEX.md` 는 검색용 · 종료 = `/session-close`.
+
+## R128 완료 (11-10 · 사이드 세션 — 샵마인 '여러 줄 모두 통일' D-198)
+- **한 계정이 여러 줄이면 모든 줄을 현재값으로 통일**(소유자 '모두 변경'·스크린샷 (DW)커머스 3줄): `classify`='같음'은 **모든 줄이 이미 현재값일 때만** · `updates_to_apply`=한 줄이라도 다르면 그 계정의 **모든 후보 행** 되씀. 이전엔 '한 줄이라도 맞으면 같음'이라 옛값 줄이 남아 로그인 거부 위험(D-012·D-190). 게이트 `test_unify_all_rows_when_partial_match` 추가 → **run_checks 19종 초록**.
+- ⚠ 이 변경으로 실데이터 '다름' 건수가 이전 dry-run(같음 34·다름 1)보다 **늘 수 있음**(옛값 줄 잔존 계정이 '다름'으로) → 배포 전 `sync --dry-run` **재실행**해 새 건수 확인 권장. 제약 = 계속 줄 계정ID가 **비면(병합·생략)** 못 잡음(현재 대장은 줄마다 반복이라 해당 없음 · 생기면 forward-fill 별도).
+
+## R127 완료 (11-10 · 사이드 세션 — 샵마인 되쓰기 전 관리대장 백업 D-197)
+- **비번 되쓰기 직전 관리대장 백업 = 구글시트 안 탭 복제**(`백업_비번동기화_날짜시각`): ⛔관리대장은 평문 비번이 있어 **로컬 백업 금지** → 구글시트 안에서만 복제(비번이 구글 밖으로 안 나감·'로컬 백업 금지'와 양립). 변경 있을 때(apply·plan) 만·`--dry-run`은 백업 안 함. `GSheetClient.duplicate_sheet` + `shopmine_sync.backup_ledger` + run_daily_sync 되쓰기 직전 1줄 · 게이트가 '백업이 모든 되쓰기보다 먼저·dry-run 백업 0' 검증 → **run_checks 19종 초록**·복잡도 0.
+- **실데이터 dry-run 검증 통과(11-10)**: 관리대장 '셀독리스트' 180행·계정 59건 → 같음 34·다름→대장갱신 1(aehee5505=로그인 막힌 7계정 중 하나)·샵마인에만 24(hide4u 등 미관리) · 쓴 셀 0. 매칭 정상·배포 안전. ⚠남은 확인 = 서비스계정이 관리대장에 **'편집' 권한** 있는지(없으면 되쓰기 조용히 실패·비치명) · 앱 설정 `gsheet/input_url` 탭 = '셀독리스트' 인지.
+- ⛔ **배포 zip 생성 = 통제 세션 전용** — 사이드 세션은 코드·게이트·푸시까지(소유자 '정상확인후 배포' 요청은 통제 세션이 zip 생성으로 이행).
+
+## R126 완료 (11-10 · 사이드 세션 — 샵마인 로그인 해결·실서버 검증·dry-run D-196)
+- **실서버 로그인 블로커 = 비번 '값' 오차 하나로 확정·해결(D-196)**: pktmon 으로 **정상 성공 로그인 1회 캡처**(관리자 PowerShell·`pktmon start/stop` → `etl2pcap` → `parse_capture.py`) → 실제 성공 요청 본문이 **우리 do_login 과 완전 일치**(CompanyId=imyes2u·UserId=limws0652·OsVersion""·ShopmineVersion=26.8.24.866·필드 5개) 확인. 유일한 차이 = UserPassword 값(샵마인 자동로그인이라 사장님이 평소 안 치는 값·실제 길이 4자 ≠ 추정 12자). 캡처의 평문 비번을 **화면 미출력로 곧장 credstore 에 심는 1회용 스크립트**(scratchpad `seed_shopmine_from_capture.py`)로 심음 → **discover 성공**: 로그인 OK · 계정 59건 · 필드명 `MarketId`/`MarketPassword` 확정(우리 기본값과 일치).
+- **실서버 검증 완료**: do_login·fetch_accounts(59건)·필드명 모두 실서버 확인. 코드 변경 0(로그인 본문·계정조회·필드명 전부 맞았음).
+- **sync 에 `--dry-run` 추가(안전 미리보기)**: `run_daily_sync(..., apply=False)` + CLI `--dry-run` → 대조·리포트만, 관리대장·credstore 에 쓰지 않음(갱신 예정 건수만 보고). 게이트에 `test_dry_run_no_write` 추가 → **run_checks 19종 초록**·check_complexity 0. 일상 자동(앱 훅)은 apply=True 그대로.
+- ⛔ **마스터(관리대장) 실 쓰기 = 사이드 세션이 안 함**(통제 세션 전용·[[feedback-control-session-only]] 취지): 실 sync 쓰기는 **배포 후 앱 훅이 매일 자동**(소유자 '리포트+관리대장 자동반영' 승인) 또는 소유자/통제 세션이 수동. 이 세션은 `--dry-run` 까지만. 첫 수동 확인은 `sync --dry-run` 권장(관리대장 URL = 설정 탭 gsheet/input_url 또는 --url).
+- 자격·비번 평문 = credstore(DPAPI)만 · git/문서/채팅/커밋/리포트 어디에도 안 씀 · 로그인 자격 ID 는 커밋 메시지에도 안 적음. 캡처 파일(`C:\Temp\sm.etl`·`sm.pcapng`·비번 평문 포함)은 소유자가 삭제.
 
 ## R125 완료 (11-10 · 사이드 세션 — 샵마인 비번 동기화 D-195)
 - **샵마인 서버 비번 ↔ 관리대장 하루 1회 대조·자동 갱신(D-195)**: 담당자가 샵마인만 고쳐 어긋난 대장 비번을 샵마인 현재값(진실 소스)으로 맞춤. 소유자 선택 = '앱 통합' + '리포트+관리대장 자동반영'.
   - 새 모듈 `src/coupang_analytics/shopmine_sync.py`(로그인·계정수신·필드탐색·서버16 failover·대조·되쓰기·리포트) · `tools/shopmine_sync.py`(CLI setup/discover/sync/selftest) · `input_list.password_column`(공개 헬퍼) · `ui/app_qt.py` `_maybe_shopmine_sync` 훅(관리대장 로드 직후·하루 1회·비치명) · 게이트 `tools/verify_shopmine_sync_offline.py`(run_checks 등록 → 19종).
   - 자격 = credstore `__shopmine_login__`(DPAPI·사용자 getpass) · 비번 평문은 로그·리포트·화면·커밋 어디에도 안 씀(리포트 = 계정ID·상태만) · 리포트 `output/샵마인동기화/대조_*.csv`.
   - **run_checks 19종 초록** · check_complexity 경고 0. 실 서버·실 자격 호출 없이 결정적(DPAPI 왕복·필드탐색·대조분류·되쓰기·credstore 갱신·리포트 비노출).
-  - ⚠ **남은 = 실서버 로그인 블로커(비번 전송 변환)**: 실서버 discover 로 **필드명·서버·버전 확정**(응답 최상위 키 AuthenticationKey·AuthorizationCode·IsSuccess · 설치 버전 26.8.24.866 = shopmine_version.txt). 그러나 **정확 자격·버전·OsVersion""·앱 종료(동시접속 배제)에도 IsSuccess=False** → 앱이 **상류(LoginForm.DoLoginAsync→LoginAdapter.LoginAsync)에서 비번을 변환(해시)해 보낼** 가능성. REA(local_41625313) 가 그 IL 추적 중(path B). 변환식 확정 후 `setup --pw-hash <md5|sha1|sha256|sha512[-upper]>` 1회로 마무리. 안 되면 pktmon 성공 로그인 1회 캡처로 비번 필드 길이·hex 판별.
-  - 코드 준비 완료: `shopmine_sync.transform_password`·setup `--pw-hash`·do_login 배선(변환식만 넣으면 됨). ⛔블라인드 해시 재시도 금지(잠금) — REA 확정 후 1회만. 로그인 자격 ID 는 git/문서에 안 적음(사장님 PC credstore 에만).
+  - 로그인 본문 = CompanyId·UserId·UserPassword(세 필드 strip·앱 Trim 과 동일)·OsVersion·ShopmineVersion 평문(해시·AES 없음·REA IL 확정). ⚠ 당시 '실서버 로그인 블로커'는 **R126 에서 해결**(원인 = 비번 값 오차 하나 · 위 R126 블록 참고).
   - **게이트 선재 결함 수정(테스트 전용·동작 불변)**: `tools/verify_transfer_settle_offline.py` S5 가 벽시계 `past_until`(멈춤 17:40)을 모킹 안 해 **17:40 이후 돌면 requested 빈 리스트로 실패**(실측 11-10 17:54 재현·깨끗한 HEAD R124 에서도 동일 실패 확인) → S5 구간에서 `past_until` 모킹(멈춤 로직은 S3 가 모킹된 now 로 덮음). production 코드 변경 없음.
 
 ## 이번 세션 완료 (R122 · 11-10 · 통제 세션)
@@ -105,5 +120,5 @@
 - 무거운 작업(게이트·빌드·정산서 재생성 약 20분)은 하나씩 — 빌드 중 게이트 동시 실행 금지(10-10 BSOD).
 - 정산서 재생성 = 장부 기준일 고정 · 입력 `C:\Users\user\AppData\Local\Temp\claude\baadfd9cd5410c86\4381331a-2d4c-4ed7-849b-7a91cf1d34ad\scratchpad\o30\output\`(임시 — 지워지면 `C:\Users\user\Downloads\output (30).zip` 다시 풀기) · 방법 `재생성_안내.md`. 검산 도구는 1쪽 칸 위치를 읽으므로 정산서 머리 줄 수를 바꾸지 말 것.
 - 재고현황 시트 = 앱은 늘 첫 탭만 읽음(D-183) · 통합판매현황 1행 숨긴 칸 '차트설정:' 지우지 말 것.
-- 병렬 세션 번호 — 다음 = **D-196·R126**.
+- 병렬 세션 번호 — 다음 = **D-199·R129**.
 - 사람 승인 대기열 금지 · 로그인·판매수집·정산 = 프록시 금지 · 배포 zip·결과 시트 반영 = 통제 세션만.

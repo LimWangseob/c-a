@@ -56,6 +56,11 @@ def ok(msg):
 class FakeClient:
     def __init__(self):
         self.writes = []
+        self.backups = []                       # (source, new_title, 그 시점까지의 쓰기 수)
+
+    def duplicate_sheet(self, source_title, new_title):
+        self.backups.append((source_title, new_title, len(self.writes)))   # 쓰기 전이면 셋째=0
+        return 999
 
     def write_values(self, sheet, rows, start, raw=False):
         self.writes.append((sheet, start, rows[0][0], raw))
@@ -127,6 +132,27 @@ def test_updates_plan():
     ok("갱신 계획 — 빈 값/같음/샵마인전용 제외 · 여러 줄 통일")
 
 
+def test_unify_all_rows_when_partial_match():
+    # (DW)커머스처럼 한 계정이 여러 줄: 일부 줄만 샵마인 현재값, 나머지는 옛값 → '다름'으로 보고 모든 줄 통일(모두 변경)
+    rows = [
+        ["대표자명", "사업자명", "계정아이디", "비밀번호", "상품명"],
+        ["", "DW", "dw1849", "cur!", "상품1"],      # row2 이미 현재값
+        ["", "DW", "dw1849", "old!", "상품2"],      # row3 옛값
+        ["", "DW", "dw1849", "old!", "상품3"],      # row4 옛값
+        ["", "온", "same1", "ok!", "상품1"],        # row5·6 모든 줄 현재값 → 같음(안 바꿈)
+        ["", "온", "same1", "ok!", "상품2"],
+    ]
+    cands, pw_col = sm.ledger_password_map(rows)
+    shopmine = {"dw1849": "cur!", "same1": "ok!"}
+    st = dict(sm.classify(shopmine, cands))
+    assert st["dw1849"] == sm.ST_DIFF, "한 줄만 맞고 나머지 다르면 '다름'(통일 필요)"
+    assert st["same1"] == sm.ST_MATCH, "모든 줄이 현재값이면 '같음'(안 바꿈)"
+    plan = dict((aid, (pw, r)) for aid, pw, r in sm.updates_to_apply(shopmine, cands))
+    assert set(plan) == {"dw1849"}, "모든 줄이 현재값인 계정은 갱신 안 함"
+    assert plan["dw1849"] == ("cur!", [2, 3, 4]), "여러 줄 전부(이미 맞은 줄 포함) 현재값으로 통일"
+    ok("여러 줄 통일 — 일부만 맞아도 모든 줄 현재값으로('모두 변경') · 전부 맞으면 안 바꿈")
+
+
 def test_apply_updates():
     store = CredStore(Path(tempfile.mkdtemp()) / "creds.json")
     store.set_password(SA.alt_key("shopD"), "d2")        # 값2(D-190) 존재 → 통일 후 비워져야
@@ -154,6 +180,10 @@ def test_run_daily_sync_end_to_end():
             now=datetime(2026, 11, 10, 18, 0, 0), out_dir=str(Path(d) / "rep"))
         assert out == {"accounts": 6, "updated": 2, "cells": 4, "report": out["report"]}, out
         assert len(cl.writes) == 4
+        assert len(cl.backups) == 1, "변경 전 관리대장 백업(탭 복제) 1회"
+        src, name, writes_at_backup = cl.backups[0]
+        assert src == "Sheet1" and name.startswith("백업_비번동기화_"), cl.backups
+        assert writes_at_backup == 0, "백업은 어떤 되쓰기보다 먼저여야 함(복구 안전)"
         report = Path(out["report"])
         assert report.exists()
         text = report.read_text(encoding="utf-8-sig")
@@ -197,6 +227,23 @@ def test_login_strips_fields():
     ok("로그인 본문 — 업체ID·사용자ID·비번 앞뒤 공백 제거(앱 Trim 과 동일·평문)")
 
 
+def test_dry_run_no_write():
+    # apply=False(미리보기) → 대조·리포트는 하되 관리대장·credstore 에 아무것도 안 쓴다(갱신 예정 건수는 그대로 보고)
+    with tempfile.TemporaryDirectory() as d:
+        store = CredStore(Path(d) / "creds.json")
+        cl = FakeClient()
+        out = sm.run_daily_sync(
+            "URL", "Sheet1", LEDGER_ROWS, store=store, client=cl,
+            fetch=lambda s, log: dict(SHOPMINE), log=lambda m: None,
+            now=datetime(2026, 11, 10), out_dir=str(Path(d) / "rep"), apply=False)
+        assert out == {"accounts": 6, "updated": 2, "cells": 0, "report": out["report"]}, out
+        assert cl.writes == [], "dry-run 은 관리대장에 쓰지 않아야 함"
+        assert cl.backups == [], "dry-run 은 백업 탭도 안 만든다(변경 안 하니까)"
+        assert not store.get_password("shopA"), "dry-run 은 credstore 도 안 건드림"
+        assert Path(out["report"]).exists(), "리포트는 생성(대조 결과 미리보기)"
+    ok("dry-run — 대조·리포트만 · 관리대장/credstore 쓰기 0 · 백업 0 · 갱신 예정 건수 보고")
+
+
 def test_no_pw_col_skips():
     out = sm.run_daily_sync("URL", "S", [["대표자명", "상품명"]], store=None,
                             client=FakeClient(), fetch=lambda s, log: {"x": "y"}, log=lambda m: None,
@@ -213,10 +260,12 @@ def main():
     test_ledger_map()
     test_classify()
     test_updates_plan()
+    test_unify_all_rows_when_partial_match()
     test_apply_updates()
     test_run_daily_sync_end_to_end()
     test_login_rejected_message()
     test_login_strips_fields()
+    test_dry_run_no_write()
     test_no_pw_col_skips()
     print("통과 — 실 API·실 자격 없이 결정적. 비번 평문 비노출 확인.")
 
