@@ -39,6 +39,11 @@ _TWO_STEP_MARKERS = ("2단계 인증",)
 _AKAMAI_OVERLAY = "#sec-overlay"
 # Akamai 전면 차단 페이지 마커(자동입력·자동제출이 봇으로 탐지돼 authenticate 요청이 거부될 때).
 _BLOCK_MARKERS = ("Access Denied", "errors.edgesuite.net", "You don't have permission", "Reference #")
+# 계정 정지(승인 반려) 신호: 로그인 후 윙 홈이 정상 대시보드가 아니라 온보딩 화면이고, 좌측 메뉴가
+# 실제 URL 이 아니라 /unapproved/... 로 라우팅된다(2026-11-11 hide4u 실측). 관리 중 활성이던
+# 계정이 이 화면이면 '정지'로 본다. (정산/매출 메뉴는 실제 URL 유지 → 조회는 되고 판매·받기만 막힘)
+_SUSPEND_MARKERS = ("승인 반려",)
+_UNAPPROVED_HREF = "a[href*='/unapproved/']"
 _CHROME_CANDIDATES = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
@@ -51,6 +56,16 @@ def find_chrome() -> str:
         if Path(p).exists():
             return p
     raise FileNotFoundError("설치된 Google Chrome 을 찾지 못했습니다.")
+
+
+def judge_suspended(has_unapproved_link: bool, body_text: str) -> bool:
+    """정지(승인 반려) 판정 — 순수 함수(게이트 테스트용·네트워크 없음).
+
+    메뉴가 /unapproved/ 로 라우팅되거나(구조적·강한 신호) 홈에 '승인 반려' 문구가 있으면 정지.
+    """
+    if has_unapproved_link:
+        return True
+    return any(m in (body_text or "") for m in _SUSPEND_MARKERS)
 
 
 def _free_port() -> int:
@@ -415,6 +430,20 @@ class WingBrowser:
         except Exception:
             return False
         return any(n in names for n in _AUTH_COOKIES)
+
+    def is_suspended(self) -> bool:
+        """로그인 성공한 계정이 '정지(승인 반려)' 상태인지 — 윙 홈이 온보딩 화면이고 메뉴가
+        /unapproved/ 로 라우팅되면 정지로 본다(관리 중 활성이던 계정 한정).
+
+        신호 없음·읽기 실패 시 False(정상). 오탐(정상→정지, 수집 중단·취소선)보다 누락(정지→정상,
+        기존처럼 수집 시도)이 안전하므로 실패는 False 로 떨어뜨린다. authenticated() 성공 후 호출 전제.
+        """
+        try:
+            has_unapproved = self.page.query_selector(_UNAPPROVED_HREF) is not None
+            body = "" if has_unapproved else (self.page.inner_text("body")[:2000] or "")
+            return judge_suspended(has_unapproved, body)
+        except Exception:
+            return False
 
     def _overlay_visible(self, selector: str) -> bool:
         """오버레이 요소가 실제로 노출(display:none 아님)인지."""

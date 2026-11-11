@@ -267,6 +267,39 @@ def password_column(rows: list) -> int | None:
     return _alias_index([h.lower().replace(" ", "") for h in header], _PW_ALIASES)
 
 
+def account_id_column(rows: list) -> int | None:
+    """관리대장 값 격자 → **계정아이디 열의 0-based 인덱스**(없으면 None). password_column 과 같은 헤더·별칭 규칙.
+    계정 정지 취소선을 어느 열 셀에 칠지 결정하는 데 쓴다."""
+    def _match(header: list[str]) -> bool:
+        return _alias_index([h.lower().replace(" ", "") for h in header], _ID_ALIASES) is not None
+
+    header, hrow = _find_header_row(rows, _match)
+    if hrow < 0:
+        return None
+    return _alias_index([h.lower().replace(" ", "") for h in header], _ID_ALIASES)
+
+
+def account_id_rows(rows: list) -> dict[str, list[int]]:
+    """값 격자 → {계정아이디: [그 계정ID가 적힌 모든 1-based 시트 행]}.
+
+    정지 취소선은 그 계정의 **모든 행 계정아이디 셀**에 쳐야 reader(_handle_account_row)가 매 행에서 제외로 읽는다
+    (대장은 줄마다 계정ID 반복 → 한 행만 치면 다음 비-취소선 행에서 acct_cancelled 가 풀림)."""
+    col = account_id_column(rows)
+    if col is None:
+        return {}
+
+    def _match(header: list[str]) -> bool:
+        return _alias_index([h.lower().replace(" ", "") for h in header], _ID_ALIASES) is not None
+
+    _, hrow = _find_header_row(rows, _match)
+    out: dict[str, list[int]] = {}
+    for r, row in enumerate(rows[hrow + 1:], start=hrow + 2):
+        aid = _norm(_cell(row, col))
+        if aid:
+            out.setdefault(aid, []).append(r)
+    return out
+
+
 _DISCONTINUED = ("판매중지", "판매중단", "판매종료", "판매불가")   # 대장 텍스트 마커(판매부진=계속 판매라 제외)
 
 

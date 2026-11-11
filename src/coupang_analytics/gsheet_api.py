@@ -399,6 +399,23 @@ class GSheetClient:
         return self._exec(self._sheets().batchUpdate(
             spreadsheetId=self.spreadsheet_id, body={"requests": requests}), "서식/구조 반영")
 
+    def set_strike(self, sheet: str, col0: int, rows_1based: list[int], on: bool) -> int:
+        """지정 셀(열 col0 = 0-based · 행들 1-based)의 **취소선 서식**을 on/off 하고 변경한 셀 수 반환.
+
+        계정 정지 표기(on=True → 계정아이디 칸 취소선)와 정상화 원복(on=False → 해제)에 쓴다. `read_strike_grid`
+        가 읽는 것과 같은 effectiveFormat.textFormat.strikethrough 를 설정하므로 다음 파싱에서 제외/복귀가 반영된다.
+        strikethrough 필드만 바꿔 다른 서식은 보존. 행이 흩어져 있을 수 있어 셀마다 1 repeatCell."""
+        gid = self.sheet_id(sheet)
+        if gid is None:
+            raise GSheetError(f"시트를 찾을 수 없습니다: {sheet}")
+        reqs = [{"repeatCell": {
+            "range": {"sheetId": gid, "startRowIndex": r - 1, "endRowIndex": r,
+                      "startColumnIndex": col0, "endColumnIndex": col0 + 1},
+            "cell": {"userEnteredFormat": {"textFormat": {"strikethrough": on}}},
+            "fields": "userEnteredFormat.textFormat.strikethrough"} } for r in rows_1based]
+        self.batch_update(reqs)
+        return len(reqs)
+
 
 def check_access(url_or_id: str, *, store: CredStore | None = None,
                  sa_path: str | Path | None = None) -> tuple[str, list[str]]:
