@@ -5,8 +5,8 @@
 - BUILD_TAG: R131
 - 갱신: 2026-11-11 (R117~R128 = 위탁정산서·셀독전환 정산·윙 부가세 머리글·샵마인 비번 동기화 D-185~D-198 · **R129~R131 = 계정 정지(승인 반려) 감지→수집 건너뜀→대장 계정아이디 취소선 표기(가역) D-199**). 완료 상세 = DECISIONS·git log.
 - 마지막 커밋: `e5cd79c` [R131] 계정 정지 2/2b(app_qt 훅·D-199) ← `b296b8b` [R130] 파이프라인 게이트 ← `80ef396` [R129] primitives ← `19c0887` [R128] merge 샵마인. origin 동기화됨.
-- 직전 빌드: **R128 d2ef954 — 배포 zip 11-11 13:59**(174,265,448바이트 · 샵마인 R126~128 포함 · tar 압축 · ⚠ build.bat Compress-Archive 170MB 13분+ 행 → tar 로 대체). **⛔ R129~R131(계정 정지)은 아직 빌드 안 됨** — 재빌드 필요. 운용 PC 현재 = 11-09 15:28 zip(R115).
-- 배포본: `D:\coupang-analytics\dist\쿠팡애널리틱스_배포.zip` 11-11 13:59(d2ef954 · R128). ⛔ 11-08 이전 zip 설치 금지.
+- 직전 빌드: **R132 22d933f — 배포 zip 11-11 17:24**(174,294,700바이트 · 계정 정지 R129~R131 + 샵마인 R126~128 포함 · exe 2종에 `account_suspend` 모듈 확인 · tar 압축 38초 · 이름 cp949 저장=한국어 Windows 탐색기 정상 · ⚠ build.bat Compress-Archive 는 이번에도 0바이트에서 멈춰 끊고 tar 로 대체). 운용 PC 현재 = 11-09 15:28 zip(R115) — **설치 대기**.
+- 배포본: `D:\coupang-analytics\dist\쿠팡애널리틱스_배포.zip` 11-11 17:24(22d933f · R132). ⛔ 11-11 17:24 이전 zip 설치 금지(계정 정지 감지 빠짐).
 - 세션 시작 = STATE.md + `docs/CURRENT_RULES.md` 읽고 git log/status 대조 3줄 요약 · 색인 `docs/DECISIONS_INDEX.md` 는 검색용 · 종료 = `/session-close`.
 
 ## R129~R131 완료 (11-11 · 통제 세션 — 계정 정지 감지→취소선 D-199)
@@ -14,12 +14,12 @@
 - 코드: R129 primitives(`browser.is_suspended`·`input_list.account_id_column/rows`·`gsheet_api.set_strike`·신규 `account_suspend`·게이트 `verify_account_suspend_offline` 9종·run_checks 20종) · R130 파이프라인 게이트(`_login_and_discover`→`AccountSuspended`·두 루프 done·재시도 안 함) · R131 `app_qt._maybe_account_suspend`(상태파일→취소선·struck_now 멱등·백업 먼저·정상전환 게이트가 clear).
 - 원복: 앱이 표기만. **사람이 취소선 떼면** → 활성 복귀→로그인→정상이면 상태파일 clear·수집 재개 / 여전히 정지면 재표기. ⚠ **순수 자동 원복**(취소선 친 계정까지 매 회차 재확인) 미구현(취소선=input_list 제외라 로그인 안 함).
 
-## 현재 Step — 계정 정지 기능 구현·커밋·푸시 끝 → **배포 zip 재빌드 + 운용 PC 설치 + 라이브 음성확인** 남음
+## 현재 Step — 계정 정지 기능 구현·커밋·푸시·배포 zip 빌드(R132) 끝 → **운용 PC 설치 + 라이브 음성확인** 남음
 - 설계·근거: `docs/DECISIONS.md` D-199 · hide4u 윙 스크린샷(DOM `/unapproved/`·업체코드 A01781927) · 누적 처리기록 77회차.
 - 정산 2단계(셀독전환) 운용 준비 D-187 는 별도 진행 중(아래 다음 작업).
 
 ## 다음 작업 (우선순위)
-1. **R131 배포 zip 재빌드(통제 세션) → 운용 PC 설치(소유자 · 최우선)**: 계정 정지 + 샵마인 동기화(R125~128) + 그간 수정 전부 포함. 빌드 = PowerShell `cmd /c "D:\coupang-analytics\build.bat"` · Compress-Archive 행 시 tar 로 압축. 설치 = 압축 풀기 전 `0_먼저실행_보안제외.bat`(관리자) → `coupang-analytics\` 덮어쓰기.
+1. **운용 PC 설치(소유자 · 최우선)** — zip 은 11-11 17:24 R132 빌드 완료: 계정 정지 + 샵마인 동기화(R125~128) + 그간 수정 전부 포함. 빌드 = PowerShell `cmd /c "D:\coupang-analytics\build.bat"` · Compress-Archive 행 시 tar 로 압축. 설치 = 압축 풀기 전 `0_먼저실행_보안제외.bat`(관리자) → `coupang-analytics\` 덮어쓰기.
 2. **라이브 음성 확인**: 정상 계정 1개로 `is_suspended()`=False(오탐 0 — 정상을 정지로 오판 않는지) · hide4u 로 True 확인(배포 후 로그 또는 디버그).
 3. **(소유자) 로그인 막힌 계정 비번 수정**: aehee5505·seankim137·plan_it·unipang·gbseller808·lslfgh(2단계)·wavetech — 샵마인 동기화가 일부 교정(dry-run상 aehee5505만 '다름'), 나머지는 실제 비번 확인. 수정 후 다음 실행에서 수집.
 3b. **(소유자) 추가정산 코드 'B' 받기 방법**(roum0502 등) · **hellojin 광고 500**(광고센터 미개설 추정 → 로그인 조회로 확정) — output(35) 분석 미수집 원인(D-199 외 남은 오류).
