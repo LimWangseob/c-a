@@ -110,6 +110,9 @@ class _FakeWing:
         self._auth += 1
         return bool(_seq("authenticated", self._auth, False))
 
+    def is_suspended(self) -> bool:
+        return bool(_SPEC.get("suspended", False))   # 기본 정상(정지 아님) — 정지 게이트 통과
+
     def autofill_login(self, account_id, pw, on_log=None) -> bool:
         _COUNT["autofill"] = _COUNT.get("autofill", 0) + 1
         return bool(_SPEC.get("autofill", True))

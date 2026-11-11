@@ -45,7 +45,7 @@ from . import match_anchor  # noqa: E402
 from .match_anchor import anchor_path  # noqa: E402
 from .promo_sheet import apply_promo_starts  # noqa: E402
 from .pipeline_sales import (  # noqa: E402,F401
-    LoginBlocked, LoginCredentialError, NeedLogin, _discover_inventory,
+    AccountSuspended, LoginBlocked, LoginCredentialError, NeedLogin, _discover_inventory,
     _discover_products, _dump_raw, _ensure_login, _fresh_login, _ilog, _log_discover_summary,
     _login_and_discover, _pid_by_vid, _resolve_login_failure,
     _roster_from_names, _run_discover, _semi_retry_login, _short, _vtag, account_profile,
@@ -507,6 +507,10 @@ def _collect_session_first(ctx: _RunCtx, accounts, get_password) -> list[tuple[i
         except NeedLogin:                         # 세션 없음 → 뒤로 미룸(자동제출 안 함)
             login_needed.append((i, a))
             log(f"  [{a.label}] 세션 만료 → 로그인 대기열(세션 있는 계정 먼저 수집 후 처리)")
+        except AccountSuspended:                   # 로그인됐으나 계정 정지(승인 반려) → '처리됨'·재시도 안 함
+            done.add(a.account_id)
+            _save_ctx_progress(ctx)
+            log(f"  [{a.label}] 계정 정지(승인 반려) — 수집 건너뜀·재시도 안 함(관리대장 취소선 표기 예정)")
         except Exception as exc:
             first = (str(exc).splitlines() or [""])[0][:250]
             log(f"  [{a.label}] 처리 오류: {exc.__class__.__name__}: {first} — 건너뜀")
@@ -546,6 +550,10 @@ def _collect_with_login(ctx: _RunCtx, login_needed, get_password, *, pace_first:
             _save_ctx_progress(ctx)
             log(f"  [{a.label}] 비밀번호 오류/계정 상태로 건너뜀 — 자동 재시도 안 함(계정잠금 방지). "
                 "관리대장에서 비번 수정 후 새 실행(다음 날/진행분 초기화)에서 재시도됨")
+        except AccountSuspended:                  # 로그인됐으나 계정 정지(승인 반려) → '처리됨'·재시도 안 함
+            done.add(a.account_id)
+            _save_ctx_progress(ctx)
+            log(f"  [{a.label}] 계정 정지(승인 반려) — 수집 건너뜀·재시도 안 함(관리대장 취소선 표기 예정)")
         except Exception as exc:
             first = (str(exc).splitlines() or [""])[0][:250]
             log(f"  [{a.label}] 처리 오류: {exc.__class__.__name__}: {first} — 건너뜀")

@@ -42,6 +42,12 @@ class LoginCredentialError(Exception):
     같은 실행·야간 재개가 다시 제출하지 않게 한다. 사용자 지시(2026-09-15): 비번 1회 오류면 재시도 안 함."""
 
 
+class AccountSuspended(Exception):
+    """로그인은 됐으나 계정이 **정지(승인 반려)** — 윙 홈이 온보딩 화면(/unapproved 라우팅). 수집·받기·광고가
+    막혀 오류만 쌓이므로 그 계정을 건너뛰고(재시도 안 함·'처리됨') 관리대장 계정아이디에 취소선을 쳐 표기한다.
+    정상화되면 원복(account_suspend·소유자 2026-11-11)."""
+
+
 def _dump_raw(account_id: str, log, out_dir: str = "output") -> None:
     """수집한 3개 데이터 API 응답 **원문(가공 없음)** 을 계정별 gzip 사이드카로 저장 — 다양한 오프라인 분석용.
 
@@ -121,6 +127,11 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
     with WingBrowser(profile_dir=account_profile(a.account_id), offscreen=not semi) as b:
         if not _login_with_candidates(b, a, pws, log, login=login, semi=semi):
             return None, {}, {}, {}, set(), set(), {}, {}   # 이 계정 건너뜀(무인 비번없음·otp·로그인 미완료)
+        if b.is_suspended():                 # 로그인은 됐으나 계정 정지(승인 반려) → 수집 건너뜀·대장 취소선 예정
+            from . import account_suspend
+            account_suspend.mark_suspended(a.account_id)
+            log(f"[정지] {a.business_name or a.account_id} — 계정 정지(승인 반려) 감지: 수집 건너뜀, 관리대장 취소선 표기 예정")
+            raise AccountSuspended(a.account_id)
         collector.reset_raw()                # 계정별 응답 원문 버퍼 초기화(파일 분리)
         found = _discover_products(b, a, date_from, date_to, log, ai_key=ai_key, anchor_file=anchor_file)
         _dump_raw(a.account_id, log)         # 3 API 응답 원문 저장(가공 없음·분석용). found None(데이터없음)이어도 남김

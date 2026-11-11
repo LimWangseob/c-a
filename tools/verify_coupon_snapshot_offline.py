@@ -336,6 +336,9 @@ def s7_wiring():
             order.append("close")
             return False
 
+        def is_suspended(self):
+            return False   # 정상 계정(정지 아님) — 정지 게이트 통과
+
     saved = {k: getattr(PS, k) for k in ("WingBrowser", "_login_with_candidates", "_discover_products", "_dump_raw",
                                          "_record_sales_periods", "_record_sales_history", "_record_sales_backfill")}
     PS.WingBrowser = FakeWing
