@@ -12,7 +12,6 @@ import io
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -120,6 +119,25 @@ def _scripts(tmp: str, spec: list[tuple[str, float, int]]) -> list:
     return out
 
 
+def _barrier_scripts(tmp: str, names: list[str], wait: float) -> list:
+    """서로를 기다리는 검사 — 각자 시작 표시를 남기고 나머지 표시가 다 생겨야 통과(wait 초 안 생기면 exit 1).
+    동시에 돌면 부하와 상관없이 통과 · 하나씩 돌면 앞의 것이 실패 → 걸린 시간 대신 '실제로 겹쳐 돎'을 판정(D-203)."""
+    d = Path(tempfile.mkdtemp(dir=tmp))
+    out = []
+    for name in names:
+        p = d / f"{name}.py"
+        p.write_text(
+            "import pathlib, sys, time\nsys.stdout.reconfigure(encoding='utf-8')\n"
+            f"d = pathlib.Path(r'{d}')\n(d / '{name}.start').write_text('1')\n"
+            f"end = time.monotonic() + {wait}\n"
+            f"while not all((d / (n + '.start')).exists() for n in {names!r}):\n"
+            f"    if time.monotonic() > end:\n        print('{name} 혼자 돎')\n        sys.exit(1)\n"
+            "    time.sleep(0.02)\n"
+            f"print('{name} 출력')\n", encoding="utf-8")
+        out.append((name, str(p), True))
+    return out
+
+
 def _main(argv: list[str], stdin: str = "") -> tuple[int, str]:
     old_out, old_in = sys.stdout, sys.stdin
     sys.stdout, sys.stdin = io.StringIO(), io.StringIO(stdin)
@@ -131,14 +149,15 @@ def _main(argv: list[str], stdin: str = "") -> tuple[int, str]:
 
 
 def s5_parallel():
-    print("[S5] 동시 실행 — 1초짜리 3개를 동시 3개로 = 2초 안 · 결과는 목록 순서 · 실패 하나면 exit 1·기록 안 함")
+    print("[S5] 동시 실행 — 서로 기다리는 3개가 동시 3개로 다 통과(실제로 겹쳐 돎) · 하나씩이면 실패 · 결과는 목록 순서 · 실패 하나면 exit 1·기록 안 함")
     with tempfile.TemporaryDirectory() as tmp:
-        checks = _scripts(tmp, [("느림", 1.0, 0), ("보통", 1.0, 0), ("빠름", 1.0, 0)])
-        t = time.monotonic()
-        res = RC.run_all(checks, 3)
-        assert time.monotonic() - t < 2.0, "동시에 안 돎"
-        assert [r[0] for r in res] == ["느림", "보통", "빠름"] and all(r[1] for r in res)
+        names = ["느림", "보통", "빠름"]
+        res = RC.run_all(_barrier_scripts(tmp, names, 10.0), 3)
+        assert all(r[1] for r in res), "동시에 안 돎: " + " / ".join(r[3].strip() for r in res)
+        assert [r[0] for r in res] == names
         assert "느림 출력" in res[0][3]
+        seq = RC.run_all(_barrier_scripts(tmp, names[:2], 1.5), 1)
+        assert not seq[0][1] and "혼자 돎" in seq[0][3], "하나씩 돌았는데 동시 판정을 통과함"
         root = _repo(tmp)
         saved = RC.ROOT, RC.CHECKS
         RC.ROOT, RC.CHECKS = root, _scripts(tmp, [("통과", 0, 0), ("실패", 0, 3)])
