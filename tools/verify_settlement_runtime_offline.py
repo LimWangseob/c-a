@@ -2419,14 +2419,14 @@ def p52_settlement_docs():
     assert DOC.check_returns(rets) == 1
     assert DOC.returns_url("A00434040", D("2026-11-08")).endswith("/A00434040/1735657200000/1794063599999")
 
-    # ⑥ 업체코드 = RG 원문 settlementGroupKey 앞부분(하나일 때만)
+    # ⑥ 업체코드 = RG 원문 settlementGroupKey 앞부분(하나일 때만 · 다른 근거는 P55)
     with tempfile.TemporaryDirectory() as tmp:
         sd = Path(tmp)
-        assert DOC.vendor_from_snapshots(sd / "없음") == ""
+        assert DOC.rg_vendor(sd / "없음", [], sd / "재고없음") == ""
         with gzip.open(sd / "2026-11-08.json.gz", "wt", encoding="utf-8") as fh:
             json.dump({"조회": [{"응답": {"settlementStatusReports": [{"settlementGroupKey": "A00434040-2026-10-27-2026-11-02"}]}}],
                        "예정": []}, fh)
-        assert DOC.vendor_from_snapshots(sd) == "A00434040"
+        assert DOC.rg_vendor(sd, [], sd / "재고없음") == "A00434040"
 
     # ⑦ collect: 회차당 종류별 3달 · 받은 달 다시 안 받음 · 한 종류 실패 = 그 종류만 · 업체코드 없으면 RG 안 함 · 반품 하루 1번
     with tempfile.TemporaryDirectory() as tmp:
@@ -2477,6 +2477,70 @@ def p52_settlement_docs():
             raise API.ApiBlocked("x")
         expect(API.ApiBlocked, lambda: DOC.collect(blocked, hc2, gb, Path(tmp) / "B", D("2026-11-08")), "차단은 그대로")
     ok("세금계산서 HTML 12칸·10칸(합계)·라이브 상세=요약·주문별 size 10 쪽 수 대조·RG 엑셀 판정·업체코드 · 회차당 3달·실패 격리·반품 하루 1번")
+
+
+def p55_rg_vendor_fallback():
+    print("[P55] 로켓그로스 업체코드(D-214 ⓐ) — 정산현황 원문에 줄이 없어도 정산 요청 기록(ref)·재고현황 원문(vendorId)으로 정함"
+          " → 월자료 RG 3종(재고변동·반품·부가세 상세) 받음 · 근거 없으면 윙 전용 그대로")
+    import gzip
+    import json
+    import tempfile
+    from types import SimpleNamespace
+    sys.path.insert(0, str(ROOT / "tools"))
+    import settlement_download as TD
+    from coupang_analytics import settlement_docs as DOC
+    from coupang_analytics import settlement_docs_request as DR
+    from coupang_analytics import settlement_jobs as SJ
+    name = "유병욱-(주)고로켓컴퍼니-gorocket23"
+    a = SimpleNamespace(account_id="gorocket23")
+    args = SimpleNamespace(until="", dry_run=False, cycle_since="2026-11-12T18:00:00")
+
+    def job(acct, ch, ref):
+        return SJ.Job(acct, ch, "최종액", "판매수수료", "2025-11-03", "2025-11-09", "2026-01-02", ref=ref)
+
+    def gz(p: Path, rec) -> None:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with gzip.open(p, "wt", encoding="utf-8") as fh:
+            json.dump(rec, fh)
+
+    def run(tmp: Path, jobs: list) -> tuple:
+        """소급 단계(cmd_backfill) 그대로 → 월자료 받기(DOC.collect)에 넘긴 업체코드 · 부가세 상세 요청(DR.plan)의 RG 여부."""
+        seen: dict = {}
+        log = SimpleNamespace(record=lambda *x, **k: None, saved=lambda *x, **k: None, remaining=lambda *x, **k: None)
+        pat = [(TD, "BASE", tmp / "정산"), (TD, "JOBS", tmp / "정산" / "_요청기록.json"), (TD, "INVENTORY", tmp / "재고현황_일별"),
+               (TD, "LOG", log), (TD, "name_of", lambda _a: name), (TD, "goto", lambda *x: None),
+               (TD, "collect_sales", lambda *x: 0),
+               (DOC, "collect", lambda *x, **k: (seen.__setitem__("vendor", k.get("vendor")), {"파일": [], "받음": [], "남은 달": 0})[1]),
+               (DR, "plan", lambda _jobs, _acct, _t, _n, _s, rg: (seen.__setitem__("rg", rg), [])[1])]
+        _patched(pat, lambda: TD.cmd_backfill(a, None, args, jobs))
+        return seen.get("vendor"), seen.get("rg")
+    raw_empty = {"조회": [{"기간": ["2026-11-01", "2026-11-12"], "응답": {"settlementStatusReports": []}}],
+                 "예정": [{"기간": ["2026-11-13", "2026-11-30"], "응답": {"settlementStatusReports": []}}]}
+    rg_jobs = [job(name, "로켓그로스", "A01152633-2025-11-03-2025-11-09"), job(name, "윙", ""),
+               job("다른-계정-x1", "로켓그로스", "A09999999-2025-11-03-2025-11-09")]
+    # ① gorocket23 재현(운용 PC output(36)): 2026-07부터 로켓그로스 정산 0건 → 원문 줄 0 · 정산 요청 기록엔 업체코드가 남아 있음
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        gz(tmp / "정산" / TD.RG_RAW_DIRNAME / name / "2026-11-12.json.gz", raw_empty)
+        assert run(tmp, list(rg_jobs)) == ("A01152633", True), run(tmp, list(rg_jobs))
+        # 이름 표기만 다른 옛 기록(공백·'_'·'/' — 운용 PC '권미혜_세제곱-sejegop')도 같은 계정(폴더 이름과 같은 규칙)
+        assert run(tmp, [job("유병욱_(주)고로켓컴퍼니-gorocket23", "로켓그로스", "A01152633-2025-11-03-2025-11-09")]) == ("A01152633", True)
+        # ② 요청 기록에도 없으면 재고현황 원문(① 저장)의 로켓그로스 줄 vendorId(guarisen2024 형) · 비어 있는 줄은 무시
+        inv = {"응답": [json.dumps({"viProperties": [{"creturnConfigViewDto": None},
+                                                    {"creturnConfigViewDto": {"vendorId": "A01298295"}}]})]}
+        gz(tmp / "재고현황_일별" / "gorocket23" / "2026-11-11.json.gz", inv)
+        assert run(tmp, [job(name, "윙", "")]) == ("A01298295", True)
+        # ③ 근거가 여럿이면 앞 근거(원문 → 요청 기록 → 재고) · 한 근거 안에 업체코드가 둘이면 '' (추측 금지)
+        assert run(tmp, list(rg_jobs))[0] == "A01152633", "요청 기록이 재고보다 앞"
+        two = [job(name, "로켓그로스", "A01152633-2025-11-03-2025-11-09"), job(name, "로켓그로스", "A01000001-2025-11-10-2025-11-16")]
+        assert run(tmp, two) == ("", False)
+        gz(tmp / "정산" / TD.RG_RAW_DIRNAME / name / "2026-11-13.json.gz",
+           {"조회": [{"응답": {"settlementStatusReports": [{"settlementGroupKey": "A01152633-2026-11-03-2026-11-09"}]}}], "예정": []})
+        assert run(tmp, two) == ("A01152633", True), "원문에 줄이 있으면 지금처럼 원문"
+    # ④ 근거 0 = 윙 전용(지금과 같음)
+    with tempfile.TemporaryDirectory() as tmp:
+        assert run(Path(tmp), [job(name, "윙", "")]) == ("", False)
+    ok("원문 줄 0 + 요청 기록 업체코드 → RG 받음(gorocket23) · 재고현황 vendorId(guarisen2024) · 둘 이상 = '' · 근거 0 = 윙 전용")
 
 
 def p53_vat_detail_requests():
@@ -2660,6 +2724,7 @@ def main():
     p52_settlement_docs()
     p53_vat_detail_requests()
     p54_result_summary()
+    p55_rg_vendor_fallback()
     print("정산 런타임 오프라인 검증 통과")
 
 

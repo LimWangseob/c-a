@@ -47,6 +47,7 @@ except AttributeError:
     pass
 
 from coupang_analytics import apppaths  # noqa: E402
+from coupang_analytics import daily_snapshot  # noqa: E402
 from coupang_analytics import settlement_accounts as SA  # noqa: E402
 from coupang_analytics import settlement_files as SF  # noqa: E402
 from coupang_analytics import settlement_forecast as FC  # noqa: E402
@@ -313,6 +314,7 @@ def read_events(b, name: str, start: date, end: date, amounts_from: date | None 
 
 
 RG_RAW_DIRNAME = "정산현황_원문"                         # output/정산/정산현황_원문/{계정}/{날짜}.json.gz (D-164 원인 확인용)
+INVENTORY = Path("output") / daily_snapshot.INVENTORY_DIRNAME  # ① 재고현황 원문(계정ID별) — 로켓그로스 업체코드 셋째 근거(D-214 ⓐ)
 RG_RAW_DAYS = 70                                        # 원문으로 남길 지난 조회 구간(최근 70일과 겹치는 달) — 예정 줄이 지난 줄이 되는 범위
 
 
@@ -571,20 +573,28 @@ def cmd_backfill(a, b, args, jobs: list) -> None:
     """소급 단계(D-170) — 판매분석 1/1~(회차 기준 상한 150일→60일·D-167) + 월자료(D-171). 한 일이 있으면 '소급' 줄을 남겨
     다음 바퀴 판단(_sweep_work_count)에 셈 — 다 받았거나 이번 회차 상한을 다 쓰면 줄 없음 → '완료'로 끝남."""
     days = collect_sales(a, b, args)
-    docs = collect_docs(a, b, args)
+    docs = collect_docs(a, b, args, jobs)
     asked = request_docs(a, b, args, jobs)
     if days or docs:
         LOG.record(name_of(a), "소급", RL.OK, f"판매분석 {days}일 · 월자료 {docs}개" + (f" · 월자료 요청 {asked}건" if asked else ""))
 
 
+def _rg_vendor(a, jobs: list) -> str:
+    """로켓그로스 업체코드(없으면 '' = 윙 전용) — 정산현황 원문 → 정산 요청 기록 ref → ① 재고현황 원문 순(D-214 ⓐ ·
+    settlement_docs.rg_vendor). 요청 기록은 계정 이름을 폴더와 같은 규칙(_token)으로 맞춰 고름(옛 표기 공백·'_'·'/')."""
+    from coupang_analytics import settlement_docs as DOC
+    tok = SF._token(name_of(a), "계정명")
+    refs = [j.ref for j in jobs if j.channel == "로켓그로스" and j.ref and SF._token(j.account, "계정명") == tok]
+    return DOC.rg_vendor(BASE / RG_RAW_DIRNAME / tok, refs, INVENTORY / a.account_id)
+
+
 def request_docs(a, b, args, jobs: list) -> int:
     """요청형 월자료(부가세 상세 윙·RG — D-171 N8) · 회차 계정당 4건(D-170) · 요청 사이 = 정산 요청 간격.
     받기는 다음 바퀴 정기 단계의 cmd_download(같은 기록·같은 목록). 반환 = 요청 수('요청' 정상 줄 = 다음 바퀴 판단에 셈)."""
-    from coupang_analytics import settlement_docs as DOC
     from coupang_analytics import settlement_docs_request as DR
     name = name_of(a)
     since = getattr(args, "cycle_since", "") or f"{date.today()}T00:00:00"
-    rg = bool(DOC.vendor_from_snapshots(BASE / RG_RAW_DIRNAME / SF._token(name, "계정명")))
+    rg = bool(_rg_vendor(a, jobs))
     picked = DR.plan(jobs, name, date.today(), datetime.now(), since, rg)
     SJ.save_jobs(JOBS, jobs)
     if not picked or past_until(args):
@@ -595,7 +605,7 @@ def request_docs(a, b, args, jobs: list) -> int:
                       gap=lambda: time.sleep(random.uniform(*GAP_SEC)))
 
 
-def collect_docs(a, b, args) -> int:
+def collect_docs(a, b, args, jobs: list) -> int:
     """월자료(D-171 — 세금계산서 2종·라이브·주문별 매출·RG 재고변동 + RG 반품내역 하루 1번) · 회차 계정당 종류별 3달(D-170).
     조회만. 종류 하나 실패 = 그 종류만 기록하고 계속(차단만 중단). 반환 = 받은 파일 수. 저장 = 검증자료/월자료/{계정}/."""
     from coupang_analytics import settlement_docs as DOC
@@ -610,7 +620,7 @@ def collect_docs(a, b, args) -> int:
             raise BlockDetected(str(exc)) from exc
     goto(b, API.WING_URL, name)
     s = DOC.collect(lambda m, p, body: api(b, name, m, p, body), html, lambda url: _get_bytes(b, url), VERIFY / "월자료" / tok,
-                    date.today(), vendor=DOC.vendor_from_snapshots(BASE / RG_RAW_DIRNAME / tok),
+                    date.today(), vendor=_rg_vendor(a, jobs),
                     since=getattr(args, "cycle_since", "") or f"{date.today()}T00:00:00",
                     gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)), page_gap=lambda: time.sleep(random.uniform(1, 2.5)),
                     note=lambda m: LOG.record(name, "월자료", RL.WAIT, m), fatal=(BlockDetected,))
