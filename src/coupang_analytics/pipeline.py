@@ -809,6 +809,22 @@ def run_full(input_list: InputList, out_dir: str = "output",
                          renamed_accounts=renamed_accounts, registry_url=registry_url, stock_url=stock_url)
 
 
+def _warmup_or_skip(browser, log) -> bool:
+    """② 자동완성 창의 쿠팡 첫 화면 열기 — 실패하면 False(호출부가 쿠팡 자동완성 후보만 건너뜀 · T-21).
+
+    11-11 18:50 실측: 프록시 IP 가 느려 `Page.goto` 30초 시간 초과 → 이 예외가 실행 전체를 멈춰 ③ 순위가 안 돎.
+    자동완성은 후보 소스 하나일 뿐(실패 시 그 소스만 건너뜀 — kw_recommend)이라 같은 규칙을 창 열기에도 적용한다.
+    ⛔ 직접연결로 다시 열지 않는다(fail-closed D-031·D-058). ❌ 줄로 남겨 실행 결과 종합의 오류 현황에 잡힌다."""
+    from playwright.sync_api import Error as PlaywrightError
+    try:
+        warmup(browser)
+        return True
+    except PlaywrightError as exc:
+        first = (str(exc).splitlines() or [""])[0][:120]
+        log(f"  ❌ [키워드] 쿠팡 첫 화면 열기 실패({type(exc).__name__}: {first}) — 프록시 IP 불량·느림 추정 → "
+            "쿠팡 자동완성 후보만 건너뜀(직접연결 안 함·네이버·AI 후보로 선정 · ③ 순위는 계속)")
+        return False
+
 def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = "output",
                           grow: bool = False, on_log=None, gsheet_output_url: str | None = None,
                           stock_url: str | None = None) -> Path | None:
@@ -833,8 +849,8 @@ def select_keywords_stage(naver: NaverAdApi, ai_key: str | None, out_dir: str = 
     if not ok:
         log("  [키워드] 프록시 오류 → 쿠팡 자동완성 후보만 건너뜀(직접연결 안 함·네이버·AI 후보로 선정)")
     with (WingBrowser(profile_dir=_PROFILE, offscreen=True, proxy=px) if ok else nullcontext(None)) as browser:
-        if browser is not None:
-            warmup(browser)
+        if browser is not None and not _warmup_or_skip(browser, log):
+            browser = None                                  # 자동완성 후보만 건너뜀(창은 with 가 닫음)
         for biz in wb.account_sheets():
             for pname in wb.products_of(biz):
                 _select_product_keywords(wb, biz, pname, naver, ai_key, browser, grow, log)

@@ -743,6 +743,37 @@ def scenario_keyword_stage_proxy():
         proxy_pool.public_search_proxy = orig
 
 
+def scenario_keyword_warmup_timeout_keeps_ranks():
+    print("[시나리오 22b] ② 자동완성 창 쿠팡 첫 화면 시간 초과(프록시 IP 불량) → 자동완성만 건너뛰고 ③ 순위는 돎(T-21)")
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    from coupang_analytics import proxy_pool
+    from playwright.sync_api import TimeoutError as PWTimeout
+    d = Path(tempfile.mkdtemp())
+    _run1(_account_one_vid("vidW"), d, date_from="2026-09-01", date_to="2026-09-01")
+    orig_px, orig_wu = proxy_pool.public_search_proxy, P.warmup
+
+    def _timeout(browser):
+        raise PWTimeout("Page.goto: Timeout 30000ms exceeded.")
+    try:
+        proxy_pool.public_search_proxy = lambda log=None: ("http://px:1", True)
+        P.warmup = _timeout
+        logs: list = []
+        try:
+            _run2(d, on_log=logs.append)
+            raised = None
+        except Exception as exc:          # 옛 코드 = 여기서 실행 전체 중단(11-11 18:50 실측)
+            raised = exc
+        _check(raised is None, f"② 첫 화면 시간 초과가 ② 를 중단시키지 않음 (예외={raised!r})")
+        _check(any("❌" in x and "자동완성" in x and "건너뜀" in x for x in logs),
+               "시간 초과를 ❌ 줄로 남기고 자동완성만 건너뜀(직접연결 안 함)")
+        from coupang_analytics.workbook import OutputWorkbook
+        wb = OutputWorkbook.load(_run3(d, on_log=logs.append))
+        biz = wb.account_sheets()[0]
+        pname = wb.products_of(biz)[0]
+        _check(bool(wb.product_keywords(biz, pname)), "자동완성 없이도 키워드 선정됨")
+    finally:
+        proxy_pool.public_search_proxy, P.warmup = orig_px, orig_wu
+
 def scenario_manual_keywords_saved():
     print("[시나리오 23] 키워드 추천 탭 [저장] = 결과파일 그 상품 블록에 추가(기존 유지·상한)·결과 구글시트 반영(F2)")
     _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
@@ -944,6 +975,7 @@ def main():
     scenario_rank_label_matches_sales_column()
     scenario_metrics_not_summed()
     scenario_keyword_stage_proxy()
+    scenario_keyword_warmup_timeout_keeps_ranks()
     scenario_manual_keywords_saved()
     scenario_business_rename_keeps_history()
     scenario_uncollected_still_ranked()
