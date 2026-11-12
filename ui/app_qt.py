@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import html
 import json
 import os
@@ -164,6 +165,7 @@ QScrollBar::handle:horizontal { background: #cbd5e1; border-radius: 5px; min-wid
 """
 
 _LOG_COLORS = {"ok": "#4ade80", "err": "#f87171", "warn": "#fbbf24", "head": "#60a5fa", "": "#e2e8f0"}
+_LOG_ALL = -1   # 진행 로그 줄의 주인 탭 = 모든 탭(앱 시작 때 줄 · 어느 탭 작업도 아님 — 소유자 2026-11-12 T-19)
 
 
 # 설정 탭 '구글 시트 연동' 카드의 링크 4개 — 종류 → (설정 키, 화면 이름). 링크 입력은 **설정 탭에서만**
@@ -178,8 +180,8 @@ _GS_LINKS = {
 
 class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatusMixin, TransferPanelMixin,
           QtWidgets.QMainWindow):
-    log_signal = QtCore.Signal(str)
-    finish_signal = QtCore.Signal(object, object, object, object)   # (btn, on_done, result, err)
+    log_signal = QtCore.Signal(str, int)   # (줄, 주인 탭 번호 · _LOG_ALL = 모든 탭)
+    finish_signal = QtCore.Signal(object, object, object, object, object)   # (btn, on_done, result, err, 작업 표식)
     gs_status_signal = QtCore.Signal(str, object, str)   # (_GS_LINKS 종류, 연결됨 True/False/None=미확인, 설명)
 
     def __init__(self, auto: bool = False):
@@ -200,9 +202,14 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self.finish_signal.connect(self._on_finish)
         self.gs_status_signal.connect(self._set_gs_status)
 
+        # 진행 로그 = 탭별(T-19): 줄마다 주인 탭을 정한다 — 버튼 작업은 시작한 탭(작업 스레드 표식·하위 스레드는
+        # 도는 작업의 탭), 그 밖의 화면 줄은 지금 탭, 앱 시작 때 줄은 모든 탭.
+        self._log_local = threading.local()
+        self._bg_owners: dict[object, int] = {}   # 도는 작업 표식 → 주인 탭(시작 순서)
         self._build_ui()
         self._load_saved_secrets()
-        self._auto_load_input()     # 마지막 사용 입력 엑셀 자동 로드(무인 실행·재시작 후 즉시 실행 가능)
+        with self._log_owner(_LOG_ALL):   # 시작 때 줄(입력 읽기) = 모든 탭 공통(소유자 2026-11-12)
+            self._auto_load_input()     # 마지막 사용 입력 엑셀 자동 로드(무인 실행·재시작 후 즉시 실행 가능)
         if not auto:
             self._probe_gsheet_links()  # 구글시트 링크 4개 연결 상태를 뒤에서 확인해 라벨로(무인 실행은 생략)
         scr = self.screen().availableGeometry()
@@ -233,7 +240,8 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self.tabs.addTab(self._kw_tab(), "키워드 추천")
         self.tabs.addTab(self._rank_tab(), "순위 조회")
         self.tabs.addTab(self._images_tab(), "상세 이미지")
-        self.tabs.addTab(self._collect_tab(), "전체 실행")
+        self._collect_page = self._collect_tab()   # 무인 실행·재부팅 복구 화면(그 탭 로그에 남김 T-19)
+        self.tabs.addTab(self._collect_page, "전체 실행")
         self.tabs.addTab(self._settlement_tab(), "정산")   # 회사재고 + 셀독계정상품이력관리원장 실행(링크는 설정 탭)
         self.tabs.addTab(self._transfer_tab(), "셀독전환 정산")   # 미정산 셀독전환자 로그인 확인(1단계·D-111)
         self.log_panel = self._log_panel()
@@ -913,19 +921,33 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         cp = QtWidgets.QPushButton("복사")
         cp.clicked.connect(self.copy_log)
         cl = QtWidgets.QPushButton("지우기")
-        cl.clicked.connect(lambda: self.log_console.clear())
+        cl.clicked.connect(self._clear_log)
         bar.addWidget(cp)
         bar.addWidget(cl)
         bar.addStretch(1)
         v.addLayout(bar)
-        self.log_console = QtWidgets.QTextEdit()
-        self.log_console.setObjectName("logConsole")
-        self.log_console.setReadOnly(True)
+        # 탭마다 로그창 하나(T-19 · 소유자 2026-11-12 "탭을 바꾸면 그 탭의 로그만") — 지금 탭 것만 보인다.
+        self._log_stack = QtWidgets.QStackedWidget()
+        self._log_consoles = [self._new_log_console() for _ in range(self.tabs.count())]
+        for c in self._log_consoles:
+            self._log_stack.addWidget(c)
+        self.log_console = self._log_consoles[0]   # 지금 탭의 로그창(탭 바꿀 때 _on_tab_changed 가 바꿈)
+        v.addWidget(self._log_stack, 1)
+        return w
+
+    @staticmethod
+    def _new_log_console():
+        c = QtWidgets.QTextEdit()
+        c.setObjectName("logConsole")
+        c.setReadOnly(True)
         # 24/365 상시가동 메모리 잠식 방지: 콘솔은 최근 N줄만 유지(오래된 줄 자동 폐기).
         # 전체 이력은 파일 미러(run_log_*.log)에 남으므로 화면 상한이 데이터 손실은 아니다.
-        self.log_console.document().setMaximumBlockCount(config.UI_LOG_MAX_LINES)
-        v.addWidget(self.log_console, 1)
-        return w
+        c.document().setMaximumBlockCount(config.UI_LOG_MAX_LINES)
+        return c
+
+    def _clear_log(self):
+        """지우기 = 지금 탭 로그만(다른 탭·로그 파일은 그대로)."""
+        self.log_console.clear()
 
     # ── 로그(스레드 안전) ─────────────────────────────────────
     @staticmethod
@@ -943,23 +965,53 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
     def _save_shared(self, key: str, value: str) -> None:
         _cfg_save_shared(key, value)
 
-    def log(self, msg: str):
-        self.log_signal.emit(msg)   # 어느 스레드에서 불려도 GUI 스레드로 전달
+    def log(self, msg: str, *, page=None):
+        """진행 로그 한 줄 — 어느 스레드에서 불려도 GUI 스레드로 전달. page = 주인 탭 화면(GUI 스레드에서만·
+        타이머처럼 지금 탭과 무관한 줄용). 없으면 _log_owner_now 규칙으로 주인 탭을 정한다."""
+        owner = self.tabs.indexOf(page) if page is not None else self._log_owner_now()
+        self.log_signal.emit(msg, owner)
 
-    def _append_log(self, msg: str):
+    def log_all(self, msg: str):
+        """모든 탭에 보이는 줄(앱 시작 때 줄 — 소유자 2026-11-12)."""
+        self.log_signal.emit(msg, _LOG_ALL)
+
+    def _log_owner_now(self) -> int:
+        """이 줄의 주인 탭: 표식(작업 스레드·작업 끝 처리·시작 구간) → 화면 스레드면 지금 탭 →
+        표식 없는 하위 스레드면 가장 늦게 시작해 도는 작업의 탭 → 없으면 모든 탭."""
+        owner = getattr(self._log_local, "owner", None)
+        if owner is not None:
+            return owner
+        if threading.current_thread() is threading.main_thread():
+            return self.tabs.currentIndex()
+        running = list(self._bg_owners.values())
+        return running[-1] if running else _LOG_ALL
+
+    @contextlib.contextmanager
+    def _log_owner(self, owner):
+        """이 구간(이 스레드)의 줄 주인 탭을 owner 로(None = 그대로)."""
+        prev = getattr(self._log_local, "owner", None)
+        if owner is not None:
+            self._log_local.owner = owner
+        try:
+            yield
+        finally:
+            self._log_local.owner = prev
+
+    def _append_log(self, msg: str, owner: int = _LOG_ALL):
         color = _LOG_COLORS.get(self._log_tag(msg), "#e2e8f0")
         ts = config.log_ts()   # 표준 포맷 'YYYY-MM-DD HH:MM:SS.mmm'(config.format_log 과 동일 규칙)
         stamp = html.escape(f"[{ts}] ")
         safe = html.escape(msg).replace(" ", "&nbsp;")
-        # 사용자가 위로 스크롤해 과거 로그를 보는 중이면 새 줄이 와도 맨 아래로 끌어내리지 않는다
-        # (맨 아래에 있을 때만 따라 내려감 = 자동 팔로우). 이래야 로그 스크롤이 실제로 작동한다.
-        sb = self.log_console.verticalScrollBar()
-        at_bottom = sb.value() >= sb.maximum() - 4
-        self.log_console.append(
-            f'<span style="color:#64748b">{stamp}</span>'
-            f'<span style="color:{color}">{safe}</span>')
-        if at_bottom:
-            sb.setValue(sb.maximum())
+        line = f'<span style="color:#64748b">{stamp}</span><span style="color:{color}">{safe}</span>'
+        cons = self._log_consoles
+        for c in (cons if not 0 <= owner < len(cons) else [cons[owner]]):
+            # 사용자가 위로 스크롤해 과거 로그를 보는 중이면 새 줄이 와도 맨 아래로 끌어내리지 않는다
+            # (맨 아래에 있을 때만 따라 내려감 = 자동 팔로우). 이래야 로그 스크롤이 실제로 작동한다.
+            sb = c.verticalScrollBar()
+            at_bottom = sb.value() >= sb.maximum() - 4
+            c.append(line)
+            if at_bottom:
+                sb.setValue(sb.maximum())
         self._rotate_log_if_big()   # 상시가동 시 로그 파일 무한 증가(디스크) 방지 — 상한 넘으면 .1 로 회전
         with open(self._log_path, "a", encoding="utf-8") as fh:  # 파일 미러(실시간 tail용)
             fh.write(f"[{ts}] {msg}\n")
@@ -979,21 +1031,11 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             pass
 
     def copy_log(self):
-        """화면(최근 N줄)이 아니라 **실행 로그 파일 전체**를 복사한다.
-
-        콘솔 위젯은 메모리 보호로 최근 config.UI_LOG_MAX_LINES 줄만 유지하지만, 전체 이력은 run_log
-        파일에 남는다(회전 시 직전 세대 .log.1 포함). 이 둘을 이어 붙여 **모든 로그**를 클립보드에 넣는다.
-        파일을 못 읽으면 화면 텍스트로 폴백."""
-        parts = []
-        for p in (self._log_path.with_suffix(".log.1"), self._log_path):   # 회전된 직전분 + 현재
-            try:
-                if p.exists():
-                    parts.append(p.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-        text = "".join(parts).strip() or self.log_console.toPlainText()
+        """복사 = **지금 탭 로그만**(소유자 2026-11-12 T-19) — 탭마다 최근 config.UI_LOG_MAX_LINES 줄까지.
+        모든 탭의 전체 기록은 실행 로그 파일(run_log_*.log · 회전 시 .log.1)에 그대로 남는다."""
+        text = self.log_console.toPlainText()
         QtWidgets.QApplication.clipboard().setText(text)
-        self.log(f"[로그] 전체 복사됨 — {len(text.splitlines())}줄 (클립보드)")
+        self.log(f"[로그] 이 탭 로그 복사됨 — {len(text.splitlines())}줄 (클립보드 · 모든 탭 전체 기록 = {self._log_path})")
 
     # ── 백그라운드 실행(스레드 → 시그널로 완료 전달) ───────────
     def _guard_busy(self) -> bool:
@@ -1023,6 +1065,10 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
 
     def _on_tab_changed(self, *_):
         self._settings_hold = False             # 설정 탭을 떠나면 '결과 보이기' 유지 해제
+        i = self.tabs.currentIndex()            # 로그창 = 이 탭의 것(T-19)
+        if 0 <= i < len(self._log_consoles):
+            self.log_console = self._log_consoles[i]
+            self._log_stack.setCurrentIndex(i)
         self._update_log_visibility()
 
     @staticmethod
@@ -1046,11 +1092,13 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
                 if btn:
                     btn.setEnabled(True)
                 if on_done is not None:        # 흐름 마무리 — 무인(--auto)은 이 경로로 정상 종료된다
-                    self.finish_signal.emit(btn, on_done, None, None)
+                    self.finish_signal.emit(btn, on_done, None, None, None)
                 return
         if exclusive:   # 브라우저/파이프라인 실행 = 한 번에 하나(배타). btn 은 그 실행의 소유 표식.
             self._run_active = True
             self._active_btn = btn
+        token, owner = object(), self._log_owner_now()   # 이 작업의 줄 = 시작한 탭(도중에 탭을 옮겨도 · T-19)
+        self._bg_owners[token] = owner
         self._bg_active += 1              # 진행 로그창 표시(실행 버튼 클릭 후부터)
         self._log_activated = True
         if self.tabs.currentIndex() == 0:  # 설정 탭 작업은 끝난 뒤에도 결과 로그를 보이게(탭 이동 시 해제)
@@ -1060,6 +1108,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             btn.setEnabled(False)
 
         def worker():
+            self._log_local.owner = owner
             result, err = None, None
             try:
                 result = task()
@@ -1071,10 +1120,14 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
                         lock_cm.__exit__(None, None, None)
                     except Exception:
                         pass
-            self.finish_signal.emit(btn, on_done, result, err)
+            self.finish_signal.emit(btn, on_done, result, err, token)
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_finish(self, btn, on_done, result, err):
+    def _on_finish(self, btn, on_done, result, err, token=None):
+        with self._log_owner(self._bg_owners.pop(token, None)):   # 끝 처리 줄 = 그 작업의 탭
+            self._finish_run(btn, on_done, result, err)
+
+    def _finish_run(self, btn, on_done, result, err):
         if btn:
             btn.setEnabled(True)
         self._bg_active = max(0, self._bg_active - 1)   # 진행 로그창 표시 갱신(설정 탭 유휴면 숨김)
@@ -1680,6 +1733,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         사람 개입 0 전제: 입력·키 자동 로드, 확인 팝업 없음, 로그인 차단·2차인증 계정은 건너뜀(멈추지 않음),
         차단 시 쿨다운/자동재개. 절전은 실행 동안 방지. (2차인증은 사무실=신뢰 IP면 없이 통과.)
         """
+        self.tabs.setCurrentWidget(self._collect_page)   # 무인 화면 = 전체 실행 탭(그 탭 로그 · T-19)
         self.log("== [무인 자동 실행] 시작 ==")
         power.keep_awake(True)
         if self.input_list is None:
@@ -1746,6 +1800,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
           - 마커 'done'/없음 & 진행중 없음 = 이어서 할 것 없음 → 종료.
         재부팅 후 Windows 자동 로그인이 켜져 있어야 이 창(세션)이 떠서 동작한다(반자동은 잠긴 세션도 가능).
         """
+        self.tabs.setCurrentWidget(self._collect_page)   # 복구 화면 = 전체 실행 탭(그 탭 로그 · T-19)
         marker = read_run_stage()
         prog = resumable_progress()
         plan = plan_resume_stages(marker, prog)
@@ -2117,7 +2172,7 @@ def main():
     win = App(auto=(auto or resume))
     win.show()
     for m in pre_logs:
-        win.log(m)
+        win.log_all(m)   # 시작 때 줄 = 모든 탭 공통(T-19)
     if resume:                      # 재부팅 복구 — 오늘 중단분만 이어서(없으면 스스로 종료)
         QtCore.QTimer.singleShot(1500, win.start_resume)
     elif auto:                      # 이벤트 루프 뜬 직후 무인 실행 자동 시작

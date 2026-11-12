@@ -65,6 +65,7 @@ class TransferPanelMixin:
         v.addWidget(self._transfer_card())
         v.addWidget(self._settle_card())
         v.addStretch(1)
+        self._transfer_page = scroll   # 이 탭 화면 — 5초마다 읽는 진행 줄의 주인 탭(T-19)
         return scroll
 
     def _transfer_card(self):
@@ -165,13 +166,14 @@ class TransferPanelMixin:
             self._tr_timer.stop()
             for b, on in ((self.tr_start_btn, True), (self.tr_retry_btn, True), (self.tr_stop_btn, False)):
                 b.setEnabled(on)
-            self.log("[셀독전환] 로그인 확인 끝 — 결과 폴더의 로그인확인_*.xlsx('연락 필요' 시트) 확인")
+            self.log("[셀독전환] 로그인 확인 끝 — 결과 폴더의 로그인확인_*.xlsx('연락 필요' 시트) 확인",
+                     page=self._transfer_page)
 
     def _tr_tail_log(self) -> None:
         """이번 실행의 로그 파일에서 새 줄만 앱 로그로."""
         self._tr_log, lines = _tail(TL.OUT_DIR / "로그", "로그인확인_*.log", self._tr_since, self._tr_log)
         for line in lines:
-            self.log(f"[셀독전환] {line}")
+            self.log(f"[셀독전환] {line}", page=self._transfer_page)   # 다른 탭을 보는 중에도 이 탭에(T-19)
 
     # ── 2단계: 정산 자료 받기(D-187) ─────────────────────────────
     def _settle_card(self):
@@ -254,10 +256,10 @@ class TransferPanelMixin:
     def _ts_poll(self) -> None:
         self._ts_log, lines = _tail(TS.STORE_DIR / "로그", "실행_*.log", self._ts_since, self._ts_log)
         for line in lines:
-            self.log(f"[셀독전환 정산] {line}")
+            self.log(f"[셀독전환 정산] {line}", page=self._transfer_page)
         self._ts_refresh()
         if not self._ts_running():
             self._ts_timer.stop()
             self.ts_start_btn.setEnabled(True)
             self.ts_stop_btn.setEnabled(False)
-            self.log(f"[셀독전환] 정산 자료 받기 끝 — 누적 파일 {TS.CUMULATIVE.resolve()}")
+            self.log(f"[셀독전환] 정산 자료 받기 끝 — 누적 파일 {TS.CUMULATIVE.resolve()}", page=self._transfer_page)
