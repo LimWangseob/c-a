@@ -192,9 +192,10 @@ MASTER = Path("output") / "쿠팡데이타분석_통계.xlsx"
 
 
 def _fake_result_stages(*, unfilled=(0,), searched=(5,), sales_fail=False, kw_fail=False, kw_raise=None, stop_at=None,
-                        retry_empty=False):
+                        retry_empty=False, raise_at=None):
     """가짜 단계 — ①은 LAST_SALES, ③은 LAST_RANK 를 실제처럼 채우고 로그를 남긴다(실 로그인·시트 없음).
-    unfilled·searched = ③ 회차마다 값(실제 ③처럼 부를 때마다 LAST_RANK 를 새로 채움) · retry_empty = 재시도 ③이 요약 없이 끝남."""
+    unfilled·searched = ③ 회차마다 값(실제 ③처럼 부를 때마다 LAST_RANK 를 새로 채움) · retry_empty = 재시도 ③이 요약 없이 끝남.
+    raise_at = (단계 '①'·'③', 예외) — 그 단계 도중 예외(① = LAST_SALES 채우기 전 · ③ = LAST_RANK 비운 뒤)."""
     calls, marks, stop, seq, sseq = [], [], {"v": False}, list(unfilled), list(searched)
 
     def fake_run_full(_il, **kw):
@@ -203,6 +204,8 @@ def _fake_result_stages(*, unfilled=(0,), searched=(5,), sales_fail=False, kw_fa
         log("  [자동입력] 실패(Timeout) — 창에서 직접 입력하세요")       # ① 도중 기록('❌' 아님) = 오류 아님
         if sales_fail:
             log("  [가-1] ❌ [상품명] 노출명 확인 실패: '상품' VID ['v1']")
+        if raise_at and raise_at[0] == "①":
+            raise raise_at[1]
         _rr.LAST_SALES.update(accounts=["가-1", "나-2", "다-3"], pw=["나-2"] if sales_fail else [],
                               missed={"다-3": "2단계 인증 필요"} if sales_fail else {},
                               ok=1 if sales_fail else 3, total=3,
@@ -224,6 +227,8 @@ def _fake_result_stages(*, unfilled=(0,), searched=(5,), sales_fail=False, kw_fa
         if n:
             k["on_log"]("  ❌ [순위] 가-1 · 상품 「kw」 — 검색결과가 두 바퀴 연속 안 나옴 → 공란, 확인 필요")
         _st.LAST_RANK.clear()
+        if raise_at and raise_at[0] == "③":
+            raise raise_at[1]
         if retry_empty and calls.count("③") > 1:   # 재시도 ③이 워크북을 못 읽고 끝남(요약 없음)
             return None
         _st.LAST_RANK.update(searched=s, blocked=1, conn=0, unfilled=n, novid=0, stopped=False)
@@ -346,6 +351,41 @@ def pin_yesterday_rank_catchup():
     finally:
         _st.read_last_run_stage = orig
 
+
+def pin_crash_summary():
+    print("[핀 P13] 실행이 예외로 멈춤 → 종합에 멈춘 단계 '도중 오류로 멈춤' · 그 예외도 오류 수 · ③ 이 안 끝났으면 '순위 빈 칸 0' 안 씀 (T-29)")
+    err = "TimeoutError: Page.goto: Timeout 30000ms exceeded."
+    for where, kw in (("①", dict(raise_at=("①", TimeoutError("Page.goto: Timeout 30000ms exceeded.")))),
+                      ("②", dict(kw_raise=TimeoutError("Page.goto: Timeout 30000ms exceeded."))),
+                      ("③", dict(raise_at=("③", TimeoutError("Page.goto: Timeout 30000ms exceeded."))))):
+        logs: list = []
+        calls, marks, stop = _fake_result_stages(**kw)
+        try:
+            run_stages(None, StagePlan(), ai_key="k", naver=None, date_from=DF, date_to=DT, date_label=DL,
+                       get_password=lambda a: None, carry=True, should_stop=stop, on_log=logs.append)
+            raised = False
+        except TimeoutError:
+            raised = True
+        b = _block(logs)
+        line = {"①": "① 판매수집: ", "②": "② 키워드 선정: ", "③": "③ 순위: "}[where]
+        got = next(x for x in b if x.startswith(line))
+        _check(raised and b[1] == "판정: 오류 발생 --> 중단", f"{where} 예외 → 예외 그대로 올림·'오류 발생 --> 중단'")
+        _check(got == f"{line}도중 오류로 멈춤", f"{where} 멈춘 단계 = '도중 오류로 멈춤'(옛 = '함'·'수집 성공 ?/3'·'측정 0건') {got!r}")
+        _check(any(x.startswith("오류 현황(") and x.endswith(": 1건") for x in b) and f"      실행을 멈춘 오류: {err}" in b,
+               f"{where} 멈추게 한 예외 = 오류 현황 1건(그 단계 아래) {[x for x in b if '오류' in x]}")
+        rank_tail = "순위 도중 멈춤" if where == "③" else "순위 안 돎"
+        _check(f"· {rank_tail} · 오류 1 ·" in b[-1] and "순위 빈 칸" not in b[-1],
+               f"{where} 한 줄 요약 = '{rank_tail}'·'오류 1'(옛 = '순위 빈 칸 0 · 오류 0') {b[-1]}")
+        after = {"①": ("② 키워드 선정: 이번 실행에서 안 돎", "③ 순위: 이번 실행에서 안 돎"),
+                 "②": ("③ 순위: 이번 실행에서 안 돎",), "③": ()}[where]
+        _check(all(x in b for x in after), f"{where} 뒤 단계 = '이번 실행에서 안 돎'")
+    logs = []
+    calls, marks, stop = _fake_result_stages()
+    run_stages(None, StagePlan(keywords=False, ranks=False), ai_key="k", naver=None, date_from=DF, date_to=DT,
+               date_label=DL, get_password=lambda a: None, carry=True, should_stop=stop, on_log=logs.append)
+    _check("· 순위 안 돎 · 오류 0 ·" in _block(logs)[-1], f"① 단독(③ 계획 없음) 한 줄 요약도 '순위 안 돎' {_block(logs)[-1]}")
+
+
 def main() -> int:
     print("=" * 60)
     print("  핀 테스트 — plan_run_mode 실행모드 결정 + 단계 조립(run_stages)")
@@ -362,6 +402,7 @@ def main() -> int:
     pin_stage_assembly()
     pin_run_result()
     pin_yesterday_rank_catchup()
+    pin_crash_summary()
     print("=" * 60)
     print("  [완료] 실행모드 핀 모두 통과")
     print("=" * 60)
