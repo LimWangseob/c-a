@@ -142,6 +142,7 @@ def _fake_stages(stop_at: str | None = None):
     _st.push_ledger_inventory = lambda *a: hit("재고")
     _st.push_company_stock = lambda *a: hit("회사재고")
     _st.write_run_stage = lambda s: marks.append(s)
+    _st.read_last_run_stage = lambda: None   # 개발 PC output 의 실제 단계 기록을 읽지 않게(결정적 · P12 만 바꿔 넣음)
     return calls, marks, (lambda: stop["v"])
 
 
@@ -232,6 +233,7 @@ def _fake_result_stages(*, unfilled=(0,), searched=(5,), sales_fail=False, kw_fa
     _st.push_ledger_inventory = lambda *a: calls.append("재고")
     _st.push_company_stock = lambda *a: calls.append("회사재고")
     _st.write_run_stage = lambda s: marks.append(s)
+    _st.read_last_run_stage = lambda: None   # 개발 PC output 의 실제 단계 기록을 읽지 않게(결정적 · P12 만 바꿔 넣음)
     return calls, marks, (lambda: stop["v"])
 
 
@@ -305,6 +307,45 @@ def pin_run_result():
     _check(_block(logs)[1] == "판정: 정상 완료" and calls == ["①"], "① 단독 실행도 블록")
 
 
+def pin_yesterday_rank_catchup():
+    print("[핀 P12] 직전 실행이 어제 ③ 을 못 끝냄(단계 기록 어제 'sales'·'ranks') → 오늘 ③ 뒤 어제 칸 ③ 1회 (T-20 재발 방지 (가))")
+    from datetime import date, timedelta
+    y = (date.today() - timedelta(days=1)).isoformat()
+    orig = _st.read_last_run_stage
+
+    def run(marker, plan=None, designated=False):
+        calls, marks, stop = _fake_result_stages()
+        labels: list = []
+        track = _st.track_ranks_stage
+
+        def rec(**k):
+            labels.append(k.get("date_label"))
+            return track(**k)
+        _st.track_ranks_stage = rec
+        _st.read_last_run_stage = lambda: marker
+        logs: list = []
+        run_stages(None, plan or StagePlan(), ai_key="k", naver=None, date_from=DF, date_to=DT, date_label=DL,
+                   get_password=lambda a: None, carry=True, designated=designated, should_stop=stop,
+                   on_log=logs.append)
+        return calls, marks, labels, logs
+    try:
+        for stage in ("sales", "ranks"):
+            calls, marks, labels, logs = run({"date": y, "stage": stage})
+            _check(calls == ["①", "②", "③", "재고", "회사재고", "③"] and labels[-1] == y,
+                   f"어제 '{stage}' → 오늘 ③·재고 뒤 어제 칸({y}) ③ 1회 {calls} {labels}")
+            _check(any("지난 실행" in m and "③" in m and y[5:].replace("-", ".") in m for m in logs), "지난 실행 칸 채우기 안내 줄(칸 이름 포함)")
+            _check(marks[-1] == "done", f"단계 기록 끝 = done {marks}")
+        for marker, why in (({"date": y, "stage": "done"}, "어제 done"), (None, "기록 없음"),
+                            ({"date": date.today().isoformat(), "stage": "sales"}, "오늘 기록(재부팅 복구 몫)")):
+            calls, _, labels, _ = run(marker)
+            _check(calls.count("③") == 1, f"{why} → 어제 칸 채우기 없음 {calls}")
+        calls, _, _, _ = run({"date": y, "stage": "sales"}, designated=True)
+        _check(calls.count("③") == 1, f"날짜 지정 실행 → 어제 칸 채우기 없음 {calls}")
+        calls, _, _, _ = run({"date": y, "stage": "sales"}, plan=StagePlan(keywords=False, ranks=False))
+        _check("③" not in calls, f"① 단독 → ③ 없음 {calls}")
+    finally:
+        _st.read_last_run_stage = orig
+
 def main() -> int:
     print("=" * 60)
     print("  핀 테스트 — plan_run_mode 실행모드 결정 + 단계 조립(run_stages)")
@@ -320,6 +361,7 @@ def main() -> int:
     pin_resume_plan()
     pin_stage_assembly()
     pin_run_result()
+    pin_yesterday_rank_catchup()
     print("=" * 60)
     print("  [완료] 실행모드 핀 모두 통과")
     print("=" * 60)

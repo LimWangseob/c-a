@@ -87,6 +87,16 @@ def read_run_stage(out_dir: str | Path = "output") -> dict | None:
     return m
 
 
+def read_last_run_stage(out_dir: str | Path = "output") -> dict | None:
+    """마지막 실행의 단계 기록(dict) — 날짜와 상관없이(read_run_stage 는 오늘 것만). 없거나 깨졌으면 None.
+    다음 날 실행이 '어제 ③ 을 못 끝냈는지' 판단하는 데 쓴다(T-20 재발 방지 (가) · pipeline_stages)."""
+    p = _run_stage_path(out_dir)
+    try:
+        m = json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+    except (OSError, ValueError):
+        return None
+    return m if isinstance(m, dict) else None
+
 def _load_latest_wb(out: Path):
     """최신 결과 워크북 로드 — 마스터 우선, 없으면 진행중. (wb, path) 또는 (None, None)."""
     for p in (_master_path(out), _partial_path(out)):

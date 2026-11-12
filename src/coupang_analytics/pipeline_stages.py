@@ -13,10 +13,11 @@ UI 는 무엇을 할지(StagePlan)만 정한다. 게이트: `tools/pin_run_plan.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 from .pipeline import run_full, select_keywords_stage
 from .pipeline_gsheet import push_company_stock, push_ledger_inventory
-from .pipeline_paths import write_run_stage
+from .pipeline_paths import column_label, read_last_run_stage, write_run_stage
 from .pipeline_ranks import LAST_RANK, track_ranks_stage
 from .run_result import KEYWORDS, RANKS, SALES, STOCK, RunSummary
 
@@ -61,6 +62,33 @@ def _retry_blank_ranks(ranks: dict, log, should_stop, result):
     return result
 
 
+def _missed_rank_day(marker: dict | None, today: str) -> str | None:
+    """직전 실행이 ③ 을 못 끝낸 날(ISO) — 단계 기록이 오늘보다 앞 날짜이고 'sales'(① 끝)·'ranks'(② 끝)면 그 날,
+    아니면 None('done'·기록 없음·오늘 기록 = 재부팅 복구 몫). ① 이 그날 돌아 날짜 칸이 있는 경우만 대상."""
+    if not marker or marker.get("stage") not in ("sales", "ranks"):
+        return None
+    day = str(marker.get("date") or "")
+    return day if day and day < today else None
+
+
+def _catch_up_missed_ranks(missed: str | None, ranks: dict, log, should_stop, result):
+    """오늘 ③·재고 역기록이 끝난 뒤 직전 실행 날짜 칸의 ③ 을 1회(T-20 재발 방지 (가) · 소유자 2026-11-12).
+
+    11-11 실측: ② 오류로 ③ 이 안 돌았고, 다음 날 재부팅 복구는 오늘 시작분만 이어받아(D-032) 그 칸이 빈 채로 남음.
+    채운 칸은 ③ 이 건너뛰므로 빈 칸만 검색된다. 실행 결과 종합의 ③ 요약은 오늘 실행 값을 유지한다."""
+    if not missed or should_stop():
+        return result
+    label = column_label(missed)
+    today_rank = dict(LAST_RANK)
+    log.enter(RANKS)
+    log(f"[단계] ③ 지난 실행({label}) 순위 칸 채우기 — 그날 실행이 ③ 까지 못 끝냄(빈 칸만 검색)")
+    result = track_ranks_stage(**{**ranks, "date_label": missed}) or result
+    log(f"  [③ {label} 칸] 측정 {int(LAST_RANK.get('searched') or 0)}건 · 남은 빈 칸 {int(LAST_RANK.get('unfilled') or 0)}개")
+    LAST_RANK.clear()
+    LAST_RANK.update(today_rank)
+    return result
+
+
 def run_stages(input_list, plan: StagePlan, *, ai_key, naver, date_from: str, date_to: str, date_label: str,
                get_password, carry: bool, redo_today: bool = False, designated: bool = False,
                grow: bool = False, rank_date_label: str | None = None, should_stop=lambda: False,
@@ -71,6 +99,7 @@ def run_stages(input_list, plan: StagePlan, *, ai_key, naver, date_from: str, da
     rank_date_label: ③이 기록할 날짜 칸(None = 최신 칸). 전체실행은 ①과 같은 칸을 넘긴다(날짜 지정·재개 라벨 일치)."""
     LAST_RANK.clear()                       # 이번 실행의 ③ 요약만 남게(③ 안 돌면 UI 가 지난 요약을 읽지 않음)
     accounts = [a.label for a in getattr(input_list, "accounts", None) or []]
+    missed = None if (designated or not plan.ranks) else _missed_rank_day(read_last_run_stage(), date.today().isoformat())
     with RunSummary(on_log, accounts, should_stop=should_stop, rank=LAST_RANK, sheet_url=gsheet_output_url) as log:
         result = None
         if plan.sales:                      # ① 반자동 판매수집(미완료 계정 즉시 재시도는 run_full 안에서·D-029)
@@ -101,6 +130,7 @@ def run_stages(input_list, plan: StagePlan, *, ai_key, naver, date_from: str, da
             push_ledger_inventory(gsheet_input_url, log)
             push_company_stock(stock_url, gsheet_input_url, log)
             result = _retry_blank_ranks(ranks, log, should_stop, result)
+            result = _catch_up_missed_ranks(missed, ranks, log, should_stop, result)
             if not should_stop():
                 write_run_stage("done")
         return result
