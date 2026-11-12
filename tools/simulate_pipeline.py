@@ -774,6 +774,66 @@ def scenario_keyword_warmup_timeout_keeps_ranks():
     finally:
         proxy_pool.public_search_proxy, P.warmup = orig_px, orig_wu
 
+
+def scenario_e2e_warmup_timeout_then_catch_up():
+    print("[시나리오 22c] 11-11 재현 종단(run_stages 실제 순서) — 어제 ② 첫 화면 시간 초과로 실행 중단('sales' 남음) → "
+          "오늘 전체실행: ② 시간 초과에도 ③ 돎 + 재고 역기록 뒤 어제 칸 ③ 1회 · 단계 기록 'done' (T-21·D-220)")
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    import os
+    from datetime import timedelta
+    from coupang_analytics import pipeline_paths, proxy_pool
+    from coupang_analytics.pipeline_stages import StagePlan, run_stages
+    from coupang_analytics.workbook import OutputWorkbook
+    from playwright.sync_api import TimeoutError as PWTimeout
+    y, t = (date.today() - timedelta(days=1)).isoformat(), date.today().isoformat()
+    yl, tl = pipeline_paths.column_label(y), pipeline_paths.column_label(t)
+    il, d, cwd = _account_one_vid("vidE"), Path(tempfile.mkdtemp()), os.getcwd()
+    orig = (proxy_pool.public_search_proxy, P.warmup, P._warmup_or_skip)
+
+    def _timeout(browser):
+        raise PWTimeout("Page.goto: Timeout 30000ms exceeded.")
+
+    def _day(day, logs):   # 운영 전체실행(app_qt·무인 --auto)과 같은 run_stages 호출 — 날짜만 그날
+        return run_stages(il, StagePlan(), ai_key="sim", naver=None, date_from=day, date_to=day, date_label=day,
+                          get_password=lambda a: None, carry=True, rank_date_label=day, on_log=logs.append)
+
+    def _marker():
+        return json.loads(pipeline_paths._run_stage_path("output").read_text(encoding="utf-8"))
+    try:
+        os.chdir(d)                                   # run_stages 는 기본 'output' 폴더(운영과 같은 상대경로)
+        Path("output").mkdir()
+        proxy_pool.public_search_proxy = lambda log=None: ("http://px:1", True)
+        P.warmup = _timeout                           # 이틀 다 같은 불량 프록시 IP(첫 화면 30초 초과)
+        P._warmup_or_skip = lambda browser, log: (P.warmup(browser), True)[1]   # 어제 = 옛 코드(보호 없이 호출)
+        try:
+            _day(y, [])
+            raised = None
+        except PWTimeout as exc:
+            raised = exc
+        _check(raised is not None and _marker()["stage"] == "sales", f"어제(옛 코드) = ② 에서 실행 중단·단계 기록 'sales' {_marker()}")
+        p = pipeline_paths._run_stage_path("output")   # 기록은 '실행한 날' 날짜 → 어제 실행분으로 되돌림(하루 지남)
+        p.write_text(json.dumps({**_marker(), "date": y}, ensure_ascii=False), encoding="utf-8")
+        P._warmup_or_skip = orig[2]                   # 오늘 = 배포본 코드(T-21·D-220)
+        logs: list = []
+        _day(t, logs)
+        wb = OutputWorkbook.load(P._master_path(Path("output")))
+        biz = wb.account_sheets()[0]
+        pname = wb.products_of(biz)[0]
+        kws = wb.product_keywords(biz, pname)
+        _check(any("❌" in x and "자동완성" in x and "건너뜀" in x for x in logs), "오늘 ② 시간 초과 = ❌ 줄 + 자동완성만 건너뜀")
+        _check(bool(kws) and all(wb.is_rank_filled(biz, pname, k, tl) for k in kws), f"오늘 칸({tl}) ③ 순위 채움 {kws}")
+        _check(all(wb.is_rank_filled(biz, pname, k, yl) for k in kws), f"어제 칸({yl}) ③ 순위 채움(지난 실행 칸 채우기)")
+        i3 = next(i for i, x in enumerate(logs) if "[단계] ③ 반자동 순위" in x)
+        ic = next((i for i, x in enumerate(logs) if f"③ 지난 실행({yl})" in x), -1)
+        _check(ic > i3, f"어제 칸 ③ = 오늘 ③·재고 역기록 뒤 1회 (오늘 ③ 줄 {i3} · 어제 칸 줄 {ic})")
+        _check(sum(f"③ 지난 실행({yl})" in x for x in logs) == 1, "어제 칸 채우기는 1회만")
+        _check(_marker()["stage"] == "done" and _marker()["date"] == t, f"오늘 단계 기록 = 'done' {_marker()}")
+        judge = next(x for x in logs if x.startswith("판정: "))
+        _check(judge != "판정: 오류 발생 --> 중단", f"오늘 실행은 중단 없이 끝남 {judge}")
+    finally:
+        os.chdir(cwd)
+        proxy_pool.public_search_proxy, P.warmup, P._warmup_or_skip = orig
+
 def scenario_manual_keywords_saved():
     print("[시나리오 23] 키워드 추천 탭 [저장] = 결과파일 그 상품 블록에 추가(기존 유지·상한)·결과 구글시트 반영(F2)")
     _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
@@ -976,6 +1036,7 @@ def main():
     scenario_metrics_not_summed()
     scenario_keyword_stage_proxy()
     scenario_keyword_warmup_timeout_keeps_ranks()
+    scenario_e2e_warmup_timeout_then_catch_up()
     scenario_manual_keywords_saved()
     scenario_business_rename_keeps_history()
     scenario_uncollected_still_ranked()
