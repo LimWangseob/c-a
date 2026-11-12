@@ -270,20 +270,39 @@ def returns_url(vendor: str, today: date) -> str:
     return RETURNS_URL.format(v=vendor, s=_kst_ms(date(2025, 1, 1)), e=_kst_ms(today) - 1)
 
 
-def vendor_from_snapshots(folder: Path) -> str:
-    """로켓그로스 정산현황 원문(D-164 하루 1번·`정산현황_원문/{계정}/*.json.gz`)의 settlementGroupKey 앞부분 = 업체코드.
-    최근 원문부터 보고 하나로 정해지면 그 값 · 여러 개면 '' (추측 금지 — unlisted_row_events 와 같은 규칙) · 원문 없음 = ''(윙 전용)."""
+def rg_vendor(raw: Path, refs, inventory: Path) -> str:
+    """로켓그로스 업체코드(D-214 ⓐ) — 처음으로 업체코드가 나온 근거가 정함:
+    ① 정산현황 원문(D-164 하루 1번·`정산현황_원문/{계정}/*.json.gz` — 최근 70일 정산 줄)의 settlementGroupKey 앞부분
+    ② 정산 요청 기록(`_요청기록.json` — 지우지 않음)의 로켓그로스 ref(같은 settlementGroupKey) — 최근 정산 줄이 없는 계정(gorocket23)
+    ③ ① 판매수집의 재고현황 원문(`재고현황_일별/{계정ID}/*.json.gz`)의 로켓그로스 줄 vendorId — 정산 줄이 2026 전에 끝난 계정(guarisen2024).
+    한 근거 안에 여러 개면 '' (추측 금지 — unlisted_row_events 와 같은 규칙) · 모두 없으면 ''(윙 전용)."""
+    keys = (_recent_keys(raw, _settle_keys) or ({r.split("-")[0] for r in refs} - {""})
+            or _recent_keys(inventory, _inventory_keys))
+    return next(iter(keys)) if len(keys) == 1 else ""
+
+
+def _recent_keys(folder: Path, keys_of) -> set:
+    """최근 파일부터 — 업체코드가 하나라도 나온 첫 파일의 업체코드 묶음(읽을 수 없는 파일은 건너뜀)."""
     for f in sorted(folder.glob("*.json.gz"), reverse=True) if folder.exists() else []:
         try:
             with gzip.open(f, "rt", encoding="utf-8") as fh:
-                rec = json.load(fh)
+                keys = keys_of(json.load(fh)) - {""}
         except (OSError, ValueError):
             continue
-        keys = {(r.get("settlementGroupKey") or "").split("-")[0] for part in ("조회", "예정") for q in rec.get(part) or []
-                for r in (q.get("응답") or {}).get("settlementStatusReports") or []} - {""}
         if keys:
-            return keys.pop() if len(keys) == 1 else ""
-    return ""
+            return keys
+    return set()
+
+
+def _settle_keys(rec: dict) -> set:
+    return {(r.get("settlementGroupKey") or "").split("-")[0] for part in ("조회", "예정") for q in rec.get(part) or []
+            for r in (q.get("응답") or {}).get("settlementStatusReports") or []}
+
+
+def _inventory_keys(rec: dict) -> set:
+    """재고현황 응답 원문(글자 그대로 저장) → viProperties[].creturnConfigViewDto.vendorId(로켓그로스 재고 줄에만 있음)."""
+    bodies = [json.loads(b) if isinstance(b, str) else b for b in rec.get("응답") or []]
+    return {(v.get("creturnConfigViewDto") or {}).get("vendorId") or "" for d in bodies for v in (d or {}).get("viProperties") or []}
 
 
 def _kst_ms(d: date) -> int:
