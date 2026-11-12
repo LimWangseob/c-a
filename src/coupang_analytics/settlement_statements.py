@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from coupang_analytics import settlement_statement_account as AC
 from coupang_analytics import settlement_statement_context as CTX
 from coupang_analytics import settlement_statement_source as SRC
 from coupang_analytics.settlement_statement_book import book, safe_name, summary_book, summary_row
@@ -43,13 +44,11 @@ def run(args: CTX.StatementArgs) -> dict:
     if miss:
         raise FileNotFoundError(f"입력 폴더 {args.inputs} 에 없음: {', '.join(miss)}")
     ctx = CTX.load(args)
-    if not ctx.window:
-        print(f"  · 계약 기간 보강 없음({CTX.WINDOW} 없음)")
     res, skipped = [], []
     for acct in ctx.accts:
         a = account(ctx, acct)
         row = summary_row(a, shown(a))                      # 정산서 1쪽과 같은 숫자(줄 합계 검산 포함)
-        if not (a["mpids"] or a["scope"] in ("결과 시트 관리 상품", "원장 정산전용상품")):
+        if not (a["mpids"] or a["scope"].startswith(AC.LEDGER) or a["scope"] == AC.SETTLE_ONLY):
             skipped.append(row)
             continue
         own = a["info"]["사업자"] in SRC.OWN_BUSINESSES

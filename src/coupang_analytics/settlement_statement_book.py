@@ -175,6 +175,9 @@ def _sale_sheets(wb, a: dict, xs: list) -> None:
     table(wb, "제외한 상품", ["상품명", "수량", "판매금액", "쿠팡 정산금액"],
           sorted(([e[0], e[1], e[2], e[3]] for e in a["prod"].values() if not e[4]), key=lambda e: -e[2]), (50, 10, 16, 16),
           note="관리 상품이 아니어서 정산서에서 뺀 상품(위탁자 본인 상품 등) · 정산이 끝난 판매만.")
+    if a["scope_check"]:
+        table(wb, "관리 상품 확인 필요", ["등록상품ID", "상품명", "사유"], [list(x) for x in a["scope_check"]], (16, 50, 80),
+              money_from=99, total=False, note="관리 상품인지 정하지 못해 금액에 넣지 않은 상품 · 판정 자료를 채워 다시 만들면 반영.")
     if xs:
         table(wb, "외부 마케팅 대행비", ["요청일", "제품", "건수", "고객 부담", "회사 부담", "진행"],
               [[x["요청일"], x["제품명"], x["건수"], x["고객 부담"], x["우리 부담"], "완료" if x["완료"] else "진행 전"] for x in xs],

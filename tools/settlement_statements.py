@@ -2,10 +2,11 @@
 
     python tools/settlement_statements.py --out <출력 폴더> --managed-output <관리기준 output> --settle-dir <output/정산>
         --stats <정산집계.xlsx> --basis YYYY-MM-DD [--inputs <입력 폴더>] [--issued YYYY-MM-DD] [--settle-only <json>]
+        [--account-history <json>]
 
-- 입력 폴더(기본 `output/정산서/입력`) 고정 이름 = settlement_statement_context.REQUIRED (+ 선택 contract_window_scope.json).
+- 입력 폴더(기본 `output/정산서/입력`) 고정 이름 = settlement_statement_context.REQUIRED.
 - 장부 기준일 = 받은 지급 줄의 정산일이 빠지지 않는 날(D-137 ⑤) · 관리기준 = 마지막 정상 실행의 결과(D-137 ⑥).
-- `--settle-only` 를 안 주면 원장 '정산전용상품' 시트를 구글에서 실시간으로 읽음(옛 동작).
+- `--settle-only` 를 안 주면 원장 '정산전용상품' 시트를 구글에서 실시간으로 읽음(옛 동작). `--account-history`(원장 '계정이력' 사본)도 같음.
 """
 from __future__ import annotations
 
@@ -32,11 +33,13 @@ def _args(argv: list[str] | None = None) -> ST.ARGS:
     ap.add_argument("--settle-only", type=Path)
     ap.add_argument("--supp", type=Path)
     ap.add_argument("--snap", type=Path)
+    ap.add_argument("--account-history", type=Path)
     a = ap.parse_args(argv)
     date.fromisoformat(a.basis)
     date.fromisoformat(a.issued)
     return ST.ARGS(out=a.out, managed_output=a.managed_output, settle_dir=a.settle_dir, stats=a.stats, basis=a.basis,
-                   inputs=a.inputs, issued=a.issued, settle_only=a.settle_only, supp=a.supp, snap=a.snap)
+                   inputs=a.inputs, issued=a.issued, settle_only=a.settle_only, supp=a.supp, snap=a.snap,
+                   account_history=a.account_history)
 
 
 def main(argv: list[str] | None = None) -> int:

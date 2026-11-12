@@ -1,9 +1,10 @@
 """위탁정산서 실행 준비 — 입력 폴더·인자 → 한 번 읽는 공통 자료(ctx). T-25 이관(옛 `statement_managed.py` 59~136줄의 모듈 전역 계산
 + `run_contract_window.py` 계약 기간 보강 · 행동 불변). 고정 경로 없음 — 모든 경로는 `StatementArgs` 로 받는다.
 
-입력 폴더(`inputs`) 고정 이름(손 입력·AI 판정표 · 없으면 ❌ 시작 전 중단 · 계약 기간 보강만 선택):
+입력 폴더(`inputs`) 고정 이름(손 입력·AI 판정표 · 없으면 ❌ 시작 전 중단):
   사업자_대응표.csv · 체험단_보충.json · 쿠팡_별도보상.json · 관리시작달_차이표.xlsx(계약일 AI 판정 D-185) ·
-  svc_digital_judge.json(가전 AI 판정 D-161) · ledger.json(관리대장 스냅샷·비밀번호 없음) · contract_window_scope.json(선택 · D-159)
+  svc_digital_judge.json(가전 AI 판정 D-161) · ledger.json(관리대장 스냅샷·비밀번호 없음) ·
+  관리상품_되찾기_판정.json(이력 없이 지운 로켓그로스 상품 — 위탁자 본인 상품 AI 판정 · settlement_statement_scope ⑤)
 """
 from __future__ import annotations
 
@@ -16,23 +17,23 @@ from types import SimpleNamespace
 
 import openpyxl
 
-from coupang_analytics import sales_history, sales_summary, workbook_sales
+from coupang_analytics import sales_history, sales_summary
 from coupang_analytics import settlement_experience as XP
 from coupang_analytics import settlement_files as SF
 from coupang_analytics import settlement_ledger as SL
+from coupang_analytics import settlement_statement_scope as SCOPE
 from coupang_analytics import settlement_statement_source as SRC
-from coupang_analytics.workbook import OutputWorkbook
 
 MAP_CSV = "사업자_대응표.csv"
-REQUIRED = (MAP_CSV, "체험단_보충.json", "쿠팡_별도보상.json", "관리시작달_차이표.xlsx", "svc_digital_judge.json", "ledger.json")
-WINDOW = "contract_window_scope.json"
+REQUIRED = (MAP_CSV, "체험단_보충.json", "쿠팡_별도보상.json", "관리시작달_차이표.xlsx", "svc_digital_judge.json", "ledger.json",
+            SCOPE.JUDGE)
 DIGITAL_RATES = {5.8, 6.4, 7.8}
 
 
 @dataclass(frozen=True)
 class StatementArgs:
     out: Path               # 출력 폴더
-    managed_output: Path    # 관리 상품 기준 output 폴더(쿠팡데이타분석_통계.xlsx·판매분석_*)
+    managed_output: Path    # 관리 상품 기준 output 폴더(쿠팡데이타분석_통계*.xlsx·판매분석_*·_raw 상품조회)
     settle_dir: Path        # output/정산 폴더
     stats: Path             # 정산집계_*.xlsx
     basis: str              # 장부 기준일 YYYY-MM-DD(D-137 ⑤)
@@ -41,6 +42,7 @@ class StatementArgs:
     settle_only: Path | None = None   # 원장 '정산전용상품' 시트 사본 json(없으면 구글 실시간 읽기)
     supp: Path | None = None          # 보충 조회 폴더(옛 기준일 조회 방식 · 보통 없음)
     snap: Path | None = None          # 같은 시각대 조회 스냅샷 폴더(보통 없음)
+    account_history: Path | None = None   # 원장 '계정이력' 시트 사본 json(없으면 구글 실시간 · 계약 없는 계정의 관리 시작)
 
 
 def missing_inputs(inputs: Path) -> list[str]:
@@ -125,14 +127,15 @@ def _accounts(a: StatementArgs, c: SimpleNamespace) -> None:
 
 
 def _managed(a: StatementArgs, c: SimpleNamespace) -> None:
-    """관리 상품 기준 — 결과 시트 블록 VID·판매분석 노출 상품명·체험단·원장 정산전용상품·계약 기간 보강."""
-    c.managed = workbook_sales.managed_vids(OutputWorkbook.load(a.managed_output / "쿠팡데이타분석_통계.xlsx"))
+    """관리 상품 기준 — 대장(결과 엑셀 + 날짜별 사본) VID·같은 상품명(D-107)·되찾은 로켓그로스 상품·체험단·원장 정산전용상품."""
+    c.ledger = SCOPE.ledger_vids(a.managed_output)
     c.daily, c.periods = sales_history.load_daily(a.managed_output), sales_history.load_periods(a.managed_output)
-    c.listings = sales_summary.managed_listings((c.daily, c.periods), c.managed)
+    c.listings = sales_summary.managed_listings((c.daily, c.periods), c.ledger)
+    c.contracts = contracts(a.inputs / "관리시작달_차이표.xlsx")
+    c.rg = SCOPE.recover_all(c.ledger, c.listings, (c.daily, c.periods), SCOPE.inventory(a.managed_output), c.contracts,
+                             SCOPE.account_history(a.account_history), SCOPE.load_judge(a.inputs / SCOPE.JUDGE))
     c.xrows = XP.load(a.out, None, a.inputs / "체험단_보충.json")
     c.settle_only, c.settle_only_err = settle_only_sheet(a.settle_only)
-    w = a.inputs / WINDOW
-    c.window = json.loads(w.read_text(encoding="utf-8")) if w.is_file() else {}
 
 
 def load(a: StatementArgs) -> SimpleNamespace:
@@ -144,5 +147,4 @@ def load(a: StatementArgs) -> SimpleNamespace:
     _managed(a, c)
     c.svc_judge = json.loads((a.inputs / "svc_digital_judge.json").read_text(encoding="utf-8"))
     c.files, c.unjudged = _settle_files(a.settle_dir, c.svc_judge)
-    c.contracts = contracts(a.inputs / "관리시작달_차이표.xlsx")
     return c

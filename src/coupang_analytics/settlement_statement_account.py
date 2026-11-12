@@ -1,9 +1,9 @@
 """위탁정산서 계정 하나 — 관리 상품 몫 계산 1부(지급 줄·관리 범위·상품별 자료·정산 중 판매). T-25 이관(옛 `statement_managed.py`
 `account()` 270~418줄을 메서드로 나눔 · 계산식·순서 그대로 · 2부 = `settlement_statement_deduct.py`).
 
-- 관리 상품 = 결과 시트 사업자 블록 VID + 판매분석 노출 상품명이 같은 VID(D-107). 정산 원본 옵션ID(=VID)로 등록상품ID 를 찾아
-  관리 VID 가 하나라도 있는 등록상품은 상품 전체를 관리로 본다. 결과 시트 밖 계정 = 원장 '정산전용상품' 시트(구분 '관리').
-  계약 기간 보강(D-159) = 입력 폴더 `contract_window_scope.json` 의 VID·등록상품ID 를 더함.
+- 관리 상품 = 대장 VID(결과 엑셀 + 날짜별 사본 — 지운 상품 포함) + 판매분석 노출 상품명이 같은 VID(D-107) + 이력 없이 지운
+  로켓그로스 상품에서 되찾은 VID(`settlement_statement_scope` · 소유자 2026-11-12 규칙 ①~⑤). 정산 원본 옵션ID(=VID)로 등록상품ID 를 찾아
+  관리 VID 가 하나라도 있는 등록상품은 상품 전체를 관리로 본다. 대장 밖 계정 = 원장 '정산전용상품' 시트(구분 '관리').
 - 상품별 쿠팡 자료(정확): 끝난 판매의 판매금액·쿠폰·수수료·정산금액 · 계약 달 앞 판매 = 관리 밖(D-185 ②).
 - 정산 중 판매 = 쿠팡 상품별 자료 전까지 같은 달 관리 판매 비율(D-148 예외).
 """
@@ -15,10 +15,10 @@ from pathlib import Path
 
 import openpyxl
 
-from coupang_analytics import sales_summary
 from coupang_analytics import settlement_files as SF
 from coupang_analytics import settlement_ledger as SL
 from coupang_analytics import settlement_managed_alloc as MA
+from coupang_analytics import settlement_statement_scope as SCOPE
 from coupang_analytics import settlement_stats as SS
 from coupang_analytics import settlement_statement_source as SRC
 
@@ -108,24 +108,22 @@ def deductions(r: dict) -> tuple[float, float, Counter]:
     return num(r.get("totalPayableAmount")), 0.0, parts
 
 
+LEDGER, SETTLE_ONLY = "관리대장 상품", "원장 정산전용상품"
+
+
 def scope(ctx, aid: str) -> tuple[str, set, set, dict]:
-    """(범위, 관리 VID, 관리 노출 상품명, 관리 등록상품ID 직접 지정) — 결과 시트 > 원장 정산전용상품 · + 계약 기간 보강(D-159)."""
-    sc, vids, names, marks = _scope_base(ctx, aid)
-    x = ctx.window.get(aid)
-    if not x:
-        return sc, vids, names, marks
-    return sc + " + 계약 기간 보강", set(vids) | set(x["vids"]), names, {**marks, **{p: "관리" for p in x["pids"]}}
-
-
-def _scope_base(ctx, aid: str) -> tuple[str, set, set, dict]:
-    if aid in ctx.managed:
-        return "결과 시트 관리 상품", {str(v) for v in ctx.managed[aid]}, ctx.listings.get(aid) or set(), {}
+    """(범위, 관리 VID, 관리 노출 상품명, 관리 등록상품ID 직접 지정) — 관리대장(+ 되찾은 로켓그로스 상품) > 원장 정산전용상품."""
+    if aid in ctx.ledger:
+        r = ctx.rg.get(aid) or {"vids": set(), "got": [], "check": []}
+        sc = LEDGER + (f" + 되찾은 로켓그로스 상품 {len(r['got'])}개" if r["got"] else "") + (
+            f"(확인 필요 {len(r['check'])}개)" if r["check"] else "")
+        return sc, set(ctx.ledger[aid]) | r["vids"], ctx.listings.get(aid) or set(), {}
     marks = ctx.settle_only.get(aid) or {}
     if not marks:
         return "관리 상품 자료 없음" + (f"({ctx.settle_only_err})" if ctx.settle_only_err else ""), set(), set(), {}
     if any(v not in ("관리", "본인상품") for v in marks.values()):
         return f"판정 대기(원장 정산전용상품 구분 빈 칸 {sum(v not in ('관리', '본인상품') for v in marks.values())}줄)", set(), set(), marks
-    return "원장 정산전용상품", set(), set(), marks
+    return SETTLE_ONLY, set(), set(), marks
 
 
 def ratio(mset: dict, ch: str, ym: str, S: float) -> float:
@@ -178,9 +176,9 @@ class AccountBase:
     def _scope(self) -> None:
         c, aid = self.ctx, self.aid
         self.sc, self.vids, self.mnames, self.marks = scope(c, aid)
+        self.scope_check = (c.rg.get(aid) or {}).get("check", [])            # 관리 상품인지 못 정한 상품(금액 밖 · 정산서에 표시)
         self.known, self.cdate = aid in c.contracts, c.contracts.get(aid)     # D-185 — 계약 달 앞 판매 = 관리 상품 아님
-        self.vid_name = {str(v): sales_summary._listing(o) for store in (c.daily, c.periods) for rec in (store.get(aid) or {}).values()
-                         for v, o in (rec.get("옵션") or {}).items()}
+        self.vid_name = SCOPE.vid_names((c.daily, c.periods), aid)
         self.files = c.files.get(aid, [])
         self.opt2pid = {str(r.option_id): str(r.product_id) for f in self.files for r in f.rows if r.option_id and r.product_id}
         self.mpids = {pid for o, pid in self.opt2pid.items() if self.is_mv(o)} | {p for p, k in self.marks.items() if k == "관리"}

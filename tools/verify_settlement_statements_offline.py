@@ -203,12 +203,92 @@ def test_migration_inputs() -> None:
                                     ["", "", "333", "", "관리"]]), encoding="utf-8")
         rows, err = CTX.settle_only_sheet(snap)
         assert (dict(rows), err) == ({"a1": {"111": "관리", "222": ""}}, ""), rows
-    ctx = SimpleNamespace(managed={"m1": [5, 6]}, listings={"m1": {"노출명"}}, settle_only={"a1": {"111": "관리", "222": ""}},
-                          settle_only_err="", window={"m1": {"vids": ["7"], "pids": ["P9"]}})
-    assert AC.scope(ctx, "m1") == ("결과 시트 관리 상품 + 계약 기간 보강", {"5", "6", "7"}, {"노출명"}, {"P9": "관리"})
+    ctx = SimpleNamespace(ledger={"m1": {"5", "6"}}, listings={"m1": {"노출명"}}, rg={}, settle_only={"a1": {"111": "관리", "222": ""}},
+                          settle_only_err="")
+    assert AC.scope(ctx, "m1") == ("관리대장 상품", {"5", "6"}, {"노출명"}, {})
     assert AC.scope(ctx, "a1")[0] == "판정 대기(원장 정산전용상품 구분 빈 칸 1줄)"
     assert AC.scope(ctx, "zz")[0] == "관리 상품 자료 없음"
     assert (AC.month_add("2026-01", -1), AC.month_add("2026-12", 1), AC.month_add("9999-99", -1)) == ("2025-12", "2027-01", "9999-99")
+
+
+# ── 관리 상품 범위(소유자 2026-11-12 승인 규칙 ①~⑤ · 원문 "규칙안 5가지 승인, 기준일·달 단위도 제안대로 진행해") ──
+# ① 대장 상품(지금 + 예전에 있다가 지운 상품 · 기간 자르지 않음 D-223 ②) ② 같은 상품명 다른 VID(D-107 · 같은 계정만)
+# ③ 이력 없이 지워진 상품만 쿠팡 등록 로켓그로스 상품에서 되찾음(같은 상품의 판매자배송 VID 포함 · D-222)
+# ④ 등록 '계약 달 이후'(달 단위) · 계약 없고 대장에만 있으면 원장 계정이력 첫 관리 시작 ⑤ 위탁자 본인 상품 제외 · 판정 못 함/자료 없음 = 확인 필요
+def _inv(created: str, **types) -> dict:
+    return {"created": created, "name": f"상품{created}", "types": {k[1:]: t for k, t in types.items()}}
+
+
+def test_managed_scope() -> None:
+    from types import SimpleNamespace
+
+    from coupang_analytics import settlement_statement_account as AC
+    from coupang_analytics import settlement_statement_scope as SCOPE
+    # ① 대장 = 지금 결과 엑셀 + 날짜별 사본(지운 상품) — 파일 고르기 · 합치기
+    with tempfile.TemporaryDirectory() as d:
+        for n in ("쿠팡데이타분석_통계.xlsx", "쿠팡데이타분석_통계_261001.xlsx", "쿠팡데이타분석_통계_보관_261002_101010.xlsx",
+                  "쿠팡데이타분석_진행중.xlsx", "~$쿠팡데이타분석_통계_261001.xlsx", "쿠팡데이타분석_통계_261001.json"):
+            (Path(d) / n).write_text("", encoding="utf-8")
+        assert [p.name for p in SCOPE.ledger_files(Path(d))] == [
+            "쿠팡데이타분석_통계.xlsx", "쿠팡데이타분석_통계_261001.xlsx", "쿠팡데이타분석_통계_보관_261002_101010.xlsx"]
+    ledger = SCOPE.merge_ledgers([{"a1": {11}, "e1": {"901"}, "f1": {"911"}, "c1": {"951"}, "d1": {"961"}},
+                                  {"a1": {"21"}, "gone": {"31"}}])
+    assert ledger["a1"] == {"11", "21"} and ledger["gone"] == {"31"}, ledger           # 지운 상품·계정째 빠진 계정도 대장 상품
+    assert SCOPE.merge_ledgers([{"x": {"1|2 ", 3}}]) == {"x": {"1", "2", "3"}}          # 옛 결과 엑셀 'a|b' 한 칸 = 옵션 2개
+    # ④ 원장 계정이력 → 첫 관리 시작(비밀번호 줄은 안 봄 · 계정아이디 변경은 이어짐 · 기록 시작일 최초등록 = 그 전부터 관리)
+    head = ["번호", "실행번호", "일시", "효력일", "계정아이디", "사업자명", "변동유형", "항목", "이전값", "변경값"]
+    rows = [head, ["1", "", "", "2026-09-20", "d1", "", "최초등록", "", "", ""],
+            ["2", "", "", "2026-10-02", "c0", "", "신규계정", "", "", ""],
+            ["3", "", "", "2026-10-05", "c1", "", "확인완료", "계정아이디", "c0", "c1"],
+            ["4", "", "", "2026-09-25", "c1", "", "수정", "비밀번호", "x", "y"]]
+    starts = SCOPE.first_starts(rows)
+    assert starts == {"d1": ("2026-09-20", True), "c0": ("2026-10-02", False), "c1": ("2026-10-02", False)}, starts
+    stores = ({"a1": {"2026-06-01": {"옵션": {"11": {"상품": "보냉백 A", "구분": "로켓그로스"},
+                                               "13": {"상품": "보냉백  A", "구분": "윙"}}}},
+               "b1": {"2026-06-01": {"옵션": {"91": {"상품": "보냉백 A", "구분": "윙"}}}}},
+              {"a1": {"M:2026-06": {"옵션": {"101": {"상품": "재등록", "구분": "로켓그로스", "등록상품ID": "16280000000"},
+                                             "111": {"상품": "옛", "구분": "로켓그로스", "등록상품ID": "16050000000"},
+                                             "121": {"상품": "모름", "구분": "로켓그로스", "등록상품ID": "16150000000"},
+                                             "131": {"상품": "윙만", "구분": "윙", "등록상품ID": "16290000000"}}}}})
+    inv = {"a1": {"16000000001": _inv("2026-01-01", v11="RFM", v12="NORMAL"),          # 대장 상품(계약 전 등록이어도 대장 우선)
+                  "16250000000": _inv("2026-07-01", v41="RFM", v42="NORMAL"),          # ③ 이력 없이 지운 RG — 판매자배송 VID 포함
+                  "16251000000": _inv("2026-07-01", v51="NORMAL"),                     # 판매자배송 전용·대장과 무관 = 후보 아님
+                  "16100000000": _inv("2026-04-30", v61="RFM"),                        # 계약 달 전 등록 = 제외
+                  "16200000000": _inv("2026-05-13", v71="RFM", v72="NORMAL"),          # 진공포장기: 05-13 등록·계약 05-14 = 같은 달 = 포함
+                  "16260000000": _inv("2026-08-01", v81="RFM"),                        # 위탁자 본인 상품 = 제외
+                  "16270000000": _inv("2026-08-01", v91="RFM")},                       # 판정 없음 = 확인 필요
+           "c1": {"16300000001": _inv("2026-09-15", v52="RFM"), "16400000001": _inv("2026-10-05", v53="RFM")},
+           "d1": {"16255000002": _inv("2026-08-10", v62="RFM")},
+           "f1": {"16255000003": _inv("2026-08-10", v63="RFM")}}
+    judge = {"a1": {"16250000000": {"판정": "관리"}, "16200000000": {"판정": "관리"}, "16100000000": {"판정": "관리"},
+                    "16260000000": {"판정": "본인상품", "근거": "위탁자 브랜드"}, "16280000000": {"판정": "관리"}},
+             "c1": {"16400000001": {"판정": "관리"}, "16300000001": {"판정": "관리"}}}
+    from coupang_analytics import sales_summary
+    listings = sales_summary.managed_listings(stores, ledger)
+    contracts = {"a1": "2026-05-14", "c1": None}
+    rg = SCOPE.recover_all(ledger, listings, stores, inv, contracts, (starts, ""), judge)
+    a1 = rg["a1"]
+    assert a1["vids"] == {"41", "42", "71", "72", "101"}, a1["vids"]
+    assert {p for p, _n, _w in a1["got"]} == {"16250000000", "16200000000", "16280000000"}, a1["got"]
+    excl = {p: w for p, _n, w in a1["excl"]}
+    assert set(excl) == {"16100000000", "16260000000", "16050000000"}, excl            # 계약 달 전(상품조회·ID 순서) · 본인 상품
+    assert "계약 달 전 등록" in excl["16100000000"] and "위탁자 본인" in excl["16260000000"], excl
+    check = {p: w for p, _n, w in a1["check"]}
+    assert set(check) == {"16270000000", "16150000000"}, check                          # 판정 없음 · 등록일 모름(ID 사이)
+    assert rg["c1"]["vids"] == {"53"} and {p for p, *_ in rg["c1"]["excl"]} == {"16300000001"}, rg["c1"]   # 대장 관리 시작 2026-10 기준
+    assert [p for p, *_ in rg["d1"]["check"]] == ["16255000002"] and not rg["d1"]["vids"], rg["d1"]      # 기록 시작일 최초등록 = 확인 필요
+    assert [w for *_x, w in rg["f1"]["check"]] == ["기준일 없음(계약 없음 · 원장 계정이력에 관리 시작 없음)"], rg["f1"]
+    assert [w for *_x, w in rg["e1"]["check"]] == ["상품조회 자료 없음 — 이력 없이 지운 로켓그로스 상품을 되찾지 못함"], rg["e1"]
+    ctx = SimpleNamespace(ledger=ledger, listings=listings, rg=rg, settle_only={}, settle_only_err="", files={}, contracts=contracts,
+                          daily=stores[0], periods=stores[1])
+    sc, vids, names, marks = AC.scope(ctx, "a1")
+    assert sc == "관리대장 상품 + 되찾은 로켓그로스 상품 3개(확인 필요 2개)" and vids == {"11", "21", "41", "42", "71", "72", "101"}, (sc, vids)
+    assert names == {"보냉백 A"} and marks == {}, names
+    acc = AC.AccountBase(ctx, "벅스-a1")
+    acc._scope()
+    assert acc.is_mv("13") and not acc.is_mv("51") and not acc.is_mv("91") and acc.scope_check == a1["check"]   # ② 같은 이름 윙 VID
+    sc, vids, _n, _m = AC.scope(ctx, "gone")                                                # D-210: 계정째 대장에서 빠진 계정도 대장 상품
+    assert (sc, vids) == ("관리대장 상품(확인 필요 1개)", {"31"}), (sc, vids)                 # 상품조회 없음 = 되찾기 확인 필요
 
 
 def main() -> int:
@@ -220,7 +300,8 @@ def main() -> int:
     test_settlement_ledger()
     test_additional_pay()
     test_migration_inputs()
-    print("✅ 위탁정산서 계산 규칙 시험 3종 + 이관 입구 통과")
+    test_managed_scope()
+    print("✅ 위탁정산서 계산 규칙 시험 3종 + 이관 입구 + 관리 상품 범위 통과")
     return 0
 
 

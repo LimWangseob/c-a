@@ -191,7 +191,7 @@ class Account(AccountBase):
                                  "line_m", "paid_total", "rows_out", "dup", "bad", "mpids", "tm", "tx", "prod", "mmon", "ushare",
                                  "u_sales", "um_sales", "um_settle", "settle_all", "settle_m", "pay_m", "ship", "ship_u", "ship_stats",
                                  "fav", "add", "addm", "start_note")}
-        out.update({"info": self.ctx.names[self.acct], "ok": self.L["ok"] and not self.bad, "why": why, "scope": self.sc,
+        out.update({"info": self.ctx.names[self.acct], "ok": self.L["ok"] and not self.bad, "why": why, "scope": self.sc, "scope_check": self.scope_check,
                     "month_share": self.month_share, "extras": self.ctx.extras.get(self.aid, [])})
         return out
 
