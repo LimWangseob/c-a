@@ -549,7 +549,7 @@ def _collect_with_login(ctx: _RunCtx, login_needed, get_password, *, pace_first:
             ctx.coupang_checks[a.account_id] = (_CC_PWFAIL, datetime.now().strftime("%Y-%m-%d"))
             _save_ctx_progress(ctx)
             log(f"  [{a.label}] 비밀번호 오류/계정 상태로 건너뜀 — 자동 재시도 안 함(계정잠금 방지). "
-                "관리대장에서 비번 수정 후 새 실행(다음 날/진행분 초기화)에서 재시도됨")
+                "관리대장 비번을 고치면 다음 실행에서 고친 값으로 시도(거부된 같은 값은 다시 넣지 않음·D-205)")
         except AccountSuspended:                  # 로그인됐으나 계정 정지(승인 반려) → '처리됨'·재시도 안 함
             done.add(a.account_id)
             _save_ctx_progress(ctx)
@@ -700,7 +700,7 @@ def _log_login_failures(ctx: _RunCtx, accounts, uncollected) -> None:
                 + " — 다음 실행에서 다시 시도 ==")
     if pw:
         ctx.log(f"== ⚠ 비밀번호 오류로 수집 못한 계정 {len(pw)}개: {', '.join(a.label for a in pw)} — 관리대장 비밀번호 "
-                "수정 필요(거부된 같은 값은 24시간 다시 넣지 않음·D-123) ==")
+                "수정 필요(거부된 같은 값은 고칠 때까지 다시 넣지 않음·D-205) ==")
 
 
 def run_full(input_list: InputList, out_dir: str = "output",

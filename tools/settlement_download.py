@@ -209,16 +209,20 @@ def _profile_busy(profile: str, wait_sec: int = 60, until: datetime | None = Non
 def _login(b, a, pws: list, hidden: bool) -> None:
     """로그인 + 판정 코드 기록. 차단은 '차단', 비번 오류·미완료는 SessionSkip(재시도 안 함). pws = 관리대장 값 먼저
     (SA.login_passwords) — 첫 값이 '비밀번호가 다릅니다'일 때만 다음 값 1회(앱 ①과 같은 _login_with_candidates·D-012)."""
-    from coupang_analytics.pipeline_sales import LoginBlocked, LoginCredentialError, _login_with_candidates
+    from coupang_analytics.pipeline_sales import (LoginBlocked, LoginCredentialError, LoginPasswordBlocked,
+                                                  _login_with_candidates)
     name = name_of(a)
     try:
         ok = _login_with_candidates(b, a, pws, log, login=True, semi=not hidden)
     except LoginBlocked as exc:
         LOG.record(name, "로그인", RL.BLOCK, f"로그인 차단 — {exc}")
         raise SessionSkip("로그인 차단(재시도 안 함)") from exc
+    except LoginPasswordBlocked as exc:              # 넣지 않고 막음(D-205) — 실제 거부와 문구 구분
+        LOG.record(name, "로그인", RL.FAIL, f"비밀번호 오류 — 전에 거부된 값이라 넣지 않음(고칠 때까지·D-205) ({exc})")
+        raise SessionSkip("비밀번호 오류(고칠 때까지 다시 넣지 않음)") from exc
     except LoginCredentialError as exc:
-        LOG.record(name, "로그인", RL.FAIL, f"비밀번호 오류·잠금 의심 — 재시도 안 함 ({exc})")
-        raise SessionSkip("비밀번호 오류(재시도 안 함)") from exc
+        LOG.record(name, "로그인", RL.FAIL, f"비밀번호 오류 — 쿠팡이 거부·고칠 때까지 다시 넣지 않음 ({exc})")
+        raise SessionSkip("비밀번호 오류(고칠 때까지 다시 넣지 않음)") from exc
     code, detail = b.classify_login()
     if not ok:
         LOG.record(name, "로그인", RL.BLOCK if code in ("blocked", "akamai") else RL.FAIL, f"{code}: {detail}")

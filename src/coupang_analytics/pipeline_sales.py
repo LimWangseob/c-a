@@ -42,6 +42,11 @@ class LoginCredentialError(Exception):
     같은 실행·야간 재개가 다시 제출하지 않게 한다. 사용자 지시(2026-09-15): 비번 1회 오류면 재시도 안 함."""
 
 
+class LoginPasswordBlocked(LoginCredentialError):
+    """전에 쿠팡이 거부한 비밀번호 값이라 **넣지 않고** 막음(D-205 — 관리대장 값이 바뀔 때까지). 처리는 비번 오류와 같고
+    (그래서 하위 클래스) 기록 문구만 '실제 거부'와 구분한다."""
+
+
 class AccountSuspended(Exception):
     """로그인은 됐으나 계정이 **정지(승인 반려)** — 윙 홈이 온보딩 화면(/unapproved 라우팅). 수집·받기·광고가
     막혀 오류만 쌓이므로 그 계정을 건너뛰고(재시도 안 함·'처리됨') 관리대장 계정아이디에 취소선을 쳐 표기한다.
@@ -288,10 +293,10 @@ def _fresh_login(b, a: Account, pw, log, unattended: bool) -> bool:
     """신선 로그인(세션 없음) — 자동입력·대기·반자동 1회 재시도·실패분류·성공 안착.
 
     반환 True/False, 예외 LoginBlocked/LoginCredentialError 는 _ensure_login 규약과 동일."""
-    if pw and _refused_today(a, pw, log):   # D-068·D-123: 거부된 값은 거부 시각부터 24시간 다시 넣지 않음
-        log(f"  [{a.label}] ⛔ 이 비밀번호는 최근 24시간 안에 쿠팡에서 거부됨 — 거부 뒤 24시간은 다시 넣지 않음"
-            "(계정 잠금 방지·D-068·D-123). 관리대장(정산은 원장) 비밀번호를 고치면 바로 다시 시도합니다")
-        raise LoginCredentialError(a.account_id)
+    if pw and _refused_today(a, pw, log):   # D-068·D-205: 거부된 값은 관리대장 값이 바뀔 때까지 다시 넣지 않음
+        log(f"  [{a.label}] ⛔ 이 비밀번호는 전에 쿠팡에서 거부됨 — 관리대장 값이 바뀔 때까지 다시 넣지 않음"
+            "(계정 잠금 방지·D-068·D-205). 관리대장(정산은 원장) 비밀번호를 고치면 바로 다시 시도합니다")
+        raise LoginPasswordBlocked(a.account_id)
     shown = {"v": False}
 
     def _need_user():   # 2차인증·봇챌린지 등 사람이 꼭 필요할 때
@@ -384,7 +389,7 @@ def _resolve_login_failure(b, a: Account, log, cred_fail: bool, pw=None) -> bool
 
 
 def _refused_today(a: Account, pw: str, log) -> bool:
-    """오늘 거부된 비밀번호인가(D-068). 기록을 못 읽으면 로그로 알리고 '아님'(평소대로 1회 시도)."""
+    """전에 거부된 비밀번호인가(D-068·D-205). 기록을 못 읽으면 로그로 알리고 '아님'(평소대로 1회 시도)."""
     try:
         return login_today.refused_today(a.account_id, pw)
     except (OSError, ValueError) as exc:
