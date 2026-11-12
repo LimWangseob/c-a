@@ -1702,3 +1702,15 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 실적 = 정산 기준 하나만(견본 1차) · 판매금액 하나만.
 - 영향 범위: 구현 전(코드 변경 없음) — T-18(T-25) 4단계 셀독 정산서 양식 · 견본 2차(새 파일). (미해결 · 소유자 답 전) 목표 도달율이 어느 실적을 쓰는지·분모(계약금액+목표수익금 vs 목표수익금)·실적 범위(계약 품목 vs 5월 이후 등록 상품 전체 D-152)·제로리스크 확정지급 10건을 대상에 넣을지 — 이 결정으로 정해진 것 아님.
 - 상태: ACTIVE
+
+### D-219 [STATEMENTS_IN_REPO] 위탁정산서 코드 = 저장소 이관(전부 `src` · 분해) · 고정 경로 → 인자 · 손 입력 7종 → 입력 폴더 고정 이름 · 현행 26곳과 칸 값 차이 0 (2026-11-12, R152)
+- 결정(소유자 2026-11-12 — 이관 계획(`docs/plans/T25-step1-statements-migration-2026-11-12.md`)의 'A안(큰 2개는 분해 없이 tools) / B안(지금 분해해 전부 src)' 질문에 원문 "B안."):
+  ① git 밖 `output\_분석_261013\정산스크립트\` 본체(statement_managed·business_statements·managed_alloc·settlement_ledger·experience·additional_pay)와 입구 `run_contract_window.py` 를 `src/coupang_analytics/` 로 옮기고 괴물함수를 나눔(계산식·순서 그대로): `settlement_statement_source`(정산집계·계정→사업자·미정산) · `settlement_statement_context`(입력·공통 자료·계약 기간 보강) · `settlement_statement_account`·`settlement_statement_deduct`(계정 계산 1·2부) · `settlement_statement_sheets`·`settlement_statement_book`(엑셀) · `settlement_statements`(입구 run) · `settlement_ledger`·`settlement_managed_alloc`·`settlement_experience`·`settlement_additional_pay`. 명령 = `tools/settlement_statements.py`.
+  ② 손 입력·AI 판정표 = 입력 폴더(기본 `output/정산서/입력/`) 고정 이름 — 사업자_대응표.csv · 체험단_보충.json · 쿠팡_별도보상.json · 관리시작달_차이표.xlsx · svc_digital_judge.json · ledger.json(없으면 ❌ 시작 전 중단) + contract_window_scope.json(선택 · 없으면 보강 없음 로그). 장부 기준일·관리기준 output·정산 폴더·정산집계·발행일 = 인자. 옛 기본값(정산서입력_output24) 없앰.
+  ③ 원장 '정산전용상품' 시트 = 지금처럼 구글 실시간 읽기(기본) · `--settle-only <json>` 사본을 주면 그것만(대조·시험용).
+- 근거(실측 · `D:\coupang-analytics\output\_분석_261112_T25_이관대조\`): output(30)·기준일 2026-11-03·같은 입력·같은 시트 사본으로 옛 코드(A) ↔ 새 코드(B) = 27개 파일 칸 값 차이 0 · 서식 차이 0 · 병합 같음(`대조_A_vs_B.md`) · 실행 로그 같음(26곳 · 정산서 없음 11 · 28/35).
+  A ↔ 현행 `위탁정산서_20261103기준_관리상품_output30_D186_판매0달제외` = 발행일 칸 26 + 니코에이블·벅스 D-200 문구(시트 이름 '체험단'→'외부 마케팅 대행비'·문구 2칸)뿐 · 금액 차이 0(`대조_D186_vs_A.md`). B 검산 = 독립 검산 26/26 · '추정' 0 · 합계 6항목 현행과 같음(`검산_B_vs_D186.txt`).
+  품질 지수(radon): 옛 statement_managed·business_statements MI 0.0(C) · 괴물함수 account CC 167 → 새 11개 MI 전부 A · CC 21 이상 함수 0.
+- 버린 대안: A안(큰 2개 `tools/` · 분해 다음 — 소유자 'B안') · `check_complexity.KNOWN_BAD` 에 추가(게이트 약화 D-202).
+- 영향 범위: 새 파일 = 위 src 11 + `tools/settlement_statements.py`·`tools/check_settlement_statements.py`(실출력 검산·게이트 밖)·`tools/verify_settlement_statements_offline.py`(옛 시험 3종 본문 그대로 + 이관 입구 · `run_checks` quick 등록). 원본 폴더는 그대로 둠(분석 스크립트 34개가 import · 백업 `_백업\T25이관전\`). 옛 양식(business_statements `main` — 사업자별 정산내역·전체계정_위탁정산서)은 관리상품 정산서 흐름이 쓰지 않아 옮기지 않음(원본 폴더에서 계속 실행 가능). 앱·배포 zip 변경 없음(5단계 `statements` 명령 전). 다음 = D-217 ① 관리 상품 출처 변경(별도 커밋).
+- 상태: ACTIVE

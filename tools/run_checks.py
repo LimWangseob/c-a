@@ -48,6 +48,7 @@ CHECKS = [
     ("소싱 후보(발굴·검색량·경쟁·점수 랭킹)", "tools/verify_sourcing_offline.py", True),
     ("정산 계산(지급일·금액·파싱 골든)", "tools/verify_settlement_offline.py", True),
     ("정산 런타임(다운로드·감시·검증 시트·지급일 대조)", "tools/verify_settlement_runtime_offline.py", True),
+    ("위탁정산서 계산 규칙(배분·장부·추가지급·입력 폴더)", "tools/verify_settlement_statements_offline.py", True),
     ("판매분석 금액 날짜별 누적", "tools/verify_sales_history_offline.py", True),
     ("통합 판매현황(첫 시트·월·주 조회)", "tools/verify_sales_summary_offline.py", True),
     ("쿠폰 목록·재고현황 날짜별 보관", "tools/verify_coupon_snapshot_offline.py", True),
