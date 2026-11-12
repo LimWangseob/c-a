@@ -119,7 +119,6 @@ def renames(old_names, accounts: list[SettleAccount], tok=lambda s: s) -> dict:
 
 
 # ── 정산 계정 출처 = 셀독계정상품이력관리원장(D-103) ─────────────────────────────
-KEEP_DAYS = 90        # 관리중단 뒤에도 남은 정산(로켓그로스 월정산·지급 보류 등)을 받는 기간
 SYNC_MAX_AGE_H = 26   # 원장 마지막 동기화가 이보다 오래면 정산 계정 구성 중단(18:00 실행이 하루 한 번 동기화)
 
 
@@ -137,10 +136,10 @@ def last_sync_time(sync_values: list) -> str:
     return max(times, default="")
 
 
-def accounts_from_registry(reg, settle_rows: dict, last_sync: str, now, keep_days: int = KEEP_DAYS,
+def accounts_from_registry(reg, settle_rows: dict, last_sync: str, now,
                            max_age_h: int = SYNC_MAX_AGE_H) -> tuple[list[SettleAccount], dict]:
-    """원장 → 정산 계정 [SettleAccount] + 구성 요약. 대상 = (셀독원장) 최근 keep_days 일 안에 하루라도 관리한 계정
-    (관리중 + 관리중단 뒤 keep_days 일 이내) − 오입력 + (정산전용계정) 관리중 또는 중단일이 keep_days 일 이내.
+    """원장 → 정산 계정 [SettleAccount] + 구성 요약. 대상 = (셀독원장) 한 번이라도 관리한 계정(관리중 + 관리중단 — 기간
+    제한 없음 · 쿠팡에 자료가 있으면 계속 받음 D-211) − 오입력 + (정산전용계정) 모든 줄(관리중·관리중단).
     비밀번호 = 원장 값(셀독원장 = 매일 관리대장에서 반영). 원장 동기화가 max_age_h 시간보다 오래면 AccountSourceError."""
     from datetime import datetime as _dt, timedelta
     from .registry_history import managed_between
@@ -151,9 +150,8 @@ def accounts_from_registry(reg, settle_rows: dict, last_sync: str, now, keep_day
     if age > timedelta(hours=max_age_h):
         raise AccountSourceError(f"원장 마지막 동기화 {last_sync} — {max_age_h}시간이 넘음(원장 링크가 바뀌었거나 18:00 실행이 "
                                  "안 됨). 설정 탭 원장 링크 확인 후 다시 실행(옛 정산 계정 파일로 대신하지 않음)")
-    start = (now - timedelta(days=keep_days)).strftime("%Y-%m-%d")
     mistaken = reg.mistaken_ids()
-    picked = [a for a in managed_between(reg, start, now.strftime("%Y-%m-%d")) if a not in mistaken and valid_account_id(a)]
+    picked = [a for a in managed_between(reg, "0000-01-01", now.strftime("%Y-%m-%d")) if a not in mistaken and valid_account_id(a)]
     out = []
     for aid in picked:
         acct = reg.account_rows(aid)[0].acct
@@ -164,9 +162,8 @@ def accounts_from_registry(reg, settle_rows: dict, last_sync: str, now, keep_day
         if aid in picked:
             dup.append(aid)
             continue
-        if row.active or (row.fields.get("중단일", "") or "9999") >= start:
-            out.append(SettleAccount(aid, row.label or aid, row.fields.get("비밀번호", "")))
-            settle_n += 1
+        out.append(SettleAccount(aid, row.label or aid, row.fields.get("비밀번호", "")))
+        settle_n += 1
     info = {"원장 동기화": last_sync, "셀독원장": len(picked), "정산전용": settle_n,
             "오입력 제외": len(mistaken), "중복(셀독원장 우선)": dup}
     return out, info

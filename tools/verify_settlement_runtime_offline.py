@@ -1422,7 +1422,7 @@ def p32_evidence_rules():
 
 
 def p37_accounts_from_registry():
-    print("[P37] 정산 계정 = 원장(셀독원장 관리중·관리중단 90일 이내 − 오입력 + 정산전용계정) · 동기화 오래되면 중단(D-103)")
+    print("[P37] 정산 계정 = 원장(셀독원장 한 번이라도 관리한 계정 − 오입력 + 정산전용계정) · 기간 제한 없음(D-211) · 동기화 오래되면 중단(D-103)")
     from datetime import datetime as D
     from coupang_analytics import registry as R, registry_model as M, registry_settle as RS
     from coupang_analytics import settlement_accounts as SA
@@ -1443,9 +1443,9 @@ def p37_accounts_from_registry():
     now = D(2026, 10, 21, 19)
     accts, info = SA.accounts_from_registry(reg, settle, "2026-10-21 18:00:30", now)
     got = {a.account_id: (a.label, a.password) for a in accts}
-    assert set(got) == {"keep1", "rec1", "own1"}, got                     # old1(중단 112일)·gone1(중단 173일) 제외
+    assert set(got) == {"keep1", "rec1", "old1", "own1", "gone1"}, got    # 중단 112일(old1)·173일(gone1)도 포함(D-211 기간 제한 없음)
     assert got["keep1"] == ("대표-가게1", "pw1b") and got["own1"] == ("임-디프", "pwO"), got   # 원장 최신 비번·정산전용 값
-    assert info["중복(셀독원장 우선)"] == ["keep1"] and info["정산전용"] == 1, info
+    assert info["중복(셀독원장 우선)"] == ["keep1"] and info["정산전용"] == 2, info
     for last, why in (("2026-10-20 08:00:00", "오래됨"), ("", "기록 없음")):
         try:
             SA.accounts_from_registry(reg, settle, last, now)
@@ -1453,7 +1453,7 @@ def p37_accounts_from_registry():
             pass
         else:
             raise AssertionError(f"동기화 {why}인데 통과")
-    ok("관리중·중단 90일 이내 포함·오래된 중단 제외·정산전용 관리중 포함·중복=원장 우선·최신 비번·동기화 오래됨/없음=중단")
+    ok("관리중·관리중단(기간 무관) 포함·정산전용 관리중·관리중단 포함·중복=원장 우선·최신 비번·동기화 오래됨/없음=중단")
 
 
 def p38_wing_extra_settlement():

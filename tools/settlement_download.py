@@ -108,8 +108,8 @@ def _accounts_from_file() -> list:
 
 
 def _accounts_from_registry() -> list:
-    """D-103 — 셀독계정상품이력관리원장(링크 = 설정 registry/url)에서 정산 계정을 만든다: 셀독원장(관리중·관리중단 90일
-    이내·오입력 제외) + 정산전용계정 시트. 원장이 오래됐거나 못 읽으면 중단(옛 계정 파일로 대신하지 않음)."""
+    """D-103 — 셀독계정상품이력관리원장(링크 = 설정 registry/url)에서 정산 계정을 만든다: 셀독원장(관리중·관리중단 — 기간 제한 없음 D-211
+    · 오입력 제외) + 정산전용계정 시트(모든 줄). 원장이 오래됐거나 못 읽으면 중단(옛 계정 파일로 대신하지 않음)."""
     from coupang_analytics import appconfig, gsheet_api, registry_gsheet as RG, registry_settle as RS
     url = appconfig.get("registry/url", "")
     if not url:
