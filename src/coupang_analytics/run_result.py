@@ -16,7 +16,7 @@ from .login_today import OTP
 
 LAST_SALES: dict = {}   # ① 끝 정보 — run_stages 시작 때 비우고 pipeline.run_full 이 채움
 SALES, KEYWORDS, RANKS, STOCK, PREP = "① 판매수집", "② 키워드 선정", "③ 순위", "재고 역기록", "준비"
-PW_HINT = "관리대장 비밀번호 확인 — 거부된 값은 고칠 때까지 다시 넣지 않음"
+PW_HINT = "관리대장 비밀번호 확인 — 거부된 값은 24시간 다시 넣지 않음"
 MAX_LINES = 20          # 단계마다 오류 줄 표시 상한(넘으면 '외 N건')
 TITLE = "===== [실행 결과 종합] ====="
 

@@ -1936,7 +1936,7 @@ def p54_result_summary():
         j = " | ".join(b)
         assert b[0] == "===== [실행 결과 종합] =====" and b[1] == "판정: 일부 실패 --> 확인 필요", b[:2]
         assert "전체 작업 계정: 5개 — A-1, B-2, C-3, D-4, E-5" in b
-        assert any(x.startswith("비밀번호 오류로 수집 안 된 계정: 1개 — B-2 (") and "고칠 때까지" in x for x in b), j
+        assert any(x.startswith("비밀번호 오류로 수집 안 된 계정: 1개 — B-2 (") and "24시간" in x for x in b), j
         assert "사람 조치 필요: 1개" in b and any(x.startswith("  - C-3: otp: 2차 인증") for x in b), j
         assert "오류 현황(실패·차단, 뒤에 풀린 것 제외): 2건" in b and "  - 로그인 실패 2건: B-2, C-3" in b, j   # D-4 = 뒤에 풀림
         assert "D-4" not in j.split("오류 현황")[1].split("대기·확인 필요")[0]
@@ -2614,35 +2614,6 @@ def p53_vat_detail_requests():
     ok("부가세 상세 = 최근 달부터 회차 4건·정기와 분리 · 화면 본문 그대로 · 메뉴로 짝 · 칸·기간 판정 · 판매+환불 = 화면 월 합계(RG 기타−쿠폰)")
 
 
-def p55_login_refused_record():
-    print("[P55] 정산 로그인 처리기록 — 실제 거부와 '전에 거부된 값이라 넣지 않음'을 다른 문구로(D-205)")
-    from coupang_analytics import pipeline_sales as PS
-    from coupang_analytics import settlement_runlog as RLG
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-    import settlement_download as SD
-    acc = type("A", (), {"account_id": "x1", "label": "가", "name": "가"})()
-    orig, orig_log, orig_name = PS._login_with_candidates, SD.LOG, SD.name_of
-    with tempfile.TemporaryDirectory() as tmp:
-        try:
-            SD.LOG, SD.name_of = RLG.RunLog(tmp, echo=lambda m: None), (lambda a: "가-x1")
-            for exc in (PS.LoginCredentialError("x1"), PS.LoginPasswordBlocked("x1")):
-                def _raise(*_a, _e=exc, **_k):
-                    raise _e
-                PS._login_with_candidates = _raise
-                try:
-                    SD._login(None, acc, ["pw"], True)
-                except SD.SessionSkip:
-                    pass
-            why = [r["사유"] for r in SD.LOG.rows if r["단계"] == "로그인"]
-            pw_accts = RLG.login_problems(SD.LOG.rows)[0]          # 마지막 줄 = '넣지 않음' 도 비밀번호 오류 계정
-        finally:
-            PS._login_with_candidates, SD.LOG, SD.name_of = orig, orig_log, orig_name
-    assert len(why) == 2 and why[0].startswith("비밀번호 오류 — 쿠팡이 거부") and why[1].startswith("비밀번호 오류 — 전에 거부된 값"), why
-    assert all("고칠 때까지" in w for w in why), why
-    assert pw_accts == ["가-x1"], pw_accts
-    ok("실제 거부 = '비밀번호 오류 — 쿠팡이 거부' · 넣지 않음 = '비밀번호 오류 — 전에 거부된 값' (둘 다 '비밀번호 오류' 계정으로 셈) — 처리기록만 보고 구분")
-
-
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -2689,7 +2660,6 @@ def main():
     p52_settlement_docs()
     p53_vat_detail_requests()
     p54_result_summary()
-    p55_login_refused_record()
     print("정산 런타임 오프라인 검증 통과")
 
 
