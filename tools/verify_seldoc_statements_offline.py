@@ -264,6 +264,10 @@ def _assert_page(wb):
     assert ws.print_area == f"'셀독 정산서'!$A$1:$T${ws.max_row}"
     assert [ws.column_dimensions[chr(65 + i)].width for i in range(20)] == [4.6] * 20 and "A1:T1" in ws.merged_cells
     assert not [v for v in _cells(ws).values() if isinstance(v, str) and any(w in v for w in INTERNAL)], "내부용 글자"
+    rs = list(ws.merged_cells.ranges)                                   # 병합이 겹치면 엑셀이 '읽을 수 없는 내용' 복구 창을 띄움
+    overlap = [(str(a), str(b)) for i, a in enumerate(rs) for b in rs[i + 1:]
+               if not (a.max_row < b.min_row or b.max_row < a.min_row or a.max_col < b.min_col or b.max_col < a.min_col)]
+    assert not overlap, overlap
     return ws
 
 
@@ -287,6 +291,8 @@ def test_sheet() -> None:
         # 판매 요약(왼쪽)과 정산 요약(오른쪽) 따로 — 판매금액은 실적에 더하지 않음
         assert ws["A" + str(ws[_find(c, "쿠팡 판매 요약")].row)].value == "쿠팡 판매 요약"
         assert _find(c, "쿠팡 정산 요약").startswith("L")
+        note = ws[next(k for k, v in c.items() if isinstance(v, str) and v.startswith("정산 대상 상품 · 판매 기간"))]                                            # 판매 요약 밑 안내 = 줄바꿈 두 줄이 다 보이는 높이
+        assert note.alignment.wrap_text and (ws.row_dimensions[note.row].height or 15) >= 24, ws.row_dimensions[note.row].height
         assert _right_of(ws, _find(c, "판매금액"), "E") == 5_000_000
         assert _right_of(ws, _find(c, "판매수량"), "E") == 400
         settle = {k: _right_of(ws, _find(c, k, 12), "Q") for k in ("입금 완료", "입금 예정", "보류", "정산 기준 실적")}

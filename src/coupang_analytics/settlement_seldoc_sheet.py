@@ -28,16 +28,19 @@ CARDS = (("목표 정산 총액", "계약금액 + 목표수익금", BLACK, WON),
          ("목표 도달율", "실적 ÷ 목표 정산 총액", PURPLE, PCT), ("남은 금액", "목표까지 남은 금액", BLACK, WON))
 
 
-def put(ws, r: int, c1: int, c2: int, v=None, *, size=10, bold=False, color=BLACK, fill=None, fmt=None, align="left", border=None):
-    """r 행 c1~c2 칸 병합(c1 == c2 면 한 칸) · 맑은 고딕 · 가운데 세로 정렬 · 줄바꿈."""
-    for c in range(c1, c2 + 1):
-        x = ws.cell(r, c)
-        if fill:
-            x.fill = PatternFill("solid", fgColor=fill)
-        if border is not None:
-            x.border = border
-    if c2 > c1:
-        ws.merge_cells(start_row=r, start_column=c1, end_row=r, end_column=c2)
+def put(ws, r: int, c1: int, c2: int, v=None, *, size=10, bold=False, color=BLACK, fill=None, fmt=None, align="left", border=None,
+        rows: int = 1):
+    """r 행(부터 rows 줄) c1~c2 칸 병합(한 칸이면 병합 안 함) · 맑은 고딕 · 가운데 세로 정렬 · 줄바꿈.
+    병합은 한 번만 — 같은 칸을 겹쳐 병합하면 엑셀이 파일을 '복구'하며 병합을 지움."""
+    for rr in range(r, r + rows):
+        for c in range(c1, c2 + 1):
+            x = ws.cell(rr, c)
+            if fill:
+                x.fill = PatternFill("solid", fgColor=fill)
+            if border is not None:
+                x.border = border
+    if c2 > c1 or rows > 1:
+        ws.merge_cells(start_row=r, start_column=c1, end_row=r + rows - 1, end_column=c2)
     x = ws.cell(r, c1, v)
     x.font = Font(name="맑은 고딕", size=size, bold=bold, color=color)
     x.alignment = Alignment(horizontal=align, vertical="center", wrap_text=True)
@@ -96,8 +99,7 @@ def _contract(ws, r: int, c: Contract) -> int:
     r = _row(ws, r, "계약", f"{c.title or '없음'} (계약자 {c.party or c.rep or '없음'} · 회사 {c.company or '없음'})")
     r = _row(ws, r, "계약 기간", f"{c.signed} ~ {c.end}" if c.end else f"{c.signed} ~ (종료일 없음)")
     items = c.items or [("없음", None, None)]
-    put(ws, r, 1, 5, "품목", bold=True, color=GRAY, border=THIN)
-    ws.merge_cells(start_row=r, start_column=1, end_row=r + len(items), end_column=5)
+    put(ws, r, 1, 5, "품목", bold=True, color=GRAY, border=THIN, rows=len(items) + 1)
     for c1, c2, t in ((6, 11, "품목"), (12, 16, "단가 (VAT 포함)"), (17, 20, "수량")):
         put(ws, r, c1, c2, t, size=9, bold=True, color=GRAY, fill=LIGHT, align="center")
     for k, (name, price, qty) in enumerate(items, 1):
@@ -123,7 +125,9 @@ def _month_label(ym: str, basis: str) -> str:
 def _sales(ws, r: int, pf: Perf, basis: str) -> int:
     """왼쪽 = 쿠팡 판매 요약(판매금액·판매수량·월별) · 끝난 다음 행."""
     _section(ws, r, 1, 9, "쿠팡 판매 요약")
-    put(ws, r + 1, 1, 9, f"정산 대상 상품 · 판매 기간 {pf.period} · 수량·상품별 = 정산 끝난 판매", size=8, color=GRAY)
+    note = f"정산 대상 상품 · 판매 기간 {pf.period} · 수량·상품별 = 정산 끝난 판매"
+    put(ws, r + 1, 1, 9, note, size=8, color=GRAY)
+    ws.row_dimensions[r + 1].height = _name_height(note, per_line=34, line=12.0)   # 9열·8pt — 둘째 줄이 잘리지 않게
     put(ws, r + 2, 1, 4, "판매금액", bold=True, color=GRAY)
     put(ws, r + 2, 5, 9, pf.sales, size=12, bold=True, color=PURPLE, fmt=WON, align="right")
     put(ws, r + 3, 1, 4, "판매수량", bold=True, color=GRAY)
@@ -153,10 +157,10 @@ def _settle(ws, r: int, pf: Perf) -> int:
     return k + 1
 
 
-def _name_height(name: str) -> float:
-    """상품명이 칸(5열) 폭을 넘으면 줄 수만큼 높임 — 병합 칸은 엑셀이 높이를 맞추지 않음."""
+def _name_height(name: str, per_line: float = 22, line: float = 15.0) -> float:
+    """글이 칸 폭(기본 = 상품명 5열·9pt)을 넘으면 줄 수만큼 높임 — 병합 칸은 엑셀이 높이를 맞추지 않음."""
     units = sum(1.5 if ord(ch) > 0x2E80 else 0.8 for ch in name)
-    return 15.0 * max(1, math.ceil(units / 22))
+    return line * max(1, math.ceil(units / per_line))
 
 
 def _products(ws, r: int, pf: Perf) -> int:
