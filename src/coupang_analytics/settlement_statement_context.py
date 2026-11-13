@@ -4,7 +4,8 @@
 입력 폴더(`inputs`) 고정 이름(손 입력·AI 판정표 · 없으면 ❌ 시작 전 중단):
   사업자_대응표.csv · 체험단_보충.json · 쿠팡_별도보상.json · 관리시작달_차이표.xlsx(계약일 AI 판정 D-185) ·
   svc_digital_judge.json(가전 AI 판정 D-161) · ledger.json(관리대장 스냅샷·비밀번호 없음) ·
-  관리상품_되찾기_판정.json(이력 없이 지운 로켓그로스 상품 — 위탁자 본인 상품 AI 판정 · settlement_statement_scope ⑤)
+  관리상품_되찾기_판정.json(이력 없이 지운 로켓그로스 상품 — 위탁자 본인 상품 AI 판정 · settlement_statement_scope ⑤) ·
+  관리상품_출처판정.json(옛 PC 대장·이력원장 상품이력·계약서 품목 → 등록상품 AI 판정 · 출처 순위 D-230·D-231)
 """
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ from coupang_analytics import settlement_statement_source as SRC
 
 MAP_CSV = "사업자_대응표.csv"
 REQUIRED = (MAP_CSV, "체험단_보충.json", "쿠팡_별도보상.json", "관리시작달_차이표.xlsx", "svc_digital_judge.json", "ledger.json",
-            SCOPE.JUDGE)
+            SCOPE.JUDGE, SCOPE.SOURCE)
 DIGITAL_RATES = {5.8, 6.4, 7.8}
 
 
@@ -43,6 +44,7 @@ class StatementArgs:
     supp: Path | None = None          # 보충 조회 폴더(옛 기준일 조회 방식 · 보통 없음)
     snap: Path | None = None          # 같은 시각대 조회 스냅샷 폴더(보통 없음)
     account_history: Path | None = None   # 원장 '계정이력' 시트 사본 json(없으면 구글 실시간 · 계약 없는 계정의 관리 시작)
+    only: tuple = ()                      # 이 계정ID 만 정산서 만들기(시험용 · 비면 전 계정)
 
 
 def missing_inputs(inputs: Path) -> list[str]:
@@ -127,15 +129,20 @@ def _accounts(a: StatementArgs, c: SimpleNamespace) -> None:
 
 
 def _managed(a: StatementArgs, c: SimpleNamespace) -> None:
-    """관리 상품 기준 — 대장(결과 엑셀 + 날짜별 사본) VID·같은 상품명(D-107)·되찾은 로켓그로스 상품·체험단·원장 정산전용상품."""
+    """관리 상품 기준 — 출처 순위(D-230·D-231): ① 대장(결과 엑셀 + 날짜별 사본) VID·같은 상품명(D-107)·옛 대장 ② 원장 정산전용상품
+    (모든 계정)·이력원장 ③ 계약서 ④ 되찾은 로켓그로스 상품(1~3순위로 정한 상품 뺌) · 체험단."""
     c.ledger = SCOPE.ledger_vids(a.managed_output)
     c.daily, c.periods = sales_history.load_daily(a.managed_output), sales_history.load_periods(a.managed_output)
     c.listings = sales_summary.managed_listings((c.daily, c.periods), c.ledger)
     c.contracts = contracts(a.inputs / "관리시작달_차이표.xlsx")
-    c.rg = SCOPE.recover_all(c.ledger, c.listings, (c.daily, c.periods), SCOPE.inventory(a.managed_output), c.contracts,
-                             SCOPE.account_history(a.account_history), SCOPE.load_judge(a.inputs / SCOPE.JUDGE))
-    c.xrows = XP.load(a.out, None, a.inputs / "체험단_보충.json")
     c.settle_only, c.settle_only_err = settle_only_sheet(a.settle_only)
+    c.sources = SCOPE.load_sources(a.inputs / SCOPE.SOURCE)
+    c.ranked = {aid: SCOPE.ranked(c.settle_only.get(aid) or {}, c.sources.get(aid) or {}) for aid in set(c.settle_only) | set(c.sources)}
+    inv = SCOPE.inventory(a.managed_output)
+    c.src_vids = {aid: SCOPE.source_vids(rk, inv.get(aid) or {}, SCOPE.sales_groups(c.periods.get(aid) or {})) for aid, rk in c.ranked.items()}
+    c.rg = SCOPE.recover_all(c.ledger, c.listings, (c.daily, c.periods), inv, c.contracts,
+                             SCOPE.account_history(a.account_history), SCOPE.load_judge(a.inputs / SCOPE.JUDGE), c.ranked)
+    c.xrows = XP.load(a.out, None, a.inputs / "체험단_보충.json")
 
 
 def load(a: StatementArgs) -> SimpleNamespace:

@@ -34,12 +34,13 @@ def _args(argv: list[str] | None = None) -> ST.ARGS:
     ap.add_argument("--supp", type=Path)
     ap.add_argument("--snap", type=Path)
     ap.add_argument("--account-history", type=Path)
+    ap.add_argument("--only", default="", help="쉼표로 나눈 계정ID 만(시험용)")
     a = ap.parse_args(argv)
     date.fromisoformat(a.basis)
     date.fromisoformat(a.issued)
     return ST.ARGS(out=a.out, managed_output=a.managed_output, settle_dir=a.settle_dir, stats=a.stats, basis=a.basis,
                    inputs=a.inputs, issued=a.issued, settle_only=a.settle_only, supp=a.supp, snap=a.snap,
-                   account_history=a.account_history)
+                   account_history=a.account_history, only=tuple(x.strip() for x in a.only.split(",") if x.strip()))
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -46,6 +46,8 @@ def run(args: CTX.StatementArgs) -> dict:
     ctx = CTX.load(args)
     res, skipped = [], []
     for acct in ctx.accts:
+        if args.only and SRC.aid_of(acct) not in args.only:
+            continue
         a = account(ctx, acct)
         row = summary_row(a, shown(a))                      # 정산서 1쪽과 같은 숫자(줄 합계 검산 포함)
         if not (a["mpids"] or a["scope"].startswith(AC.LEDGER) or a["scope"] == AC.SETTLE_ONLY):

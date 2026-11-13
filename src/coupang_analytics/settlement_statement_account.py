@@ -112,18 +112,29 @@ LEDGER, SETTLE_ONLY = "관리대장 상품", "원장 정산전용상품"
 
 
 def scope(ctx, aid: str) -> tuple[str, set, set, dict]:
-    """(범위, 관리 VID, 관리 노출 상품명, 관리 등록상품ID 직접 지정) — 관리대장(+ 되찾은 로켓그로스 상품) > 원장 정산전용상품."""
+    """(범위, 관리 VID, 관리 노출 상품명, 등록상품ID 판정) — 출처 순위(D-230·D-231): 관리대장 VID·같은 이름이 먼저(아래 출처가 못 뺌) ·
+    옛 대장 > 원장 정산전용상품(모든 계정) > 이력원장 > 계약서(판정표 · 등록상품 단위) > 되찾은 로켓그로스 상품(대장 계정만)."""
+    rk = ctx.ranked.get(aid) or {}
+    marks = {pid: verdict for pid, (_src, verdict, *_x) in rk.items()}
+    src_vids = set(ctx.src_vids.get(aid) or set())
     if aid in ctx.ledger:
-        r = ctx.rg.get(aid) or {"vids": set(), "got": [], "check": []}
-        sc = LEDGER + (f" + 되찾은 로켓그로스 상품 {len(r['got'])}개" if r["got"] else "") + (
-            f"(확인 필요 {len(r['check'])}개)" if r["check"] else "")
-        return sc, set(ctx.ledger[aid]) | r["vids"], ctx.listings.get(aid) or set(), {}
-    marks = ctx.settle_only.get(aid) or {}
+        return _ledger_scope(ctx, aid, rk), set(ctx.ledger[aid]) | (ctx.rg.get(aid) or {}).get("vids", set()) | src_vids,             ctx.listings.get(aid) or set(), marks
+    sheet = ctx.settle_only.get(aid) or {}
     if not marks:
         return "관리 상품 자료 없음" + (f"({ctx.settle_only_err})" if ctx.settle_only_err else ""), set(), set(), {}
-    if any(v not in ("관리", "본인상품") for v in marks.values()):
-        return f"판정 대기(원장 정산전용상품 구분 빈 칸 {sum(v not in ('관리', '본인상품') for v in marks.values())}줄)", set(), set(), marks
-    return SETTLE_ONLY, set(), set(), marks
+    blank = sum(v not in ("관리", "본인상품") for v in sheet.values())
+    if blank:
+        return f"판정 대기(원장 정산전용상품 구분 빈 칸 {blank}줄)", set(), set(), marks
+    named = ([SETTLE_ONLY] if sheet else []) + [p for p in SCOPE.source_counts(rk) if not p.startswith(SETTLE_ONLY)]
+    return (" + ".join(named) or f"관리 상품 출처 확인 필요 {len(SCOPE.source_checks(rk))}개"), src_vids, set(), marks
+
+
+def _ledger_scope(ctx, aid: str, rk: dict) -> str:
+    """대장 계정의 범위 글 — 관리대장 상품 + 출처별 개수 + 되찾은 로켓그로스 상품(확인 필요 n개)."""
+    r = ctx.rg.get(aid) or {"vids": set(), "got": [], "check": []}
+    n_check = len(r["check"]) + len(SCOPE.source_checks(rk, SCOPE.handled(r)))
+    return LEDGER + "".join(f" + {p}" for p in SCOPE.source_counts(rk)) + (
+        f" + 되찾은 로켓그로스 상품 {len(r['got'])}개" if r["got"] else "") + (f"(확인 필요 {n_check}개)" if n_check else "")
 
 
 def ratio(mset: dict, ch: str, ym: str, S: float) -> float:
@@ -176,7 +187,8 @@ class AccountBase:
     def _scope(self) -> None:
         c, aid = self.ctx, self.aid
         self.sc, self.vids, self.mnames, self.marks = scope(c, aid)
-        self.scope_check = (c.rg.get(aid) or {}).get("check", [])            # 관리 상품인지 못 정한 상품(금액 밖 · 정산서에 표시)
+        r = c.rg.get(aid) or {}
+        self.scope_check = r.get("check", []) + SCOPE.source_checks(c.ranked.get(aid) or {}, SCOPE.handled(r))   # 못 정한 상품(금액 밖·표시)
         self.known, self.cdate = aid in c.contracts, c.contracts.get(aid)     # D-185 — 계약 달 앞 판매 = 관리 상품 아님
         self.vid_name = SCOPE.vid_names((c.daily, c.periods), aid)
         self.files = c.files.get(aid, [])

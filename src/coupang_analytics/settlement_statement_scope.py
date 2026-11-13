@@ -26,6 +26,7 @@ from coupang_analytics.workbook import OutputWorkbook
 MASTER = "쿠팡데이타분석_통계.xlsx"
 SNAP = re.compile(r"쿠팡데이타분석_통계_(\d{6}|보관_\d{6}_\d{6})\.xlsx")     # 날짜별 사본(pipeline_paths._snapshot_path) · 보관본
 JUDGE = "관리상품_되찾기_판정.json"
+SOURCE = "관리상품_출처판정.json"     # 옛 대장·이력원장·계약서 → 등록상품 AI 판정(D-230 · D-231)
 KEEP, OWN = ("관리",), ("본인상품", "제외")
 NO_INV = "상품조회 자료 없음 — 이력 없이 지운 로켓그로스 상품을 되찾지 못함"
 NO_BASE = "기준일 없음(계약 없음 · 원장 계정이력에 관리 시작 없음)"
@@ -143,14 +144,15 @@ def id_side(pid: str, bm: str, inv_all: dict) -> str | None:
 
 
 # ── ③④⑤ 되찾기 ──
-def candidates(inv: dict, groups: dict, is_mv) -> list:
-    """[(등록상품ID, 상품명, VID 집합, 등록일 | None)] — 대장 상품(VID·같은 이름)이 아닌 로켓그로스 등록 상품."""
+def candidates(inv: dict, groups: dict, is_mv, decided=frozenset()) -> list:
+    """[(등록상품ID, 상품명, VID 집합, 등록일 | None)] — 대장 상품(VID·같은 이름)도, 1~3순위 출처로 정한 상품(decided)도 아닌
+    로켓그로스 등록 상품(D-230 · 아래 순위는 위 순위가 정한 상품을 바꾸지 않음)."""
     out = []
     for pid, e in inv.items():
-        if "RFM" in e["types"].values() and not any(is_mv(v) for v in e["types"]):
+        if pid not in decided and "RFM" in e["types"].values() and not any(is_mv(v) for v in e["types"]):
             out.append((pid, e["name"], set(e["types"]), e["created"]))
     for g, e in groups.items():
-        if g not in inv and e["rg"] and not any(is_mv(v) for v in e["vids"]):
+        if g not in inv and g not in decided and e["rg"] and not any(is_mv(v) for v in e["vids"]):
             out.append((g, e["name"], set(e["vids"]), None))
     return out
 
@@ -184,14 +186,14 @@ def classify(cand: tuple, base: tuple, judge: dict, inv_all: dict) -> tuple:
     return "확인 필요", "위탁자 본인 상품인지 판정 없음"
 
 
-def recover(aid: str, is_mv, stores, inv_all: dict, base: tuple, judge: dict) -> dict:
+def recover(aid: str, is_mv, stores, inv_all: dict, base: tuple, judge: dict, decided=frozenset()) -> dict:
     """계정 하나 → {"vids": 되찾은 VID, "got"·"excl"·"check": [(등록상품ID, 상품명, 사유)]}."""
     r: dict = {"vids": set(), "got": [], "excl": [], "check": []}
     if aid not in inv_all:
         r["check"].append(("", "", NO_INV))
         return r
     groups = sales_groups(stores[1].get(aid) or {})
-    for cand in sorted(candidates(inv_all[aid], groups, is_mv)):
+    for cand in sorted(candidates(inv_all[aid], groups, is_mv, decided)):
         verdict, why = classify(cand, base, judge.get(aid) or {}, inv_all)
         r[{"관리": "got", "제외": "excl", "확인 필요": "check"}[verdict]].append((cand[0], cand[1], why))
         if verdict == "관리":
@@ -199,18 +201,87 @@ def recover(aid: str, is_mv, stores, inv_all: dict, base: tuple, judge: dict) ->
     return r
 
 
-def recover_all(ledger: dict, listings: dict, stores, inv_all: dict, contracts: dict, starts: tuple, judge: dict) -> dict:
-    """대장 계정마다 recover — {계정ID: 결과}. stores = (일별, 기간) 판매분석 저장."""
+def recover_all(ledger: dict, listings: dict, stores, inv_all: dict, contracts: dict, starts: tuple, judge: dict,
+                rank: dict) -> dict:
+    """대장 계정마다 recover — {계정ID: 결과}. stores = (일별, 기간) 판매분석 저장 · rank = {계정ID: ranked()}(1~3순위로 정한 상품)."""
     out = {}
     for aid, vids in ledger.items():
         names, vname = listings.get(aid) or set(), vid_names(stores, aid)
 
         def is_mv(v: str, vids=vids, names=names, vname=vname) -> bool:
             return v in vids or vname.get(v) in names
-        out[aid] = recover(aid, is_mv, stores, inv_all, baseline(aid, contracts, starts), judge)
+        out[aid] = recover(aid, is_mv, stores, inv_all, baseline(aid, contracts, starts), judge, decided(rank.get(aid) or {}))
     return out
 
 
 def load_judge(path: Path) -> dict:
     """입력 폴더 AI 판정표 → {계정ID: {등록상품ID: {"판정", "근거", ...}}}."""
     return json.loads(path.read_text(encoding="utf-8"))["계정"]
+
+
+# ── 정산 대상 상품 출처 순위(D-230 · D-231) ──
+# ① 관리대장(지금·사본 = ledger_vids · 옛 PC 대장 = 출처판정 '옛 대장') ② 이력원장(원장 '정산전용상품' 시트 → '상품이력' = 출처판정
+# '이력원장') ③ 계약서 품목(출처판정 '계약서' · 판매 방식 안 가림) ④ 쿠팡 등록 로켓그로스 = recover(위 순위에서 정한 상품은 후보 아님).
+# 옛 대장·이력원장·계약서 → 등록상품 = AI 판정표(코드에 계정·상품 조건 없음 · D-229). 아래 순위는 위 순위가 정한 상품을 바꾸지 않음.
+OLD, HIST, CONTRACT = "옛 대장", "이력원장", "계약서"
+SETTLE = "원장 정산전용상품"
+ORDER = (OLD, SETTLE, HIST, CONTRACT)
+CHECK = "확인 필요"
+VERDICTS = KEEP + OWN + (CHECK,)
+
+
+def load_sources(path: Path) -> dict:
+    """입력 폴더 출처판정 → {계정ID: {등록상품ID: {"출처", "판정", "상품명", "근거"}}} — 모르는 출처·판정 = ValueError."""
+    data = json.loads(path.read_text(encoding="utf-8"))["계정"]
+    for aid, prods in data.items():
+        for pid, e in prods.items():
+            if e.get("출처") not in (OLD, HIST, CONTRACT) or e.get("판정") not in VERDICTS:
+                raise ValueError(f"{SOURCE} {aid} {pid}: 출처 {e.get('출처')!r} · 판정 {e.get('판정')!r} — 허용 = {(OLD, HIST, CONTRACT)} · {VERDICTS}")
+    return data
+
+
+def ranked(settle_marks: dict, sources: dict) -> dict:
+    """계정 하나 → {등록상품ID: (출처, 판정, 근거, 상품명)} — ORDER 순서로 먼저 정한 출처가 그 상품을 정함."""
+    by: dict = {OLD: {}, HIST: {}, CONTRACT: {}}
+    for pid, e in sources.items():
+        by[e["출처"]][str(pid)] = (e["판정"], e.get("근거") or "", e.get("상품명") or "")
+    by[SETTLE] = {str(p): ((k, "", "") if k in KEEP + OWN else (CHECK, "원장 정산전용상품 구분 빈 칸", ""))
+                  for p, k in settle_marks.items()}
+    out: dict = {}
+    for src in ORDER:
+        for pid, (verdict, why, name) in by[src].items():
+            out.setdefault(pid, (src, verdict, why, name))
+    return out
+
+
+def decided(rk: dict) -> frozenset:
+    """1~3순위 출처가 정한 등록상품('관리'·'본인상품'·'제외') — '확인 필요'는 정해지지 않은 것이라 4순위로 넘어감(D-230)."""
+    return frozenset(pid for pid, (_s, verdict, *_x) in rk.items() if verdict != CHECK)
+
+
+def source_checks(rk: dict, later=frozenset()) -> list:
+    """[(등록상품ID, 상품명, 사유)] — 출처에서 '확인 필요'로 남았고 4순위(later = 되찾기에서 다룬 상품)에서도 안 다룬 상품."""
+    return [(pid, name, f"{src}: {why}".rstrip(": ")) for pid, (src, verdict, why, name) in sorted(rk.items())
+            if verdict == CHECK and pid not in later]
+
+
+def source_vids(rk: dict, inv: dict, groups: dict) -> set:
+    """1~3순위 '관리' 등록상품 → 그 상품의 VID 전부(상품조회 옵션 + 판매분석 옵션 · 판매자배송 포함) — 정산 파일 상품 ID 와
+    상품조회 등록상품ID 가 달라도 VID 로 잡는다(되찾기 recover 와 같은 방식)."""
+    out: set = set()
+    for pid, (_s, verdict, *_x) in rk.items():
+        if verdict in KEEP:
+            out |= set((inv.get(pid) or {}).get("types") or {}) | set((groups.get(pid) or {}).get("vids") or ())
+    return out
+
+
+def handled(r: dict) -> frozenset:
+    """되찾기 결과에서 다룬 등록상품(관리·제외·확인 필요)."""
+    return frozenset(p for k in ("got", "excl", "check") for p, *_x in r.get(k) or [])
+
+
+def source_counts(rk: dict) -> list:
+    """['옛 대장 1개', …] — 출처별 '관리' 상품 수(0개 출처는 뺌 · ORDER 순서)."""
+    n = {src: sum(1 for s, v, *_ in rk.values() if s == src and v in KEEP) for src in ORDER}
+    return [f"{src} {k}개" for src, k in n.items() if k]
+
