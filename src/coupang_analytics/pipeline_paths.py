@@ -58,19 +58,58 @@ def _run_stage_path(out_dir: str | Path) -> Path:
     return Path(out_dir) / _RUN_STAGE_JSON
 
 
-def write_run_stage(stage: str, out_dir: str | Path = "output") -> None:
+_RUN_DAYS_KEEP = 14   # 날짜별 단계 기록(days) 보관 일수 — 보충 범위(pipeline_stages._CATCHUP_DAYS)보다 넉넉히
+
+
+def _read_stage_file(out_dir) -> dict:
+    p = _run_stage_path(out_dir)
+    try:
+        m = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    except (OSError, ValueError):
+        return {}
+    return m if isinstance(m, dict) else {}
+
+
+def run_days(marker: dict | None) -> dict:
+    """{실행 날짜(ISO): 마지막 단계} — 단계 기록의 'days'. 'days' 없는 옛 파일 = 맨 위 date·stage 한 날(T-47 이어받기)."""
+    if not marker:
+        return {}
+    days = marker.get("days")
+    if isinstance(days, dict):
+        return {str(k): str(v) for k, v in days.items()}
+    day, stage = marker.get("date"), marker.get("stage")
+    return {str(day): str(stage)} if day and stage else {}
+
+
+def _write_stage_file(m: dict, days: dict, out_dir) -> None:
+    m["days"] = dict(sorted(days.items())[-_RUN_DAYS_KEEP:])
+    try:
+        _run_stage_path(out_dir).write_text(json.dumps(m, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def write_run_stage(stage: str, out_dir: str | Path = "output", day: str | None = None) -> None:
     """전체실행/무인의 진행 단계를 오늘 날짜로 기록(재부팅 복구용).
 
     stage: 'sales'=①판매수집 완료(다음=②) · 'ranks'=②키워드 완료(다음=③) · 'done'=전부 완료.
     ②③은 마스터에 직접 쓰고 진행중 파일을 안 남기므로, 이 마커로 어디까지 했는지 남긴다.
+    맨 위 date·stage·at = 지금 시각 기준(재부팅 복구·정산이 읽음 · 그대로) · days[day] = 실행 날짜별 마지막 단계
+    (day = 실행 시작일 · 자정 넘어 끝나도 그 실행 날짜 · 최근 며칠 못 끝낸 ③ 보충용 T-47).
     """
-    try:
-        _run_stage_path(out_dir).write_text(
-            json.dumps({"date": datetime.now().strftime("%Y-%m-%d"), "stage": stage,
-                        "at": datetime.now().isoformat(timespec="seconds")}, ensure_ascii=False),
-            encoding="utf-8")
-    except OSError:
-        pass
+    now = datetime.now()
+    days = run_days(_read_stage_file(out_dir))
+    days[day or now.strftime("%Y-%m-%d")] = stage
+    _write_stage_file({"date": now.strftime("%Y-%m-%d"), "stage": stage, "at": now.isoformat(timespec="seconds")},
+                      days, out_dir)
+
+
+def mark_run_day(day: str, stage: str, out_dir: str | Path = "output") -> None:
+    """지난 실행 날짜 하나의 단계만 바꿈(맨 위 date·stage·at 은 그대로) — 보충으로 그날 ③ 빈 칸을 다 채우면 'done'."""
+    m = _read_stage_file(out_dir)
+    days = run_days(m)
+    days[day] = stage
+    _write_stage_file(m, days, out_dir)
 
 
 def read_run_stage(out_dir: str | Path = "output") -> dict | None:

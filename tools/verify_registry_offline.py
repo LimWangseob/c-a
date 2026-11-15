@@ -12,6 +12,7 @@ import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -1177,6 +1178,33 @@ def t23_company_stock_skip_logged():
     ok("링크 미설정 3경우·계정목록 주입 미설정·SA 미등록 각 1줄 안내·반영 호출 없음·오류 표기 아님")
 
 
+def t23b_company_stock_read_fail_is_error():
+    print("[R23b] 회사 재고현황 머리를 못 읽음 = ❌ 오류(종합 오류 수에 잡힘)·읽은 탭 이름 표시 · 워크북 값은 안 건드림 (T-47 · output (37) 11-13~)")
+    from coupang_analytics import company_stock as CS
+    from coupang_analytics import gsheet_api
+    from coupang_analytics import pipeline_gsheet as PG
+    from coupang_analytics import run_result as RR
+
+    def bad_read(values):
+        raise ValueError("재고현황 상단 15행에서 '창고'·'상품명(제품명)'·'현재고(총입고수량)' 헤더를 찾지 못함")
+    applied: list = []
+    orig = (gsheet_api.load_sa_info, gsheet_api.GSheetClient, CS.resolve_tab, CS.read_stock, CS.apply_to_workbook)
+    try:
+        gsheet_api.load_sa_info = lambda *a, **k: {"x": 1}
+        gsheet_api.GSheetClient = lambda url, on_log=None: SimpleNamespace(read_values=lambda tab: [])
+        CS.resolve_tab = lambda client: "재고현황(11월)"
+        CS.read_stock = bad_read
+        CS.apply_to_workbook = lambda *a, **k: applied.append(1) or 0
+        logs: list = []
+        PG.inject_company_stock(object(), "S", logs.append)
+        assert len(logs) == 1 and "❌" in logs[0] and "'재고현황(11월)'" in logs[0] and "헤더를 찾지 못함" in logs[0], logs
+        assert applied == [], "못 읽으면 주입 안 함(값 규칙 그대로)"
+        assert RR.is_error(RR.SALES, logs[0]) and RR.is_error(RR.RANKS, logs[0]), "종합 오류 줄로 셈"
+    finally:
+        (gsheet_api.load_sa_info, gsheet_api.GSheetClient, CS.resolve_tab, CS.read_stock, CS.apply_to_workbook) = orig
+    ok("머리 못 읽음 → ❌ 한 줄(탭 이름·사유) · 주입 없음 · 종합 오류로 셈")
+
+
 def t24_mistaken_account_id():
     print("[R24] 계정아이디 형식 오류(비밀번호 오입력 등) = 원장에 안 넣음·이미 들어간 것은 '오입력' 표시(정산·로그인 제외)·로그 가림(D-103)")
     BAD = "!!x9secret"
@@ -1276,6 +1304,7 @@ def main():
     t21d_company_stock_ai_decides()
     t22_name_rules()
     t23_company_stock_skip_logged()
+    t23b_company_stock_read_fail_is_error()
     t24_mistaken_account_id()
     t25_settle_only_sheet()
     print("셀독계정상품이력관리원장 오프라인 검증 통과")

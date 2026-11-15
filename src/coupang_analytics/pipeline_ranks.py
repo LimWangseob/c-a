@@ -11,7 +11,7 @@ import random
 import re
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from . import config
@@ -178,11 +178,12 @@ def drive_rank(offscreen: bool, run_once, log, should_stop=None, halt_reason=Non
             prog["conn"], prog["ran"] = 0, True
             if not blocked or px is None:
                 return
-            if egress and halt_reason() == "block":
+            reason = halt_reason()
+            if egress and reason in ("block", _DEAD_BLOCK):   # 검색창 없는 화면이 실제 접근차단이면 차단과 같이(T-47)
                 prog["pairs"].add((px, egress))
-                proxy_blocklist.record(egress, "Akamai 검색차단")
+                proxy_blocklist.record(egress, "Akamai 검색차단" if reason == "block" else "Akamai 접근차단(검색창 없음 화면)")
                 log(f"  [프록시] ⛔ 차단 감지 — egress {egress} 차단목록 등록")
-            elif egress and halt_reason() == _DEAD:   # IP 불량 — 이번 실행만 건너뜀(쿠팡 차단 확정 아님 → 목록엔 안 남김·D-090)
+            elif egress and reason == _DEAD:   # IP 불량 — 이번 실행만 건너뜀(쿠팡 차단 확정 아님 → 목록엔 안 남김·D-090)
                 prog["pairs"].add((px, egress))
             prog["rotations"] += 1
             log(f"  [프록시] 🔄 새 IP로 전환({prog['rotations']}번째) — 다음 키워드부터(막힌 키워드는 다음 바퀴)")
@@ -252,13 +253,16 @@ def _rank_date(wb, biz: str, date_label: str | None) -> str | None:
 
 def track_ranks_stage(out_dir: str = "output", on_log=None,
                       should_stop=None, gsheet_output_url: str | None = None,
-                      stock_url: str | None = None, date_label: str | None = None) -> Path | None:
+                      stock_url: str | None = None, date_label: str | None = None,
+                      run_date: date | None = None) -> Path | None:
     """③ 노출순위 조회 전용(**반자동**) — 최신 워크북 로드, 상품(고유ID)+키워드로 순위 측정·기록. 로그인 불필요.
 
     ①(상품ID)·②(키워드)가 이미 워크북에 있어야 한다. 상품마다 저장된 vendorItemId 로 검색결과에서 내
     상품을 찾아 오가닉 순위를 기록한다(가장 최근 일자 컬럼, date_label 을 주면 **그 날짜 칸**·이미 채워진 칸은 건너뜀).
     앱이 보이는 창에서 키워드를 타이핑+Enter 하고 그 화면만 읽는다(offscreen 자동 순위는 폐기·D-022 B5 삭제).
     매칭 시 블록 이름을 검색결과의 **노출명**으로 현행화한다. should_stop() 이 참이면 중도 중단.
+    run_date = 이 실행의 날짜(전체실행·무인 시작일) — 통합판매현황 '전일'을 이 날 기준으로(자정 뒤 ③ 이 달력상 어제를
+    전일로 써 0원으로 덮던 결함 T-47 · output (37) 11-13 06:22). None = 오늘(순위 탭 단독).
     """
     log = on_log or (lambda m: None)
     LAST_RANK.clear()
@@ -271,7 +275,7 @@ def track_ranks_stage(out_dir: str = "output", on_log=None,
         log("== 순위 조회: 결과 워크북이 없습니다 — 먼저 ①②를 실행하세요 ==")
         return None
     inject_company_stock(wb, stock_url, log)   # 회사보유재고 → 워크북(계정목록 5열) · apply_style 전
-    refresh_sales_sheet(wb, out, log)          # 첫 시트 통합판매현황(① 뒤 쌓인 판매 기록 반영)
+    refresh_sales_sheet(wb, out, log, today=run_date)   # 첫 시트 통합판매현황(① 뒤 쌓인 판매 기록 · 전일 = 실행 날짜 전날)
 
     def _on_pass():   # 진전 있는 바퀴 끝마다 결과 반영 — 밤새 빈 칸을 다시 돌아도 시트가 따라옴(2026-10-13)
         wb.apply_style()
@@ -341,6 +345,7 @@ def _save_block_evidence(pg, kw: str, marker: str) -> dict:
 
 # IP 불량(D-090) — 쿠팡 화면에 검색창이 없음 = 이 IP 로는 쿠팡이 안 열림(키워드 탓 아님).
 _DEAD = "dead"
+_DEAD_BLOCK = "dead_block"     # 검색창 없는 화면이 실제 쿠팡 접근차단 화면(Access Denied 등) — 흐름은 IP 불량, 기록은 차단(T-47)
 _SEARCH_BOX_JS = "() => !!document.querySelector(\"input[name='q'], input.headerSearchKeyword, #headerSearchKeyword\")"
 _SEARCH_BOX_WAIT_SEC = 15      # 느리게 뜨는 화면 여유(실측 10-20: 검색창 있는 IP 의 미로딩은 4건뿐)
 _DEAD_STREAK_STOP = 15         # 성공 없이 IP 불량이 이만큼 이어지면 쿠팡 화면 구조 변경 의심 → ③ 마침(실측 최대 연속 5)
@@ -561,7 +566,7 @@ class _SemiState:
     pass_no: int = 1
     pass_mark: int = 0          # 이번 바퀴 시작 때의 searched(진전 판정)
     pass_trouble: bool = False  # 이번 바퀴에 차단/연결 장애가 있었나(없는데 진전도 없으면 측정 불가로 마침)
-    halt_reason: str = ""       # 'block' | 'conn' | 'miss' | 'dead' — drive_rank 가 차단 IP 기록 여부 판단(block 만 기록)
+    halt_reason: str = ""       # 'block' | 'conn' | 'miss' | 'dead' | 'dead_block' — drive_rank 가 차단 IP 기록 여부 판단(block·dead_block 기록)
     dead_total: int = 0         # IP 불량(쿠팡 화면에 검색창 없음) 횟수 — 차단·연결 장애와 구분(D-090)
     dead_streak: int = 0        # 성공 없이 이어진 IP 불량 수(_DEAD_STREAK_STOP 이면 ③ 마침)
     gave_up: bool = False       # IP 불량이 너무 이어져 ③ 을 마침(새 IP 로 더 돌지 않음)
@@ -794,25 +799,41 @@ def _semi_on_dead(st: _SemiState, browser, kw: str, log) -> bool:
     으로 표시(진전 없는 바퀴로 오판해 ③ 을 일찍 마치지 않게)한 뒤, 회전 가능하면 새 IP(True). 못 잰 키워드는 호출부가 뒤로
     미뤄 바퀴 끝 빈 칸 재검색에서 다시 잰다(소유자 2026-10-21 '즉시 다른 IP·키워드로 전환, 한 사이클 뒤 누락분 재검색').
     회전 불가면 False(호출부가 기존 미로딩 처리). 성공 없이 _DEAD_STREAK_STOP 번 이어지면 화면 구조 변경 의심 → ③ 마침."""
-    st.dead_total += 1
+    denied = _denied_marker(browser)   # output (37): '검색창 없음' 14건이 전부 쿠팡 'Access Denied' 화면(T-47)
     st.dead_streak += 1
     st.pass_trouble = True
-    ev = _save_block_evidence(browser.page, kw or "홈", "검색창 없음")
-    log(f"  [반자동] {f'「{kw}」 ' if kw else ''}쿠팡 화면에 검색창 없음 = IP 불량(화면이 안 열림·키워드 탓 아님) · "
-        f"증거 {ev.get('file') or ev.get('error', '없음')}")
+    if denied:
+        st.blocked_total += 1
+    else:
+        st.dead_total += 1
+    ev = _save_block_evidence(browser.page, kw or "홈", f"검색창 없음·{denied}" if denied else "검색창 없음")
+    where, evf = f"「{kw}」 " if kw else "", ev.get("file") or ev.get("error", "없음")
+    if denied:
+        log(f"  [반자동] {where}쿠팡 접근차단 화면(판정 단어 '{denied}' · 검색창 없음) = 이 IP 차단 → 차단 이력에 기록 · 증거 {evf}")
+    else:
+        log(f"  [반자동] {where}쿠팡 화면에 검색창 없음 = IP 불량(화면이 안 열림·키워드 탓 아님) · 증거 {evf}")
     if st.dead_streak >= _DEAD_STREAK_STOP:
         st.gave_up = st.halted = True
         st.halt_reason = _DEAD
-        log(f"  ❌ [순위] 성공 없이 IP 불량 {st.dead_streak}번 연속 — 쿠팡 화면 구조 변경 또는 프록시 전체 불량 의심 → "
+        log(f"  ❌ [순위] 성공 없이 검색창 없는 화면(IP 불량·접근차단) {st.dead_streak}번 연속 — 쿠팡 화면 구조 변경·프록시 전체 불량·차단 의심 → "
             f"순위 마침(증거 화면 {_EVIDENCE_DIR} 확인 필요)")
         return True
     if not rotation_can_rotate():
         return False
     st.rotations += 1
     st.miss_streak = 0
-    st.halted, st.halt_reason = True, _DEAD
+    st.halted, st.halt_reason = True, (_DEAD_BLOCK if denied else _DEAD)
     log("  ⟳ 프록시 새 IP 로 전환 — 다음 키워드부터(못 잰 키워드는 바퀴 끝 빈 칸 재검색에서 다시)")
     return True
+
+
+def _denied_marker(browser) -> str:
+    """창(모든 탭)이 쿠팡 차단/권한없음 화면이면 맞은 판정 단어(_BLOCK_PAGE_MARKERS), 아니면 ''."""
+    try:
+        pages = _all_pages(browser)
+    except Exception:
+        return ""   # 창 상태를 못 읽음 = 판정 불가 → 기존 IP 불량 처리(차단으로 단정 안 함 · _connection_down 과 같은 규칙)
+    return next((m for m in map(_block_marker, pages) if m), "")
 
 
 def _semi_on_miss(st: _SemiState, kw, blocked, conn: bool, log) -> None:

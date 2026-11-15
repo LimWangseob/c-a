@@ -668,9 +668,9 @@ def _sales_left(name: str, account_id: str, days: int) -> None:
     """판매분석 받은 파일·남은 소급 일수(1/1~어제 중 빠진 날) → [실행 결과 종합](D-168). 그 계정 파일만 읽음."""
     from coupang_analytics import sales_history as SH
     from coupang_analytics import sales_summary as SS
-    path = Path("output") / SH.DIRNAME / f"{account_id}.json"
+    path = Path("output") / SH.DIRNAME / account_id      # 계정 × 달 파일 폴더(D-243 ③ 경로 변경만)
     try:
-        have = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        have = SH.load_account("output", account_id)
     except (OSError, ValueError) as exc:                 # 남은 수 계산만 못 함 — 그 계정 나머지 소급은 계속(기록으로 명시)
         LOG.record(name, "판매분석·쿠폰", RL.WAIT, f"남은 소급 계산 실패 — 확인 필요 ({exc.__class__.__name__})")
         return

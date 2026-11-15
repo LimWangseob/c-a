@@ -13,11 +13,11 @@ UI 는 무엇을 할지(StagePlan)만 정한다. 게이트: `tools/pin_run_plan.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 from .pipeline import run_full, select_keywords_stage
 from .pipeline_gsheet import push_company_stock, push_ledger_inventory
-from .pipeline_paths import column_label, read_last_run_stage, write_run_stage
+from .pipeline_paths import column_label, mark_run_day, read_last_run_stage, run_days, write_run_stage
 from .pipeline_ranks import LAST_RANK, track_ranks_stage
 from .run_result import KEYWORDS, RANKS, SALES, STOCK, RunSummary
 
@@ -62,30 +62,41 @@ def _retry_blank_ranks(ranks: dict, log, should_stop, result):
     return result
 
 
-def _missed_rank_day(marker: dict | None, today: str) -> str | None:
-    """직전 실행이 ③ 을 못 끝낸 날(ISO) — 단계 기록이 오늘보다 앞 날짜이고 'sales'(① 끝)·'ranks'(② 끝)면 그 날,
-    아니면 None('done'·기록 없음·오늘 기록 = 재부팅 복구 몫). ① 이 그날 돌아 날짜 칸이 있는 경우만 대상."""
-    if not marker or marker.get("stage") not in ("sales", "ranks"):
-        return None
-    day = str(marker.get("date") or "")
-    return day if day and day < today else None
+_CATCHUP_DAYS = 7   # 보충 범위 = 오늘 앞 7일(T-47 · Claude 제안 '7일' — 소유자가 다른 값을 말하면 그 값 · D-245)
 
 
-def _catch_up_missed_ranks(missed: str | None, ranks: dict, log, should_stop, result):
-    """오늘 ③·재고 역기록이 끝난 뒤 직전 실행 날짜 칸의 ③ 을 1회(T-20 재발 방지 (가) · 소유자 2026-11-12).
+def _missed_rank_days(marker: dict | None, today: date) -> list[str]:
+    """③ 을 못 끝낸 지난 날들(ISO · 최근부터) — 날짜별 단계 기록(run_days)이 'sales'(① 끝)·'ranks'(② 끝)이고
+    오늘 앞 _CATCHUP_DAYS 일 안. 'done'·기록 없음·오늘 기록(재부팅 복구 몫)은 빼고, 보충이 빈 칸을 남긴 날은
+    'done' 이 안 찍혀 다음 실행이 다시 본다. ① 이 그날 돌아 날짜 칸이 있는 경우만 대상."""
+    lo, hi = (today - timedelta(days=_CATCHUP_DAYS)).isoformat(), today.isoformat()
+    return sorted((d for d, st in run_days(marker).items() if st in ("sales", "ranks") and lo <= d < hi), reverse=True)
+
+
+def _catch_up_missed_ranks(missed: list[str], ranks: dict, log, should_stop, result):
+    """오늘 ③·재고 역기록이 끝난 뒤 못 끝낸 지난 날 칸마다 ③ 을 1회(T-20 재발 방지 (가) 소유자 2026-11-12 · 여러 날 T-47).
 
     11-11 실측: ② 오류로 ③ 이 안 돌았고, 다음 날 재부팅 복구는 오늘 시작분만 이어받아(D-032) 그 칸이 빈 채로 남음.
-    채운 칸은 ③ 이 건너뛰므로 빈 칸만 검색된다. 실행 결과 종합의 ③ 요약은 오늘 실행 값을 유지한다."""
-    if not missed or should_stop():
-        return result
-    label = column_label(missed)
-    today_rank = dict(LAST_RANK)
-    log.enter(RANKS)
-    log(f"[단계] ③ 지난 실행({label}) 순위 칸 채우기 — 그날 실행이 ③ 까지 못 끝냄(빈 칸만 검색)")
-    result = track_ranks_stage(**{**ranks, "date_label": missed}) or result
-    log(f"  [③ {label} 칸] 측정 {int(LAST_RANK.get('searched') or 0)}건 · 남은 빈 칸 {int(LAST_RANK.get('unfilled') or 0)}개")
+    output (37): 이틀 연속 ③ 이 07:00 에 끊겨 앞날(11.13)이 보충 대상에서 빠짐 → 7일 안 못 끝낸 날 전부.
+    채운 칸은 ③ 이 건너뛰므로 빈 칸만 검색된다. 빈 칸 0 이면 그날 'done'. 종합의 ③ 측정 값은 오늘 실행 값을 유지하고
+    보충 칸별 결과는 LAST_RANK['catchup'](빈 칸은 종합 판정·한 줄 요약에 더함)."""
+    today_rank, done = dict(LAST_RANK), []
+    for day in missed:
+        if should_stop():
+            break
+        label = column_label(day)
+        log.enter(RANKS)
+        log(f"[단계] ③ 지난 실행({label}) 순위 칸 채우기 — 그날 실행이 ③ 까지 못 끝냄(빈 칸만 검색)")
+        result = track_ranks_stage(**{**ranks, "date_label": day}) or result
+        left = int(LAST_RANK.get("unfilled") or 0)
+        log(f"  [③ {label} 칸] 측정 {int(LAST_RANK.get('searched') or 0)}건 · 남은 빈 칸 {left}개")
+        if "unfilled" in LAST_RANK and not left and not should_stop():
+            mark_run_day(day, "done")
+        done.append({"label": label, "searched": int(LAST_RANK.get("searched") or 0), "unfilled": left})
     LAST_RANK.clear()
     LAST_RANK.update(today_rank)
+    if done:
+        LAST_RANK["catchup"] = done
     return result
 
 
@@ -99,7 +110,8 @@ def run_stages(input_list, plan: StagePlan, *, ai_key, naver, date_from: str, da
     rank_date_label: ③이 기록할 날짜 칸(None = 최신 칸). 전체실행은 ①과 같은 칸을 넘긴다(날짜 지정·재개 라벨 일치)."""
     LAST_RANK.clear()                       # 이번 실행의 ③ 요약만 남게(③ 안 돌면 UI 가 지난 요약을 읽지 않음)
     accounts = [a.label for a in getattr(input_list, "accounts", None) or []]
-    missed = None if (designated or not plan.ranks) else _missed_rank_day(read_last_run_stage(), date.today().isoformat())
+    run_day = date.today()                  # 이 실행의 날짜 — 자정 넘어 끝나도 단계 기록·통합판매현황 '전일' 기준(T-47)
+    missed = [] if (designated or not plan.ranks) else _missed_rank_days(read_last_run_stage(), run_day)
     with RunSummary(on_log, accounts, should_stop=should_stop, rank=LAST_RANK, sheet_url=gsheet_output_url) as log:
         result = None
         if plan.sales:                      # ① 반자동 판매수집(미완료 계정 즉시 재시도는 run_full 안에서·D-029)
@@ -111,16 +123,16 @@ def run_stages(input_list, plan: StagePlan, *, ai_key, naver, date_from: str, da
                               stock_url=stock_url, designated=designated)
             if not (plan.keywords or plan.ranks):   # ① 단독 실행 → 판매데이터만 채우고 끝(단계 기록 안 함)
                 return result
-            write_run_stage("sales")
+            write_run_stage("sales", day=run_day.isoformat())
         if plan.keywords and not should_stop():  # ② 키워드 선정 — 노출측정 없이 AI 선정(동결분 유지·로그인 불필요)
             log.enter(KEYWORDS)
             log("[단계] ② 키워드 선정 — 노출측정 없이 AI 선정(동결분 유지)")
             select_keywords_stage(naver, ai_key, grow=grow, on_log=log, gsheet_output_url=gsheet_output_url,
                                   stock_url=stock_url)
-            write_run_stage("ranks")
+            write_run_stage("ranks", day=run_day.isoformat())
         if plan.ranks and not should_stop():     # ③ 반자동 순위 — 보이는 창 자동 타이핑(차단 시 쿨다운-재개)
             ranks = dict(should_stop=should_stop, on_log=log, gsheet_output_url=gsheet_output_url,
-                         stock_url=stock_url, date_label=rank_date_label)
+                         stock_url=stock_url, date_label=rank_date_label, run_date=run_day)
             log.enter(RANKS)
             log("[단계] ③ 반자동 순위 — 보이는 창 자동 타이핑(중지: '반자동 중지')")
             result = track_ranks_stage(**ranks)
@@ -132,7 +144,7 @@ def run_stages(input_list, plan: StagePlan, *, ai_key, naver, date_from: str, da
             result = _retry_blank_ranks(ranks, log, should_stop, result)
             result = _catch_up_missed_ranks(missed, ranks, log, should_stop, result)
             if not should_stop():
-                write_run_stage("done")
+                write_run_stage("done", day=run_day.isoformat())
         return result
 
 

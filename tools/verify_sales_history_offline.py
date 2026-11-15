@@ -52,7 +52,7 @@ def s2_record_daily():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "output"
         assert SH.record(out, "acc1", "2026-10-12", "2026-10-12", m).startswith("기록 — 옵션 2개·판매금액 155,000원")
-        d = json.loads((out / SH.DIRNAME / "acc1.json").read_text(encoding="utf-8"))
+        d = SH.load_account(out, "acc1")
         day = d["2026-10-12"]
         assert day["옵션"]["111"] == {"상품": "캠핑테이블 XR010", "옵션": "블랙", "구분": "로켓그로스", "판매금액": 125000,
                                      "판매수량": 5, "주문": 3, "등록상품ID": "16328453904"}, day
@@ -61,7 +61,7 @@ def s2_record_daily():
         m2 = C._parse_vendor_items([_item(111, 50000, 2, 2)])
         SH.record(out, "acc1", "2026-10-12", "2026-10-12", m2)                  # 같은 날 재실행 = 그날만 교체
         SH.record(out, "acc1", "2026-10-13", "2026-10-13", {})                  # 판매 0인 날 = 빈 기록(없음과 구분)
-        d = json.loads((out / SH.DIRNAME / "acc1.json").read_text(encoding="utf-8"))
+        d = SH.load_account(out, "acc1")
         assert sorted(d) == ["2026-10-12", "2026-10-13"]
         assert list(d["2026-10-12"]["옵션"]) == ["111"] and d["2026-10-12"]["합계"]["판매금액"] == 50000
         assert d["2026-10-13"]["옵션"] == {} and d["2026-10-13"]["합계"]["판매금액"] == 0
@@ -79,7 +79,7 @@ def s3_skip():
         r2 = SH.record(out, "acc1", "2026-10-12", "2026-10-12", fallback)
         assert r1.startswith("건너뜀") and "하루" in r1, r1
         assert r2.startswith("건너뜀") and "금액" in r2, r2
-        assert not (out / SH.DIRNAME / "acc1.json").exists()
+        assert SH.load_account(out, "acc1") == {}
     ok("기간 조회·엑셀 폴백은 기록 안 함(사유 반환)")
 
 
@@ -92,11 +92,50 @@ def s4_inventory_id():
         out = Path(tmp) / "output"
         SH.record(out, "acc1", "2026-10-12", "2026-10-12", m)
         SH.record_period(out, "acc1", "M:2026-10", "2026-10-01", "2026-10-12", m)
-        day = json.loads((out / SH.DIRNAME / "acc1.json").read_text(encoding="utf-8"))["2026-10-12"]["옵션"]
+        day = SH.load_account(out, "acc1")["2026-10-12"]["옵션"]
         per = json.loads((out / SH.PERIOD_DIRNAME / "acc1.json").read_text(encoding="utf-8"))["M:2026-10"]["옵션"]
         assert day["111"]["등록상품ID"] == per["111"]["등록상품ID"] == "16328453904"
         assert day["222"]["등록상품ID"] == per["222"]["등록상품ID"] == "", "응답에 없으면 빈 칸(칸은 있음 = 새 기록)"
     ok("inventoryId → 등록상품ID · 일별·기간 기록 모두 · 없으면 빈 칸")
+
+
+def s5_month_files():
+    print("[S5] 판매분석_일별 = 계정 × 달 파일(D-243 ③) · 지난 달 파일 안 다시 씀 · 옛 계정 파일 자동 변환 + 보관 이동(삭제 없음)")
+    m = {"111": OptionMetric("111", "캠핑테이블", "블랙", "", 0, 5, 0, registration_type="RFM", gmv=1000, orders=1)}
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "output"
+        d = out / SH.DIRNAME
+        d.mkdir(parents=True)
+        legacy = {"2026-09-29": {"수집": "x", "합계": {"판매금액": 7}, "옵션": {}},
+                  "2026-10-30": {"수집": "x", "합계": {"판매금액": 8}, "옵션": {}}}
+        (d / "acc1.json").write_text(json.dumps(legacy), encoding="utf-8")       # 옛 파일(계정 1개 = 파일 1개)
+        (d / "acc2.json").write_text(json.dumps({"2026-10-01": legacy["2026-10-30"]}), encoding="utf-8")
+        before = SH.load_daily(out)                                              # 읽기만으로는 옮기지 않음
+        assert before["acc1"] == legacy and (d / "acc1.json").exists(), before
+        SH.record(out, "acc1", "2026-11-14", "2026-11-14", m)
+        months = sorted(x.name for x in (d / "acc1").glob("*.json"))
+        assert months == ["2026-09.json", "2026-10.json", "2026-11.json"], months
+        assert not (d / "acc1.json").exists() and not (d / "acc2.json").exists(), "첫 기록 때 옛 파일 전부 변환"
+        kept = list((out / "보관").rglob("acc1.json")) + list((out / "보관").rglob("acc2.json"))
+        assert len(kept) == 2 and all(k.parent.name == SH.DIRNAME and k.parent.parent.parent.name == "보관" for k in kept), kept
+        assert json.loads(kept[0].read_text(encoding="utf-8")) in (legacy, {"2026-10-01": legacy["2026-10-30"]}), "옮긴 옛 파일 내용 그대로"
+        got = SH.load_daily(out)
+        assert list(got["acc1"]) == ["2026-09-29", "2026-10-30", "2026-11-14"] and got["acc2"] == {"2026-10-01": legacy["2026-10-30"]}, got
+        assert SH.load_account(out, "acc1") == got["acc1"] and SH.load_account(out, "없음") == {}
+        old_sep = (d / "acc1" / "2026-09.json").stat().st_mtime_ns
+        SH.record(out, "acc1", "2026-11-15", "2026-11-15", m)                   # 이번 달 기록 = 지난 달 파일 안 건드림
+        assert (d / "acc1" / "2026-09.json").stat().st_mtime_ns == old_sep
+        assert list(json.loads((d / "acc1" / "2026-11.json").read_text(encoding="utf-8"))) == ["2026-11-14", "2026-11-15"]
+        SH.record(out, "acc1", "2026-10-30", "2026-10-30", {})                   # 소급(지난 날 다시 받음) = 그 달 파일의 그날만
+        assert SH.load_account(out, "acc1")["2026-10-30"]["합계"]["판매금액"] == 0
+        (d / "acc3.json").write_text(json.dumps({"2026-11-01": legacy["2026-10-30"]}), encoding="utf-8")
+        (d / "acc3").mkdir()
+        (d / "acc3" / "2026-11.json").write_text(json.dumps({"2026-11-02": legacy["2026-09-29"]}), encoding="utf-8")
+        assert list(SH.load_daily(out)["acc3"]) == ["2026-11-01", "2026-11-02"], "옛 파일 + 달 파일 함께 읽음(다른 PC 사본)"
+        SH.record(out, "acc3", "2026-11-03", "2026-11-03", {})
+        assert list(SH.load_account(out, "acc3")) == ["2026-11-01", "2026-11-02", "2026-11-03"], "변환 때 같은 달 파일과 합침"
+        assert not list(d.rglob("*.tmp"))
+    ok("계정 폴더 × 달 파일 · 옛 파일 첫 기록 때 전부 변환·보관\YYYY-MM 이동 · 읽기 = 옛+달 합침 · 지난 달 파일 그대로")
 
 
 def main():
@@ -106,6 +145,7 @@ def main():
         s2_record_daily()
         s4_inventory_id()
         s3_skip()
+        s5_month_files()
     finally:
         os.chdir(old)
     print("판매분석 금액 날짜별 누적 오프라인 검증 통과")
