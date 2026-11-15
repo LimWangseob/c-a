@@ -62,7 +62,7 @@ def _retry_blank_ranks(ranks: dict, log, should_stop, result):
     return result
 
 
-_CATCHUP_DAYS = 7   # 보충 범위 = 오늘 앞 7일(T-47 · Claude 제안 '7일' — 소유자가 다른 값을 말하면 그 값 · D-245)
+_CATCHUP_DAYS = 7   # 보충 범위 = 오늘 앞 7일(T-47 · Claude 제안 '7일' — 소유자가 다른 값을 말하면 그 값 · D-248)
 
 
 def _missed_rank_days(marker: dict | None, today: date) -> list[str]:
