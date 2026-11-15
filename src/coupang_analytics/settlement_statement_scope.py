@@ -157,6 +157,24 @@ def candidates(inv: dict, groups: dict, is_mv, decided=frozenset()) -> list:
     return out
 
 
+COST_ONLY = "비용만 있는 등록상품(판매 줄 없음 · 상품조회·판매분석에 없음) — 출처 판정 전 · 금액 밖(D-244)"
+
+
+def cost_only(costs: dict, inv: dict, groups: dict) -> dict:
+    """{등록상품ID: (상품명, 옵션ID 집합)} — 비용 리포트 짝(costs = {옵션ID: (등록상품ID, 상품명)}) 중 상품조회(inv)·판매분석(groups)에
+    없는 등록상품(판매 없이 비용만 · D-244 ④⑤)."""
+    out: dict = {}
+    for opt, (pid, name) in sorted(costs.items()):
+        if pid not in inv and pid not in groups:
+            out.setdefault(pid, (name, set()))[1].add(opt)
+    return out
+
+
+def cost_only_checks(costs: dict, inv: dict, groups: dict, seen: set) -> list:
+    """[(등록상품ID, 상품명, 사유)] — 비용만 있는 등록상품 중 아직 어느 경로(관리·판매 줄·출처판정·되찾기)도 다루지 않은 것(D-244 ⑤)."""
+    return [(pid, name, COST_ONLY) for pid, (name, _o) in sorted(cost_only(costs, inv, groups).items()) if pid not in seen]
+
+
 def _side(pid: str, created: str | None, bm: str, inv_all: dict) -> tuple:
     if created:
         return ("after" if created[:7] >= bm else "before"), f"등록 {created}"

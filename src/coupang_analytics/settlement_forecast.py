@@ -3,13 +3,15 @@
 
 쿠팡 정산현황(윙·로켓그로스)을 오늘 이후까지 조회하면 쿠팡이 미리 만든 **앞으로의 정산 줄**(정산대상·공제·예정 최종지급액)이
 온다(노바네스트 화면 실측: 정산일 2026-11-03 '월정' 줄 463원). 이 줄은 지급 내역(쿠팡지급내역/*.json — 지난 정산만)과 섞지 않고
-수집일마다 `정산예정기록.jsonl` 에 쌓는다. 정산일이 지나면 실제 지급 내역과 맞대 **며칠 전 예정이 원 단위로 맞았는지**(정산대상·
+수집일마다 `정산예정기록/YYYY-MM.jsonl`(수집일 달 · D-243 ③ — 지난 달 파일은 다시 안 씀) 에 쌓는다. 정산일이 지나면 실제 지급 내역과 맞대 **며칠 전 예정이 원 단위로 맞았는지**(정산대상·
 공제 항목·최종지급액)를 '예정 정확도' 시트로 낸다. 정산서 ④ 정산 예정(로켓그로스)은 이 기록의 예정 줄을 쓴다(D-081 — 계정별 마지막 수집일).
 """
 from __future__ import annotations
 
 import json
+import shutil
 import time
+from collections import Counter
 from datetime import date
 from pathlib import Path
 
@@ -72,12 +74,59 @@ def _next_batch() -> str:
     return str(_last_batch)
 
 
+def month_dir(path) -> Path:
+    """달 파일 폴더 — 옛 한 파일 경로(…/정산예정기록.jsonl) 옆 같은 이름 폴더(…/정산예정기록/YYYY-MM.jsonl · D-243 ③)."""
+    return Path(path).with_suffix("")
+
+
+def _split_legacy(p: Path, today: date) -> None:
+    """옛 한 파일 → 수집일 달 파일로 나눠 씀(이미 있는 같은 줄은 그 개수만큼 빼서 중복 없음) → 옛 파일은 보관/YYYY-MM/ 로 이동(삭제 없음).
+    달 폴더가 없으면 임시 폴더에 다 쓴 뒤 이름 바꿈(중간에 끊겨도 반쪽 폴더를 읽지 않게)."""
+    d = month_dir(p)
+    by_month: dict = {}
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            by_month.setdefault(json.loads(line)["수집일"][:7], []).append(line)
+    work = d if d.is_dir() else d.with_name(d.name + ".tmp")
+    keep = p.parent / "보관" / f"{today:%Y-%m}"
+    if work != d and work.exists():                       # 지난번에 끊긴 임시 폴더(옛 파일은 그대로 있음) → 보관(삭제 없음)
+        _move_free(work, keep)
+    work.mkdir(parents=True, exist_ok=True)
+    for month, lines in sorted(by_month.items()):
+        mp = work / f"{month}.jsonl"
+        have = Counter(mp.read_text(encoding="utf-8").splitlines()) if mp.exists() else Counter()
+        new = []
+        for ln in lines:                                  # 같은 줄이 여러 번(보류 해제 100% 같은 값 줄)이어도 개수대로
+            if have[ln]:
+                have[ln] -= 1
+            else:
+                new.append(ln)
+        if new:
+            with mp.open("a", encoding="utf-8") as f:
+                f.write("".join(ln + "\n" for ln in new))
+    if work != d:
+        work.rename(d)
+    _move_free(p, keep)
+
+
+def _move_free(src: Path, folder: Path) -> None:
+    """src → folder/ 같은 이름(이미 있으면 번호를 붙임 · 덮어쓰기·삭제 없음)."""
+    folder.mkdir(parents=True, exist_ok=True)
+    dst, n = folder / src.name, 1
+    while dst.exists():
+        dst, n = folder / f"{src.stem}.{n}{src.suffix}", n + 1
+    shutil.move(str(src), str(dst))
+
+
 def record(path, acct: str, ch: str, rows: list, today: date) -> int:
     """오늘 본 예정 줄을 추가 — 한 번 조회의 줄 묶음에 같은 '묶음' 번호. 같은 날 다시 조회하면 읽을 때 정산일마다 마지막
-    묶음만 남음(같은 정산 줄 키가 여러 개인 보류 해제 100% 줄도 전부 · D-085). 반환 = 기록한 줄 수."""
+    묶음만 남음(같은 정산 줄 키가 여러 개인 보류 해제 100% 줄도 전부 · D-085). 저장 = 수집일 달 파일만(D-243 ③ · 옛 한 파일이
+    있으면 먼저 달 파일로 나눔). 반환 = 기록한 줄 수."""
     if not rows:
         return 0
-    p = Path(path)
+    if Path(path).is_file():
+        _split_legacy(Path(path), today)
+    p = month_dir(path) / f"{today:%Y-%m}.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
     batch = _next_batch()
     with p.open("a", encoding="utf-8") as f:
@@ -88,12 +137,13 @@ def record(path, acct: str, ch: str, rows: list, today: date) -> int:
 
 
 def load(path) -> list[dict]:
-    """예정 기록 — (수집일·계정·채널·정산일) 마다 마지막 조회 묶음의 줄 전부. 묶음 없는 옛 기록 = 정산 줄마다 마지막 값."""
-    p = Path(path)
-    if not p.is_file():
-        return []
+    """예정 기록 — (수집일·계정·채널·정산일) 마다 마지막 조회 묶음의 줄 전부. 묶음 없는 옛 기록 = 정산 줄마다 마지막 값.
+    읽는 곳 = 달 폴더(정산예정기록/*.jsonl)가 있으면 그것만 · 없으면 옛 한 파일(옮겨 온 분석 사본 · D-243 ③)."""
+    d = month_dir(path)
+    files = sorted(d.glob("*.jsonl")) if d.is_dir() else [Path(path)] if Path(path).is_file() else []
+    lines = [ln for f in files for ln in f.read_text(encoding="utf-8").splitlines()]
     groups: dict = {}
-    for line in p.read_text(encoding="utf-8").splitlines():
+    for line in lines:
         if line.strip():
             r = json.loads(line)
             g = groups.setdefault((r["수집일"], r["계정"], r["채널"], str(r["정산일"])[:10]), {})

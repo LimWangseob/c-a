@@ -282,7 +282,7 @@ def test_managed_scope() -> None:
     assert [w for *_x, w in rg["f1"]["check"]] == ["기준일 없음(계약 없음 · 원장 계정이력에 관리 시작 없음)"], rg["f1"]
     assert [w for *_x, w in rg["e1"]["check"]] == ["상품조회 자료 없음 — 이력 없이 지운 로켓그로스 상품을 되찾지 못함"], rg["e1"]
     ctx = SimpleNamespace(ledger=ledger, listings=listings, rg=rg, settle_only={}, settle_only_err="", files={}, contracts=contracts,
-                          daily=stores[0], periods=stores[1], ranked={}, src_vids={})
+                          daily=stores[0], periods=stores[1], ranked={}, src_vids={}, cost_opts={}, inv=inv)
     sc, vids, names, marks = AC.scope(ctx, "a1")
     assert sc == "관리대장 상품 + 되찾은 로켓그로스 상품 3개(확인 필요 2개)" and vids == {"11", "21", "41", "42", "71", "72", "101"}, (sc, vids)
     assert names == {"보냉백 A"} and marks == {}, names
@@ -349,7 +349,7 @@ def test_scope_priority() -> None:
     src_vids = {a: SCOPE.source_vids(rk, inv.get(a) or {}, SCOPE.sales_groups(stores[1].get(a) or {})) for a, rk in ranked.items()}
     assert src_vids["a1"] == {"21", "31"}, src_vids                                   # 1~3순위 '관리' 등록상품 → 그 상품의 VID 전부
     ctx = SimpleNamespace(ledger=ledger, listings=listings, rg=rg, settle_only=settle_only, settle_only_err="", ranked=ranked,
-                          src_vids=src_vids, files={}, contracts={"a1": "2026-05-14"}, daily=stores[0], periods=stores[1])
+                          src_vids=src_vids, files={}, contracts={"a1": "2026-05-14"}, daily=stores[0], periods=stores[1], cost_opts={}, inv=inv)
     sc, vids, _names, marks = AC.scope(ctx, "a1")
     assert sc == "관리대장 상품 + 옛 대장 1개 + 계약서 1개 + 되찾은 로켓그로스 상품 2개(확인 필요 1개)", sc   # 0개 출처는 안 적음
     assert vids == {"11", "81", "61", "21", "31"}, vids
@@ -413,11 +413,82 @@ def test_scope_judge() -> None:
     print("test_scope_judge OK")
 
 
+# ── 판매 없이 비용만 있는 관리 상품(D-244 · 소유자 2026-11-15) — 근거 T-42 보고: dalbong1849 16258713629 보관비(옵션 = 대장 VID)·
+# ljung0622 TTGW02 반출비(옵션 = 되찾은 VID)가 관리 상품ID 를 주문 줄 짝에서만 만들어 '관리 밖'으로 빠짐.
+def test_cost_only_scope() -> None:
+    from types import SimpleNamespace
+
+    import openpyxl
+
+    from coupang_analytics import settlement_files as SF
+    from coupang_analytics import settlement_scope_judge as J
+    from coupang_analytics import settlement_statement_account as AC
+    from coupang_analytics import settlement_statement_source as SRC
+    from coupang_analytics import settlement_stats as SS
+    acct = "서달원-(DW)커머스-d1"
+    lines = [SF.CostLine(acct, "2026-09", "16258713629", "95609464754", "아기수영장 HW016", "보관비", 5408, 540),
+             SF.CostLine(acct, "2026-10", "", "95609464754", "", SF.COMPENSATION, 100),           # 보상 = 옵션만 → 같은 짝으로 상품
+             SF.CostLine(acct, "2026-05", "16157622592", "95273555059", "전동물총 TTGW02", "반출비", 166800, 16680),
+             SF.CostLine(acct, "2026-09", "16377117417", "95700000001", "빔프로젝터거치대 LN167", "보관비", 2200, 220),
+             SF.CostLine(acct, "2026-09", "16400000000", "95700000002", "판정표 관리 상품", "보관비", 100, 10),
+             SF.CostLine(acct, "2026-09", "16500000000", "95700000003", "상품조회에 있는 상품", "보관비", 100, 10),
+             SF.CostLine(acct, "2026-09", SF.MULTI_PRODUCT, "", "", "반출 배송 서비스비", 1000, 100)]
+    res = SS.aggregate([], lines)
+    with tempfile.TemporaryDirectory() as d:
+        p = SS.write_stats(Path(d) / "정산집계_new.xlsx", res)
+        wb = openpyxl.load_workbook(p, read_only=True)
+        assert SRC.COST_OPTIONS in wb.sheetnames, wb.sheetnames                        # ① 새 시트
+        opts = SRC.cost_options(wb)
+        wb.close()
+        assert opts == {"d1": {"95609464754": ("16258713629", "아기수영장 HW016"), "95273555059": ("16157622592", "전동물총 TTGW02"),
+                               "95700000001": ("16377117417", "빔프로젝터거치대 LN167"), "95700000002": ("16400000000", "판정표 관리 상품"),
+                               "95700000003": ("16500000000", "상품조회에 있는 상품")}}, opts   # 묶음 줄(여러 상품) 짝 없음
+        empty = SS.write_stats(Path(d) / "정산집계_0.xlsx", SS.aggregate([], []))     # 비용 없어도 머리 줄만 있는 시트
+        wb = openpyxl.load_workbook(empty, read_only=True)
+        assert SRC.COST_OPTIONS in wb.sheetnames and SRC.cost_options(wb) == {}, wb.sheetnames
+        wb.close()
+        old = Path(d) / "정산집계_old.xlsx"                                             # ② 옛 집계(시트 없음) = 시작 전 중단
+        wb = openpyxl.Workbook()
+        wb.active.title = "상품별 월별"
+        wb.save(old)
+        try:
+            SRC.read_stats(old)
+            raise AssertionError("옛 정산집계를 받아들임")
+        except FileNotFoundError as exc:                                               # 두 도구가 '❌ 시작 전 중단'으로 받는 종류
+            assert isinstance(exc, SRC.StatsTooOld) and "정산집계를 다시 만드세요" in str(exc), exc
+    # ③ 관리 VID 옵션의 등록상품 = 관리(판매 줄 짝 opt2pid 는 그대로)
+    ledger = {"d1": {"95609464754", "95322412626"}}
+    rg = {"d1": {"vids": {"95273555059"}, "got": [("16157622592", "전동물총", "되찾기")], "excl": [], "check": []}}
+    files = {"d1": [SimpleNamespace(rows=[SimpleNamespace(option_id="95322412626", product_id="16142251017"),
+                                          SimpleNamespace(option_id="95111", product_id="8758835645")])]}
+    rk = {"16400000000": ("옛 대장", "관리", "옛 대장 3행", "판정표 관리 상품")}
+    inv = {"d1": {"16142251017": _inv("2026-04-08", v95322412626="RFM"), "16500000000": _inv("2026-08-01", v95700000003="RFM")}}
+    ctx = SimpleNamespace(ledger=ledger, listings={}, rg=rg, settle_only={}, settle_only_err="", files=files, contracts={},
+                          daily={}, periods={}, ranked={"d1": rk}, src_vids={}, cost_opts=opts, inv=inv)
+    acc = AC.AccountBase(ctx, acct)
+    acc._scope()
+    assert acc.opt2pid == {"95322412626": "16142251017", "95111": "8758835645"}, acc.opt2pid
+    assert acc.mpids == {"16142251017", "16258713629", "16157622592", "16400000000"}, acc.mpids
+    # ⑤ 판정 전(출처판정·되찾기에 없음 · 상품조회·판매분석에 없음) = '관리 상품 확인 필요'(금액 밖) — 16500000000 은 상품조회 경로
+    chk = {p: (n, w) for p, n, w in acc.scope_check}
+    assert set(chk) == {"16377117417"} and chk["16377117417"][0] == "빔프로젝터거치대 LN167", acc.scope_check
+    assert "비용만" in chk["16377117417"][1] and "금액 밖" in chk["16377117417"][1], chk
+    # ④ 출처 AI 판정 대상 = 상품조회 + 판매분석 + 비용만 있는 등록상품(관리 VID 옵션 상품은 뺌)
+    vids = ledger["d1"] | rg["d1"]["vids"]
+    tg = J.targets("d1", inv, {}, lambda v: v in vids, {}, opts["d1"])
+    got = {t["등록상품ID"]: t for t in tg}
+    assert set(got) == {"16377117417", "16400000000", "16500000000"}, got
+    assert got["16377117417"] == {"등록상품ID": "16377117417", "상품명": "빔프로젝터거치대 LN167", "노출명": [], "등록일": "",
+                                  "판매방식": ["RFM"]}, got["16377117417"]
+    print("test_cost_only_scope OK")
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except AttributeError:
         pass
+    test_cost_only_scope()
     test_managed_alloc()
     test_settlement_ledger()
     test_additional_pay()

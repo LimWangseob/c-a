@@ -198,24 +198,43 @@ def fetch_order_detail(call, f: date, t: date, gap=lambda: None) -> dict:
     pages = int(call("POST", f"{ORDER}-page-total", {**q, "size": ORDER_PAGE_SIZE}))
     rows: list = []
     raw, cursor = 0, ""
+    row_page: list = []
+    seen: list = []                                      # 쪽마다 (쪽, 줄 수, 원본 건수, 커서 빈칸?, 최상위 칸) — 실패 근거(T-2)
     for page in range(1, pages + 2):
         gap()
         r = call("POST", ORDER, {**q, "page": page, "size": ORDER_PAGE_SIZE, "cursorToken": cursor})
         got = r.get("orderDetails") or []
+        seen.append({"쪽": page, "줄": len(got), "원본": r.get("rawRecordSize"), "커서 빈칸": not r.get("cursorToken"),
+                     "칸": sorted(r)})
         if not got:
             break
         raw += _raw_size(r, len(got), f"{f:%Y%m} {page}쪽")
         rows += [{k: v for k, v in x.items() if k != "customerName"} for x in got]
+        row_page += [page] * len(got)
         cursor = r.get("cursorToken") or ""
         if not cursor:      # 커서 '' = 다음 쪽 없음 — ''로 또 부르면 서버가 처음부터 다시 줌(실측 11-09 bf0621 1쪽 달 3개)
             break
     else:
         raise SiteChangedError(f"주문별 매출 {f:%Y%m} 쪽 수({pages}) 뒤에도 줄이 더 옴 — 다 받았는지 모름")
-    keys = {(x.get("orderId"), x.get("transactionType"), x.get("vendorItemId"), x.get("shippingFeeId")) for x in rows}
+    keys = {_order_key(x) for x in rows}
     if not (ORDER_PAGE_SIZE * (pages - 1) < raw <= ORDER_PAGE_SIZE * pages or pages == raw == 0) or len(keys) != len(rows):
-        raise SiteChangedError(f"주문별 매출 {f:%Y%m} 쪽 수 {pages} · 원본 {raw} · 줄 {len(rows)} · 서로 다른 줄 {len(keys)} — 맞지 않음")
+        exc = SiteChangedError(f"주문별 매출 {f:%Y%m} 쪽 수 {pages} · 원본 {raw} · 줄 {len(rows)} · 서로 다른 줄 {len(keys)} — 맞지 않음")
+        exc.detail = _order_detail_evidence(f, pages, seen, rows, row_page)   # type: ignore[attr-defined]
+        raise exc
     total = {k: sum(x.get(k) or 0 for x in rows) for k in ("productGmv", "deliveryGmv", "trAmountIncVat", "apAmount")}
     return {"쪽 수": pages, "원본 건수": raw, "줄 수": len(rows), "합계": total, "줄": rows}
+
+
+def _order_key(x: dict) -> tuple:
+    return x.get("orderId"), x.get("transactionType"), x.get("vendorItemId"), x.get("shippingFeeId")
+
+
+def _order_detail_evidence(f: date, pages: int, seen: list, rows: list, row_page: list) -> dict:
+    """주문별 매출 실패 근거(T-2 · 재현용) — 쪽별 요약 + 같은 키 줄 전부(쪽 번호 포함 · 고객 이름 칸은 이미 뺌)."""
+    by: dict = {}
+    for x, pg in zip(rows, row_page):
+        by.setdefault(_order_key(x), []).append({"쪽": pg, **x})
+    return {"달": f"{f:%Y-%m}", "쪽 수(서버)": pages, "쪽별": seen, "같은 키 줄": [v for v in by.values() if len(v) > 1]}
 
 
 def _raw_size(r: dict, n_rows: int, where: str) -> int:
@@ -326,12 +345,22 @@ def _fetch(kind: str, call, html_call, get_bytes, ym: str, f: date, t: date, gap
     return json.dumps(d, ensure_ascii=False).encode("utf-8"), "json", f"{n}줄"
 
 
+def left_months(folder: Path, today: date, rg: bool) -> int:
+    """저장된 받은 기록(_받은기록.json)만 보고 남은 달 수 — 종류마다 due_months 중 기록에 없는 달(RG 종류는 rg 일 때만) ·
+    _Run.kind 의 '남은 달'과 같은 판정 · 받기 없이 전 계정 다시 셈([실행 결과 종합] 남은 소급 · T-46 ⑤)."""
+    lp = Path(folder) / LEDGER
+    led: dict = json.loads(lp.read_text(encoding="utf-8")) if lp.exists() else {}
+    return sum(sum(1 for ym, _f, _t in due_months(k, today) if ym not in (led.get(k) or {}))
+               for k in KINDS if k not in RG_KINDS or rg)
+
+
 class _Run:
     """한 계정 월자료 받기의 상태 — 받은 기록(_받은기록.json)·결과·실패 격리."""
 
-    def __init__(self, folder: Path, note, fatal: tuple, now):
+    def __init__(self, folder: Path, note, fatal: tuple, now, skip: set | None = None):
         folder.mkdir(parents=True, exist_ok=True)
         self.folder, self.note, self.fatal, self.now = folder, note, fatal, now
+        self.skip = set() if skip is None else skip      # 이번 회차에 실패한 '종류 달'(호출부가 회차 동안 같은 집합을 넘김)
         self.lp = folder / LEDGER
         self.led: dict = json.loads(self.lp.read_text(encoding="utf-8")) if self.lp.exists() else {}
         self.out: dict = {"받음": [], "실패": [], "남은 달": 0, "파일": []}
@@ -356,20 +385,31 @@ class _Run:
         except self.fatal:
             raise
         except Exception as exc:  # noqa: BLE001 — 위 설명
+            detail = getattr(exc, "detail", None)            # 원인 확인용 응답 요약(주문별 매출 쪽별 커서·중복 줄 — T-2)
+            if detail:
+                (self.folder / f"_실패_{label.replace(' ', '_')}.json").write_text(
+                    json.dumps(detail, ensure_ascii=False, indent=1), encoding="utf-8")
             self.out["실패"].append(f"{label}: {exc.__class__.__name__}: {str(exc)[:120]}")
             self.note(f"월자료 {label} 실패 — {exc.__class__.__name__}: {str(exc)[:120]}")   # 본문까지(11-08 이름만 남아 원인 못 봄)
             return None
 
     def kind(self, kind: str, today: date, since: str, fetch, gap) -> None:
-        """한 종류 — 받은 기록에 없는 달을 최근부터 이번 회차 남은 예산만큼 · 실패하면 그 종류는 이번 회차 멈춤."""
+        """한 종류 — 받은 기록에 없는 달을 최근부터 이번 회차 남은 예산(받은 달 수)만큼. 실패한 달은 이번 회차에 다시 부르지 않고
+        더 옛 달로 넘어감(한 달 결함이 나머지 달을 막지 않게 — D-245 · 실측 11-15 주문별 매출 4월 실패 계정은 1~3월 시도 0)."""
         got = self.led.get(kind) or {}
         todo = [m for m in due_months(kind, today) if m[0] not in got]
-        used = sum(1 for s in got.values() if since and s >= since)
-        for ym, f, t in list(todo[:max(0, BUDGET_MONTHS - used)]):
+        budget = BUDGET_MONTHS - sum(1 for s in got.values() if since and s >= since)
+        for ym, f, t in list(todo):
+            if budget <= 0:
+                break
+            if f"{kind} {ym}" in self.skip:
+                continue
             r = self.attempt(f"{kind} {ym}", lambda ym=ym, f=f, t=t: fetch(kind, ym, f, t))
             gap()
             if r is None:
-                break
+                self.skip.add(f"{kind} {ym}")
+                continue
+            budget -= 1
             body, ext, msg = r
             self.save(f"{kind}_{ym}.{ext}", body, kind, ym)
             self.out["받음"].append(f"{kind}_{ym}.{ext}({msg})")
@@ -387,12 +427,13 @@ class _Run:
 
 
 def collect(call, html_call, get_bytes, folder: Path, today: date, *, vendor: str = "", since: str = "",
-            gap=lambda: None, page_gap=None, note=lambda m: None, fatal: tuple = (ApiBlocked,), now=datetime.now) -> dict:
+            gap=lambda: None, page_gap=None, note=lambda m: None, fatal: tuple = (ApiBlocked,), now=datetime.now,
+            skip: set | None = None) -> dict:
     """월자료 받기(소급 단계 · D-170). 종류마다 받은 기록에 없는 달을 최근부터 — **회차(since 이후) 계정당 종류별 BUDGET_MONTHS 달**.
-    종류 하나가 실패하면 그 종류만 이번 회차 멈춤(다음 회차가 이어서)·차단(fatal)은 그대로 올림. RG 반품내역 = 업체코드 있는
+    실패한 달은 skip(회차 동안 같은 집합)에 넣어 이번 회차엔 다시 안 부르고 더 옛 달로(D-245) · 차단(fatal)은 그대로 올림. RG 반품내역 = 업체코드 있는
     계정만 하루 1번 최신본 덮어쓰기. gap = 종류·달 사이 쉼 · page_gap = 한 자료 안 쪽 넘김 쉼(없으면 gap — 주문별 매출은 10건씩이라
     큰 계정은 쪽이 많음). 반환 = {'받음': [파일 이름·요약], '실패': [...], '남은 달': n, '파일': [저장 경로]}."""
-    run = _Run(folder, note, fatal, now)
+    run = _Run(folder, note, fatal, now, skip)
 
     def fetch(kind, ym, f, t):
         return _fetch(kind, call, html_call, get_bytes, ym, f, t, page_gap or gap)

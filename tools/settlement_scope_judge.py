@@ -1,7 +1,9 @@
 """정산 대상 상품 출처 AI 판정 — 준비(prepare) · 반영(apply) (D-230 · D-231 · 모듈 = `coupang_analytics.settlement_scope_judge`).
 
   python tools/settlement_scope_judge.py prepare --managed-output <output 폴더> --inputs <입력 폴더> --out <요청 폴더>
-      --old-ledger <옛 대장.xlsx> [...] --history <원장 상품이력 사본.json> --contract-db <계약 DB v4.xlsx> [--accounts a,b,c]
+      --old-ledger <옛 대장.xlsx> [...] --history <원장 상품이력 사본.json> --contract-db <계약 DB v4.xlsx> --stats <정산집계.xlsx>
+      [--accounts a,b,c]
+  (정산집계 '옵션별 등록상품' 시트 = 판매 없이 비용만 있는 등록상품도 판정대상 · 없는 옛 집계 = ❌ 시작 전 중단 · D-244)
   → <요청 폴더>/프롬프트.md + 요청_<계정ID>.json(계정마다) — AI 가 프롬프트대로 답_<계정ID>.json 을 쓴다.
   python tools/settlement_scope_judge.py apply --requests <요청 폴더> --answers <답 폴더> --out <입력 폴더>/관리상품_출처판정.json
   → 답 검사(판정대상 ID·출처·판정·근거·원문 그대로) 통과한 계정만 판정표에 씀(같은 계정 옛 항목은 바꿈 · 다른 계정은 그대로).
@@ -20,6 +22,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from coupang_analytics import sales_history, sales_summary  # noqa: E402
 from coupang_analytics import settlement_scope_judge as J  # noqa: E402
 from coupang_analytics import settlement_statement_scope as SCOPE  # noqa: E402
+from coupang_analytics import settlement_statement_source as SRC  # noqa: E402
 
 
 def _people(inputs: Path) -> dict:
@@ -27,7 +30,21 @@ def _people(inputs: Path) -> dict:
         return {r["계정ID"]: (r["사업자"], r["대표자"]) for r in csv.DictReader(f) if r.get("계정ID")}
 
 
+def _cost_options(stats: Path) -> dict:
+    import openpyxl
+    wb = openpyxl.load_workbook(stats, read_only=True)
+    try:
+        return SRC.cost_options(wb)
+    finally:
+        wb.close()
+
+
 def prepare(a) -> int:
+    try:
+        costs = _cost_options(a.stats)
+    except FileNotFoundError as exc:                       # 옛 집계(StatsTooOld)·파일 없음
+        print(f"❌ 시작 전 중단 — {exc}")
+        return 1
     people = _people(a.inputs)
     want = [x.strip() for x in a.accounts.split(",")] if a.accounts else sorted(people)
     ledger = SCOPE.ledger_vids(a.managed_output)
@@ -44,7 +61,7 @@ def prepare(a) -> int:
 
         def is_mv(v: str, vids=vids, names=names, vname=vname) -> bool:
             return v in vids or vname.get(v) in names
-        tg = J.targets(aid, inv, SCOPE.sales_groups(stores[1].get(aid) or {}), is_mv, vname)
+        tg = J.targets(aid, inv, SCOPE.sales_groups(stores[1].get(aid) or {}), is_mv, vname, costs.get(aid) or {})
         pk = J.packet(aid, people.get(aid, ("", "")), tg, old.get(aid, []), hist.get(aid, []), cons.get(aid, []))
         (a.out / f"요청_{aid}.json").write_text(json.dumps(pk, ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"{aid}: 판정대상 {len(tg)} · 옛대장 {len(pk['근거자료']['① 옛대장'])} · 이력원장 {len(pk['근거자료']['② 이력원장'])}"
@@ -89,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--old-ledger", nargs="+", required=True, type=Path)
     p.add_argument("--history", required=True, type=Path)
     p.add_argument("--contract-db", required=True, type=Path)
+    p.add_argument("--stats", required=True, type=Path, help="정산집계 xlsx('옵션별 등록상품' 시트 · D-244)")
     p.add_argument("--accounts", default="")
     q = sub.add_parser("apply")
     q.add_argument("--requests", required=True, type=Path)

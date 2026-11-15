@@ -313,7 +313,7 @@ def read_events(b, name: str, start: date, end: date, amounts_from: date | None 
     return found
 
 
-RG_RAW_DIRNAME = "정산현황_원문"                         # output/정산/정산현황_원문/{계정}/{날짜}.json.gz (D-164 원인 확인용)
+RG_RAW_DIRNAME = STORE.RG_RAW_DIRNAME                   # output/정산/정산현황_원문/{계정}/{날짜}.json.gz (D-164 원인 확인용)
 INVENTORY = Path("output") / daily_snapshot.INVENTORY_DIRNAME  # ① 재고현황 원문(계정ID별) — 로켓그로스 업체코드 셋째 근거(D-214 ⓐ)
 RG_RAW_DAYS = 70                                        # 원문으로 남길 지난 조회 구간(최근 70일과 겹치는 달) — 예정 줄이 지난 줄이 되는 범위
 
@@ -605,6 +605,9 @@ def request_docs(a, b, args, jobs: list) -> int:
                       gap=lambda: time.sleep(random.uniform(*GAP_SEC)))
 
 
+DOC_FAILED: dict = {}      # (회차 시작, 계정 폴더) → 이번 회차에 실패한 '종류 달' — 같은 회차 다음 바퀴엔 다시 안 부름(D-245)
+
+
 def collect_docs(a, b, args, jobs: list) -> int:
     """월자료(D-171 — 세금계산서 2종·라이브·주문별 매출·RG 재고변동 + RG 반품내역 하루 1번) · 회차 계정당 종류별 3달(D-170).
     조회만. 종류 하나 실패 = 그 종류만 기록하고 계속(차단만 중단). 반환 = 받은 파일 수. 저장 = 검증자료/월자료/{계정}/."""
@@ -619,9 +622,9 @@ def collect_docs(a, b, args, jobs: list) -> int:
             LOG.record(name, "차단감지", RL.BLOCK, str(exc))
             raise BlockDetected(str(exc)) from exc
     goto(b, API.WING_URL, name)
+    since = getattr(args, "cycle_since", "") or f"{date.today()}T00:00:00"
     s = DOC.collect(lambda m, p, body: api(b, name, m, p, body), html, lambda url: _get_bytes(b, url), VERIFY / "월자료" / tok,
-                    date.today(), vendor=_rg_vendor(a, jobs),
-                    since=getattr(args, "cycle_since", "") or f"{date.today()}T00:00:00",
+                    date.today(), vendor=_rg_vendor(a, jobs), since=since, skip=DOC_FAILED.setdefault((since, tok), set()),
                     gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)), page_gap=lambda: time.sleep(random.uniform(1, 2.5)),
                     note=lambda m: LOG.record(name, "월자료", RL.WAIT, m), fatal=(BlockDetected,))
     for f in s["파일"]:
@@ -680,6 +683,25 @@ def _sales_left(name: str, account_id: str, days: int) -> None:
                                                        limit=10 ** 6)), "일")
 
 
+def _backlog_left(accts, args) -> None:
+    """바퀴 끝 남은 소급을 **전 계정**의 저장 자료로 다시 셈 — 그 바퀴 소급 단계를 못 돈 계정(로그인 실패·중단된 바퀴·새 프로세스)도
+    판매분석·월자료·광고 남은 양이 [실행 결과 종합]에 잡힘(T-46 ⑤ · output (37) 보고 B ⑤ — 적게 세어 '다 받았다' 오판 방지).
+    받기 없음(파일만 읽음) · 판정 = 각 단계와 같은 함수(_sales_left · DOC/AD.left_months)."""
+    from coupang_analytics import settlement_ads as AD
+    from coupang_analytics import settlement_docs as DOC
+    jobs = SJ.load_jobs(JOBS)
+    today = date.today()
+    for a in accts:
+        name = name_of(a)
+        tok = SF._token(name, "계정명")
+        _sales_left(name, a.account_id, 0)
+        try:
+            LOG.remaining(name, "월자료", DOC.left_months(VERIFY / "월자료" / tok, today, bool(_rg_vendor(a, jobs))), "달")
+            LOG.remaining(name, "광고", AD.left_months(VERIFY / "광고", tok, min(args.start, AD.FROM), today), "달")
+        except (OSError, ValueError) as exc:   # 받은 기록 파일 깨짐 등 — 남은 수만 못 셈(기록으로 명시 · _sales_left 와 같음)
+            LOG.record(name, "남은 소급", RL.WAIT, f"남은 소급 계산 실패 — 확인 필요 ({exc.__class__.__name__})")
+
+
 def collect_verify(a, b, args) -> None:
     """검증 원자료(조회만)를 계정별로 하루 한 번 저장 — settlement_verify_collect. 오늘 이미 모았으면 건너뜀."""
     from coupang_analytics import settlement_verify_collect as VC
@@ -717,11 +739,14 @@ def collect_ads(a, b, args) -> None:
     try:
         s = AD.collect(call, lambda url: _get_bytes(b, url), VERIFY / "광고", SF._token(name, "계정명"), min(args.start, AD.FROM),
                        date.today(),
-                       gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)), get_report=lambda url: _get_bytes(b, url, text_ok=True))
+                       gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)), get_report=lambda url: _get_bytes(b, url, text_ok=True),
+                       fatal=(BlockDetected,))
         for f in s.get("파일", ()):
             LOG.saved(name, f, "광고")
         LOG.remaining(name, "광고", s["남은 달"], "달")
-        msg = [f"{k} {','.join(v)}" for k, v in s.items() if isinstance(v, list) and v and k not in ("받을 것", "파일")]
+        for why in s.get("실패", ()):                              # 밀크런·광고센터 따로 실패(한쪽이 다른 쪽을 막지 않음 · D-245)
+            LOG.record(name, "광고비", RL.FAIL, why)
+        msg = [f"{k} {','.join(v)}" for k, v in s.items() if isinstance(v, list) and v and k not in ("받을 것", "파일", "실패")]
         if msg or s["남은 달"]:
             LOG.record(name, "광고비", RL.OK, " · ".join(msg + ([f"남은 달 {s['남은 달']}(다음 실행에)"] if s["남은 달"] else [])))
     except BlockDetected:
@@ -860,6 +885,9 @@ def cmd_stats() -> None:
                          costs=costs, verify=verify, inflows=SV.inflows_all(amounts, vdatas, today=date.today()),
                          forecast=acc)
     LOG.saved(RL.ALL, out, "정산 집계")
+    moved = STORE.rotate_stats(BASE)                      # 최신 3개만 남기고 보관/YYYY-MM 으로 이동(D-243 ② · 삭제 없음)
+    if moved:
+        log(f"  [정산집계 정리] 옛 정산집계 {moved}개 → {BASE / '보관'}/YYYY-MM (최신 {STORE.STATS_KEEP}개만 남김)")
     log(f"집계 정산 파일 {len(files)}개·비용 리포트 {len(costs)}시트·쿠팡 지급 내역 {len(amounts)}줄 → {out} "
         f"(경고 {len(res.warnings)}건)")
 
@@ -914,9 +942,36 @@ def _wait_accounts(lg) -> int:
     return len({r["계정"] for r in lg.rows if r["단계"] == "계정" and r["결과"] == RL.WAIT})
 
 
+def _open_jobs() -> tuple[list, set]:
+    """(요청예정·요청됨 작업, 정지 계정ID — 앱 상태 파일 `output/_계정정지.json` D-199 · 읽기만)."""
+    from coupang_analytics import account_suspend
+    return [j for j in SJ.load_jobs(JOBS) if j.status in (SJ.ST_PLANNED, SJ.ST_REQUESTED)], account_suspend.suspended_ids()
+
+
+def _is_suspended(account: str, ids: set) -> bool:
+    return any(account.endswith("-" + i) for i in ids)          # 계정명 = '대표자-사업자-계정ID'(display_name)
+
+
 def _pending_jobs() -> int:
-    """요청예정·요청됨(쿠팡 파일 생성 대기) 작업 수."""
-    return sum(1 for j in SJ.load_jobs(JOBS) if j.status in (SJ.ST_PLANNED, SJ.ST_REQUESTED))
+    """요청예정·요청됨(쿠팡 파일 생성 대기) 작업 수 — 정지 계정 작업은 빼고 셈(받기는 D-215 대로 계속 · D-247 ·
+    실측 output (37) hide4u 요청됨 9건이 받기 500 반복으로 회차 '완료'를 막음)."""
+    jobs, ids = _open_jobs()
+    return sum(1 for j in jobs if not _is_suspended(j.account, ids))
+
+
+def _suspended_pending() -> dict[str, int]:
+    """정지 계정의 요청예정·요청됨 작업 수 {계정: 건수} — [실행 결과 종합] '정지 계정 대기 — 확인 필요'(D-247)."""
+    jobs, ids = _open_jobs()
+    out: dict[str, int] = {}
+    for j in jobs:
+        if _is_suspended(j.account, ids):
+            out[j.account] = out.get(j.account, 0) + 1
+    return out
+
+
+def _watch_failures() -> dict[str, str]:
+    """완료 문구·상태의 '확인 필요' 계정 = 이번 바퀴 실패로 끝난 계정 + 정지 계정 받기 대기(D-247 — 완료·실패 확인)."""
+    return {**LOG.unresolved_failures(), **{a: "정지 계정 받기 대기" for a in _suspended_pending()}}
 
 
 def _one_pass(args) -> tuple[bool, int]:
@@ -942,8 +997,9 @@ def _one_pass(args) -> tuple[bool, int]:
         LOG.error("(전체)", "자동실행", exc)
         return False, 0
     finally:
+        _backlog_left(accts, args)           # 남은 소급 = 전 계정 저장 자료로 다시 셈(T-46 ⑤)
         CYCLE.add(LOG)                       # 회차 [실행 결과 종합] 재료(D-168)
-    LOG.summary(pending=_pending_jobs())
+    LOG.summary(pending=_pending_jobs(), suspended=_suspended_pending())
     return rc == 1, work
 
 
@@ -952,7 +1008,7 @@ def _cycle_close(status: str, reason: str, *, stopped: bool = False) -> None:
     if not CYCLE.passes:
         LOG.heartbeat(status, reason)
         return
-    lines = RL.result_block(CYCLE, pending=_pending_jobs(), stopped=stopped, note=reason,
+    lines = RL.result_block(CYCLE, pending=_pending_jobs(), suspended=_suspended_pending(), stopped=stopped, note=reason,
                             title=f"실행 결과 종합 — 이번 회차 {CYCLE.passes}바퀴")
     for ln in lines:
         LOG.line(ln)
@@ -1023,7 +1079,7 @@ def cmd_watch(args) -> int:
                     return 0
                 stopped, work = _one_pass(args)
                 idle = 0 if work else idle + 1
-                fails = LOG.unresolved_failures()
+                fails = _watch_failures()
                 action, reason = W.plan_after_pass(stopped, work, _pending_jobs(), _wait_accounts(LOG), idle, failed=fails)
                 log(f"[자동] {reason}")
                 if action in ("again", "later"):
@@ -1103,7 +1159,7 @@ def _transfer_settle(args) -> int:
     if args.parent:
         _watch_app(args.parent)
     rc = TS.main_cli(args, _transfer_work(args), log)
-    LOG.summary(pending=_pending_jobs())
+    LOG.summary(pending=_pending_jobs(), suspended=_suspended_pending())
     LOG.heartbeat("완료" if rc == 0 else "종료", f"셀독전환자 정산 자료 받기 · 종료코드 {rc}")
     return rc
 
@@ -1168,7 +1224,7 @@ def main() -> int:
            "evidence": cmd_evidence}[args.command]
     LOG.accounts = [name_of(a) for a in accts]
     rc = _run_both(accts, args) if run is cmd_run else _run_accounts(accts, run, args)
-    LOG.summary(pending=_pending_jobs())
+    LOG.summary(pending=_pending_jobs(), suspended=_suspended_pending())
     log(f"기록: {LOG.csv} · 오류 추적: {LOG.errors if LOG.errors.exists() else '없음'}")
     LOG.heartbeat("완료", f"명령 {args.command} · 종료코드 {rc}")
     return rc
