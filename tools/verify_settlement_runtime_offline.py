@@ -2121,6 +2121,7 @@ def p47_settle_sales_coupons():
     import settlement_download as TD
     from coupang_analytics import collector, wing_coupons
     from coupang_analytics import pipeline_sales as PS
+    from coupang_analytics import sales_history as SH
     from coupang_analytics import sales_summary as SS
     assert SS.FIRST_DAY == D("2026-04-01") and SS.COLLECT_FROM == D("2026-01-01"), "표시 시작 4/1 · 수집 시작 1/1"
     assert SS.plan_backfill({}, D("2026-01-02"), first=SS.COLLECT_FROM) == ["2026-01-02", "2026-01-01"]
@@ -2156,7 +2157,7 @@ def p47_settle_sales_coupons():
             assert ("2026-01-01", "2026-01-31") in periods and ("2026-03-01", "2026-03-31") in periods, periods
             assert coupons == [("acc1", "output")], coupons
             assert any(r[1] == "판매분석·쿠폰" for r in recs), recs
-            assert "2026-01-31" in json.loads((d / "acc1.json").read_text(encoding="utf-8")), "1~3월 일별 저장"
+            assert "2026-01-31" in SH.load_account("output", "acc1"), "1~3월 일별 저장(계정 × 달 파일 D-243 ③ 경로 변경만)"
         finally:
             os.chdir(old_cwd)
     ok("정산 실행 = 1/1부터 빠진 날(1/1 받기 전 150일 D-167·최근부터)·1~3월 월 합계·쿠폰(계정ID) · ① 판매수집은 4/1 그대로")

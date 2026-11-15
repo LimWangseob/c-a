@@ -121,6 +121,8 @@ def pin_designated_date():
 
 # ── 단계 조립(정리 B6 — 전체실행·무인 --auto·재부팅 복구 --resume 공통 run_stages) ─────────────
 import coupang_analytics.pipeline_stages as _st  # noqa: E402
+
+DAY_MARKS: list = []   # 지난 날 ③ 끝남 표시(mark_run_day) — 시험마다 비움
 from coupang_analytics.pipeline_stages import StagePlan, plan_resume_stages, run_stages  # noqa: E402
 
 
@@ -141,7 +143,8 @@ def _fake_stages(stop_at: str | None = None):
     _st.track_ranks_stage = lambda **k: (hit("③"), calls.append(f"③칸={k['date_label']}"))[0] or "ranks"
     _st.push_ledger_inventory = lambda *a: hit("재고")
     _st.push_company_stock = lambda *a: hit("회사재고")
-    _st.write_run_stage = lambda s: marks.append(s)
+    _st.write_run_stage = lambda s, **k: marks.append(s)
+    _st.mark_run_day = lambda d, s, **k: DAY_MARKS.append((d, s))
     _st.read_last_run_stage = lambda: None   # 개발 PC output 의 실제 단계 기록을 읽지 않게(결정적 · P12 만 바꿔 넣음)
     return calls, marks, (lambda: stop["v"])
 
@@ -237,7 +240,8 @@ def _fake_result_stages(*, unfilled=(0,), searched=(5,), sales_fail=False, kw_fa
     _st.run_full, _st.select_keywords_stage, _st.track_ranks_stage = fake_run_full, fake_kw, fake_track
     _st.push_ledger_inventory = lambda *a: calls.append("재고")
     _st.push_company_stock = lambda *a: calls.append("회사재고")
-    _st.write_run_stage = lambda s: marks.append(s)
+    _st.write_run_stage = lambda s, **k: marks.append(s)
+    _st.mark_run_day = lambda d, s, **k: DAY_MARKS.append((d, s))
     _st.read_last_run_stage = lambda: None   # 개발 PC output 의 실제 단계 기록을 읽지 않게(결정적 · P12 만 바꿔 넣음)
     return calls, marks, (lambda: stop["v"])
 
@@ -352,6 +356,71 @@ def pin_yesterday_rank_catchup():
         _st.read_last_run_stage = orig
 
 
+def pin_catchup_recent_days():
+    print("[핀 P14] 최근 7일 안 ③ 못 끝낸 날 전부 보충(최근부터) · 다 채운 날만 '완료' 표시 · 종합 빈 칸에 보충 칸 포함 · ③ 에 실행 날짜 (T-47)")
+    from datetime import date, timedelta
+    t = date.today()
+    d = lambda n: (t - timedelta(days=n)).isoformat()   # noqa: E731
+    orig = _st.read_last_run_stage
+    try:
+        for extra in ({}, {"fail_day": d(1)}):
+            calls, marks, stop = _fake_result_stages(unfilled=(0, 0, 0, 3) if extra else (0,), searched=(5, 2, 1))
+            seen: list = []
+            track = _st.track_ranks_stage
+
+            def rec(**k):
+                seen.append((k.get("date_label"), k.get("run_date")))
+                return track(**k)
+            _st.track_ranks_stage = rec
+            DAY_MARKS.clear()
+            hist = {"date": d(1), "stage": "ranks", "days": {d(1): "ranks", d(2): "done", d(3): "sales", d(7): "ranks",
+                                                          d(8): "ranks", t.isoformat(): "sales"}}
+            _st.read_last_run_stage = lambda: hist
+            logs: list = []
+            run_stages(None, StagePlan(), ai_key="k", naver=None, date_from=DF, date_to=DT, date_label=DL,
+                       get_password=lambda a: None, carry=True, should_stop=stop, on_log=logs.append)
+            labels = [x for x, _ in seen]
+            _check(labels == [None, d(1), d(3), d(7)], f"오늘 ③ 뒤 7일 안 못 끝낸 날(최근부터) · done·8일 전·오늘 제외 {labels}")
+            _check(all(r == t for _, r in seen), f"③ 마다 실행 날짜(시작일) 넘김 {seen}")
+            b = _block(logs)
+            if not extra:
+                _check(DAY_MARKS == [(d(1), "done"), (d(3), "done"), (d(7), "done")], f"빈 칸 0 인 날 = 완료 표시 {DAY_MARKS}")
+                _check(b[1] == "판정: 정상 완료", f"보충 빈 칸 0 → 정상 {b[1]}")
+            else:
+                _check((d(7), "done") not in DAY_MARKS and (d(1), "done") in DAY_MARKS,
+                       f"빈 칸 남은 날은 완료 표시 안 함(다음 실행이 다시) {DAY_MARKS}")
+                _check(b[1] == "판정: 순위 빈 칸 --> 확인 필요", f"오늘 빈 칸 0 이어도 보충 칸 빈 칸 → 확인 필요 {b[1]}")
+                _check("순위 빈 칸 3 " in b[-1], f"한 줄 요약 빈 칸 = 보충 칸 포함 {b[-1]}")
+                lab = d(7)[5:].replace("-", ".")
+                _check(any("지난 칸 보충" in x and f"{lab} 빈 칸 3" in x for x in b), "③ 줄에 보충 칸별 빈 칸")
+            _st.track_ranks_stage = track
+    finally:
+        _st.read_last_run_stage = orig
+
+
+def pin_run_days_file():
+    print("[핀 P15] 단계 기록 파일 — 날짜별 기록(days) · 옛 파일(맨 위 한 날) 이어받음 · 14일만 · 지난 날 완료 표시 (T-47)")
+    import json
+    import tempfile
+    from coupang_analytics import pipeline_paths as PP
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / PP._RUN_STAGE_JSON
+        f.write_text(json.dumps({"date": "2026-11-14", "stage": "ranks", "at": "2026-11-14T18:36:11"}), encoding="utf-8")
+        PP.write_run_stage("sales", tmp, day="2026-11-15")
+        m = json.loads(f.read_text(encoding="utf-8"))
+        _check(m["stage"] == "sales" and m["days"] == {"2026-11-14": "ranks", "2026-11-15": "sales"},
+               f"옛 기록 이어받고 오늘 추가(맨 위 date·stage·at 그대로) {m}")
+        PP.mark_run_day("2026-11-14", "done", tmp)
+        m = json.loads(f.read_text(encoding="utf-8"))
+        _check(m["days"]["2026-11-14"] == "done" and m["stage"] == "sales", f"지난 날만 완료(맨 위 안 바뀜) {m}")
+        for i in range(20):
+            PP.write_run_stage("done", tmp, day=f"2026-12-{i + 1:02d}")
+        m = json.loads(f.read_text(encoding="utf-8"))
+        _check(len(m["days"]) == 14 and min(m["days"]) == "2026-12-07", f"최근 14일만 {sorted(m['days'])[:2]}")
+        _check(PP.run_days(m) == m["days"] and PP.run_days({"date": "2026-11-14", "stage": "ranks"}) == {"2026-11-14": "ranks"}
+               and PP.run_days(None) == {}, "run_days = days · 옛 파일 = 맨 위 한 날 · 없음 = 빈")
+
+
 def pin_crash_summary():
     print("[핀 P13] 실행이 예외로 멈춤 → 종합에 멈춘 단계 '도중 오류로 멈춤' · 그 예외도 오류 수 · ③ 이 안 끝났으면 '순위 빈 칸 0' 안 씀 (T-29)")
     err = "TimeoutError: Page.goto: Timeout 30000ms exceeded."
@@ -402,6 +471,8 @@ def main() -> int:
     pin_stage_assembly()
     pin_run_result()
     pin_yesterday_rank_catchup()
+    pin_catchup_recent_days()
+    pin_run_days_file()
     pin_crash_summary()
     print("=" * 60)
     print("  [완료] 실행모드 핀 모두 통과")

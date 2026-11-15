@@ -271,10 +271,12 @@ def inject_company_stock(wb, stock_url: str | None, log) -> None:
 
     관리대장 역기록(push_company_stock)과 **별개**로, 계정목록에 보여주려 매 실행 재고현황을 읽어 워크북 인메모리에
     넣는다(마스터 미저장·다음 실행 재주입). stock_url 없거나 SA 미등록이면 no-op(정상 — 계정목록 공란). 실패는
-    로그·비치명(계정목록·통계는 그대로 렌더). 읽기 전용(재고현황 시트를 쓰지 않음)."""
+    로그·비치명(계정목록·통계는 그대로 렌더)이지만 ❌ 줄 = [실행 결과 종합] 오류로 셈(머리 못 읽어 회사보유재고가 통째로
+    빈 칸인데 ⚠ 만 남던 결함 T-47 · output (37) 11-13~ · 값 규칙 D-156·D-157 그대로). 읽기 전용(재고현황 시트를 쓰지 않음)."""
     if not stock_url:                                # 미설정 = '생략' 안내(오류 아님) — 계정목록 회사보유재고 공란
         log("== [회사재고] 재고현황 링크(stock/url) 미설정 — 계정목록 회사보유재고 표기 생략(공란) ==")
         return
+    tab = ""
     try:
         from . import company_stock, gsheet_api
         if not gsheet_api.load_sa_info():
@@ -287,7 +289,9 @@ def inject_company_stock(wb, stock_url: str | None, log) -> None:
         n = company_stock.apply_to_workbook(wb, stock, cache=_stock_cache(out_dir, log), title_of=title_of)
         log(f"== [회사재고] 계정목록 표기 — 재고현황 '{tab}' {len(stock)}품목 → {n}개 상품 주입 ==")
     except Exception as exc:
-        log(f"== [회사재고] ⚠ 계정목록 표기 생략(진행): {exc.__class__.__name__}: {str(exc)[:120]} ==")
+        where = f"재고현황 '{tab}' " if tab else "재고현황 "
+        log(f"== [회사재고] ❌ 계정목록 회사보유재고 못 채움(진행 · {where}읽기 실패 — 시트 머리·첫 탭 확인): "
+            f"{exc.__class__.__name__}: {str(exc)[:160]} ==")
 
 
 def push_coupang_checks(registry_url: str | None, checks: dict, log) -> None:

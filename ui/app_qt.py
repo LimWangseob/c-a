@@ -48,6 +48,7 @@ from coupang_analytics.pipeline import (column_dates, backup_sources,  # noqa: E
                                         track_ranks_stage)
 from coupang_analytics.pipeline_stages import StagePlan, plan_resume_stages, run_stages  # noqa: E402
 from coupang_analytics.pipeline_ranks import LAST_RANK  # noqa: E402
+from coupang_analytics import run_result  # noqa: E402
 from coupang_analytics.rank import make_matcher, organic_rank, warmup  # noqa: E402
 import registry_ui  # noqa: E402
 from proxy_panel_qt import ProxyPanelMixin  # noqa: E402
@@ -1784,9 +1785,25 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self._auto_quit()
 
     def _auto_quit(self):
+        self._quitting = True   # 무인이 스스로 끝냄 — 창 닫힘 기록(closeEvent)에 '사람이 닫음'을 안 씀
         mark_app_finished()   # D-020: 무인이 스스로 끝남 → 정산은 계속(17:55 까지). 사람이 끄면 이 표시 없음 → 함께 종료
         power.keep_awake(False)
         QtWidgets.QApplication.quit()
+
+    def closeEvent(self, event):   # noqa: N802 (Qt 이름)
+        """창 닫힘 기록(T-47) — 사람이 닫으면 어느 단계에서 닫았는지 + 도는 실행의 [실행 결과 종합] '사람 중지 --> 중단'
+        (D-173 · output (37) 11-13·14 로그가 순위 한 줄 중간에서 그냥 끊김). 닫기는 막지 않음(정산 함께 종료 D-020 그대로)."""
+        if not getattr(self, "_quitting", False):
+            stop = getattr(self, "_semi_stop", None)
+            if stop is not None:
+                stop.set()
+            runs = list(run_result.ACTIVE)
+            for rs in runs:
+                rs.close_now("사람이 앱 창을 닫음")
+            if not runs:
+                busy = "종합 없는 단독 작업 도중(순위 탭 등)" if getattr(self, "_run_active", False) else "도는 실행 없음"
+                self.log_all(f"[앱 종료] 사람이 앱 창을 닫음 — {busy}")
+        super().closeEvent(event)
 
     # ── 재부팅 복구(--resume): 재부팅으로 끊긴 '오늘 작업'만 이어서(없으면 조용히 종료) ──
     def start_resume(self):

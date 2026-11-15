@@ -812,7 +812,8 @@ def scenario_e2e_warmup_timeout_then_catch_up():
             raised = exc
         _check(raised is not None and _marker()["stage"] == "sales", f"어제(옛 코드) = ② 에서 실행 중단·단계 기록 'sales' {_marker()}")
         p = pipeline_paths._run_stage_path("output")   # 기록은 '실행한 날' 날짜 → 어제 실행분으로 되돌림(하루 지남)
-        p.write_text(json.dumps({**_marker(), "date": y}, ensure_ascii=False), encoding="utf-8")
+        p.write_text(json.dumps({**_marker(), "date": y, "days": {y: _marker()["stage"]}}, ensure_ascii=False),
+                     encoding="utf-8")   # 날짜별 기록(days · D-248)도 어제 실행분
         P._warmup_or_skip = orig[2]                   # 오늘 = 배포본 코드(T-21·D-220)
         logs: list = []
         _day(t, logs)

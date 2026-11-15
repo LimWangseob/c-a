@@ -430,6 +430,54 @@ def test_semi_dead_ip() -> None:
          PR._unfilled, PR._connection_down) = orig
 
 
+def test_semi_dead_ip_denied_is_block() -> None:
+    """③ '검색창 없음'으로 본 화면이 실제 쿠팡 접근차단(Access Denied)이면 차단으로 기록(T-47 · output (37) 11-15
+    _순위차단 '검색창 없음' 14건 = 전부 제목 'Access Denied'): 차단 감지 수에 셈·증거 판정 단어에 차단 단어·drive_rank 가
+    그 egress 를 차단 이력에 남김 · 흐름(바로 새 IP·키워드 미룸·15번 연속 마침 D-090)과 검색 간격은 그대로."""
+    from types import SimpleNamespace as NS
+    from coupang_analytics import pipeline_ranks as PR
+    from coupang_analytics import proxy_blocklist as bl
+    denied = NS(inner_text=lambda sel: "Access Denied · You don't have permission to access this server.", title=lambda: "Access Denied")
+    browser = NS(page=denied, context=NS(browser=NS(contexts=[NS(pages=[denied])])), to_front=lambda: None)
+    orig = (PR.rotation_can_rotate, PR._save_block_evidence)
+    ev: list = []
+    try:
+        PR._save_block_evidence = lambda pg, kw, marker: ev.append(marker) or {"file": "x"}
+        PR.rotation_can_rotate = lambda: True
+        st = PR._SemiState()
+        assert PR._semi_on_dead(st, browser, "kw", lambda m: None) is True
+        assert (st.halted, st.halt_reason, st.blocked_total, st.dead_total, st.dead_streak, st.rotations) ==             (True, PR._DEAD_BLOCK, 1, 0, 1, 1), st
+        assert ev == ["검색창 없음·Access Denied"], ev
+        st = PR._SemiState(dead_streak=PR._DEAD_STREAK_STOP - 1)        # 15번 연속 마침 규칙은 그대로
+        assert PR._semi_on_dead(st, browser, "", lambda m: None) is True and st.gave_up
+    finally:
+        PR.rotation_can_rotate, PR._save_block_evidence = orig
+    saved = (config.PROXY_ENABLED, config.RANK_PROXY_ROTATE_ON_BLOCK, config.RANK_PROXY_PRECHECK_EGRESS)
+    orig = (PR.WingBrowser, proxy_pool.rank_proxy_pool_urls, bl.resolve_egress_ip, bl.is_blocked, bl.record)
+    proxy_pool.reset_cache()
+    try:
+        config.PROXY_ENABLED = config.RANK_PROXY_ROTATE_ON_BLOCK = config.RANK_PROXY_PRECHECK_EGRESS = True
+        PR.WingBrowser = _FakeCM
+        proxy_pool.rank_proxy_pool_urls = lambda: ["http://a:1", "http://b:1"]
+        bl.is_blocked = lambda ip, data=None: False
+        recorded: list = []
+        bl.record = lambda ip, reason="": recorded.append((ip, reason))
+        ips = iter(["9.9.9.5", "9.9.9.6"])
+        bl.resolve_egress_ip = lambda browser, log=None: next(ips)
+        reasons = iter([PR._DEAD_BLOCK, ""])
+        cur: dict = {}
+
+        def _run(b, e) -> bool:
+            cur["r"] = next(reasons)
+            return bool(cur["r"])
+        PR.drive_rank(offscreen=False, run_once=_run, log=lambda m: None, halt_reason=lambda: cur["r"])
+        assert [ip for ip, _ in recorded] == ["9.9.9.5"] and "접근차단" in recorded[0][1], recorded
+    finally:
+        (config.PROXY_ENABLED, config.RANK_PROXY_ROTATE_ON_BLOCK, config.RANK_PROXY_PRECHECK_EGRESS) = saved
+        (PR.WingBrowser, proxy_pool.rank_proxy_pool_urls, bl.resolve_egress_ip, bl.is_blocked, bl.record) = orig
+        proxy_pool.reset_cache()
+
+
 def test_drive_rank_conn_not_block() -> None:
     """drive_rank(2026-10-13): IP 확인 실패 = 연결 장애 → 검색 안 하고 다음 IP·차단 목록 기록 없음. 3번 연속이면
     쉬고(sleep) 다음 IP 는 확인 실패여도 실행. 검색 중 연결 장애(halt_reason 'conn')도 차단 기록 없음."""
@@ -611,6 +659,7 @@ def main() -> None:
         test_rank_block_images,
         test_semi_block_rotate_signal,
         test_semi_dead_ip,
+        test_semi_dead_ip_denied_is_block,
         test_drive_rank_conn_not_block,
         test_drive_rank_profile_per_ip,
         test_rank_identity_follows_ip,

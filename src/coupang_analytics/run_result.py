@@ -20,6 +20,8 @@ PW_HINT = "관리대장 비밀번호 확인 — 거부된 값은 24시간 다시
 MAX_LINES = 20          # 단계마다 오류 줄 표시 상한(넘으면 '외 N건')
 TITLE = "===== [실행 결과 종합] ====="
 HALTED = "도중 오류로 멈춤"   # 실행을 멈춘 예외가 난 단계(T-29 — 옛 = '함'·'수집 성공 ?/N')
+CLOSED = "사람이 창을 닫아 멈춤"   # 실행 도중 앱 창을 닫음(T-47 — 옛 = 로그가 그냥 끊김)
+ACTIVE: list = []   # 지금 도는 RunSummary — 앱 창이 닫힐 때 종합을 바로 남김(close_now · T-47)
 
 
 def is_error(stage: str, msg: str) -> bool:
@@ -47,7 +49,8 @@ class RunSummary:
 
     def __init__(self, on_log, accounts, *, should_stop, rank: dict, sheet_url: str = ""):
         self._log, self.accounts, self._stop, self.rank, self.sheet_url = on_log, list(accounts), should_stop, rank, sheet_url
-        self.stage, self.retried, self.crash_stage = PREP, 0, ""
+        self.stage, self.retried, self.crash_stage, self.cut = PREP, 0, "", HALTED
+        self.closed = False
         self.errors: dict[str, list[str]] = {}
         self.ran: list[str] = []
         self.files: list[tuple[str, object]] = []
@@ -72,9 +75,24 @@ class RunSummary:
 
     def __enter__(self) -> RunSummary:
         LAST_SALES.clear()
+        ACTIVE.append(self)
         return self
 
+    def close_now(self, why: str) -> None:
+        """실행 도중 앱이 끝남(사람이 창을 닫음) — 닫은 단계와 종합을 지금 찍는다(곧 프로세스가 끝나 __exit__ 까지 못 감).
+        판정 = 사람 중지 --> 중단(D-173) · 닫은 단계 = '사람이 창을 닫아 멈춤' · 뒤늦은 __exit__ 은 종합을 다시 안 찍음."""
+        if self.closed:
+            return
+        self.closed, self.crash_stage, self.cut = True, self.stage, CLOSED
+        self._log(f"[앱 종료] {why} — {self.stage} 도중 · 이 실행은 여기서 끝남(진행분은 저장된 데까지)")
+        for ln in self.block(stopped=True):
+            self._log(ln)
+
     def __exit__(self, et, ev, tb) -> Literal[False]:
+        if self in ACTIVE:
+            ACTIVE.remove(self)
+        if self.closed:                       # 창 닫힘 때 이미 종합을 찍음(close_now)
+            return False
         crashed = "" if et is None else f"{et.__name__}: {(str(ev).splitlines() or [''])[0][:200]}"
         if crashed:                           # 멈춘 단계 = 그때 단계 · 멈추게 한 예외도 오류 현황에(T-29)
             self.crash_stage = self.stage
@@ -98,15 +116,17 @@ class RunSummary:
         if RANKS not in self.ran:
             return "③ 순위: 이번 실행에서 안 돎"
         if self.crash_stage == RANKS:
-            return f"③ 순위: {HALTED}"
+            return f"③ 순위: {self.cut}"
         if not r:
             self.errors.setdefault(RANKS, []).append("③ 순위 결과 없음(결과 워크북 없음 등 — 위 로그 확인)")
             return "③ 순위: 결과 없음"
         tail = " · 모든 처리 끝난 뒤 빈 칸 1회 재시도함" if self.retried else ""
         n, first = int(r.get("searched") or 0), r.get("first_searched")
         split = f"(첫 회 {first} + 재시도 {n - first})" if self.retried and first is not None else ""
+        catch = "".join(f" · 지난 칸 보충 {c['label']} 측정 {c['searched']} · {c['label']} 빈 칸 {c['unfilled']}"
+                        for c in r.get("catchup", []))
         return (f"③ 순위: 측정 {n}건{split} · 빈 칸 {r.get('unfilled', 0)} · VID 없음 {r.get('novid', 0)} · "
-                f"차단감지 {r.get('blocked', 0)}회{tail}")
+                f"차단감지 {r.get('blocked', 0)}회{tail}{catch}")
 
     def _error_lines(self) -> list[str]:
         out = []
@@ -131,13 +151,13 @@ class RunSummary:
         if SALES not in self.ran:
             return "① 판매수집: 이번 실행에서 안 돎"
         if self.crash_stage == SALES:
-            return f"① 판매수집: {HALTED}"
+            return f"① 판매수집: {self.cut}"
         return f"① 판매수집: 수집 성공 {s.get('ok', '?')}/{s.get('total', n_accts)}계정"
 
     def _kw_state(self) -> str:
         if KEYWORDS not in self.ran:
             return "이번 실행에서 안 돎"
-        return HALTED if self.crash_stage == KEYWORDS else "함"
+        return self.cut if self.crash_stage == KEYWORDS else "함"
 
     def _rank_tail(self, unfilled: int) -> str:
         """한 줄 요약의 ③ 부분 — ③ 이 끝까지 돈 때만 '순위 빈 칸 N'(안 돌았는데 '빈 칸 0'으로 읽히던 오기 T-29)."""
@@ -145,19 +165,24 @@ class RunSummary:
             return "순위 도중 멈춤"
         return f"순위 빈 칸 {unfilled}" if RANKS in self.ran else "순위 안 돎"
 
+    def _unfilled_all(self) -> int:
+        """순위 빈 칸 = 오늘 칸 + 지난 칸 보충(D-220)이 남긴 빈 칸 — 보충 칸 빈 칸이 '정상 완료'로 가려지던 결함(T-47)."""
+        return int(self.rank.get("unfilled") or 0) + sum(int(c.get("unfilled") or 0) for c in self.rank.get("catchup", []))
+
     @staticmethod
     def _named(head: str, items: list, hint: str = "") -> str:
         return f"{head}: {len(items)}개" + (f" — {', '.join(items)}" + (f" ({hint})" if hint else "") if items else "")
 
-    def block(self, crashed: str = "") -> list[str]:
+    def block(self, crashed: str = "", stopped: bool | None = None) -> list[str]:
         accts = list(LAST_SALES.get("accounts") or self.accounts)
         pw, missed = list(LAST_SALES.get("pw", [])), dict(LAST_SALES.get("missed", {}))
         human = {a: w for a, w in missed.items() if w == OTP}
         lost = {a: w for a, w in missed.items() if w != OTP}
         rank_line = self._rank_line()                         # 결과 없음이면 오류 줄 추가 → nerr 전에
-        unfilled = int(self.rank.get("unfilled") or 0) if RANKS in self.ran else 0
+        unfilled = self._unfilled_all() if RANKS in self.ran else 0   # 오늘 칸 + 지난 칸 보충 빈 칸(T-47)
         nerr = sum(len(v) for v in self.errors.values())
-        judge = verdict(crashed=crashed, stopped=bool(self._stop()), failed=self._failed(pw, missed, unfilled),
+        stop = bool(self._stop()) if stopped is None else stopped
+        judge = verdict(crashed=crashed, stopped=stop, failed=self._failed(pw, missed, unfilled),
                         unfilled=unfilled)
         files = self._all_files()
         return [TITLE, f"판정: {judge}", *([f"오류 내용: {crashed}"] if crashed else []),
@@ -173,4 +198,4 @@ class RunSummary:
                 f"로그인 못 함 {len(lost)} · {self._rank_tail(unfilled)} · 오류 {nerr} · 저장 파일 {len(files)}"]
 
 
-__all__ = ["LAST_SALES", "RunSummary", "is_error", "verdict"]
+__all__ = ["ACTIVE", "LAST_SALES", "RunSummary", "is_error", "verdict"]

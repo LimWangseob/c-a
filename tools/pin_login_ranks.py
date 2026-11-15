@@ -360,7 +360,7 @@ def pin_discover_empty_uses_vendor():
 
 
 def pin_sales_history_wiring():
-    print("[핀 S] 하루 단위 ① 수집 직후 판매분석 금액을 날짜별로 기록(output/판매분석_일별/{계정}.json)")
+    print("[핀 S] 하루 단위 ① 수집 직후 판매분석 금액을 날짜별로 기록(output/판매분석_일별/{계정}/{YYYY-MM}.json)")
     import json
     _SPEC.clear(); _COUNT.clear()
     _SPEC["authenticated"] = [True]
@@ -371,7 +371,7 @@ def pin_sales_history_wiring():
         try:
             acct, metrics, *_ = P._login_and_discover(_ledger_account(), "2026-09-20", "2026-09-20",
                                                       lambda aid: "pw", lambda m: None)
-            path = Path(tmp) / "output" / "판매분석_일별" / "pin1.json"
+            path = Path(tmp) / "output" / "판매분석_일별" / "pin1" / "2026-09.json"   # 계정 × 달 파일(D-243)
             _check(acct is not None and path.exists(), "수집 성공 뒤 날짜별 기록 파일 생성")
             day = json.loads(path.read_text(encoding="utf-8")).get("2026-09-20", {})
             _check(day.get("옵션", {}).get(_VID, {}).get("판매금액") == 125000, "그날 옵션 판매금액 = 판매분석 값")
@@ -792,6 +792,29 @@ def pin_sales_excel_menu():
     print("  ✅ pin_sales_excel_menu — 상품별(기본)·기간별 메뉴 클릭")
 
 
+def pin_rank_sales_sheet_run_date():
+    print("[핀 T47-1] ③ 이 자정 넘어 시작해도 통합판매현황 '전일' = 실행 날짜 전날(달력 날짜 아님 · output (37) 11-13 06:22 0원 덮임)")
+    from datetime import date
+    got: list = []
+    names = ("_load_latest_wb", "inject_company_stock", "refresh_sales_sheet", "_track_ranks_semi", "push_gsheet",
+             "_log_quality_summary")
+    orig = {n: getattr(PR, n) for n in names}
+    try:
+        PR._load_latest_wb = lambda out: (SimpleNamespace(apply_style=lambda: None, save=lambda p: None), Path("m.xlsx"))
+        PR.inject_company_stock = lambda *a, **k: None
+        PR.refresh_sales_sheet = lambda wb, out, log, today=None: got.append(today)
+        PR._track_ranks_semi = lambda *a, **k: Path("m.xlsx")
+        PR.push_gsheet = lambda *a, **k: None
+        PR._log_quality_summary = lambda *a, **k: None
+        PR.track_ranks_stage(on_log=lambda m: None, date_label="2026-11-11", run_date=date(2026, 11, 12))
+        _check(got == [date(2026, 11, 12)], f"실행 날짜(11-12)를 넘김 → 전일 = 11-11 {got}")
+        PR.track_ranks_stage(on_log=lambda m: None)
+        _check(got[-1] is None, "순위 탭 단독(실행 날짜 없음) = 기존대로 오늘 기준")
+    finally:
+        for n, f in orig.items():
+            setattr(PR, n, f)
+
+
 def main() -> int:
     config.SESSION_STATE_DB = os.path.join(tempfile.gettempdir(), "pin_session_state.db")
     from coupang_analytics import login_today as LT
@@ -838,6 +861,7 @@ def main() -> int:
         pin_submit_fallback_on_no_nav()
         pin_rank_delay_override()
         pin_sales_excel_menu()
+        pin_rank_sales_sheet_run_date()
     finally:
         for k, v in saved.items():   # 순위 config 원복(다른 검증 오염 방지 — 별 프로세스지만 방어적)
             setattr(config, k, v)

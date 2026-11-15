@@ -187,6 +187,37 @@ def s7_file_mirror_all(w):
     ok("로그 파일 = 모든 탭 줄이 한 파일에 그대로(지우기와 무관)")
 
 
+def s8_close_mid_run_records(w):
+    """앱 창을 닫으면 어느 단계에서 사람이 닫았는지 + [실행 결과 종합] '사람 중지 --> 중단'(T-47 · output (37) 11-13·14
+    로그가 순위 한 줄 중간에서 그냥 끝남 · D-173). 실행이 없을 때도 닫힘 한 줄 · 무인이 스스로 끝낼 땐 '사람이' 안 씀."""
+    from coupang_analytics import run_result as RR
+    w._semi_stop = threading.Event()
+    rs = RR.RunSummary(w.log, ["가-1"], should_stop=w._semi_stop.is_set, rank={})
+    rs.__enter__()
+    rs.enter(RR.SALES)
+    rs.enter(RR.RANKS)
+    start = len(w._log_path.read_text(encoding="utf-8"))
+    w.close()
+    _pump()
+    text = w._log_path.read_text(encoding="utf-8")[start:]
+    assert "[앱 종료] 사람이 앱 창을 닫음 — ③ 순위 도중" in text, text[-800:]
+    assert "판정: 사람 중지 --> 중단" in text and "③ 순위: 사람이 창을 닫아 멈춤" in text, text[-800:]
+    assert "③ 순위 결과 없음" not in text, "닫혀서 멈춘 ③ 을 '결과 없음' 오류로 세지 않음"
+    assert w._semi_stop.is_set(), "닫을 때 ③ 중지 신호"
+    rs.__exit__(None, None, None)            # 작업 스레드가 뒤늦게 끝나도 종합 두 번 안 찍음
+    _pump()
+    text = w._log_path.read_text(encoding="utf-8")[start:]
+    assert text.count(RR.TITLE) == 1, text.count(RR.TITLE)
+    assert not RR.ACTIVE, "끝난 실행은 목록에서 빠짐"
+    start = len(text) + start
+    w.show(); w.close(); _pump()
+    text = w._log_path.read_text(encoding="utf-8")[start:]
+    assert "[앱 종료] 사람이 앱 창을 닫음 — 도는 실행 없음" in text and RR.TITLE not in text, text
+    w.show(); w._quitting = True; w.close(); _pump()
+    assert "사람이" not in w._log_path.read_text(encoding="utf-8")[start + len(text):], "무인이 스스로 끝냄 = 사람 닫음 아님"
+    ok("창 닫기 = 닫은 단계 + 종합 '사람 중지 --> 중단'(한 번만) · 실행 없을 때 한 줄 · 무인 스스로 끝남은 안 씀")
+
+
 def main():
     w = _app()
     s1_current_tab(w)
@@ -196,6 +227,7 @@ def main():
     s5_transfer_poll_lines(w)
     s6_copy_clear_current_tab(w)
     s7_file_mirror_all(w)
+    s8_close_mid_run_records(w)
     print("앱 진행 로그창 탭별 표시(T-19) 오프라인 검증 통과")
 
 
