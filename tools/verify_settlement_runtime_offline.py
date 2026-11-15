@@ -747,6 +747,50 @@ def p24_local_store():
                 ("2026-01-30", 100), ("2026-02-06", 7)]                                   # 키 병합·지금 이름 값 우선·정렬
             TD._migrate_names(accts)                                                       # 멱등
             assert sorted(p.name for p in TD.FILES.glob("*.xlsx")) == [f_new] and len(SJ.load_jobs(TD.JOBS)) == 1
+            # (a2) 월자료·광고·정산현황 원문도 계정ID 기준 지금 이름으로 이어 씀(T-46 ⑥ · output (37) hide4u 폴더 둘) —
+            #      없는 쪽은 옮김 · 같은 이름은 지금 이름 쪽 유지 + 받은 기록·캠페인 없음은 합침 · 옛 쪽 겹친 파일 = 보관(삭제 없음)
+            mo, mn = TD.VERIFY / "월자료" / told, TD.VERIFY / "월자료" / tnew
+            mo.mkdir(parents=True)
+            mn.mkdir(parents=True)
+            (mo / "주문별매출_202605.json").write_bytes(b"o5")
+            (mo / "라이브정산_202609.json").write_bytes(b"old")
+            (mn / "라이브정산_202609.json").write_bytes(b"new")
+            wjson(mo / "_받은기록.json", {"주문별매출": {"202605": "a"}, "라이브정산": {"202609": "a"}, "RG반품내역": "2026-11-01"})
+            wjson(mn / "_받은기록.json", {"라이브정산": {"202609": "b"}, "주문별매출": {"202606": "b"}})
+            ad = TD.VERIFY / "광고"
+            ad.mkdir(parents=True)
+            (ad / f"{told}_밀크런_202609.xlsx").write_bytes(b"m9")
+            (ad / f"{told}_광고정산_202610.json").write_bytes(b"old")
+            (ad / f"{tnew}_광고정산_202610.json").write_bytes(b"new")
+            wjson(ad / f"{told}_광고.json", {"캠페인 없음": ["202601"]})
+            wjson(ad / f"{tnew}_광고.json", {"캠페인 없음": ["202602"]})
+            rg = TD.BASE / "정산현황_원문" / told
+            rg.mkdir(parents=True)
+            (rg / "2026-11-10.json.gz").write_bytes(b"gz")
+            js = SJ.load_jobs(TD.JOBS)
+            js.append(SJ.Job(old, "윙", SJ.DOC_KIND, "부가세상세", "2026-05-01", "2026-05-31", "2026-06-15", status=SJ.ST_DONE,
+                             file=f"월자료/{told}/부가세상세_202605.xlsx"))
+            SJ.save_jobs(TD.JOBS, js)
+            TD._migrate_names(accts)
+            keep = TD.BASE / "보관" / "계정명바뀜" / told
+            assert not mo.exists() and sorted(p.name for p in mn.iterdir()) == [
+                "_받은기록.json", "라이브정산_202609.json", "주문별매출_202605.json"], list(mn.iterdir())  # 옛 코드 = 폴더 둘
+            assert (mn / "라이브정산_202609.json").read_bytes() == b"new" and (keep / "월자료" / "라이브정산_202609.json").read_bytes() == b"old"
+            assert rjson(mn / "_받은기록.json") == {"주문별매출": {"202605": "a", "202606": "b"}, "라이브정산": {"202609": "b"},
+                                                  "RG반품내역": "2026-11-01"}, rjson(mn / "_받은기록.json")
+            assert (keep / "월자료" / "_받은기록.json").exists(), "합친 옛 받은 기록도 보관(삭제 없음)"
+            assert sorted(p.name for p in ad.iterdir()) == [f"{tnew}_광고.json", f"{tnew}_광고정산_202610.json",
+                                                            f"{tnew}_밀크런_202609.xlsx"], list(ad.iterdir())
+            assert (ad / f"{tnew}_광고정산_202610.json").read_bytes() == b"new"
+            assert (keep / "광고" / f"{told}_광고정산_202610.json").read_bytes() == b"old"
+            assert rjson(ad / f"{tnew}_광고.json") == {"캠페인 없음": ["202601", "202602"]}
+            assert not rg.exists() and (TD.BASE / "정산현황_원문" / tnew / "2026-11-10.json.gz").read_bytes() == b"gz"
+            assert [j_.file for j_ in SJ.load_jobs(TD.JOBS) if j_.kind == SJ.DOC_KIND] == [f"월자료/{tnew}/부가세상세_202605.xlsx"]
+            TD._migrate_names(accts)                                                       # 멱등
+            assert sorted(p.name for p in ad.iterdir()) == [f"{tnew}_광고.json", f"{tnew}_광고정산_202610.json",
+                                                            f"{tnew}_밀크런_202609.xlsx"] and not mo.exists()
+            js = [j_ for j_ in SJ.load_jobs(TD.JOBS) if j_.kind != SJ.DOC_KIND]
+            SJ.save_jobs(TD.JOBS, js)                                                      # 아래 (b) 시험 기대값 그대로
             # (b) cmd_merge: 옮겨 온 폴더(예전 이름) 합치기 — 같은 작업 1회·같은 이름 파일은 원본에 남김·비용 폴더·금액 병합
             src = Path(tmp) / "옮겨온"
             f2_old, c_old = fname(old, "2026-02-06", ps="2026-01-12", pe="2026-01-18"), fname(old, "2026-01-30", "주정산", "보관비", "로켓그로스")
@@ -1322,8 +1366,33 @@ def p34_forecast_accuracy():
         assert sorted(r["최종지급액"] for r in FC.load(f3)) == [7, 9]
         FC.record(f3, "C", "윙", [{**rel, "최종지급액": 11}], date(2026, 10, 18))
         assert [r["최종지급액"] for r in FC.load(f3)] == [11]
+        # D-243 ③ 달별 파일 — 수집일 달 파일(정산예정기록/YYYY-MM.jsonl)에만 씀 · 지난 달 파일은 다시 안 씀 ·
+        #   옛 한 파일은 첫 기록 때 달 파일로 나눈 뒤 보관/YYYY-MM/ 로 이동(삭제 없음) · 달 폴더가 없으면 옛 파일 그대로 읽음(분석 사본)
+        import json as _json
+        base = Path(tmp) / "정산"
+        f4 = base / "정산예정기록.jsonl"
+        legacy = [{"수집일": "2026-09-30", "계정": "D", "채널": "윙", "묶음": "1", **rel, "최종지급액": 1},
+                  {"수집일": "2026-10-02", "계정": "D", "채널": "윙", "묶음": "2", **rel, "최종지급액": 2},
+                  {"수집일": "2026-10-03", "계정": "D", "채널": "윙", **rel, "최종지급액": 3}]          # 묶음 없는 옛 줄
+        base.mkdir()
+        f4.write_text("".join(_json.dumps(r, ensure_ascii=False) + "\n" for r in legacy), encoding="utf-8")
+        want = sorted((r["수집일"], r["최종지급액"]) for r in legacy)
+        assert sorted((r["수집일"], r["최종지급액"]) for r in FC.load(f4)) == want                  # 달 폴더 없음 = 옛 파일
+        FC.record(f4, "D", "윙", [{**rel, "최종지급액": 4}], date(2026, 11, 5))
+        months = base / "정산예정기록"
+        assert sorted(p.name for p in months.iterdir()) == ["2026-09.jsonl", "2026-10.jsonl", "2026-11.jsonl"], list(months.iterdir())
+        assert not f4.exists() and (base / "보관" / "2026-11" / "정산예정기록.jsonl").is_file(), "옛 파일 = 보관으로 이동(삭제 없음)"
+        assert sorted((r["수집일"], r["최종지급액"]) for r in FC.load(f4)) == sorted(want + [("2026-11-05", 4)])
+        oct_bytes = (months / "2026-10.jsonl").read_bytes()
+        FC.record(f4, "D", "윙", [{**rel, "최종지급액": 5}], date(2026, 11, 6))
+        assert (months / "2026-10.jsonl").read_bytes() == oct_bytes, "지난 달 파일은 다시 안 씀"
+        assert len((months / "2026-11.jsonl").read_text(encoding="utf-8").splitlines()) == 2
+        f4.write_text(_json.dumps(legacy[0], ensure_ascii=False) + "\n", encoding="utf-8")          # 옛 파일이 다시 생김(합치기 등)
+        FC.record(f4, "D", "윙", [{**rel, "최종지급액": 6}], date(2026, 11, 7))
+        assert len((months / "2026-09.jsonl").read_text(encoding="utf-8").splitlines()) == 1, "같은 줄은 한 번만(중복 없음)"
+        assert not f4.exists() and len(list((base / "보관" / "2026-11").glob("정산예정기록*.jsonl"))) == 2
     ok("오늘 뒤 줄만 예정 기록·같은 날 마지막 값·정산일 지나면 칸별 대조(며칠 전 예정)·실제 없음·요약·집계 시트"
-       "·로켓그로스 정산대상 칸 저장(판매액+환불−수수료−할인)")
+       "·로켓그로스 정산대상 칸 저장(판매액+환불−수수료−할인)·달별 파일(옛 파일 변환·보관 이동 D-243 ③)")
 
 
 def p33_login_password_source():
@@ -2281,6 +2350,7 @@ def p51_regular_then_backfill():
         order.clear()
         pat = [(TD.RL, "RunLog", FakeLog), (TD, "load_accounts", lambda only: ["a", "b"]), (TD, "cmd_stats", lambda: None),
                (TD, "name_of", lambda a: a), (TD, "_pending_jobs", lambda: 0), (TD, "CYCLE", TD.RL.Totals()),
+               (TD, "_backlog_left", lambda accts, a: None),
                (TD, "_run_accounts", lambda accts, run, a: (order.append(run.__name__), rc_regular if run is TD.cmd_run else 0)[1])]
         stopped, _work = _patched(pat, lambda: TD._one_pass(SimpleNamespace(start=D("2026-01-01"), until="", dry_run=False)))
         assert order == want and stopped == bool(rc_regular), (order, stopped)
@@ -2758,6 +2828,151 @@ def p53_vat_detail_requests():
     ok("부가세 상세 = 최근 달부터 회차 4건·정기와 분리 · 화면 본문 그대로 · 메뉴로 짝 · 칸·기간 판정 · 판매+환불 = 화면 월 합계(RG 기타−쿠폰)")
 
 
+def p57_backlog_all_accounts():
+    print("[P57] [실행 결과 종합] 남은 소급 = 바퀴 끝에 전 계정 저장 자료로 다시 셈(T-46 ⑤ · output (37) 보고 B ⑤) —"
+          " 로그인 못 한 계정·중단된 바퀴도 판매분석·월자료·광고 남은 양이 잡힘")
+    import json
+    import os
+    from datetime import timedelta
+    from types import SimpleNamespace
+    sys.path.insert(0, str(ROOT / "tools"))
+    import settlement_download as TD
+    from coupang_analytics import settlement_ads as AD
+    from coupang_analytics import settlement_docs as DOC
+    today = date.today()
+    sales_all = (today - timedelta(days=1) - D("2026-01-01")).days + 1                # 1/1~어제 전부 빔
+    wing_kinds = [k for k in DOC.KINDS if k not in DOC.RG_KINDS]
+    docs_all = sum(len(DOC.due_months(k, today)) for k in wing_kinds)
+    ads_all = len(AD.due_months(AD.FROM, today))
+
+    class FakeLog:
+        run_id, accounts = "t", []
+
+        def __init__(self, base):
+            self.rows, self.files, self.left = [], [], {}
+
+        def heartbeat(self, *a, **k):
+            pass
+
+        def summary(self, **k):
+            pass
+
+        def line(self, m):
+            pass
+
+        def record(self, *a, **k):
+            pass
+
+        def saved(self, *a, **k):
+            pass
+
+        def remaining(self, account, kind, n, unit):
+            self.left[(account, kind)] = (int(n), unit)
+    accts = [SimpleNamespace(account_id="a1", nm="A-a1"), SimpleNamespace(account_id="b2", nm="B-b2")]
+
+    def run_accounts(accts_, run, args):           # A 만 소급 단계를 돌고 '판매분석 0' 을 남김 · B = 로그인 실패(남은 값 없음)
+        if run is TD.cmd_backfill:
+            TD.LOG.remaining("A-a1", "판매분석", 0, "일")
+        return 0
+    cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        (t / "output" / "판매분석_일별").mkdir(parents=True)
+        os.chdir(t)
+        try:
+            # A = 판매분석 1/1~어제 다 받음 · 월자료 주문별매출 1달 받음 · 광고 1달 받음(밀크런+광고정산+매출성장광고)
+            days = {(D("2026-01-01") + timedelta(days=i)).isoformat(): {"수집": "x"} for i in range(sales_all)}
+            (t / "output" / "판매분석_일별" / "a1.json").write_text(json.dumps(days), encoding="utf-8")
+            ym = DOC.due_months("주문별매출", today)[0][0]
+            (t / "v" / "월자료" / "A-a1").mkdir(parents=True)
+            (t / "v" / "월자료" / "A-a1" / DOC.LEDGER).write_text(json.dumps({"주문별매출": {ym: "x"}}), encoding="utf-8")
+            am = AD.due_months(AD.FROM, today)[-1][0]
+            (t / "v" / "광고").mkdir(parents=True)
+            for f in (f"A-a1_밀크런_{am}.xlsx", f"A-a1_광고정산_{am}.json", f"A-a1_매출성장광고_{am}.xlsx"):
+                (t / "v" / "광고" / f).write_bytes(b"x")
+            cycle = TD.RL.Totals()
+            pat = [(TD.RL, "RunLog", FakeLog), (TD, "load_accounts", lambda only: accts), (TD, "cmd_stats", lambda: None),
+                   (TD, "name_of", lambda a: a.nm), (TD, "_pending_jobs", lambda: 0), (TD, "CYCLE", cycle),
+                   (TD, "VERIFY", t / "v"), (TD, "BASE", t / "b"), (TD, "INVENTORY", t / "inv"), (TD, "JOBS", t / "b" / "_요청기록.json"),
+                   (TD, "_run_accounts", run_accounts)]
+            _patched(pat, lambda: TD._one_pass(SimpleNamespace(start=D("2026-01-01"), until="", dry_run=False)))
+        finally:
+            os.chdir(cwd)
+    left = cycle.left
+    assert left.get(("B-b2", "판매분석")) == (sales_all, "일"), left                     # 옛 코드 = B 줄 없음(남은 소급 적게 셈)
+    assert left.get(("B-b2", "월자료")) == (docs_all, "달"), left
+    assert left.get(("B-b2", "광고")) == (ads_all, "달"), left
+    assert left.get(("A-a1", "판매분석")) == (0, "일") and left.get(("A-a1", "월자료")) == (docs_all - 1, "달"), left
+    assert left.get(("A-a1", "광고")) == (ads_all - 1, "달"), left
+    block = "\n".join(TD.RL.result_block(cycle))
+    assert f"판매분석 {sales_all}일(1계정)" in block, block
+    ok("바퀴 끝 전 계정 다시 셈 — 로그인 못 한 계정 판매분석·월자료·광고 전부 · 받은 계정은 저장 자료 기준")
+
+
+def p58_stats_keep_latest():
+    print("[P58] 정산집계 = 최신 3개만 output/정산 · 나머지는 보관/YYYY-MM/(파일 이름 날짜) 로 이동 · 삭제 없음(D-243 ② · T-46)")
+    from coupang_analytics import settlement_store as STORE
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        names = ["정산집계_260930_180001.xlsx", "정산집계_261001_180001.xlsx", "정산집계_261101_180001.xlsx",
+                 "정산집계_261114_180001.xlsx", "정산집계_261115_010229.xlsx"]
+        for i, n in enumerate(names):
+            (base / n).write_bytes(bytes([i]))
+        (base / "정산집계_수동.xlsx").write_bytes(b"m")                                     # 이름 규칙 밖 = 손대지 않음
+        moved = STORE.rotate_stats(base)
+        assert sorted(p.name for p in base.glob("정산집계_*.xlsx")) == ["정산집계_261101_180001.xlsx", "정산집계_261114_180001.xlsx",
+                                                                      "정산집계_261115_010229.xlsx", "정산집계_수동.xlsx"]
+        assert (base / "보관" / "2026-09" / names[0]).read_bytes() == b"\x00" and (base / "보관" / "2026-10" / names[1]).exists()
+        assert moved == 2 and STORE.rotate_stats(base) == 0, moved                          # 멱등
+    ok("정산집계 최신 3개 · 옛 것 보관/YYYY-MM 이동 · 이름 규칙 밖 그대로 · 멱등")
+
+
+def p59_suspended_pending():
+    print("[P59] 정지 계정(_계정정지.json · D-199)의 요청됨·요청예정 = 회차 완료 판단 수에서 뺌 · 받기는 계속(D-215) ·"
+          " [실행 결과 종합] '정지 계정 대기 N건 — 확인 필요' 따로 표시(T-46 ⑦ · output (37) hide4u 9건 · 소유자 A안)")
+    import json
+    import os
+    from types import SimpleNamespace
+    sys.path.insert(0, str(ROOT / "tools"))
+    import settlement_download as TD
+    from coupang_analytics import settlement_jobs as SJ
+    from coupang_analytics import settlement_runlog as RLG
+    from coupang_analytics import settlement_watch as W
+    hide = "장성원-온라이프-(계정사용불가)-hide4u"
+    cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            Path("output").mkdir()
+            Path("output/_계정정지.json").write_text(json.dumps({"hide4u": {"업체코드": "", "struck_at": "2026-11-11T18:23:40"}}),
+                                                    encoding="utf-8")
+            jobs = Path(tmp) / "_요청기록.json"
+            js = [SJ.Job(hide, "윙", "주정산", f"r{i}", "2026-01-05", "2026-01-11", "2026-01-30", status=SJ.ST_REQUESTED)
+                  for i in range(9)]
+            js += [SJ.Job("가-dehide4u", "윙", "주정산", "x", "2026-01-05", "2026-01-11", "2026-01-30", status=SJ.ST_PLANNED),
+                   SJ.Job(hide, "윙", "주정산", "done", "2026-01-05", "2026-01-11", "2026-01-30", status=SJ.ST_DONE)]
+            SJ.save_jobs(jobs, js)
+            pending, susp = _patched([(TD, "JOBS", jobs)], lambda: (TD._pending_jobs(), TD._suspended_pending()))
+            assert pending == 1, pending                                   # 옛 코드 = 10 → 'later' 반복(회차 '완료' 못 함)
+            assert susp == {hide: 9}, susp                                 # '-dehide4u' 는 다른 계정(끝이 '-hide4u' 아님)
+            lg = SimpleNamespace(rows=[], unresolved_failures=lambda: {})
+            fails = _patched([(TD, "JOBS", jobs), (TD, "LOG", lg)], TD._watch_failures)
+            assert fails == {hide: "정지 계정 받기 대기"}, fails
+            act, why = W.plan_after_pass(False, 0, 0, 0, 0, failed=fails)
+            assert act == "done" and "확인 필요" in why and W.done_status(len(fails)) == "완료·실패 확인", (act, why)
+        finally:
+            os.chdir(cwd)
+    with tempfile.TemporaryDirectory() as tmp:
+        lg = RLG.RunLog(Path(tmp), echo=lambda m: None)
+        lg.remaining(hide, "판매분석", 0, "일")
+        b = RLG.result_block(lg, suspended={hide: 9})
+        assert b[1] == "판정: 일부 실패 --> 확인 필요", b[1]
+        assert f"정지 계정 대기 9건 — 확인 필요(완료 판단에서 뺌 · 받기는 계속 D-215)" in b, b
+        assert f"  - {hide}: 9건" in b and "정지 계정 대기 9" in b[-1], b
+        assert "정지 계정 대기" not in "\n".join(RLG.result_block(lg)), "정지 계정 없으면 줄 없음(지금 그대로)"
+    ok("정지 계정 대기 = 완료 판단에서 뺌 · 따로 '확인 필요' 표시 · 완료·실패 확인 · 다른 계정 이름 끝 혼동 없음")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -2806,6 +3021,9 @@ def main():
     p54_result_summary()
     p55_rg_vendor_fallback()
     p56_one_failure_not_blocking()
+    p57_backlog_all_accounts()
+    p58_stats_keep_latest()
+    p59_suspended_pending()
     print("정산 런타임 오프라인 검증 통과")
 
 

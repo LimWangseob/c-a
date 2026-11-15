@@ -345,6 +345,15 @@ def _fetch(kind: str, call, html_call, get_bytes, ym: str, f: date, t: date, gap
     return json.dumps(d, ensure_ascii=False).encode("utf-8"), "json", f"{n}줄"
 
 
+def left_months(folder: Path, today: date, rg: bool) -> int:
+    """저장된 받은 기록(_받은기록.json)만 보고 남은 달 수 — 종류마다 due_months 중 기록에 없는 달(RG 종류는 rg 일 때만) ·
+    _Run.kind 의 '남은 달'과 같은 판정 · 받기 없이 전 계정 다시 셈([실행 결과 종합] 남은 소급 · T-46 ⑤)."""
+    lp = Path(folder) / LEDGER
+    led: dict = json.loads(lp.read_text(encoding="utf-8")) if lp.exists() else {}
+    return sum(sum(1 for ym, _f, _t in due_months(k, today) if ym not in (led.get(k) or {}))
+               for k in KINDS if k not in RG_KINDS or rg)
+
+
 class _Run:
     """한 계정 월자료 받기의 상태 — 받은 기록(_받은기록.json)·결과·실패 격리."""
 

@@ -108,7 +108,7 @@ class RunLog:
                 last_ok[r["계정"]] = i
         return {a: step for a, (i, step) in last_fail.items() if last_ok.get(a, -1) < i}
 
-    def summary(self, *, pending: int = 0, stopped: bool = False, note: str = "") -> list[str]:
+    def summary(self, *, pending: int = 0, stopped: bool = False, note: str = "", suspended: dict | None = None) -> list[str]:
         """계정별·결과별 건수 + 단계별 비정상 건수 + [실행 결과 종합](D-168) — 끝에 출력·로그에도 남김."""
         by_acct: dict = {}
         for r in self.rows:
@@ -116,7 +116,7 @@ class RunLog:
         lines = [f"[요약] {a}: " + " · ".join(f"{k} {v}" for k, v in sorted(c.items())) for a, c in by_acct.items()]
         bad = Counter((r["단계"], r["결과"]) for r in self.rows if r["결과"] in (FAIL, BLOCK))
         lines += [f"[비정상] {s} {res}: {n}건" for (s, res), n in sorted(bad.items())] or ["[비정상] 없음"]
-        lines += result_block(self, pending=pending, stopped=stopped, note=note)
+        lines += result_block(self, pending=pending, stopped=stopped, note=note, suspended=suspended)
         for ln in lines:
             self.line(ln)
         return lines
@@ -217,13 +217,21 @@ def _left_text(left: dict, pending: int) -> str:
     return "없음" if left else "확인 못 함(소급 단계를 돌지 않음)"
 
 
-def result_block(src, *, pending: int = 0, stopped: bool = False, note: str = "", title: str = "실행 결과 종합") -> list[str]:
+def result_block(src, *, pending: int = 0, stopped: bool = False, note: str = "", title: str = "실행 결과 종합",
+                 suspended: dict | None = None) -> list[str]:
     """[실행 결과 종합](D-168) 줄들 — src = RunLog 또는 Totals(rows·files·left·accounts). 로그만 보고 정상 수행 여부를 판단하게:
-    판정 · 전체 작업 계정 · 비밀번호 오류 계정 · 사람 조치 필요 · 오류 현황 · 대기·확인 필요 · 남은 소급 · 받은 파일 전부(경로).
+    판정 · 전체 작업 계정 · 비밀번호 오류 계정 · 사람 조치 필요 · 오류 현황 · 대기·확인 필요 · 정지 계정 대기 · 남은 소급 · 받은 파일 전부(경로).
+    suspended = 정지 계정 {계정: 요청예정·요청됨 건수}(완료 판단에서 뺀 것 — 있으면 '확인 필요' · D-247).
     마지막 줄 = 한 줄 요약(상태 카드·화면 끝 몇 줄만 보는 사람용). 비밀번호 값은 다루지 않음(계정 이름·사유만)."""
     rows = src.rows
     accts = list(src.accounts) or list(dict.fromkeys(r["계정"] for r in rows if r["계정"] != ALL))
     judge = verdict(rows, stopped)
+    susp = suspended or {}
+    if susp and judge == "정상 완료":
+        judge = "일부 실패 --> 확인 필요"
+    n_susp = sum(susp.values())
+    susp_lines = ([f"정지 계정 대기 {n_susp}건 — 확인 필요(완료 판단에서 뺌 · 받기는 계속 D-215)",
+                   *[f"  - {a}: {n}건" for a, n in susp.items()]] if susp else [])
     pw, human = login_problems(rows)
     fails = open_failures(rows)
     waits = [r for r in rows if r["결과"] == WAIT]
@@ -234,9 +242,10 @@ def result_block(src, *, pending: int = 0, stopped: bool = False, note: str = ""
            f"사람 조치 필요: {len(human)}개", *[f"  - {a}: {why}" for a, why in human.items()],
            f"오류 현황(실패·차단, 뒤에 풀린 것 제외): {len(fails)}건", *_grouped(fails),
            f"대기·확인 필요(다음 바퀴·다음 회차에 다시): {len(waits)}건", *_grouped(waits),
+           *susp_lines,
            f"남은 소급: {left}",
            f"이번 실행에서 받은 파일: {len(src.files)}개",
            *[f"  - {a}: {p}" + (f" ({m})" if m else "") for a, p, m in src.files],
            f"==> {judge} · 계정 {len(accts)} · 비밀번호 오류 {len(pw)} · 사람 조치 {len(human)} · 오류 {len(fails)} · "
-           f"받은 파일 {len(src.files)} · 남은 소급 {left}"]
+           + (f"정지 계정 대기 {n_susp} · " if susp else "") + f"받은 파일 {len(src.files)} · 남은 소급 {left}"]
     return out

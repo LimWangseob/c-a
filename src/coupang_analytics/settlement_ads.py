@@ -57,6 +57,23 @@ def due_months(start: date, today: date) -> list[tuple[str, date, date]]:
             if (t + timedelta(days=1)).day == 1]
 
 
+def _ad_done(folder: Path, acct: str, ym: str, none: set) -> bool:
+    """광고센터 그 달 끝 = 광고정산 json + (캠페인 없음 | 매출성장광고 엑셀)."""
+    return (folder / f"{acct}_광고정산_{ym}.json").exists() and (ym in none or (folder / f"{acct}_매출성장광고_{ym}.xlsx").exists())
+
+
+def _left(folder: Path, acct: str, months: list, none: set) -> int:
+    return sum(1 for ym, _f, _t in months if not ((folder / f"{acct}_밀크런_{ym}.xlsx").exists() and _ad_done(folder, acct, ym, none)))
+
+
+def left_months(folder: Path, acct: str, start: date, today: date) -> int:
+    """저장된 파일만 보고 남은 달 수(밀크런·광고센터 둘 다 받아야 그 달 끝) — collect 의 '남은 달'과 같은 판정 ·
+    받기 없이 전 계정 다시 셈([실행 결과 종합] 남은 소급 — 로그인 못 한 계정 포함 · T-46 ⑤)."""
+    state_p = Path(folder) / f"{acct}_광고.json"
+    state = json.loads(state_p.read_text(encoding="utf-8")) if state_p.exists() else {}
+    return _left(Path(folder), acct, due_months(start, today), set(state.get("캠페인 없음") or []))
+
+
 def _ymd(d: date) -> int:
     return int(f"{d:%Y%m%d}")
 
@@ -140,7 +157,7 @@ def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date, 
         return folder / f"{acct}_밀크런_{ym}.xlsx"
 
     def ad_done(ym: str) -> bool:
-        return (folder / f"{acct}_광고정산_{ym}.json").exists() and (ym in none or (folder / f"{acct}_매출성장광고_{ym}.xlsx").exists())
+        return _ad_done(folder, acct, ym, none)
 
     def milk_month(ym: str, f: date, t: date) -> None:
         milk_p(ym).write_bytes(bytes_(MILK_EXCEL.format(y=f.year, m=f.month)))
@@ -188,6 +205,6 @@ def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date, 
             except Exception as exc:  # noqa: BLE001 — 그쪽(밀크런|광고센터)만 이번 실행 멈춤 · 사유 그대로 남김
                 out["실패"].append(f"{what} {ym}: {exc.__class__.__name__}: {str(exc)[:120]}")
                 break
-    out["남은 달"] = sum(1 for m in months if not (milk_p(m[0]).exists() and ad_done(m[0])))
+    out["남은 달"] = _left(folder, acct, months, none)
     state_p.write_text(json.dumps({**state, "캠페인 없음": sorted(none)}, ensure_ascii=False), encoding="utf-8")
     return out
