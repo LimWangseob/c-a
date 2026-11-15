@@ -432,7 +432,10 @@ def test_cost_only_scope() -> None:
              SF.CostLine(acct, "2026-09", "16377117417", "95700000001", "빔프로젝터거치대 LN167", "보관비", 2200, 220),
              SF.CostLine(acct, "2026-09", "16400000000", "95700000002", "판정표 관리 상품", "보관비", 100, 10),
              SF.CostLine(acct, "2026-09", "16500000000", "95700000003", "상품조회에 있는 상품", "보관비", 100, 10),
-             SF.CostLine(acct, "2026-09", SF.MULTI_PRODUCT, "", "", "반출 배송 서비스비", 1000, 100)]
+             SF.CostLine(acct, "2026-09", SF.MULTI_PRODUCT, "", "", "반출 배송 서비스비", 1000, 100),
+             # 옵션ID 없이 등록상품ID 만 있는 비용 줄(R191 시뮬레이션 B8 — seankim137 16377117417 반출 배송 서비스비 2,420원이 짝 없이 빠짐)
+             SF.CostLine(acct, "2026-09", "16600000000", "", "반출비만 상품", "반출 배송 서비스비", 2200, 220),
+             SF.CostLine(acct, "2026-10", "", "95700000009", "", SF.COMPENSATION, 300)]            # 상품 못 찾은 보상(tellace83 13,474원 꼴)
     res = SS.aggregate([], lines)
     with tempfile.TemporaryDirectory() as d:
         p = SS.write_stats(Path(d) / "정산집계_new.xlsx", res)
@@ -442,7 +445,9 @@ def test_cost_only_scope() -> None:
         wb.close()
         assert opts == {"d1": {"95609464754": ("16258713629", "아기수영장 HW016"), "95273555059": ("16157622592", "전동물총 TTGW02"),
                                "95700000001": ("16377117417", "빔프로젝터거치대 LN167"), "95700000002": ("16400000000", "판정표 관리 상품"),
-                               "95700000003": ("16500000000", "상품조회에 있는 상품")}}, opts   # 묶음 줄(여러 상품) 짝 없음
+                               "95700000003": ("16500000000", "상품조회에 있는 상품"),
+                               SRC.no_option_key("16600000000"): ("16600000000", "반출비만 상품"),
+                               "95700000009": ("옵션 95700000009", "")}}, opts   # 묶음 줄(여러 상품) 짝 없음
         empty = SS.write_stats(Path(d) / "정산집계_0.xlsx", SS.aggregate([], []))     # 비용 없어도 머리 줄만 있는 시트
         wb = openpyxl.load_workbook(empty, read_only=True)
         assert SRC.COST_OPTIONS in wb.sheetnames and SRC.cost_options(wb) == {}, wb.sheetnames
@@ -471,13 +476,15 @@ def test_cost_only_scope() -> None:
     assert acc.mpids == {"16142251017", "16258713629", "16157622592", "16400000000"}, acc.mpids
     # ⑤ 판정 전(출처판정·되찾기에 없음 · 상품조회·판매분석에 없음) = '관리 상품 확인 필요'(금액 밖) — 16500000000 은 상품조회 경로
     chk = {p: (n, w) for p, n, w in acc.scope_check}
-    assert set(chk) == {"16377117417"} and chk["16377117417"][0] == "빔프로젝터거치대 LN167", acc.scope_check
+    assert set(chk) == {"16377117417", "16600000000", "옵션 95700000009"} and chk["16377117417"][0] == "빔프로젝터거치대 LN167", acc.scope_check
+    assert chk["16600000000"][0] == "반출비만 상품", chk                          # 옵션ID 없는 비용 줄도 조용히 빠지지 않음
     assert "비용만" in chk["16377117417"][1] and "금액 밖" in chk["16377117417"][1], chk
     # ④ 출처 AI 판정 대상 = 상품조회 + 판매분석 + 비용만 있는 등록상품(관리 VID 옵션 상품은 뺌)
     vids = ledger["d1"] | rg["d1"]["vids"]
     tg = J.targets("d1", inv, {}, lambda v: v in vids, {}, opts["d1"])
     got = {t["등록상품ID"]: t for t in tg}
-    assert set(got) == {"16377117417", "16400000000", "16500000000"}, got
+    assert set(got) == {"16377117417", "16400000000", "16500000000", "16600000000", "옵션 95700000009"}, got
+    assert got["16600000000"]["노출명"] == [] and got["16600000000"]["상품명"] == "반출비만 상품", got["16600000000"]
     assert got["16377117417"] == {"등록상품ID": "16377117417", "상품명": "빔프로젝터거치대 LN167", "노출명": [], "등록일": "",
                                   "판매방식": ["RFM"]}, got["16377117417"]
     print("test_cost_only_scope OK")

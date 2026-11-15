@@ -189,7 +189,9 @@ def _option_products(files: list[SettleFile], lines: list) -> dict:
 
 def _add_costs(table: dict, lines: list, files: list[SettleFile], warns: list) -> list:
     """비용 줄 → 상품·월 표. 돌려줌 = 비용 줄의 (계정, 옵션ID, 등록상품ID, 상품명) 짝(정렬) — 판매 없이 비용만 있는 상품도
-    옵션으로 관리 판정하게 정산서에 넘김(D-244 · 짝 = 위 o2p 와 같음 · 묶음·못 찾은 줄은 뺌)."""
+    옵션으로 관리 판정하게 정산서에 넘김(D-244 · 짝 = 위 o2p 와 같음 · 묶음 줄은 뺌 · 옵션ID 없이 등록상품ID 만 있는 줄도
+    옵션 칸 빈 채로, 상품을 못 찾은 보상 줄도 '옵션 ID' 상품으로 짝을 남김 — 없으면 판정 대상·'관리 상품 확인 필요'에서 조용히 빠짐 ·
+    R191 시뮬레이션 B8)."""
     o2p = _option_products(files, lines)
     unmapped, bucket = 0, {}
     pairs: dict = {}
@@ -197,8 +199,8 @@ def _add_costs(table: dict, lines: list, files: list[SettleFile], warns: list) -
         pid = c.product_id or o2p.get((c.account, c.option_id))
         if not pid:
             pid, unmapped = f"옵션 {c.option_id}", unmapped + 1
-        elif c.option_id and pid not in (MULTI_PRODUCT, NO_PRODUCT):
-            key = (c.account, c.option_id, pid)
+        if pid not in (MULTI_PRODUCT, NO_PRODUCT):
+            key = (c.account, c.option_id or "", pid)
             pairs[key] = pairs.get(key) or c.product_name
         amt = c.ex_vat + c.vat
         if pid in (MULTI_PRODUCT, NO_PRODUCT):

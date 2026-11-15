@@ -151,6 +151,11 @@ class StatsTooOld(FileNotFoundError):
     """정산집계에 정산서가 읽을 시트가 없음(옛 집계) — 필수 입력 없음과 같게 ❌ 시작 전 중단(폴백 없음 · D-244)."""
 
 
+def no_option_key(pid: str) -> str:
+    """옵션ID 없는 비용 줄 짝의 자리 키 — 옵션ID 칸이 비면 등록상품마다 따로(빈 키 하나로 겹치지 않게 · VID 와 겹치지 않는 글자)."""
+    return f"(옵션 없음) {pid}"
+
+
 def cost_options(wb) -> dict:
     """'옵션별 등록상품' 시트 → {계정ID: {옵션ID: (등록상품ID, 상품명)}} — 판매 없이 비용만 있는 상품도 옵션으로 관리 판정(D-244)."""
     if COST_OPTIONS not in wb.sheetnames:
@@ -161,7 +166,7 @@ def cost_options(wb) -> dict:
     out: dict = defaultdict(dict)
     for r in rows[1:]:
         if r and r[0]:
-            out[aid_of(str(r[0]))][str(r[1])] = (str(r[2]), str(r[3] or ""))
+            out[aid_of(str(r[0]))][str(r[1] or "") or no_option_key(str(r[2]))] = (str(r[2]), str(r[3] or ""))
     return dict(out)
 
 
