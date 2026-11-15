@@ -109,15 +109,17 @@ def _gql(call, query: str, variables: dict) -> dict:
 
 
 def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date, *, gap=lambda: None,
-            max_months: int = MAX_MONTHS, get_report=None) -> dict:
+            max_months: int = MAX_MONTHS, get_report=None, fatal: tuple = ()) -> dict:
     """call(method, path, body) = 광고센터 화면 안 호출(처음 부를 때 광고센터를 열도록 호출부가 늦게 연결) ·
     get_bytes(url) = 로그인 세션으로 파일 받기 · get_report(url) = 보고서 받기(글자 응답 허용, 없으면 get_bytes) · gap() = 원격 요청마다 먼저 쉼(차단 방지). 받을 게 남은 달은 최근 달부터
-    max_months 개만. 반환 = 요약 {받을 것, 요청, 기다림, 받음, 캠페인 없음, 남은 달, 파일(이번에 저장한 경로)}."""
+    max_months 개만 — 밀크런(윙 주소)과 광고센터(광고정산·매출성장광고)는 **따로** 세고 따로 실패(한쪽 오류가 다른 쪽 달을 막지 않음 ·
+    D-245 · 실측 11-15 hellojin 광고센터 500 → 밀크런 10달 빔). 실패 = '실패' 목록에 사유를 남기고 그쪽만 이번 실행 멈춤 · fatal(차단)은 올림.
+    반환 = 요약 {받을 것, 요청, 기다림, 받음, 캠페인 없음, 실패, 남은 달(이번 실행 뒤 다 받지 못한 달), 파일(이번에 저장한 경로)}."""
     folder.mkdir(parents=True, exist_ok=True)
     state_p = folder / f"{acct}_광고.json"
     state = json.loads(state_p.read_text(encoding="utf-8")) if state_p.exists() else {}
     none = set(state.get("캠페인 없음") or [])
-    out: dict = {"받을 것": [], "요청": [], "기다림": [], "받음": [], "캠페인 없음": [], "남은 달": 0, "파일": []}
+    out: dict = {"받을 것": [], "요청": [], "기다림": [], "받음": [], "캠페인 없음": [], "실패": [], "남은 달": 0, "파일": []}
     reports: list | None = None
 
     raw_call, raw_bytes, raw_report = call, get_bytes, get_report or get_bytes
@@ -134,39 +136,40 @@ def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date, 
         gap()
         return raw_report(url)
 
-    def done(ym: str) -> bool:
-        return all((folder / f"{acct}_{k}_{ym}.{x}").exists() for k, x in (("밀크런", "xlsx"), ("광고정산", "json"))) and (
-            ym in none or (folder / f"{acct}_매출성장광고_{ym}.xlsx").exists())
-    todo = [m for m in reversed(due_months(start, today)) if not done(m[0])]
-    out["남은 달"] = max(0, len(todo) - max_months)
-    call, get_bytes = call_, bytes_
-    for ym, f, t in todo[:max_months]:
-        milk = folder / f"{acct}_밀크런_{ym}.xlsx"
-        if not milk.exists():
-            milk.write_bytes(get_bytes(MILK_EXCEL.format(y=f.year, m=f.month)))
-            out["파일"].append(milk)
+    def milk_p(ym: str) -> Path:
+        return folder / f"{acct}_밀크런_{ym}.xlsx"
+
+    def ad_done(ym: str) -> bool:
+        return (folder / f"{acct}_광고정산_{ym}.json").exists() and (ym in none or (folder / f"{acct}_매출성장광고_{ym}.xlsx").exists())
+
+    def milk_month(ym: str, f: date, t: date) -> None:
+        milk_p(ym).write_bytes(bytes_(MILK_EXCEL.format(y=f.year, m=f.month)))
+        out["파일"].append(milk_p(ym))
+
+    def ad_month(ym: str, f: date, t: date) -> None:
+        nonlocal reports
         daily = folder / f"{acct}_광고정산_{ym}.json"
         if not daily.exists():
-            d = _gql(call, _DAILY, {"startDate": _ymd(f), "endDate": _ymd(t), "settlementDomain": "SELLER"})["getDailySettlement"]
+            d = _gql(call_, _DAILY, {"startDate": _ymd(f), "endDate": _ymd(t), "settlementDomain": "SELLER"})["getDailySettlement"]
             daily.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
             out["파일"].append(daily)
         pa = folder / f"{acct}_매출성장광고_{ym}.xlsx"
         if pa.exists() or ym in none:
-            continue
+            return
         out["받을 것"].append(ym)
-        camps = _gql(call, _CAMPAIGNS, {"startDate": _ymd(f), "endDate": _ymd(t), "reportType": "pa"})["getCampaignList"] or []
+        camps = _gql(call_, _CAMPAIGNS, {"startDate": _ymd(f), "endDate": _ymd(t), "reportType": "pa"})["getCampaignList"] or []
         if not camps:
             none.add(ym)
             out["캠페인 없음"].append(ym)
-            continue
+            return
         if reports is None:
-            reports = _gql(call, _LIST, {"reportType": "pa", "page": 1, "pageSize": 50, "duration": 90,
-                                         "onlyScheduledReport": False})["reportList"]["reports"] or []
+            reports = _gql(call_, _LIST, {"reportType": "pa", "page": 1, "pageSize": 50, "duration": 90,
+                                          "onlyScheduledReport": False})["reportList"]["reports"] or []
         rep = pick_report(reports, ym, len(camps))
         if rep is None:
-            _gql(call, _REQUEST, {"startDate": _ymd(f), "endDate": _ymd(t), "campaignIds": [c["id"] for c in camps],
-                                  "reportType": "pa", "dateGroup": "daily", "granularity": "keyword",
-                                  "excludeIfNoClickCount": False})
+            _gql(call_, _REQUEST, {"startDate": _ymd(f), "endDate": _ymd(t), "campaignIds": [c["id"] for c in camps],
+                                   "reportType": "pa", "dateGroup": "daily", "granularity": "keyword",
+                                   "excludeIfNoClickCount": False})
             out["요청"].append(ym)
         elif rep.get("status") == "completed":
             pa.write_bytes(report_xlsx(report_(PA_EXCEL.format(id=rep["id"]))))
@@ -174,5 +177,17 @@ def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date, 
             out["파일"].append(pa)
         else:
             out["기다림"].append(ym)
+    months = list(reversed(due_months(start, today)))
+    for what, fn, todo in (("밀크런", milk_month, [m for m in months if not milk_p(m[0]).exists()]),
+                           ("광고센터", ad_month, [m for m in months if not ad_done(m[0])])):
+        for ym, f, t in todo[:max_months]:
+            try:
+                fn(ym, f, t)
+            except fatal:
+                raise
+            except Exception as exc:  # noqa: BLE001 — 그쪽(밀크런|광고센터)만 이번 실행 멈춤 · 사유 그대로 남김
+                out["실패"].append(f"{what} {ym}: {exc.__class__.__name__}: {str(exc)[:120]}")
+                break
+    out["남은 달"] = sum(1 for m in months if not (milk_p(m[0]).exists() and ad_done(m[0])))
     state_p.write_text(json.dumps({**state, "캠페인 없음": sorted(none)}, ensure_ascii=False), encoding="utf-8")
     return out

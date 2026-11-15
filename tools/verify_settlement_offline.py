@@ -559,7 +559,7 @@ def p9_settle_stats():
     with tempfile.TemporaryDirectory() as tmp:
         out = ST.write_stats(Path(tmp) / "집계.xlsx", res, {"A": 200_000}, files=[w, wfinal, g])
         wb = openpyxl.load_workbook(out)
-        assert wb.sheetnames == ["상품별 월별", "계정별 월별", "계약자 정산", "지급액 검산", "경고"]
+        assert wb.sheetnames == ["상품별 월별", "계정별 월별", "옵션별 등록상품", "계약자 정산", "지급액 검산", "경고"]   # D-244 시트
         assert [c.value for c in wb["계약자 정산"][2]] == ["A", 144622, 200000, 55378]
         assert wb["지급액 검산"].max_row == 1 + 5                 # 윙 주정산·최종액 30%·월별서 계산한 08-31 주 70% + RG 2
         out3 = ST.write_stats(Path(tmp) / "집계3.xlsx", res, amounts=[

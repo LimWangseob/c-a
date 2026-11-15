@@ -118,6 +118,7 @@ def _settle_files(base: Path, svc_judge: dict) -> tuple[dict, dict]:
 def _accounts(a: StatementArgs, c: SimpleNamespace) -> None:
     """정산집계·장부·미정산 — 계정 전체 숫자."""
     c.st = SRC.read_stats(a.stats)
+    c.cost_opts = c.st["cost_opts"]                    # 계정ID → {옵션ID: (등록상품ID, 상품명)} 비용 리포트 짝(D-244)
     c.tot, c.per = SRC.confirmed(c.st["data"])
     c.accts = sorted({r[0] for _, src in SRC.DETAIL for r in c.st["data"][src][1]})
     led_accounts = json.loads((a.inputs / "ledger.json").read_text(encoding="utf-8"))["accounts"]
@@ -138,7 +139,7 @@ def _managed(a: StatementArgs, c: SimpleNamespace) -> None:
     c.settle_only, c.settle_only_err = settle_only_sheet(a.settle_only)
     c.sources = SCOPE.load_sources(a.inputs / SCOPE.SOURCE)
     c.ranked = {aid: SCOPE.ranked(c.settle_only.get(aid) or {}, c.sources.get(aid) or {}) for aid in set(c.settle_only) | set(c.sources)}
-    inv = SCOPE.inventory(a.managed_output)
+    inv = c.inv = SCOPE.inventory(a.managed_output)
     c.src_vids = {aid: SCOPE.source_vids(rk, inv.get(aid) or {}, SCOPE.sales_groups(c.periods.get(aid) or {})) for aid, rk in c.ranked.items()}
     c.rg = SCOPE.recover_all(c.ledger, c.listings, (c.daily, c.periods), inv, c.contracts,
                              SCOPE.account_history(a.account_history), SCOPE.load_judge(a.inputs / SCOPE.JUDGE), c.ranked)

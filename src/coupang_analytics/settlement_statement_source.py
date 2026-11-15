@@ -22,6 +22,7 @@ import openpyxl
 
 from coupang_analytics import settlement_files as SF
 from coupang_analytics import settlement_forecast as FC
+from coupang_analytics import settlement_stats as SS
 from coupang_analytics.settlement_ledger import wing_month_targets
 
 OWN_BUSINESSES = {"디프", "디프픽"}       # 우리(소유자) 사업자 — 위탁 통보 대상 아님(소유자 2026-10-19): 계산은 같게·파일은 따로
@@ -143,9 +144,35 @@ def _pay_refs(wb, cur: set, data: dict) -> tuple[dict, dict]:
     return ref, fastm
 
 
+COST_OPTIONS = SS.COST_OPTIONS
+
+
+class StatsTooOld(FileNotFoundError):
+    """정산집계에 정산서가 읽을 시트가 없음(옛 집계) — 필수 입력 없음과 같게 ❌ 시작 전 중단(폴백 없음 · D-244)."""
+
+
+def cost_options(wb) -> dict:
+    """'옵션별 등록상품' 시트 → {계정ID: {옵션ID: (등록상품ID, 상품명)}} — 판매 없이 비용만 있는 상품도 옵션으로 관리 판정(D-244)."""
+    if COST_OPTIONS not in wb.sheetnames:
+        raise StatsTooOld(f"정산집계에 '{COST_OPTIONS}' 시트가 없음(옛 집계) — 정산집계를 다시 만드세요(settlement_download stats · D-244)")
+    rows = list(wb[COST_OPTIONS].iter_rows(values_only=True))
+    if not rows or tuple(rows[0][:4]) != SS.COST_OPTIONS_HEAD:
+        raise StatsTooOld(f"정산집계 '{COST_OPTIONS}' 머리 줄이 다름 {rows[:1]} — 정산집계를 다시 만드세요(D-244)")
+    out: dict = defaultdict(dict)
+    for r in rows[1:]:
+        if r and r[0]:
+            out[aid_of(str(r[0]))][str(r[1])] = (str(r[2]), str(r[3] or ""))
+    return dict(out)
+
+
 def read_stats(stats: Path) -> dict:
-    """시트 데이터 + 예전 이름(검증 자료에만 남은) 줄 제거(D-054 이전 집계 대비) + 검증 건수 + 지급 참고."""
+    """시트 데이터 + 예전 이름(검증 자료에만 남은) 줄 제거(D-054 이전 집계 대비) + 검증 건수 + 지급 참고 + 비용 옵션 짝(D-244)."""
     wb = openpyxl.load_workbook(stats, read_only=True)
+    try:
+        opts = cost_options(wb)                        # 옛 집계 = 다른 시트 읽기 전 중단
+    except StatsTooOld:
+        wb.close()
+        raise
     data = {}
     for _, src in DETAIL:
         rows = list(wb[src].iter_rows(values_only=True))
@@ -155,7 +182,7 @@ def read_stats(stats: Path) -> dict:
     data["계좌 입금"] = (hdr, [r for r in rows if r[0] not in stale])
     verify = _verify_counts(wb, stale)
     ref, fastm = _pay_refs(wb, cur, data)
-    return {"data": data, "stale": stale, "verify": verify, "ref": ref, "fastm": fastm}
+    return {"data": data, "stale": stale, "verify": verify, "ref": ref, "fastm": fastm, "cost_opts": opts}
 
 
 def confirmed(data: dict) -> tuple[dict, dict]:

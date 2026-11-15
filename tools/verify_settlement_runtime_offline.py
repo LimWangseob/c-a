@@ -2452,15 +2452,17 @@ def p52_settlement_docs():
         def hc2(m, p, b):
             return table(DOC.TAX_HEAD, [r1]) if p == DOC.TAX else table(DOC.CONSIGN_HEAD, [["발행 내역이 없습니다."]])
 
+        skip: set = set()                                         # 회차 동안 같은 집합(호출부 DOC_FAILED · D-245)
+
         def run(vendor=""):
             return DOC.collect(api_, hc2, gb, folder, D("2026-11-08"), vendor=vendor, since="2026-11-08T18:00:00",
-                               now=lambda: clock["now"])
+                               now=lambda: clock["now"], skip=skip)
         s1 = run()
         names = sorted(x.split("(")[0] for x in s1["받음"])
         assert names == sorted([f"{k}_{ym}.json" for k in ("매입세금계산서", "위수탁세금계산서", "주문별매출") for ym in
-                                ("202609", "202608", "202607")]), names
-        assert len(s1["실패"]) == 1 and s1["실패"][0].startswith("라이브정산 202609"), s1["실패"]
-        assert s1["남은 달"] == 3 * 6 + 9, s1["남은 달"]          # 세 종류 6달씩 + 라이브 9달(실패 달 포함)
+                                ("202609", "202608", "202607")] + [f"라이브정산_{ym}.json" for ym in ("202608", "202607", "202606")]), names
+        assert len(s1["실패"]) == 1 and s1["실패"][0].startswith("라이브정산 202609") and skip == {"라이브정산 202609"}, s1["실패"]
+        assert s1["남은 달"] == 3 * 6 + 6, s1["남은 달"]          # 세 종류 6달씩 + 라이브 6달(실패 달 넘어 옛 3달 받음 · D-245)
         assert sorted(f.name for f in s1["파일"]) == names and all(f.exists() for f in s1["파일"])   # D-168 받은 파일 경로
         assert not got_urls, "업체코드 없으면 RG 재고변동·반품 안 부름"
         assert json.loads((folder / "매입세금계산서_202609.json").read_text(encoding="utf-8"))["공급가액 합"] == 473746
@@ -2477,6 +2479,84 @@ def p52_settlement_docs():
             raise API.ApiBlocked("x")
         expect(API.ApiBlocked, lambda: DOC.collect(blocked, hc2, gb, Path(tmp) / "B", D("2026-11-08")), "차단은 그대로")
     ok("세금계산서 HTML 12칸·10칸(합계)·라이브 상세=요약·주문별 size 10 쪽 수 대조·RG 엑셀 판정·업체코드 · 회차당 3달·실패 격리·반품 하루 1번")
+
+
+def p56_one_failure_not_blocking():
+    print("[P56] 한 곳 실패가 나머지를 막지 않음(D-245 · output (37) 보고 B ③④) — 월자료 실패 달은 그 회차에 다시 안 부르고 옛 달로 ·"
+          " 광고센터 500 이어도 밀크런 받음 · 주문별 매출 실패 근거 파일(T-2 재현용)")
+    from coupang_analytics import settlement_ads as AD
+    from coupang_analytics import settlement_docs as DOC
+    import json
+    from datetime import datetime
+
+    from coupang_analytics import settlement_wing_api as API
+    D = date.fromisoformat
+
+    def no(*_a):
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        calls: list = []
+
+        def fetch(kind, ym, f, t):
+            calls.append(ym)
+            if ym in ("202609", "202608"):
+                raise API.SiteChangedError(f"{ym} 맞지 않음")
+            return b"{}", "json", "0줄"
+
+        def run(since: str, skip: set, day: str):
+            r = DOC._Run(Path(tmp), no, (API.ApiBlocked,), lambda: datetime.fromisoformat(day), skip)
+            r.kind("주문별매출", D(day[:10]), since, fetch, no)
+            return r
+        skip1: set = set()
+        r1 = run("2026-11-15T18:00:00", skip1, "2026-11-15T19:00:00")
+        assert calls == ["202609", "202608", "202607", "202606", "202605"], calls        # 옛 코드 = 202609 실패에서 멈춤
+        assert skip1 == {"주문별매출 202609", "주문별매출 202608"} and r1.out["남은 달"] == 6, (skip1, r1.out)
+        calls.clear()
+        run("2026-11-15T18:00:00", skip1, "2026-11-15T21:00:00")                          # 같은 회차 다음 바퀴 = 예산 다 씀
+        assert calls == [], calls
+        calls.clear()
+        run("2026-11-16T18:00:00", set(), "2026-11-16T19:00:00")                          # 다음 회차 = 실패 달 1번 더 · 옛 달 3개
+        assert calls[:2] == ["202610", "202609"] or calls[:1] == ["202609"], calls
+        assert {"202604", "202603"} <= set(calls), calls
+
+        # 주문별 매출 실패 근거 = 쪽별 커서·중복 줄(고객 이름 칸 없음)
+        def one_page(m, path, body):
+            if path.endswith("-page-total"):
+                return 2
+            return {"orderDetails": [{"orderId": i, "transactionType": "ORDER", "vendorItemId": 1, "shippingFeeId": None,
+                                      "customerName": "홍길동"} for i in range(10)], "rawRecordSize": 10, "cursorToken": ""}
+        r = DOC._Run(Path(tmp) / "o", no, (API.ApiBlocked,), datetime.now)
+        assert r.attempt("주문별매출 202604", lambda: DOC.fetch_order_detail(one_page, D("2026-04-01"), D("2026-04-30"))) is None
+        ev = json.loads((Path(tmp) / "o" / "_실패_주문별매출_202604.json").read_text(encoding="utf-8"))
+        assert ev["쪽 수(서버)"] == 2 and ev["쪽별"] == [{"쪽": 1, "줄": 10, "원본": 10, "커서 빈칸": True,
+                                                          "칸": ["cursorToken", "orderDetails", "rawRecordSize"]}], ev
+        assert "홍길동" not in json.dumps(ev, ensure_ascii=False), ev
+
+        def dup(m, path, body):
+            if path.endswith("-page-total"):
+                return 1
+            x = {"orderId": 7, "transactionType": "ORDER", "vendorItemId": 1, "shippingFeeId": None, "productGmv": 100}
+            return {"orderDetails": [x, {**x, "productGmv": 200}], "rawRecordSize": 2, "cursorToken": ""}
+        assert r.attempt("주문별매출 202605", lambda: DOC.fetch_order_detail(dup, D("2026-05-01"), D("2026-05-31"))) is None
+        ev = json.loads((Path(tmp) / "o" / "_실패_주문별매출_202605.json").read_text(encoding="utf-8"))
+        assert [[(x["쪽"], x["productGmv"]) for x in g] for g in ev["같은 키 줄"]] == [[(1, 100), (1, 200)]], ev
+
+    # 광고센터 500 → 밀크런은 따로 2달씩 · 남은 달 = 다 못 받은 달 · 실패 사유 남김
+    with tempfile.TemporaryDirectory() as tmp:
+        def ad500(m, path, body):
+            raise API.SiteChangedError("ServerBusy: /marketing-reporting/v2/graphql → 500")
+        s1 = AD.collect(ad500, lambda url: b"PK-milk", Path(tmp), "h-hellojin", D("2026-06-01"), D("2026-10-20"))
+        milks = sorted(p_.name for p_ in Path(tmp).glob("*_밀크런_*.xlsx"))
+        assert milks == ["h-hellojin_밀크런_202608.xlsx", "h-hellojin_밀크런_202609.xlsx"], milks
+        assert len(s1["실패"]) == 1 and s1["실패"][0].startswith("광고센터 202609") and s1["남은 달"] == 4, s1
+        s2 = AD.collect(ad500, lambda url: b"PK-milk", Path(tmp), "h-hellojin", D("2026-06-01"), D("2026-10-21"))
+        assert len(list(Path(tmp).glob("*_밀크런_*.xlsx"))) == 4 and s2["남은 달"] == 4, s2      # 옛 코드 = 밀크런도 202609 에서 멈춤
+
+        def blocked(m, path, body):
+            raise API.ApiBlocked("차단")
+        expect(API.ApiBlocked, lambda: AD.collect(blocked, lambda url: b"PK", Path(tmp) / "b", "x", D("2026-06-01"), D("2026-10-20"),
+                                                  fatal=(API.ApiBlocked,)), "차단은 그대로")
+    ok("월자료 실패 달 건너뛰고 옛 달 · 같은 회차 재시도 없음 · 광고센터 500 이어도 밀크런 · 주문별 매출 실패 근거 파일")
 
 
 def p55_rg_vendor_fallback():
@@ -2725,6 +2805,7 @@ def main():
     p53_vat_detail_requests()
     p54_result_summary()
     p55_rg_vendor_fallback()
+    p56_one_failure_not_blocking()
     print("정산 런타임 오프라인 검증 통과")
 
 

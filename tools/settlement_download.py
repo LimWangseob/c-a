@@ -605,6 +605,9 @@ def request_docs(a, b, args, jobs: list) -> int:
                       gap=lambda: time.sleep(random.uniform(*GAP_SEC)))
 
 
+DOC_FAILED: dict = {}      # (회차 시작, 계정 폴더) → 이번 회차에 실패한 '종류 달' — 같은 회차 다음 바퀴엔 다시 안 부름(D-245)
+
+
 def collect_docs(a, b, args, jobs: list) -> int:
     """월자료(D-171 — 세금계산서 2종·라이브·주문별 매출·RG 재고변동 + RG 반품내역 하루 1번) · 회차 계정당 종류별 3달(D-170).
     조회만. 종류 하나 실패 = 그 종류만 기록하고 계속(차단만 중단). 반환 = 받은 파일 수. 저장 = 검증자료/월자료/{계정}/."""
@@ -619,9 +622,9 @@ def collect_docs(a, b, args, jobs: list) -> int:
             LOG.record(name, "차단감지", RL.BLOCK, str(exc))
             raise BlockDetected(str(exc)) from exc
     goto(b, API.WING_URL, name)
+    since = getattr(args, "cycle_since", "") or f"{date.today()}T00:00:00"
     s = DOC.collect(lambda m, p, body: api(b, name, m, p, body), html, lambda url: _get_bytes(b, url), VERIFY / "월자료" / tok,
-                    date.today(), vendor=_rg_vendor(a, jobs),
-                    since=getattr(args, "cycle_since", "") or f"{date.today()}T00:00:00",
+                    date.today(), vendor=_rg_vendor(a, jobs), since=since, skip=DOC_FAILED.setdefault((since, tok), set()),
                     gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)), page_gap=lambda: time.sleep(random.uniform(1, 2.5)),
                     note=lambda m: LOG.record(name, "월자료", RL.WAIT, m), fatal=(BlockDetected,))
     for f in s["파일"]:
@@ -717,11 +720,14 @@ def collect_ads(a, b, args) -> None:
     try:
         s = AD.collect(call, lambda url: _get_bytes(b, url), VERIFY / "광고", SF._token(name, "계정명"), min(args.start, AD.FROM),
                        date.today(),
-                       gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)), get_report=lambda url: _get_bytes(b, url, text_ok=True))
+                       gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)), get_report=lambda url: _get_bytes(b, url, text_ok=True),
+                       fatal=(BlockDetected,))
         for f in s.get("파일", ()):
             LOG.saved(name, f, "광고")
         LOG.remaining(name, "광고", s["남은 달"], "달")
-        msg = [f"{k} {','.join(v)}" for k, v in s.items() if isinstance(v, list) and v and k not in ("받을 것", "파일")]
+        for why in s.get("실패", ()):                              # 밀크런·광고센터 따로 실패(한쪽이 다른 쪽을 막지 않음 · D-245)
+            LOG.record(name, "광고비", RL.FAIL, why)
+        msg = [f"{k} {','.join(v)}" for k, v in s.items() if isinstance(v, list) and v and k not in ("받을 것", "파일", "실패")]
         if msg or s["남은 달"]:
             LOG.record(name, "광고비", RL.OK, " · ".join(msg + ([f"남은 달 {s['남은 달']}(다음 실행에)"] if s["남은 달"] else [])))
     except BlockDetected:

@@ -25,6 +25,8 @@ from . import payout as P
 from .settlement_files import CH_WING, COMPENSATION, MULTI_PRODUCT, NO_PRODUCT, SettleFile
 
 SHIPPING_KEY = "배송비"
+COST_OPTIONS = "옵션별 등록상품"                     # 비용 리포트 옵션ID → 등록상품ID(D-244)
+COST_OPTIONS_HEAD = ("계정", "옵션ID", "등록상품ID", "상품명")
 
 
 @dataclass
@@ -58,6 +60,7 @@ class ProductMonth:
 class StatsResult:
     products: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
+    cost_options: list = field(default_factory=list)   # 비용 리포트 줄의 (계정, 옵션ID, 등록상품ID, 상품명) — '옵션별 등록상품' 시트(D-244)
 
     def account_months(self) -> dict:
         out: dict = {}
@@ -171,7 +174,7 @@ def aggregate(files: list[SettleFile], cost_lines=()) -> StatsResult:
         _add(table.setdefault(key, ProductMonth(r.account, f"{day:%Y-%m}", pid)), r)
     if undated:
         res.warnings.append(f"날짜 없는 금액 줄 {undated}건 — 각 파일 정산 기간 끝의 달로 집계")
-    _add_costs(table, list(cost_lines), files, res.warnings)
+    res.cost_options = _add_costs(table, list(cost_lines), files, res.warnings)
     res.products = [table[k] for k in sorted(table)]
     return res
 
@@ -184,13 +187,19 @@ def _option_products(files: list[SettleFile], lines: list) -> dict:
     return out
 
 
-def _add_costs(table: dict, lines: list, files: list[SettleFile], warns: list) -> None:
+def _add_costs(table: dict, lines: list, files: list[SettleFile], warns: list) -> list:
+    """비용 줄 → 상품·월 표. 돌려줌 = 비용 줄의 (계정, 옵션ID, 등록상품ID, 상품명) 짝(정렬) — 판매 없이 비용만 있는 상품도
+    옵션으로 관리 판정하게 정산서에 넘김(D-244 · 짝 = 위 o2p 와 같음 · 묶음·못 찾은 줄은 뺌)."""
     o2p = _option_products(files, lines)
     unmapped, bucket = 0, {}
+    pairs: dict = {}
     for c in lines:
         pid = c.product_id or o2p.get((c.account, c.option_id))
         if not pid:
             pid, unmapped = f"옵션 {c.option_id}", unmapped + 1
+        elif c.option_id and pid not in (MULTI_PRODUCT, NO_PRODUCT):
+            key = (c.account, c.option_id, pid)
+            pairs[key] = pairs.get(key) or c.product_name
         amt = c.ex_vat + c.vat
         if pid in (MULTI_PRODUCT, NO_PRODUCT):
             bucket[pid] = bucket.get(pid, 0) + amt
@@ -205,6 +214,7 @@ def _add_costs(table: dict, lines: list, files: list[SettleFile], warns: list) -
         warns.append(f"재고 손실 보상 {unmapped}묶음 — 옵션ID 로 상품을 못 찾아 '옵션 ID' 줄로 따로 집계")
     for k, v in bucket.items():
         warns.append(f"반출 배송 서비스비 {v:,}원(VAT 포함) — 박스에 {k}: 상품별로 나누지 않고 '{k}' 줄로 집계")
+    return [(*key, pairs[key] or "") for key in sorted(pairs)]
 
 
 def payout_lines(files: list[SettleFile], warns: list | None = None) -> list[tuple]:
@@ -274,7 +284,7 @@ _A_HEAD = ["계정", "쿠팡 정산금액 합계(부가비용 차감 전)", "계
 def write_stats(path, res: StatsResult, contracts: dict | None = None, files: list | None = None,
                 amounts: list | None = None, costs: list | None = None, verify: list | None = None,
                 inflows: list | None = None, forecast: list | None = None) -> Path:
-    """집계 엑셀: '상품별 월별'·'계정별 월별'·'계약자 정산'·'지급액 검산'(files 주면)·'쿠팡 지급 내역'(amounts)·
+    """집계 엑셀: '상품별 월별'·'계정별 월별'·'옵션별 등록상품'(D-244)·'계약자 정산'·'지급액 검산'(files 주면)·'쿠팡 지급 내역'(amounts)·
     '로켓그로스 비용'(costs)·'경고' 시트. contracts={계정: 계약금액}(없는 계정은 빈칸).
     amounts = [{'계정','채널','정산일','기간 시작','기간 끝','지급비율','최종지급액', 쿠팡 금액 칸…}],
     costs = [(계정, 정산일, 기간 시작, 기간 끝, 리포트, 시트, 최종비용)]."""
@@ -295,6 +305,10 @@ def write_stats(path, res: StatsResult, contracts: dict | None = None, files: li
         am.append([acct, month, v["wing"], v["rg"], v["wing"] + v["rg"], v["cost"], v["comp"],
                    v["wing"] + v["rg"] - v["cost"] + v["comp"]])
     _cost_product_sheet(wb, res.products)
+    op = wb.create_sheet(COST_OPTIONS)                # D-244 — 비용 없어도 머리 줄(정산서가 옛 집계와 구분)
+    op.append(list(COST_OPTIONS_HEAD))
+    for row in res.cost_options:
+        op.append(list(row))
     cs = wb.create_sheet("계약자 정산")
     cs.append(_A_HEAD)
     for acct, settled in sorted(res.account_totals().items()):

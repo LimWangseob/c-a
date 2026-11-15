@@ -155,9 +155,10 @@ def _dates(h: dict, rows: list) -> dict:
 
 
 # ── 판정대상 ──
-def targets(aid: str, inv_all: dict, groups: dict, is_mv, vname: dict) -> list:
-    """쿠팡 등록 상품(상품조회 + 판매분석) 중 1순위(대장 VID·같은 상품명)에 없는 것 — 판매 방식 안 가림(③ 계약서 = D-231).
-    상품명 = 등록명 · 노출명 = 판매 기록의 고객용 제목(VID 별 · vname = settlement_statement_scope.vid_names)."""
+def targets(aid: str, inv_all: dict, groups: dict, is_mv, vname: dict, costs: dict) -> list:
+    """쿠팡 등록 상품(상품조회 + 판매분석 + 판매 없이 비용만 있는 상품) 중 1순위(대장 VID·같은 상품명)에 없는 것 — 판매 방식 안 가림
+    (③ 계약서 = D-231). 상품명 = 등록명 · 노출명 = 판매 기록의 고객용 제목(VID 별 · vname = settlement_statement_scope.vid_names).
+    costs = 정산집계 '옵션별 등록상품'의 이 계정 짝 {옵션ID: (등록상품ID, 상품명)} — 비용 리포트는 로켓그로스(D-244 ④)."""
     out = {}
     for pid, e in (inv_all.get(aid) or {}).items():
         if not any(is_mv(v) for v in e["types"]):
@@ -167,6 +168,10 @@ def targets(aid: str, inv_all: dict, groups: dict, is_mv, vname: dict) -> list:
         if g not in out and g not in (inv_all.get(aid) or {}) and not any(is_mv(v) for v in e["vids"]):
             out[g] = {"등록상품ID": g, "상품명": e["name"], "노출명": sorted({vname[v] for v in e["vids"] if vname.get(v)}),
                       "등록일": "", "판매방식": ["RFM"] if e["rg"] else ["NORMAL"]}
+    for pid, (name, opts) in SCOPE.cost_only(costs, inv_all.get(aid) or {}, groups).items():
+        if not any(is_mv(v) for v in opts):
+            out[pid] = {"등록상품ID": pid, "상품명": name, "노출명": sorted({vname[v] for v in opts if vname.get(v)}),
+                        "등록일": "", "판매방식": ["RFM"]}
     return [out[k] for k in sorted(out)]
 
 
