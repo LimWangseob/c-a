@@ -59,6 +59,7 @@ CHECKS = [
     ("계정 정지 감지→대장 취소선(판정·열·상태파일·백업먼저·가역)", "tools/verify_account_suspend_offline.py", True),
     ("회귀 게이트 자체(동시 실행·통과 기록)", "tools/verify_run_checks_offline.py", True),
     ("앱 진행 로그창 탭별 표시(탭·작업·시작 줄·복사)", "tools/verify_ui_log_tabs_offline.py", True),
+    ("output 내보내기·합치기·보관 이동(변경분·실행 중 멈춤·UTF-8·비밀번호 뺌 D-243)", "tools/verify_output_export_offline.py", True),
     ("오프라인 실증(워크북·매칭·키워드선정)", "tools/verify_offline.py", False),
 ]
 
