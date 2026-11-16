@@ -205,10 +205,8 @@ def _basis_sheet(wb, a: dict, v: dict) -> None:
     t, tm, D, Dm, share, fin = a["t"], a["tm"], a["D"], a["Dm"], a["share"], a["fin"]
     basis = [["정산금액(끝난 판매)", t["settle"], tm["settle"] / t["settle"] if t["settle"] else 0, tm["settle"],
               "정확 — 상품별 쿠팡 정산 자료에서 관리 상품만 더함(배송비 = 같은 주문·반품 상품)"]]
-    for ch, ym, s, e, shr, ms, me in a["ushare"]:
-        _r, mm, aa = a["month_share"](ch, ym)
-        basis.append([f"정산 중 {ym} {ch}", e, shr, me, f"{PENDING_NOTE} — " + (f"판매분석 {ym} {ch} 관리 상품 판매 {mm:,.0f} / 전체 {aa:,.0f}" if aa
-                                                                             else "상품별 확정 정산금의 관리 비율")])
+    for ch, ym, s, e, shr, ms, me, how in a["ushare"]:
+        basis.append([f"정산 중 {ym} {ch}", e, shr, me, f"{PENDING_NOTE} — {how}"])
     for k, x in {**D, **({SVC: D[SVC]} if SVC in Dm else {})}.items():
         if round(x) or k == SVC and k in Dm:
             shr, why, kind = share[k]

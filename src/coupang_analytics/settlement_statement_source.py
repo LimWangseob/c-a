@@ -237,8 +237,9 @@ def purchase_ap(pur: dict) -> dict:
 
 
 def _wing_unsettled(a: str, pur: dict, per: dict, t30: dict, src: str, today: str) -> list:
-    """윙 = 달 정산대상 − 정산 파일 몫. 달 정산대상 = 쿠팡 30%(최종액)·월정산 줄의 정산대상(지급됐든 예정이든 — 조회 시점
-    구매확정분까지) / 그 줄이 아직 없으면 매출내역 정산대상."""
+    """윙 = 달 정산대상 − 정산 파일 몫. 끝난 달 정산대상 = 쿠팡 30%(최종액)·월정산 줄의 정산대상 / 그 줄이 없거나 진행 중인 달 = 매출내역
+    정산대상(판매와 같은 기간 — 진행 중 달 30% 줄은 그 줄 판매 기간까지만이라 판매(매출내역 어제까지)와 어긋남 · 실측 oopean 11월 T-63) ·
+    음수 예정(환불 구매확정)도 남김(D-262 · 나누기는 settlement_statement_pending)."""
     out = []
     filed = {m for (aa, m), v in per.items() if aa == a and round(v.get("w_settle", 0))}
     for m in sorted(set(pur) | ({mm.replace("-", "") for mm in t30} & filed)):     # 범위 = 매출내역 달 + 정산 파일 있는 달
@@ -246,14 +247,14 @@ def _wing_unsettled(a: str, pur: dict, per: dict, t30: dict, src: str, today: st
         rs = (pur.get(m) or {}).get("purchaseReports") or []
         rev, ap = sum(x["revenueAmount"] for x in rs), sum(x["apAmount"] for x in rs)
         f = per[(a, m)]
-        if mm in t30:
+        if mm in t30 and mm < today[:7]:
             tgt, kind, note = t30[mm], "쿠팡 계산(윙 최종액 줄 정산대상)", src
-            if mm >= today[:7] and round(tgt) != round(ap):
-                note += f" · 매출내역(어제까지) {ap:,.0f}보다 {tgt - ap:+,.0f} = 조회 시점까지 추가 구매확정분"
         else:
             tgt, kind, note = ap, "확정(매출내역)", src
-        if round(tgt - f["w_settle"]) > 0:
-            out.append(("윙", mm, int(rev - f["w_sales"]), int(round(tgt - f["w_settle"])), kind, note))
+            if mm in t30 and round(t30[mm]) != round(ap):
+                note += f" · 30% 줄 정산대상 {t30[mm]:,.0f} = 그 줄 판매 기간까지만 — 판매와 같은 기간인 매출내역(어제까지) 사용"
+        if round(tgt - f["w_settle"]):
+            out.append(("윙", mm, int(rev - f["w_sales"]), int(round(tgt - f["w_settle"])), kind, note, []))
     return out
 
 
@@ -322,7 +323,7 @@ def _rg_gap(base: Path, supp: Path | None, aid: str, had: list, first: str) -> l
         return []
     why = "판매분석 주별 자료 없음" if sold is None else "판매분석에 판매 있음"
     return [("로켓그로스", str(gs)[:7], 0, 0, "확인 필요",
-             f"{gs}~{ge} 판매 기간은 정산 파일·쿠팡 예정 줄 둘 다 없음({why}) — 금액 넣지 않음")]
+             f"{gs}~{ge} 판매 기간은 정산 파일·쿠팡 예정 줄 둘 다 없음({why}) — 금액 넣지 않음", [])]
 
 
 def _last_login(base: Path) -> dict:
@@ -339,12 +340,14 @@ def _last_login(base: Path) -> dict:
 
 
 def _rg_weeks(aid: str, rows: list, settled: set) -> dict:
-    """(월, 구분) → [판매금액, 정산대상, 기간들, 판매액 빠짐] + 판매 주 시작일 목록 — 정산 파일 없는 2026 판매 주만."""
+    """(월, 구분) → [판매금액, 정산대상, 기간들, 판매액 빠짐, 주 목록[(시작, 끝, 판매 또는 None, 정산대상)]] + 판매 주 시작일 목록 —
+    정산 파일 없는 2026 판매 주만. 월 = 주 시작 날짜의 달(계정 합계 표시용) · 정산서 달은 주 목록의 날짜(매출인식일)로 가름(D-266 ③ ·
+    settlement_statement_pending.rg_week)."""
     weeks: dict = defaultdict(list)
     for r in rows:
         if (aid, str(r["기간 시작"])[:10], str(r["기간 끝"])[:10]) not in settled and str(r["기간 시작"])[:10] >= "2026-01-01":
             weeks[(str(r["기간 시작"])[:10], str(r["기간 끝"])[:10])].append(r)
-    acc: dict = defaultdict(lambda: [0, 0, [], False])
+    acc: dict = defaultdict(lambda: [0, 0, [], False, []])
     for (s0, e0), ls in sorted(weeks.items()):
         kind, amt, sales = _rg_week(ls)
         if not amt and not sales:
@@ -354,6 +357,7 @@ def _rg_weeks(aid: str, rows: list, settled: set) -> dict:
         g[1] += amt
         g[2].append(f"{s0[5:]}~{e0[5:]}")
         g[3] = g[3] or sales is None
+        g[4].append((s0, e0, sales, amt))
     return {"acc": acc, "first": min((s0 for s0, _ in weeks), default="")}
 
 
@@ -362,19 +366,19 @@ def _rg_unsettled(base: Path, supp: Path | None, aid: str, rows: list, settled: 
     had = sorted(e for (a, _, e) in settled if a == aid)
     if not rows:
         return [] if (not had or collected) else [("로켓그로스", "-", 0, 0, "자료 없음",
-                                                     "쿠팡 정산 줄 조회 없음(로그인 실패 등) — 금액 넣지 않음")]
+                                                     "쿠팡 정산 줄 조회 없음(로그인 실패 등) — 금액 넣지 않음", [])]
     wk = _rg_weeks(aid, rows, settled)
     out = _rg_gap(base, supp, aid, had, wk["first"])
-    for (m, kind), (sales, amt, per_, miss) in sorted(wk["acc"].items()):
+    for (m, kind), (sales, amt, per_, miss, wks) in sorted(wk["acc"].items()):
         note = f"{src} · 판매 주 {len(per_)}개 {', '.join(per_)}"
         if miss:
             note += " · 판매금액 = 정산 줄 판매액 칸 저장 전 기록이라 비움"
-        out.append(("로켓그로스", m, int(sales), int(amt), kind, note))
+        out.append(("로켓그로스", m, int(sales), int(amt), kind, note, wks))
     return out
 
 
 def unsettled(base: Path, supp: Path | None, accts: list, per: dict, led, snaps: dict) -> tuple[dict, dict]:
-    """계정 → [(채널, 월, 미정산 판매금액, 정산 예정액, 구분, 비고)] + 계정 → 매출내역 달별 정산대상(장부 대조용)."""
+    """계정 → [(채널, 월, 미정산 판매금액, 정산 예정액, 구분, 비고, 로켓그로스 주 목록)] + 계정 → 매출내역 달별 정산대상(장부 대조용)."""
     settled, login = _settled_weeks(base), _last_login(base)
     first_day = min((r["수집일"] for r in FC.load(base / FC.FORECAST_FILE)), default="")
     out, aps = {}, {}
@@ -384,7 +388,7 @@ def unsettled(base: Path, supp: Path | None, accts: list, per: dict, led, snaps:
         src = f"쿠팡 정산현황·매출내역 조회 {led.src_day.get(aid) or '-'}"
         pur = _purchase(base, a, snap)
         aps[a] = purchase_ap(pur)
-        wing = ([("윙", "-", 0, 0, "자료 없음", "매출내역 없음 — 금액 넣지 않음")] if not pur
+        wing = ([("윙", "-", 0, 0, "자료 없음", "매출내역 없음 — 금액 넣지 않음", [])] if not pur
                 else _wing_unsettled(a, pur, per, wing_month_targets(led.wing_rows(aid)), src, led.today))
         collected = aid in snaps or login.get(aid, "") >= first_day
         out[a] = wing + _rg_unsettled(base, supp, aid, led.rg_rows(aid), settled, src, collected)

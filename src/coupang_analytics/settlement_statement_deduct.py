@@ -83,11 +83,13 @@ class Account(AccountBase):
 
     # ── 판매자서비스이용료(옛 450~470 · D-161) ──
     def svc_month(self, ym: str) -> tuple:
-        """구매확정 달 관리 판매 — 상품별 파일이 다 온 달 = 그 값 · 덜 온 달 = 그 달 판매분석 · 둘 다 없음 = 계정 관리 정산금 비율(D-162)."""
+        """구매확정 달 관리 판매 — 상품별 파일이 다 온 달 = 그 값 · 덜 온 달 = 파일 + 정산 예정분 나눈 값(D-262 · '확인 필요' 금액 뺌) ·
+        둘 다 없음 = 계정 관리 정산금 비율(D-162)."""
         mm_, aa_ = self.msales.get(("윙", ym), (0.0, 0.0))
         if aa_ and self.pur.get(ym, 0.0) - sum(self.wconf[ym]) <= 1:
             return mm_, aa_
-        _s, mm_, aa_ = self.month_share("윙", ym)
+        p = self.upend.get(("윙", ym)) or [0.0, 0.0, 0.0]
+        mm_, aa_ = mm_ + p[1], aa_ + p[0]
         return (mm_, aa_) if aa_ else (self.S, 1.0)
 
     def _svc(self) -> None:
@@ -171,6 +173,8 @@ class Account(AccountBase):
             why.append(f"E3 보류 줄 {L['e3'][0]:,} vs 보류목록 {L['e3'][1]:,}")
         if any(x[4] in ("자료 없음", "확인 필요") for x in self.u):
             why.append("④ 정산 중 판매 일부 자료 없음")
+        if self.ucheck:
+            why.append(f"④ 정산 예정분 관리 몫 확인 필요 {len(self.ucheck)}건(정산대상 {sum(x[3] for x in self.ucheck):,.0f}원은 관리 몫에 안 넣음 · D-262 ③)")
         if self.bad:
             why.append(f"지급 줄 공식 어긋남 {self.bad}")
         if self.start_note:
@@ -189,10 +193,10 @@ class Account(AccountBase):
         g = self.__dict__
         out = {k: g[k] for k in ("acct", "aid", "t", "u", "L", "D", "Dm", "share", "fin", "gross", "refund", "st_settle", "st_ded",
                                  "line_m", "paid_total", "rows_out", "dup", "bad", "mpids", "tm", "tx", "prod", "mmon", "ushare",
-                                 "u_sales", "um_sales", "um_settle", "settle_all", "settle_m", "pay_m", "ship", "ship_u", "ship_stats",
+                                 "u_sales", "um_sales", "um_settle", "ucheck", "settle_all", "settle_m", "pay_m", "ship", "ship_u", "ship_stats",
                                  "fav", "add", "addm", "start_note")}
         out.update({"info": self.ctx.names[self.acct], "ok": self.L["ok"] and not self.bad, "why": why, "scope": self.sc, "scope_check": self.scope_check,
-                    "month_share": self.month_share, "extras": self.ctx.extras.get(self.aid, [])})
+                    "extras": self.ctx.extras.get(self.aid, [])})
         return out
 
 

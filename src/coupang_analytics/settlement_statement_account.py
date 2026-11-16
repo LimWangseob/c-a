@@ -18,6 +18,7 @@ import openpyxl
 from coupang_analytics import settlement_files as SF
 from coupang_analytics import settlement_ledger as SL
 from coupang_analytics import settlement_managed_alloc as MA
+from coupang_analytics import settlement_statement_pending as PEND
 from coupang_analytics import settlement_statement_scope as SCOPE
 from coupang_analytics import settlement_stats as SS
 from coupang_analytics import settlement_statement_source as SRC
@@ -304,32 +305,28 @@ class AccountBase:
         self.ship_u = (ship["확인 필요"][0] * ship_r, ship["확인 필요"][1] * ship_r)   # 위 관리 몫 — 검산·배송비 줄에도 같은 값
         tm["other"] = tm["sales"] - tm["coupon"] - tm["fee"] - tm["settle"]
 
-    # ── 정산 중 판매(옛 386~410) ──
-    def month_share(self, ch: str, ym: str, gate: bool = True) -> tuple[float, float, float]:
-        if gate and MA.pre_contract(ym, self.cdate):             # 계약 전 달 = 관리 몫 0(D-185 ②)
-            return 0.0, 0.0, 0.0
-        recs = self.ctx.periods.get(self.aid) or {}
-        keys = [f"M:{ym}"] if f"M:{ym}" in recs else [k for k in recs if k.startswith(f"W:{ym}")]
-        mm = aa = 0.0
-        for k in keys:
-            for vv, o in (recs[k].get("옵션") or {}).items():
-                if o.get("구분") == ch:
-                    aa += num(o.get("판매금액"))
-                    mm += num(o.get("판매금액")) if self.is_mv(str(vv)) else 0
-        return (mm / aa if aa else 0.0), mm, aa
-
+    # ── 정산 중 판매(D-262 · D-264 · D-266 — 나누기 = settlement_statement_pending) ──
     def _unsettled_share(self) -> None:
-        t, tm = self.t, self.tm
-        self.ushare = []
-        for ch, ym, s, e_, *_ in self.u:
-            sh, _mm, aa_ = self.month_share(ch, ym)
-            if not aa_ and not MA.pre_contract(ym, self.cdate):  # 그 달 판매분석 없음 = 상품별 확정 정산금의 관리 비율(D-162)
-                sh = tm["settle"] / t["settle"] if t["settle"] else 0.0
-            self.ushare.append((ch, ym, s, e_, sh, s * sh, e_ * sh))
-            self.mset[(ch, ym)][1] += e_
-            self.mset[(ch, ym)][0] += e_ * sh
-            self.mmon[ym.replace("-", "")][0] += s * sh
-            self.mmon[ym.replace("-", "")][1] += e_ * sh
+        """ushare = (판매 방식, 달, 판매, 정산대상, 관리 비율, 관리 판매, 관리 정산, 근거) · ucheck = 관리 몫에 안 넣은 '확인 필요'(D-262 ③) ·
+        upend[(판매 방식, 달)] = [나눈 판매, 관리 판매(계약 반영), 관리 판매(계약 무시 — 관리 시작 달 후보)]."""
+        tm = self.tm
+        self.ushare, self.ucheck = [], []
+        self.upend: dict = defaultdict(lambda: [0.0, 0.0, 0.0])
+        for ch, ym, s, e_, ms, me, how, why in PEND.split(self):
+            raw_ms = ms
+            if MA.pre_contract(ym, self.cdate):                  # 계약 전 달 = 관리 몫 0(D-185 ②)
+                ms, me, how = 0.0, 0.0, "계약 전 달 — 관리 몫 0(D-185 ②)"
+            if why:
+                self.ucheck.append((ch, ym, s, e_, why))
+                how = f"확인 필요 — {why} · 이 금액은 관리 몫에 넣지 않음(쿠팡 상품별 자료가 오면 다음 정산서에 반영 · D-262 ③)"
+            else:
+                self.mset[(ch, ym)][1] += e_
+                self.mset[(ch, ym)][0] += me
+                p = self.upend[(ch, ym)]
+                p[0], p[1], p[2] = p[0] + s, p[1] + ms, p[2] + raw_ms
+            self.ushare.append((ch, ym, s, e_, me / e_ if e_ else (ms / s if s else 0.0), ms, me, how))
+            self.mmon[ym.replace("-", "")][0] += ms
+            self.mmon[ym.replace("-", "")][1] += me
         self.um_sales, self.um_settle = sum(x[5] for x in self.ushare), sum(x[6] for x in self.ushare)
         self.settle_m = tm["settle"] + self.um_settle
         self.S = self.settle_m / self.settle_all if self.settle_all else 0.0
@@ -341,7 +338,7 @@ class AccountBase:
                        + [ym for ym, c in self.by_m.items() if round(c["m_logi"])])
         self.start = min(self.active) if self.active else "9999-99"
         raw = {ym for ym, x in self.raw_s.items() if round(x)} | {ym for ym, x in self.raw_l.items() if round(x)}
-        raw |= {ym for ch, ym, s, *_ in self.u if round(s * self.month_share(ch, ym, False)[0])}   # 정산 중 판매(상품별 자료 전)
+        raw |= {ym for (_ch, ym), p in self.upend.items() if round(p[2])}   # 정산 중 판매(상품별 자료 전 · 계약 무시 몫)
         st_, self.start_note = MA.contract_start(min(raw) if raw else "", self.cdate, self.known)   # D-185 — 자동·계약 중 이른 달 · 계약 전 판매 제외
         if st_:
             self.start = st_
