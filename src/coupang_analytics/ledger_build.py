@@ -1,11 +1,12 @@
 """장부 DB 빌드 — 원천(운용 output 사본) → 새 SQLite. 묶음(part)마다 이관 모듈을 차례로 부른다(무거운 실행 하나씩).
 
 - 같은 입력 → 같은 DB 내용(표 해시 · V1). 실행 기록(run_meta)만 시각이 다르다.
-- 계정 표 = 원천에서 본 계정ID·표기·vendorId 를 모은 것(이름 2개 계정 = J2 판정 후보).
+- 계정 표 = 원천에서 본 계정ID·표기·vendorId(정산현황 원문 link_key 앞부분)를 모은 것(표기 2개 계정 = J2 판정 후보).
 """
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections import defaultdict
 from datetime import datetime
@@ -15,6 +16,7 @@ from . import ledger_load_account, ledger_load_cost, ledger_load_sales, ledger_l
 from .ledger_src import Registry
 
 PARTS = ("settle", "cost", "account", "sales")
+_VENDOR_KEY = re.compile(r"^([A-Z]\d{8})-\d{4}-\d{2}-\d{2}")
 
 
 def _accounts(con: sqlite3.Connection, exclude: frozenset[str]) -> None:
@@ -26,7 +28,12 @@ def _accounts(con: sqlite3.Connection, exclude: frozenset[str]) -> None:
                 seen[acc].add(base)       # 계정 표기(이름-상호-계정ID) — 표기 2개 이상 = J2 후보
     for acc, label in con.execute("SELECT account_id, link_key FROM account_entry WHERE item='표기'"):
         seen[acc].add(label)
-    rows = [(a, "", json.dumps(sorted(x for x in v if x), ensure_ascii=False), int(a in exclude),
+    vids: dict[str, set] = defaultdict(set)
+    for acc, key in con.execute("SELECT DISTINCT account_id, link_key FROM account_entry WHERE item LIKE '원문 %'"):
+        m = _VENDOR_KEY.match(key or "")
+        if m:
+            vids[acc].add(m.group(1))     # 정산현황 원문 link_key = vendorId-기간시작-기간끝 …
+    rows = [(a, ",".join(sorted(vids.get(a, ()))), json.dumps(sorted(x for x in v if x), ensure_ascii=False), int(a in exclude),
              "제외 계정(실행 인자)" if a in exclude else "") for a, v in sorted(seen.items())]
     con.executemany("INSERT INTO account VALUES (?,?,?,?,?)", rows)
 

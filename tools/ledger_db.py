@@ -1,6 +1,8 @@
 """장부 DB 시험본 입구 — 오프라인만(쿠팡 로그인·API 없음) · 원천은 읽기만 · 결과는 시험 폴더에만.
 
     python tools/ledger_db.py build --output <운용 output 사본> --db <새 sqlite 경로> [--exclude Difpick] [--only a,b] [--parts settle,cost,...]
+    python tools/ledger_db.py verify --db <DB> [--twin <다시 만든 DB>]
+    python tools/ledger_db.py judge --db <DB> --rules <판정 폴더>
 
 - 계획 = output/_시험_261116_장부DB/계획.md · 제외 계정·시험 계정은 인자로만(D-229).
 """
@@ -16,7 +18,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import sqlite3  # noqa: E402
 
-from coupang_analytics import ledger_build, ledger_verify  # noqa: E402
+from coupang_analytics import ledger_build, ledger_judge, ledger_verify  # noqa: E402
 
 
 def _args(argv: list[str] | None) -> argparse.Namespace:
@@ -31,6 +33,9 @@ def _args(argv: list[str] | None) -> argparse.Namespace:
     v = sub.add_parser("verify", help="검증 V2~V7(+ --twin 이 있으면 V1 표 해시 비교)")
     v.add_argument("--db", required=True, type=Path)
     v.add_argument("--twin", type=Path, help="같은 입력으로 다시 만든 DB(V1)")
+    j = sub.add_parser("judge", help="판정 규칙 파일(규칙_*.json)을 검증 결과에 적용(D-265 · verify 뒤)")
+    j.add_argument("--db", required=True, type=Path)
+    j.add_argument("--rules", required=True, type=Path, help="판정 폴더(규칙_*.json · 직접판정_*.json · 표본 출력)")
     return ap.parse_args(argv)
 
 
@@ -56,6 +61,11 @@ def main(argv: list[str] | None = None) -> int:
             same = ledger_verify.same_hashes(con, sqlite3.connect(a.twin))
             print(f"V1 다시 만든 DB 표 해시 같음: {sum(same.values())}/{len(same)} · 다른 표 {[t for t, ok in same.items() if not ok]}")
         for line in ledger_verify.run(con):
+            print(line)
+        con.close()
+    elif a.cmd == "judge":
+        con = sqlite3.connect(a.db)
+        for line in ledger_judge.run(con, a.rules):
             print(line)
         con.close()
     print(f"끝 {time.time() - t0:.0f}초")

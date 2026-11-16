@@ -5,12 +5,16 @@
   로켓그로스: 매출인식일이 기간 안인 판매수수료 줄 정산대상액 합 × 지급비율 = totalPayableAmount
   → + 그 주(정산주기 끝 = 기간 끝) 상품 비용·보상 + 비용 세액·반출 배송 서비스비 + 회차 KEY 지급 구성(이월·추가 공제·조정) = 최종.
   비용은 ⑮ 의 비용 칸(대조용)이 있는 회차에 붙인다(70%·30% 중 쿠팡이 뺀 회차). '정산줄없음' 비용은 다음 회차 이월 줄로 들어가므로 뺀다.
-- 차이 구간 = D-235(0 · 1~99 · 100 이상). 100 이상 = J7 원인 판정 대상(판정 전 cause 빈 칸).
+- 로켓그로스 지급액은 쿠팡이 줄마다 반올림한다(2단계 실측 1,732회차 차 0): 첫 지급(비율 ≥ 50) = 사사오입(줄 × 비율) ·
+  나머지 지급(비율 < 50) = 줄 − 사사오입(줄 × (100 − 비율)) · 100% = 줄 그대로.
+- 차이 구간 = D-235(0 · 1~99 · 100 이상). 원인(cause)은 여기서 쓰지 않는다 — 판정 규칙 파일을 읽는 ledger_judge 가 붙인다(D-265).
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections import defaultdict
+from decimal import ROUND_HALF_UP, Decimal
 
 from .ledger_schema import all_hashes, bucket
 
@@ -65,8 +69,12 @@ def v3_keys(con) -> list[str]:
         "GROUP BY account_id, option_id HAVING COUNT(DISTINCT inventory_id) > 1").fetchall()
     for acc, vid, n in inv:
         con.execute(_INS, ("V3 등록상품ID 2개 이상", acc, vid, 1, n, n - 1, "확인 필요", ""))
+    labels = [(acc, len(json.loads(names or "[]"))) for acc, names in con.execute("SELECT account_id, names FROM account")]
+    labels = [(acc, n) for acc, n in labels if n > 1]
+    for acc, n in labels:     # subject 에 표기 값(성명 포함)을 쓰지 않음 — 개수만
+        con.execute(_INS, ("V3 계정 표기 2개 이상(J2)", acc, f"표기 {n}개", 1, n, n - 1, "확인 필요", ""))
     return [f"V3 KEY: 같은 KEY 금액 다름 {l1} · 비용 KEY 겹침 {len(dup_cost)} · 회차 KEY 겹침 {len(dup_round)} · "
-            f"노출상품ID 2개 이상 옵션 {len(multi)} · 등록상품ID 2개 이상 옵션 {len(inv)}"]
+            f"노출상품ID 2개 이상 옵션 {len(multi)} · 등록상품ID 2개 이상 옵션 {len(inv)} · 계정 표기 2개 이상 {len(labels)}"]
 
 
 def _line_sums(con, acc: str, src: str) -> list[tuple[str, int]]:
@@ -85,6 +93,22 @@ def _entries(con, acc: str, rk: str, role: str) -> dict[str, int]:
     return out
 
 
+def _hu(x: Decimal) -> int:
+    return int(x.quantize(Decimal(1), rounding=ROUND_HALF_UP))
+
+
+def rg_line_pay(settle: int, ratio: float) -> int:
+    """로켓그로스 정산 줄 1개의 이번 회차 지급액(쿠팡 줄별 반올림 · 모듈 설명 참고)."""
+    r = Decimal(str(ratio))
+    if r >= 50:
+        return _hu(Decimal(settle) * r / 100)
+    return settle - _hu(Decimal(settle) * (100 - r) / 100)
+
+
+def _rg_period_pay(lines: list, ps: str, pe: str, ratio: float) -> int:
+    return sum(rg_line_pay(s, ratio) for d, s in lines if ps <= d <= pe)
+
+
 def _wing(con, r: tuple, lines: list) -> None:
     acc, rk, ps, pe, ratio, release, tgt, payable, final, pending = r
     ded = sum(_entries(con, acc, rk, "지급 구성").values())
@@ -95,10 +119,9 @@ def _wing(con, r: tuple, lines: list) -> None:
         _put(con, "V4 윙 보류 해제·추가지급 최종", acc, subj, final, (pending or 0) + int(add) + ded)
         return
     s = _period_sum(lines, ps, pe)
-    if not any(ps <= d <= pe for d, _ in lines) and tgt:
-        _put(con, "V4 윙 상품 합 = targetAmount", acc, subj, tgt, s, "후보: 그 기간 정산 파일 줄 없음(받기 전 기간)")
-        return
     _put(con, "V4 윙 상품 합 = targetAmount", acc, subj, tgt, s)
+    if not any(ps <= d <= pe for d, _ in lines) and tgt:
+        return
     calc_pay = round((tgt or 0) * ratio / 100)
     _put(con, "V4 윙 지급액 = target × 비율", acc, subj, payable, calc_pay)
     if final is not None:
@@ -119,11 +142,10 @@ def _rg_costs(con, acc: str, pe: str) -> int:
 def _rg(con, r: tuple, lines: list) -> None:
     acc, rk, ps, pe, ratio, _rel, _tgt, payable, final, _p = r
     subj = f"로켓그로스 {rk}"
-    s = _period_sum(lines, ps, pe)
+    calc_pay = _rg_period_pay(lines, ps, pe, ratio)
+    _put(con, "V4 RG 지급액 = 상품 줄별 × 비율", acc, subj, payable, calc_pay)
     if not any(ps <= d <= pe for d, _ in lines) and payable:
-        _put(con, "V4 RG 지급액 = 상품 합 × 비율", acc, subj, payable, 0, "후보: 그 기간 정산 파일 줄 없음(받기 전 기간)")
         return
-    _put(con, "V4 RG 지급액 = 상품 합 × 비율", acc, subj, payable, round(s * ratio / 100))
     ref = _entries(con, acc, rk, "대조용")
     has_cfs = any(ref.get(k) for k in CFS_REF)
     costs = _rg_costs(con, acc, pe) if has_cfs else 0
@@ -133,7 +155,8 @@ def _rg(con, r: tuple, lines: list) -> None:
         _put(con, "V4 RG 비용 = ⑮ 비용 칸", acc, subj, cfs_ref, costs)
     pay = sum(_entries(con, acc, rk, "지급 구성").values())
     if final is not None:
-        _put(con, "V4 RG 최종(상품 내역 + 계정 내역)", acc, subj, final, (payable or 0) + costs + pay)
+        _put(con, "V4 RG 최종 = 지급액 + 비용 + 계정 내역", acc, subj, final, (payable or 0) + costs + pay)
+        _put(con, "V4 RG 최종(상품 내역부터)", acc, subj, final, calc_pay + costs + pay)
 
 
 def v4_rounds(con) -> list[str]:

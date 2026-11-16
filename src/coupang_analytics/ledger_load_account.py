@@ -3,7 +3,9 @@
 역할(role) 뜻 — 회차 대조(V4)에서 두 번 세지 않게 나눔:
 - '지급 구성' = 쿠팡이 계정 단위로 그 회차에서 더하거나 뺀 값(윙 차감 사유 · RG 이월·추가 공제·판매 조정 · 비용 세액).
 - '대조용' = 상품 내역의 합이거나 지급 구성의 원천 상세(RG 비용 칸 합 · 재고 보상 합 · 광고정산·밀크런 원천 · 매출내역).
-- '예정' = 정산예정기록·정산현황 원문의 예정값(수집일마다) · '확인 필요' = J4 판정 전 자료(월렛·우대수수료 환급).
+- '예정' = 정산예정기록·정산현황 원문의 예정값(수집일마다).
+- J4 판정(2단계 · 판정/J4_판정.json): 월렛 입출금 = '대조용'(실입금 기록 · DEPOSIT 556건 = 그날 회차 최종지급액 합 원 단위 ·
+  정산금액 SSOT = 지급내역) · 우대수수료 환급 = '별도 입금'(쿠팡페이가 대표계좌로 직접 · 회차 지급과 별개 · 주문 단위).
 KEY: 윙 회차 = 정산일|기간 시작|기간 끝|지급비율|보류 해제|pendingAmount · RG = 정산일|기간 시작|기간 끝|지급비율
 (샘플검증 5절 3). 원문의 UTC `T15:00:00Z` = 한국 다음 날(320/320 실측).
 """
@@ -22,8 +24,10 @@ RG_PAY = ("totalLastSettlementUnpaidCfsDeductionAmount", "totalPastCfsDeductionA
           "totalMilkRunDeductionAmount", "totalArFactoringDeductionAmount", "totalNegativeDeductionAmount",
           "totalCoupangLiveDeductionAmount", "totalDebitCardDeductionAmount", "totalMerchantCashAdvanceDeductionAmount",
           "totalBusinessInsightsDeductionAmount", "totalSubscriptionFeeDeductionAmount",
-          "totalPostPurchaseDeductionAmount", "totalCarryOverSettlementDeductionAmount", "totalCfsFeeAdjustment")
-RG_PLUS = ("totalSalesAdjustment",)
+          "totalPostPurchaseDeductionAmount", "totalCfsFeeAdjustment")
+# 더하는 칸: 판매 조정 · 이월(CarryOver = 이번 회차에서 못 뺀 비용을 다음으로 넘긴 금액 → 비용 칸에서 뺀 만큼 되돌려 더함).
+# 실측(2단계 J7): 이월 칸 있는 RG 회차 108개 전부 빼기로 넣었을 때 '차 = 2 × 이월' → 더하기로 고침.
+RG_PLUS = ("totalSalesAdjustment", "totalCarryOverSettlementDeductionAmount")
 _ENTRY_SQL = ("INSERT INTO account_entry(account_id, sale_type, round_key, item, role, amount, link_key, occur_date, "
               "file_id, src_pos) VALUES (?,?,?,?,?,?,?,?,?,?)")
 
@@ -264,16 +268,16 @@ class VerifyLoader(AccountLoader):
         return n
 
     def _held(self, acc: str, d: dict, fid: int) -> int:
-        """확인 필요(J4 전): 월렛 입출금 · 우대수수료 환급 — 판정 전엔 회차 대조에 넣지 않음."""
+        """월렛 입출금(대조용) · 우대수수료 환급(별도 입금) — 둘 다 회차 지급 구성 밖(J4)."""
         n = 0
         for i, w in enumerate(d.get("wallet") or []):
             self.entry(acc, "로켓그로스", f"wallet:{w.get('walletEventId') or i}", f"월렛 {w.get('walletEventType')}",
-                       "확인 필요", won(w.get("amount")), json.dumps(w.get("settlementGroupKeys") or [], ensure_ascii=False),
+                       "대조용", won(w.get("amount")), json.dumps(w.get("settlementGroupKeys") or [], ensure_ascii=False),
                        d10(str(w.get("paymentDate") or "")[:8]), fid, f"wallet[{i}]")
             n += 1
         for ym, blk in sorted((d.get("favorable") or {}).items()):
             for i, r in enumerate((blk or {}).get("rows") or []):
-                self.entry(acc, "윙", f"favorable:{ym}", "우대수수료 환급", "확인 필요", won(r.get("refundAmount")),
+                self.entry(acc, "윙", f"favorable:{ym}", "우대수수료 환급", "별도 입금", won(r.get("refundAmount")),
                            nid(r.get("orderId")), d10(r.get("realTransferDateStr")), fid, f"favorable.{ym}[{i}]")
                 n += 1
         return n

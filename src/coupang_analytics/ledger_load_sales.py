@@ -4,7 +4,9 @@
 - 판매분석 일별 = 옵션×결제일(판매 0 인 옵션 줄 = 뺀 줄 이유 '판매 0 옵션'). 사본은 옛 한 파일 `{계정ID}.json`,
   지금 코드는 `{계정ID}/{YYYY-MM}.json`(D-243) — 둘 다 읽는다.
 - 주문별매출 = 윙 구매확정일 기준 달 파일 · 상품+배송비가 한 줄(apAmount = productGmv + deliveryGmv − sfcAmount − trAmountIncVat).
-- 월자료의 다른 파일은 대조표 판정대로 '생략' 또는 '확인 필요'(J4 전 미반영)로 이름만 남긴다.
+- 라이브정산 상세 = 줄마다 수수료 `amount`(VAT 별도 · 상세 `totalAmount` 는 빈 칸) → product_cost. 요약[] = 생략(중복):
+  수수료 = 상세 amount 합 · 합계(VAT 포함) = 지급내역 `totalCoupangLiveDeductionAmount`(계정 내역 · J4 실측 32파일 전부).
+- 월자료의 다른 파일은 대조표 판정(J4 포함)대로 '생략'으로 이름만 남긴다 · 판정 근거 = 판정/J4_판정.json.
 """
 from __future__ import annotations
 
@@ -17,8 +19,9 @@ from pathlib import Path
 from .ledger_src import Registry, account_id, d10, nid, won
 
 RAW = re.compile(r"^(?P<acc>.+?)_(?P<kind>vendor_inventory|sales|inventory)_p\d+\.json\.gz$")
-MONTH_FILES = {"주문별매출": "반영", "라이브정산": "반영", "매입세금계산서": "확인 필요", "윙부가세상세": "생략",
+MONTH_FILES = {"주문별매출": "반영", "라이브정산": "반영", "매입세금계산서": "생략", "윙부가세상세": "생략",
                "RG부가세상세": "생략", "위수탁세금계산서": "생략", "RG재고변동": "생략", "RG반품내역": "생략"}
+MONTH_NOTES = {"매입세금계산서": "J4 생략(중복·증빙) — 서비스 항목마다 금액 원천(판매수수료·비용 리포트·광고·밀크런·지급내역 칸)이 따로 있음"}
 _OL = ("INSERT INTO order_line(account_id, sale_type, order_no, item_key, txn_type, seq, option_id, product_id, inventory_id, "
        "recognized, paid_date, cycle_end, qty, gross, sales, coupon, fee, settle, src, file_id, sheet, src_row) "
        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
@@ -82,7 +85,7 @@ class SalesLoader:
                 kind = re.split(r"_\d{6}|_최신", p.stem)[0]
                 status = MONTH_FILES.get(kind, "생략")
                 if status != "반영":
-                    note = "확인 필요(J4) — 판정 전 미반영" if status == "확인 필요" else "대조표 7-5절 생략"
+                    note = MONTH_NOTES.get(kind, "대조표 7-5절 생략")
                     self.reg.add(p, f"월자료 {kind}", acc, status=status, note=note)
                     continue
                 fid = self.reg.add(p, f"월자료 {kind}", acc)
@@ -117,11 +120,11 @@ class SalesLoader:
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (acc, "라이브 수수료", f"{nid(r.get('orderId'))}|{nid(r.get('vendorItemId'))}|{r.get('orderOrCancel')}",
                  nid(r.get("vendorItemId")), "", nid(r.get("orderId")), str(r.get("orderOrCancel") or ""),
-                 d10(r.get("calculationDate")), "", "", -won(r.get("totalAmount")), -1, "라이브정산",
+                 d10(r.get("calculationDate")), "", "", -won(r.get("amount")), -1, "라이브정산",
                  d10(r.get("calculationDate")), fid, "상세", i))
         n_sum = len(j.get("요약") or [])
         if n_sum:
-            self.reg.skip(fid, "요약[] — 확인 필요(J4)", n_sum)
+            self.reg.skip(fid, "요약[] — 생략(중복 J4: 수수료 = 상세 amount 합 · 합계(VAT 포함) = 지급내역 라이브 공제 칸)", n_sum)
         self.reg.done(fid, len(det) + n_sum, len(det))
 
     # ── 옵션 짝 원천(_raw · 재고현황_일별) ──
@@ -193,7 +196,7 @@ def load(con: sqlite3.Connection, reg: Registry, output: Path) -> None:
     s.monthly(output / "정산" / "검증자료" / "월자료")
     s.raw(output / "_raw")
     s.snapshots(output / "재고현황_일별")
-    for sub, kind, note in (("판매분석_기간", "판매분석 기간", "확인 필요(J4) — 판정 전 미반영"),
+    for sub, kind, note in (("판매분석_기간", "판매분석 기간", "J4 생략(중복) — 기간×옵션 = 같은 기간 일별 합(29,683/29,684 · 1건 = 최근 주 수집 시점 차)"),
                             ("쿠폰목록_일별", "쿠폰목록 날짜별", "대조표 7-7절 생략(불필요)")):
         for p in sorted((output / sub).rglob("*")) if (output / sub).is_dir() else []:
             if p.is_file():
