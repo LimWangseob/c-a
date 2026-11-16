@@ -435,7 +435,9 @@ def test_cost_only_scope() -> None:
              SF.CostLine(acct, "2026-09", SF.MULTI_PRODUCT, "", "", "반출 배송 서비스비", 1000, 100),
              # 옵션ID 없이 등록상품ID 만 있는 비용 줄(R191 시뮬레이션 B8 — seankim137 16377117417 반출 배송 서비스비 2,420원이 짝 없이 빠짐)
              SF.CostLine(acct, "2026-09", "16600000000", "", "반출비만 상품", "반출 배송 서비스비", 2200, 220),
-             SF.CostLine(acct, "2026-10", "", "95700000009", "", SF.COMPENSATION, 300)]            # 상품 못 찾은 보상(tellace83 13,474원 꼴)
+             SF.CostLine(acct, "2026-10", "", "95700000009", "", SF.COMPENSATION, 300),            # 상품 못 찾은 보상(tellace83 13,474원 꼴)
+             # 비용 줄도 있고 정산 파일 주문 줄(판매)도 있는 상품 — 상품조회·판매분석에는 없음(T-53 · R192 시뮬레이션 B8 ④-2 ski1121·Difpick 꼴)
+             SF.CostLine(acct, "2026-09", "16700000000", "95700000010", "판매도 있는 상품", "보관비", 100, 10)]
     res = SS.aggregate([], lines)
     with tempfile.TemporaryDirectory() as d:
         p = SS.write_stats(Path(d) / "정산집계_new.xlsx", res)
@@ -447,7 +449,8 @@ def test_cost_only_scope() -> None:
                                "95700000001": ("16377117417", "빔프로젝터거치대 LN167"), "95700000002": ("16400000000", "판정표 관리 상품"),
                                "95700000003": ("16500000000", "상품조회에 있는 상품"),
                                SRC.no_option_key("16600000000"): ("16600000000", "반출비만 상품"),
-                               "95700000009": ("옵션 95700000009", "")}}, opts   # 묶음 줄(여러 상품) 짝 없음
+                               "95700000009": ("옵션 95700000009", ""),
+                               "95700000010": ("16700000000", "판매도 있는 상품")}}, opts   # 묶음 줄(여러 상품) 짝 없음
         empty = SS.write_stats(Path(d) / "정산집계_0.xlsx", SS.aggregate([], []))     # 비용 없어도 머리 줄만 있는 시트
         wb = openpyxl.load_workbook(empty, read_only=True)
         assert SRC.COST_OPTIONS in wb.sheetnames and SRC.cost_options(wb) == {}, wb.sheetnames
@@ -464,26 +467,37 @@ def test_cost_only_scope() -> None:
     # ③ 관리 VID 옵션의 등록상품 = 관리(판매 줄 짝 opt2pid 는 그대로)
     ledger = {"d1": {"95609464754", "95322412626"}}
     rg = {"d1": {"vids": {"95273555059"}, "got": [("16157622592", "전동물총", "되찾기")], "excl": [], "check": []}}
-    files = {"d1": [SimpleNamespace(rows=[SimpleNamespace(option_id="95322412626", product_id="16142251017"),
-                                          SimpleNamespace(option_id="95111", product_id="8758835645")])]}
+    files = {"d1": [SimpleNamespace(channel="로켓그로스", rows=[SimpleNamespace(option_id="95322412626", product_id="16142251017", product_name="관리 상품"),
+                                          SimpleNamespace(option_id="95111", product_id="8758835645", product_name="판매만 상품"),
+                                          # 판매 + 같은 달 취소(합 0 · 정산집계 '상품별 월별' 주문 칸은 0) — 그래도 주문 줄이 있는 상품(T-53)
+                                          SimpleNamespace(option_id="95700000010", product_id="16700000000", product_name="비용+판매 상품"),
+                                          SimpleNamespace(option_id="95700000010", product_id="16700000000", product_name="")])]}
     rk = {"16400000000": ("옛 대장", "관리", "옛 대장 3행", "판정표 관리 상품")}
     inv = {"d1": {"16142251017": _inv("2026-04-08", v95322412626="RFM"), "16500000000": _inv("2026-08-01", v95700000003="RFM")}}
     ctx = SimpleNamespace(ledger=ledger, listings={}, rg=rg, settle_only={}, settle_only_err="", files=files, contracts={},
                           daily={}, periods={}, ranked={"d1": rk}, src_vids={}, cost_opts=opts, inv=inv)
     acc = AC.AccountBase(ctx, acct)
     acc._scope()
-    assert acc.opt2pid == {"95322412626": "16142251017", "95111": "8758835645"}, acc.opt2pid
+    assert acc.opt2pid == {"95322412626": "16142251017", "95111": "8758835645", "95700000010": "16700000000"}, acc.opt2pid
     assert acc.mpids == {"16142251017", "16258713629", "16157622592", "16400000000"}, acc.mpids
     # ⑤ 판정 전(출처판정·되찾기에 없음 · 상품조회·판매분석에 없음) = '관리 상품 확인 필요'(금액 밖) — 16500000000 은 상품조회 경로
     chk = {p: (n, w) for p, n, w in acc.scope_check}
     assert set(chk) == {"16377117417", "16600000000", "옵션 95700000009"} and chk["16377117417"][0] == "빔프로젝터거치대 LN167", acc.scope_check
     assert chk["16600000000"][0] == "반출비만 상품", chk                          # 옵션ID 없는 비용 줄도 조용히 빠지지 않음
     assert "비용만" in chk["16377117417"][1] and "금액 밖" in chk["16377117417"][1], chk
-    # ④ 출처 AI 판정 대상 = 상품조회 + 판매분석 + 비용만 있는 등록상품(관리 VID 옵션 상품은 뺌)
+    # ④ 출처 AI 판정 대상 = 상품조회 + 판매분석 + 비용만 있는 등록상품(관리 VID 옵션 상품은 뺌 · 정산 파일 주문 줄에 나온 상품은 뺌 =
+    #    정산서 seen 의 opt2pid 값과 같은 기준 · T-53) — 16700000000 = 비용 줄 + 주문 줄 → '비용만' 아님
+    assert "16700000000" not in chk, chk
     vids = ledger["d1"] | rg["d1"]["vids"]
-    tg = J.targets("d1", inv, {}, lambda v: v in vids, {}, opts["d1"])
+    from coupang_analytics import settlement_statement_scope as SCOPE
+    sold = SCOPE.sold_products(files["d1"])                                     # prepare 가 쓰는 판매 줄 상품 = 정산서 seen 의 판매 줄 몫
+    assert set(sold) == set(acc.opt2pid.values()) == {"16142251017", "8758835645", "16700000000"}, sold
+    tg = J.targets("d1", inv, {}, lambda v: v in vids, {}, opts["d1"], sold)
     got = {t["등록상품ID"]: t for t in tg}
-    assert set(got) == {"16377117417", "16400000000", "16500000000", "16600000000", "옵션 95700000009"}, got
+    # 판매 줄은 있는데 상품조회·판매분석에 없는 상품도 판정 대상(관리 VID 옵션 상품 16142251017 은 뺌 · 소유자 2026-11-16 D-256)
+    assert set(got) == {"16377117417", "16400000000", "16500000000", "16600000000", "옵션 95700000009", "8758835645", "16700000000"}, got
+    assert got["16700000000"] == {"등록상품ID": "16700000000", "상품명": "비용+판매 상품", "노출명": [], "등록일": "",
+                                  "판매방식": ["RFM"]}, got["16700000000"]
     assert got["16600000000"]["노출명"] == [] and got["16600000000"]["상품명"] == "반출비만 상품", got["16600000000"]
     assert got["16377117417"] == {"등록상품ID": "16377117417", "상품명": "빔프로젝터거치대 LN167", "노출명": [], "등록일": "",
                                   "판매방식": ["RFM"]}, got["16377117417"]

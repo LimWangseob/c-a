@@ -89,17 +89,20 @@ def _write_stage_file(m: dict, days: dict, out_dir) -> None:
         pass
 
 
-def write_run_stage(stage: str, out_dir: str | Path = "output", day: str | None = None) -> None:
+def write_run_stage(stage: str, out_dir: str | Path = "output", day: str | None = None,
+                    record_day: bool = True) -> None:
     """전체실행/무인의 진행 단계를 오늘 날짜로 기록(재부팅 복구용).
 
     stage: 'sales'=①판매수집 완료(다음=②) · 'ranks'=②키워드 완료(다음=③) · 'done'=전부 완료.
     ②③은 마스터에 직접 쓰고 진행중 파일을 안 남기므로, 이 마커로 어디까지 했는지 남긴다.
     맨 위 date·stage·at = 지금 시각 기준(재부팅 복구·정산이 읽음 · 그대로) · days[day] = 실행 날짜별 마지막 단계
     (day = 실행 시작일 · 자정 넘어 끝나도 그 실행 날짜 · 최근 며칠 못 끝낸 ③ 보충용 T-47).
+    record_day=False = 맨 위만 갱신·days 는 그대로(날짜 지정 실행 — 그날 정기 ③ 미완료가 다음 날 보충에 남게 T-54).
     """
     now = datetime.now()
     days = run_days(_read_stage_file(out_dir))
-    days[day or now.strftime("%Y-%m-%d")] = stage
+    if record_day:
+        days[day or now.strftime("%Y-%m-%d")] = stage
     _write_stage_file({"date": now.strftime("%Y-%m-%d"), "stage": stage, "at": now.isoformat(timespec="seconds")},
                       days, out_dir)
 

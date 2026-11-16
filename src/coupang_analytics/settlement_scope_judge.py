@@ -155,10 +155,12 @@ def _dates(h: dict, rows: list) -> dict:
 
 
 # ── 판정대상 ──
-def targets(aid: str, inv_all: dict, groups: dict, is_mv, vname: dict, costs: dict) -> list:
+def targets(aid: str, inv_all: dict, groups: dict, is_mv, vname: dict, costs: dict, sold: dict) -> list:
     """쿠팡 등록 상품(상품조회 + 판매분석 + 판매 없이 비용만 있는 상품) 중 1순위(대장 VID·같은 상품명)에 없는 것 — 판매 방식 안 가림
     (③ 계약서 = D-231). 상품명 = 등록명 · 노출명 = 판매 기록의 고객용 제목(VID 별 · vname = settlement_statement_scope.vid_names).
-    costs = 정산집계 '옵션별 등록상품'의 이 계정 짝 {옵션ID: (등록상품ID, 상품명)} — 비용 리포트는 로켓그로스(D-244 ④)."""
+    costs = 정산집계 '옵션별 등록상품'의 이 계정 짝 {옵션ID: (등록상품ID, 상품명)} — 비용 리포트는 로켓그로스(D-244 ④) ·
+    sold = 이 계정 정산 파일 주문 줄의 등록상품 {등록상품ID: (상품명, 옵션ID 집합, 로켓그로스 여부)}(settlement_statement_scope.sold_products) —
+    '비용만'에서 뺌(정산서 seen 과 같은 기준 · T-53) · 상품조회·판매분석에 없고 관리 VID 옵션도 없으면 판정 대상(관리 상품일 수 있음 · D-256)."""
     out = {}
     for pid, e in (inv_all.get(aid) or {}).items():
         if not any(is_mv(v) for v in e["types"]):
@@ -168,7 +170,11 @@ def targets(aid: str, inv_all: dict, groups: dict, is_mv, vname: dict, costs: di
         if g not in out and g not in (inv_all.get(aid) or {}) and not any(is_mv(v) for v in e["vids"]):
             out[g] = {"등록상품ID": g, "상품명": e["name"], "노출명": sorted({vname[v] for v in e["vids"] if vname.get(v)}),
                       "등록일": "", "판매방식": ["RFM"] if e["rg"] else ["NORMAL"]}
-    for pid, (name, opts) in SCOPE.cost_only(costs, inv_all.get(aid) or {}, groups).items():
+    for pid, (name, opts, rg) in sorted(sold.items()):       # 판매 줄은 있는데 상품조회·판매분석에 없는 상품(소유자 2026-11-16 · D-256)
+        if pid not in out and pid not in (inv_all.get(aid) or {}) and pid not in groups and not any(is_mv(v) for v in opts):
+            out[pid] = {"등록상품ID": pid, "상품명": name, "노출명": sorted({vname[v] for v in opts if vname.get(v)}),
+                        "등록일": "", "판매방식": ["RFM"] if rg else ["NORMAL"]}
+    for pid, (name, opts) in SCOPE.cost_only(costs, inv_all.get(aid) or {}, groups, sold).items():
         if not any(is_mv(v) for v in opts):
             out[pid] = {"등록상품ID": pid, "상품명": name, "노출명": sorted({vname[v] for v in opts if vname.get(v)}),
                         "등록일": "", "판매방식": ["RFM"]}

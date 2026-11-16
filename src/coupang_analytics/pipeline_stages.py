@@ -62,7 +62,7 @@ def _retry_blank_ranks(ranks: dict, log, should_stop, result):
     return result
 
 
-_CATCHUP_DAYS = 7   # 보충 범위 = 오늘 앞 7일(T-47 · Claude 제안 '7일' — 소유자가 다른 값을 말하면 그 값 · D-248)
+_CATCHUP_DAYS = 3   # 보충 범위 = 오늘 앞 3일(소유자 2026-11-16 T-52 답 '3일' · 처음 = Claude 제안 7일 T-47 · D-248·D-253)
 
 
 def _missed_rank_days(marker: dict | None, today: date) -> list[str]:
@@ -77,7 +77,7 @@ def _catch_up_missed_ranks(missed: list[str], ranks: dict, log, should_stop, res
     """오늘 ③·재고 역기록이 끝난 뒤 못 끝낸 지난 날 칸마다 ③ 을 1회(T-20 재발 방지 (가) 소유자 2026-11-12 · 여러 날 T-47).
 
     11-11 실측: ② 오류로 ③ 이 안 돌았고, 다음 날 재부팅 복구는 오늘 시작분만 이어받아(D-032) 그 칸이 빈 채로 남음.
-    output (37): 이틀 연속 ③ 이 07:00 에 끊겨 앞날(11.13)이 보충 대상에서 빠짐 → 7일 안 못 끝낸 날 전부.
+    output (37): 이틀 연속 ③ 이 07:00 에 끊겨 앞날(11.13)이 보충 대상에서 빠짐 → 보충 범위(_CATCHUP_DAYS) 안 못 끝낸 날 전부.
     채운 칸은 ③ 이 건너뛰므로 빈 칸만 검색된다. 빈 칸 0 이면 그날 'done'. 종합의 ③ 측정 값은 오늘 실행 값을 유지하고
     보충 칸별 결과는 LAST_RANK['catchup'](빈 칸은 종합 판정·한 줄 요약에 더함)."""
     today_rank, done = dict(LAST_RANK), []
@@ -123,13 +123,13 @@ def run_stages(input_list, plan: StagePlan, *, ai_key, naver, date_from: str, da
                               stock_url=stock_url, designated=designated)
             if not (plan.keywords or plan.ranks):   # ① 단독 실행 → 판매데이터만 채우고 끝(단계 기록 안 함)
                 return result
-            write_run_stage("sales", day=run_day.isoformat())
+            write_run_stage("sales", day=run_day.isoformat(), record_day=not designated)
         if plan.keywords and not should_stop():  # ② 키워드 선정 — 노출측정 없이 AI 선정(동결분 유지·로그인 불필요)
             log.enter(KEYWORDS)
             log("[단계] ② 키워드 선정 — 노출측정 없이 AI 선정(동결분 유지)")
             select_keywords_stage(naver, ai_key, grow=grow, on_log=log, gsheet_output_url=gsheet_output_url,
                                   stock_url=stock_url)
-            write_run_stage("ranks", day=run_day.isoformat())
+            write_run_stage("ranks", day=run_day.isoformat(), record_day=not designated)
         if plan.ranks and not should_stop():     # ③ 반자동 순위 — 보이는 창 자동 타이핑(차단 시 쿨다운-재개)
             ranks = dict(should_stop=should_stop, on_log=log, gsheet_output_url=gsheet_output_url,
                          stock_url=stock_url, date_label=rank_date_label, run_date=run_day)
@@ -144,7 +144,7 @@ def run_stages(input_list, plan: StagePlan, *, ai_key, naver, date_from: str, da
             result = _retry_blank_ranks(ranks, log, should_stop, result)
             result = _catch_up_missed_ranks(missed, ranks, log, should_stop, result)
             if not should_stop():
-                write_run_stage("done", day=run_day.isoformat())
+                write_run_stage("done", day=run_day.isoformat(), record_day=not designated)
         return result
 
 

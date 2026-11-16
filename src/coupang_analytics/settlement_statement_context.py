@@ -100,15 +100,22 @@ def unjudged(p: Path, svc_judge: dict) -> set:
     return out
 
 
+def settle_files(base: Path) -> list:
+    """[(경로, 정산 파일)] — output/정산/파일 의 정산 파일(경로 순). 정산서와 출처 판정 준비(prepare)가 같은 목록(T-53)."""
+    out = []
+    for p in sorted((base / "파일").glob("*.xlsx")):
+        try:
+            out.append((p, SF.load_settle_file(p)))
+        except Exception:  # noqa: BLE001 — 읽는 방법 없는 리포트는 옵션↔상품 대응에 필요 없음
+            continue
+    return out
+
+
 def _settle_files(base: Path, svc_judge: dict) -> tuple[dict, dict]:
     """(계정ID → 정산 파일 목록, 계정ID → 판정표에 없는 가전 요율 등록상품)."""
     files: dict = defaultdict(list)
     unj: dict = defaultdict(set)
-    for p in sorted((base / "파일").glob("*.xlsx")):
-        try:
-            f = SF.load_settle_file(p)
-        except Exception:  # noqa: BLE001 — 읽는 방법 없는 리포트는 옵션↔상품 대응에 필요 없음
-            continue
+    for p, f in settle_files(base):
         files[SRC.aid_of(f.account)].append(f)
         if f.channel == SF.CH_WING:
             unj[SRC.aid_of(f.account)] |= unjudged(p, svc_judge)

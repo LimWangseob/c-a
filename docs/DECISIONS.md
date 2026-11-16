@@ -1944,7 +1944,7 @@ un_log_*.log`)로 확인 필요.
 - 근거: T-42 보고 `output\_분석_261115_T42_관리밖출처\보고.md`(dalbong1849 16258713629 보관비 8,235 · ljung0622 TTGW02 반출비 183,480 빠짐 · 원인 = 관리 상품ID 를 주문 줄 짝에서만 만듦 `settlement_statement_account.py:195~196`) · 비용 리포트 1,812개 직접 읽기 634.8초 실측(정산서마다 읽기 불가) · 짝 확인 95609464754→16258713629 · 95273555059→16157622592.
 - 버린 대안: 판정표 줄만 추가(원인 남음) · 정산서마다 비용 리포트 직접 읽기(11분) · 옛 집계일 때 다른 방법으로 대신(폴백).
 - 영향 범위: 정산 코드만(D-233) — `settlement_stats`·`settlement_statement_source`·`settlement_statement_account`·`settlement_scope_judge`·`tools/settlement_scope_judge.py` · T-38 S2 숫자 모듈도 같은 규칙.
-- 상태: ACTIVE (구현 R185 ㉠ 5cacda6 · master 병합 R191 · 정산집계를 새로 만든 뒤부터 적용 · ⑤ 보완 D-252)
+- 상태: ACTIVE (구현 R185 ㉠ 5cacda6 · master 병합 R191 · 정산집계를 새로 만든 뒤부터 적용 · ⑤ 보완 D-252 · ④ 보완 D-255)
 
 ### D-245 [SETTLE_FAIL_ISOLATION] 정산 받기 — 한 달·한 곳 실패가 나머지를 막지 않음(월자료 실패 달 건너뛰기 · 밀크런/광고센터 분리) · 주문별 매출 실패 근거 파일 (2026-11-15, R185)
 - 결정(소유자 2026-11-15 — 통제 세션 대화 원문 "1·2·3 모두 추천대로 진행해줘" · "오류부분도 수정해야 됨" · T-46 결함 목록 = output (37) 보고 B 7절): ① 월자료 한 종류의 한 달이 실패하면 그 달은 **그 회차 동안 다시 부르지 않고** 더 옛 달로 넘어감(회차 예산 = 받은 달 3개 그대로 · 실패 달은 다음 회차에 1번 더) ② 광고 받기 = 밀크런(윙 주소)과 광고센터(광고정산·매출성장광고)를 **따로** 세고 따로 실패 — 광고센터 500 이어도 밀크런은 최근부터 2달씩 · 실패 사유는 처리기록 '광고비' 실패 줄 · '남은 달' = 실행 뒤 다 받지 못한 달 수 ③ 주문별 매출 실패 때 `검증자료\월자료\{계정}\_실패_주문별매출_YYYYMM.json`(쪽별 줄 수·원본 건수·커서 빈칸 여부·응답 칸 이름 + 같은 키 줄 전부 · 고객 이름 칸 없음) — T-2 재현용 근거. ①②의 세부(회차 기억 = 실행 중 메모리 · 2달·3달 예산 유지)는 Claude 구현값.
@@ -1973,7 +1973,7 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 결과 워크북의 빈 칸으로 날짜 고르기(뒤에 더한 키워드의 옛 날 빈 칸까지 검색 — 11.12 4칸·11.10 31칸 · ③ 이 이미 12시간) · 범위 제한 없음(밤 시간 안에 못 끝남) · 오래된 날부터(최근 순위가 더 쓸모 있음 · 오래된 날은 7일 지나면 빠짐 — Claude 판단).
 - 남는 영향(Claude 판단·소유자 지시 아님): 배포 직후 옛 파일엔 마지막 하루(11-14)만 있어 11.13·11.11 은 자동 보충 안 됨(사람이 '날짜 지정' T-20) · 보충 날이 많을수록 실행 시간·IP 사용 늘어남(③ 한 번 11.6~12.4시간 — 07:00 에 끊기면 남은 날은 다음 실행).
 - 영향 범위: `src/coupang_analytics/pipeline_paths.py`(`write_run_stage` day·`run_days`·`mark_run_day`) · `pipeline_stages.py`(`_CATCHUP_DAYS`·`_missed_rank_days`·`_catch_up_missed_ranks`·`run_stages`) · `run_result.py`(`_rank_line`·`_unfilled_all`) · `tools/pin_run_plan.py` P14·P15. HQ 포팅 대상.
-- 상태: ACTIVE
+- 상태: ACTIVE (부분 SUPERSEDED by D-253 — 보충 범위 7일 → 3일 · 날짜 지정 실행의 날짜별 기록 = D-254)
 
 ### D-249 [RANK_DEAD_IP_DENIED] ③ '검색창 없음'(IP 불량 D-090) 화면이 쿠팡 접근차단 화면(Access Denied·사용권한 등)이면 차단으로 기록 — 그 IP 차단 목록 등록·차단 감지 수 · 흐름·검색 간격은 그대로 (2026-11-15, R185)
 - 결정(통제 세션이 전한 소유자 승인 2026-11-15 "오류부분도 수정해야 됨" — T-47 4번 · '검색 간격·IP 정책 D-053·D-090 은 바꾸지 말 것'): 검색창이 없을 때 창의 화면에 차단 판정 단어(`_BLOCK_PAGE_MARKERS`)가 있으면 차단 — 증거 판정 단어 '검색창 없음·{단어}' · 차단 감지 수에 셈(IP 불량 수에서 뺌) · drive_rank 가 그 egress 를 차단 목록(`proxy_blocklist` · 사유 'Akamai 접근차단(검색창 없음 화면)')에 남김. 바로 새 IP·못 잰 키워드 미룸·성공 없이 15번 연속이면 마침(D-090)은 그대로. 차단 단어 없는 검색창 없음 화면은 D-090 그대로(목록에 안 남김).
@@ -2004,4 +2004,33 @@ un_log_*.log`)로 확인 필요.
 - 근거(실측 · `D:\coupang-analytics\output\_배포검증\R191_261115\시뮬레이션\보고_B_정산.md` B8 ④-1): `settlement_stats._add_costs` 가 `c.option_id` 있을 때만 짝을 남김 → seankim137 16377117417 빔프로젝터거치대(반출 배송 서비스비 2,420원 · T-42 '관리 맞음')가 관리·확인 필요·판정 대상 어디에도 없음 · T-42 후보 152개 중 15개 · 관리 시작 뒤 15,894원(seankim137 2,420 + tellace83 13,474 보상 줄). 재현 = 수정 전 `aggregate` 짝 0개(집계 금액 2,420 은 있음) · 시험 `test_cost_only_scope` 두 경우 추가 → 수정 뒤 통과. 11-03 자료 28곳 다시 실행(`결과\b9_결함1수정_재실행2.log` · `b8_compare.json` ↔ `b8_compare_수정전.json`): 금액 차이 0 · 바뀐 것 = '관리 상품 확인 필요' 시트(seankim137 +1 · ljung0622 +3 · tellace83 +4줄) · 옵션별 등록상품 1,724→1,889줄 · seankim137 판정 요청에 16377117417 들어감.
 - 버린 대안: 옵션ID 칸에 등록상품ID 를 넣음(VID 와 섞임) · 빈 옵션ID 하나로 읽음(한 계정 여러 상품이 한 키로 겹침) · 상품 못 찾은 보상 줄은 그대로 둠(13,474원이 조용히 빠짐 — 오류 정의).
 - 영향 범위: 정산 코드만(D-233) — `settlement_stats._add_costs` · `settlement_statement_source.cost_options`·`no_option_key` · 시험 `tools/verify_settlement_statements_offline.py` `test_cost_only_scope`. 정산집계를 새로 만든 뒤부터 적용(D-244 와 같음).
+- 상태: ACTIVE
+
+### D-253 [RANK_CATCHUP_3DAYS] 지난 칸 ③ 보충 범위 = 오늘 앞 3일(D-248 의 '7일' 대체) (2026-11-16, R193)
+- 결정(소유자 2026-11-16 — 통제 세션 질문 'T-52 ① 순위가 끊긴 지난 날을 다시 채우는 범위를 몇 일로 할까요?'에 "3일" 선택 · 앞 요청 원문 "수정해줘"): `pipeline_stages._CATCHUP_DAYS` = 3 — 오늘 앞 3일 안에서 ③ 을 못 끝낸 날만 자동 보충(최근 날부터 · 그 밖은 사람이 '날짜 지정' T-20). 같은 질문의 ② output 보관 이동 기준(D-243 ② Claude 구현값)은 "지금 기준 유지 (추천)" — 그대로.
+- 근거: D-248 의 7일 = Claude 제안(소유자 원문 아님 · STATE T-52) · 보충 날이 많을수록 밤 실행 시간·IP 사용 늘어남(③ 한 번 11.6~12.4시간 · D-248 남는 영향). 시험 `tools/pin_run_plan.py` P14 = 범위 상수 기준(끝 날 포함 · 하루 더 앞 제외)으로 고침 → 통과.
+- 버린 대안: 7일 유지(소유자가 바꿈) · 14일.
+- 영향 범위: `src/coupang_analytics/pipeline_stages.py`(`_CATCHUP_DAYS`) · `tools/pin_run_plan.py` P14. HQ 포팅 대상.
+- 상태: ACTIVE
+
+### D-254 [RANK_DESIGNATED_KEEPS_DAY] 날짜 지정 실행은 오늘 날짜별 단계 기록(days[오늘])을 바꾸지 않음 — 그날 정기 ③ 미완료가 다음 실행 보충에 남게 (2026-11-16, R193)
+- 결정(소유자 2026-11-16 원문 "수정해줘" — STATE T-54 를 가리킴): 날짜 지정 전체실행(`designated=True`)의 단계 기록은 맨 위 `date`·`stage`·`at` 만 지금처럼 갱신하고 `days[오늘]` 은 그대로 둔다(`write_run_stage(record_day=False)`). 정기·무인 실행은 그대로. 날짜 지정 실행이 고친 그 날 칸을 'done' 으로 표시하는 확장은 안 함(범위 밖 · Claude 판단).
+- 근거(실측 · `D:\coupang-analytics\output\_배포검증\R191_261115\시뮬레이션\보고_A_앱_내보내기.md` A5): 정기 ③ 이 끊겨 오늘이 'sales' 로 남은 날 같은 날 날짜 지정 실행이 끝나면 days[오늘]='done' → 다음 날 D-248 보충에서 빠짐(옛 코드도 같음 · D-248 에 정의 없음). 재현 시험 P16(수정 전 `{'2026-11-16': 'done'}` 로 실패 → 수정 뒤 'sales' 유지 · 다음 날 보충 대상 = [오늘] · 정기 대조 = 'done'). 맨 위 값 = 정산 watch(`settlement_watch.read_marker` — 전체실행 뒤 ① 완료 신호 `ui/app_qt.py` start_settlement_watch since)·재부팅 복구(`read_run_stage`)가 읽으므로 유지.
+- 버린 대안: 날짜 지정 실행이 단계 기록을 아예 안 씀(정산 watch 가 ① 완료를 못 봄) · 지정 날짜 칸을 'done' 표시(이번 범위 밖).
+- 영향 범위: `src/coupang_analytics/pipeline_paths.py`(`write_run_stage` record_day) · `pipeline_stages.py`(`run_stages` 3곳) · `tools/pin_run_plan.py` P16. HQ 포팅 대상.
+- 상태: ACTIVE
+
+### D-255 [SCOPE_COST_ONLY_SOLD_EXCLUDED] prepare '비용만' 판정 대상 = 정산서와 같은 기준 — 정산 파일 주문 줄에 나온 등록상품은 뺌 · prepare `--settle-dir` 필수 (2026-11-16, R193)
+- 결정(소유자 2026-11-16 원문 "수정해줘" — STATE T-53 을 가리킴): `settlement_scope_judge.targets` 의 '비용만' 대상(`settlement_statement_scope.cost_only`)이 정산 파일 주문 줄(옵션ID·등록상품ID 있는 줄)에 나온 등록상품을 뺀다 — 정산서 `_scope` 의 opt2pid 와 같은 함수(`option_products`)·같은 파일 목록(`settlement_statement_context.settle_files`). prepare(`tools/settlement_scope_judge.py`)는 `--settle-dir`(output\정산) 필수 · `파일\` 폴더 없으면 ❌ 시작 전 중단(폴백 없음). 정산집계 '상품별 월별' 칸으로 대신하는 방식은 버림(Claude 판단 · 아래 근거).
+- 근거(실측 · `D:\coupang-analytics\output\_배포검증\R191_261115\시뮬레이션\보고_B_정산.md` B8 ④-2): 고치기 전 prepare 판정 대상이 옛 코드보다 740개 많고 그중 579개가 판매 있음(ski1121·Difpick 등) · 재현 = `test_cost_only_scope` 에 '비용 줄 + 주문 줄(판매·같은 달 취소)' 상품 → 수정 전 실패 · 수정 뒤 통과 · prepare 쪽 sold = 정산서 opt2pid 같은 집합 시험. 11-03 자료(`…\시뮬레이션\결과\b8_judge_targets_T53후.json`): 판정 대상 10,459 → 9,880(579 빠짐 · 판매 없는 상품 잘못 뺀 것 0) · seankim137 16377117417·tellace83 '옵션 …' 4개·ljung0622 16157622592 그대로 남음. 정산집계 칸 방식 = 같은 달 판매 뒤 취소(합 0) 줄 때문에 정산서 기준과 744개 중 34개 어긋남(`scratchpad\t53\measure_t53.json`). 정산 파일 1,323개 읽기 약 156초 더 걸림.
+- 버린 대안: 정산집계 '상품별 월별' 주문 칸 0 아닌 줄(취소 합 0 상품을 놓침) · 그대로 둠(AI 판정 부담·'비용만' 이름표 틀림).
+- 남는 일(사실 · 소유자 판단 필요 → STATE T-55): 빠진 579개 = 판매 줄은 있지만 상품조회·판매분석에 없는 상품 — D-244 전처럼 출처 AI 판정을 받지 않고, 정산서에서도 대장 VID·같은 상품명·판정표 '관리'가 아니면 관리 밖(표시 없음 · 예전부터의 동작) · 위탁 계정 gbseller808 29·hk66597582 18·tellace83 23·ljung0622 16 등 포함.
+- 영향 범위: 정산 코드만(D-233) — `settlement_statement_scope`(`option_products`·`cost_only` sold) · `settlement_statement_account`(opt2pid 같은 식으로 바꿈) · `settlement_statement_context`(`settle_files`) · `settlement_scope_judge.targets` · `tools/settlement_scope_judge.py`(`--settle-dir`·`_sold`) · 시험 `test_cost_only_scope`.
+- 상태: ACTIVE
+
+### D-256 [SCOPE_SOLD_UNLISTED_JUDGED] 판매 줄은 있는데 상품조회·판매분석에 없는 상품도 출처 AI 판정 대상 (2026-11-16, R193)
+- 결정(소유자 2026-11-16 원문 — 통제 세션 안내 'T-53 수정으로 AI 판정 대상에서 빠진 상품 579개 · 판매 기록은 있지만 상품조회·판매분석에는 없는 상품'에 "관리 상품이면 이 상품들도 AI 판정 대상에 올려줘"): prepare 판정 대상(`settlement_scope_judge.targets`)에 정산 파일 주문 줄에 나온 등록상품 중 상품조회·판매분석에 없고 관리 VID 옵션(대장 VID·같은 상품명·판정표 '관리')도 없는 것을 넣는다 — 상품명 = 정산 파일 줄 상품명 · 판매방식 = 로켓그로스 줄 있으면 RFM, 아니면 NORMAL · 등록일 빈 칸. '비용만' 이름(D-255)은 그대로(판매 줄 상품은 '비용만' 아님). 정산서 쪽 '관리 상품 확인 필요' 표시는 이번에 안 바꿈(판정표에 '관리'로 들어오면 관리 · Claude 판단 — 소유자 요청 범위 = 판정 대상).
+- 근거: D-255 실측(11-03 자료 579개 = 판매 줄 있음·상품조회·판매분석에 없음 · 위탁 계정 gbseller808 29·hk66597582 18·tellace83 23·ljung0622 16 포함) · 시험 `test_cost_only_scope`(판매만 상품 8758835645·비용+판매 상품 16700000000 = 판정 대상 · 관리 VID 옵션 상품 16142251017 = 뺌 · 수정 전 코드 = 둘 다 없음).
+- 버린 대안: 비용 줄 있는 판매 상품만(판매만 있는 상품이 같은 이유로 빠짐) · 정산서 '확인 필요' 표시까지(요청 밖 · 판정 대상이 늘어난 뒤 필요하면 따로).
+- 영향 범위: 정산 코드만(D-233) — `settlement_statement_scope.sold_products` · `settlement_scope_judge.targets`(sold = 상품별 이름·옵션·채널) · `tools/settlement_scope_judge.py` `_sold` · 시험 `test_cost_only_scope`.
 - 상태: ACTIVE

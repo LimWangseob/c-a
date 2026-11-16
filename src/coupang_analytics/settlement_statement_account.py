@@ -192,7 +192,7 @@ class AccountBase:
         self.known, self.cdate = aid in c.contracts, c.contracts.get(aid)     # D-185 — 계약 달 앞 판매 = 관리 상품 아님
         self.vid_name = SCOPE.vid_names((c.daily, c.periods), aid)
         self.files = c.files.get(aid, [])
-        self.opt2pid = {str(r.option_id): str(r.product_id) for f in self.files for r in f.rows if r.option_id and r.product_id}
+        self.opt2pid = SCOPE.option_products(self.files)   # 판매 줄 짝 — 출처 판정 준비(prepare)와 같은 함수(T-53)
         self.mpids = {pid for o, pid in self.opt2pid.items() if self.is_mv(o)} | {p for p, k in self.marks.items() if k == "관리"}
         costs = c.cost_opts.get(aid) or {}                 # 비용 리포트 짝 — 판매 없이 비용만 있는 상품도 옵션으로(D-244 ③)
         self.mpids |= {pid for o, (pid, _n) in costs.items() if self.is_mv(o)}

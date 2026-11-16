@@ -357,14 +357,15 @@ def pin_yesterday_rank_catchup():
 
 
 def pin_catchup_recent_days():
-    print("[핀 P14] 최근 7일 안 ③ 못 끝낸 날 전부 보충(최근부터) · 다 채운 날만 '완료' 표시 · 종합 빈 칸에 보충 칸 포함 · ③ 에 실행 날짜 (T-47)")
+    print(f"[핀 P14] 최근 {_st._CATCHUP_DAYS}일 안 ③ 못 끝낸 날 전부 보충(최근부터) · 다 채운 날만 '완료' 표시 · 종합 빈 칸에 보충 칸 포함 · ③ 에 실행 날짜 (T-47)")
     from datetime import date, timedelta
     t = date.today()
     d = lambda n: (t - timedelta(days=n)).isoformat()   # noqa: E731
+    n = _st._CATCHUP_DAYS                              # 범위 끝 날(n) 포함 · n+1 일 전 제외(소유자 3일 D-253)
     orig = _st.read_last_run_stage
     try:
         for extra in ({}, {"fail_day": d(1)}):
-            calls, marks, stop = _fake_result_stages(unfilled=(0, 0, 0, 3) if extra else (0,), searched=(5, 2, 1))
+            calls, marks, stop = _fake_result_stages(unfilled=(0, 0, 3) if extra else (0,), searched=(5, 2, 1))
             seen: list = []
             track = _st.track_ranks_stage
 
@@ -373,25 +374,25 @@ def pin_catchup_recent_days():
                 return track(**k)
             _st.track_ranks_stage = rec
             DAY_MARKS.clear()
-            hist = {"date": d(1), "stage": "ranks", "days": {d(1): "ranks", d(2): "done", d(3): "sales", d(7): "ranks",
-                                                          d(8): "ranks", t.isoformat(): "sales"}}
+            hist = {"date": d(1), "stage": "ranks", "days": {d(1): "ranks", d(2): "done", d(n): "sales",
+                                                          d(n + 1): "ranks", t.isoformat(): "sales"}}
             _st.read_last_run_stage = lambda: hist
             logs: list = []
             run_stages(None, StagePlan(), ai_key="k", naver=None, date_from=DF, date_to=DT, date_label=DL,
                        get_password=lambda a: None, carry=True, should_stop=stop, on_log=logs.append)
             labels = [x for x, _ in seen]
-            _check(labels == [None, d(1), d(3), d(7)], f"오늘 ③ 뒤 7일 안 못 끝낸 날(최근부터) · done·8일 전·오늘 제외 {labels}")
+            _check(labels == [None, d(1), d(n)], f"오늘 ③ 뒤 {n}일 안 못 끝낸 날(최근부터) · done·{n + 1}일 전·오늘 제외 {labels}")
             _check(all(r == t for _, r in seen), f"③ 마다 실행 날짜(시작일) 넘김 {seen}")
             b = _block(logs)
             if not extra:
-                _check(DAY_MARKS == [(d(1), "done"), (d(3), "done"), (d(7), "done")], f"빈 칸 0 인 날 = 완료 표시 {DAY_MARKS}")
+                _check(DAY_MARKS == [(d(1), "done"), (d(n), "done")], f"빈 칸 0 인 날 = 완료 표시 {DAY_MARKS}")
                 _check(b[1] == "판정: 정상 완료", f"보충 빈 칸 0 → 정상 {b[1]}")
             else:
-                _check((d(7), "done") not in DAY_MARKS and (d(1), "done") in DAY_MARKS,
+                _check((d(n), "done") not in DAY_MARKS and (d(1), "done") in DAY_MARKS,
                        f"빈 칸 남은 날은 완료 표시 안 함(다음 실행이 다시) {DAY_MARKS}")
                 _check(b[1] == "판정: 순위 빈 칸 --> 확인 필요", f"오늘 빈 칸 0 이어도 보충 칸 빈 칸 → 확인 필요 {b[1]}")
                 _check("순위 빈 칸 3 " in b[-1], f"한 줄 요약 빈 칸 = 보충 칸 포함 {b[-1]}")
-                lab = d(7)[5:].replace("-", ".")
+                lab = d(n)[5:].replace("-", ".")
                 _check(any("지난 칸 보충" in x and f"{lab} 빈 칸 3" in x for x in b), "③ 줄에 보충 칸별 빈 칸")
             _st.track_ranks_stage = track
     finally:
@@ -419,6 +420,44 @@ def pin_run_days_file():
         _check(len(m["days"]) == 14 and min(m["days"]) == "2026-12-07", f"최근 14일만 {sorted(m['days'])[:2]}")
         _check(PP.run_days(m) == m["days"] and PP.run_days({"date": "2026-11-14", "stage": "ranks"}) == {"2026-11-14": "ranks"}
                and PP.run_days(None) == {}, "run_days = days · 옛 파일 = 맨 위 한 날 · 없음 = 빈")
+
+
+def pin_designated_keeps_today_day():
+    print("[핀 P16] 오늘 정기 ③ 끊김('sales') → 같은 날 날짜 지정 실행 끝 → days[오늘] 그대로 · 맨 위 date·stage·at 은 지금처럼 갱신 (T-54)")
+    import json
+    import tempfile
+    from datetime import date, datetime, timedelta
+    from coupang_analytics import pipeline_paths as PP
+    today = date.today().isoformat()
+    orig = _st.write_run_stage
+    try:
+        for designated, want_day in ((True, "sales"), (False, "done")):
+            with tempfile.TemporaryDirectory() as tmp:
+                f = Path(tmp) / PP._RUN_STAGE_JSON
+                seeded_at = f"{today}T00:00:01"
+                f.write_text(json.dumps({"date": today, "stage": "sales", "at": seeded_at, "days": {today: "sales"}}),
+                             encoding="utf-8")
+                calls, _, stop = _fake_result_stages()
+                tops: list = []
+
+                def real(s, **k):   # 실제 기록 함수(임시 폴더) — 단계마다 맨 위 stage 를 모은다
+                    PP.write_run_stage(s, tmp, **k)
+                    tops.append(json.loads(f.read_text(encoding="utf-8"))["stage"])
+                _st.write_run_stage = real
+                run_stages(None, StagePlan(), ai_key="k", naver=None, date_from=DF, date_to=DT, date_label="2026-11-10",
+                           get_password=lambda a: None, carry=True, designated=designated, should_stop=stop,
+                           rank_date_label="2026-11-10", on_log=lambda m: None)
+                m = json.loads(f.read_text(encoding="utf-8"))
+                kind = "날짜 지정" if designated else "정기(대조)"
+                _check(m["days"].get(today) == want_day, f"{kind} 실행 끝 → days[오늘] = {want_day!r} {m['days']}")
+                _check(tops == ["sales", "ranks", "done"] and m["date"] == today and m["at"] > seeded_at,
+                       f"{kind} 맨 위 date·stage·at = 단계마다 지금 시각으로 갱신(정산 ① 완료 신호·재부팅 복구 그대로) {tops} {m}")
+                _check(datetime.fromisoformat(m["at"]).date().isoformat() == today, "맨 위 at = 오늘")
+            if designated:   # 날짜 지정 뒤 남은 기록으로 다음 날 보충 대상 = 오늘(D-248)
+                catch = _st._missed_rank_days(m, date.today() + timedelta(days=1))
+                _check(catch == [today], f"다음 날 보충 대상에 오늘이 남음 {catch}")
+    finally:
+        _st.write_run_stage = orig
 
 
 def pin_crash_summary():
@@ -473,6 +512,7 @@ def main() -> int:
     pin_yesterday_rank_catchup()
     pin_catchup_recent_days()
     pin_run_days_file()
+    pin_designated_keeps_today_day()
     pin_crash_summary()
     print("=" * 60)
     print("  [완료] 실행모드 핀 모두 통과")

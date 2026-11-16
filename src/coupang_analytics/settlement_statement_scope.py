@@ -160,19 +160,38 @@ def candidates(inv: dict, groups: dict, is_mv, decided=frozenset()) -> list:
 COST_ONLY = "비용만 있는 등록상품(판매 줄 없음 · 상품조회·판매분석에 없음) — 출처 판정 전 · 금액 밖(D-244)"
 
 
-def cost_only(costs: dict, inv: dict, groups: dict) -> dict:
+def option_products(files: list) -> dict:
+    """{옵션ID: 등록상품ID} — 정산 파일 주문 줄(옵션ID·등록상품ID 있는 줄) 짝. 값 = 판매 줄이 있는 등록상품(같은 달 취소로 합이 0 이어도) ·
+    정산서(settlement_statement_account opt2pid)와 출처 판정 준비(prepare)가 같은 기준(T-53)."""
+    return {str(r.option_id): str(r.product_id) for f in files for r in f.rows if r.option_id and r.product_id}
+
+
+def sold_products(files: list) -> dict:
+    """{등록상품ID: (상품명, 옵션ID 집합, 로켓그로스 여부)} — 정산 파일 주문 줄에 나온 등록상품(option_products 와 같은 줄 ·
+    출처 판정 준비가 상품조회·판매분석에 없는 판매 상품도 판정 대상에 올림 · 소유자 2026-11-16 T-55 D-256)."""
+    out: dict = {}
+    for f in files:
+        for r in f.rows:
+            if r.option_id and r.product_id:
+                name, opts, rg = out.get(str(r.product_id), ("", set(), False))
+                opts.add(str(r.option_id))
+                out[str(r.product_id)] = (name or str(r.product_name or ""), opts, rg or f.channel == "로켓그로스")
+    return out
+
+
+def cost_only(costs: dict, inv: dict, groups: dict, sold) -> dict:
     """{등록상품ID: (상품명, 옵션ID 집합)} — 비용 리포트 짝(costs = {옵션ID: (등록상품ID, 상품명)}) 중 상품조회(inv)·판매분석(groups)에
-    없는 등록상품(판매 없이 비용만 · D-244 ④⑤)."""
+    없고 판매 줄도 없는(sold = 정산 파일 주문 줄의 등록상품 · option_products 값) 등록상품(판매 없이 비용만 · D-244 ④⑤ · T-53)."""
     out: dict = {}
     for opt, (pid, name) in sorted(costs.items()):
-        if pid not in inv and pid not in groups:
+        if pid not in inv and pid not in groups and pid not in sold:
             out.setdefault(pid, (name, set()))[1].add(opt)
     return out
 
 
 def cost_only_checks(costs: dict, inv: dict, groups: dict, seen: set) -> list:
     """[(등록상품ID, 상품명, 사유)] — 비용만 있는 등록상품 중 아직 어느 경로(관리·판매 줄·출처판정·되찾기)도 다루지 않은 것(D-244 ⑤)."""
-    return [(pid, name, COST_ONLY) for pid, (name, _o) in sorted(cost_only(costs, inv, groups).items()) if pid not in seen]
+    return [(pid, name, COST_ONLY) for pid, (name, _o) in sorted(cost_only(costs, inv, groups, seen).items())]
 
 
 def _side(pid: str, created: str | None, bm: str, inv_all: dict) -> tuple:
