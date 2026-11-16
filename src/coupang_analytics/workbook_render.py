@@ -6,9 +6,11 @@ tools 는 OutputWorkbook 을 블랙박스로만 쓰므로 monkeypatch 재배선 
 """
 from __future__ import annotations
 
+from . import rank_schedule
 from .workbook_common import *  # noqa: F401,F403
 
 
+_REST_FILL = PatternFill("solid", fgColor=rank_schedule.REST_RGB)   # ③ 안 재는 날 빈 칸(계정 3묶음 D-257)
 _NO_FILL = PatternFill()   # 일자 칸 색 지움 — 값은 날짜 따라 옮겨 가도 색은 칸에 남으므로 7일 밖은 매번 지운다(D-158)
 
 
@@ -407,7 +409,8 @@ class _RenderMixin:
         prod_fill_lt = sty.f_prod_lt if prod_fill is sty.f_prod else sty.f_prod2_lt
         self._style_metric_rows(ws, sty, hr, m_end, promo, maxc, prod_fill, prod_fill_lt)
         if kh:
-            self._style_keyword_rows(ws, sty, kh, end, promo, maxc, is_disc, is_mkt, prod_fill_lt)
+            rest = rank_schedule.rest_cells(self, ws, ws.title, nm, range(kh + 1, end + 1))   # 안 재는 날 빈 칸(D-257)
+            self._style_keyword_rows(ws, sty, kh, end, promo, maxc, is_disc, is_mkt, prod_fill_lt, rest)
             self._flag_sale_mismatch(ws, sty, kh, nm, is_disc)
         self._style_block_edges(ws, sty, i, hr, end, m_end, kh, headers, regs, maxc)
 
@@ -468,7 +471,7 @@ class _RenderMixin:
                 ws.cell(r, _COL_NAME, values.get(value_at[r], ""))
 
     def _style_keyword_rows(self, ws, sty: _StyleCtx, kh: int, end: int, promo: dict, maxc: int,
-                            is_disc: bool, is_mkt: bool, prod_fill_lt: PatternFill) -> None:
+                            is_disc: bool, is_mkt: bool, prod_fill_lt: PatternFill, rest=frozenset()) -> None:
         """키워드블록(레이아웃 v4): A~E 키워드명(가로 병합·좌측확장) · F 검색량 · G(소헤더 비고/순위라벨) · H~ 순위.
         사업자명(A:B) 표기 폐지 — 키워드가 A~E 로 좌측 확장(소유자 확정 2026-09-24). 키워드명 앵커=A.
         소헤더=회색·키워드행 A~F=**옅은 상품군색**(상품군 전체 통일·소유자 2026-09-25)."""
@@ -493,8 +496,8 @@ class _RenderMixin:
                 else:
                     gm.value = "판매중"
                     gm.font = sty.bold
-            for c in range(_FIRST_DATE, maxc + 1):
-                _sty_cell(ws, r, c, sty, fill=promo.get(c, _NO_FILL))
+            for c in range(_FIRST_DATE, maxc + 1):   # 체험단 7일 배경 · 안 재는 날 빈 칸 = 옅은 회색(rest · D-257) · 그 밖 색 지움
+                _sty_cell(ws, r, c, sty, fill=promo[c] if c in promo else _REST_FILL if (r, c) in rest else _NO_FILL)
 
     def _flag_sale_mismatch(self, ws, sty: _StyleCtx, kh: int, nm: str, is_disc: bool) -> None:
         """판매상태 불일치 경고: 대장=판매중지인데 쿠팡 실제=판매중/부분판매중이면 판매중지 소헤더행(kh)의

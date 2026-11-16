@@ -798,9 +798,11 @@ def pin_rank_sales_sheet_run_date():
     got: list = []
     names = ("_load_latest_wb", "inject_company_stock", "refresh_sales_sheet", "_track_ranks_semi", "push_gsheet",
              "_log_quality_summary")
-    orig = {n: getattr(PR, n) for n in names}
+    orig = {n: getattr(PR, n) for n in names + ("rank_schedule",)}
+    groups: list = []
     try:
         PR._load_latest_wb = lambda out: (SimpleNamespace(apply_style=lambda: None, save=lambda p: None), Path("m.xlsx"))
+        PR.rank_schedule = SimpleNamespace(refresh_groups=lambda wb, day, log: groups.append(day))   # 묶음 = 실행 날짜(D-257)
         PR.inject_company_stock = lambda *a, **k: None
         PR.refresh_sales_sheet = lambda wb, out, log, today=None: got.append(today)
         PR._track_ranks_semi = lambda *a, **k: Path("m.xlsx")
@@ -808,11 +810,103 @@ def pin_rank_sales_sheet_run_date():
         PR._log_quality_summary = lambda *a, **k: None
         PR.track_ranks_stage(on_log=lambda m: None, date_label="2026-11-11", run_date=date(2026, 11, 12))
         _check(got == [date(2026, 11, 12)], f"실행 날짜(11-12)를 넘김 → 전일 = 11-11 {got}")
+        _check(groups == [date(2026, 11, 12)], f"오늘 묶음도 실행 날짜 기준(D-257) {groups}")
         PR.track_ranks_stage(on_log=lambda m: None)
         _check(got[-1] is None, "순위 탭 단독(실행 날짜 없음) = 기존대로 오늘 기준")
     finally:
         for n, f in orig.items():
             setattr(PR, n, f)
+
+
+def _split_wb(start, *, measured=True):
+    """계정 3개(같은 무게 · 상품 1·키워드 2) + 가 계정에 체험단 상품 1 — 시작일 전 날짜에 기록이 있으면 '잰 적 있음'."""
+    from datetime import timedelta
+    from coupang_analytics import rank_schedule as RS
+    wb = OutputWorkbook.empty()
+    before = (start - timedelta(days=1)).isoformat()
+    for biz, aid in (("가상사", "id_a"), ("나상사", "id_b"), ("다상사", "id_c")):
+        wb.ensure_account(biz)
+        wb.set_account_id(biz, aid)
+        wb.ensure_product_block(biz, f"{biz}상품", config.KIND_CONTRACT, ["k1", "k2"], registered=f"{biz}상품")
+        wb.set_product_vids(biz, f"{biz}상품", [f"v_{aid}"])
+        if measured:
+            for kw in ("k1", "k2"):
+                wb.set_keyword_rank(biz, f"{biz}상품", kw, before, 5)
+    wb.ensure_product_block("가상사", "체험", config.KIND_CONTRACT, ["t1"], registered="체험")
+    wb.set_product_vids("가상사", "체험", ["v_t"])
+    wb.set_keyword_rank("가상사", "체험", "t1", before, 9)
+    RS.refresh_groups(wb, start)
+    return wb
+
+
+def pin_rank_split_schedule():
+    print("[핀 R1] ③ 순위 계정 3묶음 — 처음 배정 = 키워드 수 고르게 · 날짜마다 한 묶음 · 체험단 시작일 포함 10일 매일 · "
+          "새 키워드 첫 측정 · 시작일 전 = 전부 · 새 계정 = 가벼운 묶음 · 사라진 계정 줄 지움 (D-257)")
+    from datetime import date, timedelta
+    from coupang_analytics import rank_schedule as RS
+    from coupang_analytics.workbook_common import _RANKGRP_SHEET
+    start = date.today() - timedelta(days=20)
+    day = lambda n: (start + timedelta(days=n)).isoformat()   # noqa: E731
+    _check(RS.assign({"a": 10, "b": 9, "c": 8, "d": 7, "e": 1}, {}) == {"a": 0, "b": 1, "c": 2, "d": 2, "e": 1},
+           "큰 것부터 가장 가벼운 묶음(10 | 9+1 | 8+7)")
+    _check(RS.assign({"a": 10, "b": 9, "n": 50}, {"a": 2, "b": 0}) == {"a": 2, "b": 0, "n": 1},
+           "기존 배정 그대로 · 새 열쇠만 가벼운 묶음")
+    wb = _split_wb(start)
+    plan = RS.load_plan(wb)
+    _check(plan.start == start and sorted(plan.groups.values()) == [0, 1, 2], f"시작일·3계정 각 묶음 {plan.groups}")
+    _check(plan.groups["id_a"] == 0, f"가장 무거운 계정(체험단 포함 3키워드) = 가 묶음 {plan.groups}")
+    _check(_RANKGRP_SHEET not in wb.account_sheets() and wb.wb[_RANKGRP_SHEET].sheet_state == "hidden",
+           "숨긴 시트 · 계정 시트 아님(구글시트에 안 올라감)")
+    turn = {plan.groups[k]: biz for k, biz in (("id_a", "가상사"), ("id_b", "나상사"), ("id_c", "다상사"))}
+    promo = start + timedelta(days=4)
+    wb.set_promo_start("가상사", "체험", promo.isoformat())   # 체험단 시작 = 4일째 → 4~13일째 매일
+    for n in range(0, 16):
+        got = sorted({(b, p) for b, p, _k in PR._unfilled(wb, day(n))})
+        want = {(turn[n % 3], f"{turn[n % 3]}상품")}
+        if 4 <= n <= 13 or n % 3 == 0:
+            want.add(("가상사", "체험"))
+        _check(got == sorted(want), f"{n}일째 = {turn[n % 3]} 묶음만 + 체험단(4~13일째 매일) {got}")
+    old = sorted({b for b, _p, _k in PR._unfilled(wb, (start - timedelta(days=2)).isoformat())})
+    _check(old == ["가상사", "나상사", "다상사"], f"시작일 전 날짜 = 전부 잼 {old}")
+    wb.ensure_product_block("나상사", "새상품", config.KIND_CONTRACT, ["new1"], registered="새상품")
+    wb.set_product_vids("나상사", "새상품", ["v_new"])
+    rest_day = next(n for n in range(1, 4) if turn[n % 3] != "나상사")
+    got = [(p, k) for b, p, k in PR._unfilled(wb, day(rest_day)) if b == "나상사"]
+    _check(got == [("새상품", "new1")], f"쉬는 날에도 기록 없는 새 키워드는 잼 · 기존 키워드는 안 잼 {got}")
+    wb.ensure_account("라상사")
+    wb.set_account_id("라상사", "id_d")
+    wb.ensure_product_block("라상사", "라상품", config.KIND_CONTRACT, ["d1"], registered="라상품")
+    wb.set_product_vids("라상사", "라상품", ["v_d"])
+    del wb.wb["다상사"]
+    logs: list = []
+    p2 = RS.refresh_groups(wb, start + timedelta(days=30), logs.append)
+    _check(p2.start == start and p2.groups["id_a"] == plan.groups["id_a"] and p2.groups["id_b"] == plan.groups["id_b"],
+           f"다시 불러도 시작일·기존 묶음 그대로 {p2.groups}")
+    _check("id_c" not in p2.groups and p2.groups["id_d"] == plan.groups["id_c"],
+           f"사라진 계정 줄 지움 · 새 계정 = 가장 가벼운 묶음(빈 묶음) {p2.groups}")
+    _check(any("[순위 묶음]" in m and "새 계정 라상사" in m for m in logs), f"로그에 오늘 묶음·새 계정 {logs}")
+
+
+def pin_rank_split_rest_not_blank():
+    print("[핀 R2] 쉬는 칸 = ③ 검색 안 함 · 빈 칸 수에 안 셈 · 데이터점검 '순위 공란' 제외 (D-257)")
+    from datetime import date, timedelta
+    from coupang_analytics import rank_schedule as RS
+    _SPEC.clear(); _COUNT.clear()
+    start = date.today() - timedelta(days=2)               # 오늘 = 3일째 → 오늘 차례 = (2 mod 3) 묶음
+    d = Path(tempfile.mkdtemp()); path = d / "s.xlsx"
+    wb = _split_wb(start)
+    plan = RS.load_plan(wb)
+    on = next(b for k, b in (("id_a", "가상사"), ("id_b", "나상사"), ("id_c", "다상사")) if plan.groups[k] == 2)
+    for b in ("가상사", "나상사", "다상사"):
+        wb.ensure_date(b, date.today().isoformat())
+    wb.save(path)
+    pg = object()
+    st = _install_rank_fakes([(pg, False)] * 10)
+    P._track_ranks_semi(wb, path, lambda m: None, lambda: False)
+    _check(sorted(set(st["kws"])) == ["k1", "k2"] and len(st["kws"]) == 2, f"오늘 묶음({on}) 키워드 2개만 검색 {st['kws']}")
+    _check(PR.LAST_RANK.get("unfilled") == 0, f"쉬는 계정 빈 칸은 빈 칸 수 0 {PR.LAST_RANK}")
+    q = wb.data_quality_summary()
+    _check(q["products"] == 4 and q["active_blank_rank"] == 0, f"쉬는 상품(3개)은 '판매중인데 순위 공란'에 안 셈 {q}")
 
 
 def main() -> int:
@@ -862,6 +956,8 @@ def main() -> int:
         pin_rank_delay_override()
         pin_sales_excel_menu()
         pin_rank_sales_sheet_run_date()
+        pin_rank_split_schedule()
+        pin_rank_split_rest_not_blank()
     finally:
         for k, v in saved.items():   # 순위 config 원복(다른 검증 오염 방지 — 별 프로세스지만 방어적)
             setattr(config, k, v)

@@ -18,6 +18,7 @@ from . import config
 from . import human_mouse
 from . import proxy_blocklist
 from . import proxy_pool
+from . import rank_schedule
 from .browser import WingBrowser
 from .kw_recommend import rank_label
 from .product_naming import rename_to_exposed
@@ -275,6 +276,7 @@ def track_ranks_stage(out_dir: str = "output", on_log=None,
         log("== 순위 조회: 결과 워크북이 없습니다 — 먼저 ①②를 실행하세요 ==")
         return None
     inject_company_stock(wb, stock_url, log)   # 회사보유재고 → 워크북(계정목록 5열) · apply_style 전
+    rank_schedule.refresh_groups(wb, run_date or date.today(), log)   # 계정 3묶음 배정·오늘 묶음 로그(D-257)
     refresh_sales_sheet(wb, out, log, today=run_date)   # 첫 시트 통합판매현황(① 뒤 쌓인 판매 기록 · 전일 = 실행 날짜 전날)
 
     def _on_pass():   # 진전 있는 바퀴 끝마다 결과 반영 — 밤새 빈 칸을 다시 돌아도 시트가 따라옴(2026-10-13)
@@ -651,15 +653,15 @@ def _semi_next_pass(st: _SemiState, wb, date_label, on_pass, log) -> bool:
 
 def _rank_todo(wb, biz, pname, date):
     """순위를 채울 대상이면 (vids, 빈 키워드 목록), 아니면 None.
-    생략: 수집주기 밖·판매중지(rank_suppressed)·키워드 없음(2차 옵션)·다 채움. vids = sibling_vids(전 옵션·아이템위너)."""
-    if wb.has_marketing() and not wb.product_due(biz, pname, date)[0]:
-        return None                        # 상품 수집 주기(마케팅 상품만 매일) — 오늘 대상 아니면 순위도 생략
+    생략: 판매중지(rank_suppressed)·키워드 없음(2차 옵션)·다 채움·**그 날짜에 안 재는 키워드**(체험단 10일·계정 3묶음
+    D-257 — 옛 has_marketing 3일 주기 자리 · 쉬는 칸은 빈 칸 집계·재시도·지난 칸 보충에서도 빠짐). vids = sibling_vids."""
     if wb.rank_suppressed(biz, pname):     # 판매중지·임시저장·검토중·대장취소선 → 순위 제외(승인반려는 조사·D-114)
         return None
     keywords = wb.product_keywords(biz, pname)
     if not keywords:                       # 2차 옵션 블록(키워드 없음)은 순위 대상 아님
         return None
     todo = [kw for kw in keywords if not wb.is_rank_filled(biz, pname, kw, date)]
+    todo = rank_schedule.due_keywords(wb, biz, pname, todo, date)
     if not todo:
         return None
     return wb.sibling_vids(biz, pname), todo

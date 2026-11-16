@@ -69,7 +69,7 @@ class OutputWorkbook(_RenderMixin, _IndexMixin, _MetaMixin, _DateMixin, _Lifecyc
         # 메타시트가 계정시트 뒤에 올 수 있어 **먼저 한 번** 스캔해 {(사업자,상품): [vid…]} 를 만든다.
         meta_vids = self._scan_meta_vids()
         for ws in self.wb.worksheets:
-            if ws.title in (_INDEX_SHEET, _ACCT_SHEET, _STAMP_SHEET, _MKT_SHEET, _DISC_SHEET, _SALES_SHEET):  # 특수시트 = 데이터 아님
+            if ws.title in (_INDEX_SHEET, _ACCT_SHEET, _STAMP_SHEET, _MKT_SHEET, _DISC_SHEET, _SALES_SHEET, _RANKGRP_SHEET):  # 특수시트 = 데이터 아님
                 continue
             if ws.title == _META_SHEET:                 # 상품ID 매핑 시트 → 행 인덱스만 복원
                 self._reindex_meta_rows(ws)
@@ -545,20 +545,23 @@ class OutputWorkbook(_RenderMixin, _IndexMixin, _MetaMixin, _DateMixin, _Lifecyc
         반환 {products, search_link, miss_vid, active_blank_rank}:
         - search_link = 상품링크가 검색폴백(pid 미확보) 수(정상상품인데 검색링크면 productId 미확보 신호)
         - miss_vid = vid 없는(미매칭) 상품 수
-        - active_blank_rank = **판매중(비억제) 상품인데 최신 일자 순위가 전부 공란**(=미측정/차단 의심·핵심 이상치)"""
+        - active_blank_rank = **판매중(비억제) 상품인데 최신 일자 순위가 전부 공란**(=미측정/차단 의심·핵심 이상치)
+          · 그 날짜에 안 재는 상품(계정 3묶음 쉬는 날 D-257)은 셈에서 뺌"""
+        from .rank_schedule import any_due
         search_link = miss_vid = active_blank = total = 0
         for biz in self.wb.sheetnames:
             if biz in _SPECIAL_SHEETS or biz.startswith("_") or "계정" in biz or "목차" in biz:
                 continue
             ws = self.wb[biz]
             latest = min(self._date_col.get(biz, {}).values(), default=None)   # 최신=가장 왼쪽 일자칸
+            latest_lbl = next((k for k, c in self._date_col.get(biz, {}).items() if c == latest), "")
             for p in self.products_of(biz):
                 total += 1
                 if "np/search" in self.product_url(biz, p):
                     search_link += 1
                 if not self.product_vids(biz, p):
                     miss_vid += 1
-                if latest and not self.rank_suppressed(biz, p):
+                if latest and not self.rank_suppressed(biz, p) and any_due(self, biz, p, latest_lbl):
                     named = [(r, nm) for (r, nm) in self._kw_block_rows(biz, p) if nm]
                     if named and all(_norm(ws.cell(r, latest).value) == "" for (r, _nm) in named):
                         active_blank += 1

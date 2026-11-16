@@ -144,7 +144,10 @@ def run_stages(input_list, plan: StagePlan, *, ai_key, naver, date_from: str, da
             result = _retry_blank_ranks(ranks, log, should_stop, result)
             result = _catch_up_missed_ranks(missed, ranks, log, should_stop, result)
             if not should_stop():
-                write_run_stage("done", day=run_day.isoformat(), record_day=not designated)
+                left = int(LAST_RANK.get("unfilled") or 0)   # 오늘 칸 빈 칸(재시도 뒤 · 쉬는 칸 제외 D-257)
+                write_run_stage("done", day=run_day.isoformat(), record_day=not designated and not left)
+                if left and not designated:   # 그날 못 잰 칸 = 다음 실행이 보충(D-253 3일 · 맨 위는 'done' D-257)
+                    mark_run_day(run_day.isoformat(), "ranks")
         return result
 
 

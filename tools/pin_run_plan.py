@@ -460,6 +460,38 @@ def pin_designated_keeps_today_day():
         _st.write_run_stage = orig
 
 
+def pin_today_blank_next_day_catchup():
+    print("[핀 P17] 오늘 칸 빈 칸이 재시도 뒤에도 남음 → 날짜별 기록 = 'ranks'(맨 위 = 'done') → 다음 실행 보충 대상 · 빈 칸 0 = 'done' · "
+          "날짜 지정 = 그대로 (D-257 실패 칸 다음 날 보충)")
+    import json
+    import tempfile
+    from datetime import date, timedelta
+    from coupang_analytics import pipeline_paths as PP
+    today = date.today().isoformat()
+    orig_w, orig_m = _st.write_run_stage, _st.mark_run_day
+    try:
+        for unfilled, designated, want in (((3, 3), False, "ranks"), ((3, 0), False, "done"), ((0,), False, "done"),
+                                           ((3, 3), True, "sales")):
+            with tempfile.TemporaryDirectory() as tmp:
+                f = Path(tmp) / PP._RUN_STAGE_JSON
+                f.write_text(json.dumps({"date": today, "stage": "sales", "at": f"{today}T00:00:01", "days": {today: "sales"}}),
+                             encoding="utf-8")
+                calls, _, stop = _fake_result_stages(unfilled=unfilled)
+                _st.write_run_stage = lambda s, **k: PP.write_run_stage(s, tmp, **k)
+                _st.mark_run_day = lambda d, s, **k: PP.mark_run_day(d, s, tmp)
+                run_stages(None, StagePlan(), ai_key="k", naver=None, date_from=DF, date_to=DT, date_label=DL,
+                           get_password=lambda a: None, carry=True, designated=designated, should_stop=stop,
+                           on_log=lambda m: None)
+                m = json.loads(f.read_text(encoding="utf-8"))
+                kind = f"빈 칸 {unfilled[-1]}" + (" · 날짜 지정" if designated else "")
+                _check(m["stage"] == "done" and m["days"].get(today) == want,
+                       f"{kind} → 맨 위 'done' · days[오늘] = {want!r} {m}")
+                catch = _st._missed_rank_days(m, date.today() + timedelta(days=1))
+                _check((today in catch) == (want != "done"), f"{kind} → 다음 날 보충 대상 {catch}")
+    finally:
+        _st.write_run_stage, _st.mark_run_day = orig_w, orig_m
+
+
 def pin_crash_summary():
     print("[핀 P13] 실행이 예외로 멈춤 → 종합에 멈춘 단계 '도중 오류로 멈춤' · 그 예외도 오류 수 · ③ 이 안 끝났으면 '순위 빈 칸 0' 안 씀 (T-29)")
     err = "TimeoutError: Page.goto: Timeout 30000ms exceeded."
@@ -513,6 +545,7 @@ def main() -> int:
     pin_catchup_recent_days()
     pin_run_days_file()
     pin_designated_keeps_today_day()
+    pin_today_blank_next_day_catchup()
     pin_crash_summary()
     print("=" * 60)
     print("  [완료] 실행모드 핀 모두 통과")

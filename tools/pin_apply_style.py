@@ -366,6 +366,60 @@ def pin_stray_url_cleanup() -> None:
     _check(lnk is not None and _n(getattr(lnk, "target", "")).startswith("http"), "상품명 헤더 C 링크는 보존")
 
 
+def pin_rank_rest_fill():
+    print("[핀 S11] ③ 안 재는 날 빈 칸 = 옅은 회색(F2F2F2) — 재는 날 빈 칸·값 있는 칸·시작일 전·판매중지·체험단 10일은 회색 없음 · "
+          "날짜가 늘어도 칸 날짜로 다시 칠함 (D-257)")
+    from datetime import date, timedelta
+    from coupang_analytics import rank_schedule as RS
+    from coupang_analytics.workbook_common import _parse_date
+    start = date.today() - timedelta(days=10)
+    wb = _build()
+    for b, aid in (("휴식A", "ra"), ("휴식B", "rb"), ("휴식C", "rc")):
+        wb.ensure_account(b)
+        wb.set_account_id(b, aid)
+        wb.ensure_product_block(b, f"{b}품", config.KIND_CONTRACT, ["r1", "r2"], registered=f"{b}품")
+        wb.set_product_vids(b, f"{b}품", [f"v{aid}"])
+        wb.set_keyword_rank(b, f"{b}품", "r1", (start - timedelta(days=1)).isoformat(), 3)   # 잰 적 있는 키워드
+        wb.set_keyword_rank(b, f"{b}품", "r2", (start - timedelta(days=1)).isoformat(), 4)
+    wb.ensure_product_block("휴식A", "체험품", config.KIND_CONTRACT, ["p1"], registered="체험품")
+    wb.set_product_vids("휴식A", "체험품", ["vpromo"])
+    wb.set_keyword_rank("휴식A", "체험품", "p1", (start - timedelta(days=1)).isoformat(), 7)
+    wb.set_promo_start("휴식A", "체험품", (start + timedelta(days=3)).isoformat())
+    wb.ensure_product_block("휴식A", "중지품", config.KIND_CONTRACT, ["s1"], registered="중지품")
+    wb.set_product_vids("휴식A", "중지품", ["vstop"])
+    wb.set_keyword_rank("휴식A", "중지품", "s1", (start - timedelta(days=1)).isoformat(), 2)
+    wb.apply_sale_status("휴식A", {"vstop": True})
+    plan = RS.refresh_groups(wb, start)
+    biz, g = "휴식A", plan.groups["ra"]
+    rest = lambda n: n >= 0 and n % 3 != g   # noqa: E731   (그 계정 묶음 차례가 아닌 날)
+    nv = next(n for n in range(1, 4) if rest(n))
+    for n in range(-2, 9):
+        wb.ensure_date(biz, (start + timedelta(days=n)).isoformat())
+    wb.set_keyword_rank(biz, f"{biz}품", "r1", (start + timedelta(days=nv)).isoformat(), 6)   # 쉬는 날인데 값 있음
+    wb.normalize_date_columns()
+    wb.apply_style()
+    ws = wb.wb[biz]
+    cols = {_parse_date(k): c for k, c in wb._date_col.get(biz, {}).items()}
+
+    def row_of(prod, kw):
+        return wb._kw_row[(biz, prod, kw)]
+    r1, r2, pr, sr = row_of(f"{biz}품", "r1"), row_of(f"{biz}품", "r2"), row_of("체험품", "p1"), row_of("중지품", "s1")
+    gray = lambda r, n: _fill(ws, r, cols[start + timedelta(days=n)]).endswith("F2F2F2")   # noqa: E731
+    _check(all(gray(r2, n) == rest(n) for n in range(0, 9)), f"빈 칸 회색 = 쉬는 날만(묶음 {RS.NAMES[g]} · 재는 날 흰 빈 칸 = 못 잰 칸)")
+    _check(not gray(r1, nv) and any(gray(r1, n) for n in range(0, 9) if rest(n) and n != nv),
+           "쉬는 날이어도 값 있는 칸은 회색 없음")
+    _check(not gray(r2, -1) and not gray(r2, -2), "새 규칙 시작일 전 빈 칸 = 회색 없음")
+    _check(not any(gray(pr, n) for n in range(3, 9)), "체험단 시작일부터 10일 안 = 회색 없음(매일 잼)")
+    _check(all(gray(pr, n) == rest(n) for n in range(0, 3)), "체험단 시작 전 = 계정 묶음대로")
+    _check(not any(gray(sr, n) for n in range(0, 9)), "판매중지 상품 = 회색 없음(순위 조사 안 함)")
+    hr = _hdr_row(ws, f"{biz}품")
+    _check(not any(_fill(ws, hr + 1, c).endswith("F2F2F2") for c in cols.values()), "지표 줄(판매량 등)은 회색 없음")
+    wb.ensure_date(biz, (start + timedelta(days=9)).isoformat())   # 다음 날 실행 — 날짜 칸이 한 칸씩 밀림
+    wb.normalize_date_columns()
+    wb.apply_style()
+    cols = {_parse_date(k): c for k, c in wb._date_col.get(biz, {}).items()}
+    _check(all(gray(r2, n) == rest(n) for n in range(0, 10)), "날짜가 늘어도 칸 날짜로 다시 칠함(잔상 없음 · D-158 같은 이유)")
+
 def main() -> int:
     print("=" * 60)
     print("  핀 테스트 — OutputWorkbook.apply_style 서식 출력")
@@ -376,6 +430,7 @@ def main() -> int:
     pin_sale_status_mismatch()
     pin_marketing_fill()
     pin_promo_no_leftover()
+    pin_rank_rest_fill()
     pin_group_edges()
     pin_group_fill_alternation()
     pin_product_hyperlink()
