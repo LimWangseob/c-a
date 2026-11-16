@@ -232,6 +232,52 @@ def t_live_amount(tmp: Path) -> None:
     con.close()
 
 
+def t_statement(tmp: Path) -> None:
+    """계획 5절 · D-185(관리 시작 달·계약 전 판매 뺌) · D-266 ③(달 = 쿠팡 정산 기준 날짜의 달) · D-153 ①(세액은 쿠팡 자료 비율)."""
+    from coupang_analytics import ledger_statement as ST
+    print("[정산서 숫자] 관리 옵션만 · 관리 시작 달·계약일 · 배송비 섞인 주문 · 비용 세액 비율")
+    con = LS.create(tmp / "st.sqlite")
+    ol = ("INSERT INTO order_line(account_id,sale_type,order_no,item_key,txn_type,seq,option_id,recognized,sales,coupon,fee,settle,"
+          "src,file_id,src_row) VALUES (?,?,?,?,?,1,?,?,?,0,0,?,'주문상세',1,?)")
+    rows = [("A", "윙", "o1", "k1", "판매", "M1", "2026-08-31", 1000, 900),     # 관리 · 8월
+            ("A", "윙", "o1", "k0", "판매", "", "2026-08-31", 3000, 2700),       # o1 배송비(상품 줄 모두 관리)
+            ("A", "윙", "o2", "k2", "판매", "M1", "2026-09-01", 2000, 1800),     # 관리 · 9월(기준 날짜 달)
+            ("A", "윙", "o2", "k3", "판매", "X9", "2026-09-01", 5000, 4500),     # 관리 밖
+            ("A", "윙", "o2", "k4", "판매", "", "2026-09-01", 3000, 2700),       # o2 배송비 = 섞인 주문
+            ("A", "윙", "o3", "k5", "판매", "M1", "2026-07-31", 7000, 6300),     # 관리 시작 달 앞
+            ("A", "윙", "o4", "k6", "판매", "M1", "2026-08-04", 4000, 3600)]     # 계약일 앞이지만 계약 달 → 넣음(D-185 ② 달 단위)
+    con.executemany(ol, [r + (i,) for i, r in enumerate(rows)])
+    pc = ("INSERT INTO product_cost(account_id,kind,nat_key,option_id,cycle_end,amount,sign,file_id,sheet,src_row) "
+          "VALUES ('A','보관비',?,?,'2026-09-07',?,-1,1,'s',?)")
+    con.executemany(pc, [("n1", "M1", -300, 1), ("n2", "X9", -700, 2)])
+    con.execute("INSERT INTO account_entry(account_id,sale_type,round_key,item,role,amount,occur_date,file_id,src_pos) "
+                "VALUES ('A','로켓그로스','r1','비용 세액 보관비','대조용',-100,'2026-09-07',1,'p')")
+    sc = {"ok": True, "managed": {"M1"}, "start": "2026-08", "cdate": "2026-08-05", "check": []}
+    conf = ST.confirmed(con, "A", sc)
+    check(set(conf) == {"2026-08", "2026-09"}, "달 = 기준 날짜 달 · 관리 시작 달 앞(7월) 없음")
+    check(conf["2026-08"]["sales"] == 8000 and conf["2026-08"]["settle"] == 7200,
+          "8월 = 관리 1,000 + 관리만 든 주문 배송비 3,000 + 계약일(08-05) 앞이지만 계약 달 4,000(D-185 ② 달 단위)")
+    sc_early = {**sc, "start": "2026-07"}         # 자동 판정 달이 계약 달보다 빠른 계정
+    check("2026-07" not in ST.confirmed(con, "A", sc_early), "관리 시작 달이 빨라도 계약 시작일 달(8월) 앞 7월 판매 뺌(D-185 ②)")
+    check(conf["2026-09"]["sales"] == 2000 and conf["2026-09"]["ship_mixed"] == 2700,
+          "9월 = 관리 2,000만 · 관리 밖 상품 뺌 · 섞인 주문 배송비는 금액 밖 따로(2,700)")
+    cost = ST.costs(con, "A", sc)
+    check(cost["2026-09"]["보관비"] == [-300, -30, -1000], "보관비 관리 −300 · 세액 −100 × 300/1,000 = −30 · 계정 전체 −1,000")
+    cr = "INSERT INTO check_result VALUES (?, 'A', ?, ?, 0, ?, '100 이상', ?)"
+    con.executemany(cr, [("V4 RG 지급액 = 상품 줄별 × 비율", "로켓그로스 2026-09-05|2026-08-25|2026-09-02|70", 5000, -5000, "R-J7-01 적용"),
+                         ("V4 RG 비용 = ⑮ 비용 칸", "로켓그로스 2026-08-20|2026-07-28|2026-08-03|70", -800, 800, "R-J7-02 적용"),
+                         ("V4 RG 지급액 = 상품 줄별 × 비율", "로켓그로스 2026-09-12|2026-09-03|2026-09-09|70", 900, -900, "R-J7-03 적용")])
+    nd = ST.account_numbers(con, "A", sc)
+    check(set(k for k, v in nd["months"].items() if v["no_data"]) == {"2026-08", "2026-09"} and nd["status"] == "자료 없음 달 있음",
+          "자료 받기 전 회차(R-J7-01·02)가 걸친 관리 달 = '자료 없음·확인 필요'(D-146) · 0원 통과 안 함")
+    check(len(nd["months"]["2026-08"]["no_data"]) == 2, "계약 달(8월)에 걸친 회차는 계약일 앞에서 끝나도 넣음(달 단위) · 끝전 규칙(R-J7-03)은 자료 없음 아님")
+    nd_early = ST.account_numbers(con, "A", sc_early)
+    check("2026-07" not in nd_early["months"], "계약 시작일 달 앞(7월)은 자료 없음 달로도 안 셈(D-185 ②)")
+    r = ST.account_numbers(con, "A", {**sc, "managed": set(), "check": ["관리 옵션 0"]})
+    check(r["status"] == "관리 상품 확인 필요" and r["total"]["confirmed"]["sales"] == 0, "범위 못 정함 → '관리 상품 확인 필요'(가리지 않음)")
+    con.close()
+
+
 def t_bucket() -> None:
     print("[D-235] 차이 구간")
     check(LS.bucket(0) == "0", "0원 = '0'")
@@ -254,6 +300,7 @@ def main() -> int:
         t_judge(tmp)
         t_cost_report_before(tmp)
         t_live_amount(tmp)
+        t_statement(tmp)
     t_rg_line_pay()
     t_bucket()
     print(f"\n장부 DB 시험: 실패 {len(FAILS)}")

@@ -3,6 +3,7 @@
     python tools/ledger_db.py build --output <운용 output 사본> --db <새 sqlite 경로> [--exclude Difpick] [--only a,b] [--parts settle,cost,...]
     python tools/ledger_db.py verify --db <DB> [--twin <다시 만든 DB>]
     python tools/ledger_db.py judge --db <DB> --rules <판정 폴더>
+    python tools/ledger_db.py statement --db <DB> --scope <관리 범위 json> --out <결과 json>
 
 - 계획 = output/_시험_261116_장부DB/계획.md · 제외 계정·시험 계정은 인자로만(D-229).
 """
@@ -16,9 +17,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+import json  # noqa: E402
 import sqlite3  # noqa: E402
 
-from coupang_analytics import ledger_build, ledger_judge, ledger_verify  # noqa: E402
+from coupang_analytics import ledger_build, ledger_judge, ledger_statement, ledger_verify  # noqa: E402
 
 
 def _args(argv: list[str] | None) -> argparse.Namespace:
@@ -36,6 +38,10 @@ def _args(argv: list[str] | None) -> argparse.Namespace:
     j = sub.add_parser("judge", help="판정 규칙 파일(규칙_*.json)을 검증 결과에 적용(D-265 · verify 뒤)")
     j.add_argument("--db", required=True, type=Path)
     j.add_argument("--rules", required=True, type=Path, help="판정 폴더(규칙_*.json · 직접판정_*.json · 표본 출력)")
+    s = sub.add_parser("statement", help="DB → 위탁정산서 관리 몫 숫자(4단계 · 관리 범위 = tools/ledger_scope_export.py 결과)")
+    s.add_argument("--db", required=True, type=Path)
+    s.add_argument("--scope", required=True, type=Path)
+    s.add_argument("--out", required=True, type=Path)
     return ap.parse_args(argv)
 
 
@@ -68,6 +74,10 @@ def main(argv: list[str] | None = None) -> int:
         for line in ledger_judge.run(con, a.rules):
             print(line)
         con.close()
+    elif a.cmd == "statement":
+        res = ledger_statement.build(a.db, a.scope)
+        a.out.write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"계정 {len(res)} · 관리 상품 확인 필요 {sum(r['status'] != 'ok' for r in res.values())} · 저장 {a.out}")
     print(f"끝 {time.time() - t0:.0f}초")
     return 0
 
