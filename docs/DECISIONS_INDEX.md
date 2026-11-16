@@ -263,4 +263,5 @@
 - D-258 S [CONSIGNOR_STATEMENT_PENDING_LABEL2] 위탁자 정산서 1쪽 큰 카드 예정분 문구 = '정산 금액중 쿠팡 미확정 금액' (2026-11-16, R198) → D-259
 - D-259 A [CONSIGNOR_STATEMENT_PENDING_LABEL3] 위탁자 정산서 1쪽 큰 카드 예정분 문구 = '쿠팡 미확정 금액 포함'(D-258 같은 날 다시 바꿈) (2026-11-16, R198)
 - D-260 A [CONSIGNOR_STATEMENT_PDF_DELIVERY] 위탁자 정산서 발송 = 위탁자별 PDF · 첫 장 월별 요약(여러 달) · 위탁자 모음 요약·'아직 반영 안 된 부분'은 구글시트에만 · 판매 기간·발행 줄 진하게 · '검토용' 표시 없음 (2026-11-16, R199)
-- D-261 A [CONSIGNOR_STATEMENT_PENDING_SPLIT] 정산서 오류 3건(E1~E3)·판매자서비스이용료 이중 계산 방지 = 모든 위탁 정산서 프로그램에 반영 (2026-11-16, R201)
+- D-261 P [CONSIGNOR_STATEMENT_PENDING_SPLIT] 정산서 오류 3건(E1~E3)·판매자서비스이용료 이중 계산 방지 = 모든 위탁 정산서 프로그램에 반영 (2026-11-16, R201) → D-262
+- D-262 A [CONSIGNOR_STATEMENT_PENDING_ORDER] 정산 예정분 관리 몫 나누기 순서 = ① 주문별매출 실제값 → ② 그 돈이 나온 기간의 상품별 판매 → ③ 그래도 안 되면 그 금액만 '확인 필요'로 빼고 발행 (2026-11-16, R202)
