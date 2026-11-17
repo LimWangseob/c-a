@@ -4,9 +4,9 @@
 윙(D-269 ①): ① 주문별매출 실제값 → ② B8+환산(D-266 ① · D-267) → ③ ②가 '확인 필요' 조건(0~100% 밖 · 나눌 판매 없음 · 검산 1.5 이상 · 지연 자료 없음)이면
   빼지 않고 ⓒ2 = 저장해 둔 결제→구매확정 지연 분포 + 윙 정산 파일 환산(이미 확정 주문 빼기 없음) → 그것도 안 되면 ⓑo(D-282) =
   판매분석 일별 [그 달 1일−30일, 판매 끝] − 이미 확정의 관리 비율 × 쿠팡 예정 → 셋 다 안 되는 금액만 '확인 필요'.
-  ②③④ 모두 기준일에 앱이 가진 자료만(`basis_data` · T-84): 주문별매출 = 기준일 전에 받은 달(cut 앞 달) · 윙 정산 파일 = 정산일 ≤ 기준일 ·
-  지연 분포 = cut 앞 달 · 저장 분포 = '기준 달' ≤ cut 만 · 정산일 모르는 윙 정산 파일이 있으면 '확인 필요'.
-- ① 그 달 `검증자료/월자료/{계정}/주문별매출_YYYYMM.json` 줄 중 구매확정일이 윙 정산 파일 기간 밖인 줄의 합(판매 = productGmv + deliveryGmv ·
+  ①②③④ 모두 기준일에 앱이 가진 자료만(`basis_data` · T-84 · ① = D-292): 주문별매출 = 기준일 전에 받은 달(cut 앞 달 · ① = 그 달이 받은 달일 때만) ·
+  윙 정산 파일 = 정산일 ≤ 기준일 · 지연 분포 = cut 앞 달 · 저장 분포 = '기준 달' ≤ cut 만 · 정산일 모르는 윙 정산 파일이 있으면 '확인 필요'.
+- ① 그 달(기준일 전에 받은 달) `검증자료/월자료/{계정}/주문별매출_YYYYMM.json` 줄 중 구매확정일이 윙 정산 파일 기간 밖인 줄의 합(판매 = productGmv + deliveryGmv ·
   정산 = apAmount)이 쿠팡 예정과 원 단위 같을 때만 · 상품 없는 줄(배송비·취소) = 같은 주문 상품 줄 수 비율(못 찾으면 그 예정분 관리 비율).
 - ② 윙 B8: 판매분석 일별 윙 순액(결제일) [그 달 1일−30일, E−8일] − 이미 구매확정된 판매(cut 앞 달 주문별매출 productGmv(결제일) + 그 주문 밖 윙
   정산 파일 줄(한 번만 · 구매확정일에서 결제→구매확정 지연 분포로 결제일에 나눔)) · 옵션 합 뒤 음수 0. E = 예정 판매 기간 끝(기준일 전날 또는 그 달 말일 중 이른 날)
@@ -232,8 +232,13 @@ def basis_data(orders: dict, files: list, base, ym: str, basis: date) -> tuple:
     if nodate:
         return (), f"정산일 모르는 윙 정산 파일 {nodate}개(기준일 전 자료인지 모름)"
     cut = min(ym, _received_ym(basis))
-    _p, wrows = _wing_files([f for f in files if f.channel == WING and f.settle_date <= basis])
+    _p, wrows = _basis_wing(files, basis)
     return (cut, _wing_known(orders, cut), wrows, lag_pmf(str(base), cut)), ""
+
+
+def _basis_wing(files: list, basis: date) -> tuple[list, list]:
+    """정산일 ≤ 기준일 윙 정산 파일 → (기간 목록, 정산 줄) — ①·B8·ⓒ2·ⓑo 공통(정산일 모르는 파일은 basis_data 가 먼저 거름)."""
+    return _wing_files([f for f in files if f.channel == WING and f.settle_date <= basis])
 
 
 def wing_ops(daily: dict, got: tuple, win: tuple, s: float, e: float, is_mv) -> tuple:
@@ -337,29 +342,29 @@ def split(acct) -> list:
     daily = (c.daily or {}).get(acct.aid) or {}
     periods = (c.periods or {}).get(acct.aid) or {}
     orders = order_months(c.base, acct.acct)
-    wing = _wing_files(acct.files)
     out = []
     for ch, ym, s, e, kind, note, *rest in acct.u:
         if kind in ("자료 없음", "확인 필요") or ym == "-":
             out.append((ch, ym, s, e, 0.0, 0.0, f"{kind} — {note}", ""))
         elif ch == WING:
-            out.append((ch, ym, s, e, *_wing_one(c.base, (ym, s, e), orders, wing, daily, acct.is_mv, basis, acct.files)))
+            out.append((ch, ym, s, e, *_wing_one(c.base, (ym, s, e), orders, daily, acct.is_mv, basis, acct.files)))
         else:
             out += [(ch, *x) for wk in (rest[0] if rest else []) for x in rg_week(daily, periods, wk, acct.is_mv)]
     return out
 
 
-def _wing_one(base, line: tuple, orders: dict, wing: tuple, daily: dict, is_mv, basis: date, files: list) -> tuple:
+def _wing_one(base, line: tuple, orders: dict, daily: dict, is_mv, basis: date, files: list) -> tuple:
     """① 실제값 → ② B8+환산 → ③ ⓒ2(저장 지연 분포 + 정산 파일 환산) → ④ ⓑo(운용 시점 그 달 판매 비율 D-282) → 안 되면 확인 필요(D-269 ①)."""
     ym, s, e = line
-    got = wing_actual(orders.get(ym.replace("-", "")) or [], wing[0], s, e, is_mv)
-    if got:
-        return (*got, "")
+    have, why = basis_data(orders, files, base, ym, basis)      # ①·B8·ⓒ2·ⓑo = 기준일에 앱이 가진 자료만(T-84 · D-292)
+    if why:
+        return 0.0, 0.0, "", f"①·B8·ⓒ2·ⓑo: {why}"
+    if ym < _received_ym(basis):                                # ① = 기준일 전에 받은 그 달 주문별매출 · 정산일 ≤ 기준일 윙 정산 파일 기간(D-292)
+        got = wing_actual(orders.get(ym.replace("-", "")) or [], _basis_wing(files, basis)[0], s, e, is_mv)
+        if got:
+            return (*got, "")
     nxt = date(int(ym[:4]) + (ym[5:] == "12"), int(ym[5:]) % 12 + 1, 1)
     win = (ym, min(nxt - timedelta(days=1), basis - timedelta(days=1)))
-    have, why = basis_data(orders, files, base, ym, basis)      # B8·ⓒ2·ⓑo = 기준일에 앱이 가진 자료만(T-84)
-    if why:
-        return 0.0, 0.0, "", f"B8·ⓒ2·ⓑo: {why}"
     cut, known, wrows, pmf = have
     save_pmf(base, cut, pmf)
     b8 = wing_b8(daily, known, wrows, pmf, win, s, e, is_mv, ("윙 B8+환산", lambda s0: _known_rates(known, s0)))
