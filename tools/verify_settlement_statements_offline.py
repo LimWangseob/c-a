@@ -504,6 +504,36 @@ def test_cost_only_scope() -> None:
     print("test_cost_only_scope OK")
 
 
+# ── 관리 몫 입금 나누기(D-294 · 2026-11-17) — 근거 = 샘플검증2 1절 aehee5505(관리 100%): ② 1,270,470 · 있는 줄 1,153,573 · gen 6,609 →
+# 지금 방식은 배율 1.09506 으로 끝난 줄에 퍼뜨려 10-07 지급 RG 70% 107,947 → 118,209(+10,262). D-294 = 끝난 줄 = 그 줄 실제 관리 몫 ·
+# 지급 줄·gen 이 없는 잔액 110,288 = '입금 예정(지급일 미정)' 한 줄.
+def test_status_split_pending_rest() -> None:
+    from collections import Counter
+
+    from coupang_analytics.settlement_statement_deduct import status_split
+    r1 = ("x", "로켓그로스", "2026-10-07", "2026-09-01", "2026-09-06", 70, "지급 완료")
+    r2 = ("x", "로켓그로스", "2026-11-10", "2026-09-07", "2026-10-31", 70, "지급 완료")
+    r3 = ("x", "윙", "2026-10-20", "2026-09-21", "2026-09-27", 70, "보류")          # 관리 일부 달(관리 6,890 / 계정 10,274)
+    line_info = [("지급 완료", "로켓그로스", "2026-09", 107_947.0, 0.0, Counter({"광고비": 9_570.0}), r1),
+                 ("지급 완료", "로켓그로스", "2026-09", 1_045_626.0, 0.0, Counter(), r2),
+                 ("보류", "윙", "2026-09", 10_274.0, 0.0, Counter(), r3)]
+    gen = {("로켓그로스", "2026-11"): 6_609.0}
+    mset = {("로켓그로스", "2026-09"): (1_153_573.0, 1_153_573.0), ("로켓그로스", "2026-11"): (6_609.0, 6_609.0),
+            ("윙", "2026-09"): (6_890.0, 10_274.0)}
+    settle_m = 1_270_470.0 + 6_890.0
+    st, ded, lines = status_split(line_info, gen, mset, settle_m, {"광고비": ("2026-09", 1.0)}, 1.0)
+    got = {(row[2], s): round(sm) for row, s, sm, _dm in lines if row}
+    assert got == {("2026-10-07", "지급 완료"): 107_947, ("2026-11-10", "지급 완료"): 1_045_626, ("2026-10-20", "보류"): 6_890}, got
+    assert sorted((s, round(sm)) for row, s, sm, _dm in lines if row is None) == [("예정", 6_609), ("예정", 110_288)], lines
+    assert round(st["지급 완료"]) == 1_153_573 and round(st["보류"]) == 6_890 and round(st["예정"]) == 116_897, st
+    assert round(sum(st.values())) == round(settle_m), st                                  # 합 = ② 그대로
+    assert ded["지급 완료"] == Counter({"광고비": 9_570.0}) and not ded["예정"], ded      # 공제 몫은 그대로
+    # 잔액 0 이면 지급일 미정 잔액 줄 없음
+    _st, _d, lines0 = status_split(line_info[:2], {}, mset, 1_153_573.0, {}, 1.0)
+    assert all(row is not None for row, *_ in lines0) and round(_st["지급 완료"]) == 1_153_573, lines0
+    print("test_status_split_pending_rest OK")
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -517,6 +547,7 @@ def main() -> int:
     test_managed_scope()
     test_scope_priority()
     test_scope_judge()
+    test_status_split_pending_rest()
     print("✅ 위탁정산서 계산 규칙 시험 3종 + 이관 입구 + 관리 상품 범위 통과")
     return 0
 
