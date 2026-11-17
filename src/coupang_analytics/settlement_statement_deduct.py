@@ -19,13 +19,16 @@ from coupang_analytics.settlement_statement_account import (
 
 def status_split(line_info: list, gen: dict, mset: dict, settle_m: float, rates: dict, S: float):
     """관리 상품 몫을 쿠팡 지급 줄마다 나눠 입금 완료·예정·보류로 더한다(소유자 2026-10-27).
-    정산금액 = 관리 상품 정산 총액(②)을 '줄 지급대상 × 그 줄 판매 달·판매 방식의 관리 상품 정산 비율' 가중으로 나눔(합 = ② 그대로) ·
+    정산금액 = 그 줄 실제 관리 몫 '줄 지급대상 × 그 줄 판매 달·판매 방식의 관리 상품 정산 비율'(배율 없음 · D-294 ①) ·
+    관리 상품 정산 총액(②) 중 지급 줄·줄 생성 전 몫에 없는 잔액 = '입금 예정(지급일 미정)' 한 줄(끝난 줄에 퍼뜨리지 않음 · D-294 ②) ·
     공제 = 그 줄에서 실제 빠진 항목 금액 × 항목 몫 비율 · rates = {항목: (이 판매 달부터, 비율)} — 관리 시작 전 판매 줄은 0(합 = 공제 관리 몫 그대로) ·
     줄 생성 전 몫 = 예정.
     반환: ({상태: 정산금액}, {상태: {항목: 공제}}, [(장부 줄|None, 상태, 관리 정산금액, 관리 공제)])."""
     items = [(st, pay * ratio(mset, ch, ym, S), parts, row) for st, ch, ym, pay, _rel, parts, row in line_info]
     items += [("예정", amt * ratio(mset, ch, ym, S), Counter(), None) for (ch, ym), amt in gen.items() if amt]
-    wsum = sum(x[1] for x in items)
+    rest = settle_m - sum(x[1] for x in items)
+    if round(rest):
+        items.append(("예정", rest, Counter(), None))
     st_settle: dict = dict.fromkeys(STS, 0.0)
     st_ded: dict = {st: Counter() for st in STS}
     line_m = []
@@ -33,8 +36,7 @@ def status_split(line_info: list, gen: dict, mset: dict, settle_m: float, rates:
     def rate(k: str, row) -> float:
         since, r = rates.get(k, ("", 0.0))
         return r if row is not None and str(row[3])[:7] >= since else 0.0
-    for st, w, parts, row in items:
-        sm = settle_m * w / wsum if wsum else 0.0
+    for st, sm, parts, row in items:
         dm = Counter({k: x * rate(k, row) for k, x in parts.items() if x})
         st_settle[st] += sm
         st_ded[st].update(dm)
