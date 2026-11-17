@@ -4,6 +4,9 @@
 - 광고센터 일별 광고비 정산내역 = GraphQL getDailySettlement(기간, settlementDomain SELLER) — **날짜 × 캠페인** 소진 광고비·
   예산 초과 차감 후·**청구가능 광고비**(쿠팡이 주는 가장 작은 청구 단위 — 상품별 청구액은 없음). 7월 청구가능 378,188(7/12·13·14
   일예산 초과 750 차감) + 부가세 37,819 = 416,007 = 8/10~9/7 로켓그로스 광고비 공제 합 · 6월 244,347 = 6월분 공제 합(원 단위).
+  같은 요청의 subtotals = **날짜 × 배송유형**(rocketGrowth·nonRod·rod) 청구가능·부가세·청구금액(+VAT) — 부가세는 쿠팡이 날마다
+  따로 계산(청구가능×10% 반올림과 ±1~2원 다른 날 있음) → RG 광고 공제(그 정산 줄 매출 기간 일별 청구금액 합) 원 단위용(T-82 ·
+  칸 이름 = 광고센터 일별 광고비 정산내역 화면이 보낸 질의 2026-11-17 그대로). 응답은 통째로 저장(없으면 null 그대로).
 - 광고센터 매출 성장 광고 보고서(advertising.coupang.com, GraphQL /marketing-reporting/v2/graphql):
   getCampaignList(기간) → requestReport(일별·키워드·캠페인 ID 전부) → reportList(status completed) →
   GET /marketing-reporting/v2/api/excel-report?id=… (xlsx — 큰 보고서는 탭 구분 글자 text/csv 로 옴·report_xlsx 로 엑셀로 바꿔 저장). 칸 = 날짜·광고집행 옵션ID·광고비 등(견본 벅스 7월 378,986).
@@ -43,7 +46,9 @@ _DAILY = ("mutation DailySettlement($startDate: Int!, $endDate: Int!, $settlemen
           "summary { total { deliveredAdcost deliveredAdcostAfterCap billableAmount totalFinalAmount } "
           "rocketGrowth { billableAmount vat totalFinalAmount } nonRod { billableAmount vat totalFinalAmount } } "
           "items { date campaignId campaignName adType deliveredAdcost deliveredAdcostAdj deliveredAdcostAfterCap "
-          "promotionAdjustment billableAdjustment billableAmount } } }")
+          "promotionAdjustment billableAdjustment billableAmount } "
+          "subtotals { " + " ".join(f"{dom} {{ date domain deliveredAdcost deliveredAdcostAfterCap billableAmount vat "
+                                    f"totalFinalAmount taxCode }}" for dom in ("rocketGrowth", "nonRod", "rod")) + " } } }")
 _REQUEST = ("mutation RequestReport($startDate: Int!, $endDate: Int!, $campaignIds: [ID], $reportType: ReportType!, "
             "$dateGroup: DateGroup!, $granularity: Granularity, $excludeIfNoClickCount: Boolean) { requestReport(data: "
             "{startDate: $startDate, endDate: $endDate, campaignIds: $campaignIds, reportType: $reportType, dateGroup: $dateGroup, "
