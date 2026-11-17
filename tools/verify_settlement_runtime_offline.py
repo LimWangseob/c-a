@@ -20,6 +20,28 @@ except AttributeError:
     pass
 
 D = date.fromisoformat
+# 광고센터 일별 광고비 정산내역 화면이 실제로 보낸 질의(2026-11-17 · 공백 한 칸으로 줄임 · 근거 = 통제 세션 메모
+# T82_getDailySettlement_화면질의_2026-11-17.md) — settlement_ads._DAILY 칸 이름은 여기 있는 것만 쓴다(짐작 금지).
+AD_SCREEN_QUERY = (
+    "mutation ($startDate: Int!, $endDate: Int!, $settlementDomain: SettlementDomain!, $reportType: SettlementReportType) { "
+    "getDailySettlement( startDate: $startDate endDate: $endDate settlementDomain: $settlementDomain reportType: $reportType ) "
+    "{ ...DailySettlement __typename } } fragment DailySettlement on DailySettlement { summary { total { vendorName "
+    "deliveredAdcost deliveredAdcostAfterCap promotionAdjustment billableAdjustment billableAmount totalFinalAmount __typename } "
+    "nonRod { domain deliveredAdcost deliveredAdcostAfterCap billableAmount promotionAdjustment billableAdjustment "
+    "deliveredAdcostAdj deliveredAdcostAfterAdj vat totalFinalAmount __typename } rod { domain deliveredAdcost "
+    "deliveredAdcostAfterCap billableAmount promotionAdjustment billableAdjustment deliveredAdcostAdj deliveredAdcostAfterAdj "
+    "vat totalFinalAmount __typename } rocketGrowth { domain deliveredAdcost deliveredAdcostAfterCap billableAmount "
+    "promotionAdjustment billableAdjustment deliveredAdcostAdj deliveredAdcostAfterAdj vat totalFinalAmount __typename } "
+    "__typename } items { date type settlementDomain campaignId campaignName adType goalType deliveredAdcost "
+    "deliveredAdcostAdj deliveredAdcostAfterAdj budgetAmount budgetType priorSpend deliveredAdcostAfterCap billableAmount "
+    "promotionAdjustment billableAdjustment cumulativeMonthlyDeliveredAdcost monthlyCap priorMonthRollover createdBy "
+    "ownership __typename } subtotals { nonRod { date domain deliveredAdcost deliveredAdcostAfterCap deliveredAdcostAdj "
+    "deliveredAdcostAfterAdj billableAmount promotionAdjustment billableAdjustment vat totalFinalAmount taxCode __typename } "
+    "rod { date domain deliveredAdcost deliveredAdcostAfterCap deliveredAdcostAdj deliveredAdcostAfterAdj billableAmount "
+    "promotionAdjustment billableAdjustment vat totalFinalAmount taxCode __typename } rocketGrowth { date domain "
+    "deliveredAdcost deliveredAdcostAfterCap deliveredAdcostAdj deliveredAdcostAfterAdj billableAmount promotionAdjustment "
+    "billableAdjustment vat totalFinalAmount taxCode __typename } __typename } dailyInvoiceAgencyCampaignAdjustments { "
+    "adjustmentType adjustmentAmount invoiceAgencyId campaignId __typename } __typename }")
 
 
 def ok(msg):
@@ -1640,6 +1662,7 @@ def p40_orphan_ship_returns():
 def p41_ad_reports():
     print("[P41] 광고비 원천 월별(D-116 ③④) — 끝난 달(+3일)만 · 윙 로켓그로스 광고비 내역 엑셀 + 매출 성장 광고 보고서(요청→다음에 받기)")
     import json
+    import re
     import tempfile
     from pathlib import Path
     from coupang_analytics import settlement_ads as AD
@@ -1665,8 +1688,12 @@ def p41_ad_reports():
             assert v["settlementDomain"] == "SELLER", v
             items = [{"date": 20260712, "campaignId": "105108858", "campaignName": "07-12 보냉백 3종", "deliveredAdcost": 30150,
                       "deliveredAdcostAfterCap": 30000, "billableAmount": 30000}] if v["startDate"] == 20260701 else []
-            return {"data": {"getDailySettlement": {"summary": {"total": {"billableAmount": 30000 if items else 0}},
-                                                    "items": items}}}
+            d = {"summary": {"total": {"billableAmount": 30000 if items else 0}}, "items": items}
+            if "subtotals" in q:                      # 실측(광고센터 화면 2026-11-17): 날짜×배송유형 부가세·청구금액 — 고른 칸만 옴
+                d["subtotals"] = {"rocketGrowth": [{"date": 20260712, "domain": "ROCKETGROWTH", "billableAmount": 30000, "vat": 3000,
+                                                    "totalFinalAmount": 33000, "taxCode": "B0"}] if items else None,
+                                  "nonRod": None, "rod": None}
+            return {"data": {"getDailySettlement": d}}
         if "getCampaignList" in q:
             return {"data": {"getCampaignList": store["campaigns"][str(body["variables"]["startDate"])[:6]]}}
         if "reportList" in q:
@@ -1690,6 +1717,14 @@ def p41_ad_reports():
         settle = json.loads((folder / "벅스-bux1004_광고정산_202607.json").read_text(encoding="utf-8"))
         assert settle["items"][0]["billableAmount"] == 30000 and settle["items"][0]["date"] == 20260712, settle
         assert json.loads((folder / "벅스-bux1004_광고정산_202606.json").read_text(encoding="utf-8"))["items"] == []
+        # T-82: 일별 배송유형·부가세·청구금액(+VAT) = 같은 요청 subtotals 를 그대로 저장 · 칸 이름은 화면 질의에 있는 것만(짐작 금지)
+        assert settle["subtotals"]["rocketGrowth"] == [{"date": 20260712, "domain": "ROCKETGROWTH", "billableAmount": 30000,
+                                                        "vat": 3000, "totalFinalAmount": 33000, "taxCode": "B0"}], settle
+        assert settle["summary"]["total"]["billableAmount"] == 30000, settle                     # 기존 월 합 그대로
+        screen = set(re.findall(r"[A-Za-z_]+", AD_SCREEN_QUERY))
+        assert set(re.findall(r"[A-Za-z_]+", AD._DAILY)) <= screen, set(re.findall(r"[A-Za-z_]+", AD._DAILY)) - screen
+        for dom in ("rocketGrowth", "nonRod", "rod"):
+            assert re.search(dom + r" \{ date domain [^}]*billableAmount [^}]*vat totalFinalAmount taxCode", AD._DAILY), dom
         assert (folder / "벅스-bux1004_밀크런_202606.xlsx").exists()
         assert s1["요청"] == ["202607"] and s1["캠페인 없음"] == ["202606"], s1
         st = json.loads((folder / "벅스-bux1004_광고.json").read_text(encoding="utf-8"))
