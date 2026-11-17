@@ -574,7 +574,8 @@ class _Led:
         return self.r
 
     def account(self, acct, per, un, rgf, aps):
-        rows = [[acct, ch, *SL._key(r), "지급 완료", 0, 0, r["최종지급액"]] for ch, rs in (("윙", self.w), ("로켓그로스", self.r)) for r in rs]
+        rows = [[acct, ch, *SL._key(r), r.get("상태", "지급 완료"), 0, 0, r["최종지급액"]]
+                for ch, rs in (("윙", self.w), ("로켓그로스", self.r)) for r in rs]
         return {"rows": rows, "buckets": {"줄 생성 전": 0}, "e1_bad": [], "e2_bad": [], "e3": (0, 0)}
 
 
@@ -606,6 +607,20 @@ def test_d304_wing_negative_round() -> None:
     print("test_d304_wing_negative_round OK")
 
 
+def test_d319_scheduled_negative_kept() -> None:
+    """D-319: D-304 되돌림은 '지급 완료' 회차만 — 예정(지급 전) 윙 음수 회차는 음수 그대로(뒤 회차 3PM 회수 공제가 아직 자료에 없어
+    0 으로 두면 예정 합이 부풂 · 실측 oopean 예정 +1,813,986)."""
+    from coupang_analytics import settlement_statement_account as SA
+    neg = {**_wing(1_001_000, [("상품광고비", 1_053_343)]), "상태": "예정"}
+    pay, rel, parts = SA.deductions(neg, done=False)
+    assert round(parts["3PM_매출채권"]) == 0 and round(pay + rel - sum(parts.values())) == -52_343, parts
+    a = _acct([neg])
+    assert a.bad == 0, a.bad
+    assert round(a.D["3PM_매출채권"]) == 0 and [round(x[8]) for x in a.rows_out] == [-52_343], a.rows_out
+    assert round(a.fin["예정"]) == -52_343, a.fin
+    print("test_d319_scheduled_negative_kept OK")
+
+
 def test_d305_watch_warning() -> None:
     """D-305: 감지 목록(윙 사유 채권추심·빠른정산 사용액·쿠팡 판매자 성장 대출 + 로켓그로스 MCA·체크카드 칸) 중 처리 판정표(파일)에 없는
     계정×항목 = '확인 필요' 불일치 사유 · 판정표에 있는 항목은 경고 없음."""
@@ -629,6 +644,7 @@ def main() -> int:
     test_d312_fast_used()
     test_d312_own_deduction()
     test_d304_wing_negative_round()
+    test_d319_scheduled_negative_kept()
     test_d305_watch_warning()
     test_cost_only_scope()
     test_managed_alloc()

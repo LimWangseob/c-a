@@ -98,8 +98,8 @@ def payout_lines(led, aid: str, L: dict) -> tuple[list, list]:
     return keep, dup
 
 
-def deductions(r: dict) -> tuple[float, float, Counter]:
-    """지급 줄 1개 → (정산금액, 보류 해제액, 공제 항목별 Counter(+ = 빠지는 돈))."""
+def deductions(r: dict, done: bool = True) -> tuple[float, float, Counter]:
+    """지급 줄 1개 → (정산금액, 보류 해제액, 공제 항목별 Counter(+ = 빠지는 돈)) · done = 상태 '지급 완료'(D-319)."""
     parts: Counter = Counter()
     if r["채널"] == "윙":
         for x in r.get("차감 사유") or []:
@@ -110,7 +110,9 @@ def deductions(r: dict) -> tuple[float, float, Counter]:
             parts[ETC] += rest
         pay, rel = (0.0 if SL.release(r) else num(r.get("paidAmount"))), num(r.get("pendingAmount"))
         neg = pay + rel - sum(parts.values())
-        if round(neg) < 0:              # 음수 최종 회차 = 쿠팡이 다음 회차 '3PM_매출채권'으로 회수 → 같은 항목으로 되돌림(D-304 · 이중 차감 없음)
+        # 지급 끝난 음수 최종 회차 = 쿠팡이 다음 회차 '3PM_매출채권'으로 회수 → 같은 항목으로 되돌림(D-304 · 이중 차감 없음) ·
+        # 예정 회차는 음수 그대로(뒤 회차 회수 공제가 아직 자료에 없음 · D-319)
+        if done and round(neg) < 0:
             parts[PM3] += neg
         return pay, rel, parts
     ad, mr = num(r.get("totalAdSalesDeductionAmount")), num(r.get("totalMilkRunDeductionAmount"))
@@ -197,12 +199,13 @@ class AccountBase:
         self.line_info: list = []          # (상태, 판매 방식, 판매 시작 달, 정산금액, 보류 해제액, 공제 항목, 장부 줄) — 관리 상품 입금 나누기용
         self.watch: Counter = Counter()    # D-305 감지 항목 계정 합
         for row, r in lines:
-            pay, rel, parts = deductions(r)
+            st = row[6].split(" ·")[0]
+            pay, rel, parts = deductions(r, st == STS[0])
             self.watch.update(watched(r))
-            self.line_info.append((row[6].split(" ·")[0], r["채널"], str(row[3])[:7], pay, rel, parts, row))
+            self.line_info.append((st, r["채널"], str(row[3])[:7], pay, rel, parts, row))
             final = num(r["최종지급액"])
-            if r["채널"] == "윙":
-                final = max(final, 0.0)     # 윙 음수 최종 회차 = 0 지급 · 그 음수는 3PM 되돌림(D-304 정산금액 = Σmax)
+            if r["채널"] == "윙" and st == STS[0]:
+                final = max(final, 0.0)     # 지급 끝난 윙 음수 회차 = 0 지급 · 그 음수는 3PM 되돌림(D-304 · 예정은 그대로 D-319)
             self.bad += round(pay + rel - sum(parts.values())) != round(final)
             self.D.update(parts)
             self.D[REL] -= rel
