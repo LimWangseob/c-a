@@ -27,6 +27,15 @@ AD, LOGI, MILK, SVC, ETC, COMP, REL, FAST = ("광고비", "로켓그로스 물�
                                              "판매자서비스이용료", "기타 공제", "재고 분실·파손 보상(쿠팡이 줌)", "보류됐다 풀린 돈",
                                              "빠른정산 계좌인출액")
 STS = ("지급 완료", "예정", "보류")
+# 위탁자 본인 차감(D-312 ② · D-305 따로 줄) = 쿠팡이 계정 정산에서 뺀 위탁자 개인 대출 상환·체크카드 대금 — 계정 합계엔 차감 · 관리 몫 0
+PM3 = "3PM_매출채권"              # 윙 차감 사유 원문 이름(D-304 음수 최종 회차 되돌림도 같은 항목)
+OWN = "위탁자 본인 차감"
+OWN_LOAN, OWN_MCA, OWN_CARD = f"{OWN} — 성장 대출", f"{OWN} — MCA 상환", f"{OWN} — 체크카드 대금"
+# 윙 차감 사유 → 공제 항목(D-312 ① 빠른정산 사용액 = 이미 당겨 받은 돈 ±0 = 계좌인출액과 같은 항목 · ② 26 성장 대출)
+WING_KEY = {"빠른정산 사용액": FAST, "쿠팡 판매자 성장 대출": OWN_LOAN}
+# D-305 감지 목록 — 처리 판정표(입력 `본인차감_처리판정.json`)에 없는 계정×항목이 나오면 '확인 필요' 사유
+WATCH_WING = ("빠른정산 사용액", "채권추심", "쿠팡 판매자 성장 대출")      # 윙 차감 사유 원문
+WATCH_RG = {"totalMerchantCashAdvanceDeductionAmount": "MCA 상환", "totalDebitCardDeductionAmount": "체크카드 대금"}
 
 
 def num(v) -> float:
@@ -89,24 +98,44 @@ def payout_lines(led, aid: str, L: dict) -> tuple[list, list]:
     return keep, dup
 
 
-def deductions(r: dict) -> tuple[float, float, Counter]:
-    """지급 줄 1개 → (정산금액, 보류 해제액, 공제 항목별 Counter(+ = 빠지는 돈))."""
+def deductions(r: dict, done: bool = True) -> tuple[float, float, Counter]:
+    """지급 줄 1개 → (정산금액, 보류 해제액, 공제 항목별 Counter(+ = 빠지는 돈)) · done = 상태 '지급 완료'(D-319)."""
     parts: Counter = Counter()
     if r["채널"] == "윙":
         for x in r.get("차감 사유") or []:
             why = x.get("사유") or ETC
-            parts[AD if "광고" in why else why] += num(x.get("금액"))
+            parts[AD if "광고" in why else WING_KEY.get(why, why)] += num(x.get("금액"))
         rest = num(r.get("totalDeductionAmount")) - sum(parts.values())
         if round(rest):
             parts[ETC] += rest
-        return (0.0 if SL.release(r) else num(r.get("paidAmount"))), num(r.get("pendingAmount")), parts
+        pay, rel = (0.0 if SL.release(r) else num(r.get("paidAmount"))), num(r.get("pendingAmount"))
+        neg = pay + rel - sum(parts.values())
+        # 지급 끝난 음수 최종 회차 = 쿠팡이 다음 회차 '3PM_매출채권'으로 회수 → 같은 항목으로 되돌림(D-304 · 이중 차감 없음) ·
+        # 예정 회차는 음수 그대로(뒤 회차 회수 공제가 아직 자료에 없음 · D-319)
+        if done and round(neg) < 0:
+            parts[PM3] += neg
+        return pay, rel, parts
     ad, mr = num(r.get("totalAdSalesDeductionAmount")), num(r.get("totalMilkRunDeductionAmount"))
     ar = num(r.get("totalArFactoringDeductionAmount"))        # 빠른정산(셀러월렛) 상환 — 추가공제 안(KB §1-14)
+    mca, card = num(r.get("totalMerchantCashAdvanceDeductionAmount")), num(r.get("totalDebitCardDeductionAmount"))  # 80·81 추가공제 안(D-312 ②)
     # 판매 조정(totalSalesAdjustment)은 추가공제에도 같은 금액으로 들어 있어 서로 지워짐(줄 공식 E2 와 같은 결과)
-    parts.update({AD: ad, MILK: mr, FAST: ar,
-                  ETC: num(r.get("totalAdditionalDeductionAmount")) - ad - mr - ar - num(r.get("totalSalesAdjustment")),
+    parts.update({AD: ad, MILK: mr, FAST: ar, OWN_MCA: mca, OWN_CARD: card,
+                  ETC: num(r.get("totalAdditionalDeductionAmount")) - ad - mr - ar - mca - card - num(r.get("totalSalesAdjustment")),
                   LOGI: num(r.get("totalFinalCfsFeeDeductionAmount")), COMP: -num(r.get("totalCfsInventoryCompensationAmount"))})
     return num(r.get("totalPayableAmount")), 0.0, parts
+
+
+def watched(r: dict) -> Counter:
+    """지급 줄 1개 → D-305 감지 항목 금액(윙 = 차감 사유 원문 · 로켓그로스 = 칸 이름)."""
+    out: Counter = Counter()
+    if r["채널"] == "윙":
+        for x in r.get("차감 사유") or []:
+            if x.get("사유") in WATCH_WING:
+                out[x["사유"]] += num(x.get("금액"))
+        return out
+    for col, name in WATCH_RG.items():
+        out[name] += num(r.get(col))
+    return out
 
 
 LEDGER, SETTLE_ONLY = "관리대장 상품", "원장 정산전용상품"
@@ -168,10 +197,15 @@ class AccountBase:
         self.D: Counter = Counter()
         self.rows_out, self.bad = [], 0
         self.line_info: list = []          # (상태, 판매 방식, 판매 시작 달, 정산금액, 보류 해제액, 공제 항목, 장부 줄) — 관리 상품 입금 나누기용
+        self.watch: Counter = Counter()    # D-305 감지 항목 계정 합
         for row, r in lines:
-            pay, rel, parts = deductions(r)
-            self.line_info.append((row[6].split(" ·")[0], r["채널"], str(row[3])[:7], pay, rel, parts, row))
+            st = row[6].split(" ·")[0]
+            pay, rel, parts = deductions(r, st == STS[0])
+            self.watch.update(watched(r))
+            self.line_info.append((st, r["채널"], str(row[3])[:7], pay, rel, parts, row))
             final = num(r["최종지급액"])
+            if r["채널"] == "윙" and st == STS[0]:
+                final = max(final, 0.0)     # 지급 끝난 윙 음수 회차 = 0 지급 · 그 음수는 3PM 되돌림(D-304 · 예정은 그대로 D-319)
             self.bad += round(pay + rel - sum(parts.values())) != round(final)
             self.D.update(parts)
             self.D[REL] -= rel

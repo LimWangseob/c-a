@@ -504,6 +504,138 @@ def test_cost_only_scope() -> None:
     print("test_cost_only_scope OK")
 
 
+# ── 지급 줄 공제 분류 — 기대값 = 결정 원문 실측 값(D-312 · D-304 · D-305 · 코드에서 뽑지 않음) ──
+def _wing(paid, why, pending=0, ratio=70, day="2026-08-24"):
+    return {"채널": "윙", "정산일": day, "기간 시작": "2026-08-01", "기간 끝": "2026-08-07", "지급비율": ratio, "targetAmount": paid,
+            "paidAmount": paid, "pendingAmount": pending, "차감 사유": [{"사유": k, "금액": v} for k, v in why],
+            "totalDeductionAmount": sum(v for _, v in why), "최종지급액": paid + pending - sum(v for _, v in why)}
+
+
+def test_d312_fast_used() -> None:
+    """D-312 ①: 윙 '빠른정산 사용액' = 이미 당겨 받은 돈(±0) = 빠른정산 계좌인출액과 같은 항목(FAST) — 공제 항목으로 따로 두지 않음.
+    실측 seankim137 2026-08-24 줄: 사용액 491,416 + 인출 254,512 + 광고 424,164 = 지급가능 1,170,092 · 최종 0."""
+    from coupang_analytics import settlement_statement_account as SA
+    r = _wing(1170092, [("빠른정산 사용액", 491416), ("빠른정산 계좌인출액", 254512), ("상품광고비", 424164)])
+    pay, rel, parts = SA.deductions(r)
+    assert "빠른정산 사용액" not in parts, parts
+    assert parts == {"빠른정산 계좌인출액": 491416 + 254512, "광고비": 424164}, parts
+    assert round(pay + rel - sum(parts.values())) == 0
+    print("test_d312_fast_used OK")
+
+
+OWN_LOAN, OWN_MCA, OWN_CARD = "위탁자 본인 차감 — 성장 대출", "위탁자 본인 차감 — MCA 상환", "위탁자 본인 차감 — 체크카드 대금"
+
+
+def _rg_line(**kw):
+    base = dict.fromkeys(("totalAdSalesDeductionAmount", "totalMilkRunDeductionAmount", "totalArFactoringDeductionAmount",
+                          "totalMerchantCashAdvanceDeductionAmount", "totalDebitCardDeductionAmount", "totalSalesAdjustment",
+                          "totalFinalCfsFeeDeductionAmount", "totalCfsInventoryCompensationAmount"), 0)
+    return {"채널": "로켓그로스", **base, **kw}
+
+
+def test_d312_own_deduction() -> None:
+    """D-312 ②: 26 성장 대출(윙 사유) · 80 MCA 상환 · 81 체크카드(RG 칸) = 정산금액에서 차감(쿠팡 실지급과 같음) · '위탁자 본인 차감'
+    줄(D-305 따로 줄 · 기타 공제에 섞지 않음) · 관리 몫 0. 실측 tellace83 26 798,784 · 80 8,121,756 · seankim137 81 82,870."""
+    from collections import Counter
+    from types import SimpleNamespace
+    from coupang_analytics import settlement_statement_account as SA
+    from coupang_analytics.settlement_statement_deduct import Account
+    pay, rel, parts = SA.deductions(_wing(798784, [("쿠팡 판매자 성장 대출", 798784)]))
+    assert parts == {OWN_LOAN: 798784}, parts
+    add = 8121756 + 82870 + 5000                                     # 추가공제 = MCA + 체크카드 + 그 밖 5,000
+    pay, rel, parts = SA.deductions(_rg_line(totalPayableAmount=10_000_000, totalMerchantCashAdvanceDeductionAmount=8121756,
+                                             totalDebitCardDeductionAmount=82870, totalAdditionalDeductionAmount=add))
+    assert (parts[OWN_MCA], parts[OWN_CARD], parts["기타 공제"]) == (8121756, 82870, 5000), parts
+    assert round(pay - sum(parts.values())) == 10_000_000 - add      # 계정 지급액 = 쿠팡 실지급 그대로
+    # 관리 몫: 위탁자 본인 차감 = 0 · 다른 공제는 그대로(기타 공제 관리 비율 0.5 → 2,500)
+    a = Account.__new__(Account)
+    a.D = Counter({OWN_LOAN: 798784, OWN_MCA: 8121756, OWN_CARD: 82870, "기타 공제": 5000})
+    a.share, a.rates = {"기타 공제": (0.5, "시험", "쿠팡 자료")}, {"기타 공제": ("", 0.5)}
+    a.sv, a.start, a.active, a.line_info = {"잔액 관리": 0}, "2025-01", False, []
+    a.L, a.mset, a.S, a.settle_m = {"gen": {}}, {}, 0.0, 100_000.0
+    a.ctx = SimpleNamespace()
+    a._rest_and_status()
+    assert all(a.share[k][0] == 0 and a.share[k][2] == "위탁자 본인 차감" for k in (OWN_LOAN, OWN_MCA, OWN_CARD)), a.share
+    assert {k: round(x) for k, x in a.Dm.items() if round(x)} == {"기타 공제": 2500}, a.Dm
+    assert round(a.pay_m) == 97_500, a.pay_m
+    print("test_d312_own_deduction OK")
+
+
+class _Led:
+    """장부 가짜(지급 줄만) — 윙·로켓그로스 원본 줄 → Ledger.account 의 rows 모양."""
+
+    def __init__(self, wing, rg=()):
+        self.w, self.r = list(wing), list(rg)
+
+    def wing_rows(self, aid):
+        return self.w
+
+    def rg_rows(self, aid):
+        return self.r
+
+    def account(self, acct, per, un, rgf, aps):
+        rows = [[acct, ch, *SL._key(r), r.get("상태", "지급 완료"), 0, 0, r["최종지급액"]]
+                for ch, rs in (("윙", self.w), ("로켓그로스", self.r)) for r in rs]
+        return {"rows": rows, "buckets": {"줄 생성 전": 0}, "e1_bad": [], "e2_bad": [], "e3": (0, 0)}
+
+
+def _acct(wing, rg=(), judge=None):
+    from types import SimpleNamespace
+    from coupang_analytics.settlement_statement_deduct import Account
+    ctx = SimpleNamespace(led=_Led(wing, rg), per={}, un={"가-x1": []}, rgf={}, aps={"가-x1": {}}, tot={"가-x1": {"settle": 0}},
+                          own_judge=judge or {})
+    a = Account(ctx, "가-x1")
+    a._payouts()
+    return a
+
+
+def test_d304_wing_negative_round() -> None:
+    """D-304: 윙 회차 최종액(paid − 공제)이 음수면 그 음수만큼 '3PM_매출채권'에 되돌려 넣고(공제 −), 뒤 회차 3PM 회수 줄 = 같은 항목
+    공제 → 짝이면 합 0 · 정산금액 = Σmax(회차 최종액, 0) = 쿠팡 실지급(이중 차감 없음). 실측 guarisen2024 이중 차감 52,343."""
+    from coupang_analytics import settlement_statement_account as SA
+    neg = _wing(1_001_000, [("상품광고비", 1_053_343)], day="2026-08-24")
+    back = {**_wing(500_000, [("3PM_매출채권", 52_343)], day="2026-08-31"), "기간 시작": "2026-08-08", "기간 끝": "2026-08-14"}
+    pay, rel, parts = SA.deductions(neg)
+    assert (round(parts["3PM_매출채권"]), round(parts["광고비"])) == (-52_343, 1_053_343), parts
+    assert round(pay + rel - sum(parts.values())) == 0
+    assert round(SA.deductions(back)[2]["3PM_매출채권"]) == 52_343
+    a = _acct([neg, back])
+    assert a.bad == 0, a.bad
+    assert round(a.D["3PM_매출채권"]) == 0 and round(a.D["광고비"]) == 1_053_343, a.D
+    assert sorted(round(x[8]) for x in a.rows_out) == [0, 447_657], a.rows_out          # 음수 회차 = 0 지급
+    assert round(a.fin["지급 완료"]) == 447_657 == round(a.paid_total), a.fin              # = 쿠팡 실지급(0 + 447,657)
+    print("test_d304_wing_negative_round OK")
+
+
+def test_d319_scheduled_negative_kept() -> None:
+    """D-319: D-304 되돌림은 '지급 완료' 회차만 — 예정(지급 전) 윙 음수 회차는 음수 그대로(뒤 회차 3PM 회수 공제가 아직 자료에 없어
+    0 으로 두면 예정 합이 부풂 · 실측 oopean 예정 +1,813,986)."""
+    from coupang_analytics import settlement_statement_account as SA
+    neg = {**_wing(1_001_000, [("상품광고비", 1_053_343)]), "상태": "예정"}
+    pay, rel, parts = SA.deductions(neg, done=False)
+    assert round(parts["3PM_매출채권"]) == 0 and round(pay + rel - sum(parts.values())) == -52_343, parts
+    a = _acct([neg])
+    assert a.bad == 0, a.bad
+    assert round(a.D["3PM_매출채권"]) == 0 and [round(x[8]) for x in a.rows_out] == [-52_343], a.rows_out
+    assert round(a.fin["예정"]) == -52_343, a.fin
+    print("test_d319_scheduled_negative_kept OK")
+
+
+def test_d305_watch_warning() -> None:
+    """D-305: 감지 목록(윙 사유 채권추심·빠른정산 사용액·쿠팡 판매자 성장 대출 + 로켓그로스 MCA·체크카드 칸) 중 처리 판정표(파일)에 없는
+    계정×항목 = '확인 필요' 불일치 사유 · 판정표에 있는 항목은 경고 없음."""
+    wing = _wing(1_000_000, [("채권추심", 10_000), ("쿠팡 판매자 성장 대출", 798_784), ("상품광고비", 1_000)])
+    rg = {**_rg_line(totalPayableAmount=10_000_000, totalMerchantCashAdvanceDeductionAmount=8_121_756,
+                     totalAdditionalDeductionAmount=8_121_756),
+          "정산일": "2026-08-26", "기간 시작": "2026-08-01", "기간 끝": "2026-08-07", "지급비율": 70, "최종지급액": 1_878_244}
+    a = _acct([wing], [rg], judge={"x1": {"채권추심": "시험 근거"}})
+    a.ucheck, a.start_note = [], ""
+    assert a.bad == 0, a.bad
+    assert a._why() == ["확인 필요 — 처리 판정표에 없는 MCA 상환 8,121,756원(D-305)",
+                        "확인 필요 — 처리 판정표에 없는 쿠팡 판매자 성장 대출 798,784원(D-305)"], a._why()
+    print("test_d305_watch_warning OK")
+
+
 # ── 관리 몫 입금 나누기(D-294 · 2026-11-17) — 근거 = 샘플검증2 1절 aehee5505(관리 100%): ② 1,270,470 · 있는 줄 1,153,573 · gen 6,609 →
 # 지금 방식은 배율 1.09506 으로 끝난 줄에 퍼뜨려 10-07 지급 RG 70% 107,947 → 118,209(+10,262). D-294 = 끝난 줄 = 그 줄 실제 관리 몫 ·
 # 지급 줄·gen 이 없는 잔액 110,288 = '입금 예정(지급일 미정)' 한 줄.
@@ -539,6 +671,11 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     except AttributeError:
         pass
+    test_d312_fast_used()
+    test_d312_own_deduction()
+    test_d304_wing_negative_round()
+    test_d319_scheduled_negative_kept()
+    test_d305_watch_warning()
     test_cost_only_scope()
     test_managed_alloc()
     test_settlement_ledger()

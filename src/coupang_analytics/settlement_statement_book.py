@@ -13,7 +13,7 @@ import openpyxl
 from coupang_analytics import settlement_additional_pay as AP
 from coupang_analytics import settlement_experience as XP
 from coupang_analytics import settlement_statement_source as SRC
-from coupang_analytics.settlement_statement_account import FAST, STS, SVC
+from coupang_analytics.settlement_statement_account import FAST, OWN, STS, SVC
 from coupang_analytics.settlement_statement_sheets import (
     NOTES, PCT, PENDING_NOTE, PLAIN, SHIP_LABEL, SIGNED, cell, flow, managed_lines, merge, section, shown, table)
 
@@ -154,6 +154,10 @@ def _refs(ws, r: int, ctx, a: dict) -> tuple[int, list]:
     r = flow(ws, r, "계정 전체 쿠팡 정산금액", a["settle_all"], "", fill="ref")
     r = flow(ws, r, "계정 전체 입금 완료", fin["지급 완료"], "", fill="ref")
     r = flow(ws, r, "계정 전체 입금 예정", fin["예정"], "", fill="ref")
+    for k, x in sorted(a["D"].items()):                 # 위탁자 본인 차감 = 계정 정산에선 빠짐 · 관리 상품 몫 0(D-312 ② · D-305 따로 줄)
+        if k.startswith(OWN) and round(x):
+            r = flow(ws, r, k, round(x), "쿠팡이 계정 정산에서 뺀 위탁자 개인 대출 상환·체크카드 대금 · 관리 상품 몫 0 · 위 G 에서 빼지 않음",
+                     fill="ref")
     for x in a["extras"]:
         r = flow(ws, r, f"쿠팡 별도 보상 — {x['내용']}", x["금액"], f"{x['일자']} 대표계좌 입금 · 정산과 별도 · 상품 구분 정보 없음",
                  fill="ref")

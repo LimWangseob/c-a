@@ -26,6 +26,7 @@ from coupang_analytics import settlement_statement_scope as SCOPE
 from coupang_analytics import settlement_statement_source as SRC
 
 MAP_CSV = "사업자_대응표.csv"
+OWN_JUDGE = "본인차감_처리판정.json"    # 선택 · {"계정": {계정ID: {감지 항목: 근거}}} — D-305 처리 판정표(근거 남긴 파일 · D-229)
 REQUIRED = (MAP_CSV, "체험단_보충.json", "쿠팡_별도보상.json", "관리시작달_차이표.xlsx", "svc_digital_judge.json", "ledger.json",
             SCOPE.JUDGE, SCOPE.SOURCE)
 DIGITAL_RATES = {5.8, 6.4, 7.8}
@@ -161,5 +162,7 @@ def load(a: StatementArgs) -> SimpleNamespace:
     _accounts(a, c)
     _managed(a, c)
     c.svc_judge = json.loads((a.inputs / "svc_digital_judge.json").read_text(encoding="utf-8"))
+    oj = a.inputs / OWN_JUDGE          # 선택 파일 · 없으면 빈 판정표 = 감지 항목 전부 '확인 필요' 사유(D-305 · 조용한 대체 아님)
+    c.own_judge = json.loads(oj.read_text(encoding="utf-8"))["계정"] if oj.is_file() else {}
     c.files, c.unjudged = _settle_files(a.settle_dir, c.svc_judge)
     return c
