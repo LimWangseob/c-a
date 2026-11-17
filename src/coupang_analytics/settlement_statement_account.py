@@ -28,6 +28,7 @@ AD, LOGI, MILK, SVC, ETC, COMP, REL, FAST = ("광고비", "로켓그로스 물�
                                              "빠른정산 계좌인출액")
 STS = ("지급 완료", "예정", "보류")
 # 위탁자 본인 차감(D-312 ② · D-305 따로 줄) = 쿠팡이 계정 정산에서 뺀 위탁자 개인 대출 상환·체크카드 대금 — 계정 합계엔 차감 · 관리 몫 0
+PM3 = "3PM_매출채권"              # 윙 차감 사유 원문 이름(D-304 음수 최종 회차 되돌림도 같은 항목)
 OWN = "위탁자 본인 차감"
 OWN_LOAN, OWN_MCA, OWN_CARD = f"{OWN} — 성장 대출", f"{OWN} — MCA 상환", f"{OWN} — 체크카드 대금"
 # 윙 차감 사유 → 공제 항목(D-312 ① 빠른정산 사용액 = 이미 당겨 받은 돈 ±0 = 계좌인출액과 같은 항목 · ② 26 성장 대출)
@@ -104,7 +105,11 @@ def deductions(r: dict) -> tuple[float, float, Counter]:
         rest = num(r.get("totalDeductionAmount")) - sum(parts.values())
         if round(rest):
             parts[ETC] += rest
-        return (0.0 if SL.release(r) else num(r.get("paidAmount"))), num(r.get("pendingAmount")), parts
+        pay, rel = (0.0 if SL.release(r) else num(r.get("paidAmount"))), num(r.get("pendingAmount"))
+        neg = pay + rel - sum(parts.values())
+        if round(neg) < 0:              # 음수 최종 회차 = 쿠팡이 다음 회차 '3PM_매출채권'으로 회수 → 같은 항목으로 되돌림(D-304 · 이중 차감 없음)
+            parts[PM3] += neg
+        return pay, rel, parts
     ad, mr = num(r.get("totalAdSalesDeductionAmount")), num(r.get("totalMilkRunDeductionAmount"))
     ar = num(r.get("totalArFactoringDeductionAmount"))        # 빠른정산(셀러월렛) 상환 — 추가공제 안(KB §1-14)
     mca, card = num(r.get("totalMerchantCashAdvanceDeductionAmount")), num(r.get("totalDebitCardDeductionAmount"))  # 80·81 추가공제 안(D-312 ②)
@@ -178,6 +183,8 @@ class AccountBase:
             pay, rel, parts = deductions(r)
             self.line_info.append((row[6].split(" ·")[0], r["채널"], str(row[3])[:7], pay, rel, parts, row))
             final = num(r["최종지급액"])
+            if r["채널"] == "윙":
+                final = max(final, 0.0)     # 윙 음수 최종 회차 = 0 지급 · 그 음수는 3PM 되돌림(D-304 정산금액 = Σmax)
             self.bad += round(pay + rel - sum(parts.values())) != round(final)
             self.D.update(parts)
             self.D[REL] -= rel

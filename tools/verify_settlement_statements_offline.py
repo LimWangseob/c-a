@@ -561,6 +561,51 @@ def test_d312_own_deduction() -> None:
     print("test_d312_own_deduction OK")
 
 
+class _Led:
+    """장부 가짜(지급 줄만) — 윙·로켓그로스 원본 줄 → Ledger.account 의 rows 모양."""
+
+    def __init__(self, wing, rg=()):
+        self.w, self.r = list(wing), list(rg)
+
+    def wing_rows(self, aid):
+        return self.w
+
+    def rg_rows(self, aid):
+        return self.r
+
+    def account(self, acct, per, un, rgf, aps):
+        rows = [[acct, ch, *SL._key(r), "지급 완료", 0, 0, r["최종지급액"]] for ch, rs in (("윙", self.w), ("로켓그로스", self.r)) for r in rs]
+        return {"rows": rows, "buckets": {"줄 생성 전": 0}, "e1_bad": [], "e2_bad": [], "e3": (0, 0)}
+
+
+def _acct(wing, rg=(), judge=None):
+    from types import SimpleNamespace
+    from coupang_analytics.settlement_statement_deduct import Account
+    ctx = SimpleNamespace(led=_Led(wing, rg), per={}, un={"가-x1": []}, rgf={}, aps={"가-x1": {}}, tot={"가-x1": {"settle": 0}},
+                          own_judge=judge or {})
+    a = Account(ctx, "가-x1")
+    a._payouts()
+    return a
+
+
+def test_d304_wing_negative_round() -> None:
+    """D-304: 윙 회차 최종액(paid − 공제)이 음수면 그 음수만큼 '3PM_매출채권'에 되돌려 넣고(공제 −), 뒤 회차 3PM 회수 줄 = 같은 항목
+    공제 → 짝이면 합 0 · 정산금액 = Σmax(회차 최종액, 0) = 쿠팡 실지급(이중 차감 없음). 실측 guarisen2024 이중 차감 52,343."""
+    from coupang_analytics import settlement_statement_account as SA
+    neg = _wing(1_001_000, [("상품광고비", 1_053_343)], day="2026-08-24")
+    back = {**_wing(500_000, [("3PM_매출채권", 52_343)], day="2026-08-31"), "기간 시작": "2026-08-08", "기간 끝": "2026-08-14"}
+    pay, rel, parts = SA.deductions(neg)
+    assert (round(parts["3PM_매출채권"]), round(parts["광고비"])) == (-52_343, 1_053_343), parts
+    assert round(pay + rel - sum(parts.values())) == 0
+    assert round(SA.deductions(back)[2]["3PM_매출채권"]) == 52_343
+    a = _acct([neg, back])
+    assert a.bad == 0, a.bad
+    assert round(a.D["3PM_매출채권"]) == 0 and round(a.D["광고비"]) == 1_053_343, a.D
+    assert sorted(round(x[8]) for x in a.rows_out) == [0, 447_657], a.rows_out          # 음수 회차 = 0 지급
+    assert round(a.fin["지급 완료"]) == 447_657 == round(a.paid_total), a.fin              # = 쿠팡 실지급(0 + 447,657)
+    print("test_d304_wing_negative_round OK")
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -568,6 +613,7 @@ def main() -> int:
         pass
     test_d312_fast_used()
     test_d312_own_deduction()
+    test_d304_wing_negative_round()
     test_cost_only_scope()
     test_managed_alloc()
     test_settlement_ledger()
