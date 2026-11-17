@@ -20,6 +20,7 @@ from pathlib import Path
 
 COUPON_DIRNAME = "쿠폰목록_일별"
 INVENTORY_DIRNAME = "재고현황_일별"
+PRODUCT_INFO_DIRNAME = "상품정보_일별"   # 상품조회 칸 뽑아 보관(product_info · T-100)
 _SUFFIX = ".json.gz"
 _PARTIAL = "_부분"
 
@@ -35,6 +36,14 @@ def _day_dir(out_dir, dirname: str, account_id: str) -> Path:
 def has_day(out_dir, dirname: str, account_id: str) -> bool:
     """오늘 완료본이 있나(부분본은 아님)."""
     return (_day_dir(out_dir, dirname, account_id) / f"{_now():%Y-%m-%d}{_SUFFIX}").exists()
+
+
+def complete_files(out_dir, dirname: str, account_id: str) -> list[Path]:
+    """그 계정 완료본 파일(부분본 제외) — 이름순 = 날짜순(같은 날 시각 붙은 파일이 뒤)."""
+    d = _day_dir(out_dir, dirname, account_id)
+    if not d.is_dir():
+        return []
+    return sorted(p for p in d.glob(f"*{_SUFFIX}") if _PARTIAL not in p.name)
 
 
 def _free_path(d: Path, now: datetime, partial: bool) -> Path:
