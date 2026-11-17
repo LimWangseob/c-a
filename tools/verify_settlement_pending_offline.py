@@ -217,10 +217,10 @@ def test_wing_ops(base: Path) -> None:
     assert _near(c.um_sales, 0) and _near(c.um_settle, 0), f"c 확인 필요 금액 = 관리 몫 0: {c.um_sales} {c.um_settle}"
 
 
-def _cut_run(base: Path, files: list, u: list) -> tuple:
-    """기준일 11-10 · 일별 = 10-10 옵션1 600 · 10-20 옵션2 400 → (나눈 조각 금액, 확인 필요 (판매 방식, 달, 정산대상), 근거·사유)."""
+def _cut_run(base: Path, files: list, u: list, basis: str = "2026-11-10") -> tuple:
+    """기준일(기본 11-10) · 일별 = 10-10 옵션1 600 · 10-20 옵션2 400 → (나눈 조각 금액, 확인 필요 (판매 방식, 달, 정산대상), 근거·사유)."""
     a = _stub(base, u)
-    a.ctx.basis = "2026-11-10"
+    a.ctx.basis = basis
     a.ctx.daily = {AID: _wing_daily(None, only={"2026-10-10": ("1", 600), "2026-10-20": ("2", 400)})}
     a.files = files
     a._unsettled_share()
@@ -283,6 +283,31 @@ def test_cut_basis() -> None:
         assert got[1] == [("윙", "2026-11", 640)] and "정산일 모르는 윙 정산 파일 1개" in got[2][0], f"g 정산일 모르는 윙 파일 = 확인 필요: {got}"
 
 
+def test_actual_cut() -> None:
+    """D-292 — ① 주문별매출 실제값도 기준일에 앱이 가진 자료만(B8·ⓒ2·ⓑo 와 같은 자르기):
+    h 기준일 11-10 · 10월 예정 600·500 · 202610 주문별매출(받는 날 11-15 = 기준일 뒤)이 쿠팡 예정과 원 단위 같아도 ① 에 안 씀 → 그 파일이 없을 때와 같음.
+    i 기준일 11-15(202610 은 받은 달) · 정산일 11-20 윙 파일(기준일 뒤)이 주문 44 를 덮어 ① 이 맞아 보여도 그 파일 기간은 안 뺌 → 그 파일이 없을 때와 같음.
+    (E2 = 기준일 11-15 · 받은 202610 · 기준일 전 파일 → ① 그대로 = test_pending_split)"""
+    u: list = [("윙", "2026-10", 600, 500, "쿠팡 계산", "조회", [])]
+    with tempfile.TemporaryDirectory() as t0, tempfile.TemporaryDirectory() as t1:
+        alone = _cut_run(Path(t0), [], u)
+        _later_orders(Path(t1))
+        mixed = _cut_run(Path(t1), [], u)
+        assert not any("주문별매출 실제값" in h for h in mixed[2]), f"h 기준일 뒤 받는 주문별매출은 ① 에 안 씀: {mixed}"
+        assert mixed[:2] == alone[:2], f"h 기준일 뒤 받는 주문별매출을 넣어도 = 없을 때와 같음: {mixed} ≠ {alone}"
+    rows = [_row(40, 1, 600, 500, "2026-10-10", "2026-10-18"), _row(44, 2, 400, 360, "2026-10-20", "2026-10-28")]
+    f45 = _file("윙", date(2026, 10, 26), date(2026, 11, 1), [(44, "2", 400, 360, date(2026, 10, 28))], settle=date(2026, 11, 20))
+    with tempfile.TemporaryDirectory() as t0, tempfile.TemporaryDirectory() as t1:
+        for t in (t0, t1):
+            d = Path(t) / "검증자료" / "월자료" / ACCT
+            d.mkdir(parents=True)
+            (d / "주문별매출_202610.json").write_text(json.dumps({"줄": rows}), encoding="utf-8")
+        alone = _cut_run(Path(t0), [], u, "2026-11-15")
+        mixed = _cut_run(Path(t1), [f45], u, "2026-11-15")
+        assert not any("주문별매출 실제값" in h for h in mixed[2]), f"i 기준일 뒤 정산된 윙 파일 기간은 ① 에서 안 뺌: {mixed}"
+        assert mixed[:2] == alone[:2], f"i 기준일 뒤 정산된 윙 파일을 넣어도 = 없을 때와 같음: {mixed} ≠ {alone}"
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -291,6 +316,7 @@ def main() -> int:
     test_wing_unsettled()
     test_pending_split()
     test_cut_basis()
+    test_actual_cut()
     print("✅ 정산 예정분 관리 몫 나누기 시험(D-262 ① 실제값 · 윙 B8 → ⓒ2 → ⓑo 채움(D-282)·지연 분포 저장 D-269 ① · 로켓그로스 그 달 판매 비율 D-269 ② · 쿠팡 예정 금액 그대로 D-279 · 금액 판정 D-281) 통과")
     return 0
 
