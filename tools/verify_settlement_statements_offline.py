@@ -523,12 +523,51 @@ def test_d312_fast_used() -> None:
     print("test_d312_fast_used OK")
 
 
+OWN_LOAN, OWN_MCA, OWN_CARD = "위탁자 본인 차감 — 성장 대출", "위탁자 본인 차감 — MCA 상환", "위탁자 본인 차감 — 체크카드 대금"
+
+
+def _rg_line(**kw):
+    base = dict.fromkeys(("totalAdSalesDeductionAmount", "totalMilkRunDeductionAmount", "totalArFactoringDeductionAmount",
+                          "totalMerchantCashAdvanceDeductionAmount", "totalDebitCardDeductionAmount", "totalSalesAdjustment",
+                          "totalFinalCfsFeeDeductionAmount", "totalCfsInventoryCompensationAmount"), 0)
+    return {"채널": "로켓그로스", **base, **kw}
+
+
+def test_d312_own_deduction() -> None:
+    """D-312 ②: 26 성장 대출(윙 사유) · 80 MCA 상환 · 81 체크카드(RG 칸) = 정산금액에서 차감(쿠팡 실지급과 같음) · '위탁자 본인 차감'
+    줄(D-305 따로 줄 · 기타 공제에 섞지 않음) · 관리 몫 0. 실측 tellace83 26 798,784 · 80 8,121,756 · seankim137 81 82,870."""
+    from collections import Counter
+    from types import SimpleNamespace
+    from coupang_analytics import settlement_statement_account as SA
+    from coupang_analytics.settlement_statement_deduct import Account
+    pay, rel, parts = SA.deductions(_wing(798784, [("쿠팡 판매자 성장 대출", 798784)]))
+    assert parts == {OWN_LOAN: 798784}, parts
+    add = 8121756 + 82870 + 5000                                     # 추가공제 = MCA + 체크카드 + 그 밖 5,000
+    pay, rel, parts = SA.deductions(_rg_line(totalPayableAmount=10_000_000, totalMerchantCashAdvanceDeductionAmount=8121756,
+                                             totalDebitCardDeductionAmount=82870, totalAdditionalDeductionAmount=add))
+    assert (parts[OWN_MCA], parts[OWN_CARD], parts["기타 공제"]) == (8121756, 82870, 5000), parts
+    assert round(pay - sum(parts.values())) == 10_000_000 - add      # 계정 지급액 = 쿠팡 실지급 그대로
+    # 관리 몫: 위탁자 본인 차감 = 0 · 다른 공제는 그대로(기타 공제 관리 비율 0.5 → 2,500)
+    a = Account.__new__(Account)
+    a.D = Counter({OWN_LOAN: 798784, OWN_MCA: 8121756, OWN_CARD: 82870, "기타 공제": 5000})
+    a.share, a.rates = {"기타 공제": (0.5, "시험", "쿠팡 자료")}, {"기타 공제": ("", 0.5)}
+    a.sv, a.start, a.active, a.line_info = {"잔액 관리": 0}, "2025-01", False, []
+    a.L, a.mset, a.S, a.settle_m = {"gen": {}}, {}, 0.0, 100_000.0
+    a.ctx = SimpleNamespace()
+    a._rest_and_status()
+    assert all(a.share[k][0] == 0 and a.share[k][2] == "위탁자 본인 차감" for k in (OWN_LOAN, OWN_MCA, OWN_CARD)), a.share
+    assert {k: round(x) for k, x in a.Dm.items() if round(x)} == {"기타 공제": 2500}, a.Dm
+    assert round(a.pay_m) == 97_500, a.pay_m
+    print("test_d312_own_deduction OK")
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except AttributeError:
         pass
     test_d312_fast_used()
+    test_d312_own_deduction()
     test_cost_only_scope()
     test_managed_alloc()
     test_settlement_ledger()

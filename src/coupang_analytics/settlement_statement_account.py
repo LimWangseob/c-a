@@ -27,7 +27,11 @@ AD, LOGI, MILK, SVC, ETC, COMP, REL, FAST = ("광고비", "로켓그로스 물�
                                              "판매자서비스이용료", "기타 공제", "재고 분실·파손 보상(쿠팡이 줌)", "보류됐다 풀린 돈",
                                              "빠른정산 계좌인출액")
 STS = ("지급 완료", "예정", "보류")
-WING_KEY = {"빠른정산 사용액": FAST}      # 윙 차감 사유 → 공제 항목(D-312 ① 빠른정산 사용액 = 이미 당겨 받은 돈 ±0 = 계좌인출액과 같은 항목)
+# 위탁자 본인 차감(D-312 ② · D-305 따로 줄) = 쿠팡이 계정 정산에서 뺀 위탁자 개인 대출 상환·체크카드 대금 — 계정 합계엔 차감 · 관리 몫 0
+OWN = "위탁자 본인 차감"
+OWN_LOAN, OWN_MCA, OWN_CARD = f"{OWN} — 성장 대출", f"{OWN} — MCA 상환", f"{OWN} — 체크카드 대금"
+# 윙 차감 사유 → 공제 항목(D-312 ① 빠른정산 사용액 = 이미 당겨 받은 돈 ±0 = 계좌인출액과 같은 항목 · ② 26 성장 대출)
+WING_KEY = {"빠른정산 사용액": FAST, "쿠팡 판매자 성장 대출": OWN_LOAN}
 
 
 def num(v) -> float:
@@ -103,9 +107,10 @@ def deductions(r: dict) -> tuple[float, float, Counter]:
         return (0.0 if SL.release(r) else num(r.get("paidAmount"))), num(r.get("pendingAmount")), parts
     ad, mr = num(r.get("totalAdSalesDeductionAmount")), num(r.get("totalMilkRunDeductionAmount"))
     ar = num(r.get("totalArFactoringDeductionAmount"))        # 빠른정산(셀러월렛) 상환 — 추가공제 안(KB §1-14)
+    mca, card = num(r.get("totalMerchantCashAdvanceDeductionAmount")), num(r.get("totalDebitCardDeductionAmount"))  # 80·81 추가공제 안(D-312 ②)
     # 판매 조정(totalSalesAdjustment)은 추가공제에도 같은 금액으로 들어 있어 서로 지워짐(줄 공식 E2 와 같은 결과)
-    parts.update({AD: ad, MILK: mr, FAST: ar,
-                  ETC: num(r.get("totalAdditionalDeductionAmount")) - ad - mr - ar - num(r.get("totalSalesAdjustment")),
+    parts.update({AD: ad, MILK: mr, FAST: ar, OWN_MCA: mca, OWN_CARD: card,
+                  ETC: num(r.get("totalAdditionalDeductionAmount")) - ad - mr - ar - mca - card - num(r.get("totalSalesAdjustment")),
                   LOGI: num(r.get("totalFinalCfsFeeDeductionAmount")), COMP: -num(r.get("totalCfsInventoryCompensationAmount"))})
     return num(r.get("totalPayableAmount")), 0.0, parts
 

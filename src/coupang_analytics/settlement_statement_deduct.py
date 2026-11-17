@@ -14,7 +14,7 @@ from collections import Counter
 from coupang_analytics import settlement_additional_pay as AP
 from coupang_analytics import settlement_managed_alloc as MA
 from coupang_analytics.settlement_statement_account import (
-    AD, COMP, LOGI, MILK, REL, STS, SVC, AccountBase, ad_files, milk_rows, month_add, num, ratio)
+    AD, COMP, LOGI, MILK, OWN, REL, STS, SVC, AccountBase, ad_files, milk_rows, month_add, num, ratio)
 
 
 def status_split(line_info: list, gen: dict, mset: dict, settle_m: float, rates: dict, S: float):
@@ -132,6 +132,9 @@ class Account(AccountBase):
     # ── 나머지 항목·보류 해제·입금 나누기(옛 485~499) ──
     def _rest_and_status(self) -> None:
         D, share, sv = self.D, self.share, self.sv
+        for k in [k for k in D if k.startswith(OWN)]:     # 위탁자 본인 차감 = 관리 몫 0(D-312 ②)
+            self.rates[k] = ("", 0.0)
+            share[k] = (0.0, "위탁자 개인 대출 상환·체크카드 대금 — 쿠팡이 계정 정산에서 뺀 돈 · 관리 상품 몫 0(D-312)", OWN)
         for k in sorted(set(D) - set(share) - {REL}):
             self.put(k, self.start, 0.0, 0.0, "쿠팡이 상품 구분 없이 준 항목", "쿠팡 자료")
         rel_m = {st: -sum(x[4] * self.line_ratio(x[1], x[2]) for x in self.line_info if x[2] >= self.start and x[0] == st)
