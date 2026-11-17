@@ -1,11 +1,12 @@
-"""위탁정산서 정산 예정분 관리 몫 나누기 시험(오프라인 · 결정적 · 실 API·네트워크 없음) — T-63 · T-73 · D-262 · D-266 · D-267 · D-269 · D-279 · D-281.
+"""위탁정산서 정산 예정분 관리 몫 나누기 시험(오프라인 · 결정적 · 실 API·네트워크 없음) — T-63 · T-73 · D-262 · D-266 · D-267 · D-269 · D-279 · D-281 · D-282.
 
 기대값 = 결정 규칙에서 손으로 계산한 금액(원 · 코드에서 뽑지 않음 · 판정 = 금액 일치 D-281):
   ① 윙 주문별매출 실제값(D-262 ①) — 정산 파일 기간 밖 구매확정 줄 합(판매 = productGmv + deliveryGmv · 정산 = apAmount)이
      쿠팡 예정과 원 단위 같으면 그 줄의 상품(배송비 줄 = 같은 주문 상품)으로 나눔.
   ② 윙 B8+환산(D-266 ① · D-267) — 판매분석 일별 윙 순액 결제일 [그 달 1일−30일, E−8일 = 기준일−9일] − 이미 구매확정된 판매 · 옵션 합 뒤 음수 0.
   ③ 윙 B8 이 '확인 필요' 조건이면 빼지 않고 ⓒ2 = 저장해 둔 결제→구매확정 지연 분포 + 윙 정산 파일 환산(이미 확정 주문 빼기 없음)으로 채움(D-269 ①) ·
-     지연 분포는 계산할 때마다 저장(검증자료/결제확정_지연분포.json). ⓒ2 도 안 되면 그 금액만 '확인 필요'.
+     지연 분포는 계산할 때마다 저장(검증자료/결제확정_지연분포.json). ⓒ2 도 안 되면 ⓑo(D-282 · 기준일 전에 받은 자료만 · 시나리오 a·b·c)
+     → 그것도 안 되면 그 금액만 '확인 필요'.
   ④ 로켓그로스 = 그 달 판매분석 판매 비율(D-269 ② · T-63 이전 방식 · 기준일 뒤 주도 같음) · 주가 달을 걸치면 날짜의 달로 나눔(D-266 ③) ·
      그 달 판매분석 판매 없음·0~100% 밖 = 그 금액만 '확인 필요'.
   ⑤ 쿠팡 예정 줄 금액은 그대로(D-279 ①) — 나눈 조각의 판매·정산 합 = 쿠팡 예정 줄 금액(원 단위).
@@ -20,7 +21,7 @@ import json
 import sys
 import tempfile
 from collections import Counter, defaultdict
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -54,8 +55,9 @@ def _row(o, vid, gmv, ap, paid, conf, dlv=0, kind="ORDER") -> dict:
             "paidDate": paid, "confirmDate": conf}
 
 
-def _file(ch: str, s: date, e: date, rows: list) -> SF.SettleFile:
-    f = SF.SettleFile(channel=ch, account=ACCT, period_start=s, period_end=e, kind="주정산" if ch == "윙" else "판매수수료")
+def _file(ch: str, s: date, e: date, rows: list, settle: date | None = None) -> SF.SettleFile:
+    f = SF.SettleFile(channel=ch, account=ACCT, period_start=s, period_end=e, kind="주정산" if ch == "윙" else "판매수수료",
+                      settle_date=settle or e + timedelta(days=7))
     f.rows = [SF.SettleRow(ch, ACCT, s, e, str(o), "P" + v, v, "상품", "옵션", 1, sl, 0, 0, st, rec, "판매")
               for o, v, sl, st, rec in rows]
     return f
@@ -157,12 +159,7 @@ def test_pending_split() -> None:
         assert a.svc_month("2026-11") == (400.0, 900.0), f"이용료 덜 온 달 = 정산 파일 + 예정분 관리 판매: {a.svc_month('2026-11')}"
         saved = json.loads((base / "검증자료" / "결제확정_지연분포.json").read_text(encoding="utf-8"))
         assert saved["분포"] == [[8, 1.0]], f"E8 결제→구매확정 지연 분포 저장(D-269 ①): {saved}"
-        b = _stub(base, [("윙", "2026-11", 100, 80, "쿠팡 계산", "조회", []), ("윙", "2026-09", -50, -45, "쿠팡 계산", "조회", [])])
-        b._unsettled_share()
-        why = {c[1]: c[4] for c in b.ucheck}
-        assert "검산" in why.get("2026-11", "") and "원" in why.get("2026-11", "") and "나눌 판매 없음" in why.get("2026-09", ""), \
-            f"E9 B8·ⓒ2 둘 다 검산 걸림(금액으로 표시 D-281)·음수 예정 = 확인 필요: {why}"
-        assert _near(b.um_sales, 0) and _near(b.um_settle, 0), f"확인 필요 금액 = 관리 몫 0: {b.um_sales} {b.um_settle}"
+        test_wing_ops(base)
         with tempfile.TemporaryDirectory() as td2:                  # 주문별매출 하나도 없음 + 저장한 지연 분포 → ⓒ2 로 채움(D-269 ①)
             (Path(td2) / "검증자료").mkdir()
             (Path(td2) / "검증자료" / "결제확정_지연분포.json").write_text(json.dumps(saved), encoding="utf-8")
@@ -176,6 +173,50 @@ def test_pending_split() -> None:
             assert "ⓒ2" in c.ushare[0][7], f"근거 문구 = ⓒ2: {c.ushare[0][7]}"
 
 
+def _wing_daily(extra: dict | None, only: dict | None = None) -> dict:
+    """윙 판매분석 일별 — only 가 있으면 그것만 · 아니면 _daily() 에 extra({날짜: (옵션, 금액)}) 더함."""
+    d = {k: {"옵션": {}} for k in only} if only is not None else _daily()
+    for day, (vid, amt) in (only or extra or {}).items():
+        d.setdefault(day, {"옵션": {}})["옵션"][vid] = {"구분": "윙", "판매금액": amt}
+    return d
+
+
+def test_wing_ops(base: Path) -> None:
+    """D-282 ⓑo — B8·ⓒ2 둘 다 '확인 필요'일 때 판매분석 일별 [그 달 1일−30일, 판매 끝] − 이미 확정(기준일 전에 받은 자료만)의 관리 비율 × 쿠팡 예정.
+
+    손 계산(옵션 1 = 관리 · 2 = 관리 밖 · 지연 분포 = 202610 주문 2줄 모두 8일):
+    a 기준일 11-15 · 11월 예정 판매 100·정산 80 · 일별에 11-12 옵션2 600 더함. B8(결제 10-02~11-06) 남은 판매 400 · ⓒ2 1,550 = 둘 다 검산(1.5배) 걸림.
+      ⓑo 결제 10-02~11-14 · 202610 주문별매출(10-31+15 = 11-15 ≤ 기준일 → 받음) 옵션1 1,000·옵션2 200 빼고 · 윙 정산 파일(정산일 11-15 ≤ 기준일)
+      주문 9 옵션2 50 을 11-03−8일 = 10-26 에서 뺌 → 옵션1 1,000+300+100+999−1,000 = 1,399 · 옵션2 200+50−50+600−200−50 = 550
+      → 관리 비율 1,399/1,949 → 관리 판매 71.78 · 관리 정산 57.42.
+    b 기준일 11-10 · 11월 예정 판매 200·정산 160. 202610 주문별매출은 아직 안 받음(11-15 > 11-10) · 정산 파일 정산일 11-15 > 기준일 → 둘 다 빼기에 안 씀.
+      B8 남은 판매 400 · ⓒ2 1,600(검산 300 이상 = 둘 다 걸림). ⓑo 결제 10-02~11-09 = 옵션1 1,400 · 옵션2 200 → 0.875 → 관리 175 · 140
+      (받기 전 자료를 섞으면 옵션2 가 0 → 200·160 이 되어 틀림).
+    c 기준일 11-15 · 일별 = 10-05 옵션1 1,000 뿐(202610 주문 3 으로 이미 확정) → ⓑo 남은 판매 0원 = 확인 필요(사유 금액 표시 D-281) · 관리 몫 0.
+    """
+    a = _stub(base, [("윙", "2026-11", 100, 80, "쿠팡 계산", "조회", []), ("윙", "2026-09", -50, -45, "쿠팡 계산", "조회", [])])
+    a.ctx.daily = {AID: _wing_daily({"2026-11-12": ("2", 600)})}
+    a._unsettled_share()
+    why = {c[1]: c[4] for c in a.ucheck}
+    assert "2026-11" not in why, f"a ⓑo 로 채움 = 11월 확인 필요 0: {why}"
+    w = _sum(a)[("윙", "2026-11")]
+    assert _near(w[2], 100 * 1399 / 1949) and _near(w[3], 80 * 1399 / 1949), f"a ⓑo 관리 판매·정산 = 71.78·57.42: {w}"
+    assert "ⓑo" in next(x[7] for x in a.ushare if x[1] == "2026-11"), f"a 근거 문구 = ⓑo: {a.ushare}"
+    assert "나눌 판매 없음" in why.get("2026-09", "") and "ⓑo" in why.get("2026-09", ""), f"a 음수 예정·지연 자료 없음 = 확인 필요: {why}"
+    b = _stub(base, [("윙", "2026-11", 200, 160, "쿠팡 계산", "조회", [])])
+    b.ctx.basis = "2026-11-10"
+    b._unsettled_share()
+    assert not b.ucheck, f"b ⓑo 로 채움 = 확인 필요 0: {b.ucheck}"
+    w = _sum(b)[("윙", "2026-11")]
+    assert _near(w[2], 175) and _near(w[3], 140), f"b 기준일 전에 안 받은 지난달 주문별매출·정산 파일은 안 뺌 → 관리 175·140: {w}"
+    c = _stub(base, [("윙", "2026-11", 100, 80, "쿠팡 계산", "조회", [])])
+    c.ctx.daily = {AID: _wing_daily(None, only={"2026-10-05": ("1", 1000)})}
+    c._unsettled_share()
+    why = {x[1]: x[4] for x in c.ucheck}
+    assert "ⓑo: 나눌 판매 없음" in why.get("2026-11", "") and "쿠팡 예정 판매 100원" in why.get("2026-11", ""), f"c ⓑo 남은 판매 0 = 확인 필요(금액): {why}"
+    assert _near(c.um_sales, 0) and _near(c.um_settle, 0), f"c 확인 필요 금액 = 관리 몫 0: {c.um_sales} {c.um_settle}"
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -183,7 +224,7 @@ def main() -> int:
         pass
     test_wing_unsettled()
     test_pending_split()
-    print("✅ 정산 예정분 관리 몫 나누기 시험(D-262 ① 실제값 · 윙 B8 → ⓒ2 채움·지연 분포 저장 D-269 ① · 로켓그로스 그 달 판매 비율 D-269 ② · 쿠팡 예정 금액 그대로 D-279 · 금액 판정 D-281) 통과")
+    print("✅ 정산 예정분 관리 몫 나누기 시험(D-262 ① 실제값 · 윙 B8 → ⓒ2 → ⓑo 채움(D-282)·지연 분포 저장 D-269 ① · 로켓그로스 그 달 판매 비율 D-269 ② · 쿠팡 예정 금액 그대로 D-279 · 금액 판정 D-281) 통과")
     return 0
 
 
