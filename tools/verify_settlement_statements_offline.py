@@ -606,6 +606,21 @@ def test_d304_wing_negative_round() -> None:
     print("test_d304_wing_negative_round OK")
 
 
+def test_d305_watch_warning() -> None:
+    """D-305: 감지 목록(윙 사유 채권추심·빠른정산 사용액·쿠팡 판매자 성장 대출 + 로켓그로스 MCA·체크카드 칸) 중 처리 판정표(파일)에 없는
+    계정×항목 = '확인 필요' 불일치 사유 · 판정표에 있는 항목은 경고 없음."""
+    wing = _wing(1_000_000, [("채권추심", 10_000), ("쿠팡 판매자 성장 대출", 798_784), ("상품광고비", 1_000)])
+    rg = {**_rg_line(totalPayableAmount=10_000_000, totalMerchantCashAdvanceDeductionAmount=8_121_756,
+                     totalAdditionalDeductionAmount=8_121_756),
+          "정산일": "2026-08-26", "기간 시작": "2026-08-01", "기간 끝": "2026-08-07", "지급비율": 70, "최종지급액": 1_878_244}
+    a = _acct([wing], [rg], judge={"x1": {"채권추심": "시험 근거"}})
+    a.ucheck, a.start_note = [], ""
+    assert a.bad == 0, a.bad
+    assert a._why() == ["확인 필요 — 처리 판정표에 없는 MCA 상환 8,121,756원(D-305)",
+                        "확인 필요 — 처리 판정표에 없는 쿠팡 판매자 성장 대출 798,784원(D-305)"], a._why()
+    print("test_d305_watch_warning OK")
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -614,6 +629,7 @@ def main() -> int:
     test_d312_fast_used()
     test_d312_own_deduction()
     test_d304_wing_negative_round()
+    test_d305_watch_warning()
     test_cost_only_scope()
     test_managed_alloc()
     test_settlement_ledger()

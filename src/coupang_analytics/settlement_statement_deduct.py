@@ -182,6 +182,8 @@ class Account(AccountBase):
             why.append(f"지급 줄 공식 어긋남 {self.bad}")
         if self.start_note:
             why.append(self.start_note)
+        judged = self.ctx.own_judge.get(self.aid, {})
+        why += [f"확인 필요 — 처리 판정표에 없는 {k} {x:,.0f}원(D-305)" for k, x in sorted(self.watch.items()) if round(x) and k not in judged]
         return why
 
     def run(self) -> dict:
