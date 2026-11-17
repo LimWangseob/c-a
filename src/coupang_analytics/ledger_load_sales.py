@@ -16,7 +16,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-from .ledger_src import Registry, account_id, d10, nid, won
+from .ledger_src import RATIO_REG, RATIO_SQL, Registry, account_id, d10, nid, won
 
 RAW = re.compile(r"^(?P<acc>.+?)_(?P<kind>vendor_inventory|sales|inventory)_p\d+\.json\.gz$")
 MONTH_FILES = {"주문별매출": "반영", "라이브정산": "반영", "매입세금계산서": "생략", "윙부가세상세": "생략",
@@ -138,16 +138,20 @@ class SalesLoader:
             if fid is None:
                 continue
             day = "최신"
+            self._fid = fid
             n = self._raw_file(json.load(gzip.open(p, "rt", encoding="utf-8")), acc, kind, day)
             self.reg.done(fid, n, n)
 
     def _raw_file(self, j: dict, acc: str, kind: str, day: str) -> int:
         n = 0
         if kind == "vendor_inventory":
-            for pr in (j.get("data") or {}).get("productList") or []:
-                for it in pr.get("vendorInventoryItems") or []:
+            for pi, pr in enumerate((j.get("data") or {}).get("productList") or []):
+                for ii, it in enumerate(pr.get("vendorInventoryItems") or []):
                     self.attr.add(acc, it.get("vendorItemId"), it.get("registrationType") or pr.get("registrationType"),
                                   pr.get("vendorInventoryId"), "", "", it.get("skuId"), "상품조회", day)
+                    self.con.execute(RATIO_SQL, (acc, RATIO_REG, nid(pr.get("vendorInventoryId")), nid(it.get("vendorItemId")),
+                                                 d10(pr.get("createdOn")), 0.0, str(pr.get("productStatus") or ""),
+                                                 self._fid, f"productList[{pi}].items[{ii}]"))
                     n += 1
         elif kind == "sales":
             for x in j.get("vendorItems") or []:

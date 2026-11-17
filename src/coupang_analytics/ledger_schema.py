@@ -3,6 +3,8 @@
 - 상품 내역 = 옵션(상품) 단위 값: ① sale_daily · ② order_line(+order_pay) · ③ product_cost.
 - 계정 내역 = 계정 단위 값: ④ pay_round · account_entry(역할 '지급 구성' / '대조용').
 - ⑤ pending_est = 정산 예정분 상품별 예상 → 실제 · ⑥ option_attr = 옵션 짝(KEY 연결용·금액 없음).
+- ⑦ ratio_src = 계정 단위 값을 상품으로 나눌 때 쓰는 쿠팡 원천 비율 자료(광고 보고서 옵션별 광고비 · 입고 적치 수량 · 등록상품 등록일)
+  — 금액 합에 넣지 않음(D-140·D-271 · 4단계 2차).
 - 모든 자료 줄에 원천 위치(file_id + sheet + src_row)를 둔다. 판정(judgment)은 Claude 판정표를 옮긴 것.
 - 계획 = output/_시험_261116_장부DB/계획.md · KEY = output/_분석_261116_예정분나누기/장부_KEY_그룹_분석.md 3절.
 """
@@ -84,6 +86,11 @@ TABLES: dict[str, str] = {
         check_name TEXT NOT NULL, account_id TEXT NOT NULL, subject TEXT NOT NULL,
         expected INTEGER, actual INTEGER, diff INTEGER, bucket TEXT NOT NULL, cause TEXT NOT NULL DEFAULT '',
         PRIMARY KEY(check_name, account_id, subject))""",
+    "ratio_src": """ratio_src(
+        account_id TEXT NOT NULL, kind TEXT NOT NULL, link_key TEXT NOT NULL, option_id TEXT NOT NULL,
+        day TEXT NOT NULL DEFAULT '', value REAL NOT NULL DEFAULT 0, flag TEXT NOT NULL DEFAULT '',
+        file_id INTEGER NOT NULL, src_pos TEXT NOT NULL,
+        PRIMARY KEY(file_id, src_pos))""",
 }
 
 # 표마다 내용 해시를 낼 때의 정렬 순서(같은 자료 → 같은 해시 · V1).
@@ -95,7 +102,7 @@ ORDER_BY: dict[str, str] = {
     "order_pay": "file_id, src_row", "product_cost": "file_id, sheet, src_row",
     "pay_round": "account_id, sale_type, round_key", "account_entry": "file_id, src_pos, item",
     "pending_est": "account_id, basis, sale_type, round_key, option_id", "judgment": "kind, subject",
-    "check_result": "check_name, account_id, subject",
+    "check_result": "check_name, account_id, subject", "ratio_src": "file_id, src_pos",
 }
 HASH_SKIP = {"run_meta"}          # 실행 시각 등 → 해시 대상 아님
 

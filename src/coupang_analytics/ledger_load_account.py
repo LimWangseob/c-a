@@ -18,7 +18,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from . import settlement_files as SF
-from .ledger_src import Registry, account_id, blank, d10, header_index, nid, won
+from .ledger_src import RATIO_AD, RATIO_INBOUND, RATIO_SQL, Registry, account_id, blank, d10, header_index, nid, won
 
 RG_PAY = ("totalLastSettlementUnpaidCfsDeductionAmount", "totalPastCfsDeductionAmount", "totalAdSalesDeductionAmount",
           "totalMilkRunDeductionAmount", "totalArFactoringDeductionAmount", "totalNegativeDeductionAmount",
@@ -167,9 +167,11 @@ class AccountLoader:
                 self._ad_json(p, acc)
             elif rest.startswith("밀크런") and p.suffix == ".xlsx":
                 self._milkrun(p, acc)
+            elif rest.startswith("매출성장광고") and p.suffix == ".xlsx":
+                self._ad_report(p, acc)
             elif self.reg.wanted(acc):
                 self.reg.add(p, f"광고 기타({rest.split('_')[0]})", acc, status="생략",
-                             note="대조표 7절 생략(매출성장광고·광고 상태)")
+                             note="대조표 7절 생략(광고 상태)")
         self.con.commit()
 
     def _ad_json(self, p: Path, acc: str) -> None:
@@ -181,6 +183,34 @@ class AccountLoader:
             self.entry(acc, "", f"date:{d10(x.get('date'))}", f"광고 청구가능 {x.get('adType') or ''}", "대조용",
                        -won(x.get("billableAmount")), nid(x.get("campaignId")), d10(x.get("date")), fid, f"items[{i}]")
         self.reg.done(fid, len(items), len(items))
+
+    def _ad_report(self, p: Path, acc: str) -> None:
+        """매출성장광고 보고서 → ratio_src '광고 보고서'(날짜×캠페인×광고집행 옵션 광고비 합 · 광고비를 옵션으로 나누는 비율 자료 D-140·D-119).
+        같은 날짜·캠페인·옵션 줄(키워드·지면별)은 한 줄로 더함 · src_pos = 첫 행+줄 수."""
+        fid = self.reg.add(p, "광고 보고서(매출성장광고)", acc)
+        if fid is None:
+            return
+        g = SF.read_grid(p)
+        ix = header_index(g[0]) if g else {}
+        agg: dict = {}
+        n = 0
+        for rn, r in enumerate(g[1:], start=2):
+            if blank(r):
+                continue
+            def c(name: str):
+                j = ix.get(name)
+                return r[j] if j is not None and j < len(r) else None
+            n += 1
+            if c("날짜") in (None, "") or c("캠페인ID") in (None, ""):
+                self.reg.skip(fid, "날짜·캠페인 ID 빈 줄")
+                continue
+            k = (d10(c("날짜")), nid(c("캠페인ID")), nid(c("광고집행옵션ID")))
+            a = agg.setdefault(k, [rn, 0, 0.0])
+            a[1] += 1
+            a[2] += float(str(c("광고비") or 0).replace(",", ""))
+        for (day, camp, opt), (rn, cnt, cost) in agg.items():
+            self.con.execute(RATIO_SQL, (acc, RATIO_AD, camp, opt, day, cost, "", fid, f"{rn}+{cnt}"))
+        self.reg.done(fid, n, n - sum(v for (f, _), v in self.reg.skips.items() if f == fid))
 
     def _milkrun(self, p: Path, acc: str) -> None:
         fid = self.reg.add(p, "밀크런", acc)
@@ -198,6 +228,9 @@ class AccountLoader:
                 return r[j] if j is not None and j < len(r) else None
             self.entry(acc, "로켓그로스", f"date:{d10(c('픽업일'))}", "밀크런 총 합계금액", "대조용", -won(c("총합계금액")),
                        nid(c("밀크런번호")), d10(c("픽업일")), fid, f"{rn}")
+            if won(c("취소수수료")):
+                self.entry(acc, "로켓그로스", f"date:{d10(c('픽업일'))}", "밀크런 취소수수료", "대조용", -won(c("취소수수료")),
+                           nid(c("밀크런번호")), d10(c("픽업일")), fid, f"{rn}")
         self.reg.done(fid, n, n)
 
 
@@ -212,15 +245,27 @@ class VerifyLoader(AccountLoader):
                 continue
             d = json.loads(p.read_text(encoding="utf-8"))
             n = (self._pending(acc, d, fid) + self._additional(acc, d, fid) + self._purchase(acc, d, fid)
-                 + self._returns(acc, d, fid) + self._held(acc, d, fid))
+                 + self._returns(acc, d, fid) + self._held(acc, d, fid) + self._inbound(acc, d, fid))
             k_skip = 0
-            for k in ("calendar", "wallet_balance", "rg_vat", "wing_vat", "inbound", "fast_settlement",
+            for k in ("calendar", "wallet_balance", "rg_vat", "wing_vat", "fast_settlement",
                       "promotion_fee", "review_campaigns"):
                 if d.get(k):
                     self.reg.skip(fid, f"키 {k} — 대조표 7-4절 생략·확인 필요(J4)")
                     k_skip += 1
             self.reg.done(fid, n + k_skip, n)
         self.con.commit()
+
+    def _inbound(self, acc: str, d: dict, fid: int) -> int:
+        """입고 내역 → ratio_src '입고 적치'(밀크런번호 × 옵션 · 적치 수량, 없으면 요청 수량 · 취소 = flag) — 밀크런을 상품으로 나누는 비율 자료."""
+        n = 0
+        for i, s in enumerate(d.get("inbound") or []):
+            for j, k in enumerate(s.get("skus") or []):
+                q = k.get("stowedQty") or k.get("requestedQty") or 0
+                self.con.execute(RATIO_SQL, (acc, RATIO_INBOUND, nid(s.get("milkrunSeq")), nid(k.get("vendorItemId")),
+                                             d10(s.get("pickupDate")), float(q), "취소" if s.get("cancelled") else "",
+                                             fid, f"inbound[{i}].skus[{j}]"))
+                n += 1
+        return n
 
     def _pending(self, acc: str, d: dict, fid: int) -> int:
         rows = ((d.get("pending") or {}).get("전체") or {}).get("pendingReports") or []

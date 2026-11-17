@@ -31,6 +31,11 @@ def nm(h) -> str:
     return "".join(str(h or "").split())
 
 
+RATIO_SQL = ("INSERT INTO ratio_src(account_id, kind, link_key, option_id, day, value, flag, file_id, src_pos) "
+             "VALUES (?,?,?,?,?,?,?,?,?)")
+RATIO_AD, RATIO_INBOUND, RATIO_REG = "광고 보고서", "입고 적치", "등록상품"
+
+
 def nid(v) -> str:
     s = "" if v is None else str(v).strip()
     return s[:-2] if _ID_FLOAT.fullmatch(s) else s

@@ -313,6 +313,50 @@ def t_statement_links(tmp: Path) -> None:
     con.close()
 
 
+def t_statement_account(tmp: Path) -> None:
+    """계정 단위 값(4단계 2차): 윙 차감 묶음(광고·빠른정산 사용액 D-312 ①·이용료·나머지 = 기타·지급 끝난 음수 = 3PM D-304) ·
+    로켓그로스 추가 공제 나머지 = 기타(세이버 따로 D-271) · 광고 = 청구액 × 보고서 옵션 비율 × 1.1(D-140) · 이용료 = 등록 비율(D-271) ·
+    기타 = 판매 비중·등록 비중 중 작은 쪽(D-237·D-241 ⑨)."""
+    from coupang_analytics import ledger_statement as ST
+    from coupang_analytics import ledger_statement_account as SA
+    print("[정산서 숫자] 계정 단위 값 — 묶음·광고 비율·등록 비율·작은 쪽")
+    con = LS.create(tmp / "st3.sqlite")
+    con.executemany("INSERT INTO pay_round(account_id,sale_type,round_key,settle_date,period_start,period_end,ratio,status,release,"
+                    "payable,pending,file_id,src_pos) VALUES ('A',?,?,'2026-10-01','2026-09-01','2026-09-07',100,?,0,?,0,1,?)",
+                    [("윙", "w1", "DONE", 50000, "p1"), ("로켓그로스", "g1", "", 0, "p2")])
+    ae = ("INSERT INTO account_entry(account_id,sale_type,round_key,item,role,amount,link_key,occur_date,file_id,src_pos) "
+          "VALUES ('A',?,?,?,?,?,?,?,1,?)")
+    con.executemany(ae, [("윙", "w1", "차감 상품/브랜드광고비", "지급 구성", -1000, "", "", "a1"),
+                         ("윙", "w1", "차감 빠른정산 사용액", "지급 구성", -500, "", "", "a2"),
+                         ("윙", "w1", "차감 판매자서비스이용료", "지급 구성", -55000, "", "", "a3"),
+                         ("윙", "w1", "totalDeductionAmount", "대조용", 56700, "", "", "a4"),
+                         ("로켓그로스", "g1", "totalAdditionalDeductionAmount", "대조용", 10000, "", "", "a5"),
+                         ("로켓그로스", "g1", "totalAdSalesDeductionAmount", "지급 구성", -3000, "", "", "a6"),
+                         ("로켓그로스", "g1", "totalMilkRunDeductionAmount", "지급 구성", -2000, "", "", "a7"),
+                         ("로켓그로스", "g1", "totalSubscriptionFeeDeductionAmount", "지급 구성", -1000, "", "", "a8"),
+                         ("", "date:2026-09-05", "광고 청구가능 PA", "대조용", -1000, "101", "2026-09-05", "a9")])
+    con.execute("INSERT INTO src_file(file_id,path,kind,account_id,size,sha256,status) VALUES "
+                "(2,'광고/A_매출성장광고_202609.xlsx','광고 보고서(매출성장광고)','A',1,'x','반영')")
+    rs = "INSERT INTO ratio_src(account_id,kind,link_key,option_id,day,value,flag,file_id,src_pos) VALUES ('A',?,?,?,?,?,'',2,?)"
+    con.executemany(rs, [("광고 보고서", "101", "901", "2026-09-05", 300, "r1"), ("광고 보고서", "101", "909", "2026-09-05", 100, "r2"),
+                         ("등록상품", "801", "901", "2026-08-01", 0, "r3"), ("등록상품", "809", "909", "2026-08-01", 0, "r4")])
+    con.execute("INSERT INTO order_line(account_id,sale_type,order_no,item_key,txn_type,seq,option_id,inventory_id,recognized,sales,coupon,"
+                "fee,settle,src,file_id,src_row) VALUES ('A','윙','o1','k1','판매',1,'901','801','2026-09-03',1000,0,100,900,'주문상세',1,1)")
+    lines = {x[0]: dict(x[3]) for x in SA.deduct_lines(con, "A")}
+    w = lines["윙"]
+    check(w == {SA.AD: 1000, SA.FAST: 500, SA.SVC: 55000, SA.ETC: 200, SA.PM3: -6700},
+          "윙 차감 = 광고 1,000 · 빠른정산 사용액 → 계좌인출액 500 · 이용료 55,000 · 나머지 기타 200 · 지급 끝난 음수 −6,700 = 3PM")
+    g = lines["로켓그로스"]
+    check(g == {SA.AD: 3000, SA.MILK: 2000, SA.SUB: 1000, SA.ETC: 4000}, "로켓그로스 추가 공제 10,000 − 광고·밀크런·세이버 = 기타 4,000")
+    sc = ST.with_products(con, "A", {"ok": True, "managed": {"901"}, "start": "2026-09", "cdate": "", "check": []})
+    it = SA.account_values(con, "A", sc, "2026-09")["items"]
+    check(round(it[SA.AD]["m"]) == 3725, "광고 = 청구 1,000 × 보고서 관리 비율 300/400 × 1.1 = 825 + 상품 자료 없는 공제(4,000 − 1,100) × 줄 관리 정산 비율 1.0(D-162)")
+    check(round(it[SA.SVC]["m"]) == 27500, "이용료 55,000 × 등록상품 1/2(D-271)")
+    check(round(it[SA.SUB]["m"]) == 500, "세이버 1,000 × 등록상품 1/2(D-271 · 기타에서 따로)")
+    check(round(it[SA.ETC]["m"]) == 2100, "기타 (200 + 4,000) × min(판매 비중 1.0, 등록 비중 0.5)(D-237·D-241 ⑨)")
+    con.close()
+
+
 def t_bucket() -> None:
     print("[D-235] 차이 구간")
     check(LS.bucket(0) == "0", "0원 = '0'")
@@ -337,6 +381,7 @@ def main() -> int:
         t_live_amount(tmp)
         t_statement(tmp)
         t_statement_links(tmp)
+        t_statement_account(tmp)
     t_rg_line_pay()
     t_bucket()
     print(f"\n장부 DB 시험: 실패 {len(FAILS)}")

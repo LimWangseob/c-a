@@ -14,7 +14,8 @@
 - 반출 배송 서비스비(④ 계정 내역 · 고리 = '반출ID>대표 등록상품 ID' · 박스 단위) = 대표 등록상품(없으면 같은 반출ID 의 반출비
   상품 줄 ③)이 모두 관리면 관리 몫 ·
   섞이거나 못 찾으면 금액 밖 '확인 필요'(목록 4번째 칸 · 비율로 나누지 않음 D-146).
-- 계정 단위 값(광고·밀크런·서비스이용료·기타 공제·정산 예정분)은 이 1차에 없음 — 2차(D-236·D-241·D-262·D-266)에서.
+- 계정 단위 값(광고·밀크런·서비스이용료·기타 공제) = `ledger_statement_account.account_values`(2차) → 결과 'account' 칸.
+  정산 예정분 나누기(D-266·D-269)는 아직 없음.
 결과 = {계정ID: {"status", "check", "months": {YYYY-MM: {...}}, "total": {...}}} — 숫자는 원 단위 정수.
 """
 from __future__ import annotations
@@ -251,10 +252,13 @@ def account_numbers(con: sqlite3.Connection, aid: str, sc: dict) -> dict:
             cost_tot[k] = [a + b for a, b in zip(cost_tot[k], v)]
     check = list(sc["check"]) + [f"자료 없음·확인 필요(D-146) {ym}" for ym in sorted(nod)]
     status = "관리 상품 확인 필요" if sc["check"] else ("자료 없음 달 있음" if nod else "ok")
+    from .ledger_statement_account import account_values       # 계정 단위 값(4단계 2차) — 순환 import 피함
+    active = [ym for ym, m in conf.items() if round(m["sales"])] + [ym for ym, d in cost.items() if any(round(v[0]) for v in d.values())]
+    acc = account_values(con, aid, sc, min(active) if active else sc["start"])
     return {"status": status, "check": check, "start": sc["start"], "cdate": sc["cdate"],
             "months": {ym: {"confirmed": conf.get(ym), "cost": cost.get(ym), "no_data": nod.get(ym)}
                        for ym in sorted(set(conf) | set(cost) | set(nod))},
-            "total": {"confirmed": tot, "cost": dict(cost_tot)}}
+            "total": {"confirmed": tot, "cost": dict(cost_tot)}, "account": acc}
 
 
 def build(db: Path, scope_json: Path) -> dict:
