@@ -88,7 +88,13 @@ def rg_payout_date(ratio: int, period_start: date, period_end: date, holidays) -
     - 70%·100% = 그 주 마감일(일) + 20영업일 (100% = 월말 조각이 한 번에 지급된 줄·비율은 쿠팡 응답값을 그대로 씀)
     - 30%, 월이 바뀌는 주(월요일과 일요일의 달이 다름)의 조각 = 주 마감일 + **25영업일**
     - 30%, 그 밖 = 매출인식 달의 익익월 첫 영업일(PAYOUT_RG_WEEKLY_FINAL)
+    - 100%, 기간이 그 달 1일~말일 전체 = 월정산(MONTHLY) 줄 → 월 마감일 + 20영업일(PAYOUT_RG_MONTHLY · 도움말
+      '월정산 = 월 판매마감일 +20영업일' · D-075 novanest1284 '월정' 08-01~08-31 → 09-30 · 장부 DB 달 전체 줄 7/7 · T-97).
+      주정산 월말 조각은 7일 이하라 달 전체가 될 수 없음.
     ⚠ 영업일 공휴일 집합은 쿠팡 기준과 같아야 함(실측: 2026-05-01·07-17 도 비영업일). 모르는 비율 = ValueError."""
+    month = f"{period_start:%Y-%m}"
+    if ratio == 100 and period_start.day == 1 and period_end == _month_end(month):
+        return payout_date(PAYOUT_RG_MONTHLY, revenue_month=month, holidays=holidays)
     if ratio in (70, 100):
         return payout_date(PAYOUT_RG_WEEKLY_1ST, week_end=period_end, holidays=holidays)
     if ratio != 30:
@@ -96,7 +102,7 @@ def rg_payout_date(ratio: int, period_start: date, period_end: date, holidays) -
     monday = period_start - timedelta(days=period_start.weekday())
     if monday.month != week_sunday(period_end).month:
         return add_business_days(week_sunday(period_end), 25, holidays)
-    return payout_date(PAYOUT_RG_WEEKLY_FINAL, revenue_month=f"{period_start:%Y-%m}", holidays=holidays)
+    return payout_date(PAYOUT_RG_WEEKLY_FINAL, revenue_month=month, holidays=holidays)
 
 
 def _half_up(x: Decimal) -> int:
