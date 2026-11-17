@@ -82,6 +82,7 @@ python ui/app_qt.py     # 기본 UI = PySide6(Qt) + Windows 11 Fluent 스타일
 - **공유=직렬화**(한 번에 한 세션 or 통합 세션): `config.py`·`pipeline.py`·`browser.py`·`credstore.py`·`CLAUDE.md`·`designs/`·`docs/DECISIONS.md`. 레인이 config 값 필요하면 통제 세션에 요청(직접 편집 금지).
 - **충돌 핫스팟**: 게이트/핀 파일(`tools/verify_offline.py` 등)=핀 함수 append+등록 1줄만 충돌 · DECISIONS/메모리=append-only.
 - **병합**: 각 레인 `run_checks` 초록 후 push → **master 병합은 직렬**(한 브랜치씩·게이트 재실행). **2~3레인이 최적**(7레인 통제 관료제 불필요).
+- **⛔새 세션·이어가기 카드 만들기 = 통제 세션만**(소유자 2026-11-17 "너가 통제 해줘" · D-275): 하위 세션은 인계 파일 갱신 후 통제 세션에 보고하고 멈춤 · 같은 일 카드는 하나만.
 - **⛔배포 zip 생성·결과 구글시트 반영 = 통제 세션('Coupang Analytics')만**(소유자 2026-10-21 '일원화'): 다른 세션은 코드→게이트→master 푸시→통제 세션 알림까지·제안도 금지. 근거 = 10-21 사이드 세션 사본 반영 때 오입력 계정ID 3칸 노출([[feedback-control-session-only]]).
 
 ## 환경
