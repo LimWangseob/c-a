@@ -23,6 +23,7 @@ _KEY_COLS = ("정산유형", "거래유형", "주문ID", "배송ID", "반출ID",
              "옵션ID", "SKUID", "진열일", "발생일", "발생일(배송완료일)", "발생일(입고완료일)")
 _OCCUR = ("발생일", "발생일(배송완료일)", "발생일(입고완료일)")
 _ACCOUNT_SHEETS = ("반출배송서비스비리포트",)
+_OUTBOUND_REP = nm("대표 등록상품 ID")     # 머리글 비교는 공백 지운 이름(nm)
 _INFO_SHEETS = ("자동반출",)
 
 
@@ -142,10 +143,11 @@ class CostLoader:
         amt = won(r[aj] if aj < len(r) else None, where)
         cyc = d10(get("정산주기(종료일)"))
         occur = next((d10(get(c)) for c in _OCCUR if get(c) not in (None, "")), "")
-        if key in _ACCOUNT_SHEETS:
+        if key in _ACCOUNT_SHEETS:      # 박스 단위 · 고리 = '반출ID>대표 등록상품 ID 목록'(쿠팡 칸 그대로 · '-' = 빈 목록)
+            rep = sorted({nid(x.strip()) for x in str(get(_OUTBOUND_REP) or "").split(",") if x.strip() not in ("", "-")})
             self.con.execute("INSERT INTO account_entry(account_id, sale_type, round_key, item, role, amount, link_key, "
                              "occur_date, file_id, src_pos) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                             (acc, "로켓그로스", f"cycle:{cyc}", sheet, "지급 구성", -amt, nid(get("반출ID")), occur, fid,
+                             (acc, "로켓그로스", f"cycle:{cyc}", sheet, "지급 구성", -amt, f"{nid(get('반출ID'))}>{','.join(rep)}", occur, fid,
                               f"{sheet}!{n}"))
             return 1
         sign = 1 if "보상" in sheet else -1

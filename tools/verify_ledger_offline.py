@@ -252,7 +252,7 @@ def t_statement(tmp: Path) -> None:
     con.executemany(pc, [("n1", "M1", -300, 1), ("n2", "X9", -700, 2)])
     con.execute("INSERT INTO account_entry(account_id,sale_type,round_key,item,role,amount,occur_date,file_id,src_pos) "
                 "VALUES ('A','로켓그로스','r1','비용 세액 보관비','대조용',-100,'2026-09-07',1,'p')")
-    sc = {"ok": True, "managed": {"M1"}, "start": "2026-08", "cdate": "2026-08-05", "check": []}
+    sc = ST.with_products(con, "A", {"ok": True, "managed": {"M1"}, "start": "2026-08", "cdate": "2026-08-05", "check": []})
     conf = ST.confirmed(con, "A", sc)
     check(set(conf) == {"2026-08", "2026-09"}, "달 = 기준 날짜 달 · 관리 시작 달 앞(7월) 없음")
     check(conf["2026-08"]["sales"] == 8000 and conf["2026-08"]["settle"] == 7200,
@@ -262,7 +262,7 @@ def t_statement(tmp: Path) -> None:
     check(conf["2026-09"]["sales"] == 2000 and conf["2026-09"]["ship_mixed"] == 2700,
           "9월 = 관리 2,000만 · 관리 밖 상품 뺌 · 섞인 주문 배송비는 금액 밖 따로(2,700)")
     cost = ST.costs(con, "A", sc)
-    check(cost["2026-09"]["보관비"] == [-300, -30, -1000], "보관비 관리 −300 · 세액 −100 × 300/1,000 = −30 · 계정 전체 −1,000")
+    check(cost["2026-09"]["보관비"] == [-300, -30, -1000, 0], "보관비 관리 −300 · 세액 −100 × 300/1,000 = −30 · 계정 전체 −1,000")
     cr = "INSERT INTO check_result VALUES (?, 'A', ?, ?, 0, ?, '100 이상', ?)"
     con.executemany(cr, [("V4 RG 지급액 = 상품 줄별 × 비율", "로켓그로스 2026-09-05|2026-08-25|2026-09-02|70", 5000, -5000, "R-J7-01 적용"),
                          ("V4 RG 비용 = ⑮ 비용 칸", "로켓그로스 2026-08-20|2026-07-28|2026-08-03|70", -800, 800, "R-J7-02 적용"),
@@ -275,6 +275,41 @@ def t_statement(tmp: Path) -> None:
     check("2026-07" not in nd_early["months"], "계약 시작일 달 앞(7월)은 자료 없음 달로도 안 셈(D-185 ②)")
     r = ST.account_numbers(con, "A", {**sc, "managed": set(), "check": ["관리 옵션 0"]})
     check(r["status"] == "관리 상품 확인 필요" and r["total"]["confirmed"]["sales"] == 0, "범위 못 정함 → '관리 상품 확인 필요'(가리지 않음)")
+    con.close()
+
+
+def t_statement_links(tmp: Path) -> None:
+    """D-116 ①(관리 VID 있는 등록상품 = 상품 전체) · D-116 ②(상품 없는 배송비 = 반품 조회 상품) · 반출 배송 서비스비 = 대표 등록상품
+    (없으면 같은 반출ID 반출비 줄) · 못 찾으면 금액 밖(D-146)."""
+    from coupang_analytics import ledger_statement as ST
+    print("[정산서 숫자] 등록상품 단위 관리 · 반품 조회 배송비 · 반출 배송 대표 상품")
+    con = LS.create(tmp / "st2.sqlite")
+    ol = ("INSERT INTO order_line(account_id,sale_type,order_no,item_key,txn_type,seq,option_id,inventory_id,recognized,sales,coupon,"
+          "fee,settle,src,file_id,src_row) VALUES ('A',?,?,?,'판매',1,?,?,'2026-09-10',?,0,?,?,?,1,?)")
+    rows = [("로켓그로스", "o1", "k1", "M1", "P1", 1000, 0, 900, "판매수수료"),     # 관리 옵션 · 등록상품 P1
+            ("로켓그로스", "o2", "k2", "M2", "P1", 2000, 0, 1800, "판매수수료"),    # 같은 등록상품 P1 의 다른 옵션 → 관리
+            ("로켓그로스", "o3", "k3", "X9", "P9", 5000, 0, 4500, "판매수수료"),    # 관리 밖
+            ("윙", "o4", "k4", "", "", 6000, 198, 5802, "주문상세"),             # 상품 줄 없는 배송비 · 반품 조회 = M2 → 관리
+            ("윙", "o5", "k5", "", "", 3000, 99, 2901, "주문상세")]              # 상품 줄 · 반품 조회 모두 없음 → 금액 밖
+    con.executemany(ol, [r + (i,) for i, r in enumerate(rows)])
+    ae = ("INSERT INTO account_entry(account_id,sale_type,round_key,item,role,amount,link_key,occur_date,file_id,src_pos) "
+          "VALUES ('A',?,?,?,?,?,?,'2026-09-07',1,?)")
+    con.executemany(ae, [("", "order:o4", ST.RETURN_ITEM, "연결", 0, "o4>M2", "r1"),
+                         ("로켓그로스", "cycle:2026-09-07", ST.OUTBOUND_SHIP, "지급 구성", -2200, "B1>P1", "b1"),    # 대표 = 관리
+                         ("로켓그로스", "cycle:2026-09-07", ST.OUTBOUND_SHIP, "지급 구성", -2800, "B2>", "b2"),      # '-' → 반출비 줄 P1
+                         ("로켓그로스", "cycle:2026-09-07", ST.OUTBOUND_SHIP, "지급 구성", -1000, "B3>P1,P9", "b3"),  # 섞임 → 금액 밖
+                         ("로켓그로스", "cycle:2026-09-07", ST.OUTBOUND_SHIP, "지급 구성", -500, "B4>", "b4")])      # 못 찾음 → 금액 밖
+    con.execute("INSERT INTO product_cost(account_id,kind,nat_key,option_id,inventory_id,cycle_end,amount,sign,file_id,sheet,src_row) "
+                "VALUES ('A','반출비','반출ID=B2|옵션ID=M2','M2','P1','2026-09-07',-300,-1,1,'s',1)")
+    sc = ST.with_products(con, "A", {"ok": True, "managed": {"M1"}, "start": "2026-08", "cdate": "", "check": []})
+    check(sc["mpids"] == {"P1"} and "M2" in sc["mopts"], "관리 옵션 M1 의 등록상품 P1 → 같은 등록상품 옵션 M2 도 관리(D-116 ①)")
+    m = ST.confirmed(con, "A", sc)["2026-09"]
+    check(m["gross"] == 3000 and m["ship"] == 6000 and m["ship_fee"] == -198 and m["settle"] == 8502,
+          "판매 = M1 1,000 + M2 2,000 · 배송비 6,000(반품 조회 상품 M2 = 관리 D-116 ②) · 배송비 수수료 −198 따로")
+    check(m["ship_unknown"] == 2901, "상품 줄·반품 조회 모두 없는 배송비 = 금액 밖 '확인 필요'(2,901 · 비율로 나누지 않음 D-146)")
+    ob = ST.costs(con, "A", sc)["2026-09"][ST.OUTBOUND_SHIP]
+    check(ob[0] == -5000 and ob[3] == -1500 and ob[2] == -6500,
+          "반출 배송 = 대표 P1 −2,200 + 대표 없음→반출비 줄 P1 −2,800 = −5,000 · 섞임·못 찾음 −1,500 금액 밖 · 계정 전체 −6,500")
     con.close()
 
 
@@ -301,6 +336,7 @@ def main() -> int:
         t_cost_report_before(tmp)
         t_live_amount(tmp)
         t_statement(tmp)
+        t_statement_links(tmp)
     t_rg_line_pay()
     t_bucket()
     print(f"\n장부 DB 시험: 실패 {len(FAILS)}")
