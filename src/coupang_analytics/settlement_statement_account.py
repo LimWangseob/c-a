@@ -27,6 +27,7 @@ AD, LOGI, MILK, SVC, ETC, COMP, REL, FAST = ("광고비", "로켓그로스 물�
                                              "판매자서비스이용료", "기타 공제", "재고 분실·파손 보상(쿠팡이 줌)", "보류됐다 풀린 돈",
                                              "빠른정산 계좌인출액")
 STS = ("지급 완료", "예정", "보류")
+WING_KEY = {"빠른정산 사용액": FAST}      # 윙 차감 사유 → 공제 항목(D-312 ① 빠른정산 사용액 = 이미 당겨 받은 돈 ±0 = 계좌인출액과 같은 항목)
 
 
 def num(v) -> float:
@@ -95,7 +96,7 @@ def deductions(r: dict) -> tuple[float, float, Counter]:
     if r["채널"] == "윙":
         for x in r.get("차감 사유") or []:
             why = x.get("사유") or ETC
-            parts[AD if "광고" in why else why] += num(x.get("금액"))
+            parts[AD if "광고" in why else WING_KEY.get(why, why)] += num(x.get("금액"))
         rest = num(r.get("totalDeductionAmount")) - sum(parts.values())
         if round(rest):
             parts[ETC] += rest

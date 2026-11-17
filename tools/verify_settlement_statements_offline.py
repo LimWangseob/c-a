@@ -504,11 +504,31 @@ def test_cost_only_scope() -> None:
     print("test_cost_only_scope OK")
 
 
+# ── 지급 줄 공제 분류 — 기대값 = 결정 원문 실측 값(D-312 · D-304 · D-305 · 코드에서 뽑지 않음) ──
+def _wing(paid, why, pending=0, ratio=70, day="2026-08-24"):
+    return {"채널": "윙", "정산일": day, "기간 시작": "2026-08-01", "기간 끝": "2026-08-07", "지급비율": ratio, "targetAmount": paid,
+            "paidAmount": paid, "pendingAmount": pending, "차감 사유": [{"사유": k, "금액": v} for k, v in why],
+            "totalDeductionAmount": sum(v for _, v in why), "최종지급액": paid + pending - sum(v for _, v in why)}
+
+
+def test_d312_fast_used() -> None:
+    """D-312 ①: 윙 '빠른정산 사용액' = 이미 당겨 받은 돈(±0) = 빠른정산 계좌인출액과 같은 항목(FAST) — 공제 항목으로 따로 두지 않음.
+    실측 seankim137 2026-08-24 줄: 사용액 491,416 + 인출 254,512 + 광고 424,164 = 지급가능 1,170,092 · 최종 0."""
+    from coupang_analytics import settlement_statement_account as SA
+    r = _wing(1170092, [("빠른정산 사용액", 491416), ("빠른정산 계좌인출액", 254512), ("상품광고비", 424164)])
+    pay, rel, parts = SA.deductions(r)
+    assert "빠른정산 사용액" not in parts, parts
+    assert parts == {"빠른정산 계좌인출액": 491416 + 254512, "광고비": 424164}, parts
+    assert round(pay + rel - sum(parts.values())) == 0
+    print("test_d312_fast_used OK")
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except AttributeError:
         pass
+    test_d312_fast_used()
     test_cost_only_scope()
     test_managed_alloc()
     test_settlement_ledger()
