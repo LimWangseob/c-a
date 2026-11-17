@@ -305,7 +305,7 @@ class AccountBase:
         self.ship_u = (ship["확인 필요"][0] * ship_r, ship["확인 필요"][1] * ship_r)   # 위 관리 몫 — 검산·배송비 줄에도 같은 값
         tm["other"] = tm["sales"] - tm["coupon"] - tm["fee"] - tm["settle"]
 
-    # ── 정산 중 판매(D-262 · D-264 · D-266 — 나누기 = settlement_statement_pending) ──
+    # ── 정산 중 판매(D-262 · D-264 · D-266 · D-269 — 나누기 = settlement_statement_pending) ──
     def _unsettled_share(self) -> None:
         """ushare = (판매 방식, 달, 판매, 정산대상, 관리 비율, 관리 판매, 관리 정산, 근거) · ucheck = 관리 몫에 안 넣은 '확인 필요'(D-262 ③) ·
         upend[(판매 방식, 달)] = [나눈 판매, 관리 판매(계약 반영), 관리 판매(계약 무시 — 관리 시작 달 후보)]."""
