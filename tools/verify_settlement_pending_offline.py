@@ -6,7 +6,7 @@
   ② 윙 B8+환산(D-266 ① · D-267) — 판매분석 일별 윙 순액 결제일 [그 달 1일−30일, E−8일 = 기준일−9일] − 이미 구매확정된 판매 · 옵션 합 뒤 음수 0.
   ③ 윙 B8 이 '확인 필요' 조건이면 빼지 않고 ⓒ2 = 저장해 둔 결제→구매확정 지연 분포 + 윙 정산 파일 환산(이미 확정 주문 빼기 없음)으로 채움(D-269 ①) ·
      지연 분포는 계산할 때마다 저장(검증자료/결제확정_지연분포.json). ⓒ2 도 안 되면 ⓑo(D-282 · 기준일 전에 받은 자료만 · 시나리오 a·b·c)
-     → 그것도 안 되면 그 금액만 '확인 필요'.
+     → 그것도 안 되면 그 금액만 '확인 필요'. B8·ⓒ2 도 기준일에 앱이 가진 자료만(T-84 · 시나리오 d·e·f·g).
   ④ 로켓그로스 = 그 달 판매분석 판매 비율(D-269 ② · T-63 이전 방식 · 기준일 뒤 주도 같음) · 주가 달을 걸치면 날짜의 달로 나눔(D-266 ③) ·
      그 달 판매분석 판매 없음·0~100% 밖 = 그 금액만 '확인 필요'.
   ⑤ 쿠팡 예정 줄 금액은 그대로(D-279 ①) — 나눈 조각의 판매·정산 합 = 쿠팡 예정 줄 금액(원 단위).
@@ -190,7 +190,7 @@ def test_wing_ops(base: Path) -> None:
       주문 9 옵션2 50 을 11-03−8일 = 10-26 에서 뺌 → 옵션1 1,000+300+100+999−1,000 = 1,399 · 옵션2 200+50−50+600−200−50 = 550
       → 관리 비율 1,399/1,949 → 관리 판매 71.78 · 관리 정산 57.42.
     b 기준일 11-10 · 11월 예정 판매 200·정산 160. 202610 주문별매출은 아직 안 받음(11-15 > 11-10) · 정산 파일 정산일 11-15 > 기준일 → 둘 다 빼기에 안 씀.
-      B8 남은 판매 400 · ⓒ2 1,600(검산 300 이상 = 둘 다 걸림). ⓑo 결제 10-02~11-09 = 옵션1 1,400 · 옵션2 200 → 0.875 → 관리 175 · 140
+      B8·ⓒ2 도 같은 자르기(T-84) → 빼기 0 · 결제 10-02~11-01 남은 판매 1,650(검산 300 이상 = 둘 다 걸림). ⓑo 결제 10-02~11-09 = 옵션1 1,400 · 옵션2 200 → 0.875 → 관리 175 · 140
       (받기 전 자료를 섞으면 옵션2 가 0 → 200·160 이 되어 틀림).
     c 기준일 11-15 · 일별 = 10-05 옵션1 1,000 뿐(202610 주문 3 으로 이미 확정) → ⓑo 남은 판매 0원 = 확인 필요(사유 금액 표시 D-281) · 관리 몫 0.
     """
@@ -217,6 +217,72 @@ def test_wing_ops(base: Path) -> None:
     assert _near(c.um_sales, 0) and _near(c.um_settle, 0), f"c 확인 필요 금액 = 관리 몫 0: {c.um_sales} {c.um_settle}"
 
 
+def _cut_run(base: Path, files: list, u: list) -> tuple:
+    """기준일 11-10 · 일별 = 10-10 옵션1 600 · 10-20 옵션2 400 → (나눈 조각 금액, 확인 필요 (판매 방식, 달, 정산대상), 근거·사유)."""
+    a = _stub(base, u)
+    a.ctx.basis = "2026-11-10"
+    a.ctx.daily = {AID: _wing_daily(None, only={"2026-10-10": ("1", 600), "2026-10-20": ("2", 400)})}
+    a.files = files
+    a._unsettled_share()
+    return ([tuple(round(x, 2) for x in (s_, e_, ms, me)) for _ch, _ym, s_, e_, _r, ms, me, _h in a.ushare],
+            [(c[0], c[1], c[3]) for c in a.ucheck], [x[7] for x in a.ushare])
+
+
+def _later_orders(base: Path) -> None:
+    """기준일(11-10) 뒤에 받는 202610 주문별매출(10-31+15 = 11-15) — 주문 40 옵션1 600 결제 10-10 · 구매확정 10-18(지연 8일)."""
+    d = base / "검증자료" / "월자료" / ACCT
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "주문별매출_202610.json").write_text(json.dumps({"줄": [_row(40, 1, 600, 500, "2026-10-10", "2026-10-18")]}), encoding="utf-8")
+
+
+def _store(base: Path, ym: str, pmf: list) -> None:
+    (base / "검증자료").mkdir(parents=True, exist_ok=True)
+    (base / "검증자료" / "결제확정_지연분포.json").write_text(json.dumps({"기준 달": ym, "분포": pmf}), encoding="utf-8")
+
+
+def test_cut_basis() -> None:
+    """T-84 — B8·ⓒ2 도 ⓑo(D-282)처럼 기준일에 앱이 가진 자료만: 기준일 뒤에 받은 주문별매출 달 · 기준일 뒤 정산된 윙 정산 파일 ·
+    기준일 뒤 달 저장 분포를 넣어도 결과 = 그것들이 없을 때 · 정산일 모르는 윙 정산 파일 = 확인 필요.
+
+    손 계산(기준일 11-10 · 11월 예정 · 결제 [10-02, 11-09−8일 = 11-01] · 받은 달 끝 = (11-10−14일)의 달 = 10월 → 주문별매출·지연 분포 = 10월 앞 달만):
+    d B8 — 자료 없음(빼기 0 · 환산 = 판매 그대로) → 남은 판매 옵션1 600 · 옵션2 400 · 쿠팡 판매 800·정산 640 → 관리 480·384.
+      (기준일 뒤 202610 주문별매출 옵션1 600 · 정산일 11-15 윙 파일 옵션2 400 을 섞으면 옵션1 0 → 관리 0 이 되어 틀림)
+    e ⓒ2 — 정산일 11-01 윙 파일 주문 30 옵션2 100(정산 90 · 구매확정 10-25) → B8 = 지연 자료 없음 → 저장 분포(기준 달 2026-09 · 5일)로
+      10-20 옵션2 100 뺌 → 옵션1 600 · 옵션2 300 · 환산 = 파일 비율 0.9(옵션1 = 계정 비율 0.9) → 관리 800×600/900 = 533.33 · 640×540/810 = 426.67.
+    f 저장 분포 기준 달 2026-12(기준일 뒤 자료) = 쓰지 않음 → e 에서 저장 분포 없는 때와 같이 확인 필요.
+    g 정산일 모르는 윙 정산 파일(줄 = 결제 시작 전 · d 처럼 B8 은 될 자료) = 확인 필요(ⓑo 와 같은 사유 · 기준일 전 자료인지 모름).
+    """
+    u: list = [("윙", "2026-11", 800, 640, "쿠팡 계산", "조회", [])]
+    f30 = _file("윙", date(2026, 10, 19), date(2026, 10, 25), [(30, "2", 100, 90, date(2026, 10, 25))], settle=date(2026, 11, 1))
+    f41 = _file("윙", date(2026, 11, 2), date(2026, 11, 8), [(41, "2", 400, 360, date(2026, 10, 28))], settle=date(2026, 11, 15))
+    with tempfile.TemporaryDirectory() as t0, tempfile.TemporaryDirectory() as t1:
+        alone = _cut_run(Path(t0), [], u)
+        assert alone[0] == [(800, 640, 480, 384)] and not alone[1], f"d B8 자료 없음 = 관리 480·384: {alone}"
+        _later_orders(Path(t1))
+        mixed = _cut_run(Path(t1), [f41], u)
+        assert mixed[:2] == alone[:2], f"d 기준일 뒤 받은 주문별매출·기준일 뒤 정산된 윙 파일은 B8 에 안 씀 → 없을 때와 같음: {mixed} ≠ {alone}"
+    with tempfile.TemporaryDirectory() as t0, tempfile.TemporaryDirectory() as t1:
+        _store(Path(t0), "2026-09", [[5, 1.0]])
+        alone = _cut_run(Path(t0), [f30], u)
+        assert alone[0] == [(800, 640, 533.33, 426.67)] and not alone[1] and "ⓒ2" in alone[2][0], f"e ⓒ2 = 관리 533.33·426.67: {alone}"
+        _store(Path(t1), "2026-09", [[5, 1.0]])
+        _later_orders(Path(t1))
+        f42 = _file("윙", date(2026, 11, 2), date(2026, 11, 8), [(42, "1", 200, 150, date(2026, 11, 3))], settle=date(2026, 11, 15))
+        mixed = _cut_run(Path(t1), [f30, f42], u)
+        assert mixed[:2] == alone[:2], f"e 기준일 뒤 자료를 넣어도 ⓒ2 = 없을 때와 같음: {mixed} ≠ {alone}"
+    with tempfile.TemporaryDirectory() as t0, tempfile.TemporaryDirectory() as t1:
+        alone = _cut_run(Path(t0), [f30], u)
+        assert alone[1] == [("윙", "2026-11", 640)], f"f 저장 분포 없음 = 확인 필요: {alone}"
+        _store(Path(t1), "2026-12", [[5, 1.0]])
+        mixed = _cut_run(Path(t1), [f30], u)
+        assert mixed[:2] == alone[:2], f"f 기준일 뒤 달(2026-12) 저장 분포는 ⓒ2 에 안 씀: {mixed} ≠ {alone}"
+    with tempfile.TemporaryDirectory() as t0:
+        nod = _file("윙", date(2026, 9, 14), date(2026, 9, 20), [(43, "2", 10, 9, date(2026, 9, 20))])   # 결제 시작 전 줄 = 빼기에 안 씀(B8 은 됨)
+        nod.settle_date = None
+        got = _cut_run(Path(t0), [nod], u)
+        assert got[1] == [("윙", "2026-11", 640)] and "정산일 모르는 윙 정산 파일 1개" in got[2][0], f"g 정산일 모르는 윙 파일 = 확인 필요: {got}"
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -224,6 +290,7 @@ def main() -> int:
         pass
     test_wing_unsettled()
     test_pending_split()
+    test_cut_basis()
     print("✅ 정산 예정분 관리 몫 나누기 시험(D-262 ① 실제값 · 윙 B8 → ⓒ2 → ⓑo 채움(D-282)·지연 분포 저장 D-269 ① · 로켓그로스 그 달 판매 비율 D-269 ② · 쿠팡 예정 금액 그대로 D-279 · 금액 판정 D-281) 통과")
     return 0
 
