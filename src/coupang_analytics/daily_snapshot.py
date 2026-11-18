@@ -57,6 +57,44 @@ def _free_path(d: Path, now: datetime, partial: bool) -> Path:
     return path
 
 
+KEEP_DIRNAME = "수집일별보관"   # 덮어쓰는 파일의 전날 값(D-335) — 같은 폴더 아래 · 밑줄 없는 이름(계정 '{tok}_*' glob 에 안 걸림)
+
+
+def _same_as_latest(d: Path, old: bytes) -> bool:
+    latest = max(d.glob("*.gz"), default=None) if d.is_dir() else None   # 이름 = 날짜(같은 날 시각 붙은 것이 뒤)
+    return latest is not None and gzip.decompress(latest.read_bytes()) == old
+
+
+def keep_before_overwrite(path, today=None, new: bytes | None = None) -> Path | None:
+    """덮어쓰기 **직전**에 부름 — 옛 파일이 오늘 전 수집분이면 그 값을 `{폴더}/수집일별보관/{파일 이름}/{옛 수집일}{확장자}.gz` 로 남김
+    (소유자 D-335 · 11-18). 수집일 = 옛 파일 수정 날짜. 같은 날 다시 쓰기는 안 남김(그날 마지막 값은 다음날 첫 덮어쓰기 때 남음) ·
+    새로 쓸 내용(new)이나 앞 보관본과 같으면 안 남김 · 보관본은 덮어쓰지 않음(같은 이름 있으면 시각 붙임) · 읽는 쪽 파일 이름 그대로.
+    반환 = 남긴 경로(없으면 None). 저장 실패 = OSError 그대로(호출부가 덮어쓰기 전에 멈춤 — 옛 값 안 잃음)."""
+    p = Path(path)
+    if not p.is_file():
+        return None
+    st = p.stat()
+    when = datetime.fromtimestamp(st.st_mtime)
+    if when.date() == (today or _now().date()):
+        return None
+    old = p.read_bytes()
+    raw = gzip.decompress(old) if p.suffix == ".gz" else old
+    d = p.parent / KEEP_DIRNAME / p.name
+    if (new is not None and new == old) or _same_as_latest(d, raw):
+        return None
+    ext = "".join(p.suffixes[-2:]) if p.suffix == ".gz" else p.suffix + ".gz"
+    d.mkdir(parents=True, exist_ok=True)
+    dst = d / f"{when:%Y-%m-%d}{ext}"
+    n = 1
+    while dst.exists():
+        dst = d / f"{when:%Y-%m-%d}_{when:%H%M%S}{f'_{n}' if n > 1 else ''}{ext}"
+        n += 1
+    tmp = dst.with_name(dst.name + ".tmp")
+    tmp.write_bytes(old if p.suffix == ".gz" else gzip.compress(old))
+    os.replace(tmp, dst)
+    return dst
+
+
 def save(out_dir, dirname: str, account_id: str, payload: dict, partial: bool = False) -> Path:
     """머리 칸(수집·계정·날짜)을 붙여 저장하고 경로를 돌려줌. 저장 실패는 OSError(호출부가 비치명 처리)."""
     now = _now()

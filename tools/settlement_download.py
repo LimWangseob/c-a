@@ -719,6 +719,7 @@ def collect_verify(a, b, args) -> None:
     data = VC.keep_previous(data, old)                     # 조회 실패한 항목·달 = 지난 값 유지(D-161)
     data["returns"] = {**kept, **(data.get("returns") or {})}
     path.parent.mkdir(parents=True, exist_ok=True)
+    daily_snapshot.keep_before_overwrite(path, today)      # 전날 값 수집일별 보관(D-335 · 우대수수료 '이체 대기' 등)
     STORE.write_json_atomic(path, data)
     LOG.saved(name, path, "검증 원자료")
     LOG.record(name, "검증", RL.OK, f"검증 자료 저장 — 월렛 {len(data.get('wallet') or [])}건·반품 조회 {len(orders)}주문·"

@@ -23,6 +23,7 @@ import re
 from datetime import date
 from pathlib import Path
 
+from . import daily_snapshot as DS
 from . import settlement_files as SF
 from .settlement_wing_api import _COST_FIELDS, CFS_KINDS
 
@@ -331,6 +332,7 @@ def write(folder: Path, rows: list[dict], today: date) -> tuple[Path, Path]:
     folder.mkdir(parents=True, exist_ok=True)
     paths = (folder / "받기의심.csv", folder / "다시받을목록.csv")
     for path, rs in zip(paths, (rows, [r for r in rows if r["다시 받기"] != NO])):
+        DS.keep_before_overwrite(path, today)                 # 전날 목록(D-335)
         with path.open("w", newline="", encoding="utf-8-sig") as fo:
             w = csv.DictWriter(fo, fieldnames=("확인일", *COLUMNS))
             w.writeheader()

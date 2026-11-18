@@ -20,6 +20,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from . import daily_snapshot as DS
+
 ST_PLANNED = "요청예정"
 ST_REQUESTED = "요청됨"
 ST_DONE = "받음"
@@ -219,4 +221,5 @@ def save_jobs(path, jobs: list[Job]) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(p.suffix + ".tmp")
     tmp.write_text(json.dumps([asdict(j) for j in jobs], ensure_ascii=False, indent=1), encoding="utf-8")
+    DS.keep_before_overwrite(p)                            # 전날 요청 상태(D-335)
     os.replace(tmp, p)
