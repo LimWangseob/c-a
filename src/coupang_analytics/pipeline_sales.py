@@ -16,7 +16,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from . import config
-from . import daily_snapshot, login_today, session_state
+from . import daily_snapshot, login_today, product_info, session_state
 from .browser import WING_URL, WingBrowser
 from .input_list import Account
 from .kw_ai import KeywordAIError
@@ -55,7 +55,7 @@ def _dump_raw(account_id: str, log, out_dir: str = "output") -> None:
     중복 판별·필드 탐색 등에 쓴다. 저장 위치=output/_raw/{계정}_{api}_p{n}.json.gz, run_log 엔 위치만(원문이
     커서 run_log 오염 방지). 설정(config.SAVE_RAW_RESPONSES) 끄면 no-op·버퍼 비면 no-op. 저장 실패는
     비치명(로그만·수집은 계속). api = vendor_inventory | inventory | sales(각 페이지 p1·p2…).
-    _raw 는 매 실행 덮어쓰므로 재고현황은 날짜별로도 남긴다(_archive_inventory)."""
+    _raw 는 매 실행 덮어쓰므로 재고현황은 날짜별로도 남긴다(_archive_inventory) · 상품조회는 정산용 칸만 날짜별(product_info)."""
     if not config.SAVE_RAW_RESPONSES:
         return
     import gzip
@@ -77,6 +77,7 @@ def _dump_raw(account_id: str, log, out_dir: str = "output") -> None:
     except Exception as exc:   # 저장 실패해도 수집은 계속(비치명)
         log(f"  [원본저장] ⚠ {account_id} 응답 원문 저장 실패(비치명) — {exc.__class__.__name__}: {str(exc)[:80]}")
     _archive_inventory(account_id, dumps.get("inventory"), log, out_dir)
+    product_info.archive(out_dir, account_id, dumps.get("vendor_inventory"), log)   # 상품 칸 날짜별(categoryId 등 · T-100)
 
 
 def _archive_inventory(account_id: str, bodies, log, out_dir) -> None:
