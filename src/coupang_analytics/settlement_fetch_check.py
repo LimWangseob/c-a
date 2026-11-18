@@ -2,7 +2,11 @@
 
 접속 없음(파일만 읽음). 조용히 넘기지 않는다(오류 정의 = 목표 자료가 안 나옴):
 - 비용 리포트(로켓그로스) — 시트 최종비용 합 ↔ 같은 정산 줄(정산일·기간)의 대응 공제 칸 합(`settlement_wing_api._COST_FIELDS`).
-  리포트 0원(머리줄만)인데 공제 있음 = 받기 의심(실측 D-302: 91white·tellace83·sg0141n 리뷰-이벤트-비용 · 공제 6,660·2,220·2,220).
+  리포트 0원(머리줄만)인데 공제 있음 = 받기 의심. 단 리뷰 이벤트 리포트는 0줄이어도 공제가 있음(D-324 ④ · 윙 화면 재받기도 0줄)
+  → 대조 안 하고 아래 계정 누계로 검산.
+- 리뷰 이벤트 계정 누계(D-324 ②) — 지급 내역 공제 합(로켓그로스 totalPostPurchaseDeductionAmount + 윙 차감 사유 '리뷰 이벤트') ↔
+  검증자료 리뷰 캠페인 사용 리뷰 × 1건 금액(2,220 = 2,000 + 200×1.1 · D-302 ⑤). 공제가 더 많음·캠페인 자료 없음 = 받기 의심 ·
+  공제가 모자람 = 아직 회차에 안 붙은 리뷰(쿠팡 배정 · 회차 미확정 · 확인 필요 · D-324 ③).
 - 라이브정산 월자료 — 요약 totalAmount ↔ 라이브 공제 줄(로켓그로스 totalCoupangLiveDeductionAmount · 윙 차감 사유 '라이브')을
   계산일(calculationDate) 뒤 첫 같은 금액으로 짝짓고, 짝 없는 공제 줄의 해당 달 json 이 비었으면 받기 의심
   (실측 D-302: freewin7777 라이브정산_202602.json 빈데 2026-03-30 공제 347).
@@ -26,6 +30,8 @@ SUSPECT, CHECK = "받기 의심", "확인 필요"
 YES, NO, T90 = "예", "아니오", "T-90 필요분만"
 COLUMNS = ("판정", "종류", "계정", "정산일", "기간", "항목", "받은 값", "대조 값", "다시 받기", "근거 파일", "설명")
 LIVE_FIELD = "totalCoupangLiveDeductionAmount"
+REVIEW_REPORT = SF._token(_COST_FIELDS[SF.REVIEW_FIELD], "리포트")   # 파일 이름의 리뷰 이벤트 리포트 표기
+WING_REVIEW = "리뷰 이벤트"                                           # 윙 차감 사유(실측 91white 11-13 4,440)
 MILK_SUM = ("발생금액", "조정액", "추가금", "세액")      # 총 합계금액 = 이 칸들의 합(실측)
 MILK_UNSEEN = ("통행료",)                              # 실측 값 전부 0 — 0 아니면 확인 필요
 
@@ -127,7 +133,7 @@ def cost_checks(costs: Path, amounts: Path, memo_path: Path | None = None, budge
             out.append(_row(CHECK, "비용 리포트", acct, settle, period, m["report"], got, "", NO, p, "대조할 지급 내역 줄 없음"))
             continue
         want = sum(_num(r.get(f)) for r in hit for f in want_f)
-        if got == want:
+        if got == want or (got == 0 and m["report"] == REVIEW_REPORT):   # 리뷰 0줄 + 공제 = 쿠팡이 빈 리포트를 줌(D-324 ④ · review_checks)
             continue
         why = (f"리포트 자료 줄 0(머리줄만)인데 공제 {want:,}원" if got == 0
                else f"리포트 합 {got:,} ≠ 공제 {want:,}({'+'.join(want_f)})")
@@ -253,13 +259,70 @@ def _milk_rows(p: Path, acct: str, ym: str) -> list[dict]:
     return out
 
 
+def review_per(c: dict) -> int:
+    """리뷰 1건 공제 = 리뷰 보상 + 사사오입(서비스 수수료 × 1.1) — 캠페인 칸(2,000 + 220 = 2,220 · D-302 ⑤ · D-324 ②)."""
+    return int(c["incentivePerReview"]) + (int(c["serviceFeePerReview"]) * 11 + 5) // 10
+
+
+def _review_taken(amounts: Path, acct: str) -> int:
+    """지급 내역 리뷰 이벤트 공제 누계 — 로켓그로스 칸 + 윙 차감 사유 '리뷰 이벤트'."""
+    rg = sum(_num(r.get(SF.REVIEW_FIELD)) for r in _payout(amounts, acct, "로켓그로스"))
+    return rg + sum(_num(x.get("금액")) for r in _payout(amounts, acct, "윙") for x in r.get("차감 사유") or []
+                    if WING_REVIEW in str(x.get("사유") or ""))
+
+
+def _review_want(rc: dict) -> tuple[int, int, set]:
+    """(사용 리뷰 수, 사용 리뷰 × 1건 금액 합, 1건 금액 종류) — 취소된 캠페인도 이미 쓴 리뷰는 공제(실측 91white fe9e2d01 2건)."""
+    used = [(int((c.get("sellerContribution") or {}).get("consumedReviews") or 0), c) for c in rc.get("campaigns") or []]
+    used = [(n, c) for n, c in used if n]
+    return sum(n for n, _ in used), sum(n * review_per(c) for n, c in used), {review_per(c) for _, c in used}
+
+
+def _review_one(acct: str, p: Path, rc: dict | None, got: int) -> dict | None:
+    """rc = 검증자료 review_campaigns(없거나 조회 실패 = None) · got = 지급 내역 공제 누계."""
+    if not rc:
+        return None if not got else _row(SUSPECT, "리뷰 이벤트", acct, "", "누계", "리뷰 캠페인", got, 0, YES, p,
+                                         f"공제 누계 {got:,}원인데 검증자료 리뷰 캠페인 자료 없음")
+    try:
+        n_used, want, per = _review_want(rc)
+    except (KeyError, TypeError, ValueError) as exc:     # 1건 금액 칸이 없거나 숫자 아님 — 추측하지 않음
+        return _row(CHECK, "리뷰 이벤트", acct, "", "누계", "1건 금액 칸", got, "", NO, p, f"캠페인 1건 금액 칸 읽기 실패 {exc!r}"[:200])
+    if rc.get("hasMore"):
+        return _row(SUSPECT, "리뷰 이벤트", acct, "", "누계", "리뷰 캠페인", got, want, YES, p,
+                    f"캠페인 100개 넘음 — 다 못 받아 검산 못 함(받은 사용 리뷰 {n_used}건)")
+    if got == want:
+        return None
+    if got > want:
+        return _row(SUSPECT, "리뷰 이벤트", acct, "", "누계", "사용 리뷰 × 1건 금액", got, want, YES, p,
+                    f"공제 누계 {got:,} > 사용 리뷰 {n_used}건 {want:,} — 캠페인 자료 빠짐 의심")
+    one = next(iter(per)) if len(per) == 1 else 0
+    cnt = f"{(want - got) // one}건 " if one and (want - got) % one == 0 else ""
+    return _row(CHECK, "리뷰 이벤트", acct, "", "누계", "사용 리뷰 × 1건 금액", got, want, NO, p,
+                f"아직 공제 안 된 리뷰 {cnt}{want - got:,}원 — 회차 미확정(쿠팡 배정 · 지급 전 경고값 · D-324 ③)")
+
+
+def review_checks(ver: Path, amounts: Path) -> list[dict]:
+    """계정마다 리뷰 이벤트 공제 누계 ↔ 사용 리뷰 × 1건 금액(D-324 ②) · 대상 = 공제가 있거나 캠페인 자료가 있는 계정."""
+    camps = {}
+    for p in sorted(ver.glob("*.json")) if ver.exists() else ():
+        d = json.loads(p.read_text(encoding="utf-8"))
+        if isinstance(d, dict) and "review_campaigns" in d:
+            camps[p.stem] = d["review_campaigns"]
+    accts = set(camps) | ({p.stem.rsplit("_", 1)[0] for p in amounts.glob("*.json")} if amounts.exists() else set())
+    out = []
+    for acct in sorted(accts):
+        r = _review_one(acct, ver / f"{acct}.json", camps.get(acct), _review_taken(amounts, acct))
+        out += [r] if r else []
+    return out
+
+
 def scan(base: Path, max_new: int = MAX_NEW) -> tuple[list[dict], int]:
     """정산 기록 폴더(output/정산) 전체 대조 → (줄, 상한으로 이번에 못 읽어 다음 실행에 읽을 엑셀 수)."""
     base, budget = Path(base), new_budget(max_new)
     ver, memo = base / "검증자료", base / "자료출처"
     rows = (cost_checks(base / "파일" / "비용", base / "쿠팡지급내역", memo / "_비용리포트합.json", budget)
             + live_checks(ver / "월자료", base / "쿠팡지급내역") + ad_checks(ver / "광고")
-            + milk_checks(ver / "광고", memo / "_밀크런검산.json", budget))
+            + milk_checks(ver / "광고", memo / "_밀크런검산.json", budget) + review_checks(ver, base / "쿠팡지급내역"))
     return rows, budget["남음"]
 
 
