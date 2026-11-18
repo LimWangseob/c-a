@@ -67,7 +67,7 @@ def cost_file(base: Path, settle: str, report: str, start: str, end: str, sheets
 
 
 def t1_cost_reports():
-    print("[T1] 비용 리포트 ↔ 같은 정산 줄 공제 칸 — 머리줄만인데 공제 있음 = 받기 의심(D-302 91white 6,660 모양)")
+    print("[T1] 비용 리포트 ↔ 같은 정산 줄 공제 칸 — 리뷰 리포트 0줄 + 공제 6,660 = 대조 안 함(D-324 ④ · 검산은 T9 계정 누계)")
     with tempfile.TemporaryDirectory() as td:
         base = Path(td)
         review = cost_file(base, "2026-11-06", "리뷰 이벤트 비용", "2026-10-05", "2026-10-11",
@@ -84,10 +84,9 @@ def t1_cost_reports():
              "totalWarehousingFeeDeductionAmount": 55000, "totalFulfillmentFeeDeductionAmount": 88000}])
         rows = FC.cost_checks(base / "파일" / "비용", base / "쿠팡지급내역")
         by = {(r["정산일"], r["항목"]): r for r in rows}
-        assert len(rows) == 2, rows
-        r = by[("2026-11-06", "리뷰-이벤트-비용")]
-        assert (r["판정"], r["받은 값"], r["대조 값"], r["다시 받기"]) == (FC.SUSPECT, 0, 6660, FC.YES), r
-        assert "머리줄만" in r["설명"] and r["근거 파일"] == str(review), r
+        assert len(rows) == 1, rows
+        assert ("2026-11-06", "리뷰-이벤트-비용") not in by, by     # D-324 ④: 쿠팡이 빈 리포트를 줌(윙 화면 재받기 11-18) — 받기 의심 아님
+        assert review.exists()
         r = by[("2026-11-13", "리뷰-이벤트-비용")]
         assert (r["판정"], r["다시 받기"]) == (FC.CHECK, FC.NO) and "지급 내역 줄 없음" in r["설명"], r
         assert ("2026-11-13", "보관비") not in by            # 정산 줄 없는 주 물류비 = 미납 CFS 주 리포트(D-065) · 대조 안 함
@@ -104,7 +103,7 @@ def t1_cost_reports():
         finally:
             SF.read_sheets = orig
         assert len(json.loads(memo.read_text(encoding="utf-8"))) == 6
-    ok("리뷰 0 ↔ 공제 6,660 = 받기 의심·다시 받기 · 입출고/배송 2칸 합 일치 = 줄 없음 · 지급 줄 없음 = 확인 필요(미납 CFS 주 물류비 제외) · 못 읽는 파일 = 받기 의심 · 시트 합 기억(두 번째는 엑셀 안 읽음)")
+    ok("리뷰 0줄 ↔ 공제 6,660 = 줄 없음(D-324 ④) · 입출고/배송 2칸 합 일치 = 줄 없음 · 지급 줄 없음 = 확인 필요(미납 CFS 주 물류비 제외) · 못 읽는 파일 = 받기 의심 · 시트 합 기억(두 번째는 엑셀 안 읽음)")
 
 
 def t2_live():
@@ -172,16 +171,64 @@ def t4b_scan_budget():
                       {"리뷰 이벤트": [[None] * 18 for _ in range(5)] + [REVIEW_HDR, REVIEW_SUB]})
         wjson(base / "쿠팡지급내역" / f"{ACCT}_로켓그로스.json",
               [{"정산일": "2026-11-06", "기간 시작": "2026-10-05", "기간 끝": "2026-10-11", "totalPostPurchaseDeductionAmount": 2220}])
+        wjson(base / "검증자료" / f"{ACCT}.json", {"review_campaigns": {"count": 1, "hasMore": False, "campaigns": [camp(1)]}})
         head = ["밀크런번호", "발생금액", "세액", "총 합계금액", "조정액", "추가금", "통행료"]
         xlsx(base / "검증자료" / "광고" / f"{ACCT}_밀크런_202609.xlsx", {"s": [head, ["M1", "1", "1", "x", "0", "0", "0"]]})
         rows, later = FC.scan(base, max_new=2)
-        assert later == 2 and [(r["정산일"], r["판정"]) for r in rows] == [("2026-11-06", FC.SUSPECT), ("2026-11-07", FC.CHECK)], (later, rows)
+        assert later == 2 and [(r["정산일"], r["판정"]) for r in rows] == [("2026-11-07", FC.CHECK)], (later, rows)   # 11-06 = D-324 ④
         rows, later = FC.scan(base, max_new=2)
-        assert later == 0 and [r["정산일"] for r in rows] == ["2026-11-06", "2026-11-07", "2026-11-08", ""], (later, rows)  # 남은 2개
+        assert later == 0 and [r["정산일"] for r in rows] == ["2026-11-07", "2026-11-08", ""], (later, rows)  # 남은 2개 · 리뷰 누계 1×2,220 = 공제
         milk = [r for r in rows if r["종류"] == "밀크런"][0]
         assert (milk["판정"], milk["받은 값"], milk["다시 받기"]) == (FC.SUSPECT, "읽기 실패", FC.YES), milk
         assert FC.scan(base, max_new=0) == (rows, 0)                              # 다 기억 → 새로 안 읽어도 같은 결과
     ok("상한 2 → 남음 2 · 다음 실행에 마저 · 숫자 아닌 밀크런 금액 = 받기 의심(0 으로 안 바꿈) · 기억만으로 같은 결과")
+
+
+def camp(used: int, incentive: int = 2000, fee: int = 200, status: str = "ACTIVE") -> dict:
+    """리뷰 이벤트 캠페인(검증자료 review_campaigns 실측 칸 · 91white fe9e2d01 모양) — 1건 = 2,000 + 200×1.1 = 2,220(D-302 ⑤)."""
+    return {"campaignId": f"c{used}{status}", "status": status, "incentivePerReview": incentive, "serviceFeePerReview": fee,
+            "sellerContribution": {"targetReviews": 25, "consumedReviews": used}}
+
+
+def t9_review_cumulative():
+    print("[T9] 리뷰 이벤트 계정 누계 = 사용 리뷰 × 2,220(D-324 ② · 근거 신규22_리뷰공제_이월검산.md 2절 표)")
+    with tempfile.TemporaryDirectory() as td:
+        base = Path(td)
+        amounts, ver = base / "쿠팡지급내역", base / "검증자료"
+        # 91white 모양: 캠페인 3 + 2(취소된 캠페인도 사용분은 공제) · RG 6,660 + 윙 4,440 = 11,100 = 5 × 2,220 → 줄 없음
+        wjson(ver / "가-나-a91.json", {"review_campaigns": {"count": 2, "hasMore": False,
+                                                         "campaigns": [camp(3), camp(2, status="CANCELLED")]}})
+        wjson(amounts / "가-나-a91_로켓그로스.json", [{"정산일": "2026-11-06", "totalPostPurchaseDeductionAmount": 6660.0}])
+        wjson(amounts / "가-나-a91_윙.json", [{"정산일": "2026-11-13", "차감 사유": [{"사유": "리뷰 이벤트", "금액": 4440},
+                                                                                {"사유": "상품/브랜드광고비", "금액": 2316}]}])
+        # tellace83 모양: 1건 2,220 = 2,220 → 줄 없음
+        wjson(ver / "가-나-at.json", {"review_campaigns": {"count": 1, "hasMore": False, "campaigns": [camp(1)]}})
+        wjson(amounts / "가-나-at_로켓그로스.json", [{"정산일": "2026-11-10", "totalPostPurchaseDeductionAmount": 2220}])
+        # sg0141n 모양: 사용 9(4·3·1·1) = 19,980 · 지급 끝난 공제 2,220 → 남은 8건 = 회차 미확정(확인 필요 · 다시 받기 아님)
+        wjson(ver / "가-나-asg.json", {"review_campaigns": {"count": 4, "hasMore": False,
+                                                         "campaigns": [camp(4), camp(3), camp(1), camp(1)]}})
+        wjson(amounts / "가-나-asg_로켓그로스.json", [{"정산일": "2026-11-03", "totalPostPurchaseDeductionAmount": 2220}])
+        # robincohs 모양: 0 = 0 → 줄 없음
+        wjson(ver / "가-나-arc.json", {"review_campaigns": {"count": 0, "hasMore": False, "campaigns": []}})
+        wjson(amounts / "가-나-arc_로켓그로스.json", [{"정산일": "2026-11-03", "totalPostPurchaseDeductionAmount": 0}])
+        # 사용 리뷰보다 공제가 많음 = 캠페인 자료 빠짐 의심(받기 의심 · 다시 받기)
+        wjson(ver / "가-나-aover.json", {"review_campaigns": {"count": 1, "hasMore": False, "campaigns": [camp(0)]}})
+        wjson(amounts / "가-나-aover_로켓그로스.json", [{"정산일": "2026-11-03", "totalPostPurchaseDeductionAmount": 2220}])
+        # 공제는 있는데 검증자료(캠페인) 없음 = 받기 의심
+        wjson(amounts / "가-나-anone_윙.json", [{"정산일": "2026-11-13", "차감 사유": [{"사유": "리뷰 이벤트", "금액": 2220}]}])
+        wjson(ver / "결제확정_지연분포.json", {"기준 달": "202610"})                 # 계정 파일 아닌 검증자료 = 무시
+        rows = FC.review_checks(ver, amounts)
+        got = [(r["계정"], r["판정"], r["받은 값"], r["대조 값"], r["다시 받기"]) for r in rows]
+        assert got == [("가-나-anone", FC.SUSPECT, 2220, 0, FC.YES), ("가-나-aover", FC.SUSPECT, 2220, 0, FC.YES),
+                       ("가-나-asg", FC.CHECK, 2220, 19980, FC.NO)], got
+        sg = rows[2]
+        assert sg["종류"] == "리뷰 이벤트" and "8건" in sg["설명"] and "회차 미확정" in sg["설명"], sg
+        assert "캠페인 자료 없음" in rows[0]["설명"] and rows[1]["근거 파일"].endswith("가-나-aover.json"), rows
+        assert FC.review_per(camp(1, incentive=3000, fee=300)) == 3330                 # 1건 금액 = 캠페인 칸(사사오입 300×1.1)
+        wjson(ver / "가-나-at.json", {"review_campaigns": {"count": 101, "hasMore": True, "campaigns": [camp(0)]}})
+        more = [r for r in FC.review_checks(ver, amounts) if r["계정"] == "가-나-at"]
+        assert len(more) == 1 and more[0]["판정"] == FC.SUSPECT and "100개 넘음" in more[0]["설명"], more
+    ok("5×2,220 = 6,660+4,440(윙 포함) · 1 = 2,220 · 0 = 0 줄 없음 · 사용 9 ↔ 2,220 = 8건 회차 미확정(확인 필요) · 공제 > 사용·캠페인 자료 없음·다 못 받음 = 받기 의심")
 
 
 def t5_ads_progress_refetch():
@@ -305,6 +352,7 @@ def main():
     t6_originals()
     t7_public_web()
     t8_registry()
+    t9_review_cumulative()
     print("받기 의심·자료 출처 대조 오프라인 검증 통과")
 
 
