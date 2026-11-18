@@ -48,3 +48,14 @@ def summarize(months: dict | None) -> dict:
     paid = sum(_num(x["지급금액"]) for x in rows if x["지급구분"] == PAID)
     memo = " · ".join([f"{len(rows)}줄(지급 {sum(x['지급구분'] == PAID for x in rows)})", *notes])
     return {"상태": "있음" if rows else "자료 없음", "지급금액": paid, "줄": rows, "메모": memo}
+
+
+def paid_by_day(months: dict | None) -> dict:
+    """{지급일 'YYYY-MM-DD': PAID finalRewardAmount 합} — 윙 추가지급 지급 줄 검산 짝(D-308 ①). 자료 없음·조회 실패 달 = 빈 몫."""
+    out: dict = {}
+    for r in (months or {}).values():
+        for x in (r or {}).get("reports") or []:
+            if x.get("requestStatusType") == PAID:
+                day = str(x.get("payDate") or "")[:10]
+                out[day] = out.get(day, 0) + _num(x.get("finalRewardAmount"))
+    return out

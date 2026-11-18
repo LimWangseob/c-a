@@ -206,7 +206,8 @@ class AccountBase:
             final = num(r["최종지급액"])
             if r["채널"] == "윙" and st == STS[0]:
                 final = max(final, 0.0)     # 지급 끝난 윙 음수 회차 = 0 지급 · 그 음수는 3PM 되돌림(D-304 · 예정은 그대로 D-319)
-            self.bad += round(pay + rel - sum(parts.values())) != round(final)
+            if not (r["채널"] == "윙" and SL.additional(r)):      # 윙 추가지급 줄 검산 = 장부 E2(추가지급 메뉴 짝 · D-308 ①)
+                self.bad += round(pay + rel - sum(parts.values())) != round(final)
             self.D.update(parts)
             self.D[REL] -= rel
             self.rows_out.append((row[2], row[3], row[4], row[1], row[5], row[6].split(" ·")[0], pay + rel, sum(parts.values()), final))
@@ -245,8 +246,8 @@ class AccountBase:
             for r in f.rows:
                 if r.product_id:
                     self.order_pids[str(r.order_id)].add(str(r.product_id))
-                elif f.channel == "윙" and (r.sales or r.settle):
-                    ships[(str(r.order_id), r.option_id, r.recognized, r.sales, r.settle)] = (
+                elif f.channel == "윙" and (r.sales or r.settle) and not SL.sold_2025(f"{(r.recognized or f.period_end):%Y-%m}"):
+                    ships[(str(r.order_id), r.option_id, r.recognized, r.sales, r.settle)] = (       # 2025 판매 배송비 = 정산 밖(D-328)
                         str(r.order_id), r.sales, r.settle, f"{(r.recognized or f.period_end):%Y-%m}")
         ship_rows = [x[:3] for x in ships.values() if not MA.pre_contract(x[3], self.cdate)]
         self.v = verify_json(self.ctx.base, self.acct)
@@ -295,6 +296,8 @@ class AccountBase:
         if pid in self.mpids:
             self.raw_s[ym] += ws + rs
             self.raw_l[ym] += lg
+        if SL.sold_2025(ym):                                     # 2025 판매 달 = 금액 밖(D-328) · 위 관리 시작 달 판정(D-185)엔 그대로
+            return
         m = pid in self.mpids and not MA.pre_contract(ym, self.cdate)
         (self.tm if m else self.tx).update({"sales": ws + rs, "coupon": g("판매자할인쿠폰"), "fee": g("판매수수료(VAT포함)"),
                                             "settle": settle, "logi": g("로켓그로스 물류비(VAT포함)"),
@@ -325,7 +328,8 @@ class AccountBase:
     def _gross_and_ship(self) -> None:
         self.gross = self.refund = 0.0      # 관리 상품 판매액(+)·취소·반품(−) — 정산 집계와 같은 줄(중복 제거)로
         for _f, r in SS._order_rows(self.files, []):
-            if r.product_id and str(r.product_id) in self.mpids and not MA.pre_contract(f"{(r.recognized or _f.period_end):%Y-%m}", self.cdate):
+            ym = f"{(r.recognized or _f.period_end):%Y-%m}"
+            if r.product_id and str(r.product_id) in self.mpids and not MA.pre_contract(ym, self.cdate) and not SL.sold_2025(ym):
                 if r.sales >= 0:
                     self.gross += r.sales
                 else:

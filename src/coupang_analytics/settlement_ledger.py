@@ -8,7 +8,8 @@
   E1 정산금액 = 지급대상 — 로켓그로스 = 정산 파일 있는 판매 주마다 70%+30%(·월정산 100%) / 지급된 주인데 파일 없음 = 받기 누락 ·
      윙 = 달마다 정산대상(쿠팡 30%·월정산 줄 정산대상, 그 줄 없으면 정산 파일 + ④ 매출내역) = 지급대상(70·30·월정산),
      30% 줄 전인 달 = 나머지를 '줄 생성 전'(정산대상 − 70%) · 끝난 달은 30% 줄 정산대상 = 매출내역(독립 대조).
-  E2 줄마다 최종지급액 = 윙 지급대상 + 보류해제 − 공제 / 로켓그로스 지급대상 − 추가공제 − 물류비 + 보상 + 판매조정.
+  E2 줄마다 최종지급액 = 윙 지급대상 + 보류해제 − 공제 / 로켓그로스 지급대상 − 추가공제 − 물류비 + 보상 + 판매조정 /
+     윙 추가지급 줄 = 같은 날 추가지급 메뉴 PAID finalRewardAmount 합(D-308 ①).
   E3 정산현황 보류 줄(지급일 지남·PENDING) 최종 합 = 보류목록 P 중 지급일 지난 것 · 보류 예정 = 지급일이 앞.
 """
 from __future__ import annotations
@@ -18,6 +19,7 @@ from collections import Counter, defaultdict
 from datetime import date
 from pathlib import Path
 
+from coupang_analytics import settlement_additional_pay as AP
 from coupang_analytics import settlement_forecast as FC
 
 
@@ -36,9 +38,27 @@ def _key(r: dict) -> tuple:
 SALE_FROM = "2026-01-01"    # D-328·D-329: 판매 기간(윙 구매확정일 · 로켓그로스 매출인식일) 끝이 이 날 전인 줄 = 정산 제외(판매·공제·최종 통째)
 
 
+def sold_2025(ym) -> bool:
+    """판매 달('YYYY-MM' · 'YYYYMM')이 SALE_FROM 앞 = 정산 밖(D-328) — 상품별 월별·미정산 달·정산 파일 판매 줄에 같은 기준."""
+    return str(ym).replace("-", "")[:6] < SALE_FROM.replace("-", "")[:6]
+
+
+def additional(r: dict) -> bool:
+    """윙 추가지급 줄(D-308 ①) — 100% · 정산대상·paidAmount·pendingAmount 모두 0 · 기간 = 정산일 하루(같은 날 추가지급 메뉴 줄과 짝).
+    실측 원천 윙 1,298줄 중 2줄(roum0502 2026-10-22 · freewin7777 2026-11-13) = 추가지급 json payDate·금액 2/2."""
+    k = _key(r)
+    return (k[3] == 100 and k[0] == k[1] == k[2] and not _num(r.get("targetAmount"))
+            and not _num(r.get("paidAmount")) and not _num(r.get("pendingAmount")))
+
+
 def release(r: dict) -> bool:
-    """윙 보류 해제 지급 줄(100%·지급대상 0·보류해제액)."""
-    return int(_num(r["지급비율"])) == 100 and not _num(r.get("targetAmount"))
+    """윙 보류 해제 지급 줄(100%·지급대상 0·보류해제액) — 추가지급 줄은 따로(additional · D-308 ①)."""
+    return int(_num(r["지급비율"])) == 100 and not _num(r.get("targetAmount")) and not additional(r)
+
+
+def extra_round(r: dict) -> bool:
+    """판매 회차가 아닌 윙 지급 줄 = 보류 해제 + 추가지급(지급대상·달 정산대상에 안 셈)."""
+    return release(r) or additional(r)
 
 
 def rg_window_overlap(rows: list) -> list:
@@ -68,10 +88,16 @@ def wing_month_targets(rows: list) -> dict:
     out: dict = {}
     for r in sorted(rows, key=lambda x: str(x["정산일"])):
         k = _key(r)
-        if k[3] in (30, 100) and not release(r) and k[1][:7] == k[2][:7]:
+        if k[3] in (30, 100) and not extra_round(r) and k[1][:7] == k[2][:7]:
             if k[0] >= "2026-01-01":                    # 2025 에 지급된 30% 줄 = 정산서 범위 밖
                 out[k[1][:7]] = _num(r.get("targetAmount"))
     return out
+
+
+def _round_label(ch: str, r: dict) -> str:
+    if ch != "윙":
+        return ""
+    return " · 추가지급" if additional(r) else " · 보류 해제 지급" if release(r) else ""
 
 
 class Ledger:
@@ -165,14 +191,16 @@ class Ledger:
                 return False
             if r["채널"] == "로켓그로스":
                 return k[1:3] in rg_files or k[1:3] in rg2026
-            if release(r):
+            if extra_round(r):
                 return k[0] >= "2026-01-01"
             return k[1][:7] in wing_months
         return un_w, wing_months, [r for r in raw if keep(r)]
 
     @staticmethod
-    def _line_calc(r: dict) -> tuple[float, float, float, float]:
-        """지급 줄 1개 → (지급대상, 보류 해제액, 공제, 공식 최종지급액) — E2 줄 공식."""
+    def _line_calc(r: dict, rewards: dict) -> tuple[float, float, float, float]:
+        """지급 줄 1개 → (지급대상, 보류 해제액, 공제, 공식 최종지급액) — E2 줄 공식 · rewards = {지급일: 추가지급 메뉴 PAID 합}."""
+        if r["채널"] == "윙" and additional(r):
+            return 0.0, 0.0, 0.0, float(rewards.get(_key(r)[0], 0))
         if r["채널"] == "윙":
             pay, rel, ded = _num(r.get("paidAmount")), _num(r.get("pendingAmount")), _num(r.get("totalDeductionAmount"))
             return pay, rel, ded, pay + rel - ded
@@ -181,22 +209,22 @@ class Ledger:
         ded = _num(r.get("totalAdditionalDeductionAmount")) + _num(r.get("totalFinalCfsFeeDeductionAmount")) - plus
         return pay, 0.0, ded, pay - ded
 
-    def _rows(self, a: str, lines: list) -> tuple[Counter, list, list]:
+    def _rows(self, a: str, lines: list, rewards: dict) -> tuple[Counter, list, list]:
         """(상태별 지급대상·최종·공제 합, E2 어긋난 줄, 장부 줄)."""
         b: Counter = Counter()
         e2_bad, rows = [], []
         for r in lines:
             ch, fin = r["채널"], _num(r["최종지급액"])
-            pay, rel, ded, calc = self._line_calc(r)
+            pay, rel, ded, calc = self._line_calc(r, rewards)
             if round(calc) != round(fin):
                 e2_bad.append((ch, *_key(r), round(calc), round(fin)))
             status = ("예정" if r["구분"] == "예정" else
                       "보류" if ch == "윙" and r.get("지급상태") not in (None, "DONE") else "지급 완료")
-            if not (ch == "윙" and release(r)):
+            if not (ch == "윙" and extra_round(r)):
                 b[f"지급대상 {status}"] += pay
             b[f"최종 {status}"] += fin
             b["공제"] += ded
-            rows.append([a, ch, *_key(r), status + (" · 보류 해제 지급" if ch == "윙" and release(r) else ""), pay + rel, ded, fin])
+            rows.append([a, ch, *_key(r), status + _round_label(ch, r), pay + rel, ded, fin])
         return b, e2_bad, rows
 
     @staticmethod
@@ -209,7 +237,7 @@ class Ledger:
             k = _key(r)
             if r["채널"] == "로켓그로스":
                 rg_week[k[1:3]][k[3]] = rg_week[k[1:3]].get(k[3], 0.0) + _num(r.get("totalPayableAmount"))
-            elif not release(r):
+            elif not extra_round(r):
                 wing_m[k[1][:7]] += _num(r.get("paidAmount"))
                 has30[k[1][:7]] = has30[k[1][:7]] or k[3] in (30, 100)
         return rg_week, wing_m, has30
@@ -257,7 +285,7 @@ class Ledger:
         a = _aid(acct_name)
         rg_files = {w: t for w, t in rg_files.items() if w[1] >= SALE_FROM}       # 2025 판매 주 정산 파일 = 검산 밖(D-328)
         un_w, wing_months, lines = self._lines(a, acct_name, per, unsettled, rg_files)
-        b, e2_bad, rows = self._rows(a, lines)
+        b, e2_bad, rows = self._rows(a, lines, AP.paid_by_day(AP.months_of(self.base, acct_name, self.snaps.get(a))))
         weeks = self._weeks(lines)
         e1: list = []
         gen: Counter = Counter()

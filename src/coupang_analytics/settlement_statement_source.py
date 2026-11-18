@@ -23,7 +23,7 @@ import openpyxl
 from coupang_analytics import settlement_files as SF
 from coupang_analytics import settlement_forecast as FC
 from coupang_analytics import settlement_stats as SS
-from coupang_analytics.settlement_ledger import wing_month_targets
+from coupang_analytics.settlement_ledger import sold_2025, wing_month_targets
 
 OWN_BUSINESSES = {"디프", "디프픽"}       # 우리(소유자) 사업자 — 위탁 통보 대상 아님(소유자 2026-10-19): 계산은 같게·파일은 따로
 OWN_DIR = "_우리사업자(통보 제외)"
@@ -198,6 +198,8 @@ def confirmed(data: dict) -> tuple[dict, dict]:
     per: dict = defaultdict(Counter)
     for r in rows:
         a, m = r[0], str(r[1]).replace("-", "")
+        if sold_2025(m):                               # 2025 판매 달 = 정산 밖(D-328 · 장부 줄 keep() 과 같은 기준)
+            continue
 
         def g(c: str, r=r) -> int:
             return r[ix[c]] or 0
@@ -244,6 +246,8 @@ def _wing_unsettled(a: str, pur: dict, per: dict, t30: dict, src: str, today: st
     filed = {m for (aa, m), v in per.items() if aa == a and round(v.get("w_settle", 0))}
     for m in sorted(set(pur) | ({mm.replace("-", "") for mm in t30} & filed)):     # 범위 = 매출내역 달 + 정산 파일 있는 달
         mm = f"{m[:4]}-{m[4:]}"
+        if sold_2025(m):                                # 2025 판매 달 = 정산 예정에도 넣지 않음(D-328)
+            continue
         rs = (pur.get(m) or {}).get("purchaseReports") or []
         rev, ap = sum(x["revenueAmount"] for x in rs), sum(x["apAmount"] for x in rs)
         f = per[(a, m)]

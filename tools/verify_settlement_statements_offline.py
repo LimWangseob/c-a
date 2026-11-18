@@ -195,6 +195,50 @@ def test_d329_sale_2025_excluded() -> None:
     print("test_d329_sale_2025_excluded OK")
 
 
+def test_d328_product_rows_2025_excluded() -> None:
+    """D-328(판매 시점 2025 = 정산일이 2026 이어도 위탁정산서 금액에 넣지 않음 · 판매 시점 = 윙 구매확정일 · RG 매출인식일 달):
+    장부 줄(T-117)만이 아니라 정산집계 '상품별 월별'·윙 미정산 달·정산 파일 판매 줄·배송비 줄의 2025 판매 달도 계정 합계·관리 몫에서 뺀다.
+    실측 근거: 11-15 정산집계(정산집계_재생성_R193) '상품별 월별' 2025-11·12 판매 1,159,473,158 · 정산 852,971,283 가 남아 있었음."""
+    from types import SimpleNamespace
+
+    from coupang_analytics import settlement_files as SF
+    from coupang_analytics import settlement_statement_account as SA
+    from coupang_analytics import settlement_statement_source as SRC
+    h = ["계정", "월(매출인식)", "등록상품ID", "상품명", "윙 판매액", "로켓그로스 매출금액", "판매수수료(VAT포함)", "판매자할인쿠폰",
+         "쿠팡 정산금액 합계(부가비용 차감 전)", "로켓그로스 물류비(VAT포함)", "재고 손실 보상", "물류비·보상 반영 후(광고비 등 계정 차감 전)",
+         "윙 정산금액", "로켓그로스 정산대상액", "윙 수량", "로켓그로스 수량"]
+    acct = "가-사업자-x1"
+    rows = [[acct, "2025-12", "P1", "상품", 100_000, 0, 10_000, 0, 90_000, 0, 0, 90_000, 90_000, 0, 1, 0],
+            [acct, "2026-01", "P1", "상품", 50_000, 0, 5_000, 0, 45_000, 0, 0, 45_000, 45_000, 0, 1, 0]]
+    tot, per = SRC.confirmed({"상품별 월별": (h, rows)})
+    assert (tot[acct]["sales"], tot[acct]["settle"]) == (50_000, 45_000), tot[acct]          # 계정 합계 = 2026 판매만
+    assert (acct, "202512") not in per and per[(acct, "202601")]["w_settle"] == 45_000, dict(per)
+    pur = {m: {"purchaseReports": [{"revenueAmount": s, "apAmount": ap}]} for m, s, ap in (("202512", 100_000, 90_000),
+                                                                                             ("202601", 60_000, 54_000))}
+    un = SRC._wing_unsettled(acct, pur, per, {}, "시험", "2026-02-10")
+    assert [x[1] for x in un] == ["2026-01"] and un[0][3] == 54_000 - 45_000, un           # 2025 달 = 미정산(정산 예정) 밖
+    ctx = SimpleNamespace(st={"data": {"상품별 월별": (h, rows)}}, unjudged={"x1": set()}, svc_judge={}, base=Path(tempfile.gettempdir()))
+    a = SA.AccountBase(ctx, acct)
+    a.mpids, a.opt2pid, a.cdate, a.files = {"P1"}, {}, None, []
+    a._products()
+    assert (a.tm["sales"], a.tm["settle"]) == (50_000, 45_000), a.tm                        # 관리 몫 = 2026 판매만
+    assert not [k for k in a.mset if k[1] < "2026"] and not [k for k in a.msales if k[1] < "2026"], (dict(a.mset), dict(a.msales))
+    assert a.prod[("P1", True)][2:4] == [50_000, 45_000], a.prod
+    assert a.raw_s["2025-12"] == 100_000, a.raw_s            # 관리 시작 달 자동 판정(D-185) = 판매 이력이라 2025 도 그대로 봄
+
+    def srow(order, pid, day, sales, settle):
+        return SF.SettleRow("윙", acct, day, day, order, pid, "o1" if pid else "", "상품", "", 1 if pid else 0, sales, 0, 0, settle, day, "판매")
+    f = SF.SettleFile("윙", acct, date(2025, 12, 1), date(2026, 1, 31), kind="주정산",
+                      rows=[srow("A", "P1", date(2025, 12, 5), 100_000, 90_000), srow("A", "", date(2025, 12, 5), 3_000, 2_910),
+                            srow("B", "P1", date(2026, 1, 5), 50_000, 45_000), srow("B", "", date(2026, 1, 5), 3_000, 2_910)])
+    a.files = [f]
+    a._ships()
+    assert [round(x) for x in a.ship["관리"]] == [3_000, 2_910] and not round(a.ship["제외"][0]), a.ship   # 2025 배송비 = 관리·제외 모두 밖
+    a._gross_and_ship()
+    assert (a.gross, a.refund) == (50_000, 0), (a.gross, a.refund)                          # 판매액 = 2026 판매 줄만
+    print("test_d328_product_rows_2025_excluded OK")
+
+
 # ── test_additional_pay.py — additional_pay 시험 — D-116 ③①: 없으면 '없음', 있으면 지급금액 + '확인 필요(첫 실제 자료로 칸 확정)'. ──
 EMPTY = {"reports": [], "page": 1, "pageSize": 100, "totalPages": 0}      # 실측 응답(전 계정 0건)
 
@@ -661,6 +705,40 @@ def test_d319_scheduled_negative_kept() -> None:
     print("test_d319_scheduled_negative_kept OK")
 
 
+def _wing_one_day(pay_day, day, fin, pending=0):
+    return {"정산일": pay_day, "기간 시작": day, "기간 끝": day, "지급비율": 100, "최종지급액": fin, "지급상태": "DONE", "차감 사유": [],
+            "targetAmount": 0, "paidAmount": 0, "pendingAmount": pending, "totalDeductionAmount": 0}
+
+
+def test_d308_additional_round() -> None:
+    """D-308 ①(T-105): 윙 추가지급 줄(정산대상·paid·pending 0 · 기간 = 정산일 하루) = 보류 해제(pending > 0)와 따로 분류 · 검산 =
+    같은 날 추가지급 메뉴 PAID finalRewardAmount(짝 없으면 E2 다름). 실측 roum0502 2026-10-22 16,897 · freewin7777 11-13 117,960."""
+    add = _wing_one_day("2026-10-22", "2026-10-22", 16_897)
+    rel = _wing_one_day("2026-10-20", "2026-08-16", 277_218, pending=277_218)
+    assert SL.additional(add) and not SL.release(add), "추가지급 줄 = 보류 해제 아님"
+    assert SL.release(rel) and not SL.additional(rel), "보류 해제 줄 = 추가지급 아님"
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        (base / "쿠팡지급내역").mkdir()
+        snaps = {"x1": {"윙": [add, rel], "로켓그로스": []}}
+        led = SL.Ledger(base, None, snaps, date(2026, 11, 15))
+        L = led.account("가-x1", {}, [], {}, {})
+        assert [x[1:3] for x in L["e2_bad"]] == [("2026-10-22", "2026-10-22")], L["e2_bad"]        # 추가지급 메뉴 짝 없음
+        (base / "검증자료").mkdir()
+        rep = {"reports": [{**row("PAID", 16_897), "payDate": "2026-10-22"}, {**row("REJECTED", 500), "payDate": "2026-10-22"}],
+               "totalPages": 1}
+        (base / "검증자료" / "가-x1.json").write_text(json.dumps({"additional": {"202610": rep}}), encoding="utf-8")
+        L = led.account("가-x1", {}, [], {}, {})
+        assert not L["e2_bad"], L["e2_bad"]
+        lab = {x[2]: x[6] for x in L["rows"]}
+        assert lab == {"2026-10-22": "지급 완료 · 추가지급", "2026-10-20": "지급 완료 · 보류 해제 지급"}, lab
+        assert round(L["buckets"]["최종 지급 완료"]) == 16_897 + 277_218 and not round(L["buckets"]["지급대상 지급 완료"]), L["buckets"]
+    a = _acct([add, rel])
+    assert a.bad == 0, a.bad                                    # 추가지급 줄 검산은 장부 E2(메뉴 짝)에서
+    assert round(a.paid_total) == 16_897 + 277_218 and round(a.D["보류됐다 풀린 돈"]) == -277_218, (a.paid_total, a.D)
+    print("test_d308_additional_round OK")
+
+
 def test_d305_watch_warning() -> None:
     """D-305: 감지 목록(윙 사유 채권추심·빠른정산 사용액·쿠팡 판매자 성장 대출 + 로켓그로스 MCA·체크카드 칸) 중 처리 판정표(파일)에 없는
     계정×항목 = '확인 필요' 불일치 사유 · 판정표에 있는 항목은 경고 없음."""
@@ -706,20 +784,97 @@ def test_status_split_pending_rest() -> None:
     print("test_status_split_pending_rest OK")
 
 
+def test_d342_deduction_window_2026() -> None:
+    """D-342: 공제 관리 몫(광고·밀크런 등)을 나눌 자료 창 시작 = max(관리 시작 달, 2026-01) · 밀크런 '시작 전달부터'(D-154)는 그 전달이
+    2025 면 적용 안 함(안 (나)) · 관리 시작 표시(D-185)는 그대로. 실측 ljung0622(관리 시작 2025-10 · 2025 판매 줄 통째 빠짐 D-329):
+    2025-10~12 관리 광고·밀크런이 '판매 0인 달'(D-186) 금액으로 2026 줄 공제 위에 통째 더해지면 안 됨 · 관리 밀크런 = 2026-01 이후 밀크런의 관리 몫."""
+    from collections import Counter
+    from types import SimpleNamespace
+
+    from coupang_analytics import settlement_statement_deduct as DED
+    from coupang_analytics.settlement_statement_account import AD, LOGI, MILK
+    a = DED.Account.__new__(DED.Account)
+    a.ctx, a.acct = SimpleNamespace(base=Path(tempfile.gettempdir())), "가-x1"
+    a.vids, a.vid_name, a.mnames, a.marks, a.opt2pid = {"111"}, {}, set(), {}, {}
+    a.start, a.fs, a.active, a.S = "2025-10", "2026-01", ["2026-01"], 0.5
+    a.mset = {("로켓그로스", "2026-01"): (500.0, 1000.0)}
+    parts = Counter({AD: 2_200.0, MILK: 600.0, LOGI: 1_000.0})                 # 2026 판매 줄 공제(2025 줄 = D-329 로 이미 빠짐)
+    a.line_info = [("지급 완료", "로켓그로스", "2026-01", 10_000.0, 0.0, parts, ("x", "로켓그로스", "2026-02-10", "2026-01-01"))]
+    a.deduct_lines = [(x[1], x[2], x[5]) for x in a.line_info]
+    a.D, a.share, a.rates = Counter(parts), {}, {}
+    a.by_m = {"2026-01": Counter({"logi": 1_000.0, "m_logi": 400.0})}        # 상품별 물류비 = 2026 만(D-328)
+    a.v = {"inbound": [{"milkrunSeq": s, "skus": [{"vendorItemId": 111, "stowedQty": q1}, {"vendorItemId": 222, "stowedQty": q2}]}
+                       for s, q1, q2 in (("M11", 1, 0), ("M12", 1, 0), ("M01", 1, 1))]}
+    days = {"20251015": (1_000.0, 1.0), "20251115": (1_000.0, 1.0), "20251215": (1_000.0, 1.0), "20260115": (2_000.0, 0.5)}
+    pa = [(d, 1, 111, c * r) for d, (c, r) in days.items()] + [(d, 1, 222, c * (1 - r)) for d, (c, r) in days.items()]
+    bill = {(int(d), "1"): c for d, (c, _r) in days.items()}
+    milk = {"202511": [("M11", 400.0)], "202512": [("M12", 500.0)], "202601": [("M01", 600.0)]}
+    saved = DED.ad_files, DED.milk_rows
+    DED.ad_files = lambda base, acct: (pa, bill, {d[:6] for d in days})
+    DED.milk_rows = lambda base, acct, since="": [x for m, xs in sorted(milk.items()) if m >= since for x in xs]
+    try:
+        a._logi_comp()
+        a._ads()
+        a._milk()
+    finally:
+        DED.ad_files, DED.milk_rows = saved
+    got = {k: round(a.share[k][0] * a.D[k]) for k in (AD, MILK, LOGI)}
+    # 광고 = 2026-01 청구 2,000 × 관리 0.5 × 1.1 (2025-10~12 관리 3,300 안 더함) · 밀크런 = M01 600 × 0.5(2025-11·12 밀크런 = 2025 줄에서 공제 · 안 (나))
+    assert got == {AD: 1_100, MILK: 300, LOGI: 400}, got
+    assert a.rates[AD][0] == a.rates[MILK][0] == "2026-01", a.rates                 # 입금 나누기도 2026-01 판매 줄부터
+    assert "관리 시작 2025-10" in a.share[AD][1], a.share[AD]                        # D-185 표시 그대로
+    print("test_d342_deduction_window_2026 OK")
+
+
+def test_d279_svc_estimate_row_and_d304_note() -> None:
+    """D-279 ②: 쿠팡 예정 줄에 아직 안 붙은 이용료(규칙 잔액 · 우리 계산값) = 따로 '경고값' 줄 · 쿠팡 줄 몫 줄엔 경고 없음 · 합계 그대로.
+    D-304: 3PM_매출채권 줄 설명 = 원문 값 + '이월'."""
+    from collections import Counter
+
+    import openpyxl
+
+    from coupang_analytics import settlement_statement_book as BK
+    from coupang_analytics import settlement_statement_sheets as SH
+    from coupang_analytics.settlement_statement_account import PM3, SVC
+    a = {"Dm": {SVC: 110_000.0 + 55_000.0, PM3: 20_000.0}, "sv": {"잔액 관리": 55_000.0},
+         "st_settle": {"지급 완료": 1_000_000.0, "예정": 0.0, "보류": 0.0},
+         "st_ded": {"지급 완료": Counter({SVC: 55_000.0, PM3: 20_000.0}), "예정": Counter({SVC: 55_000.0 + 55_000.0}), "보류": Counter()}}
+    ded = [(SVC, 165_000), (PM3, 20_000)]
+    tbl = SH._status_table(a, 1_000_000, ded)
+    rows = {label: (c, total) for label, c, total in tbl}
+    assert rows[SVC] == ({"지급 완료": -55_000, "보류": 0, "예정": -55_000}, -110_000), rows[SVC]      # 쿠팡 줄 몫(완료 + 예정 줄)
+    assert rows[SH.SVC_EST] == ({"지급 완료": 0, "보류": 0, "예정": -55_000}, -55_000), rows          # 규칙 잔액 = 예정만
+    assert sum(t for _l, _c, t in tbl[1:]) == -185_000, tbl                                             # 공제 합 그대로
+    assert "D-279 ②" in SH.SVC_EST and "경고값" in SH.SVC_EST
+    assert "이월" in SH.NOTES[PM3] and "D-304" in SH.NOTES[PM3] and "경고값" not in SH.NOTES[SVC]
+    ws = openpyxl.Workbook().active
+    v = {"tbl": tbl, "cost": 185_000, "fast": 0, "보류": 0, "지급 완료": 925_000, "예정": -110_000, "pay": 815_000, "settle": 1_000_000}
+    share = {SVC: (110_000 / 165_000, "", "쿠팡 자료 비율"), PM3: (1.0, "", "쿠팡 자료")}
+    BK._blocks_fg(ws, 1, {"D": {SVC: 165_000.0, PM3: 20_000.0}, "share": share}, v, [], "")
+    notes = {ws.cell(r, 2).value: str(ws.cell(r, 6).value) for r in range(1, ws.max_row + 1)}
+    assert "D-279 ②" in notes[SH.SVC_EST] and "경고값" in notes[SH.SVC_EST], notes
+    assert "경고값" not in notes[SVC] and "이월" in notes[PM3], notes
+    print("test_d279_svc_estimate_row_and_d304_note OK")
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except AttributeError:
         pass
+    test_d342_deduction_window_2026()
+    test_d279_svc_estimate_row_and_d304_note()
     test_d312_fast_used()
     test_d312_own_deduction()
     test_d304_wing_negative_round()
     test_d319_scheduled_negative_kept()
+    test_d308_additional_round()
     test_d305_watch_warning()
     test_cost_only_scope()
     test_managed_alloc()
     test_settlement_ledger()
     test_d329_sale_2025_excluded()
+    test_d328_product_rows_2025_excluded()
     test_additional_pay()
     test_migration_inputs()
     test_managed_scope()
