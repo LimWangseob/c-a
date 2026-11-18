@@ -348,3 +348,5 @@
 - D-344 A [RANK_TIME_CAP] ③ 순위 시간 상한 = 두지 않음(현행 유지) (2026-11-18, R238)
 - D-345 A [STATEMENT_FIXED_FORMAT] 위탁자 정산서 고정 형식 샘플 승인 — 승인된 샘플 모양이 코드 기준 (2026-11-19, R238)
 - D-346 A [MEMORY_GUARD_LOG] 메모리 바닥 대책 = 지금 코드의 같은 경로를 막고, 메모리 사용을 실행 로그에 남김 (2026-11-19, R238)
+- D-347 A [STATEMENT_FIXED_FORMAT] 고정 형식 정산서 세부 통제 판단 — 상품 표시 없는 광고비 = 9 '그 밖의 쿠팡 공제' · 6 종류 합 ≠ 합계면 차이를 마지막 줄 + 확인 필요 문장 (2026-11-19, R239)
+- D-348 A [MEMORY_GUARD_LOG] 정산·앱 프로그램 맨 위 OPENBLAS_NUM_THREADS=1 — openpyxl 이 부르는 numpy(OpenBLAS) 메모리 약 684MB → 18MB (2026-11-19, R239)

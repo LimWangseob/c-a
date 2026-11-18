@@ -2814,3 +2814,18 @@ un_log_*.log`)로 확인 필요.
 - 영향 범위: T-113(하위 세션 t113-memory-guard) · 정산 다운로드 · 앱 무인 실행 로그(`pipeline_stages.py` 등 로그 한 줄).
 - 상태: ACTIVE
 
+### D-347 [STATEMENT_FIXED_FORMAT] 고정 형식 정산서 세부 통제 판단 — 상품 표시 없는 광고비 = 9 '그 밖의 쿠팡 공제' · 6 종류 합 ≠ 합계면 차이를 마지막 줄 + 확인 필요 문장 (2026-11-19, R239)
+- 결정(통제 세션 판단 · D-288 · D-345 범위 안 세부 · 정산금액 영향 0 = 줄 위치·표시만): ① '광고비 중 쿠팡이 상품을 표시하지 않은 금액'(cat ad)은 9 계정 공통의 '그 밖의 쿠팡 공제' 줄에 넣는다(고정 '상품 표시 없는 창고·운송·보상 비용' 줄은 산식 43~50·55·59·60 물류 항목이라 광고 61·62 와 맞지 않음). ② 6 창고·배송비 종류별 줄 합이 1쪽 6 합계와 1원 이상 다르면 차이를 종류별 내역 마지막 줄에 넣고 judgments 에 '확인 필요' 문장을 남긴다(숨기지 않음 · 폴백 금지).
+- 근거: T-38 코드 반영 세션 보고(커밋 `ed7f388` · 승인 샘플 행 비교 차이 0 · 실자료 6건 금액 같음) · 샘플 자료엔 ①에 해당하는 금액 없음.
+- 버린 대안: ① 광고비를 '상품 표시 없는' 물류 줄에 넣음(이름만 맞춤 · 항목 성격 다름).
+- 영향 범위: `settlement_consignor_month_out.py`·`settlement_consignor_gsheet_fixed.py`(master `b31eb00`).
+- 상태: ACTIVE
+
+### D-348 [MEMORY_GUARD_LOG] 정산·앱 프로그램 맨 위 OPENBLAS_NUM_THREADS=1 — openpyxl 이 부르는 numpy(OpenBLAS) 메모리 약 684MB → 18MB (2026-11-19, R239)
+- 결정(통제 세션 승인 · D-346 범위 '지금 코드에서 같은 메모리 바닥을 만들 경로를 막음'): `tools/settlement_download.py`·`ui/app_qt.py` 맨 위(numpy 를 부를 수 있는 import 보다 먼저)에 `os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")`. 배포본에서 numpy 빼기(spec 제외)는 쓰는 곳 확인 전이라 하지 않음.
+- 근거: T-113 실측(이 노트북) — `import openpyxl` 하나로 커밋 9→703MB · `import numpy` 9→693MB · OPENBLAS_NUM_THREADS=1 이면 9→18MB(스레드 22개 · 버퍼가 스레드 수에 비례) · 배포에 numpy 포함(`dist\coupang-analytics\_internal
+umpy`) · 우리 코드는 numpy 를 직접 안 씀 · 정산 바퀴 끝 '남는 900MB'의 대부분 후보(추정 · 측정 대기).
+- 버린 대안: spec 에서 numpy 제외(지금은 위험) · 그대로 둠.
+- 영향 범위: T-113 이어서(카드 task_33327774) · 배포 때 exe 에서 커밋 MB 확인.
+- 상태: ACTIVE
+
