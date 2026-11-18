@@ -512,6 +512,7 @@ def _keep_cost(raw: Path, j, name: str, fname: str) -> None:
     SF.assert_no_pii(sheets)
     totals = SF.rg_cost_totals(sheets, date.fromisoformat(j.period_end))
     COSTS.mkdir(parents=True, exist_ok=True)
+    daily_snapshot.keep_before_overwrite(COSTS / fname)   # 자동 다시 받기(D-339)로 같은 이름을 덮어쓸 때 옛 값(D-335)
     os.replace(raw, COSTS / fname)
     j.status, j.file = SJ.ST_DONE, f"비용/{fname}"
     LOG.saved(name, COSTS / fname, "비용 리포트")
@@ -760,13 +761,16 @@ def collect_ads(a, b, args) -> None:
 
 
 def source_checks(web: bool = True) -> None:
-    """정산 자료를 다 받은 뒤 1번 — ① 받기 의심(T-82 · 파일끼리 대조 · 다시받을목록.csv) ② 원문 대조(T-78 S1 M-E · 접속 없음)
+    """정산 자료를 다 받은 뒤 1번 — ① 받기 의심(T-82 · 파일끼리 대조 · 다시받을목록.csv · 다음 실행 자동 다시 받기 표시 D-339) ② 원문 대조(T-78 S1 M-E · 접속 없음)
     ③ 공개 웹(S3 M-D · 쿠키·프록시 없는 일반 연결 · 주기 된 페이지만). 단계마다 따로 실패 기록(정산 금액과 별개)."""
     from coupang_analytics import settlement_fetch_check as FCK
+    from coupang_analytics import settlement_refetch as RF
     from coupang_analytics import settlement_sources as SRC
     today, out = date.today(), SRC.folder(BASE)
     try:
         rows, later = FCK.scan(BASE)
+        n = RF.plan(BASE, rows, today)                    # 다시받을목록 → 다음 실행 평소 받기가 다시 받게 표시(D-339)
+        LOG.record(RL.ALL, "자동 다시 받기", RL.WAIT if n["같은 결과"] or n["길 없음"] else RL.OK, RF.summary(n))
         _all, again = FCK.write(out, rows, today)
         LOG.record(RL.ALL, "받기 의심", RL.WAIT if any(r["다시 받기"] != FCK.NO for r in rows) else RL.OK,
                    f"{FCK.summary(rows)}" + (f" · 아직 안 읽은 엑셀 {later}개(다음 실행에)" if later else "") + f" → {again}")
@@ -797,6 +801,25 @@ def _wing_files(name: str) -> list:
         except Exception:  # noqa: BLE001
             continue
     return out
+
+
+def cmd_view(a, b, args, jobs: list) -> None:
+    """화면 보기 + 화면 응답 기록 첫 시험(T-122 · D-340 · D-296) — `--source SV-…` 하나 · 소유자 로그인 한 계정 1회 · 자동 실행에 안 넣음.
+    조회 전용 버튼만 · 페이지 안 스크립트 없음 · 칸 이름만 저장(값 없음) — settlement_screen_view."""
+    from coupang_analytics import settlement_screen_view as SV
+    name = name_of(a)
+    spec = SV.SPECS.get(args.source)
+    if spec is None:
+        LOG.record(name, "화면 응답", RL.FAIL, f"모르는 출처 {args.source!r} — {', '.join(SV.SPECS)}")
+        return
+    try:
+        rec = SV.capture(b.page, spec)
+    except (SV.NeedLive, SV.NotViewOnly) as exc:
+        LOG.record(name, "화면 응답", RL.WAIT, f"{args.source} 확인 필요 — {exc}")
+        return
+    p = SV.save(BASE, args.source, a.account_id, rec)
+    LOG.saved(name, p, "화면 응답 칸 목록")
+    LOG.record(name, "화면 응답", RL.OK, f"{args.source} 응답 {len(rec['응답'])}개 칸 목록 저장")
 
 
 def cmd_probe(a, b, args, jobs: list) -> None:
@@ -1198,7 +1221,7 @@ def main() -> int:
     global LOG
     ap = argparse.ArgumentParser(description="쿠팡 정산 파일 배치 다운로드")
     ap.add_argument("command", choices=("probe", "request", "download", "run", "watch", "stats", "merge", "evidence",
-                                        "transfer-login", "transfer-settle", "sources"))
+                                        "transfer-login", "transfer-settle", "sources", "view"))
     ap.add_argument("--accounts", default="", help="계정ID 쉼표 구분(비우면 관리대장 전체)")
     ap.add_argument("--from", dest="start", type=date.fromisoformat, default=date(2026, 1, 1))
     ap.add_argument("--to", dest="end", type=date.fromisoformat, default=date.today())
@@ -1212,6 +1235,7 @@ def main() -> int:
     ap.add_argument("--originals", default="", help="받은 쿠팡 원본(구매자명 포함)을 그대로 복사해 둘 폴더(증빙용·D-062)")
     ap.add_argument("--since", default="", help="watch: 이 시각(ISO) 뒤에 끝난 ①판매수집만 기다림(앱 전체실행 버튼)")
     ap.add_argument("--out", default="", help="evidence: 증빙 상위 폴더(계정마다 증빙_{사업자}_쿠팡원본 — D-067)")
+    ap.add_argument("--source", default="", help="view: 화면 출처 ID(settlement_screen_view.SPECS · 첫 시험 = 한 계정 1회)")
     ap.add_argument("--redo", action="store_true", help="evidence: 끝난 계정도 다시 받기")
     ap.add_argument("--file", default="", help="transfer-login: 셀독전환자 파일(비우면 설정 transfer/file)")
     ap.add_argument("--retry", action="store_true", help="transfer-login: 성공·인증번호·같은 틀린 비번 제외하고 다시")
@@ -1245,7 +1269,7 @@ def main() -> int:
     if args.command == "merge":
         return cmd_merge(args)
     accts = load_accounts({x.strip() for x in args.accounts.split(",") if x.strip()})
-    if args.command == "probe":
+    if args.command in ("probe", "view"):
         accts = accts[:1]
     if args.command == "evidence":
         if not args.out:
@@ -1254,7 +1278,7 @@ def main() -> int:
         JOBS = EVIDENCE_JOBS
         JOBS.parent.mkdir(parents=True, exist_ok=True)
         accts = _evidence_targets(accts, args)
-    run = {"probe": cmd_probe, "request": cmd_request, "download": cmd_download, "run": cmd_run,
+    run = {"probe": cmd_probe, "view": cmd_view, "request": cmd_request, "download": cmd_download, "run": cmd_run,
            "evidence": cmd_evidence}[args.command]
     LOG.accounts = [name_of(a) for a in accts]
     rc = _run_both(accts, args) if run is cmd_run else _run_accounts(accts, run, args)

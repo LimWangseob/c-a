@@ -23,6 +23,7 @@ from pathlib import Path
 
 from . import daily_snapshot as DS
 from . import settlement_files as SF
+from . import settlement_screen_view as SV
 from .settlement_wing_api import SiteChangedError
 
 HISTORY_COLUMNS = ("기록일", "출처ID", "항목", "이전 값", "새 값", "처음 본 날", "근거")
@@ -52,6 +53,10 @@ SOURCES: dict = {
     "ME-RG-FEE-TABLE": {"순번": (*range(28, 50),), "방법": "M-E", "주기": "매일", "단계": "S4",
                         "설명": "할인표(M-A 로 받은 표) ↔ 원문 유료 줄 — 처음 어긋난 날 = 변경 후보(표가 있어야 함 · S4 뒤)"},
 }
+# 정산 미확정 항목 자료(T-122 · D-334 · 진행률표 ②번) — 화면 보기 + 화면 응답 기록 틀(settlement_screen_view · D-340) · 첫 시험 전 = 칸 이름만.
+SOURCES.update({sid: {"순번": (), "방법": "M-V", "주기": "라이브 첫 시험 뒤 정함", "단계": "S7 라이브 필요",
+                      "설명": f"②{v['②']} {v['설명']}" + (f" · 기록 없음: {v['없음']}" if v.get("없음") else "")}
+                for sid, v in SV.SPECS.items()})
 # 자료출처_목록 '안 받음' 중 받을 출처가 없는 행(설계 4절 · D-291 ⑦⑧ · D-296 ③) — 순번 → 사유.
 NOT_SOURCED: dict = {18: "이미 받음(목록 정정 · settlement_ads summary.rocketGrowth)", 19: "이미 받음(목록 정정 · 보류목록 매일)",
                      21: "받을 수 없음 — 교환관리 화면 확인(T-80) 뒤 다시 설계(D-291 ⑧)",

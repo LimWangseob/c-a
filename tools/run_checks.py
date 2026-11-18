@@ -52,6 +52,8 @@ CHECKS = [
     ("위탁정산서 정산 예정분 나누기(D-262·D-266 실제값·B8·B+환산·확인 필요)", "tools/verify_settlement_pending_offline.py", True),
     ("정산 받기 의심·자료 출처 대조(T-82·T-78 S1~S3)", "tools/verify_settlement_sources_offline.py", True),
     ("정산 자료 전날 값 보관(덮어쓰기 9곳 · T-123 D-335)", "tools/verify_settlement_keep_offline.py", True),
+    ("정산 다시받을목록 자동 재받기(T-122 D-339)", "tools/verify_settlement_refetch_offline.py", True),
+    ("정산 윙 화면 보기·응답 기록 틀(T-122 D-340 · 첫 시험 전 칸 이름만)", "tools/verify_settlement_screen_view_offline.py", True),
     ("정산 지급 전 예상 규칙값(비즈니스 인사이트 일할·신상품 무료 창 T-116)", "tools/verify_settlement_fee_rules_offline.py", True),
     ("셀독 정산서(대상 계약·상품군·양식 1장·도달율)", "tools/verify_seldoc_statements_offline.py", True),
     ("판매분석 금액 날짜별 누적", "tools/verify_sales_history_offline.py", True),

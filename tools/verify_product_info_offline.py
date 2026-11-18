@@ -188,6 +188,43 @@ def s6_save_failure():
     ok("PermissionError → 로그만")
 
 
+def _age(p: Path, day: str) -> None:
+    t = datetime.fromisoformat(f"{day}T12:00:00").timestamp()
+    os.utime(p, (t, t))
+
+
+def s7_raw_keep():
+    print("[S7] 상품조회 원문 통째 수집일별 보관(D-341) — _raw 덮어쓰기 전 옛 원문 · 같은 내용 생략 · 같은 날 다시 = 안 남김 · 읽는 쪽 그대로")
+    with tempfile.TemporaryDirectory() as tmp:
+        raw = Path(tmp) / "_raw"
+        a1, a2 = _body([_listing(11, 1, [_option(101)])], 1, 2), _body([_listing(12, 2, [_option(102)])], 2, 2)
+        b1 = _body([_listing(11, 9, [_option(101)])], 1, 2)
+        _freeze("2026-11-17T09:00:00")
+        _dump(tmp, [a1, a2])
+        for i in (1, 2):
+            _age(raw / f"acc1_vendor_inventory_p{i}.json.gz", "2026-11-17")
+        _freeze("2026-11-18T09:00:00")
+        _dump(tmp, [b1, a2])
+        keep = raw / DS.KEEP_DIRNAME
+        k1 = keep / "acc1_vendor_inventory_p1.json.gz"
+        assert [p.name for p in k1.iterdir()] == ["2026-11-17.json.gz"], list(k1.iterdir())
+        assert gzip.decompress((k1 / "2026-11-17.json.gz").read_bytes()).decode("utf-8") == a1, "옛 원문 통째(가공 없음)"
+        assert not (keep / "acc1_vendor_inventory_p2.json.gz").exists(), "같은 내용 = 보관 생략"
+        with gzip.open(raw / "acc1_vendor_inventory_p1.json.gz", "rt", encoding="utf-8") as fh:
+            assert fh.read() == b1, "_raw = 새 원문(읽는 쪽 이름 그대로)"
+        assert sorted(p.name for p in raw.glob("*_vendor_inventory_p*.json.gz")) == [
+            "acc1_vendor_inventory_p1.json.gz", "acc1_vendor_inventory_p2.json.gz"], "읽는 쪽 glob 에 보관본 안 걸림"
+        _age(raw / "acc1_vendor_inventory_p1.json.gz", "2026-11-18")
+        _dump(tmp, [a1, a2])                                                         # 같은 날 다시 수집
+        assert [p.name for p in k1.iterdir()] == ["2026-11-17.json.gz"], "같은 날 덮어쓰기 = 안 남김(그날 마지막 값은 다음날)"
+        C.reset_raw()
+        C._raw_add("inventory", "{}")
+        PS._dump_raw("acc1", [].append, out_dir=tmp)
+        assert not (keep / "acc1_inventory_p1.json.gz").exists(), "재고현황 = 이미 날짜별(재고현황_일별) — 대상 아님"
+    C.reset_raw()
+    ok("11-17 원문 = _raw\\수집일별보관\\acc1_vendor_inventory_p1.json.gz\\2026-11-17.json.gz · 같은 내용·같은 날 = 생략 · glob 그대로")
+
+
 def real_raw(root: str) -> None:
     """받아 둔 실제 응답으로 칸 확인(게이트 밖 · 읽기만 · 결과는 화면에만)."""
     by_acc = defaultdict(list)
@@ -217,7 +254,7 @@ def main():
         return 0
     saved_now = DS._now
     try:
-        for s in (s1_extract, s2_field_appears, s3_broken, s4_wiring_and_files, s5_lookup, s6_save_failure):
+        for s in (s1_extract, s2_field_appears, s3_broken, s4_wiring_and_files, s5_lookup, s6_save_failure, s7_raw_keep):
             s()
     finally:
         DS._now = saved_now
