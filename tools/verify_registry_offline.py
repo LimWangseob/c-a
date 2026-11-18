@@ -1062,6 +1062,66 @@ def t21c_company_stock_index_none():
     ok("없음 판정 표기·판단 기록 없는 상품은 공란")
 
 
+def t21e_company_stock_option_format():
+    print("[R21e] 재고 현황 새 양식(11.17 '한다로지넷 실재고현황') — 첫 탭·머리글 이름·가용재고·'옵션명 수량'·K 접두=3PL김포(D-337)")
+    from coupang_analytics import company_stock as CS
+    new = [["한다로지넷 (3PL인천, 김포 재고현황) - 11/17(화) 마감기준"], [],
+           ["상품명 앞에 K가 붙지 않은것 : 3PL 인천\n상품명 앞에 K가 붙은 것 : 3PL김포"],
+           ["창고", "상품명", "옵션명", "가용재고", "옵션코드", "바코드번호"],
+           ["3PL김포", "KLED 스탠드 T2088", "화이트", "31", "1678619", "S0036433482380"],   # 소유자 예시 '화이트 31'
+           ["3PL김포", "KLED 스탠드 T2088", "블랙", "97", "1678618", "S0036433482378"],
+           ["3PL김포", "K가습기 HJ093", "-", "96", "1678656", "8801121340112"],          # '-' = 옵션 없음 → 수량만
+           ["3PL인천", "가습기 HJ093", "-", "10", "1675000", "8801121340112"],           # K 뗀 이름 = 같은 상품 → 창고 이어 씀
+           ["3PL김포", "K기저귀가방 CL02", "화이트", "0", "1678385", "880"],
+           ["3PL김포", "K기저귀가방 CL02", "-", "0", "1678384", "880"],                 # 옵션 섞임 = 수량만 조각
+           ["3PL인천", "헬스매트 HM001", "퍼플", "-3", "1679282", "200"],                # 음수 = 그대로 + 경고
+           ["3PL인천", "헬스매트 HM001", "핑크", "45", "1679279", "200"],
+           ["3PL인천", "햄스트링기구 R010", "", "1,500", "1675486", "880"],              # 빈 옵션 = 수량만
+           ["3PL인천", "KF94 마스크", "-", "5", "1", "2"]]                               # 인천 줄의 K = 이름 그대로
+    stock_cli = FakeClient()
+    stock_cli.grids["한다로지넷 실재고현황"] = new
+    stock_cli.grids["재고현황"] = [["재고현황 26.11.03 기준"], [], ["창고", "팔래트/박스 넘버", "이미지", "제품명(판매처 제품명)",
+                                   " 옵션(색상or스타일)", "바코드 No.", "총박스수", "총입고수량"],
+                                  ["3PL인천", "1", "", "가습기 HJ093", " N", "880", "18", "216"]]
+    assert CS.resolve_tab(stock_cli) == "한다로지넷 실재고현황"
+    stock, warns = CS.read_stock(new)
+    txt = {shown: CS.stock_text(wh) for shown, wh in stock.values()}
+    assert txt == {"LED 스탠드 T2088": "3PL김포 , 화이트 31 / 블랙 97",
+                   "가습기 HJ093": "3PL김포 , 96개 / 3PL인천 , 10개",
+                   "기저귀가방 CL02": "3PL김포 , 화이트 0 / 0",
+                   "헬스매트 HM001": "3PL인천 , 퍼플 -3 / 핑크 45",
+                   "햄스트링기구 R010": "3PL인천 , 1,500개",
+                   "KF94 마스크": "3PL인천 , 5개"}, txt
+    assert len(warns) == 1 and "음수" in warns[0] and "헬스매트" in warns[0], warns
+    # 머리글 = 위치 아닌 이름(열 순서·머리글 행이 바뀌어도) · 안내 줄 없으면 K 를 떼지 않음
+    moved = [["옵션명", "바코드번호", "가용재고", "상품명", "창고"], ["블랙", "1", "7", "KLED 스탠드 T2088", "3PL김포"]]
+    assert {s: CS.stock_text(w) for s, w in CS.read_stock(moved)[0].values()} == {"KLED 스탠드 T2088": "3PL김포 , 블랙 7"}
+    # '현재고'·'가용재고' 둘 다 있으면 소유자 말대로 현재고 · 수량 칸 이름을 모르면 멈춤(폴백 없음)
+    both = [["창고", "상품명", "가용재고", "현재고"], ["김포2", "가", "1", "9"]]
+    assert CS.read_stock(both)[0][CS.name_key("가")][1] == {"김포2": 9}
+    _expect(ValueError, lambda: CS.read_stock([["창고", "상품명", "재고수량"], ["김포2", "가", "1"]]), "수량 칸 이름 모름")
+    # 관리대장 역기록 — 옵션 표기도 앱이 쓴 값으로 알아봄(다음 실행에 사람 메모로 남지 않게)
+    led = FakeClient()
+    led.grids["셀독리스트"] = [["사업자명", "계정아이디", "상품명", "회사보유재고"],
+                               ["(주)예시", "ex01", "LED 스탠드 T2088", ""],
+                               ["", "", "가습기 HJ093", "김포2 , 3개"],
+                               ["", "", "사라진상품", "3PL김포 , 화이트 31 / 블랙 97"],          # 앱이 쓴 옵션 표기 → 재고원장 없음
+                               ["", "", "메모상품", "화이트 30개 입고예정"]]                      # 사람 메모 = 유지
+
+    def ai_none(_s, u):
+        return {"items": [{"id": int(i), "pick": None, "reason": "없음"} for i in re.findall(r"^L(\d+)\.", u, re.M)]}
+    res = CS.run_company_stock("https://x/edit?gid=9", "L", stock_client=stock_cli, ledger_client=led, ask=ai_none)
+    assert res.stock_sheet == "한다로지넷 실재고현황" and res.items == 6, res
+    assert [r[3] for r in led.grids["셀독리스트"][1:]] == ["3PL김포 , 화이트 31 / 블랙 97", "3PL김포 , 96개 / 3PL인천 , 10개",
+                                                          CS.STOCK_NONE, "화이트 30개 입고예정"], led.grids["셀독리스트"]
+    for auto in ("3PL김포 , 화이트 31 / 블랙 97", "3PL김포 , 화이트 0 / 0", "3PL인천 , 퍼플 -3 / 핑크 45 / 3PL김포 , 5개",
+                 "(화이트) 3PL김포 , 블랙 L 1,200 / 250 3"):
+        assert CS._auto_written(auto), auto
+    for memo in ("화이트 31", "화이트 30개 입고예정", "31 / 3PL김포 , 5개"):
+        assert not CS._auto_written(memo), memo
+    ok("첫 탭·머리글 이름·가용재고(현재고 우선)·옵션명 수량·'-'/빈칸=수량만·K 접두 김포 합침·옵션 표기 역기록·메모 유지")
+
+
 def t21b_company_stock_match():
     print("[R21b] 회사재고 매칭(D-072) — 괄호 앞/안·색상별 줄·모델번호(R20=R020·쿠팡 상품명)·번호 다른 함정·AI·저장 결과")
     from coupang_analytics import company_stock as CS, company_stock_match as M
@@ -1302,6 +1362,7 @@ def main():
     t21b_company_stock_match()
     t21c_company_stock_index_none()
     t21d_company_stock_ai_decides()
+    t21e_company_stock_option_format()
     t22_name_rules()
     t23_company_stock_skip_logged()
     t23b_company_stock_read_fail_is_error()
