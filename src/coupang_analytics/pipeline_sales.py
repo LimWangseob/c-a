@@ -55,7 +55,8 @@ def _dump_raw(account_id: str, log, out_dir: str = "output") -> None:
     중복 판별·필드 탐색 등에 쓴다. 저장 위치=output/_raw/{계정}_{api}_p{n}.json.gz, run_log 엔 위치만(원문이
     커서 run_log 오염 방지). 설정(config.SAVE_RAW_RESPONSES) 끄면 no-op·버퍼 비면 no-op. 저장 실패는
     비치명(로그만·수집은 계속). api = vendor_inventory | inventory | sales(각 페이지 p1·p2…).
-    _raw 는 매 실행 덮어쓰므로 재고현황은 날짜별로도 남긴다(_archive_inventory) · 상품조회는 정산용 칸만 날짜별(product_info)."""
+    _raw 는 매 실행 덮어쓰므로 재고현황은 날짜별로도 남긴다(_archive_inventory) · 상품조회는 정산용 칸 날짜별(product_info) +
+    원문 통째 수집일별 보관(_keep_old_raw · D-341)."""
     if not config.SAVE_RAW_RESPONSES:
         return
     import gzip
@@ -69,6 +70,8 @@ def _dump_raw(account_id: str, log, out_dir: str = "output") -> None:
         n = 0
         for api, bodies in dumps.items():
             for i, body in enumerate(bodies, 1):
+                if api == "vendor_inventory":
+                    _keep_old_raw(d / f"{account_id}_{api}_p{i}.json.gz", body)
                 with gzip.open(d / f"{account_id}_{api}_p{i}.json.gz", "wt", encoding="utf-8") as fh:
                     fh.write(body)
                 n += 1
@@ -78,6 +81,15 @@ def _dump_raw(account_id: str, log, out_dir: str = "output") -> None:
         log(f"  [원본저장] ⚠ {account_id} 응답 원문 저장 실패(비치명) — {exc.__class__.__name__}: {str(exc)[:80]}")
     _archive_inventory(account_id, dumps.get("inventory"), log, out_dir)
     product_info.archive(out_dir, account_id, dumps.get("vendor_inventory"), log)   # 상품 칸 날짜별(categoryId 등 · T-100)
+
+
+def _keep_old_raw(path: Path, body: str) -> None:
+    """상품조회 원문 덮어쓰기 직전 — 옛 원문이 오늘 전 수집분이고 새 원문과 다르면 `_raw/수집일별보관/{파일 이름}/{옛 수집일}.json.gz`
+    로 통째 보관(D-341 · D-335 와 같은 방식 · 같은 날 다시 = 안 남김 · 같은 내용 = 생략). 보관 실패 = OSError(덮어쓰기 전에 멈춤)."""
+    import gzip
+    old = gzip.decompress(path.read_bytes()).decode("utf-8") if path.is_file() else None
+    if old is not None and old.splitlines() != body.splitlines():   # 글자 모드 줄바꿈 차이는 같은 내용
+        daily_snapshot.keep_before_overwrite(path)
 
 
 def _archive_inventory(account_id: str, bodies, log, out_dir) -> None:
