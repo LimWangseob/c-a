@@ -171,17 +171,13 @@ def _flow_parts(rows: list) -> tuple[int, list, int, int]:
 
 
 def flow(st: MonthState, rows: list) -> list:
-    """'어디로 갔나요' — 입금 완료 · 빠른정산으로 먼저 받음 · 입금 예정 · 쿠팡페이 환급(날짜별 표 줄의 상태로 묶음). rows 의 '_status' 는 지움."""
+    """'어디로 갔나요' 고정 4줄(값 없으면 0 · D-343) — 입금 완료 · 빠른정산으로 먼저 받음 · 입금 예정 · 쿠팡페이 환급(날짜별 표 줄의 상태로 묶음).
+    rows 의 '_status' 는 지움."""
     done, plan, fast, favs = _flow_parts(rows)
-    out = []
-    if done:
-        out.append({"name": "쿠팡 입금 완료", "desc": f"{st.basis}까지 쿠팡이 지급한 돈 (이 달 비용 뺀 뒤)", "amount": done})
-    if fast:
-        out.append({"name": "빠른정산으로 먼저 받음", "desc": "쿠팡 빠른정산으로 미리 받은 돈 (뒤 지급일에 상환으로 빠짐)", "amount": fast})
-    if plan:
-        out.append(_flow_plan(plan))
-    if favs:
-        out.append({"name": "쿠팡페이 환급", "desc": "대표 계좌로 들어온 우대수수료 환급 (10번)", "amount": favs})
+    out = [{"name": "쿠팡 입금 완료", "desc": f"{st.basis}까지 쿠팡이 지급한 돈 (이 달 비용 뺀 뒤)", "amount": done},
+           {"name": "빠른정산으로 먼저 받음", "desc": "쿠팡 빠른정산으로 미리 받은 돈 (뒤 지급일에 상환으로 빠짐)", "amount": fast},
+           _flow_plan(plan),
+           {"name": "쿠팡페이 환급", "desc": "대표 계좌로 들어온 우대수수료 환급 (10번)", "amount": favs}]
     for r in rows:
         r.pop("_status")
     return out

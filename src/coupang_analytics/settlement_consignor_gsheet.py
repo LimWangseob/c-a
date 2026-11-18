@@ -7,7 +7,7 @@
 - `write_statement(client, ds, issued)` = 기존 시트(client 가 가리키는 스프레드시트)의 탭을 전부 지우고 다시 그림.
   client = `gsheet_api.GSheetClient` 모양(`meta(refresh=True)`·`batch_update(requests)`). 새 파일 만들기(D-242 ④ OAuth)는 아직 없음.
 - `export_tab_pdf(session, spreadsheet_id, gid, out)` = 탭 하나를 A4 PDF 로(session = 인증된 HTTP 세션 · `.get(url, timeout=)`).
-형식 규칙 = D-238·D-240·D-241·D-242·D-251·D-259·D-260 (docs/CURRENT_RULES.md 12절).
+형식 규칙 = D-238·D-240·D-241·D-242·D-251·D-259·D-260·D-343 고정 형식 (docs/CURRENT_RULES.md 12절).
 """
 from __future__ import annotations
 
@@ -16,7 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from coupang_analytics.settlement_consignor_gsheet_layout import C, Page, requests_for
-from coupang_analytics.settlement_consignor_gsheet_pages import consignor_sheet, pending, summary_sheet
+from coupang_analytics.settlement_consignor_gsheet_fixed import consignor_sheet
+from coupang_analytics.settlement_consignor_gsheet_pages import pending, summary_sheet
 
 FIRST_GID = 1000                 # 탭 gid = 1000 부터 차례로(요약 → 위탁자들 → 다음 달 요약 …)
 TMP_GID = 990000                 # 옛 탭을 다 지우는 동안 남겨 둘 임시 탭

@@ -5,13 +5,21 @@ from __future__ import annotations
 
 from collections import Counter
 
+from coupang_analytics import settlement_statement_account as AC
 from coupang_analytics.settlement_consignor_month_calc import MonthState, cum_round, month_end, pct
-from coupang_analytics.settlement_consignor_month_cost import KINDS, PEND_KIND, item_share
+from coupang_analytics.settlement_consignor_month_cost import KINDS, PEND_KIND, RG_REVIEW_CAT, item_share
 from coupang_analytics.settlement_consignor_month_dep import FAST, dep_rows, deposits, flow
 from coupang_analytics.settlement_consignor_month_names import name_groups
 
 LINE_NAMES = ("판매 금액", "판매자 할인쿠폰", "쿠팡 판매수수료", "쿠팡 부담 할인", "광고비", "창고·배송비(로켓그로스)",
               "창고 입고 운송비(밀크런)", "재고 분실·파손 보상")
+# 9 계정 공통 고정 9줄(D-343 · 승인 샘플 11-19) — 분류(cat) → 줄 키. 목록에 없는 윙 차감 사유·광고 미표시 = '그 밖의 쿠팡 공제'
+COMMON_ROWS = (("svc", "판매자서비스이용료"), ("saver", "로켓그로스 세이버 구독료"), ("bi", "비즈니스 인사이트 이용료"),
+               ("live", "쿠팡 라이브 수수료"), ("review", "리뷰 이벤트 (체험단)"), ("pm3", "3PM 매출채권"), ("collect", "채권추심"),
+               ("noprod", "상품 표시 없는 창고·운송·보상 비용"), ("etc", "그 밖의 쿠팡 공제"))
+CAT_ROW = {"w:" + AC.SVC: "svc", "o:subscriptionFeeOffsetYearMonthBreakdown": "saver", "o:businessInsightsOffsetYearMonthBreakdown": "bi",
+           "o:coupangLiveOffsetYearMonthBreakdown": "live", RG_REVIEW_CAT: "review", "w:" + AC.PM3: "pm3", "w:채권추심": "collect",
+           "cfs": "noprod", "milk": "noprod", "comp": "noprod"}
 
 
 # ── 원 단위 상품표(열마다 합계 = 반올림(소수 합) · 상품 칸 = 누적 반올림 · 확정 전 몫도 같은 방식) ──
@@ -55,20 +63,36 @@ def _product_row(t: dict, n: str) -> dict:
 
 
 def rg_kinds(st: MonthState, line6: int) -> list:
-    out = [{"name": nm, "amount": -round(st.kinds[k])} for k, nm in KINDS if round(st.kinds[k])]
-    if round(st.kinds[PEND_KIND]):
-        out.append({"name": PEND_KIND, "amount": -round(st.kinds[PEND_KIND]), "pending": True})
-    if sum(x["amount"] for x in out) != line6:
-        out.append({"name": "끝전", "amount": line6 - sum(x["amount"] for x in out)})
-    return out
+    """6 종류별 = 고정 9줄(8 종류 + 정산 예정 · 값 없으면 0 · D-343) · 원 단위 = 누적 반올림(합 = 1쪽 6 · 끝전 줄 없음)."""
+    keys = [k for k, _nm in KINDS] + [PEND_KIND]
+    raw = [-st.kinds[k] for k in keys]
+    if abs(sum(raw) - line6) >= 1:
+        st.j.append(f"확인 필요: 6 종류별 합 {sum(raw):,.0f} ≠ 1쪽 6 {line6:,} — 차이는 누적 반올림으로 마지막 줄(종류별 내역 전)에 들어감")
+    names = [nm for _k, nm in KINDS] + [PEND_KIND]
+    return [{"name": nm, "amount": a, **({"pending": True} if k == PEND_KIND else {})} for k, nm, a in zip(keys, names, cum_round(raw, line6))]
+
+
+def common_row(cat: str) -> str:
+    if cat in CAT_ROW:
+        return CAT_ROW[cat]
+    if cat.startswith("w:") and "라이브" in cat:
+        return "live"
+    if cat.startswith("w:") and "리뷰" in cat:
+        return "review"
+    return "etc"
 
 
 def common_out(st: MonthState) -> tuple[list, list]:
-    """9 계정 공통 — 반영 = −반올림(쿠팡 금액 × 항목 비중 · D-241 작은 쪽 / 계정 정액 3종 = 등록 비중 D-271)."""
+    """9 계정 공통 — 반영 = −반올림(쿠팡 금액 × 항목 비중 · D-241 작은 쪽 / 계정 정액 3종 = 등록 비중 D-271) → 고정 9줄로 합침(D-343 · 원문 항목 = parts)."""
     st.common_items = [(n, a, c) for n, a, c in st.common if round(a)]
     applied = [-round(a * item_share(st, c)) for n, a, c in st.common_items]
-    items = [{"name": n, "coupang_amount": round(a), "applied_amount": ap} for (n, a, _c), ap in zip(st.common_items, applied)]
-    return items, applied
+    rows = {k: {"key": k, "name": nm, "coupang_amount": 0, "applied_amount": 0, "parts": []} for k, nm in COMMON_ROWS}
+    for (n, a, c), ap in zip(st.common_items, applied):
+        r = rows[common_row(c)]
+        r["coupang_amount"] += round(a)
+        r["applied_amount"] += ap
+        r["parts"].append({"name": n, "coupang_amount": round(a), "applied_amount": ap})
+    return list(rows.values()), applied
 
 
 def coupang_by_cat(st: MonthState) -> Counter:
@@ -79,7 +103,7 @@ def coupang_by_cat(st: MonthState) -> Counter:
     c["cfs"] = st.cfs["line_fees"] + st.cfs["adjust"] + st.cfs["pending"]
     c["comp"] = -st.comp["paid"]
     for _n, a, cat in st.common_items:
-        if cat.startswith(("o:", "w:", "svc")):
+        if cat.startswith(("o:", "w:", "r:", "svc")):
             c[cat] += a
     return c
 
@@ -162,7 +186,7 @@ def _judge_flow(st: MonthState) -> list:
         j.append(f"빠른정산 상환: 이 달 판매 지급 줄({', '.join(sorted(set(st.fast['지급일'])))})에서 쿠팡이 상환으로 빼는 {st.fast['계정 전체']:,.0f}원(계정 전체) = "
                  f"이미 먼저 받은 돈(D-312 ①) → 날짜 줄에서 빼고 '{FAST}' 줄·'빠른정산으로 먼저 받음'으로 따로 표시(관리 몫 {st.fast['관리 몫']:,.0f})")
     else:
-        j.append("빠른정산 상환: 이 달 판매 지급 줄에 없음(0) → '어디로 갔나요'에 줄 없음")
+        j.append("빠른정산 상환: 이 달 판매 지급 줄에 없음(0) → '어디로 갔나요' 빠른정산 줄 공란(D-343)")
     own = {k: v for k, v in st.own.items() if round(v)}
     if own:
         j.append("위탁자 본인 차감(D-312 ② · 관리 몫 0 · 이 정산서 금액·날짜별 표에 안 넣음): "
