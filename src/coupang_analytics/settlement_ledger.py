@@ -38,6 +38,11 @@ def _key(r: dict) -> tuple:
 SALE_FROM = "2026-01-01"    # D-328·D-329: 판매 기간(윙 구매확정일 · 로켓그로스 매출인식일) 끝이 이 날 전인 줄 = 정산 제외(판매·공제·최종 통째)
 
 
+def sold_2025(ym) -> bool:
+    """판매 달('YYYY-MM' · 'YYYYMM')이 SALE_FROM 앞 = 정산 밖(D-328) — 상품별 월별·미정산 달·정산 파일 판매 줄에 같은 기준."""
+    return str(ym).replace("-", "")[:6] < SALE_FROM.replace("-", "")[:6]
+
+
 def additional(r: dict) -> bool:
     """윙 추가지급 줄(D-308 ①) — 100% · 정산대상·paidAmount·pendingAmount 모두 0 · 기간 = 정산일 하루(같은 날 추가지급 메뉴 줄과 짝).
     실측 원천 윙 1,298줄 중 2줄(roum0502 2026-10-22 · freewin7777 2026-11-13) = 추가지급 json payDate·금액 2/2."""

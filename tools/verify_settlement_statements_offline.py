@@ -195,6 +195,50 @@ def test_d329_sale_2025_excluded() -> None:
     print("test_d329_sale_2025_excluded OK")
 
 
+def test_d328_product_rows_2025_excluded() -> None:
+    """D-328(판매 시점 2025 = 정산일이 2026 이어도 위탁정산서 금액에 넣지 않음 · 판매 시점 = 윙 구매확정일 · RG 매출인식일 달):
+    장부 줄(T-117)만이 아니라 정산집계 '상품별 월별'·윙 미정산 달·정산 파일 판매 줄·배송비 줄의 2025 판매 달도 계정 합계·관리 몫에서 뺀다.
+    실측 근거: 11-15 정산집계(정산집계_재생성_R193) '상품별 월별' 2025-11·12 판매 1,159,473,158 · 정산 852,971,283 가 남아 있었음."""
+    from types import SimpleNamespace
+
+    from coupang_analytics import settlement_files as SF
+    from coupang_analytics import settlement_statement_account as SA
+    from coupang_analytics import settlement_statement_source as SRC
+    h = ["계정", "월(매출인식)", "등록상품ID", "상품명", "윙 판매액", "로켓그로스 매출금액", "판매수수료(VAT포함)", "판매자할인쿠폰",
+         "쿠팡 정산금액 합계(부가비용 차감 전)", "로켓그로스 물류비(VAT포함)", "재고 손실 보상", "물류비·보상 반영 후(광고비 등 계정 차감 전)",
+         "윙 정산금액", "로켓그로스 정산대상액", "윙 수량", "로켓그로스 수량"]
+    acct = "가-사업자-x1"
+    rows = [[acct, "2025-12", "P1", "상품", 100_000, 0, 10_000, 0, 90_000, 0, 0, 90_000, 90_000, 0, 1, 0],
+            [acct, "2026-01", "P1", "상품", 50_000, 0, 5_000, 0, 45_000, 0, 0, 45_000, 45_000, 0, 1, 0]]
+    tot, per = SRC.confirmed({"상품별 월별": (h, rows)})
+    assert (tot[acct]["sales"], tot[acct]["settle"]) == (50_000, 45_000), tot[acct]          # 계정 합계 = 2026 판매만
+    assert (acct, "202512") not in per and per[(acct, "202601")]["w_settle"] == 45_000, dict(per)
+    pur = {m: {"purchaseReports": [{"revenueAmount": s, "apAmount": ap}]} for m, s, ap in (("202512", 100_000, 90_000),
+                                                                                             ("202601", 60_000, 54_000))}
+    un = SRC._wing_unsettled(acct, pur, per, {}, "시험", "2026-02-10")
+    assert [x[1] for x in un] == ["2026-01"] and un[0][3] == 54_000 - 45_000, un           # 2025 달 = 미정산(정산 예정) 밖
+    ctx = SimpleNamespace(st={"data": {"상품별 월별": (h, rows)}}, unjudged={"x1": set()}, svc_judge={}, base=Path(tempfile.gettempdir()))
+    a = SA.AccountBase(ctx, acct)
+    a.mpids, a.opt2pid, a.cdate, a.files = {"P1"}, {}, None, []
+    a._products()
+    assert (a.tm["sales"], a.tm["settle"]) == (50_000, 45_000), a.tm                        # 관리 몫 = 2026 판매만
+    assert not [k for k in a.mset if k[1] < "2026"] and not [k for k in a.msales if k[1] < "2026"], (dict(a.mset), dict(a.msales))
+    assert a.prod[("P1", True)][2:4] == [50_000, 45_000], a.prod
+    assert a.raw_s["2025-12"] == 100_000, a.raw_s            # 관리 시작 달 자동 판정(D-185) = 판매 이력이라 2025 도 그대로 봄
+
+    def srow(order, pid, day, sales, settle):
+        return SF.SettleRow("윙", acct, day, day, order, pid, "o1" if pid else "", "상품", "", 1 if pid else 0, sales, 0, 0, settle, day, "판매")
+    f = SF.SettleFile("윙", acct, date(2025, 12, 1), date(2026, 1, 31), kind="주정산",
+                      rows=[srow("A", "P1", date(2025, 12, 5), 100_000, 90_000), srow("A", "", date(2025, 12, 5), 3_000, 2_910),
+                            srow("B", "P1", date(2026, 1, 5), 50_000, 45_000), srow("B", "", date(2026, 1, 5), 3_000, 2_910)])
+    a.files = [f]
+    a._ships()
+    assert [round(x) for x in a.ship["관리"]] == [3_000, 2_910] and not round(a.ship["제외"][0]), a.ship   # 2025 배송비 = 관리·제외 모두 밖
+    a._gross_and_ship()
+    assert (a.gross, a.refund) == (50_000, 0), (a.gross, a.refund)                          # 판매액 = 2026 판매 줄만
+    print("test_d328_product_rows_2025_excluded OK")
+
+
 # ── test_additional_pay.py — additional_pay 시험 — D-116 ③①: 없으면 '없음', 있으면 지급금액 + '확인 필요(첫 실제 자료로 칸 확정)'. ──
 EMPTY = {"reports": [], "page": 1, "pageSize": 100, "totalPages": 0}      # 실측 응답(전 계정 0건)
 
@@ -755,6 +799,7 @@ def main() -> int:
     test_managed_alloc()
     test_settlement_ledger()
     test_d329_sale_2025_excluded()
+    test_d328_product_rows_2025_excluded()
     test_additional_pay()
     test_migration_inputs()
     test_managed_scope()
