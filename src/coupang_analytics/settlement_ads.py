@@ -14,6 +14,11 @@
 - 윙 로켓그로스 밀크런 내역 엑셀 = GET /tenants/rfm-portal-2/excel/milkrun-settlement?searchYear&searchMonth&milkrunId&feeType —
   밀크런번호·픽업일·발생금액·세액·조정액 등(상품 없음 → 입고 내역 milkrunSeq 로 상품 수량과 이음, settlement_verify_collect).
 달이 끝나고 SETTLE_DAYS 일 뒤부터 받는다(월말 계산·청구가능 확정 여유). 받은 파일은 다시 받지 않는다.
+- 끝나지 않은 달(이번 달 1일~어제 · 받을 날 전 지난달) = 같은 getDailySettlement 를 매일 `{계정}_광고정산진행_{YYYYMM}.json` 에
+  덮어씀(T-78 S2 · D-291 ⑥ — 로켓그로스 광고 공제 예정 금액 = 줄 매출 기간 일별 청구금액 합 D-285). 끝난 달 파일과 이름이 달라
+  정산서(`{계정}_광고정산_*.json`)가 읽지 않음.
+- 옛 질의로 받은 달(subtotals 칸 없음) 다시 받기 = `_광고_다시받기.json`({계정: [YYYYMM]})에 적힌 달만(T-90 이 필요한 계정·달 ·
+  D-291 ⑥ · 받기 의심 목록 = settlement_fetch_check). 옛 파일은 `보관_옛질의/` 로 옮김(삭제 없음).
 """
 from __future__ import annotations
 
@@ -34,6 +39,9 @@ MILK_EXCEL = "https://wing.coupang.com/tenants/rfm-portal-2/excel/milkrun-settle
 PA_EXCEL = "https://advertising.coupang.com/marketing-reporting/v2/api/excel-report?id={id}"
 SETTLE_DAYS = 3
 FROM = date(2025, 11, 1)        # 받는 시작 달 — 2026 첫 지급에 걸친 2025-11분부터(D-166 · D-161 ④ 2025-12 에서 앞당김)
+PROGRESS = "광고정산진행"           # 끝나지 않은 달 일별(매일 덮어씀 · T-78 S2)
+REFETCH = "_광고_다시받기.json"      # {계정: [YYYYMM]} — subtotals 없는 옛 달 중 다시 받을 달(T-90 필요분만 · D-291 ⑥)
+OLD_KEEP = "보관_옛질의"             # 다시 받기 전 옛 파일을 옮기는 하위 폴더(삭제 없음)
 MAX_MONTHS = 2                  # 하루(한 번 실행) 계정당 받는 달 수 — 밀린 달은 최근 달부터 날마다 나눠서(판매 소급 하루 60일과 같은 방식·D-120)
 _CAMPAIGNS = ("query GetCampaignListInBillboard($startDate: Int!, $endDate: Int!, $reportType: ReportType!) "
               "{ getCampaignList(startDate: $startDate, endDate: $endDate, reportType: $reportType) { id name } }")
@@ -60,6 +68,25 @@ def due_months(start: date, today: date) -> list[tuple[str, date, date]]:
     last = today - timedelta(days=SETTLE_DAYS + 1)
     return [(ym, date(f.year, f.month, 1), t) for ym, f, t in month_windows(date(start.year, start.month, 1), last)
             if (t + timedelta(days=1)).day == 1]
+
+
+def progress_months(start: date, today: date) -> list[tuple[str, date, date]]:
+    """끝나지 않은(아직 받을 날 전) 달 — 1일~min(말일, 어제). 어제가 시작 달 앞이면 없음."""
+    y = today - timedelta(days=1)
+    due = {ym for ym, _f, _t in due_months(start, today)}
+    return [(ym, f, t) for ym, f, t in month_windows(date(start.year, start.month, 1), y) if ym not in due]
+
+
+def refetch_months(folder: Path, acct: str) -> set:
+    """`_광고_다시받기.json` 에 적힌 이 계정 달 중 아직 subtotals 없는 달."""
+    p = Path(folder) / REFETCH
+    want = set((json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}).get(acct) or [])
+    out = set()
+    for ym in want:
+        f = Path(folder) / f"{acct}_광고정산_{ym}.json"
+        if f.exists() and "subtotals" not in json.loads(f.read_text(encoding="utf-8")):
+            out.add(ym)
+    return out
 
 
 def _ad_done(folder: Path, acct: str, ym: str, none: set) -> bool:
@@ -141,7 +168,9 @@ def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date, 
     state_p = folder / f"{acct}_광고.json"
     state = json.loads(state_p.read_text(encoding="utf-8")) if state_p.exists() else {}
     none = set(state.get("캠페인 없음") or [])
-    out: dict = {"받을 것": [], "요청": [], "기다림": [], "받음": [], "캠페인 없음": [], "실패": [], "남은 달": 0, "파일": []}
+    redo = refetch_months(folder, acct)
+    out: dict = {"받을 것": [], "요청": [], "기다림": [], "받음": [], "캠페인 없음": [], "실패": [], "남은 달": 0, "파일": [],
+                 "다시 받음": [], "진행 달": []}
     reports: list | None = None
 
     raw_call, raw_bytes, raw_report = call, get_bytes, get_report or get_bytes
@@ -171,6 +200,11 @@ def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date, 
     def ad_month(ym: str, f: date, t: date) -> None:
         nonlocal reports
         daily = folder / f"{acct}_광고정산_{ym}.json"
+        if ym in redo:                                    # 옛 질의(subtotals 없음) → 보관 후 다시(D-291 ⑥)
+            (folder / OLD_KEEP).mkdir(exist_ok=True)
+            daily.replace(folder / OLD_KEEP / daily.name)
+            redo.discard(ym)
+            out["다시 받음"].append(ym)
         if not daily.exists():
             d = _gql(call_, _DAILY, {"startDate": _ymd(f), "endDate": _ymd(t), "settlementDomain": "SELLER"})["getDailySettlement"]
             daily.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
@@ -201,7 +235,7 @@ def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date, 
             out["기다림"].append(ym)
     months = list(reversed(due_months(start, today)))
     for what, fn, todo in (("밀크런", milk_month, [m for m in months if not milk_p(m[0]).exists()]),
-                           ("광고센터", ad_month, [m for m in months if not ad_done(m[0])])):
+                           ("광고센터", ad_month, [m for m in months if not ad_done(m[0]) or m[0] in redo])):
         for ym, f, t in todo[:max_months]:
             try:
                 fn(ym, f, t)
@@ -210,6 +244,19 @@ def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date, 
             except Exception as exc:  # noqa: BLE001 — 그쪽(밀크런|광고센터)만 이번 실행 멈춤 · 사유 그대로 남김
                 out["실패"].append(f"{what} {ym}: {exc.__class__.__name__}: {str(exc)[:120]}")
                 break
+    ad_failed = any(x.startswith("광고센터 ") for x in out["실패"])
+    for ym, f, t in ([] if ad_failed else progress_months(start, today)):   # 끝나지 않은 달 = 매일 덮어씀(T-78 S2) ·
+        try:                                                                # 이번 실행 광고센터 실패면 안 부름(D-245)
+            d = _gql(call_, _DAILY, {"startDate": _ymd(f), "endDate": _ymd(t), "settlementDomain": "SELLER"})["getDailySettlement"]
+        except fatal:
+            raise
+        except Exception as exc:  # noqa: BLE001 — 진행 달만 이번 실행 멈춤 · 사유 그대로 남김(끝난 달 자료와 별개)
+            out["실패"].append(f"광고센터 진행 {ym}: {exc.__class__.__name__}: {str(exc)[:120]}")
+            break
+        p = folder / f"{acct}_{PROGRESS}_{ym}.json"
+        p.write_text(json.dumps({"기간": [f"{f}", f"{t}"], **d}, ensure_ascii=False), encoding="utf-8")
+        out["진행 달"].append(ym)
+        out["파일"].append(p)
     out["남은 달"] = _left(folder, acct, months, none)
     state_p.write_text(json.dumps({**state, "캠페인 없음": sorted(none)}, ensure_ascii=False), encoding="utf-8")
     return out
