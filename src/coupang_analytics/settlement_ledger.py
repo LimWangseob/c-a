@@ -33,6 +33,9 @@ def _key(r: dict) -> tuple:
     return str(r["정산일"])[:10], str(r["기간 시작"])[:10], str(r["기간 끝"])[:10], int(_num(r["지급비율"]))
 
 
+SALE_FROM = "2026-01-01"    # D-328·D-329: 판매 기간(윙 구매확정일 · 로켓그로스 매출인식일) 끝이 이 날 전인 줄 = 정산 제외(판매·공제·최종 통째)
+
+
 def release(r: dict) -> bool:
     """윙 보류 해제 지급 줄(100%·지급대상 0·보류해제액)."""
     return int(_num(r["지급비율"])) == 100 and not _num(r.get("targetAmount"))
@@ -150,7 +153,7 @@ class Ledger:
             if u[0] == "윙" and u[1] != "-" and not str(u[4]).startswith(("자료", "확인")):
                 un_w[u[1]] += u[3]
         wing_months = {f"{m[:4]}-{m[4:]}" for (aa, m), v in per.items() if aa == acct_name and round(v.get("w_settle", 0))}
-        wing_months |= set(un_w)
+        wing_months = {m for m in wing_months | set(un_w) if m >= SALE_FROM[:7]}       # 2025 판매 달 = 정산 밖(D-328)
         raw = ([{**r, "채널": "윙", "구분": "지난" if str(r["정산일"])[:10] <= self.today else "예정"} for r in self.wing_rows(a)]
                + [{**r, "채널": "로켓그로스", "구분": "지난" if str(r["정산일"])[:10] <= self.today else "예정"}
                   for r in self.rg_rows(a)])
@@ -158,6 +161,8 @@ class Ledger:
 
         def keep(r) -> bool:
             k = _key(r)
+            if k[2] < SALE_FROM:                         # 판매 기간 전부 2025 = 정산일이 2026 이어도 제외(D-328·D-329)
+                return False
             if r["채널"] == "로켓그로스":
                 return k[1:3] in rg_files or k[1:3] in rg2026
             if release(r):
@@ -250,6 +255,7 @@ class Ledger:
     def account(self, acct_name: str, per: dict, unsettled: list, rg_files: dict, purchase_ap: dict) -> dict:
         """purchase_ap = {YYYY-MM: 매출내역 정산대상(apAmount)} — 끝난 달 독립 대조용."""
         a = _aid(acct_name)
+        rg_files = {w: t for w, t in rg_files.items() if w[1] >= SALE_FROM}       # 2025 판매 주 정산 파일 = 검산 밖(D-328)
         un_w, wing_months, lines = self._lines(a, acct_name, per, unsettled, rg_files)
         b, e2_bad, rows = self._rows(a, lines)
         weeks = self._weeks(lines)
@@ -258,7 +264,8 @@ class Ledger:
         self._e1_rg(lines, weeks[0], rg_files, gen, e1)
         self._e1_wing(a, acct_name, per, un_w, wing_months, weeks, purchase_ap, gen, e1)
         b["줄 생성 전"] = sum(gen.values())
-        held_p = [x for x in self.holds(acct_name) if x.get("paymentStatus") == "P"]
+        held_p = [x for x in self.holds(acct_name) if x.get("paymentStatus") == "P"
+                  and str(x.get("revenueRecognitionDateTo"))[:10] >= SALE_FROM]          # 2025 판매 보류 = 장부 줄과 같이 제외(D-328)
         held_now = sum(_num(x.get("finalPaymentAmount")) for x in held_p if str(x.get("paymentDate")) <= self.today)
         held_next = sum(_num(x.get("finalPaymentAmount")) for x in held_p if str(x.get("paymentDate")) > self.today)
         e3 = (round(b["최종 보류"]), round(held_now))
