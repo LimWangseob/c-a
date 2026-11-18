@@ -14,6 +14,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from coupang_analytics import settlement_ledger as SL
 from coupang_analytics import settlement_statement_account as AC
 from coupang_analytics import settlement_statement_source as SRC
 from coupang_analytics.settlement_consignor_month_calc import MonthState, ads, pending_sales, sales, settle_by_channel
@@ -105,11 +106,12 @@ def account_source(ctx, acct: str) -> dict:
 
 
 def sale_months(src: dict) -> list[str]:
-    """계정의 판매 달(YYYY-MM) — 정산집계 '상품별 월별' 판매·정산 금액이 있는 달 + 정산 예정(쿠팡 정산 줄) 판매가 있는 달."""
+    """계정의 판매 달(YYYY-MM) — 정산집계 '상품별 월별' 판매·정산 금액이 있는 달 + 정산 예정(쿠팡 정산 줄) 판매가 있는 달 ·
+    2025 판매 달 = 정산 밖(D-328 · settlement_ledger.sold_2025)."""
     ms = {str(p["월(매출인식)"])[:7] for p in src["prows"]
           if (p["윙 판매액"] or 0) or (p["로켓그로스 매출금액"] or 0) or (p["쿠팡 정산금액 합계(부가비용 차감 전)"] or 0)}
     ms |= {x[1] for x in src["u"] if len(str(x[1])) == 7 and (x[2] or x[3])}
-    return sorted(ms)
+    return sorted(m for m in ms if not SL.sold_2025(m))
 
 
 def _resolve(ctx, account) -> dict:

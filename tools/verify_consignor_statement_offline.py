@@ -140,6 +140,16 @@ def test_load_judge() -> None:
         assert j.names == {"aid1": [{"표시 이름": "가"}]} and len(j.notes) == 1
 
 
+def test_sale_months_2025_excluded() -> None:
+    """D-328·D-329: 판매 달(매출인식·구매확정)이 2025 = 정산 밖 → 판매 달 목록에도 없음(상품별 월별·정산 예정 둘 다)."""
+    def prow(ym: str, wing: int) -> dict:
+        return {"월(매출인식)": ym, "윙 판매액": wing, "로켓그로스 매출금액": 0, "쿠팡 정산금액 합계(부가비용 차감 전)": 0}
+    src = {"prows": [prow("2025-12", 5_000), prow("2026-01", 3_000), prow("2026-02", 0)],
+           "u": [("로켓그로스", "2025-11", 1_000, 900, "예정", ""), ("윙", "2026-03", 2_000, 1_800, "예정", ""),
+                 ("윙", "-", 0, 0, "자료 없음", "")]}
+    assert CM.sale_months(src) == ["2026-01", "2026-03"], CM.sale_months(src)
+
+
 # ── ② 그리기 쪽 ───────────────────────────────────────────────
 def _grid(reqs: list[dict]) -> tuple[int, int]:
     gp = reqs[0]["updateSheetProperties"]["properties"]["gridProperties"]
@@ -360,7 +370,7 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     except AttributeError:
         pass
-    for f in (test_cum_round, test_product_table, test_rg_kinds, test_failed_checks, test_load_judge, test_render, test_overflow,
+    for f in (test_cum_round, test_product_table, test_rg_kinds, test_failed_checks, test_load_judge, test_sale_months_2025_excluded, test_render, test_overflow,
               test_unsplittable, test_check_reject, test_multi_month, test_tool):
         f()
     print("✅ 위탁자 정산서 3차 형식 시험(숫자 반올림·상품표 열 합·종류별 끝전·검산 기준 · 그리기 구조·쪽 높이·결정 문구·넘침·검산/여러 달 거부 · 입구) 통과")
