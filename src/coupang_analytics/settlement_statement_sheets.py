@@ -4,7 +4,7 @@ from __future__ import annotations
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from coupang_analytics.settlement_statement_account import AD, COMP, ETC, FAST, LOGI, MILK, REL, STS, SVC
+from coupang_analytics.settlement_statement_account import AD, COMP, ETC, FAST, LOGI, MILK, PM3, REL, STS, SVC
 
 LINE = Side(style="thin", color="CFD8DC")
 BOX = Border(left=LINE, right=LINE, top=LINE, bottom=LINE)
@@ -16,7 +16,9 @@ PENDING_NOTE = "정산 예정 — 쿠팡 상품별 자료 전, 판매 비율로 
 SHIP_LABEL = "배송비(고객이 낸 배송료 — 쿠팡 정산 파일에 상품 없이 따로 들어오는 줄)"
 NOTES = {AD: "쿠팡 광고 사용료", LOGI: "로켓그로스 창고·배송 비용", MILK: "쿠팡 창고로 보내는 운송 서비스",
          SVC: "월 매출 100만 원 이상이면 월 5만 원+부가세", ETC: "위 항목 외 쿠팡 공제", COMP: "쿠팡 창고에서 잃어버린 재고 보상",
-         FAST: "셀러월렛으로 미리 받은 돈 상환", REL: "쿠팡이 멈췄다가 다시 보낸 돈"}
+         FAST: "셀러월렛으로 미리 받은 돈 상환", REL: "쿠팡이 멈췄다가 다시 보낸 돈",
+         PM3: "앞 회차 윙 최종지급이 음수라 0원 지급 → 쿠팡이 다음 회차에서 회수 · 이월(쿠팡 원문 값 · D-304)"}
+SVC_EST = "판매자서비스이용료 — 규칙 예상(D-279 ② 경고값)"     # 쿠팡 예정 줄에 아직 안 붙은 이용료(우리 계산값)만 이 줄 · 쿠팡 줄 몫은 SVC 줄
 ORDER = [AD, LOGI, MILK, SVC, FAST, ETC, COMP, REL]
 
 
@@ -99,6 +101,12 @@ def _status_table(a: dict, settle: int, ded: list) -> list:
             (k, -dmap.get(k, 0), {st: -a["st_ded"][st].get(k, 0.0) for st in STS}) for k in keys]:
         done, hold = round(f["지급 완료"]), round(f["보류"])
         tbl.append((label, {"지급 완료": done, "보류": hold, "예정": total - done - hold}, total))
+    est = round(a["sv"]["잔액 관리"])
+    for i, (label, c, total) in enumerate(tbl):
+        if label == SVC and est:                       # 규칙 잔액(D-161 · D-279 ②) = 예정에서 떼어 따로 줄 — 합계 그대로
+            tbl[i] = (label, {**c, "예정": c["예정"] + est}, total + est)
+            tbl.insert(i + 1, (SVC_EST, {"지급 완료": 0, "보류": 0, "예정": -est}, -est))
+            break
     return tbl
 
 

@@ -784,11 +784,43 @@ def test_status_split_pending_rest() -> None:
     print("test_status_split_pending_rest OK")
 
 
+def test_d279_svc_estimate_row_and_d304_note() -> None:
+    """D-279 ②: 쿠팡 예정 줄에 아직 안 붙은 이용료(규칙 잔액 · 우리 계산값) = 따로 '경고값' 줄 · 쿠팡 줄 몫 줄엔 경고 없음 · 합계 그대로.
+    D-304: 3PM_매출채권 줄 설명 = 원문 값 + '이월'."""
+    from collections import Counter
+
+    import openpyxl
+
+    from coupang_analytics import settlement_statement_book as BK
+    from coupang_analytics import settlement_statement_sheets as SH
+    from coupang_analytics.settlement_statement_account import PM3, SVC
+    a = {"Dm": {SVC: 110_000.0 + 55_000.0, PM3: 20_000.0}, "sv": {"잔액 관리": 55_000.0},
+         "st_settle": {"지급 완료": 1_000_000.0, "예정": 0.0, "보류": 0.0},
+         "st_ded": {"지급 완료": Counter({SVC: 55_000.0, PM3: 20_000.0}), "예정": Counter({SVC: 55_000.0 + 55_000.0}), "보류": Counter()}}
+    ded = [(SVC, 165_000), (PM3, 20_000)]
+    tbl = SH._status_table(a, 1_000_000, ded)
+    rows = {label: (c, total) for label, c, total in tbl}
+    assert rows[SVC] == ({"지급 완료": -55_000, "보류": 0, "예정": -55_000}, -110_000), rows[SVC]      # 쿠팡 줄 몫(완료 + 예정 줄)
+    assert rows[SH.SVC_EST] == ({"지급 완료": 0, "보류": 0, "예정": -55_000}, -55_000), rows          # 규칙 잔액 = 예정만
+    assert sum(t for _l, _c, t in tbl[1:]) == -185_000, tbl                                             # 공제 합 그대로
+    assert "D-279 ②" in SH.SVC_EST and "경고값" in SH.SVC_EST
+    assert "이월" in SH.NOTES[PM3] and "D-304" in SH.NOTES[PM3] and "경고값" not in SH.NOTES[SVC]
+    ws = openpyxl.Workbook().active
+    v = {"tbl": tbl, "cost": 185_000, "fast": 0, "보류": 0, "지급 완료": 925_000, "예정": -110_000, "pay": 815_000, "settle": 1_000_000}
+    share = {SVC: (110_000 / 165_000, "", "쿠팡 자료 비율"), PM3: (1.0, "", "쿠팡 자료")}
+    BK._blocks_fg(ws, 1, {"D": {SVC: 165_000.0, PM3: 20_000.0}, "share": share}, v, [], "")
+    notes = {ws.cell(r, 2).value: str(ws.cell(r, 6).value) for r in range(1, ws.max_row + 1)}
+    assert "D-279 ②" in notes[SH.SVC_EST] and "경고값" in notes[SH.SVC_EST], notes
+    assert "경고값" not in notes[SVC] and "이월" in notes[PM3], notes
+    print("test_d279_svc_estimate_row_and_d304_note OK")
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except AttributeError:
         pass
+    test_d279_svc_estimate_row_and_d304_note()
     test_d312_fast_used()
     test_d312_own_deduction()
     test_d304_wing_negative_round()

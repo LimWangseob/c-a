@@ -201,7 +201,7 @@ class Account(AccountBase):
         out = {k: g[k] for k in ("acct", "aid", "t", "u", "L", "D", "Dm", "share", "fin", "gross", "refund", "st_settle", "st_ded",
                                  "line_m", "paid_total", "rows_out", "dup", "bad", "mpids", "tm", "tx", "prod", "mmon", "ushare",
                                  "u_sales", "um_sales", "um_settle", "ucheck", "settle_all", "settle_m", "pay_m", "ship", "ship_u", "ship_stats",
-                                 "fav", "add", "addm", "start_note")}
+                                 "fav", "add", "addm", "start_note", "sv")}
         out.update({"info": self.ctx.names[self.acct], "ok": self.L["ok"] and not self.bad, "why": why, "scope": self.sc, "scope_check": self.scope_check,
                     "extras": self.ctx.extras.get(self.aid, [])})
         return out

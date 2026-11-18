@@ -15,7 +15,7 @@ from coupang_analytics import settlement_experience as XP
 from coupang_analytics import settlement_statement_source as SRC
 from coupang_analytics.settlement_statement_account import FAST, OWN, STS, SVC
 from coupang_analytics.settlement_statement_sheets import (
-    NOTES, PCT, PENDING_NOTE, PLAIN, SHIP_LABEL, SIGNED, cell, flow, managed_lines, merge, section, shown, table)
+    NOTES, PCT, PENDING_NOTE, PLAIN, SHIP_LABEL, SIGNED, SVC_EST, cell, flow, managed_lines, merge, section, shown, table)
 
 
 def _head(ws, ctx, a: dict) -> int:
@@ -106,6 +106,10 @@ def _blocks_fg(ws, r: int, a: dict, v: dict, neg: list, neg_note: str) -> int:
     fast_row = next(((c, total) for label, c, total in v["tbl"][1:] if label == FAST), None)
     for label, c, total in v["tbl"][1:]:
         if label == FAST:
+            continue
+        if label == SVC_EST:
+            frows.append((label, c["지급 완료"], c["예정"] + c["보류"], total, "쿠팡 예정 줄에 아직 안 붙은 이용료를 구매확정 달 규칙(D-161)으로 계산한 "
+                          "관리 몫 — 경고값(D-279 ②) · 쿠팡이 실제로 빼면 그 값으로 바뀜", None))
             continue
         sr = share[label]
         frows.append((label, c["지급 완료"], c["예정"] + c["보류"], total,
