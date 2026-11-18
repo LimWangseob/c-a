@@ -31,6 +31,7 @@ from pathlib import Path
 
 import openpyxl
 
+from . import daily_snapshot as DS
 from .settlement_evidence import month_windows
 from .settlement_wing_api import SiteChangedError
 
@@ -254,9 +255,11 @@ def collect(call, get_bytes, folder: Path, acct: str, start: date, today: date, 
             out["실패"].append(f"광고센터 진행 {ym}: {exc.__class__.__name__}: {str(exc)[:120]}")
             break
         p = folder / f"{acct}_{PROGRESS}_{ym}.json"
+        DS.keep_before_overwrite(p, today)                          # 매일 덮어쓰기 전 전날 일별 값(D-335)
         p.write_text(json.dumps({"기간": [f"{f}", f"{t}"], **d}, ensure_ascii=False), encoding="utf-8")
         out["진행 달"].append(ym)
         out["파일"].append(p)
     out["남은 달"] = _left(folder, acct, months, none)
+    DS.keep_before_overwrite(state_p, today)
     state_p.write_text(json.dumps({**state, "캠페인 없음": sorted(none)}, ensure_ascii=False), encoding="utf-8")
     return out

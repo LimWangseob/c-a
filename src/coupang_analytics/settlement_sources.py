@@ -21,6 +21,7 @@ from datetime import date, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
 
+from . import daily_snapshot as DS
 from . import settlement_files as SF
 from .settlement_wing_api import SiteChangedError
 
@@ -204,6 +205,7 @@ def compare_originals(base: Path, files_dir: Path, today: date, max_files: int =
         state["기준"] = f"{today}"
     state["파일"] = sorted(done)
     sp.parent.mkdir(parents=True, exist_ok=True)
+    DS.keep_before_overwrite(sp, today)                         # 전날 관측 상태(D-335)
     _write_json(sp, state)
     return {"읽음": min(len(todo), max_files) - len(errors), "남음": left, "이력": append_history(base, hist, today),
             "기준": state["기준"], "오류": errors}

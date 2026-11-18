@@ -23,6 +23,7 @@ from datetime import date, datetime, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
 
+from . import daily_snapshot as DS
 from .settlement_wing_api import _CALL_JS, ApiBlocked, ServerBusy, SiteChangedError
 
 FROM = date(2026, 1, 1)
@@ -368,6 +369,7 @@ class _Run:
     def save(self, name: str, body: bytes, key: str, sub: str = "") -> None:
         tmp = self.folder / (name + ".tmp")
         tmp.write_bytes(body)
+        DS.keep_before_overwrite(self.folder / name, self.now().date())     # RG반품내역_최신 등 전날 값(D-335)
         tmp.replace(self.folder / name)
         self.out["파일"].append(self.folder / name)
         stamp = self.now().isoformat(timespec="seconds")
@@ -375,6 +377,7 @@ class _Run:
             self.led.setdefault(key, {})[sub] = stamp
         else:
             self.led[key] = stamp
+        DS.keep_before_overwrite(self.lp, self.now().date())
         self.lp.write_text(json.dumps(self.led, ensure_ascii=False, indent=1), encoding="utf-8")
 
     def attempt(self, label: str, fn):
@@ -387,6 +390,7 @@ class _Run:
         except Exception as exc:  # noqa: BLE001 — 위 설명
             detail = getattr(exc, "detail", None)            # 원인 확인용 응답 요약(주문별 매출 쪽별 커서·중복 줄 — T-2)
             if detail:
+                DS.keep_before_overwrite(self.folder / f"_실패_{label.replace(' ', '_')}.json", self.now().date())
                 (self.folder / f"_실패_{label.replace(' ', '_')}.json").write_text(
                     json.dumps(detail, ensure_ascii=False, indent=1), encoding="utf-8")
             self.out["실패"].append(f"{label}: {exc.__class__.__name__}: {str(exc)[:120]}")

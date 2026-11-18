@@ -21,6 +21,8 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+from . import daily_snapshot
+
 DIRNAME = "판매분석_일별"
 _KIND = {"RFM": "로켓그로스", "NORMAL": "윙"}
 
@@ -50,6 +52,7 @@ def record_period(out_dir, account_id: str, key: str, date_from: str, date_to: s
         return "건너뜀 — 판매금액 없는 출처"
     opts, total = _options(metrics)
     path = Path(out_dir) / PERIOD_DIRNAME / f"{account_id}.json"
+    daily_snapshot.keep_before_overwrite(path)                # 진행 중 기간 누계 교체 전 값(D-335)
     _put(path, key, {"수집": datetime.now().isoformat(timespec="seconds"), "조회기간": [date_from, date_to],
                      "합계": total, "옵션": opts})
     return f"기록 — {key} 옵션 {len(opts)}개·판매금액 {total['판매금액']:,}원"

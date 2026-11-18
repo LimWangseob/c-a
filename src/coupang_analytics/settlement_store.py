@@ -12,6 +12,7 @@ import re
 import shutil
 from pathlib import Path
 
+from coupang_analytics import daily_snapshot as DS
 from coupang_analytics import settlement_accounts as SA
 from coupang_analytics import settlement_files as SF
 from coupang_analytics import settlement_jobs as SJ
@@ -78,6 +79,7 @@ def save_amounts(name: str, ch: str, new_rows: list) -> None:
     merged = _by_paydate(old)
     merged.update(_by_paydate(new_rows))
     path.parent.mkdir(parents=True, exist_ok=True)
+    DS.keep_before_overwrite(path)                        # 같은 정산일 줄을 쿠팡이 고쳐도 옛 줄 남김(D-335)
     _write_amounts(path, merged)
 
 
