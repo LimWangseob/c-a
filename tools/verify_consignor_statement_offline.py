@@ -183,18 +183,22 @@ def test_post_purchase() -> None:
     assert st.loc[cat] == [(key, 8_880.0)] and coupang_by_cat(st)[cat] == 8_880
 
 
-def _line(ch: str, s: str, e: str) -> tuple:
+def _line(ch: str, s: str, e: str, bi: dict | None = None) -> tuple:
     row = ["", "", "2026-12-01", s, e, "70"]
-    return (row[2], s, e, ch, row[5]), row, {"채널": ch}
+    return (row[2], s, e, ch, row[5]), row, {"채널": ch, **({BI_CAT[2:]: json.dumps(bi)} if bi else {})}
 
 
-def _expect_st(m: str, basis: str, common: list, lines: list) -> SimpleNamespace:
-    return SimpleNamespace(m=m, basis=basis, common=common, j=[], share=0.5, reg_share=0.4, lines=lambda: iter(lines))
+def _expect_st(m: str, basis: str, common: list, lines: list, pend: bool = True) -> SimpleNamespace:
+    """pend = 그 달 정산 예정분(pend_info · 정산서 상태 '정산 예정 포함'과 같은 근거) 있음."""
+    return SimpleNamespace(m=m, basis=basis, common=common, j=[], share=0.5, reg_share=0.4, lines=lambda: iter(lines),
+                           pend_info=[{"항목": "1~4 로켓그로스 정산 예정"}] if pend else [])
 
 
 def test_expect_values() -> None:
-    """T-121: 입력 없음 = 숫자 없이 비고 · 9 BI 줄(금액 있음)에만 비고 · 줄 없는 기간 = 근거만 · 금액 변화 0."""
-    lines = [_line("로켓그로스", "2026-10-01", "2026-10-26"), _line("윙", "2026-10-01", "2026-10-31"), _line("윙", "2026-09-28", "2026-09-30")]
+    """T-121: 입력 없음 = 숫자 없이 비고 · 74 = BI 쓰는 계정의 '정산 예정분 남은 달'만(통제 11-19 · 지급 끝난 달 = 없음 · 조각 0 이어도 근거·판단 문장) ·
+    9 BI 줄 note = 그 줄 금액 있을 때만(금액 없는 줄 안 만듦 D-081) · 줄 없는 기간 = 근거만 · 금액 변화 0."""
+    lines = [_line("로켓그로스", "2026-10-01", "2026-10-26", bi={"2026-10": 20_228}), _line("윙", "2026-10-01", "2026-10-31"),
+             _line("윙", "2026-09-28", "2026-09-30")]
     st = _expect_st("2026-10", "2026-11-15", [("비즈니스 인사이트 이용료", 20_228.0, BI_CAT), ("윙 지급 차감 — 판매자서비스이용료", 55_000.0, "w:" + AC.SVC)], lines)
     expect_values(st)
     assert FR.NO_INPUT in st.bi_note and "SV-BI-SUB" in st.bi_note, st.bi_note
@@ -225,6 +229,23 @@ def test_expect_values() -> None:
     st = _expect_st("2026-08", "2026-11-15", [], [_line("윙", "2026-08-03", "2026-08-09"), _line("윙", "2026-11-02", "2026-11-08")])
     expect_values(st)
     assert st.expect == {}, st.expect
+    # 74 ① 지급 끝난 달(정산 예정분 없음) · 조각 있음 = 비고·판단 문장·근거 없음
+    bi_lines = [_line("로켓그로스", "2026-09-01", "2026-11-14", bi={"2026-01": 108_900})]
+    st = _expect_st("2026-01", "2026-11-15", [("비즈니스 인사이트 이용료", 108_900.0, BI_CAT)], bi_lines, pend=False)
+    expect_values(st)
+    assert st.bi_note == "" and st.j == [] and "74 비즈니스 인사이트 남은 청구" not in st.expect, (st.bi_note, st.j, st.expect)
+    assert all(x.get("note") is None for x in common_out(st)[0])
+    # 74 ② 정산 예정분 남은 달 · 조각 0(쿠팡이 아직 안 뺌) · BI 쓰는 계정(다른 달 조각) = 근거·판단 문장 있음 · 9 BI 줄 금액 0 → 줄 비고 없음
+    st = _expect_st("2026-10", "2026-11-15", [], bi_lines)
+    expect_values(st)
+    e74 = st.expect["74 비즈니스 인사이트 남은 청구"]
+    assert e74["쿠팡이 뺀 조각"] == 0 and e74["예상값"] is None and FR.NO_INPUT in e74["비고"], e74
+    assert any("0원" in j and FR.NO_INPUT in j for j in st.j), st.j
+    assert all(x.get("note") is None for x in common_out(st)[0])
+    # 74 BI 안 쓰는 계정(어느 줄에도 조각 없음) · 정산 예정분 있음 = 74 없음
+    st = _expect_st("2026-10", "2026-11-15", [], [_line("로켓그로스", "2026-09-01", "2026-11-14")])
+    expect_values(st)
+    assert "74 비즈니스 인사이트 남은 청구" not in st.expect and st.j == [], st.expect
 
 
 def test_flow_fixed() -> None:

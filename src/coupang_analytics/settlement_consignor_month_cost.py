@@ -369,10 +369,12 @@ def _gap(st: MonthState, ch: str) -> tuple[str, str] | None:
 
 
 def expect_values(st: MonthState) -> None:
-    """74 = 9 '비즈니스 인사이트' 줄(쿠팡이 뺀 조각 · 원문)에 남은 청구 예상 비고 · 45·76·신규-03·4 = 쿠팡 줄 없는 기간 예상값 입력 점검(근거만)."""
+    """74 = BI 쓰는 계정(어느 지급 줄에든 BI 조각)의 정산 예정분 남은 달(st.pend_info = 정산서 상태 '정산 예정 포함' 근거)만 남은 청구 예상 비고 ·
+    지급 끝난 달 = 없음 · 조각 0 이어도 근거·판단 문장(9 BI 줄 note 는 금액 있을 때만 · 통제 11-19) · 45·76·신규-03·4 = 쿠팡 줄 없는 기간(근거만)."""
     st.expect, st.bi_note = {}, ""
     taken = [a for _n, a, c in st.common if c == BI_CAT]
-    if round(sum(taken)):
+    uses_bi = any(any(num(v) for v in (jl(r.get(BI_CAT[2:])) or {}).values()) for _k, _row, r in st.lines())
+    if st.pend_info and uses_bi:
         amt, note = FR.bi_expect(st.m, taken)
         st.bi_note = f"쿠팡이 아직 안 뺀 남은 청구(D-325 · D-279 ②) — {note}"
         st.expect["74 비즈니스 인사이트 남은 청구"] = {"쿠팡이 뺀 조각": round(sum(taken)), "예상값": amt, "비고": note}
