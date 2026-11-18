@@ -155,6 +155,46 @@ def test_settlement_ledger() -> None:
     print("settlement_ledger 시험 통과")
 
 
+def wg(pay, s, e, ratio, paid, ded, pending=0, target=None):
+    return {"정산일": pay, "기간 시작": s, "기간 끝": e, "지급비율": ratio, "paidAmount": paid, "pendingAmount": pending,
+            "totalDeductionAmount": ded, "targetAmount": paid / (ratio / 100) if target is None else target,
+            "최종지급액": paid + pending - ded, "지급상태": "DONE"}
+
+
+def test_d329_sale_2025_excluded() -> None:
+    """D-328·D-329: 판매 기간(윙 구매확정일 · 로켓그로스 매출인식일)이 전부 2025년인 정산 줄 = 판매·공제·최종 통째 제외(정산일이 2026 이어도) ·
+    2026 판매 줄 = 원문 공제 그대로. 줄 모양 = 실측(1단계 s4_①_줄.csv · hk66597582 윙 70% · oopean 보류 해제 2026-02-13 · RG 12월 말 주)."""
+    w25 = wg("2026-01-06", "2025-12-08", "2025-12-14", 70, 2_099_065, 10_000)                       # 2026 지급 · 2025 판매
+    w25old = wg("2025-12-22", "2025-12-01", "2025-12-07", 70, 500_000, 0)                          # 2025 지급 · 2025 판매
+    rel25 = wg("2026-02-13", "2025-11-09", "2025-11-09", 100, 0, 0, pending=68_926, target=0)      # 보류 해제(2025 판매)
+    w26 = wg("2026-01-13", "2026-01-05", "2026-01-11", 70, 700_000, 50_000)                        # 2026 판매 = 공제 그대로
+    w25h = {**wg("2026-01-19", "2025-12-22", "2025-12-28", 70, 41_314, 0), "지급상태": "PENDING"}    # 보류(oopean 실측 모양)
+    w26h = {**wg("2026-01-23", "2026-01-12", "2026-01-18", 70, 46_750, 0), "지급상태": "PENDING"}
+    holds = [{"revenueRecognitionDateFrom": s, "revenueRecognitionDateTo": e, "paymentDate": p, "paymentStatus": "P",
+              "finalPaymentAmount": f, "pendingReason": "시험"}
+             for s, e, p, f in (("2025-12-22", "2025-12-28", "2026-01-19", 41_314), ("2026-01-12", "2026-01-18", "2026-01-23", 46_750))]
+    rg25 = {**rg("2026-01-09", "2025-12-22", "2025-12-28", 70, 1_000_000, 600_000), "totalAdditionalDeductionAmount": 400_000}
+    rg25old = {**rg("2025-12-12", "2025-11-03", "2025-11-09", 70, 300_000, 300_000)}
+    rg26 = {**rg("2026-01-16", "2026-01-01", "2026-01-04", 70, 800_000, 700_000), "totalAdditionalDeductionAmount": 100_000}
+    per = {("가-x1", "202512"): {"w_settle": 3_000_000}, ("가-x1", "202601"): {"w_settle": 1_000_000}}
+    rgf = {("2025-11-03", "2025-11-09"): 300_000 / 0.7}                     # 2025 주 정산 파일(지금 keep 이 이 주 줄을 넣음)
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        (base / "쿠팡지급내역").mkdir()
+        snaps = {"x1": {"윙": [w25, w25old, rel25, w26, w25h, w26h], "로켓그로스": [rg25, rg25old, rg26],
+                        "pending": {"pendingReports": holds}}}
+        L = SL.Ledger(base, None, snaps, date(2026, 3, 1)).account("가-x1", per, [], rgf, {})
+    got = sorted((r[1], r[2], r[3]) for r in L["rows"])
+    assert got == [("로켓그로스", "2026-01-16", "2026-01-01"), ("윙", "2026-01-13", "2026-01-05"),
+                   ("윙", "2026-01-23", "2026-01-12")], got
+    b = L["buckets"]
+    assert round(b["최종 지급 완료"]) == 650_000 + 700_000 and round(b["공제"]) == 50_000 + 100_000, b    # 2026 줄 공제 원문 그대로
+    assert not any(m < "2026" for _ch, m in L["gen"]) and round(b["줄 생성 전"]) == 1_000_000 - 746_750, L["gen"]   # 2025 달 없음
+    assert not [x for x in L["e1"] if x[1] < "2026"], L["e1"]                                            # 2025 주·달 검산 없음
+    assert L["e3"] == (46_750, 46_750) and L["ok"], (L["e3"], L["e1_bad"], L["e2_bad"])                 # 2025 판매 보류 = E3 밖
+    print("test_d329_sale_2025_excluded OK")
+
+
 # ── test_additional_pay.py — additional_pay 시험 — D-116 ③①: 없으면 '없음', 있으면 지급금액 + '확인 필요(첫 실제 자료로 칸 확정)'. ──
 EMPTY = {"reports": [], "page": 1, "pageSize": 100, "totalPages": 0}      # 실측 응답(전 계정 0건)
 
@@ -679,6 +719,7 @@ def main() -> int:
     test_cost_only_scope()
     test_managed_alloc()
     test_settlement_ledger()
+    test_d329_sale_2025_excluded()
     test_additional_pay()
     test_migration_inputs()
     test_managed_scope()
