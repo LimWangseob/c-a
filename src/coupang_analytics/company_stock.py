@@ -3,7 +3,8 @@
 재고는 두 가지: 로켓그로스 재고(쿠팡 재고현황 API → '그로스 재고' 열, input_list.write_ledger_inventory)와
 **판매자배송용 회사 자체 재고**(이 모듈). 소유자 결정(2026-09-29):
 - 읽을 탭 = **늘 첫 탭**(링크의 gid 안 씀·D-183 — 새 재고 탭은 맨 앞에 둠). 양식 2가지 — 상품별 '상품명·현재고' ·
-  팔래트/박스 줄 '제품명(판매처 제품명)·총입고수량'(창고별 합산·한 팔래트 두 상품 줄 '가 / 나'·'45 / 96' 나눔·D-141).
+  팔래트/박스 줄 '제품명(판매처 제품명)·총입고수량'(창고별 합산·한 팔래트 두 상품 줄 '가 / 나'·'45 / 96' 나눔·D-141) ·
+  옵션 줄 '상품명·옵션명·가용재고'(D-337 — 옵션명 있으면 '옵션명 수량'·안내 줄 'K가 붙은 것 : 3PL김포' 의 K 를 뗌).
 - 대장 표기 = **'창고 , 수량개'**(예 '김포2 , 150개'). 여러 창고면 ' / ' 로 이어 씀(파일 순서), 같은 창고가 여러
   줄이면 그 창고 안에서 합산. '-' = 0, 음수는 그대로 쓰고 경고.
 - 매칭 = **동일 상품명**(띄어쓰기·대소문자 무시). 관리대장 상품명이 여러 줄이면 첫 줄(대장 규칙).
@@ -27,7 +28,11 @@ from .input_list import (_REQUIRED, _cell, _find_header_row, _is_real_product_na
 STOCK_COL = "회사보유재고"            # 관리대장 대상 열(헤더 이름으로 찾음)
 STOCK_NONE = "재고원장 없음"          # 재고현황에 없다고 판정한 상품 표기(D-156)
 _HEADER_SCAN = 15
-_AUTO_TEXT = re.compile(r"(\([^)]*\) )?[^,/]+ , -?[\d,]+개")   # 앱이 쓰는 표기 한 조각(stock_text·text_of)
+_AUTO_TEXT = re.compile(r"(\([^)]*\) )?[^,/]+ , (-?[\d,]+개|([^,/]+ )?-?[\d,]+)")   # 앱이 쓰는 창고 조각(stock_text·text_of)
+_AUTO_OPT = re.compile(r"([^,/]+ )?-?[\d,]+")                    # 창고 조각 뒤 옵션 조각 '블랙 97'·'0'(D-337)
+_QTY_NAMES = ("현재고", "가용재고", "총입고수량")               # 수량 칸 이름 우선순위
+_NO_OPTION = ("", "-")                                          # 옵션명 '-'·빈칸 = 옵션 없음
+_PREFIX_NOTE = re.compile(r"앞에\s*(\S+?)\s*가\s*붙은\s*것\s*:\s*([^\n]+)")
 
 
 @dataclass
@@ -61,16 +66,24 @@ def resolve_tab(client) -> str:
     return client.sheet_titles()[0]
 
 
-def _stock_columns(rows: list) -> tuple[int, int, int, int]:
-    """(헤더 행, 창고 열, 상품명 열, 수량 열) — 헤더 이름으로 찾음(탭마다 열 위치가 다름). 양식 2가지:
-    '상품명'·'현재고' · 팔래트/박스 줄 양식 '제품명(판매처 제품명)'·'총입고수량'(D-141)."""
+def _stock_columns(rows: list) -> tuple[int, int, int, int, int | None]:
+    """(헤더 행, 창고 열, 상품명 열, 수량 열, 옵션명 열 또는 None) — 헤더 이름으로 찾음(탭마다 열 위치가 다름). 양식 3가지:
+    '상품명'·'현재고' · 팔래트/박스 줄 '제품명(판매처 제품명)'·'총입고수량'(D-141) · '상품명'·'옵션명'·'가용재고'(D-337).
+    수량 칸 이름 우선 = 현재고 → 가용재고 → 총입고수량(소유자 11-18 "재고는 현재고 값")."""
     for r, row in enumerate(rows[:_HEADER_SCAN]):
         cells = ["".join(str(c).split()) for c in row]
         name = next((i for i, c in enumerate(cells) if c == "상품명" or c.startswith("제품명")), None)
-        qty = next((i for i, c in enumerate(cells) if "현재고" in c or "총입고수량" in c), None)
+        qty = next((i for want in _QTY_NAMES for i, c in enumerate(cells) if want in c), None)
         if "창고" in cells and name is not None and qty is not None:
-            return r, cells.index("창고"), name, qty
-    raise ValueError(f"재고현황 상단 {_HEADER_SCAN}행에서 '창고'·'상품명(제품명)'·'현재고(총입고수량)' 헤더를 찾지 못함")
+            return r, cells.index("창고"), name, qty, (cells.index("옵션명") if "옵션명" in cells else None)
+    raise ValueError(f"재고현황 상단 {_HEADER_SCAN}행에서 '창고'·'상품명(제품명)'·'현재고(가용재고·총입고수량)' 헤더를 찾지 못함")
+
+
+def _prefix_marks(rows: list) -> dict:
+    """머리글 위 안내 줄 '상품명 앞에 K가 붙은 것 : 3PL김포' → {'3PL김포': 'K'} — 그 창고 줄 상품명 앞 표시 글자(D-337).
+    안내 줄이 없으면 {}(이름 그대로)."""
+    text = "\n".join(str(c) for row in rows for c in row)
+    return {"".join(wh.split()): mark for mark, wh in _PREFIX_NOTE.findall(text)}
 
 
 def _split_pallet(name: str, qty) -> list:
@@ -81,30 +94,44 @@ def _split_pallet(name: str, qty) -> list:
 
 
 def stock_text(by_wh: dict) -> str:
-    """{창고: 수량} → '김포2 , 150개' / 여러 창고 '김포1 , 2,360개 / 검단 , 24개'(소유자 2026-09-29 표기)."""
-    return " / ".join(f"{wh} , {q:,}개" for wh, q in by_wh.items())
+    """{창고: 수량} → '김포2 , 150개' / 여러 창고 '김포1 , 2,360개 / 검단 , 24개'(소유자 2026-09-29 표기).
+    옵션 있는 창고 = {창고: {옵션명: 수량}} → '3PL김포 , 화이트 31 / 블랙 97'(옵션명 '-'·빈칸 조각 = 수량만 · 합산 안 함 · D-337)."""
+    def one(wh, q):
+        if isinstance(q, int):
+            return f"{wh} , {q:,}개"
+        return f"{wh} , " + " / ".join(f"{opt} {n:,}" if opt else f"{n:,}" for opt, n in q.items())
+    return " / ".join(one(wh, q) for wh, q in by_wh.items())
 
 
 def read_stock(rows: list) -> tuple[dict, list]:
-    """재고현황 값 격자 → ({상품명키: (표시명, {창고: 수량})}, 경고). 숫자 아닌 수량 줄은 제외+경고."""
-    hrow, i_wh, i_name, i_qty = _stock_columns(rows)
-    stock: dict[str, tuple[str, dict]] = {}
+    """재고현황 값 격자 → ({상품명키: (표시명, {창고: 수량 또는 {옵션명: 수량}})}, 경고). 숫자 아닌 수량 줄은 제외+경고.
+    안내 줄의 창고 표시 글자(예 김포 'K')는 상품명에서 뗌 — 같은 상품의 두 창고 재고를 한 줄로(D-337)."""
+    hrow, i_wh, i_name, i_qty, i_opt = _stock_columns(rows)
+    marks = _prefix_marks(rows[:hrow])
+    raw_stock: dict[str, tuple[str, dict]] = {}
     warnings: list[str] = []
     for r, row in enumerate(rows[hrow + 1:], start=hrow + 2):
         cell_name = " ".join(str(_cell(row, i_name) or "").split())
         if not cell_name:
             continue
         wh = " ".join(str(_cell(row, i_wh) or "").split())
+        mark = marks.get("".join(wh.split()), "")
+        if mark and cell_name.startswith(mark):
+            cell_name = cell_name[len(mark):].strip()
+        opt = "" if i_opt is None else " ".join(str(_cell(row, i_opt) or "").split())
+        opt = "" if opt in _NO_OPTION else opt
         for name, raw in _split_pallet(cell_name, _cell(row, i_qty)):
             q = parse_qty(raw)
             if q is None or not wh:
                 warnings.append(f"재고현황 {r}행 '{name}' 창고 '{wh}'·수량 '{raw}' 확인 필요 — 제외")
                 continue
-            by_wh = stock.setdefault(name_key(name), (name, {}))[1]
-            by_wh[wh] = by_wh.get(wh, 0) + q
-    for shown, by_wh in stock.values():
-        if any(q < 0 for q in by_wh.values()):
-            warnings.append(f"재고현황 '{shown}' 음수 재고({stock_text(by_wh)}) — 그대로 기록, 재고현황 확인 필요")
+            by_opt = raw_stock.setdefault(name_key(name), (name, {}))[1].setdefault(wh, {})
+            by_opt[opt] = by_opt.get(opt, 0) + q
+    stock = {k: (shown, {wh: (o[""] if list(o) == [""] else o) for wh, o in by_wh.items()})
+             for k, (shown, by_wh) in raw_stock.items()}
+    for shown, by_wh in raw_stock.values():
+        if any(q < 0 for o in by_wh.values() for q in o.values()):
+            warnings.append(f"재고현황 '{shown}' 음수 재고({stock_text(stock[name_key(shown)][1])}) — 그대로 기록, 재고현황 확인 필요")
     return stock, warnings
 
 
@@ -158,8 +185,11 @@ def apply_to_workbook(wb, stock: dict, cache: dict | None = None, title_of=None)
 
 
 def _auto_written(text: str) -> bool:
-    """빈 칸·재고원장 없음·앱이 쓴 '창고 , 수량개' 표기면 True — 그 밖의 값은 사람이 적은 메모(D-156)."""
-    return not text or text == STOCK_NONE or all(_AUTO_TEXT.fullmatch(x) for x in text.split(" / "))
+    """빈 칸·재고원장 없음·앱이 쓴 '창고 , 수량개'·'창고 , 옵션 수량 / 옵션 수량' 표기면 True — 그 밖의 값은 사람이 적은 메모(D-156)."""
+    if not text or text == STOCK_NONE:
+        return True
+    head, *rest = text.split(" / ")
+    return bool(_AUTO_TEXT.fullmatch(head)) and all(_AUTO_TEXT.fullmatch(x) or _AUTO_OPT.fullmatch(x) for x in rest)
 
 
 def _match_rows(prods: list, stock: dict, title_of, ask, cache: dict, log) -> tuple[dict, set]:
