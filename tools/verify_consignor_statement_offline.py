@@ -7,6 +7,9 @@
      어디로 갔나요 4줄 = 계정·달과 상관없이 같은 이름·순서 · 값 0 = 공란 · '이번 기간 없음'·'끝전' 없음 · 상품 줄 = 2쪽에 다 들어가면 2쪽, 아니면
      전부 3쪽부터(2쪽엔 '상품 n개 — 상품별 줄은 3쪽부터' + 합계) · 한 쪽 최대 이름 한 줄 상품 35개 / 회색 줄 함께 19개 ·
      로켓그로스 리뷰 이벤트(PostPurchase) = 9 '리뷰 이벤트' 줄에 원문 값(D-324 ①④).
+  ①-3 예상값(T-121 · 인계 44줄): 입력(BI 플랜·유료 시작일 · 세이버 끝날 · 할인표 · 접수채널)이 없으면 숫자 0개 · 금액 있는 9 '비즈니스 인사이트'
+     줄에만 비고 '입력 없음 → 예상값 미확정' · 쿠팡 줄 없는 기간(그 채널 전체 마지막 지급 줄 끝 다음 날 ~ min(달 끝, 기준일 전날) ∩ 그 달) = 근거에만 ·
+     금액·다른 줄 변화 0.
   ② 그리기 쪽(합성 자료 2개 · 정산 예정 포함/확정): 검산 통과 · 칸 범위·병합 겹침 없음 · 쪽 높이 = 쪽 수 × A4 · 쪽 경계 = 행 경계 ·
      결정 문구(D-241 ⑦ 문의 없음 · D-242 머리 · D-251 회색 줄 · D-259 1쪽 · D-260 '판매 기간 … · 발행' 굵게 · '검토용' 없음) ·
      넘치면 다음 쪽(D-241 ④ · '(계속)' 머리 · 줄 빠짐·중복 없음) · 나눌 수 없는 큰 묶음 = 중단 · 검산 실패 = 쓰기 0회 ·
@@ -35,7 +38,8 @@ from coupang_analytics import settlement_consignor_month as CM  # noqa: E402
 from coupang_analytics.settlement_consignor_gsheet_layout import MARGIN, PAGE_H, StatementLayoutError  # noqa: E402
 from coupang_analytics.settlement_consignor_month_calc import cum_round  # noqa: E402
 from coupang_analytics import settlement_statement_account as AC  # noqa: E402
-from coupang_analytics.settlement_consignor_month_cost import KINDS, PEND_KIND, _rg_notes  # noqa: E402
+from coupang_analytics import settlement_fee_rules as FR  # noqa: E402
+from coupang_analytics.settlement_consignor_month_cost import BI_CAT, KINDS, PEND_KIND, _rg_notes, expect_values  # noqa: E402
 from coupang_analytics.settlement_consignor_month_dep import flow  # noqa: E402
 from coupang_analytics.settlement_consignor_month_out import LINE_NAMES, common_out, coupang_by_cat, product_table, rg_kinds  # noqa: E402
 
@@ -177,6 +181,71 @@ def test_post_purchase() -> None:
     assert (review["coupang_amount"], review["applied_amount"]) == (8_880, -4_440), review
     cat = st.common_items[0][2]
     assert st.loc[cat] == [(key, 8_880.0)] and coupang_by_cat(st)[cat] == 8_880
+
+
+def _line(ch: str, s: str, e: str, bi: dict | None = None) -> tuple:
+    row = ["", "", "2026-12-01", s, e, "70"]
+    return (row[2], s, e, ch, row[5]), row, {"채널": ch, **({BI_CAT[2:]: json.dumps(bi)} if bi else {})}
+
+
+def _expect_st(m: str, basis: str, common: list, lines: list, pend: bool = True) -> SimpleNamespace:
+    """pend = 그 달 정산 예정분(pend_info · 정산서 상태 '정산 예정 포함'과 같은 근거) 있음."""
+    return SimpleNamespace(m=m, basis=basis, common=common, j=[], share=0.5, reg_share=0.4, lines=lambda: iter(lines),
+                           pend_info=[{"항목": "1~4 로켓그로스 정산 예정"}] if pend else [])
+
+
+def test_expect_values() -> None:
+    """T-121: 입력 없음 = 숫자 없이 비고 · 74 = BI 쓰는 계정의 '정산 예정분 남은 달'만(통제 11-19 · 지급 끝난 달 = 없음 · 조각 0 이어도 근거·판단 문장) ·
+    9 BI 줄 note = 그 줄 금액 있을 때만(금액 없는 줄 안 만듦 D-081) · 줄 없는 기간 = 근거만 · 금액 변화 0."""
+    lines = [_line("로켓그로스", "2026-10-01", "2026-10-26", bi={"2026-10": 20_228}), _line("윙", "2026-10-01", "2026-10-31"),
+             _line("윙", "2026-09-28", "2026-09-30")]
+    st = _expect_st("2026-10", "2026-11-15", [("비즈니스 인사이트 이용료", 20_228.0, BI_CAT), ("윙 지급 차감 — 판매자서비스이용료", 55_000.0, "w:" + AC.SVC)], lines)
+    expect_values(st)
+    assert FR.NO_INPUT in st.bi_note and "SV-BI-SUB" in st.bi_note, st.bi_note
+    assert any("20,228" in j and FR.NO_INPUT in j for j in st.j), st.j
+    assert set(st.expect) == {"74 비즈니스 인사이트 남은 청구", "45·76 보관비(세이버 체험 · 시작 창 B=A)", "신규-03 입출고비·배송비 할인가"}, st.expect
+    assert all(v["예상값"] is None and FR.NO_INPUT in v["비고"] for v in st.expect.values()), st.expect
+    assert st.expect["45·76 보관비(세이버 체험 · 시작 창 B=A)"]["기간"] == "2026-10-27~2026-10-31"     # 윙 = 달 끝까지 줄 있음 → 4 없음
+    items, applied = common_out(st)
+    notes = {x["name"]: x.get("note") for x in items}
+    assert notes.pop("비즈니스 인사이트 이용료") == st.bi_note and not any(notes.values()), notes
+    bi = next(x for x in items if x["key"] == "bi")
+    assert (bi["coupang_amount"], bi["applied_amount"]) == (20_228, -8_091) and sum(applied) == -8_091 - 22_000, (bi, applied)
+    # 이번 달(기준일 11-15) · BI 조각 없음 · 윙 줄 11-09 까지 → 4 = R1 + '판매자 접수면 편도일 수 있음' · 로켓그로스 줄 없음(채널 안 씀) → 45·76 없음
+    st = _expect_st("2026-11", "2026-11-15", [], [_line("윙", "2026-11-03", "2026-11-09")])
+    expect_values(st)
+    assert st.bi_note == "" and st.j == [] and list(st.expect) == ["4 반품배송비(구매확정 전 · 고객 귀책)"], st.expect
+    e4 = st.expect["4 반품배송비(구매확정 전 · 고객 귀책)"]
+    assert e4["기간"] == "2026-11-10~2026-11-14" and "판매자 접수면 편도일 수 있음" in e4["비고"] and FR.NO_INPUT in e4["비고"], e4
+    assert all(x.get("note") is None for x in common_out(st)[0])
+    # 이번 달 첫 주 · 그 달 줄 0개지만 채널은 씀(앞 달 줄) → 달 1일부터 · 기준일이 달 1일 = 줄 없는 기간 없음
+    st = _expect_st("2026-11", "2026-11-05", [], [_line("로켓그로스", "2026-10-27", "2026-10-31")])
+    expect_values(st)
+    assert st.expect["신규-03 입출고비·배송비 할인가"]["기간"] == "2026-11-01~2026-11-04", st.expect
+    st = _expect_st("2026-11", "2026-11-01", [], [_line("로켓그로스", "2026-10-27", "2026-10-31")])
+    expect_values(st)
+    assert st.expect == {}, st.expect
+    # 지난 달 구멍(그 주 판매 없음 · 뒤 줄 있음) = 줄 없는 기간 아님 — 기간 = 채널 전체 마지막 줄 끝 뒤(구매확정 전·이번 주 D-279 ③)
+    st = _expect_st("2026-08", "2026-11-15", [], [_line("윙", "2026-08-03", "2026-08-09"), _line("윙", "2026-11-02", "2026-11-08")])
+    expect_values(st)
+    assert st.expect == {}, st.expect
+    # 74 ① 지급 끝난 달(정산 예정분 없음) · 조각 있음 = 비고·판단 문장·근거 없음
+    bi_lines = [_line("로켓그로스", "2026-09-01", "2026-11-14", bi={"2026-01": 108_900})]
+    st = _expect_st("2026-01", "2026-11-15", [("비즈니스 인사이트 이용료", 108_900.0, BI_CAT)], bi_lines, pend=False)
+    expect_values(st)
+    assert st.bi_note == "" and st.j == [] and "74 비즈니스 인사이트 남은 청구" not in st.expect, (st.bi_note, st.j, st.expect)
+    assert all(x.get("note") is None for x in common_out(st)[0])
+    # 74 ② 정산 예정분 남은 달 · 조각 0(쿠팡이 아직 안 뺌) · BI 쓰는 계정(다른 달 조각) = 근거·판단 문장 있음 · 9 BI 줄 금액 0 → 줄 비고 없음
+    st = _expect_st("2026-10", "2026-11-15", [], bi_lines)
+    expect_values(st)
+    e74 = st.expect["74 비즈니스 인사이트 남은 청구"]
+    assert e74["쿠팡이 뺀 조각"] == 0 and e74["예상값"] is None and FR.NO_INPUT in e74["비고"], e74
+    assert any("0원" in j and FR.NO_INPUT in j for j in st.j), st.j
+    assert all(x.get("note") is None for x in common_out(st)[0])
+    # 74 BI 안 쓰는 계정(어느 줄에도 조각 없음) · 정산 예정분 있음 = 74 없음
+    st = _expect_st("2026-10", "2026-11-15", [], [_line("로켓그로스", "2026-09-01", "2026-11-14")])
+    expect_values(st)
+    assert "74 비즈니스 인사이트 남은 청구" not in st.expect and st.j == [], st.expect
 
 
 def test_flow_fixed() -> None:
@@ -513,7 +582,7 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     except AttributeError:
         pass
-    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_flow_fixed, test_failed_checks, test_load_judge,
+    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_expect_values, test_flow_fixed, test_failed_checks, test_load_judge,
               test_sale_months_2025_excluded, test_render, test_fixed_render, test_product_pages, test_overflow, test_unsplittable, test_check_reject,
               test_multi_month, test_tool):
         f()
