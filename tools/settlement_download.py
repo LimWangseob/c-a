@@ -39,6 +39,10 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 
+# numpy(OpenBLAS — openpyxl 이 부름)가 CPU 스레드 수만큼 버퍼를 잡아 프로세스마다 커밋 약 700MB(22스레드 실측 9→703MB ·
+# 1스레드 9→28MB · T-113 D-346) — numpy 를 부를 수 있는 어떤 import 보다 먼저. 우리 코드는 numpy 계산을 안 씀.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 try:
@@ -48,6 +52,7 @@ except AttributeError:
 
 from coupang_analytics import apppaths  # noqa: E402
 from coupang_analytics import daily_snapshot  # noqa: E402
+from coupang_analytics import memory_log as ML  # noqa: E402
 from coupang_analytics import settlement_accounts as SA  # noqa: E402
 from coupang_analytics import settlement_files as SF  # noqa: E402
 from coupang_analytics import settlement_forecast as FC  # noqa: E402
@@ -71,6 +76,13 @@ def log(m: str) -> None:
         print(m, flush=True)
     else:
         LOG.line(m)
+
+
+MEMLOG = ML.Tracker("정산 프로세스")   # D-346 ④ 단계 경계 [메모리] 줄 · 회차 종합 한 줄(watch 1프로세스 = 1회차)
+
+
+def _mem(stage: str, note: str = "") -> None:
+    log(MEMLOG.line(stage, note=note))
 
 
 class SessionSkip(Exception):
@@ -566,14 +578,17 @@ def cmd_run(a, b, args, jobs: list) -> None:
     if not args.dry_run:
         time.sleep(90)
         cmd_download(a, b, args, jobs)
-        collect_verify(a, b, args)
-        collect_ads(a, b, args)
+        with MEMLOG.around(f"검증 수집 {name_of(a)}", log):        # 검증 json 최대 17MB 통째(D-346 큰 할당 후보 — 줄만)
+            collect_verify(a, b, args)
+        with MEMLOG.around(f"광고(보고서 TSV→xlsx) {name_of(a)}", log):   # 광고 보고서 변환(큰 할당 후보 — 줄만)
+            collect_ads(a, b, args)
 
 
 def cmd_backfill(a, b, args, jobs: list) -> None:
     """소급 단계(D-170) — 판매분석 1/1~(회차 기준 상한 150일→60일·D-167) + 월자료(D-171). 한 일이 있으면 '소급' 줄을 남겨
     다음 바퀴 판단(_sweep_work_count)에 셈 — 다 받았거나 이번 회차 상한을 다 쓰면 줄 없음 → '완료'로 끝남."""
-    days = collect_sales(a, b, args)
+    with MEMLOG.around(f"판매분석·쿠폰 {name_of(a)}", log):       # 판매분석 일별 통째 읽기(큰 할당 후보 — 줄만)
+        days = collect_sales(a, b, args)
     docs = collect_docs(a, b, args, jobs)
     asked = request_docs(a, b, args, jobs)
     if days or docs:
@@ -915,7 +930,7 @@ def load_holidays(amounts: list):
     return STORE.load_holidays(amounts, log)
 
 
-def cmd_stats() -> None:
+def cmd_stats() -> Path:
     from coupang_analytics import settlement_stats as ST
     files = [SF.load_settle_file(p) for p in sorted(FILES.glob("*.xlsx"))]
     amounts = []
@@ -943,6 +958,70 @@ def cmd_stats() -> None:
         log(f"  [정산집계 정리] 옛 정산집계 {moved}개 → {BASE / '보관'}/YYYY-MM (최신 {STORE.STATS_KEEP}개만 남김)")
     log(f"집계 정산 파일 {len(files)}개·비용 리포트 {len(costs)}시트·쿠팡 지급 내역 {len(amounts)}줄 → {out} "
         f"(경고 {len(res.warnings)}건)")
+    return out
+
+
+STATS_CHILD_TIMEOUT_SEC = 3 * 3600    # 이 노트북 약 16분(보고 C 3-2) — 넘으면 자식을 끝내고 그 바퀴 '실패' 기록
+
+
+def _stats_in_child() -> None:
+    """바퀴 끝 정산 집계를 **별도 짧은 프로세스**(같은 프로그램 `stats --run-id … --result …`)로 돌린다(T-113 (나)).
+    한 번에 약 1.37GB 를 쓰고 끝나도 약 0.9GB 를 python 이 OS 에 돌려주지 않아, 13시간 도는 watch 프로세스가 그 몫을
+    들고 다음 바퀴를 돌았다(보고 C 3-2·3-3) — 자식이 끝나면 OS 가 전부 회수. 같은 실행ID 로그·오류 로그에 이어 쓰고,
+    결과(집계 파일 경로·자식 최고 커밋)는 result JSON. 실패 = 예외(호출부가 그 바퀴 '실패'로 기록 · 숨기지 않음)."""
+    from coupang_analytics import app_process as AP
+    result = LOG.dir / f"_집계결과_{LOG.run_id}.json"
+    result.unlink(missing_ok=True)
+    cmd, cwd = AP.settle_stats_cmd(LOG.run_id, result)
+    rc = subprocess.run(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        timeout=STATS_CHILD_TIMEOUT_SEC, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).returncode
+    data = json.loads(result.read_text(encoding="utf-8")) if result.exists() else {}
+    result.unlink(missing_ok=True)
+    MEMLOG.merge(data.get("메모리") or {}, "집계 프로세스")     # 자식의 [메모리] 최고·⚠ 를 회차 종합에(실패여도)
+    if rc != 0 or not data.get("out"):
+        raise RuntimeError(f"정산 집계(별도 프로세스) 실패 — 종료코드 {rc} · {data.get('오류') or '결과 파일 없음'} "
+                           f"(추적 = {LOG.errors.name})")
+    LOG.saved(RL.ALL, data["out"], "정산 집계")
+    _mem("집계 뒤", note=f"정산 집계 = 별도 프로세스(최고 커밋 {data.get('최고커밋MB')}MB · 끝나면 OS 가 회수)")
+
+
+def _commit_text() -> str:
+    from coupang_analytics import settlement_memory as MEM
+    try:
+        now, peak = MEM.commit_mb()
+    except OSError as exc:                   # 숫자만 못 읽음 — 사유를 그 자리에 적음
+        return f"확인 실패({exc.__class__.__name__})"
+    return f"{now}MB(최고 {peak}MB)"
+
+
+def _cmd_stats_main(args) -> int:
+    """`stats` 명령 — 사람이 부르면 그대로. `--result`(watch 바퀴 끝 자식 · T-113)면 부모 실행 기록에 이어 쓰고 상태 파일은
+    건드리지 않으며(부모 몫), 실패(MemoryError 포함)는 오류 로그에 남기고 종료코드 1 — 창 없는 exe 에서 처리 안 된 예외 창이
+    떠 부모가 시간 초과까지 기다리지 않게."""
+    if not args.result:
+        cmd_stats()
+        LOG.heartbeat("완료", "명령 stats")
+        return 0
+    from coupang_analytics import settlement_memory as MEM
+    res = Path(args.result)
+    MEMLOG.role = "집계 프로세스"
+    _mem("집계 시작")
+    try:
+        out = cmd_stats()
+    except Exception as exc:                          # MemoryError 도 여기(Exception 하위) — 기록하고 부모가 '실패'로 받음
+        _release_reserve()
+        LOG.error(RL.ALL, "정산 집계", exc)
+        _mem("집계 중단")
+        res.write_text(json.dumps({"오류": f"{exc.__class__.__name__}: {exc}", "메모리": MEMLOG.state()}, ensure_ascii=False),
+                       encoding="utf-8")
+        return 1
+    _mem("집계 끝")
+    res.write_text(json.dumps({"out": str(Path(out).resolve()), "최고커밋MB": MEM.commit_mb()[1], "메모리": MEMLOG.state()},
+                              ensure_ascii=False), encoding="utf-8")
+    return 0
+
+
+_PHASE = {"cmd_run": "정기", "cmd_backfill": "소급"}   # [메모리] 계정마다 줄의 단계 이름
 
 
 def _run_accounts(accts, run, args) -> int:
@@ -973,6 +1052,7 @@ def _run_accounts(accts, run, args) -> int:
             else:                                          # 그 계정만 중단(무음 아님·전체 추적은 오류 로그)
                 bad += 1
                 LOG.error(name, "계정", exc)
+        _mem(f"{_PHASE.get(run.__name__, run.__name__)} {name} 끝")
         if bad >= 2:
             LOG.record("(전체)", "중단", RL.BLOCK, "연속 2계정 실패/차단 — 전체 중단(화면 변경·차단 의심, probe 로 확인)")
             return 1
@@ -1034,6 +1114,7 @@ def _one_pass(args) -> tuple[bool, int]:
     args.end = date.today()
     log(f"실행 {LOG.run_id} · 자동 · 정산 수집 · 기간 {args.start}~{args.end}")
     LOG.heartbeat("작동중", f"정산 수집 · 기간 {args.start}~{args.end}")
+    _mem("바퀴 시작")
     try:
         accts = load_accounts(set())
     except SystemExit as exc:                # 계정 구성 실패(원장 오래됨·링크 오류 등) = 이 회차 정산 중단 — 상태 카드에 이유
@@ -1045,15 +1126,47 @@ def _one_pass(args) -> tuple[bool, int]:
     try:
         rc = _run_both(accts, args)
         work = _sweep_work_count(LOG)
-        cmd_stats()
+        _mem("집계 전")
+        _stats_in_child()                    # 바퀴 끝 집계 = 별도 짧은 프로세스(T-113 (나) — 1.37GB·남는 0.9GB 를 이 프로세스에 안 남김)
     except Exception as exc:                 # 그 바퀴만 실패 기록(다음 판단은 진전 없음으로)
         LOG.error("(전체)", "자동실행", exc)
         return False, 0
     finally:
-        _backlog_left(accts, args)           # 남은 소급 = 전 계정 저장 자료로 다시 셈(T-46 ⑤)
+        try:
+            _backlog_left(accts, args)       # 남은 소급 = 전 계정 저장 자료로 다시 셈(T-46 ⑤)
+        except MemoryError as exc:           # T-113 (다) 11-18 06:53 — finally 에서 새면 처리 안 된 예외 창·자기 종료 실패
+            _note_memory_floor("남은 소급 계산", exc)
         CYCLE.add(LOG)                       # 회차 [실행 결과 종합] 재료(D-168)
     LOG.summary(pending=_pending_jobs(), suspended=_suspended_pending())
     return rc == 1, work
+
+
+_RESERVE: list = [bytearray(16 << 20)]   # 메모리 바닥 때 풀어 기록할 여유(16MB · T-113) — 한 번만 씀
+
+
+def _release_reserve() -> None:
+    _RESERVE.clear()
+
+
+def _note_memory_floor(step: str, exc: BaseException) -> None:
+    """메모리 바닥(MemoryError)을 숨기지 않고 처리기록·_현재상태.txt 에 남긴다(T-113 (다) · fallback 아님 — 그 단계는 '실패')."""
+    _release_reserve()
+    reason = f"❌ 메모리 부족(MemoryError) — {step} 못 함 · 정산 프로세스 커밋 {_commit_text()} · PC 전체 메모리 바닥 의심(T-113)"
+    LOG.record(RL.ALL, step, RL.FAIL, f"{exc.__class__.__name__}: {exc} — {reason}")
+    LOG.heartbeat("작동중", reason)
+
+
+def _memory_floor_exit(exc: BaseException) -> int:
+    """처리 안 된 MemoryError — 창 없는 exe 의 '처리 안 된 예외' 창이 떠 프로세스가 남지 않게(11-18 07:00 이후 창 남음)
+    처리기록·_현재상태.txt 에 남기고 종료코드 3. 기록조차 못 쓰면(바닥) 종료코드 3 과 멈춘 '갱신' 시각이 흔적."""
+    if LOG is None:
+        return 3
+    try:
+        _note_memory_floor("정산 종료", exc)
+        LOG.heartbeat("종료", f"❌ 메모리 부족(MemoryError)으로 정산 종료 — 다음 회차에서 이어 받음 · 처리기록 {LOG.csv.name}")
+    except (MemoryError, OSError):
+        pass                                 # 더 쓸 곳이 없음 — 종료코드 3 으로 끝냄(창으로 멈춰 있지 않게)
+    return 3
 
 
 def _cycle_close(status: str, reason: str, *, stopped: bool = False) -> None:
@@ -1063,6 +1176,7 @@ def _cycle_close(status: str, reason: str, *, stopped: bool = False) -> None:
         return
     lines = RL.result_block(CYCLE, pending=_pending_jobs(), suspended=_suspended_pending(), stopped=stopped, note=reason,
                             title=f"실행 결과 종합 — 이번 회차 {CYCLE.passes}바퀴")
+    lines[-1:-1] = [MEMLOG.summary()]       # D-346 ④ 그날 최고 메모리(시각·단계)·⚠ 횟수 — '==>' 한 줄 요약 바로 위
     for ln in lines:
         LOG.line(ln)
     LOG.heartbeat(status, reason, extra=(f"결과 종합: {lines[-1].removeprefix('==> ')}",))
@@ -1074,11 +1188,29 @@ def _watch_app(parent_pid: int) -> None:
 
     def _gone() -> None:
         reason = "앱이 종료돼(사람이 닫음·강제 종료) 정산도 종료 — 다음 실행에서 이어서 받음"
-        log(f"[자동] {reason}")
-        LOG.heartbeat("종료", reason)
-        AP.kill_self_tree()
+        try:
+            log(f"[자동] {reason}")
+            LOG.heartbeat("종료", reason)
+            why = AP.kill_self_tree()        # 돌아오면 = taskkill 이 못 끝냄(메모리 바닥 등 · T-113 11-18 07:00:02)
+            LOG.heartbeat("종료", f"{reason} · ⚠ 자기 종료 명령 실패({why}) — 프로세스 직접 종료 · 남은 Chrome 은 다음 앱 시작 때 정리")
+        finally:
+            os._exit(1)                      # 기록을 못 써도 프로세스는 반드시 끝냄(처리 안 된 예외 창으로 남지 않게)
     AP.watch_parent(parent_pid, _gone)
     log(f"[자동] 앱(PID {parent_pid}) 종료 감시 — 사람이 앱을 끄면 함께 종료·무인 정상 완료 뒤엔 계속")
+
+
+def _between_passes() -> None:
+    """바퀴 사이(T-113 (라)): 정산이 띄운 Chrome(이 프로세스 자손)만 정리 · PC Chrome 수·메모리·정산 커밋 기록.
+    앱·소유자 Chrome 은 자손이 아니라 안 건드림(앱 몫 잔여 = 앱 시작 reap_orphan_chrome). 조회 실패는 사유를 기록."""
+    from coupang_analytics import settlement_memory as MEM
+    try:
+        n = MEM.sweep_own_chrome()
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        log(f"  [Chrome·메모리] ⚠ Chrome 확인 실패({exc.__class__.__name__}: {str(exc)[:120]}) · 정산 프로세스 커밋 {_commit_text()}")
+        return
+    log(f"  [Chrome·메모리] 정산이 띄운 남은 Chrome {n['종료']}개 종료(남음 {n['남은자손']}) · 정리 전 PC Chrome {n['전체']}개 "
+        f"(작업집합 {n['전체MB']}MB · 우리 자동화 {n['우리']}개 · 부모 없는 우리 Chrome {n['부모없는우리']}개 = 앱 몫·안 건드림) · "
+        f"정산 프로세스 커밋 {_commit_text()}")
 
 
 def _watch_wait_reason(W, prog, stage_path, cycle_start) -> tuple[str, dict | None]:
@@ -1131,6 +1263,7 @@ def cmd_watch(args) -> int:
                     LOG.heartbeat(W.done_status(int(done.get("failed") or 0)), f"이미 끝남 — {done.get('reason', '')}")
                     return 0
                 stopped, work = _one_pass(args)
+                _between_passes()
                 idle = 0 if work else idle + 1
                 fails = _watch_failures()
                 action, reason = W.plan_after_pass(stopped, work, _pending_jobs(), _wait_accounts(LOG), idle, failed=fails)
@@ -1240,6 +1373,8 @@ def main() -> int:
     ap.add_argument("--file", default="", help="transfer-login: 셀독전환자 파일(비우면 설정 transfer/file)")
     ap.add_argument("--retry", action="store_true", help="transfer-login: 성공·인증번호·같은 틀린 비번 제외하고 다시")
     ap.add_argument("--start", default="", help="transfer-login: HH:MM 까지 기다렸다 시작(밤에 이어 하기)")
+    ap.add_argument("--run-id", default="", help="stats: 이어 쓸 실행ID(watch 바퀴 끝 별도 프로세스 · T-113)")
+    ap.add_argument("--result", default="", help="stats: 결과 JSON 경로(watch 바퀴 끝 별도 프로세스 · T-113)")
     args = ap.parse_args()
     global CHANNELS, ORIGINALS, JOBS
     CHANNELS = (args.channel,) if args.channel else ()
@@ -1252,14 +1387,12 @@ def main() -> int:
         return transfer_login.main_cli(args)
     if args.command == "transfer-settle":   # D-187 셀독전환자 정산 자료 받기 — output/정산_셀독전환/정산(원장 정산 기록과 따로)
         return _transfer_settle(args)
-    LOG = RL.RunLog(BASE)
+    LOG = RL.RunLog(BASE, now=datetime.strptime(args.run_id, "%y%m%d_%H%M%S") if args.run_id else None)
     log(f"실행 {LOG.run_id} · 명령 {args.command} · 기간 {args.start}~{args.end} · 데이터 폴더 {Path.cwd()}")
-    if args.command != "watch":   # watch 는 잠금을 얻은 뒤 cmd_watch 가 상태를 쓴다 — 2중 실행(잠금 실패로 즉시
-        LOG.heartbeat("작동중", f"명령 {args.command} · 기간 {args.start}~{args.end}")   # 종료)이 실제 실행 상태를 덮지 않게
+    if args.command != "watch" and not args.result:   # watch 는 잠금을 얻은 뒤 cmd_watch 가 상태를 쓴다 — 2중 실행(잠금
+        LOG.heartbeat("작동중", f"명령 {args.command} · 기간 {args.start}~{args.end}")   # 실패로 즉시 종료)·바퀴 끝 집계 자식이 덮지 않게
     if args.command == "stats":
-        cmd_stats()
-        LOG.heartbeat("완료", "명령 stats")
-        return 0
+        return _cmd_stats_main(args)
     if args.command == "sources":         # 받기 의심·자료 출처 대조만(로그인·윙 접속 없음 · --hidden = 공개 웹도 안 읽음)
         source_checks(web=not args.hidden)
         LOG.heartbeat("완료", "명령 sources")
@@ -1291,4 +1424,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        _rc = main()
+    except MemoryError as _exc:              # T-113 (다) — 처리 안 된 예외 창 대신 기록 후 종료코드 3
+        _rc = _memory_floor_exit(_exc)
+    sys.exit(_rc)

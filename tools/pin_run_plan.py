@@ -526,6 +526,43 @@ def pin_crash_summary():
     _check("· 순위 안 돎 · 오류 0 ·" in _block(logs)[-1], f"① 단독(③ 계획 없음) 한 줄 요약도 '순위 안 돎' {_block(logs)[-1]}")
 
 
+def pin_memory_lines():
+    print("[핀 P18] D-346 ④ 앱 무인 실행 [메모리] — ①②③·재고 역기록 단계 시작·실행 끝·③ 바퀴마다 한 줄 · "
+          "종합 '==>' 바로 위에 그날 최고(시각·단계)·⚠ 횟수 · 메모리 줄은 오류 수에 안 섞임")
+    from datetime import datetime
+    from coupang_analytics import memory_log as ML
+    from coupang_analytics import pipeline_ranks as PR
+    seq = [ML.Sample((300, 320), (8000, 16000), (5, 500, 0)), ML.Sample((1500, 1600), (1000, 16000), (180, 8000, 0)),
+           ML.Sample((400, 1600), (7000, 16000), (6, 600, 0))]
+    fake = ML.Tracker("앱 프로세스", measure_fn=lambda: seq.pop(0) if len(seq) > 1 else seq[0],
+                      clock=lambda: datetime(2026, 11, 19, 3, 4, 5))
+    real, ML.APP = ML.APP, fake
+    try:
+        logs: list = []
+        calls, marks, stop = _fake_result_stages()
+        run_stages(None, StagePlan(), ai_key="k", naver=None, date_from=DF, date_to=DT, date_label=DL,
+                   get_password=lambda a: None, carry=True, should_stop=stop, on_log=logs.append)
+        mem = [m for m in logs if "[메모리]" in m]
+        for stage in ("① 판매수집 시작", "② 키워드 선정 시작", "③ 순위 시작", "재고 역기록 시작", "실행 끝"):
+            _check(any(f" {stage} · 앱 프로세스 커밋" in m for m in mem), f"[메모리] {stage} 줄 {mem}")
+        _check(any(m.startswith("  [메모리] ⚠메모리(PC 사용 가능 6% < 15% · 앱 프로세스 1500MB > 1024MB) ② 키워드 선정 시작")
+                   for m in mem), f"기준선 넘음 = 같은 줄 ⚠메모리(사유) {mem}")
+        b = _block(logs)
+        _check(b[-2] == "[메모리] 최고 커밋 1600MB(03:04:05 ② 키워드 선정 시작) · PC 사용 가능 최저 6%(03:04:05 ② 키워드 선정 시작) · "
+                        "⚠메모리 1회(기준 PC 사용 가능 < 15% 또는 프로세스 > 1024MB) · 측정 5회", f"종합 메모리 줄 {b[-2]}")
+        _check("· 오류 0 ·" in b[-1], f"메모리 줄은 오류 수에 안 섞임 {b[-1]}")
+        st, out = PR._SemiState(), []
+        real_unfilled, PR._unfilled = PR._unfilled, lambda wb, d: [("가", "상품", "kw")]
+        try:
+            st.searched = 3
+            PR._semi_next_pass(st, None, "11.19", None, out.append)
+        finally:
+            PR._unfilled = real_unfilled
+        _check(any(" ③ 2바퀴째 시작 · 앱 프로세스 커밋 400MB" in m for m in out), f"③ 바퀴마다 [메모리] 줄 {out}")
+    finally:
+        ML.APP = real
+
+
 def main() -> int:
     print("=" * 60)
     print("  핀 테스트 — plan_run_mode 실행모드 결정 + 단계 조립(run_stages)")
@@ -547,6 +584,7 @@ def main() -> int:
     pin_designated_keeps_today_day()
     pin_today_blank_next_day_catchup()
     pin_crash_summary()
+    pin_memory_lines()
     print("=" * 60)
     print("  [완료] 실행모드 핀 모두 통과")
     print("=" * 60)

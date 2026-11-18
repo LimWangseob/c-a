@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
+from . import memory_log as ML
 from .login_today import OTP
 
 LAST_SALES: dict = {}   # ① 끝 정보 — run_stages 시작 때 비우고 pipeline.run_full 이 채움
@@ -68,6 +69,7 @@ class RunSummary:
         if again:
             self.errors.pop(stage, None)
             self.retried += 1
+        self._log(ML.APP.line(f"{stage} 시작"))   # D-346 ④ 단계 경계 [메모리] 줄(오류 판정 안 거침)
 
     def saved(self, what: str, path) -> None:
         if path:
@@ -75,6 +77,7 @@ class RunSummary:
 
     def __enter__(self) -> RunSummary:
         LAST_SALES.clear()
+        ML.APP.reset()                        # 그날 최고·⚠ 횟수 = 이번 실행 것만(앱은 상시 가동)
         ACTIVE.append(self)
         return self
 
@@ -85,6 +88,7 @@ class RunSummary:
             return
         self.closed, self.crash_stage, self.cut = True, self.stage, CLOSED
         self._log(f"[앱 종료] {why} — {self.stage} 도중 · 이 실행은 여기서 끝남(진행분은 저장된 데까지)")
+        self._log(ML.APP.line("실행 끝"))
         for ln in self.block(stopped=True):
             self._log(ln)
 
@@ -97,6 +101,7 @@ class RunSummary:
         if crashed:                           # 멈춘 단계 = 그때 단계 · 멈추게 한 예외도 오류 현황에(T-29)
             self.crash_stage = self.stage
             self.errors.setdefault(self.stage, []).append(f"실행을 멈춘 오류: {crashed}")
+        self._log(ML.APP.line("실행 끝"))
         for ln in self.block(crashed):
             self._log(ln)
         return False                          # 예외는 그대로 올림
@@ -194,6 +199,7 @@ class RunSummary:
                 rank_line,
                 f"오류 현황('❌' 줄 · ②·재고 역기록은 '실패' 줄 포함): {nerr}건", *self._error_lines(),
                 f"이번 실행에서 저장한 파일: {len(files)}개", *[f"  - {w}: {p}" for w, p in files],
+                ML.APP.summary(),                     # D-346 ④ 그날 최고 메모리(시각·단계)·⚠ 횟수
                 f"==> {judge} · 계정 {len(accts)} · 비밀번호 오류 {len(pw)} · 사람 조치 {len(human)} · "
                 f"로그인 못 함 {len(lost)} · {self._rank_tail(unfilled)} · 오류 {nerr} · 저장 파일 {len(files)}"]
 
