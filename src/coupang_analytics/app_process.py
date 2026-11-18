@@ -161,10 +161,20 @@ def watch_parent(parent_pid: int, on_gone, done_file: Path = APP_DONE_FILE, poll
     return t
 
 
-def kill_self_tree() -> None:
-    """정산 프로그램 자신과 그 자식(Chrome)을 함께 종료."""
-    subprocess.run(["taskkill", "/F", "/T", "/PID", str(os.getpid())], capture_output=True,
-                   creationflags=_NO_CONSOLE)
+def kill_self_tree() -> str:
+    """정산 프로그램 자신과 그 자식(Chrome)을 함께 종료. **돌아오면 = 못 끝냄** → 사유 반환(호출부가 기록 후 직접 종료 —
+    T-113: 11-18 07:00:02 메모리 바닥에서 taskkill 이 안 먹어 처리 안 된 예외 창과 프로세스가 남음)."""
+    try:
+        r = subprocess.run(["taskkill", "/F", "/T", "/PID", str(os.getpid())], capture_output=True,
+                           creationflags=_NO_CONSOLE)
+    except (OSError, subprocess.SubprocessError, MemoryError) as exc:
+        return f"taskkill 실행 실패 {exc.__class__.__name__}"
+    return f"taskkill 종료코드 {r.returncode}"
+
+
+def settle_stats_cmd(run_id: str, result: Path) -> tuple[list[str], str]:
+    """바퀴 끝 정산 집계를 별도 짧은 프로세스로(T-113) — 같은 실행 기록(run_id)에 쓰고 결과(집계 파일 경로)는 result JSON."""
+    return _settle_program_cmd(["stats", "--run-id", run_id, "--result", str(Path(result).resolve())])
 
 
 def _ps(script: str, env_extra: dict[str, str], timeout: int = 30) -> str:

@@ -2395,7 +2395,7 @@ def p51_regular_then_backfill():
             pass
     for rc_regular, want in ((0, ["cmd_run", "cmd_backfill"]), (1, ["cmd_run"])):
         order.clear()
-        pat = [(TD.RL, "RunLog", FakeLog), (TD, "load_accounts", lambda only: ["a", "b"]), (TD, "cmd_stats", lambda: None),
+        pat = [(TD.RL, "RunLog", FakeLog), (TD, "load_accounts", lambda only: ["a", "b"]), (TD, "_stats_in_child", lambda: None),
                (TD, "name_of", lambda a: a), (TD, "_pending_jobs", lambda: 0), (TD, "CYCLE", TD.RL.Totals()),
                (TD, "_backlog_left", lambda accts, a: None),
                (TD, "_run_accounts", lambda accts, run, a: (order.append(run.__name__), rc_regular if run is TD.cmd_run else 0)[1])]
@@ -2938,7 +2938,7 @@ def p57_backlog_all_accounts():
             for f in (f"A-a1_밀크런_{am}.xlsx", f"A-a1_광고정산_{am}.json", f"A-a1_매출성장광고_{am}.xlsx"):
                 (t / "v" / "광고" / f).write_bytes(b"x")
             cycle = TD.RL.Totals()
-            pat = [(TD.RL, "RunLog", FakeLog), (TD, "load_accounts", lambda only: accts), (TD, "cmd_stats", lambda: None),
+            pat = [(TD.RL, "RunLog", FakeLog), (TD, "load_accounts", lambda only: accts), (TD, "_stats_in_child", lambda: None),
                    (TD, "name_of", lambda a: a.nm), (TD, "_pending_jobs", lambda: 0), (TD, "CYCLE", cycle),
                    (TD, "VERIFY", t / "v"), (TD, "BASE", t / "b"), (TD, "INVENTORY", t / "inv"), (TD, "JOBS", t / "b" / "_요청기록.json"),
                    (TD, "_run_accounts", run_accounts)]
@@ -3020,6 +3020,180 @@ def p59_suspended_pending():
     ok("정지 계정 대기 = 완료 판단에서 뺌 · 따로 '확인 필요' 표시 · 완료·실패 확인 · 다른 계정 이름 끝 혼동 없음")
 
 
+def _t113_fake_log(rows: list, beats: list):
+    class FakeLog:
+        run_id, files, left, accounts = "t", [], {}, []
+        csv = Path("처리기록_t.csv")
+
+        def __init__(self, *a, **k):
+            self.rows = rows
+
+        def record(self, acct, step, result, reason="", **k):
+            rows.append({"계정": acct, "단계": step, "결과": result, "사유": reason})
+
+        def error(self, acct, step, exc, *a, **k):
+            rows.append({"계정": acct, "단계": step, "결과": "실패", "사유": repr(exc)})
+
+        def heartbeat(self, status, detail="", **k):
+            beats.append((status, detail))
+
+        def line(self, m):
+            beats.append(("줄", m))
+
+        def summary(self, **k):
+            pass
+    return FakeLog
+
+
+def p60_memory_floor_finally():
+    print("[P60] T-113 (다) 바퀴 끝 finally 의 MemoryError(11-18 06:53 _backlog_left) — 밖으로 새지 않고(처리 안 된 예외 창 없음)"
+          " 처리기록 '실패'·_현재상태 '메모리 부족' 기록 · 처리 안 된 MemoryError = 기록 후 종료코드 3")
+    from types import SimpleNamespace
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    rows, beats = [], []
+
+    def boom(*a):
+        raise MemoryError()
+    pat = [(TD.RL, "RunLog", _t113_fake_log(rows, beats)), (TD, "load_accounts", lambda only: ["a"]),
+           (TD, "_stats_in_child", lambda: None), (TD, "name_of", lambda a: a), (TD, "_pending_jobs", lambda: 0),
+           (TD, "_suspended_pending", lambda: {}), (TD, "CYCLE", TD.RL.Totals()), (TD, "_run_both", lambda accts, a: 0),
+           (TD, "_backlog_left", boom), (TD, "_RESERVE", [bytearray(1)])]
+    stopped, _work = _patched(pat, lambda: TD._one_pass(SimpleNamespace(start=D("2026-01-01"), until="", dry_run=False)))
+    assert stopped is False, stopped                                      # 옛 코드 = MemoryError 가 _one_pass 밖으로 샘(재현 확인)
+    fail = [r for r in rows if r["단계"] == "남은 소급 계산"]
+    assert fail and fail[0]["결과"] == TD.RL.FAIL and "메모리 부족" in fail[0]["사유"] and "커밋" in fail[0]["사유"], rows
+    assert any("메모리 부족" in d for s, d in beats if s == "작동중"), beats
+    rows.clear(), beats.clear()
+    log = _t113_fake_log(rows, beats)()
+    rc = _patched([(TD, "LOG", log), (TD, "_RESERVE", [bytearray(1)])], lambda: TD._memory_floor_exit(MemoryError()))
+    assert rc == 3 and beats[-1][0] == "종료" and "메모리 부족" in beats[-1][1], beats
+    assert any(r["단계"] == "정산 종료" and r["결과"] == TD.RL.FAIL for r in rows), rows
+    ok("finally MemoryError = 처리기록 '실패'(커밋 MB 포함)·상태 '메모리 부족' · 바퀴는 실패로 끝나고 감시는 계속 · 처리 안 된 것 = 기록 후 3")
+
+
+def p61_self_exit_when_taskkill_fails():
+    print("[P61] T-113 (다) 앱 종료 감시의 자기 종료 — taskkill 이 안 먹어도(11-18 07:00:02 메모리 바닥) 사유 기록 후 프로세스 직접 종료")
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    from coupang_analytics import app_process as AP
+
+    class Exited(BaseException):
+        pass
+
+    def fake_exit(code):
+        raise Exited(code)
+    for heartbeat_fails in (False, True):
+        rows, beats = [], []
+        log = _t113_fake_log(rows, beats)()
+        if heartbeat_fails:
+            def hb(*a, **k):
+                raise MemoryError()
+            log.heartbeat = hb
+        pat = [(TD, "LOG", log), (AP, "watch_parent", lambda pid, fn: fn()),
+               (AP, "kill_self_tree", lambda: "taskkill 종료코드 128"), (TD.os, "_exit", fake_exit)]
+        try:
+            _patched(pat, lambda: TD._watch_app(4321))
+            raise AssertionError("자기 종료 안 함")                     # 옛 코드 = kill_self_tree 가 돌아오면 그대로 살아 있음
+        except Exited as e:
+            assert e.args == (1,), e.args
+        if not heartbeat_fails:
+            assert "자기 종료 명령 실패(taskkill 종료코드 128)" in beats[-1][1], beats
+    real = AP.subprocess.run
+
+    def no_proc(*a, **k):
+        raise OSError("가짜 — 새 프로세스 못 만듦")
+    AP.subprocess.run = no_proc
+    try:
+        assert AP.kill_self_tree() == "taskkill 실행 실패 OSError"
+    finally:
+        AP.subprocess.run = real
+    ok("taskkill 실패·기록 실패 둘 다 os._exit(1) · 상태에 '자기 종료 명령 실패(사유)' · kill_self_tree 는 실패 사유 반환")
+
+
+def p62_stats_separate_process():
+    print("[P62] T-113 (나) 바퀴 끝 정산 집계 = 별도 짧은 프로세스(stats --run-id --result) — 같은 실행 로그에 이어 씀·"
+          "상태 파일 안 덮음·집계 파일 기록 · 자식 실패 = 종료코드·오류 로그로 바퀴 '실패'")
+    import os
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    cwd, env_old = os.getcwd(), {k: os.environ.get(k) for k in ("COUPANG_DATA_ROOT", "LOCALAPPDATA")}
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        for sub in ("파일/비용", "쿠팡지급내역", "검증자료"):
+            (t / "output" / "정산" / sub).mkdir(parents=True)
+        os.environ["COUPANG_DATA_ROOT"], os.environ["LOCALAPPDATA"] = str(t), str(t)   # 자식도 같은 데이터 폴더 · 키 없음(API 안 부름)
+        os.chdir(t)
+        try:
+            log = TD.RL.RunLog(TD.BASE)
+            log.heartbeat("작동중", "부모 상태")
+            _patched([(TD, "LOG", log)], TD._stats_in_child)
+            outs = [f for a, f, n in log.files if n == "정산 집계"]
+            assert len(outs) == 1 and Path(outs[0]).exists() and Path(outs[0]).parent == (t / "output" / "정산").resolve(), log.files
+            text = log.text.read_text(encoding="utf-8")
+            assert "명령 stats" in text and "집계 정산 파일 0개" in text and "[메모리] 정산 집계 = 별도 프로세스" in text, text
+            assert "부모 상태" in log.status.read_text(encoding="utf-8"), "자식이 _현재상태.txt 를 덮지 않음"
+            assert not list(log.dir.glob("_집계결과_*.json")), "결과 JSON 은 읽고 지움"
+            assert not list(log.dir.glob("처리기록_*.csv")) or log.csv.exists(), "새 실행ID 기록 파일 안 만듦"
+            (t / "output" / "정산" / "파일" / "깨짐.xlsx").write_bytes(b"not a zip")
+            try:
+                _patched([(TD, "LOG", log)], TD._stats_in_child)
+                raise AssertionError("자식 실패를 숨김")
+            except RuntimeError as exc:
+                assert "종료코드 1" in str(exc) and log.errors.name in str(exc), exc
+            assert "정산 집계" in log.errors.read_text(encoding="utf-8"), "자식 추적은 같은 실행ID 오류 로그"
+        finally:
+            os.chdir(cwd)
+            for k, v in env_old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+    ok("자식 프로세스 집계 → 같은 실행 로그·집계 파일 기록·상태 파일 그대로 · 깨진 파일 = 자식 종료코드 1 + 같은 오류 로그 → 바퀴 실패")
+
+
+def p63_own_chrome_sweep():
+    print("[P63] T-113 (라) 바퀴 사이 Chrome 정리 = 정산 프로세스 자손만(앱·소유자·부모 없는 앱 몫 안 건드림) · 수·메모리 기록")
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    from coupang_analytics import settlement_memory as MEM
+    MB = 1 << 20
+    text = "\n".join("\t".join(map(str, r)) for r in (
+        (200, 100, 300 * MB, 1, 1, 1), (201, 200, 50 * MB, 1, 0, 1), (202, 201, 10 * MB, 1, 0, 1),   # 정산(100)이 띄운 Chrome 트리
+        (300, 50, 200 * MB, 1, 1, 1), (301, 300, 40 * MB, 1, 0, 1),                                  # 앱(50) Chrome
+        (400, 60, 500 * MB, 0, 1, 1),                                                                 # 소유자 Chrome
+        (500, 999, 100 * MB, 1, 1, 0), (501, 500, 20 * MB, 1, 0, 1)))                                 # 부모 없는 우리 Chrome(앱 몫 잔여)
+    rows = MEM.parse_census(text + "\n")
+    assert MEM.own_tree(rows, 100) == [200, 201, 202], MEM.own_tree(rows, 100)
+    assert MEM.summarize(rows, [200, 201, 202]) == {"전체": 8, "전체MB": 1220, "우리": 7, "부모없는우리": 1, "정산자손": 3}
+    expect(ValueError, lambda: MEM.parse_census("1\t2\t3\n"), "형식 다른 줄 = 오류(조용히 빼지 않음)")
+    killed, calls = [], [0]
+
+    def census(_d):
+        calls[0] += 1
+        return rows if calls[0] == 1 else [r for r in rows if r["pid"] not in (200, 201, 202)]
+    real = MEM.subprocess.run
+    MEM.subprocess.run = lambda cmd, **k: killed.append(cmd)
+    try:
+        n = _patched([(MEM, "_census", census)], lambda: MEM.sweep_own_chrome(root_pid=100))
+    finally:
+        MEM.subprocess.run = real
+    assert killed == [["taskkill", "/F", "/T", "/PID", "200"]], killed           # 맨 위 하나만 트리째 · 300·400·500 안 건드림
+    assert n["종료"] == 3 and n["남은자손"] == 0 and n["부모없는우리"] == 1, n
+    beats = []
+    log = _t113_fake_log([], beats)()
+    _patched([(TD, "LOG", log), (MEM, "sweep_own_chrome", lambda: n)], TD._between_passes)
+    line = beats[-1][1]
+    assert "남은 Chrome 3개 종료(남음 0)" in line and "PC Chrome 8개" in line and "부모 없는 우리 Chrome 1개" in line \
+        and "정산 프로세스 커밋" in line, line
+
+    def fail():
+        raise OSError("가짜 조회 실패")
+    _patched([(TD, "LOG", log), (MEM, "sweep_own_chrome", fail)], TD._between_passes)
+    assert "⚠ Chrome 확인 실패(OSError" in beats[-1][1], beats[-1]
+    ok("자손 3개만 taskkill /T(맨 위 1번) · 앱·소유자·부모 없는 앱 몫 그대로 · 전체 수·MB·남은 수·커밋 기록 · 조회 실패 사유 기록")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -3071,6 +3245,10 @@ def main():
     p57_backlog_all_accounts()
     p58_stats_keep_latest()
     p59_suspended_pending()
+    p60_memory_floor_finally()
+    p61_self_exit_when_taskkill_fails()
+    p62_stats_separate_process()
+    p63_own_chrome_sweep()
     print("정산 런타임 오프라인 검증 통과")
 
 
