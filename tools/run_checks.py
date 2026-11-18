@@ -53,6 +53,7 @@ CHECKS = [
     ("정산 받기 의심·자료 출처 대조(T-82·T-78 S1~S3)", "tools/verify_settlement_sources_offline.py", True),
     ("정산 지급 전 예상 규칙값(비즈니스 인사이트 일할·신상품 무료 창 T-116)", "tools/verify_settlement_fee_rules_offline.py", True),
     ("셀독 정산서(대상 계약·상품군·양식 1장·도달율)", "tools/verify_seldoc_statements_offline.py", True),
+    ("위탁자 정산서 3차 형식(숫자 검산·시트 그리기·쪽·결정 문구·입구)", "tools/verify_consignor_statement_offline.py", True),
     ("판매분석 금액 날짜별 누적", "tools/verify_sales_history_offline.py", True),
     ("통합 판매현황(첫 시트·월·주 조회)", "tools/verify_sales_summary_offline.py", True),
     ("쿠폰 목록·재고현황 날짜별 보관", "tools/verify_coupon_snapshot_offline.py", True),
