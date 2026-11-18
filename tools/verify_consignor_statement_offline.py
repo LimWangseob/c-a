@@ -363,6 +363,14 @@ def test_tool() -> None:
         raise AssertionError("--sheet 가 --month 없이 통과")
     except SystemExit:
         pass
+    err = io.StringIO()
+    try:                                                    # 2025 판매 달 = 정산 밖(D-328) — 손으로 줘도 만들지 않음
+        with contextlib.redirect_stderr(err):
+            T._args(base + ["--month", "2025-12"])
+        raise AssertionError("--month 2025-12 가 통과(D-328)")
+    except SystemExit:
+        assert "D-328" in err.getvalue(), err.getvalue()
+    assert T._args(base + ["--month", "2026-01"]).month == "2026-01"
 
 
 def main() -> int:

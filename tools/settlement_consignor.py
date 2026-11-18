@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from coupang_analytics import settlement_consignor_gsheet as GS  # noqa: E402
 from coupang_analytics import settlement_consignor_month as CM  # noqa: E402
+from coupang_analytics import settlement_ledger as SL  # noqa: E402
 from coupang_analytics import settlement_statement_context as CTX  # noqa: E402
 from coupang_analytics import settlement_statement_source as SRC  # noqa: E402
 
@@ -50,6 +51,8 @@ def _args(argv: list[str] | None = None) -> argparse.Namespace:
     date.fromisoformat(a.issued)
     if a.month:
         date.fromisoformat(f"{a.month}-01")
+        if SL.sold_2025(a.month):
+            ap.error(f"--month {a.month} = 2025년 판매 달 — 정산에 넣지 않음(D-328 · {SL.SALE_FROM} 부터)")
     if a.sheet and not a.month:
         ap.error("--sheet 는 --month 와 함께(판매 달마다 시트 파일 1개 · D-241 ⑥)")
     return a
