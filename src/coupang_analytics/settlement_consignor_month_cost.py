@@ -27,8 +27,11 @@ OTHER_BR = {"subscriptionFeeOffsetYearMonthBreakdown": "로켓그로스 세이�
             "businessInsightsOffsetYearMonthBreakdown": "비즈니스 인사이트 이용료",
             "coupangLiveOffsetYearMonthBreakdown": "쿠팡 라이브 수수료"}
 OWN_BR = {"debitCardOffsetYearMonthBreakdown": AC.OWN_CARD}          # D-312 ② 체크카드 = 위탁자 본인 차감
-RG_NOTE_KEYS = ("totalPostPurchaseDeductionAmount", "totalCoupangLiveDeductionAmount", "totalDebitCardDeductionAmount",
+RG_NOTE_KEYS = ("totalCoupangLiveDeductionAmount", "totalDebitCardDeductionAmount",
                 "totalSubscriptionFeeDeductionAmount", "totalBusinessInsightsDeductionAmount", "totalCarryOverSettlementDeductionAmount")
+RG_REVIEW = "totalPostPurchaseDeductionAmount"      # 로켓그로스 리뷰 이벤트 공제 = 원문 값 → 9 '리뷰 이벤트'(D-324 ①④)
+RG_REVIEW_CAT = "r:" + RG_REVIEW
+SEP_NAMES = ("우대수수료 환급 (관리 상품 몫)", "우대수수료 환급 (상품 확인 전 · 계정 전체)")     # 10 고정 2줄(D-343)
 # 계정 단위 정액 3종(D-271) — 9 반영 비중 = 등록 비중(판매 비중과 비교 안 함)
 FIXED_FEE_CATS = ("w:" + AC.SVC, "o:subscriptionFeeOffsetYearMonthBreakdown", "o:businessInsightsOffsetYearMonthBreakdown")
 PM3_BACK = f"윙 지급 차감 — {AC.PM3} (지급 끝난 음수 회차 되돌림 · D-304)"
@@ -302,6 +305,10 @@ def _wing_deductions(st: MonthState, key, r, parts: Counter) -> None:
 
 def _rg_notes(st: MonthState, key, row, r) -> None:
     st.own[AC.OWN_MCA] += num(r.get("totalMerchantCashAdvanceDeductionAmount"))     # D-312 ② MCA 상환 = 위탁자 본인 차감
+    rv = num(r.get(RG_REVIEW))
+    if rv:
+        st.common.append(("로켓그로스 지급 차감 — 리뷰 이벤트", rv, RG_REVIEW_CAT))
+        st.loc[RG_REVIEW_CAT].append((key, rv))
     for k in RG_NOTE_KEYS:
         if k == "totalCarryOverSettlementDeductionAmount" and st.pend_line(row, r):
             continue                                  # 정산 예정 줄 이월 공제 = 6 확정 전에서 처리(logistics)
@@ -415,11 +422,8 @@ def separate(st: MonthState) -> None:
     if (fav.get("totalCount") or 0) != len(rows):
         st.j.append(f"확인 필요: 우대수수료 환급 {st.mk} 목록 {len(rows)}줄 ≠ 쿠팡 전체 건수 {fav.get('totalCount')}")
     st.fav = {"계정 전체": tot, "관리 몫(주문 → 상품)": m, "상품 모르는 주문(계정 전체 금액 그대로)": unk, "건수": len(rows)}
-    st.sep = []
-    if round(m):
-        st.sep.append(("우대수수료 환급 (카드 수수료 우대분 · 쿠팡페이)", m))
+    st.sep = [(SEP_NAMES[0], m), (SEP_NAMES[1], unk)]         # 늘 2줄 · 값 없으면 0(D-343)
     if round(unk):
-        st.sep.append(("우대수수료 환급 — 상품 확인 전 (계정 전체 금액)", unk))
         st.j.append(f"우대수수료 환급 중 주문이 아직 정산 파일에 없는 {unk:,.0f}원 = 상품을 몰라 계정 전체 금액 그대로 10 에 넣음"
                     "(D-241 ② · 쿠팡 자료로 상품이 확인되면 그때 상품별로 나눔)")
     _sep_notes(st)

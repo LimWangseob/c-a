@@ -2,7 +2,11 @@
 
 기대값 = 계획서 3절 S1 검산 규칙·결정 문장에서 손으로 정함(코드에서 뽑지 않음):
   ① 숫자 쪽: 누적 반올림 칸 합 = 목표 · 상품표 열 합 = 1쪽 1~8(확정 전 포함) · 금액 전혀 없는 상품 뺌 · 판매 금액 큰 순 ·
-     6 종류별 합 = 1쪽 6(끝전 줄) · 검산 1원 이상 차이만 실패 · 판정표 파일 없음 = judgments 사유(조용히 넘기지 않음).
+     6 종류별 합 = 1쪽 6(누적 반올림 · 끝전 줄 없음) · 검산 1원 이상 차이만 실패 · 판정표 파일 없음 = judgments 사유(조용히 넘기지 않음).
+  ①-2 고정 형식(D-343 · 승인 샘플 `output\\_샘플_261118_고정형식정산서\\` 11-19 "샘플 승인."): 6 종류별 9줄 · 9 계정 공통 9줄 · 10 별도 입금 2줄 ·
+     어디로 갔나요 4줄 = 계정·달과 상관없이 같은 이름·순서 · 값 0 = 공란 · '이번 기간 없음'·'끝전' 없음 · 상품 줄 = 2쪽에 다 들어가면 2쪽, 아니면
+     전부 3쪽부터(2쪽엔 '상품 n개 — 상품별 줄은 3쪽부터' + 합계) · 한 쪽 최대 이름 한 줄 상품 35개 / 회색 줄 함께 19개 ·
+     로켓그로스 리뷰 이벤트(PostPurchase) = 9 '리뷰 이벤트' 줄에 원문 값(D-324 ①④).
   ② 그리기 쪽(합성 자료 2개 · 정산 예정 포함/확정): 검산 통과 · 칸 범위·병합 겹침 없음 · 쪽 높이 = 쪽 수 × A4 · 쪽 경계 = 행 경계 ·
      결정 문구(D-241 ⑦ 문의 없음 · D-242 머리 · D-251 회색 줄 · D-259 1쪽 · D-260 '판매 기간 … · 발행' 굵게 · '검토용' 없음) ·
      넘치면 다음 쪽(D-241 ④ · '(계속)' 머리 · 줄 빠짐·중복 없음) · 나눌 수 없는 큰 묶음 = 중단 · 검산 실패 = 쓰기 0회 ·
@@ -30,10 +34,19 @@ from coupang_analytics import settlement_consignor_gsheet as GS  # noqa: E402
 from coupang_analytics import settlement_consignor_month as CM  # noqa: E402
 from coupang_analytics.settlement_consignor_gsheet_layout import MARGIN, PAGE_H, StatementLayoutError  # noqa: E402
 from coupang_analytics.settlement_consignor_month_calc import cum_round  # noqa: E402
-from coupang_analytics.settlement_consignor_month_cost import KINDS, PEND_KIND  # noqa: E402
-from coupang_analytics.settlement_consignor_month_out import LINE_NAMES, product_table, rg_kinds  # noqa: E402
+from coupang_analytics import settlement_statement_account as AC  # noqa: E402
+from coupang_analytics.settlement_consignor_month_cost import KINDS, PEND_KIND, _rg_notes  # noqa: E402
+from coupang_analytics.settlement_consignor_month_dep import flow  # noqa: E402
+from coupang_analytics.settlement_consignor_month_out import LINE_NAMES, common_out, coupang_by_cat, product_table, rg_kinds  # noqa: E402
 
 ISSUED = "2026-11-18"
+# 고정 줄(기대 = 승인 샘플 `_render_fixed_sample.py` KIND_ROWS·COMMON_ROWS·SEP_ROWS·FLOW_ROWS 의 정산서 이름 · 코드에서 뽑지 않음)
+FIX_KINDS = ["입출고비 (창고에 넣고 꺼냄)", "고객 배송비", "보관비 (오래 둘수록 비쌈)", "바코드 붙이기", "반품 회수비", "반품 재입고비",
+             "창고에서 빼내는 비용 (반출)", "반출 배송비", "종류별 내역 전 (정산 예정·쿠팡 미확정)"]
+FIX_COMMON = ["판매자서비스이용료", "로켓그로스 세이버 구독료", "비즈니스 인사이트 이용료", "쿠팡 라이브 수수료", "리뷰 이벤트 (체험단)",
+              "3PM 매출채권", "채권추심", "상품 표시 없는 창고·운송·보상 비용", "그 밖의 쿠팡 공제"]
+FIX_SEP = ["우대수수료 환급 (관리 상품 몫)", "우대수수료 환급 (상품 확인 전 · 계정 전체)"]
+FIX_FLOW = ["쿠팡 입금 완료", "빠른정산으로 먼저 받음", "쿠팡 입금 예정", "쿠팡페이 환급"]
 
 
 def _tool():
@@ -74,22 +87,23 @@ def synthetic(pending: bool = True, month: str = "2026-09") -> dict:
     b = [400_000, 0, -43_200, 2_000, -20_000, -30_000, -5_000, 0]
     pa = [200_000, 0, -21_600, 0, 0, -10_000, 0, 0] if pending else [0] * 8
     lines = [{"no": k, "name": LINE_NAMES[k - 1], "amount": a[k - 1] + b[k - 1], "pending": pa[k - 1]} for k in range(1, 9)]
-    kinds = [{"name": "입출고비 (창고에 넣고 꺼냄)", "amount": -50_000}, {"name": "고객 배송비", "amount": -20_000 - (0 if pending else 10_000)}]
-    if pending:
-        kinds.append({"name": PEND_KIND, "amount": -10_000, "pending": True})
-    flow = ([{"name": "쿠팡 입금 완료", "desc": "이미 들어온 돈", "amount": 548_100},
-             {"name": "쿠팡 입금 예정", "desc": "쿠팡 미확정 포함", "amount": 168_400}] if pending
-            else [{"name": "쿠팡 입금 완료", "desc": "이미 들어온 돈", "amount": 716_500}])
+    kinds = [{"name": n, "amount": 0} for n in FIX_KINDS]
+    kinds[0]["amount"], kinds[1]["amount"] = -50_000, -20_000 - (0 if pending else 10_000)
+    kinds[-1].update(amount=-10_000 if pending else 0, pending=True)
+    common = [{"key": f"k{i}", "name": n, "coupang_amount": 0, "applied_amount": 0} for i, n in enumerate(FIX_COMMON)]
+    common[0].update(coupang_amount=55_000, applied_amount=-33_000)
+    fl = [{"name": n, "desc": "합성", "amount": 0} for n in FIX_FLOW]
+    fl[0]["amount"], fl[2]["amount"] = (548_100, 168_400) if pending else (716_500, 0)
     deps = [{"date": f"{month}-10", "desc": "1주 판매 정산", "amount": 300_000}, {"date": f"{month}-17", "desc": "2주 판매 정산", "amount": 248_100},
             {"date": f"{month}-24", "desc": "3주 판매 정산" + (" (예정)" if pending else ""), "amount": 168_400}]
     return {"account": "synth01", "company": "합성상회", "ceo": "합성 위탁자", "period_start": f"{month}-01", "period_end": f"{month}-30",
             "basis_date": "2026-11-15", "status": "정산 예정 포함" if pending else "확정", "lines": lines, "product_subtotal": 748_000,
             "products": [_product("합성 상품 가", a, pa), _product("합성 상품 나", b)], "rg_kinds": kinds,
-            "common": {"items": [{"name": "판매자서비스이용료", "coupang_amount": 55_000, "applied_amount": -33_000}],
+            "common": {"items": common,
                        "basis_text": "판매 비중 60.0% · 등록 비중 2/5=40.0% 중 작은 쪽 40.0%", "total_coupang": 55_000, "total_applied": -33_000},
-            "separate": [{"name": "우대수수료 환급", "amount": 1_500}], "settle_amount": 716_500,
+            "separate": [{"name": FIX_SEP[0], "amount": 1_500}, {"name": FIX_SEP[1], "amount": 0}], "settle_amount": 716_500,
             "pending_total": 168_400 if pending else 0, "pending_detail": [{"방법": "합성"}] if pending else [],
-            "flow": flow, "deposits": deps, "checks": [], "judgments": []}
+            "flow": fl, "deposits": deps, "checks": [], "judgments": []}
 
 
 # ── ① 숫자 쪽 ─────────────────────────────────────────────────
@@ -117,12 +131,60 @@ def test_product_table() -> None:
 
 
 def test_rg_kinds() -> None:
+    """D-343: 늘 9줄(이름·순서 고정 · 값 없으면 0) · 끝전 줄 없음 — 원 단위는 누적 반올림으로 종류 줄 안(합 = 1쪽 6)."""
     kinds: dict = defaultdict(float, {KINDS[0][0]: 0.6, KINDS[1][0]: 0.6})
-    got = rg_kinds(SimpleNamespace(kinds=kinds), -1)
-    assert [x["amount"] for x in got] == [-1, -1, 1] and got[-1]["name"] == "끝전", got
+    got = rg_kinds(SimpleNamespace(kinds=kinds, j=[]), -1)
+    assert [x["name"] for x in got] == FIX_KINDS, got
+    assert sum(x["amount"] for x in got) == -1 and [x["amount"] for x in got[2:]] == [0] * 7, got
+    assert got[-1]["pending"] and not any(x.get("pending") for x in got[:-1])
     kinds[PEND_KIND] = 3.0
-    got = rg_kinds(SimpleNamespace(kinds=kinds), -5)
-    assert got[-1] == {"name": PEND_KIND, "amount": -3, "pending": True}, got
+    got = rg_kinds(SimpleNamespace(kinds=kinds, j=[]), -4)
+    assert len(got) == 9 and got[-1] == {"name": PEND_KIND, "amount": -3, "pending": True}, got
+    assert rg_kinds(SimpleNamespace(kinds=defaultdict(float), j=[]), 0) == [{"name": n, "amount": 0, **({"pending": True} if n == PEND_KIND else {})} for n in FIX_KINDS]
+
+
+def test_common_fixed() -> None:
+    """D-343: 9 계정 공통 = 고정 9줄(이름·순서) · 없는 항목 0 · 항목마다 비중(D-271 정액 3종 = 등록 비중) 반올림 뒤 줄로 합침 · 금액 0 항목 뺌."""
+    st = SimpleNamespace(share=0.5, reg_share=0.4, common=[
+        ("윙 지급 차감 — 판매자서비스이용료", 11_000.0, "w:" + AC.SVC),                       # 정액 → 등록 비중 0.4
+        ("로켓그로스 세이버 구독료", 9_900.0, "o:subscriptionFeeOffsetYearMonthBreakdown"),
+        ("윙 지급 차감 — 리뷰 이벤트", 2_220.0, "w:리뷰 이벤트"),
+        ("윙 지급 차감 — 채권추심", 1_000.0, "w:채권추심"),
+        ("창고·배송비 중 쿠팡이 상품을 표시하지 않은 금액 (x)", 300.0, "cfs"),
+        ("재고 보상 중 쿠팡이 상품을 표시하지 않은 금액", -100.0, "comp"),
+        ("윙 지급 차감 — 기타 공제", 50.0, "w:기타 공제"),
+        ("광고비 중 쿠팡이 상품을 표시하지 않은 금액", 100.0, "ad"),
+        ("반올림 0", 0.2, "w:기타 공제")])
+    items, applied = common_out(st)
+    assert [x["name"] for x in items] == FIX_COMMON, items
+    got = {x["name"]: (x["coupang_amount"], x["applied_amount"]) for x in items}
+    assert got == {"판매자서비스이용료": (11_000, -4_400), "로켓그로스 세이버 구독료": (9_900, -3_960), "비즈니스 인사이트 이용료": (0, 0),
+                   "쿠팡 라이브 수수료": (0, 0), "리뷰 이벤트 (체험단)": (2_220, -1_110), "3PM 매출채권": (0, 0), "채권추심": (1_000, -500),
+                   "상품 표시 없는 창고·운송·보상 비용": (200, -100), "그 밖의 쿠팡 공제": (150, -75)}, got
+    assert sum(applied) == sum(x["applied_amount"] for x in items) == -10_145 and len(applied) == len(st.common_items) == 8
+
+
+def test_post_purchase() -> None:
+    """D-324 ①④: 로켓그로스 리뷰 이벤트 공제(totalPostPurchaseDeductionAmount) = 원문 값 → 9 '리뷰 이벤트' 줄 · 날짜별 표 위치 · 판단 문장만 쓰던 것 없앰."""
+    st = SimpleNamespace(own=defaultdict(float), common=[], loc=defaultdict(list), j=[], share=0.5, reg_share=0.4,
+                         pend_line=lambda row, r: False, ad={"deducted": 0}, milk={"deducted": 0},
+                         cfs={"line_fees": 0, "adjust": 0, "pending": 0}, comp={"paid": 0})
+    key = ("2026-11-10", "2026-10-01", "2026-10-07", "로켓그로스", "")
+    _rg_notes(st, key, list(key), {"totalPostPurchaseDeductionAmount": 8_880.0})
+    assert not [j for j in st.j if "PostPurchase" in j], st.j
+    items, _ = common_out(st)
+    review = next(x for x in items if x["name"] == "리뷰 이벤트 (체험단)")
+    assert (review["coupang_amount"], review["applied_amount"]) == (8_880, -4_440), review
+    cat = st.common_items[0][2]
+    assert st.loc[cat] == [(key, 8_880.0)] and coupang_by_cat(st)[cat] == 8_880
+
+
+def test_flow_fixed() -> None:
+    """D-343: 어디로 갔나요 = 늘 4줄(값 없으면 0)."""
+    st = SimpleNamespace(basis="2026-11-15")
+    rows = [{"date": "2026-10-10", "desc": "쿠팡 입금 완료", "amount": 1_000, "_status": "지급 완료"}]
+    got = flow(st, rows)
+    assert [x["name"] for x in got] == FIX_FLOW and [x["amount"] for x in got] == [1_000, 0, 0, 0], got
 
 
 def test_failed_checks() -> None:
@@ -303,17 +365,90 @@ def test_overflow() -> None:
     assert "정산 상세 (계속)" in cells
     assert all(sum(s.startswith(f"합성 넘침 {i:02d} ") for s in cells) == 1 for i in range(40))
     assert all(cells.count(f"합성 입금 {i}") == 1 for i in range(25))
-    assert cells.count("합계 (= 1쪽)") == 1 and cells.count("상품") >= 2
+    assert cells.count("합계 (= 1쪽)") == 2 and cells.count("상품") >= 2     # 상품 3쪽부터 → 2쪽 합계 + 상품 쪽 합계(승인 샘플)
+
+
+def _relines(d: dict, prods: list[dict]) -> dict:
+    """상품 줄을 바꾸고 1~8·6 종류별·정산 금액·어디로 갔나요·입금 내역을 그 합에 맞춤(검산 통과 유지)."""
+    d = json.loads(json.dumps(d))
+    d["products"] = prods
+    for x in d["lines"]:
+        x["amount"] = sum(p[f"c{x['no']}"] for p in prods)
+        x["pending"] = sum((p.get("pending") or {}).get(f"c{x['no']}", 0) for p in prods)
+    L6, P6 = d["lines"][5]["amount"], d["lines"][5]["pending"]
+    for k in d["rg_kinds"]:
+        k["amount"] = P6 if k.get("pending") else 0
+    d["rg_kinds"][0]["amount"] = L6 - P6
+    d["product_subtotal"] = sum(p["subtotal"] for p in prods)
+    d["settle_amount"] = d["product_subtotal"] + d["common"]["total_applied"] + sum(x["amount"] for x in d["separate"])
+    d["pending_total"] = sum(x["pending"] for x in d["lines"])
+    d["status"], d["pending_detail"] = ("정산 예정 포함", [{"방법": "합성"}]) if d["pending_total"] else ("확정", [])
+    for f in d["flow"]:
+        f["amount"] = 0
+    d["flow"][0]["amount"] = d["settle_amount"]
+    d["deposits"] = [{"date": "2026-09-10", "desc": "합성 입금", "amount": d["settle_amount"]}]
+    return d
+
+
+def _labels(t) -> list[str]:
+    """정산서에서 계정·달마다 같아야 하는 글자(숫자·상품명·날짜·회사 뺌)."""
+    fixed = set(FIX_KINDS + FIX_COMMON + FIX_SEP + FIX_FLOW)
+    return [s for s, _ in texts(t.requests) if s in fixed]
+
+
+def test_fixed_render() -> None:
+    """D-343: 확정·정산 예정 두 계정 = 고정 줄 이름·순서 같음 · 고정 줄 모두 있음 · 값 0 = 공란(숫자 0 칸 없음) · '이번 기간 없음'·'끝전' 없음 · 바닥 문구."""
+    a = synthetic(True)
+    b = {**synthetic(False), "account": "synth02", "ceo": "합성 위탁자 둘"}
+    b["separate"] = [{"name": FIX_SEP[0], "amount": 0}, {"name": FIX_SEP[1], "amount": 1_500}]
+    plan = GS.build_statement([a, b], ISSUED)
+    ta, tb = plan.tabs[1], plan.tabs[2]
+    assert _labels(ta) == _labels(tb) and sorted(set(_labels(ta))) == sorted(set(FIX_KINDS + FIX_COMMON + FIX_SEP + FIX_FLOW)), _labels(ta)
+    for t in (ta, tb):
+        joined = "\n".join(s for s, _ in texts(t.requests))
+        assert "이번 기간 없음" not in joined and "끝전" not in joined, t.title
+        assert "금액이 없는 항목은 비워 두었습니다" in joined and "쿠팡 미확정 금액 포함" in joined and "별도 입금 포함" in joined, t.title
+        zeros = [v for r in t.requests for row in r.get("updateCells", {}).get("rows", []) for v in row["values"]
+                 if v.get("userEnteredValue", {}).get("numberValue") == 0]
+        assert not zeros, (t.title, len(zeros))
+    bad = {**a, "rg_kinds": a["rg_kinds"][:2] + [{"name": "끝전", "amount": a["lines"][5]["amount"] - sum(k["amount"] for k in a["rg_kinds"][:2])}]}
+    try:                                                    # 옛 가변 자료(줄이 생기고 빠짐) = 그리지 않고 중단
+        GS.build_statement([bad], ISSUED)
+        raise AssertionError("고정 형식 아닌 자료인데 그려짐(D-343)")
+    except StatementLayoutError:
+        pass
+
+
+def _prods(n: int, pend: bool) -> list[dict]:
+    return [_product(f"합성 상품 {i:02d}", [1_000, 0, -100, 0, 0, 0, 0, 0], [1_000, 0, -100, 0, 0, 0, 0, 0] if pend else None) for i in range(n)]
+
+
+def test_product_pages() -> None:
+    """상품 줄 쪽 규칙(승인 샘플): 2쪽에 다 들어가면 2쪽(모두 2쪽) · 아니면 전부 3쪽부터 + 2쪽 안내 · 상품 쪽 한 장 = 이름 한 줄 35개 / 회색 함께 19개."""
+    base = synthetic(False)
+    for n, pend, pages in ((2, False, 2), (9, True, 3), (35, False, 3), (36, False, 4), (19, True, 3), (20, True, 4)):
+        d = _relines(base, _prods(n, pend))
+        assert GS.check(d) == [], GS.check(d)
+        plan = GS.build_statement([d], ISSUED)
+        t = plan.tabs[1]
+        cells = [s for s, _ in texts(t.requests)]
+        assert t.pages == pages, (n, pend, t.pages)
+        assert not (page_errors(plan) + structure_errors(plan)), (n, pend)
+        moved = any(f"상품 {n}개 — 상품별 줄은 3쪽부터" in s for s in cells)
+        assert moved == (pages > 2), (n, pend, moved)
+        assert all(cells.count(f"합성 상품 {i:02d}") == 1 for i in range(n)), (n, pend)
+        assert cells.count("합계 (= 1쪽)") == (2 if moved else 1) and cells.count("└ 정산 예정(쿠팡 미확정)") == (2 if moved else 1) + (n if pend else 0)
 
 
 def test_unsplittable() -> None:
+    """한 줄이 한 쪽보다 큼(나눌 수 없음) = 중단(무한 반복 없음)."""
     d = synthetic(True)
-    d["flow"] += [{"name": f"합성 {i}", "desc": "0원", "amount": 0} for i in range(45)]
+    d["products"][1]["name"] = "합성 아주 긴 상품 이름 " * 300
     try:
         GS.build_statement([d], ISSUED)
     except StatementLayoutError:
         return
-    raise AssertionError("한 쪽보다 큰 묶음인데 중단 안 됨(무한 반복 위험)")
+    raise AssertionError("한 쪽보다 큰 줄인데 중단 안 됨(무한 반복 위험)")
 
 
 def test_check_reject() -> None:
@@ -378,10 +513,11 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     except AttributeError:
         pass
-    for f in (test_cum_round, test_product_table, test_rg_kinds, test_failed_checks, test_load_judge, test_sale_months_2025_excluded, test_render, test_overflow,
-              test_unsplittable, test_check_reject, test_multi_month, test_tool):
+    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_flow_fixed, test_failed_checks, test_load_judge,
+              test_sale_months_2025_excluded, test_render, test_fixed_render, test_product_pages, test_overflow, test_unsplittable, test_check_reject,
+              test_multi_month, test_tool):
         f()
-    print("✅ 위탁자 정산서 3차 형식 시험(숫자 반올림·상품표 열 합·종류별 끝전·검산 기준 · 그리기 구조·쪽 높이·결정 문구·넘침·검산/여러 달 거부 · 입구) 통과")
+    print("✅ 위탁자 정산서 3차 형식 시험(숫자 반올림·상품표 열 합·종류별 9줄·검산 기준 · 그리기 구조·쪽 높이·결정 문구·넘침·검산/여러 달 거부 · 입구 · D-343 고정 형식(고정 줄·공란·쪽 규칙)·D-324 리뷰 이벤트) 통과")
     return 0
 
 
