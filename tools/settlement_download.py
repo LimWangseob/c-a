@@ -726,7 +726,7 @@ def collect_verify(a, b, args) -> None:
 
 
 def collect_ads(a, b, args) -> None:
-    """광고비 원천 월별(D-116 ③④) — 받을 달이 있을 때만 광고센터를 연다. 실패는 기록하고 정산은 계속(차단만 중단)."""
+    """광고비 원천 월별(D-116 ③④) + 끝나지 않은 달 일별(매일 · T-78 S2) — 처음 부를 때 광고센터를 연다. 실패는 기록하고 정산은 계속(차단만 중단)."""
     from coupang_analytics import settlement_ads as AD
     from coupang_analytics import settlement_evidence_web as EW
     name, q = name_of(a), None
@@ -756,6 +756,35 @@ def collect_ads(a, b, args) -> None:
     finally:
         if q is not None:
             q.close()
+
+
+def source_checks(web: bool = True) -> None:
+    """정산 자료를 다 받은 뒤 1번 — ① 받기 의심(T-82 · 파일끼리 대조 · 다시받을목록.csv) ② 원문 대조(T-78 S1 M-E · 접속 없음)
+    ③ 공개 웹(S3 M-D · 쿠키·프록시 없는 일반 연결 · 주기 된 페이지만). 단계마다 따로 실패 기록(정산 금액과 별개)."""
+    from coupang_analytics import settlement_fetch_check as FCK
+    from coupang_analytics import settlement_sources as SRC
+    today, out = date.today(), SRC.folder(BASE)
+    try:
+        rows, later = FCK.scan(BASE)
+        _all, again = FCK.write(out, rows, today)
+        LOG.record(RL.ALL, "받기 의심", RL.WAIT if any(r["다시 받기"] != FCK.NO for r in rows) else RL.OK,
+                   f"{FCK.summary(rows)}" + (f" · 아직 안 읽은 엑셀 {later}개(다음 실행에)" if later else "") + f" → {again}")
+    except Exception as exc:                              # 그 단계만 실패 기록(무음 아님)
+        LOG.error(RL.ALL, "받기 의심", exc)
+    try:
+        r = SRC.compare_originals(BASE, FILES, today)
+        LOG.record(RL.ALL, "자료 출처", RL.OK, f"원문 대조 읽음 {r['읽음']} · 남음 {r['남음']} · 변경 {r['이력']} · "
+                   f"기준 {r['기준'] or '만드는 중'} → {out / '변경이력.csv'}")
+        for why in r["오류"]:                              # 칸 바뀐 원문 = 그 파일만 실패(다음 실행에 다시)
+            LOG.record(RL.ALL, "자료 출처", RL.FAIL, why[:200])
+    except Exception as exc:
+        LOG.error(RL.ALL, "자료 출처", exc)
+    for sid in (SRC.due_public(BASE, today) if web else ()):
+        try:
+            hist = SRC.check_public(BASE, sid, today)
+            LOG.record(RL.ALL, "자료 출처", RL.WAIT if hist else RL.OK, f"{sid} " + ("글자 바뀜 — 변경이력.csv" if hist else "같음"))
+        except Exception as exc:
+            LOG.error(RL.ALL, "자료 출처", exc)
 
 
 def _wing_files(name: str) -> list:
@@ -1168,7 +1197,7 @@ def main() -> int:
     global LOG
     ap = argparse.ArgumentParser(description="쿠팡 정산 파일 배치 다운로드")
     ap.add_argument("command", choices=("probe", "request", "download", "run", "watch", "stats", "merge", "evidence",
-                                        "transfer-login", "transfer-settle"))
+                                        "transfer-login", "transfer-settle", "sources"))
     ap.add_argument("--accounts", default="", help="계정ID 쉼표 구분(비우면 관리대장 전체)")
     ap.add_argument("--from", dest="start", type=date.fromisoformat, default=date(2026, 1, 1))
     ap.add_argument("--to", dest="end", type=date.fromisoformat, default=date.today())
@@ -1206,6 +1235,10 @@ def main() -> int:
         cmd_stats()
         LOG.heartbeat("완료", "명령 stats")
         return 0
+    if args.command == "sources":         # 받기 의심·자료 출처 대조만(로그인·윙 접속 없음 · --hidden = 공개 웹도 안 읽음)
+        source_checks(web=not args.hidden)
+        LOG.heartbeat("완료", "명령 sources")
+        return 0
     if args.command == "watch":
         return cmd_watch(args)
     if args.command == "merge":
@@ -1224,6 +1257,8 @@ def main() -> int:
            "evidence": cmd_evidence}[args.command]
     LOG.accounts = [name_of(a) for a in accts]
     rc = _run_both(accts, args) if run is cmd_run else _run_accounts(accts, run, args)
+    if run is cmd_run and not args.dry_run:
+        source_checks()
     LOG.summary(pending=_pending_jobs(), suspended=_suspended_pending())
     log(f"기록: {LOG.csv} · 오류 추적: {LOG.errors if LOG.errors.exists() else '없음'}")
     LOG.heartbeat("완료", f"명령 {args.command} · 종료코드 {rc}")

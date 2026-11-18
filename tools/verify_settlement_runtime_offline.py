@@ -1681,6 +1681,7 @@ def p41_ad_reports():
     assert AD.pick_report([{**rep, "id": "15000000", "status": "error"}, rep], "202607", 2)["id"] == "14900611"  # 실패 건 무시
     assert AD.pick_report([{**rep, "granularity": "campaign"}], "202607", 2) is None
     calls: list = []
+    daily: list = []                                  # getDailySettlement (startDate, endDate)
     store: dict = {"reports": [], "campaigns": {"202606": [], "202607": [{"id": "105108858", "name": "07-12 보냉백 3종"},
                                                                          {"id": "1", "name": "b"}]}}
 
@@ -1689,6 +1690,7 @@ def p41_ad_reports():
         q = body["query"]
         if "getDailySettlement" in q:                 # 실측(벅스 7월): 날짜×캠페인 청구가능 — 7/12 소진 30,150 → 일예산 초과 차감 30,000
             v = body["variables"]
+            daily.append((v["startDate"], v["endDate"]))
             assert v["settlementDomain"] == "SELLER", v
             items = [{"date": 20260712, "campaignId": "105108858", "campaignName": "07-12 보냉백 3종", "deliveredAdcost": 30150,
                       "deliveredAdcostAfterCap": 30000, "billableAmount": 30000}] if v["startDate"] == 20260701 else []
@@ -1736,18 +1738,22 @@ def p41_ad_reports():
         store["reports"] = [{**rep, "status": "inprogress"}]
         got.clear()
         calls.clear()
+        daily.clear()
         s2 = AD.collect(call, get_bytes, folder, "벅스-bux1004", D("2026-06-10"), D("2026-08-05"))
         assert s2["기다림"] == ["202607"] and got == [] and "requestReport" not in str(calls), (s2, calls)   # 6월 다시 안 물음
-        assert "DailySettlement" not in str(calls), calls                                          # 받은 정산내역 다시 안 받음
+        assert daily == [(20260801, 20260804)], daily          # 받은 정산내역 다시 안 받음 · 끝나지 않은 8월만 1일~어제(T-78 S2)
         store["reports"] = [rep]
         s3 = AD.collect(call, get_bytes, folder, "벅스-bux1004", D("2026-06-10"), D("2026-08-06"))
         assert s3["받음"] == ["202607"] and got == [AD.PA_EXCEL.format(id="14900611")], (s3, got)
         assert (folder / "벅스-bux1004_매출성장광고_202607.xlsx").exists()
         got.clear()
         calls.clear()
+        daily.clear()
         s4 = AD.collect(call, get_bytes, folder, "벅스-bux1004", D("2026-06-10"), D("2026-08-07"))
-        assert calls == [] and got == [] and not s4["받을 것"], (calls, got, s4)                     # 다 받았으면 광고센터 안 엶
-    ok("끝난 달+3일·광고비·밀크런 내역 엑셀 바로·캠페인 전부로 보고서 요청·진행 중=기다림·완료=받기·캠페인 없는 달 기록·다 받으면 호출 없음")
+        assert calls == ["DailySettlement"] and got == [] and not s4["받을 것"], (calls, got, s4)    # 끝난 달은 다 받음 →
+        assert daily == [(20260801, 20260806)] and s4["진행 달"] == ["202608"], (daily, s4)        # 진행 달 일별만(T-78 S2 · D-291 ⑥)
+        assert not (folder / "벅스-bux1004_광고정산_202608.json").exists()                          # 끝난 달 이름과 섞지 않음
+    ok("끝난 달+3일·광고비·밀크런 내역 엑셀 바로·캠페인 전부로 보고서 요청·진행 중=기다림·완료=받기·캠페인 없는 달 기록·다 받으면 진행 달 일별만")
 
 
 def p42_inbound():
@@ -2016,7 +2022,8 @@ def p45_ad_report_csv():
         saved = folder / "꿈꾸는아재-t_매출성장광고_202604.xlsx"
         assert saved.read_bytes()[:2] == b"PK" and (folder / "꿈꾸는아재-t_밀크런_202604.xlsx").read_bytes() == b"PK-milk"
         assert sorted(f.name for f in s["파일"]) == sorted(["꿈꾸는아재-t_밀크런_202604.xlsx", "꿈꾸는아재-t_광고정산_202604.json",
-                                                         saved.name]), s["파일"]      # D-168 받은 파일 = 이번에 쓴 3개
+                                                         saved.name, "꿈꾸는아재-t_광고정산진행_202605.json"]), s["파일"]
+        # D-168 받은 파일 = 이번에 쓴 3개 + 끝나지 않은 5월 일별(T-78 S2)
     ok("글자 보고서 → 엑셀(금액 숫자·따옴표·콤마) · 다른 모양 = 저장 안 하고 오류 · 밀크런·정산 원본은 엑셀만 · 받은 달 다시 안 받음")
 
 
