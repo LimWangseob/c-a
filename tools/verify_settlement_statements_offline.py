@@ -661,6 +661,40 @@ def test_d319_scheduled_negative_kept() -> None:
     print("test_d319_scheduled_negative_kept OK")
 
 
+def _wing_one_day(pay_day, day, fin, pending=0):
+    return {"정산일": pay_day, "기간 시작": day, "기간 끝": day, "지급비율": 100, "최종지급액": fin, "지급상태": "DONE", "차감 사유": [],
+            "targetAmount": 0, "paidAmount": 0, "pendingAmount": pending, "totalDeductionAmount": 0}
+
+
+def test_d308_additional_round() -> None:
+    """D-308 ①(T-105): 윙 추가지급 줄(정산대상·paid·pending 0 · 기간 = 정산일 하루) = 보류 해제(pending > 0)와 따로 분류 · 검산 =
+    같은 날 추가지급 메뉴 PAID finalRewardAmount(짝 없으면 E2 다름). 실측 roum0502 2026-10-22 16,897 · freewin7777 11-13 117,960."""
+    add = _wing_one_day("2026-10-22", "2026-10-22", 16_897)
+    rel = _wing_one_day("2026-10-20", "2026-08-16", 277_218, pending=277_218)
+    assert SL.additional(add) and not SL.release(add), "추가지급 줄 = 보류 해제 아님"
+    assert SL.release(rel) and not SL.additional(rel), "보류 해제 줄 = 추가지급 아님"
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        (base / "쿠팡지급내역").mkdir()
+        snaps = {"x1": {"윙": [add, rel], "로켓그로스": []}}
+        led = SL.Ledger(base, None, snaps, date(2026, 11, 15))
+        L = led.account("가-x1", {}, [], {}, {})
+        assert [x[1:3] for x in L["e2_bad"]] == [("2026-10-22", "2026-10-22")], L["e2_bad"]        # 추가지급 메뉴 짝 없음
+        (base / "검증자료").mkdir()
+        rep = {"reports": [{**row("PAID", 16_897), "payDate": "2026-10-22"}, {**row("REJECTED", 500), "payDate": "2026-10-22"}],
+               "totalPages": 1}
+        (base / "검증자료" / "가-x1.json").write_text(json.dumps({"additional": {"202610": rep}}), encoding="utf-8")
+        L = led.account("가-x1", {}, [], {}, {})
+        assert not L["e2_bad"], L["e2_bad"]
+        lab = {x[2]: x[6] for x in L["rows"]}
+        assert lab == {"2026-10-22": "지급 완료 · 추가지급", "2026-10-20": "지급 완료 · 보류 해제 지급"}, lab
+        assert round(L["buckets"]["최종 지급 완료"]) == 16_897 + 277_218 and not round(L["buckets"]["지급대상 지급 완료"]), L["buckets"]
+    a = _acct([add, rel])
+    assert a.bad == 0, a.bad                                    # 추가지급 줄 검산은 장부 E2(메뉴 짝)에서
+    assert round(a.paid_total) == 16_897 + 277_218 and round(a.D["보류됐다 풀린 돈"]) == -277_218, (a.paid_total, a.D)
+    print("test_d308_additional_round OK")
+
+
 def test_d305_watch_warning() -> None:
     """D-305: 감지 목록(윙 사유 채권추심·빠른정산 사용액·쿠팡 판매자 성장 대출 + 로켓그로스 MCA·체크카드 칸) 중 처리 판정표(파일)에 없는
     계정×항목 = '확인 필요' 불일치 사유 · 판정표에 있는 항목은 경고 없음."""
@@ -715,6 +749,7 @@ def main() -> int:
     test_d312_own_deduction()
     test_d304_wing_negative_round()
     test_d319_scheduled_negative_kept()
+    test_d308_additional_round()
     test_d305_watch_warning()
     test_cost_only_scope()
     test_managed_alloc()

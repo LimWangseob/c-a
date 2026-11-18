@@ -206,7 +206,8 @@ class AccountBase:
             final = num(r["최종지급액"])
             if r["채널"] == "윙" and st == STS[0]:
                 final = max(final, 0.0)     # 지급 끝난 윙 음수 회차 = 0 지급 · 그 음수는 3PM 되돌림(D-304 · 예정은 그대로 D-319)
-            self.bad += round(pay + rel - sum(parts.values())) != round(final)
+            if not (r["채널"] == "윙" and SL.additional(r)):      # 윙 추가지급 줄 검산 = 장부 E2(추가지급 메뉴 짝 · D-308 ①)
+                self.bad += round(pay + rel - sum(parts.values())) != round(final)
             self.D.update(parts)
             self.D[REL] -= rel
             self.rows_out.append((row[2], row[3], row[4], row[1], row[5], row[6].split(" ·")[0], pay + rel, sum(parts.values()), final))
