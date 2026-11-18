@@ -803,6 +803,25 @@ def _wing_files(name: str) -> list:
     return out
 
 
+def cmd_view(a, b, args, jobs: list) -> None:
+    """화면 보기 + 화면 응답 기록 첫 시험(T-122 · D-340 · D-296) — `--source SV-…` 하나 · 소유자 로그인 한 계정 1회 · 자동 실행에 안 넣음.
+    조회 전용 버튼만 · 페이지 안 스크립트 없음 · 칸 이름만 저장(값 없음) — settlement_screen_view."""
+    from coupang_analytics import settlement_screen_view as SV
+    name = name_of(a)
+    spec = SV.SPECS.get(args.source)
+    if spec is None:
+        LOG.record(name, "화면 응답", RL.FAIL, f"모르는 출처 {args.source!r} — {', '.join(SV.SPECS)}")
+        return
+    try:
+        rec = SV.capture(b.page, spec)
+    except (SV.NeedLive, SV.NotViewOnly) as exc:
+        LOG.record(name, "화면 응답", RL.WAIT, f"{args.source} 확인 필요 — {exc}")
+        return
+    p = SV.save(BASE, args.source, a.account_id, rec)
+    LOG.saved(name, p, "화면 응답 칸 목록")
+    LOG.record(name, "화면 응답", RL.OK, f"{args.source} 응답 {len(rec['응답'])}개 칸 목록 저장")
+
+
 def cmd_probe(a, b, args, jobs: list) -> None:
     """읽기만 확인 — 최근 30일 정산 일정·다운로드 목록 모양. 요청·받기는 하지 않음."""
     name = name_of(a)
@@ -1202,7 +1221,7 @@ def main() -> int:
     global LOG
     ap = argparse.ArgumentParser(description="쿠팡 정산 파일 배치 다운로드")
     ap.add_argument("command", choices=("probe", "request", "download", "run", "watch", "stats", "merge", "evidence",
-                                        "transfer-login", "transfer-settle", "sources"))
+                                        "transfer-login", "transfer-settle", "sources", "view"))
     ap.add_argument("--accounts", default="", help="계정ID 쉼표 구분(비우면 관리대장 전체)")
     ap.add_argument("--from", dest="start", type=date.fromisoformat, default=date(2026, 1, 1))
     ap.add_argument("--to", dest="end", type=date.fromisoformat, default=date.today())
@@ -1216,6 +1235,7 @@ def main() -> int:
     ap.add_argument("--originals", default="", help="받은 쿠팡 원본(구매자명 포함)을 그대로 복사해 둘 폴더(증빙용·D-062)")
     ap.add_argument("--since", default="", help="watch: 이 시각(ISO) 뒤에 끝난 ①판매수집만 기다림(앱 전체실행 버튼)")
     ap.add_argument("--out", default="", help="evidence: 증빙 상위 폴더(계정마다 증빙_{사업자}_쿠팡원본 — D-067)")
+    ap.add_argument("--source", default="", help="view: 화면 출처 ID(settlement_screen_view.SPECS · 첫 시험 = 한 계정 1회)")
     ap.add_argument("--redo", action="store_true", help="evidence: 끝난 계정도 다시 받기")
     ap.add_argument("--file", default="", help="transfer-login: 셀독전환자 파일(비우면 설정 transfer/file)")
     ap.add_argument("--retry", action="store_true", help="transfer-login: 성공·인증번호·같은 틀린 비번 제외하고 다시")
@@ -1249,7 +1269,7 @@ def main() -> int:
     if args.command == "merge":
         return cmd_merge(args)
     accts = load_accounts({x.strip() for x in args.accounts.split(",") if x.strip()})
-    if args.command == "probe":
+    if args.command in ("probe", "view"):
         accts = accts[:1]
     if args.command == "evidence":
         if not args.out:
@@ -1258,7 +1278,7 @@ def main() -> int:
         JOBS = EVIDENCE_JOBS
         JOBS.parent.mkdir(parents=True, exist_ok=True)
         accts = _evidence_targets(accts, args)
-    run = {"probe": cmd_probe, "request": cmd_request, "download": cmd_download, "run": cmd_run,
+    run = {"probe": cmd_probe, "view": cmd_view, "request": cmd_request, "download": cmd_download, "run": cmd_run,
            "evidence": cmd_evidence}[args.command]
     LOG.accounts = [name_of(a) for a in accts]
     rc = _run_both(accts, args) if run is cmd_run else _run_accounts(accts, run, args)
