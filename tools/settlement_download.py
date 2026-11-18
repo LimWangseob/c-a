@@ -39,6 +39,10 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 
+# numpy(OpenBLAS — openpyxl 이 부름)가 CPU 스레드 수만큼 버퍼를 잡아 프로세스마다 커밋 약 700MB(22스레드 실측 9→703MB ·
+# 1스레드 9→28MB · T-113 D-346) — numpy 를 부를 수 있는 어떤 import 보다 먼저. 우리 코드는 numpy 계산을 안 씀.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 try:
@@ -48,6 +52,7 @@ except AttributeError:
 
 from coupang_analytics import apppaths  # noqa: E402
 from coupang_analytics import daily_snapshot  # noqa: E402
+from coupang_analytics import memory_log as ML  # noqa: E402
 from coupang_analytics import settlement_accounts as SA  # noqa: E402
 from coupang_analytics import settlement_files as SF  # noqa: E402
 from coupang_analytics import settlement_forecast as FC  # noqa: E402
@@ -71,6 +76,13 @@ def log(m: str) -> None:
         print(m, flush=True)
     else:
         LOG.line(m)
+
+
+MEMLOG = ML.Tracker("정산 프로세스")   # D-346 ④ 단계 경계 [메모리] 줄 · 회차 종합 한 줄(watch 1프로세스 = 1회차)
+
+
+def _mem(stage: str, note: str = "") -> None:
+    log(MEMLOG.line(stage, note=note))
 
 
 class SessionSkip(Exception):
@@ -566,14 +578,17 @@ def cmd_run(a, b, args, jobs: list) -> None:
     if not args.dry_run:
         time.sleep(90)
         cmd_download(a, b, args, jobs)
-        collect_verify(a, b, args)
-        collect_ads(a, b, args)
+        with MEMLOG.around(f"검증 수집 {name_of(a)}", log):        # 검증 json 최대 17MB 통째(D-346 큰 할당 후보 — 줄만)
+            collect_verify(a, b, args)
+        with MEMLOG.around(f"광고(보고서 TSV→xlsx) {name_of(a)}", log):   # 광고 보고서 변환(큰 할당 후보 — 줄만)
+            collect_ads(a, b, args)
 
 
 def cmd_backfill(a, b, args, jobs: list) -> None:
     """소급 단계(D-170) — 판매분석 1/1~(회차 기준 상한 150일→60일·D-167) + 월자료(D-171). 한 일이 있으면 '소급' 줄을 남겨
     다음 바퀴 판단(_sweep_work_count)에 셈 — 다 받았거나 이번 회차 상한을 다 쓰면 줄 없음 → '완료'로 끝남."""
-    days = collect_sales(a, b, args)
+    with MEMLOG.around(f"판매분석·쿠폰 {name_of(a)}", log):       # 판매분석 일별 통째 읽기(큰 할당 후보 — 줄만)
+        days = collect_sales(a, b, args)
     docs = collect_docs(a, b, args, jobs)
     asked = request_docs(a, b, args, jobs)
     if days or docs:
@@ -962,12 +977,12 @@ def _stats_in_child() -> None:
                         timeout=STATS_CHILD_TIMEOUT_SEC, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).returncode
     data = json.loads(result.read_text(encoding="utf-8")) if result.exists() else {}
     result.unlink(missing_ok=True)
+    MEMLOG.merge(data.get("메모리") or {}, "집계 프로세스")     # 자식의 [메모리] 최고·⚠ 를 회차 종합에(실패여도)
     if rc != 0 or not data.get("out"):
         raise RuntimeError(f"정산 집계(별도 프로세스) 실패 — 종료코드 {rc} · {data.get('오류') or '결과 파일 없음'} "
                            f"(추적 = {LOG.errors.name})")
     LOG.saved(RL.ALL, data["out"], "정산 집계")
-    log(f"  [메모리] 정산 집계 = 별도 프로세스(최고 커밋 {data.get('최고커밋MB')}MB · 끝나면 OS 가 회수) · "
-        f"정산 프로세스 커밋 {_commit_text()}")
+    _mem("집계 뒤", note=f"정산 집계 = 별도 프로세스(최고 커밋 {data.get('최고커밋MB')}MB · 끝나면 OS 가 회수)")
 
 
 def _commit_text() -> str:
@@ -989,16 +1004,24 @@ def _cmd_stats_main(args) -> int:
         return 0
     from coupang_analytics import settlement_memory as MEM
     res = Path(args.result)
+    MEMLOG.role = "집계 프로세스"
+    _mem("집계 시작")
     try:
         out = cmd_stats()
     except Exception as exc:                          # MemoryError 도 여기(Exception 하위) — 기록하고 부모가 '실패'로 받음
         _release_reserve()
         LOG.error(RL.ALL, "정산 집계", exc)
-        res.write_text(json.dumps({"오류": f"{exc.__class__.__name__}: {exc}"}, ensure_ascii=False), encoding="utf-8")
+        _mem("집계 중단")
+        res.write_text(json.dumps({"오류": f"{exc.__class__.__name__}: {exc}", "메모리": MEMLOG.state()}, ensure_ascii=False),
+                       encoding="utf-8")
         return 1
-    res.write_text(json.dumps({"out": str(Path(out).resolve()), "최고커밋MB": MEM.commit_mb()[1]}, ensure_ascii=False),
-                   encoding="utf-8")
+    _mem("집계 끝")
+    res.write_text(json.dumps({"out": str(Path(out).resolve()), "최고커밋MB": MEM.commit_mb()[1], "메모리": MEMLOG.state()},
+                              ensure_ascii=False), encoding="utf-8")
     return 0
+
+
+_PHASE = {"cmd_run": "정기", "cmd_backfill": "소급"}   # [메모리] 계정마다 줄의 단계 이름
 
 
 def _run_accounts(accts, run, args) -> int:
@@ -1029,6 +1052,7 @@ def _run_accounts(accts, run, args) -> int:
             else:                                          # 그 계정만 중단(무음 아님·전체 추적은 오류 로그)
                 bad += 1
                 LOG.error(name, "계정", exc)
+        _mem(f"{_PHASE.get(run.__name__, run.__name__)} {name} 끝")
         if bad >= 2:
             LOG.record("(전체)", "중단", RL.BLOCK, "연속 2계정 실패/차단 — 전체 중단(화면 변경·차단 의심, probe 로 확인)")
             return 1
@@ -1090,6 +1114,7 @@ def _one_pass(args) -> tuple[bool, int]:
     args.end = date.today()
     log(f"실행 {LOG.run_id} · 자동 · 정산 수집 · 기간 {args.start}~{args.end}")
     LOG.heartbeat("작동중", f"정산 수집 · 기간 {args.start}~{args.end}")
+    _mem("바퀴 시작")
     try:
         accts = load_accounts(set())
     except SystemExit as exc:                # 계정 구성 실패(원장 오래됨·링크 오류 등) = 이 회차 정산 중단 — 상태 카드에 이유
@@ -1101,6 +1126,7 @@ def _one_pass(args) -> tuple[bool, int]:
     try:
         rc = _run_both(accts, args)
         work = _sweep_work_count(LOG)
+        _mem("집계 전")
         _stats_in_child()                    # 바퀴 끝 집계 = 별도 짧은 프로세스(T-113 (나) — 1.37GB·남는 0.9GB 를 이 프로세스에 안 남김)
     except Exception as exc:                 # 그 바퀴만 실패 기록(다음 판단은 진전 없음으로)
         LOG.error("(전체)", "자동실행", exc)
@@ -1150,6 +1176,7 @@ def _cycle_close(status: str, reason: str, *, stopped: bool = False) -> None:
         return
     lines = RL.result_block(CYCLE, pending=_pending_jobs(), suspended=_suspended_pending(), stopped=stopped, note=reason,
                             title=f"실행 결과 종합 — 이번 회차 {CYCLE.passes}바퀴")
+    lines[-1:-1] = [MEMLOG.summary()]       # D-346 ④ 그날 최고 메모리(시각·단계)·⚠ 횟수 — '==>' 한 줄 요약 바로 위
     for ln in lines:
         LOG.line(ln)
     LOG.heartbeat(status, reason, extra=(f"결과 종합: {lines[-1].removeprefix('==> ')}",))

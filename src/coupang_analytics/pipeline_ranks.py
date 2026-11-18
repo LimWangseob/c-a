@@ -16,6 +16,7 @@ from pathlib import Path
 
 from . import config
 from . import human_mouse
+from . import memory_log as ML
 from . import proxy_blocklist
 from . import proxy_pool
 from . import rank_schedule
@@ -648,6 +649,7 @@ def _semi_next_pass(st: _SemiState, wb, date_label, on_pass, log) -> bool:
     st.pass_mark, st.pass_trouble = st.searched, False
     st.deferred.clear()
     log(f"== [순위] {st.pass_no}바퀴째 — 남은 빈 칸 {len(left)}개 다시(막혔던 키워드) ==")
+    log(ML.APP.line(f"③ {st.pass_no}바퀴째 시작"))   # D-346 ④ ③ 바퀴마다 [메모리] 줄(1바퀴째 = 단계 시작 줄)
     return True
 
 

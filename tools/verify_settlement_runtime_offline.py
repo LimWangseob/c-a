@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 
@@ -2355,7 +2356,7 @@ def p51_regular_then_backfill():
     # ③ 정기 단계엔 판매분석 소급이 없고, 소급 단계가 받는다 · 소급에서 한 일은 '소급' 줄로 남아 다음 바퀴 판단에 셈
     calls: list = []
     recs: list = []
-    fake_log = SimpleNamespace(record=lambda *a, **k: recs.append(a), rows=[])
+    fake_log = SimpleNamespace(record=lambda *a, **k: recs.append(a), rows=[], line=lambda m: None)   # line = [메모리] 줄(D-346)
     patches = [(TD, "cmd_request", lambda *a: calls.append("요청")), (TD, "cmd_download", lambda *a: calls.append("받기")),
                (TD, "collect_verify", lambda *a: calls.append("검증")), (TD, "collect_ads", lambda *a: calls.append("광고")),
                (TD, "collect_sales", lambda *a: (calls.append("판매"), 37)[1]),
@@ -2703,7 +2704,8 @@ def p55_rg_vendor_fallback():
     def run(tmp: Path, jobs: list) -> tuple:
         """소급 단계(cmd_backfill) 그대로 → 월자료 받기(DOC.collect)에 넘긴 업체코드 · 부가세 상세 요청(DR.plan)의 RG 여부."""
         seen: dict = {}
-        log = SimpleNamespace(record=lambda *x, **k: None, saved=lambda *x, **k: None, remaining=lambda *x, **k: None)
+        log = SimpleNamespace(record=lambda *x, **k: None, saved=lambda *x, **k: None, remaining=lambda *x, **k: None,
+                              line=lambda m: None)   # line = [메모리] 줄(D-346)
         pat = [(TD, "BASE", tmp / "정산"), (TD, "JOBS", tmp / "정산" / "_요청기록.json"), (TD, "INVENTORY", tmp / "재고현황_일별"),
                (TD, "LOG", log), (TD, "name_of", lambda _a: name), (TD, "goto", lambda *x: None),
                (TD, "collect_sales", lambda *x: 0),
@@ -3131,7 +3133,10 @@ def p62_stats_separate_process():
             outs = [f for a, f, n in log.files if n == "정산 집계"]
             assert len(outs) == 1 and Path(outs[0]).exists() and Path(outs[0]).parent == (t / "output" / "정산").resolve(), log.files
             text = log.text.read_text(encoding="utf-8")
-            assert "명령 stats" in text and "집계 정산 파일 0개" in text and "[메모리] 정산 집계 = 별도 프로세스" in text, text
+            assert "명령 stats" in text and "집계 정산 파일 0개" in text and "집계 뒤 · 정산 프로세스 커밋" in text \
+                and "정산 집계 = 별도 프로세스(최고 커밋" in text and text.count("[메모리]") >= 3, text   # ⚠ 여부 = 이 PC 상태
+            assert "집계 시작 · 집계 프로세스 커밋" in text and "집계 끝 · 집계 프로세스 커밋" in text, \
+                "자식도 같은 실행 로그에 [메모리] 줄(D-346 ④)"
             assert "부모 상태" in log.status.read_text(encoding="utf-8"), "자식이 _현재상태.txt 를 덮지 않음"
             assert not list(log.dir.glob("_집계결과_*.json")), "결과 JSON 은 읽고 지움"
             assert not list(log.dir.glob("처리기록_*.csv")) or log.csv.exists(), "새 실행ID 기록 파일 안 만듦"
@@ -3194,6 +3199,130 @@ def p63_own_chrome_sweep():
     ok("자손 3개만 taskkill /T(맨 위 1번) · 앱·소유자·부모 없는 앱 몫 그대로 · 전체 수·MB·남은 수·커밋 기록 · 조회 실패 사유 기록")
 
 
+def _fake_mem(samples: list):
+    """가짜 측정 Tracker — samples 를 차례로 돌려줌(마지막 값 반복) · 시각 고정 01:02:03."""
+    from datetime import datetime
+    from coupang_analytics import memory_log as ML
+    seq = list(samples)
+    return ML.Tracker("정산 프로세스", measure_fn=lambda: seq.pop(0) if len(seq) > 1 else seq[0],
+                      clock=lambda: datetime(2026, 11, 19, 1, 2, 3))
+
+
+def p64_memory_log_line():
+    print("[P64] D-346 ④ [메모리] 줄 — 프로세스 커밋·PC 사용 가능/전체·Chrome 수·MB · 기준선(PC < 15% · 프로세스 > 1GB) ⚠메모리 · "
+          "측정 못 함도 그 칸에 사유 · 종합 한 줄(최고 시각·단계·⚠ 횟수) · 별도 프로세스 합침")
+    from coupang_analytics import memory_log as ML
+    S = ML.Sample
+    t = _fake_mem([S((500, 600), (8000, 16000), (10, 900, 0))])
+    ln = t.line("바퀴 시작")
+    assert ln == ("  [메모리] 바퀴 시작 · 정산 프로세스 커밋 500MB(최고 600MB) · PC 사용 가능 8000/16000MB(50%) · "
+                  "Chrome 10개 900MB"), ln
+    t = _fake_mem([S((300, 300), "", ""), S((1100, 1300), (2000, 16000), (207, 9000, 3)),
+                   S("측정 못 함(OSError: 가짜)", (9000, 16000), "측정 못 함(OSError: 스냅샷)")])
+    lines: list = []
+    with t.around("검증 수집 A", lines.append):
+        pass
+    ln = lines[0]
+    assert ln.startswith("  [메모리] ⚠메모리(PC 사용 가능 12% < 15% · 정산 프로세스 1100MB > 1024MB) 검증 수집 A 뒤 · ") \
+        and "커밋 1100MB(최고 1300MB) · 전 300MB → +800MB" in ln and "Chrome 207개 9000MB(메모리 못 읽은 3개)" in ln, ln
+    ln = t.line("계정 끝")
+    assert "정산 프로세스 커밋 측정 못 함(OSError: 가짜)" in ln and "Chrome 측정 못 함(OSError: 스냅샷)" in ln \
+        and "⚠메모리" not in ln, ln
+    for x in (lines[0], ln):
+        assert "❌" not in x and "실패" not in x, f"오류 판정 단어 없음(앱 종합 오류 수에 안 섞임) {x}"
+    assert t.summary() == ("[메모리] 최고 커밋 1300MB(01:02:03 검증 수집 A 뒤) · PC 사용 가능 최저 12%(01:02:03 검증 수집 A 뒤) · "
+                           "⚠메모리 1회(기준 PC 사용 가능 < 15% 또는 프로세스 > 1024MB) · 측정 2회(못 잰 칸 2개)"), t.summary()
+    child = _fake_mem([S((1229, 1345), (1500, 16000), (5, 100, 0))])
+    child.line("집계 끝")
+    t.merge(child.state(), "집계 프로세스")
+    s = t.summary()
+    assert "최고 커밋 1345MB(01:02:03 집계 프로세스 집계 끝)" in s and "최저 9%(01:02:03 집계 프로세스 집계 끝)" in s \
+        and "⚠메모리 2회" in s and "측정 3회" in s, s
+    assert ML.Tracker("x", measure_fn=lambda: None).summary() == "[메모리] 이번 실행 측정 0회 — 기록 없음(확인 필요)"
+
+    def boom():
+        raise OSError("kernel32 없음")
+    assert ML._try(boom).startswith("측정 못 함(OSError"), "측정 실패는 사유 문자열(실행 계속 · 폴백 값 없음)"
+    real = ML.measure()                                    # 실제 PC(Windows) 한 번 — 새 프로세스 없이 숫자 셋
+    assert isinstance(real.proc, tuple) and isinstance(real.pc, tuple) and isinstance(real.chrome, tuple), real
+    ok("줄 형식·⚠ 두 기준·증가분·측정 못 함 사유·종합(최고·최저 시각·단계·⚠ 횟수)·자식 합침 · 실제 측정 숫자 셋")
+
+
+def p65_settlement_memory_lines():
+    print("[P65] D-346 ④ 정산 단계 경계 [메모리] — 바퀴 시작·집계 전·집계 뒤(자식 최고 합침)·계정마다·검증·광고·판매분석 전후 · "
+          "회차 [실행 결과 종합]에 메모리 한 줄")
+    from types import SimpleNamespace
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    from coupang_analytics import memory_log as ML
+    S = ML.Sample
+    rows, beats = [], []
+    mem = _fake_mem([S((40, 50), (8000, 16000), (3, 300, 0))])
+    pat = [(TD.RL, "RunLog", _t113_fake_log(rows, beats)), (TD, "load_accounts", lambda only: ["a"]), (TD, "MEMLOG", mem),
+           (TD, "_stats_in_child", lambda: None), (TD, "name_of", lambda a: a), (TD, "_pending_jobs", lambda: 0),
+           (TD, "_suspended_pending", lambda: {}), (TD, "CYCLE", TD.RL.Totals()), (TD, "_run_both", lambda accts, a: 0),
+           (TD, "_backlog_left", lambda accts, a: None)]
+    _patched(pat, lambda: TD._one_pass(SimpleNamespace(start=D("2026-01-01"), until="", dry_run=False)))
+    text = [m for s, m in beats if s == "줄"]
+    assert any("[메모리] 바퀴 시작 · 정산 프로세스 커밋 40MB" in m for m in text) and any("[메모리] 집계 전 ·" in m for m in text), text
+    calls, beats[:] = [], []
+    log = _t113_fake_log(rows, beats)()
+    pats = [(TD, "cmd_request", lambda *a: None), (TD, "cmd_download", lambda *a: None), (TD.time, "sleep", lambda s: None),
+            (TD, "collect_verify", lambda *a: calls.append("검증")), (TD, "collect_ads", lambda *a: calls.append("광고")),
+            (TD, "collect_sales", lambda *a: 0), (TD, "collect_docs", lambda *a: 0), (TD, "request_docs", lambda *a: 0),
+            (TD, "name_of", lambda a: "A"), (TD, "LOG", log), (TD, "MEMLOG", mem)]
+    args = SimpleNamespace(dry_run=False, until="", start=D("2026-01-01"), command="watch", hidden=True)
+    _patched(pats, lambda: (TD.cmd_run(None, None, args, []), TD.cmd_backfill(None, None, args, [])))
+    text = [m for s, m in beats if s == "줄"]
+    for stage in ("검증 수집 A 뒤", "광고(보고서 TSV→xlsx) A 뒤", "판매분석·쿠폰 A 뒤"):
+        assert any(f"[메모리] {stage} · 정산 프로세스 커밋 40MB(최고 50MB) · 전 " in m for m in text), (stage, text)
+    beats[:] = []
+
+    @contextmanager
+    def fake_session(*a, **k):
+        yield None
+
+    def cmd_backfill(a, b, args, jobs):          # 가짜 단계 — 이름 cmd_backfill → 줄 단계 '소급'
+        pass
+    _patched([(TD, "LOG", log), (TD, "MEMLOG", mem), (TD, "session", fake_session), (TD, "name_of", lambda a: a),
+              (TD, "past_until", lambda a: False), (TD.SJ, "load_jobs", lambda p: [])],
+             lambda: TD._run_accounts(["가", "나"], cmd_backfill, args))
+    text = [m for s, m in beats if s == "줄"]
+    assert any("[메모리] 소급 가 끝 ·" in m for m in text) and any("[메모리] 소급 나 끝 ·" in m for m in text), text
+    beats[:] = []
+    cyc = TD.RL.Totals()
+    cyc.passes = 1
+    _patched([(TD, "LOG", log), (TD, "MEMLOG", mem), (TD, "CYCLE", cyc), (TD, "_pending_jobs", lambda: 0),
+              (TD, "_suspended_pending", lambda: {}),
+              (TD.RL, "result_block", lambda *a, **k: ["===== [실행 결과 종합] =====", "판정: 완료", "==> 완료"])],
+             lambda: TD._cycle_close("완료", "끝"))
+    text = [m for s, m in beats if s == "줄"]
+    assert text[-2].startswith("[메모리] 최고 커밋 50MB(01:02:03 바퀴 시작)") and text[-1] == "==> 완료", text
+    ok("바퀴 시작·집계 전 · 검증·광고·판매분석 뒤(전 값·증가분) · 계정마다 · 회차 종합 끝 '==>' 바로 위에 메모리 한 줄")
+
+
+def p66_openblas_one_thread():
+    print("[P66] T-113 D-346 OpenBLAS 1스레드 — 정산 프로그램을 읽은 자식 프로세스가 openpyxl·numpy 를 불러도 커밋 < 100MB "
+          "(옛 = 22스레드 노트북 9→703MB) · 앱 진입점도 numpy 를 부를 import 보다 먼저")
+    import os
+    import subprocess
+    code = ("import importlib.util, sys\n"
+            f"spec = importlib.util.spec_from_file_location('sd', {str(ROOT / 'tools' / 'settlement_download.py')!r})\n"
+            "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
+            "import openpyxl, numpy, os\n"
+            "from coupang_analytics import settlement_memory as M\n"
+            "print(os.environ.get('OPENBLAS_NUM_THREADS'), M.commit_mb()[0])\n")
+    env = {k: v for k, v in os.environ.items() if k != "OPENBLAS_NUM_THREADS"}
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, timeout=120)
+    assert r.returncode == 0, r.stderr[-500:]
+    val, mb = r.stdout.split()[-2:]
+    assert val == "1" and int(mb) < 100, f"OPENBLAS_NUM_THREADS={val} · 커밋 {mb}MB"
+    src = (ROOT / "ui" / "app_qt.py").read_text(encoding="utf-8")
+    at = src.index('os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")')
+    assert at < src.index("from coupang_analytics"), "앱: numpy 를 부를 수 있는 우리 모듈 import 보다 먼저"
+    ok(f"정산 프로그램 자식 = OPENBLAS_NUM_THREADS 1 · openpyxl+numpy 뒤 커밋 {mb}MB(< 100MB) · 앱 진입점 순서 맞음")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -3249,6 +3378,9 @@ def main():
     p61_self_exit_when_taskkill_fails()
     p62_stats_separate_process()
     p63_own_chrome_sweep()
+    p64_memory_log_line()
+    p65_settlement_memory_lines()
+    p66_openblas_one_thread()
     print("정산 런타임 오프라인 검증 통과")
 
 

@@ -18,6 +18,7 @@ from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")   # T-113 D-346: openpyxl→numpy(OpenBLAS) 스레드 버퍼 약 700MB 커밋 방지 — numpy 를 부를 import 보다 먼저
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # ui/ 형제 모듈(registry_ui 등)
 
