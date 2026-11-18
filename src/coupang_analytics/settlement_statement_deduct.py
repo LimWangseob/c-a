@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections import Counter
 
 from coupang_analytics import settlement_additional_pay as AP
+from coupang_analytics import settlement_ledger as SL
 from coupang_analytics import settlement_managed_alloc as MA
 from coupang_analytics.settlement_statement_account import (
     AD, COMP, LOGI, MILK, OWN, REL, STS, SVC, AccountBase, ad_files, milk_rows, month_add, num, ratio)
@@ -57,6 +58,10 @@ class Account(AccountBase):
     def line_ratio(self, ch: str, ym: str) -> float:
         return ratio(self.mset, ch, ym, self.S)
 
+    def win(self, ym: str = "") -> str:
+        """공제 관리 몫 자료 창 시작 = max(그 달(기본 관리 시작 달), 2026-01) — 2025 판매 줄은 공제까지 빠짐(D-329 · D-342) · 관리 시작 표시(D-185)는 self.start 그대로."""
+        return max(ym or self.start, SL.SALE_FROM[:7])
+
     def put(self, k: str, since: str, actual: float, covered: float, how: str, kind: str,
             fs_since: str = "", fs_actual: float = 0.0, fs_covered: float = 0.0) -> None:
         d = self.due(k, since)
@@ -78,10 +83,10 @@ class Account(AccountBase):
     # ── 물류비·재고 보상(옛 446~449) ──
     def _logi_comp(self) -> None:
         keys = ("logi", "comp", "m_logi", "m_comp")
-        c_ = {k: sum(c[k] for ym, c in self.by_m.items() if ym >= self.start) for k in keys}
+        c_ = {k: sum(c[k] for ym, c in self.by_m.items() if ym >= self.win()) for k in keys}
         f_ = {k: sum(c[k] for ym, c in self.by_m.items() if ym >= self.fs) for k in keys}
-        self.put(LOGI, self.start, c_["m_logi"], c_["logi"], "상품별 물류비 리포트의 관리 상품 금액", "쿠팡 자료", self.fs, f_["m_logi"], f_["logi"])
-        self.put(COMP, self.start, -c_["m_comp"], -c_["comp"], "상품별 재고 보상의 관리 상품 금액", "쿠팡 자료", self.fs, -f_["m_comp"], -f_["comp"])
+        self.put(LOGI, self.win(), c_["m_logi"], c_["logi"], "상품별 물류비 리포트의 관리 상품 금액", "쿠팡 자료", self.fs, f_["m_logi"], f_["logi"])
+        self.put(COMP, self.win(), -c_["m_comp"], -c_["comp"], "상품별 재고 보상의 관리 상품 금액", "쿠팡 자료", self.fs, -f_["m_comp"], -f_["comp"])
 
     # ── 판매자서비스이용료(옛 450~470 · D-161) ──
     def svc_month(self, ym: str) -> tuple:
@@ -114,20 +119,20 @@ class Account(AccountBase):
     # ── 광고비·밀크런(옛 471~484) ──
     def _ads(self) -> None:
         pa, bill, have = ad_files(self.ctx.base, self.acct)
-        ad = MA.ad_share(pa, _ad_since(bill, self.start), self.is_mv, have)
+        ad = MA.ad_share(pa, _ad_since(bill, self.win()), self.is_mv, have)
         a_m, a_t = (ad[0], ad[1]) if ad else (0.0, 0.0)
-        adf = MA.ad_share(pa, _ad_since(bill, self.fs), self.is_mv, have) if self.fs > self.start else ad
-        self.put(AD, self.start, a_m * 1.1, a_t * 1.1,
+        adf = MA.ad_share(pa, _ad_since(bill, self.fs), self.is_mv, have) if self.fs > self.win() else ad
+        self.put(AD, self.win(), a_m * 1.1, a_t * 1.1,
                  "날짜×캠페인 청구가능 광고비 × 그날 광고 보고서 옵션별 비율 + 부가세" + (f" · {ad[2]}" if ad and ad[2] else ""), "쿠팡 자료 비율",
                  self.fs, (adf[0] * 1.1) if adf else 0.0, (adf[1] * 1.1) if adf else 0.0)
 
     def _milk(self) -> None:
         base, inbound = self.ctx.base, self.v.get("inbound") or []
-        since_mk = month_add(self.start, -1)                   # 밀크런 = 입고가 판매보다 먼저 — 파일·공제 둘 다 관리 시작 전달부터(D-154)
+        since_mk = self.win(month_add(self.start, -1))         # 밀크런 = 입고가 판매보다 먼저 — 파일·공제 둘 다 관리 시작 전달부터(D-154 · 2025 달이면 2026-01부터 D-342)
         mk = MA.milk_share(milk_rows(base, self.acct, since_mk.replace("-", "")), inbound, self.is_mv)
         k_m, k_t = (mk[0], mk[1]) if mk else (0.0, 0.0)
-        fs_mk = month_add(self.fs, -1)                         # 밀크런 = 첫 판매 전달부터(D-154 와 같은 한 달 앞)
-        mkf = MA.milk_share(milk_rows(base, self.acct, fs_mk.replace("-", "")), inbound, self.is_mv) if self.fs > self.start else mk
+        fs_mk = self.win(month_add(self.fs, -1))               # 밀크런 = 첫 판매 전달부터(D-154 와 같은 한 달 앞 · D-342)
+        mkf = MA.milk_share(milk_rows(base, self.acct, fs_mk.replace("-", "")), inbound, self.is_mv) if fs_mk > since_mk else mk
         self.put(MILK, since_mk, k_m, k_t, "밀크런마다 입고 건 상품 적치 수량 비율" + (f" · {mk[2]}" if mk and mk[2] else ""), "쿠팡 자료 비율",
                  fs_mk, mkf[0] if mkf else 0.0, mkf[1] if mkf else 0.0)
 
@@ -138,7 +143,7 @@ class Account(AccountBase):
             self.rates[k] = ("", 0.0)
             share[k] = (0.0, "위탁자 개인 대출 상환·체크카드 대금 — 쿠팡이 계정 정산에서 뺀 돈 · 관리 상품 몫 0(D-312)", OWN)
         for k in sorted(set(D) - set(share) - {REL}):
-            self.put(k, self.start, 0.0, 0.0, "쿠팡이 상품 구분 없이 준 항목", "쿠팡 자료")
+            self.put(k, self.win(), 0.0, 0.0, "쿠팡이 상품 구분 없이 준 항목", "쿠팡 자료")
         rel_m = {st: -sum(x[4] * self.line_ratio(x[1], x[2]) for x in self.line_info if x[2] >= self.start and x[0] == st)
                  for st in STS}   # 공제 부호 = 음수(받은 돈)
         if D[REL]:

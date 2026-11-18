@@ -784,6 +784,48 @@ def test_status_split_pending_rest() -> None:
     print("test_status_split_pending_rest OK")
 
 
+def test_d342_deduction_window_2026() -> None:
+    """D-342: 공제 관리 몫(광고·밀크런 등)을 나눌 자료 창 시작 = max(관리 시작 달, 2026-01) · 밀크런 '시작 전달부터'(D-154)는 그 전달이
+    2025 면 적용 안 함(안 (나)) · 관리 시작 표시(D-185)는 그대로. 실측 ljung0622(관리 시작 2025-10 · 2025 판매 줄 통째 빠짐 D-329):
+    2025-10~12 관리 광고·밀크런이 '판매 0인 달'(D-186) 금액으로 2026 줄 공제 위에 통째 더해지면 안 됨 · 관리 밀크런 = 2026-01 이후 밀크런의 관리 몫."""
+    from collections import Counter
+    from types import SimpleNamespace
+
+    from coupang_analytics import settlement_statement_deduct as DED
+    from coupang_analytics.settlement_statement_account import AD, LOGI, MILK
+    a = DED.Account.__new__(DED.Account)
+    a.ctx, a.acct = SimpleNamespace(base=Path(tempfile.gettempdir())), "가-x1"
+    a.vids, a.vid_name, a.mnames, a.marks, a.opt2pid = {"111"}, {}, set(), {}, {}
+    a.start, a.fs, a.active, a.S = "2025-10", "2026-01", ["2026-01"], 0.5
+    a.mset = {("로켓그로스", "2026-01"): (500.0, 1000.0)}
+    parts = Counter({AD: 2_200.0, MILK: 600.0, LOGI: 1_000.0})                 # 2026 판매 줄 공제(2025 줄 = D-329 로 이미 빠짐)
+    a.line_info = [("지급 완료", "로켓그로스", "2026-01", 10_000.0, 0.0, parts, ("x", "로켓그로스", "2026-02-10", "2026-01-01"))]
+    a.deduct_lines = [(x[1], x[2], x[5]) for x in a.line_info]
+    a.D, a.share, a.rates = Counter(parts), {}, {}
+    a.by_m = {"2026-01": Counter({"logi": 1_000.0, "m_logi": 400.0})}        # 상품별 물류비 = 2026 만(D-328)
+    a.v = {"inbound": [{"milkrunSeq": s, "skus": [{"vendorItemId": 111, "stowedQty": q1}, {"vendorItemId": 222, "stowedQty": q2}]}
+                       for s, q1, q2 in (("M11", 1, 0), ("M12", 1, 0), ("M01", 1, 1))]}
+    days = {"20251015": (1_000.0, 1.0), "20251115": (1_000.0, 1.0), "20251215": (1_000.0, 1.0), "20260115": (2_000.0, 0.5)}
+    pa = [(d, 1, 111, c * r) for d, (c, r) in days.items()] + [(d, 1, 222, c * (1 - r)) for d, (c, r) in days.items()]
+    bill = {(int(d), "1"): c for d, (c, _r) in days.items()}
+    milk = {"202511": [("M11", 400.0)], "202512": [("M12", 500.0)], "202601": [("M01", 600.0)]}
+    saved = DED.ad_files, DED.milk_rows
+    DED.ad_files = lambda base, acct: (pa, bill, {d[:6] for d in days})
+    DED.milk_rows = lambda base, acct, since="": [x for m, xs in sorted(milk.items()) if m >= since for x in xs]
+    try:
+        a._logi_comp()
+        a._ads()
+        a._milk()
+    finally:
+        DED.ad_files, DED.milk_rows = saved
+    got = {k: round(a.share[k][0] * a.D[k]) for k in (AD, MILK, LOGI)}
+    # 광고 = 2026-01 청구 2,000 × 관리 0.5 × 1.1 (2025-10~12 관리 3,300 안 더함) · 밀크런 = M01 600 × 0.5(2025-11·12 밀크런 = 2025 줄에서 공제 · 안 (나))
+    assert got == {AD: 1_100, MILK: 300, LOGI: 400}, got
+    assert a.rates[AD][0] == a.rates[MILK][0] == "2026-01", a.rates                 # 입금 나누기도 2026-01 판매 줄부터
+    assert "관리 시작 2025-10" in a.share[AD][1], a.share[AD]                        # D-185 표시 그대로
+    print("test_d342_deduction_window_2026 OK")
+
+
 def test_d279_svc_estimate_row_and_d304_note() -> None:
     """D-279 ②: 쿠팡 예정 줄에 아직 안 붙은 이용료(규칙 잔액 · 우리 계산값) = 따로 '경고값' 줄 · 쿠팡 줄 몫 줄엔 경고 없음 · 합계 그대로.
     D-304: 3PM_매출채권 줄 설명 = 원문 값 + '이월'."""
@@ -820,6 +862,7 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     except AttributeError:
         pass
+    test_d342_deduction_window_2026()
     test_d279_svc_estimate_row_and_d304_note()
     test_d312_fast_used()
     test_d312_own_deduction()
