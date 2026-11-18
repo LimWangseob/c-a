@@ -512,6 +512,7 @@ def _keep_cost(raw: Path, j, name: str, fname: str) -> None:
     SF.assert_no_pii(sheets)
     totals = SF.rg_cost_totals(sheets, date.fromisoformat(j.period_end))
     COSTS.mkdir(parents=True, exist_ok=True)
+    daily_snapshot.keep_before_overwrite(COSTS / fname)   # 자동 다시 받기(D-339)로 같은 이름을 덮어쓸 때 옛 값(D-335)
     os.replace(raw, COSTS / fname)
     j.status, j.file = SJ.ST_DONE, f"비용/{fname}"
     LOG.saved(name, COSTS / fname, "비용 리포트")
@@ -760,13 +761,16 @@ def collect_ads(a, b, args) -> None:
 
 
 def source_checks(web: bool = True) -> None:
-    """정산 자료를 다 받은 뒤 1번 — ① 받기 의심(T-82 · 파일끼리 대조 · 다시받을목록.csv) ② 원문 대조(T-78 S1 M-E · 접속 없음)
+    """정산 자료를 다 받은 뒤 1번 — ① 받기 의심(T-82 · 파일끼리 대조 · 다시받을목록.csv · 다음 실행 자동 다시 받기 표시 D-339) ② 원문 대조(T-78 S1 M-E · 접속 없음)
     ③ 공개 웹(S3 M-D · 쿠키·프록시 없는 일반 연결 · 주기 된 페이지만). 단계마다 따로 실패 기록(정산 금액과 별개)."""
     from coupang_analytics import settlement_fetch_check as FCK
+    from coupang_analytics import settlement_refetch as RF
     from coupang_analytics import settlement_sources as SRC
     today, out = date.today(), SRC.folder(BASE)
     try:
         rows, later = FCK.scan(BASE)
+        n = RF.plan(BASE, rows, today)                    # 다시받을목록 → 다음 실행 평소 받기가 다시 받게 표시(D-339)
+        LOG.record(RL.ALL, "자동 다시 받기", RL.WAIT if n["같은 결과"] or n["길 없음"] else RL.OK, RF.summary(n))
         _all, again = FCK.write(out, rows, today)
         LOG.record(RL.ALL, "받기 의심", RL.WAIT if any(r["다시 받기"] != FCK.NO for r in rows) else RL.OK,
                    f"{FCK.summary(rows)}" + (f" · 아직 안 읽은 엑셀 {later}개(다음 실행에)" if later else "") + f" → {again}")
