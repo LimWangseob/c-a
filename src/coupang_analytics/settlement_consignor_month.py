@@ -19,7 +19,7 @@ from coupang_analytics import settlement_statement_account as AC
 from coupang_analytics import settlement_statement_source as SRC
 from coupang_analytics.settlement_consignor_month_calc import MonthState, ads, pending_sales, sales, settle_by_channel
 from coupang_analytics.settlement_consignor_month_cost import (
-    alloc_pending_costs, compensation, logistics, milkrun, other_common, separate, shares)
+    alloc_pending_costs, compensation, expect_values, logistics, milkrun, other_common, separate, shares)
 from coupang_analytics.settlement_consignor_month_out import assemble
 from coupang_analytics.settlement_statement_deduct import Account
 
@@ -137,6 +137,7 @@ def build_month(ctx, account, month: str, judge: ConsignorJudge) -> dict:
     compensation(st)
     alloc_pending_costs(st)
     other_common(st)
+    expect_values(st)
     shares(st)
     separate(st)
     return assemble(st)

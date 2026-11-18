@@ -8,11 +8,13 @@ D-304·D-319 지급 끝난 윙 음수 회차 3PM 되돌림 = 기존 계산의 �
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from datetime import date, timedelta
 
+from coupang_analytics import settlement_fee_rules as FR
 from coupang_analytics import settlement_files as SF
 from coupang_analytics import settlement_managed_alloc as MA
 from coupang_analytics import settlement_statement_account as AC
-from coupang_analytics.settlement_consignor_month_calc import MonthState, jl, kst_month, pct
+from coupang_analytics.settlement_consignor_month_calc import MonthState, jl, kst_month, month_end, pct
 from coupang_analytics.settlement_statement_account import num
 
 CFS_FEES = ("totalStorageFeeDeductionAmount", "totalFulfillmentFeeDeductionAmount", "totalWarehousingFeeDeductionAmount",
@@ -33,7 +35,8 @@ RG_REVIEW = "totalPostPurchaseDeductionAmount"      # 로켓그로스 리뷰 이
 RG_REVIEW_CAT = "r:" + RG_REVIEW
 SEP_NAMES = ("우대수수료 환급 (관리 상품 몫)", "우대수수료 환급 (상품 확인 전 · 계정 전체)")     # 10 고정 2줄(D-343)
 # 계정 단위 정액 3종(D-271) — 9 반영 비중 = 등록 비중(판매 비중과 비교 안 함)
-FIXED_FEE_CATS = ("w:" + AC.SVC, "o:subscriptionFeeOffsetYearMonthBreakdown", "o:businessInsightsOffsetYearMonthBreakdown")
+BI_CAT = "o:businessInsightsOffsetYearMonthBreakdown"
+FIXED_FEE_CATS = ("w:" + AC.SVC, "o:subscriptionFeeOffsetYearMonthBreakdown", BI_CAT)
 PM3_BACK = f"윙 지급 차감 — {AC.PM3} (지급 끝난 음수 회차 되돌림 · D-304)"
 
 
@@ -344,6 +347,40 @@ def _svc_reference(st: MonthState) -> None:
     if ch.get(st.m) and not round(line):
         st.j.append(f"판매자서비스이용료: 이 달 판매 기간 쿠팡 지급 줄에 공제 없음(쿠팡 줄 없음) → 0 (D-299 ④ 쿠팡 줄 값만 · "
                     f"D-161 규칙 참고값 {ch[st.m]:,.0f}원은 넣지 않음)")
+
+
+# ── 예상값(T-121 · D-325·D-331~D-333) — 입력이 앱에 없으면 숫자 없이 비고(인계 44줄 · 쿠팡 줄 값 D-279 ① 그대로 · 금액 없는 줄 안 만듦) ──
+GAP_ITEMS = {"로켓그로스": (("45·76 보관비(세이버 체험 · 시작 창 B=A)",
+                          lambda e: FR.saver_expect(None, e)[1] + " · 보관비 A(일별 재고 수량 × CBM × 구간 단가) 줄 없는 기간 계산 없음"),
+                         ("신규-03 입출고비·배송비 할인가", lambda e: FR.discount_cell(None, None)[1])),
+             "윙": (("4 반품배송비(구매확정 전 · 고객 귀책)", lambda e: FR.return_expect(None, None, None)[1]),)}
+GAP_NOTE = " · 이 기간 금액은 정산서에 없음(쿠팡 줄 전 · D-081 · D-279 ③)"
+
+
+def _gap(st: MonthState, ch: str) -> tuple[str, str] | None:
+    """쿠팡 지급 줄이 아직 없는 기간(구매확정 전·이번 주 D-279 ③) = 그 채널 전체 마지막 줄 끝 다음 날 ~ min(달 끝, 기준일 전날) ∩ 이 달 ·
+    지난 달 안의 구멍(그 주 판매 없음)은 아님 · 채널 안 쓰는 계정 = None."""
+    ends = [date.fromisoformat(str(row[4])[:10]) for _k, row, r in st.lines() if r["채널"] == ch]
+    if not ends:
+        return None
+    start = max(date.fromisoformat(f"{st.m}-01"), max(ends) + timedelta(days=1))
+    end = min(month_end(st.m), date.fromisoformat(str(st.basis)[:10]) - timedelta(days=1))
+    return (str(start), str(end)) if start <= end else None
+
+
+def expect_values(st: MonthState) -> None:
+    """74 = 9 '비즈니스 인사이트' 줄(쿠팡이 뺀 조각 · 원문)에 남은 청구 예상 비고 · 45·76·신규-03·4 = 쿠팡 줄 없는 기간 예상값 입력 점검(근거만)."""
+    st.expect, st.bi_note = {}, ""
+    taken = [a for _n, a, c in st.common if c == BI_CAT]
+    if round(sum(taken)):
+        amt, note = FR.bi_expect(st.m, taken)
+        st.bi_note = f"쿠팡이 아직 안 뺀 남은 청구(D-325 · D-279 ②) — {note}"
+        st.expect["74 비즈니스 인사이트 남은 청구"] = {"쿠팡이 뺀 조각": round(sum(taken)), "예상값": amt, "비고": note}
+        st.j.append(f"9 비즈니스 인사이트 이용료 = 쿠팡이 {st.m} 몫으로 뺀 조각 {sum(taken):,.0f}원(원문) · {st.bi_note}")
+    for ch, items in GAP_ITEMS.items():
+        gap = _gap(st, ch)
+        for name, note in items if gap else ():
+            st.expect[name] = {"기간": f"{gap[0]}~{gap[1]}", "예상값": None, "비고": note(gap[1]) + GAP_NOTE}
 
 
 # ── 비중(D-237 · D-241 ①⑨ · D-271) ──

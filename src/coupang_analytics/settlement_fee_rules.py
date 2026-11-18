@@ -9,11 +9,26 @@
 - 로켓그로스 신상품 무료(43·44·45·76·76-2 · D-326 · D-318 ① 구체화): 첫 진열일(첫 입고완료일 + 1)부터 45일(첫 진열 2026-04-01~08-31) ·
   입출고·배송 k ≤ 43 = 0원 · k = 44 = 쿠팡 줄 값(없으면 경계 미확정) · k ≥ 45 = 유료 · 보관 31~45일 무료 = k ≤ 44 ·
   대상 옵션 = 데이터로 못 가름 → 쿠팡 줄 값 / 그 옵션 첫 정산 줄(계정 시작 무료 창 밖)이 0원이면 대상.
+- 예상값 입구(T-121 · *_expect · (금액 또는 None, 비고)): 74 남은 청구 · 45·76 세이버 체험(D-332) · 4 반품배송비(D-333) · 신규-03 할인표 칸(D-331).
+  입력(플랜·유료 시작일 · 시작 창 끝날 · 접수채널 · 할인표)이 앱에 없으면 숫자를 만들지 않고 비고 = NO_INPUT(필요 입력 · 출처).
 """
 from __future__ import annotations
 
 import calendar
-from datetime import date
+from datetime import date, timedelta
+
+NO_INPUT = "입력 없음 → 예상값 미확정"
+# 예상값 입력 → (무엇 · 앱 자료 출처와 지금 상태) — 비고 문구 한곳(출처 = 등록표 SOURCES · 화면 기록 SPECS · STATE 할 일)
+NEED = {"bi": ("비즈니스 인사이트 플랜·유료 시작일", "윙 구독 내역 SV-BI-SUB · 화면 기록 틀만(값 저장 전 · T-122)"),
+        "saver": ("세이버 무료 체험 끝날(계정 시작 창 끝날)", "윙 로켓그로스 정산현황 홈 띠 MG-RG-STATUS S6 · 등록만 · 시작 창 끝날 = 데이터로 못 가름 D-318 ①"),
+        "discount": ("카테고리 할인표(2차·말단 × 사이즈 × 판매가 구간)", "윙 fee-details 화면 MA-FEE-DETAILS S4 · 등록만(T-78)"),
+        "return": ("반품 접수채널(판매자접수·주문자접수·쿠팡CS)", "윙 반품 관리 '접수채널' · 미수집(T-118)")}
+CHECK = "확인 필요"
+
+
+def no_input(kind: str) -> str:
+    what, src = NEED[kind]
+    return f"{NO_INPUT}({what} — {src})"
 
 # ── 비즈니스 인사이트 월정액 표(VAT 제외) — 한곳 · 화면 확인값만 · (플랜, 유효 시작, 유효 끝, 출처) ──
 # 12-01 신규 요금제('프로' 이상 · 두 계정 화면 공지 11-18) 뒤 값은 모름 → 화면 확인 뒤 줄 추가(그 전엔 None = 확인 필요).
@@ -59,6 +74,73 @@ def bi_left(charge: int, taken: list) -> dict:
     """회차 예상 — 청구액 − 이미 회차에서 뺀 조각(원문 값) · 청구보다 더 빠진 금액 = 규칙 밖(조용히 0 으로 안 바꿈)."""
     got = sum(taken)
     return {"남은 청구": max(charge - got, 0), "규칙 밖": max(got - charge, 0)}
+
+
+def bi_expect(month: str, taken: list, plan: str | None = None, paid_start: date | None = None) -> tuple[int | None, str]:
+    """74 그 달(YYYY-MM) 청구 중 쿠팡이 아직 안 뺀 몫(D-325 · D-279 ② 경고값) — taken = 그 달 몫으로 이미 뺀 조각(원문).
+    유료 시작일이 그 달 앞이면 그 달 1일부터(월정액 그대로) · 그 달 뒤면 청구 없음 0."""
+    if not plan or paid_start is None:
+        return None, no_input("bi")
+    first = date.fromisoformat(f"{month}-01")
+    if paid_start.strftime("%Y-%m") > month:
+        return 0, f"유료 시작 전({paid_start}) — 청구 없음"
+    start = max(paid_start, first)
+    monthly = bi_monthly(plan, start)
+    if monthly is None:
+        return None, f"{CHECK} — 월정액 표에 없는 플랜·기간({plan} · {start}) · 화면 확인 뒤 BI_MONTHLY 줄 추가"
+    charge = bi_charge(monthly, start)
+    left = bi_left(charge, taken)
+    if left["규칙 밖"]:
+        return None, f"{CHECK} — 청구 {charge:,} 보다 {left['규칙 밖']:,}원 더 빠짐(규칙 밖)"
+    return left["남은 청구"], f"청구 {charge:,}(D-325 · {plan} {start}부터) − 뺀 조각 {sum(taken):,}"
+
+
+# ── 45·76 세이버 무료 체험(D-332 ①) — 계정 시작 창 끝 다음 날부터 270일 · 기간 안 보관 31~60일 무료(C) · 구독료 0 ──
+SAVER_TRIAL_DAYS = 270
+
+
+def saver_trial(window_end: date) -> tuple[date, date]:
+    """(체험 시작, 끝날) — 시작 = 계정 시작 창 끝 다음 날 · 끝 = 시작 + 270일(윙 홈 띠 '무료 체험 종료일' 6/6 일치)."""
+    start = window_end + timedelta(days=1)
+    return start, start + timedelta(days=SAVER_TRIAL_DAYS)
+
+
+def saver_expect(window_end: date | None, day: date) -> tuple[bool | None, str]:
+    """그 날이 세이버 체험 안(보관 31~60일 무료 · 구독료 0)인지 — 시작 창 끝날 없으면 None + 비고(숫자 안 만듦)."""
+    if window_end is None:
+        return None, no_input("saver")
+    s, e = saver_trial(window_end)
+    if day < s:
+        return False, f"체험 전(계정 시작 창 · 끝날 {window_end} · 시작 창 보관 B=A D-332 ②)"
+    if day > e:
+        return False, f"체험 끝({e}) 뒤 — 31~60일 보관 유료 · 세이버 구독료"
+    return True, f"세이버 체험 안({s}~{e}) — 31~60일 보관 무료(C) · 구독료 0"
+
+
+# ── 4 윙 반품배송비(구매확정 전 · 고객 귀책 · D-333 ②③) ──
+ONE_WAY_CH, R1_CH = ("판매자접수",), ("주문자접수", "쿠팡CS")
+MAYBE_ONE_WAY = "판매자 접수면 편도일 수 있음"
+
+
+def return_expect(r1: int | None, one_way: int | None, channel: str | None) -> tuple[int | None, str]:
+    """판매자접수 → 편도(등록 반품배송비 1회) · 주문자접수·쿠팡CS → R1 · 접수채널 없음 → R1 + '판매자 접수면 편도일 수 있음'(D-333 ③)."""
+    if channel is None:
+        return r1, f"{MAYBE_ONE_WAY} · {no_input('return')}"
+    if channel in ONE_WAY_CH:
+        return one_way, "판매자접수 = 편도(등록 반품배송비 1회 · D-333 ②)"
+    if channel in R1_CH:
+        return r1, f"{channel} = R1(지금 규칙 · D-333 ②)"
+    return None, f"{CHECK} — 모르는 접수채널 {channel!r}"
+
+
+# ── 신규-03 로켓그로스 카테고리 할인표 칸(D-331 ①) ──
+def discount_cell(screen: int | None, raw: int | None) -> tuple[int | None, str]:
+    """할인가 B 한 칸 = 화면 표 먼저 · 화면과 원문(쿠팡 줄 값)이 다른 칸 = 원문 값 · 화면 표 없음 = None + 비고(S4)."""
+    if screen is None:
+        return None, no_input("discount")
+    if raw is not None and raw != screen:
+        return raw, f"원문 값(화면 {screen:,} ≠ 원문 · D-331 ①)"
+    return screen, "화면 표(D-331 ①)"
 
 
 # ── 로켓그로스 신상품 무료 창(D-326) ──

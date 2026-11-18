@@ -111,6 +111,63 @@ def t6_newfree_expect():
     ok("무료 0 · 경계 None · 쿠팡 값 우선 · 유료 · 첫 줄 유료 = 대상 아님 · 첫 줄 없음 = None · 범위 밖 = 유료값")
 
 
+def t7_bi_expect():
+    print("[T7] 74 남은 청구 예상(T-121) = 그 달 청구(D-325) − 이미 뺀 조각 · 플랜·유료 시작일 없으면 금액 없음 + '입력 없음 → 예상값 미확정'")
+    amt, note = FR.bi_expect("2026-10", [20_228])
+    assert amt is None and FR.NO_INPUT in note and "SV-BI-SUB" in note, (amt, note)
+    assert FR.bi_expect("2026-10", [20_228, 44_154], "스탠다드", D("2026-10-08"))[0] == 12_866      # nicoable 77,248 − 64,382
+    assert FR.bi_expect("2026-11", [], "프리미엄", D("2026-11-09"))[0] == 298_356                    # 271,233(화면) × 1.1 사사오입
+    assert FR.bi_expect("2026-11", [100_000], "프리미엄", D("2025-11-03"))[0] == 312_500             # 앞 달 시작 = 그 달 1일부터 월정액 412,500
+    assert FR.bi_expect("2026-09", [], "스탠다드", D("2026-10-08")) == (0, "유료 시작 전(2026-10-08) — 청구 없음")
+    amt, note = FR.bi_expect("2026-12", [], "프리미엄", D("2025-11-03"))                            # 12-01 신규 요금제 = 표 없음
+    assert amt is None and "확인 필요" in note, note
+    amt, note = FR.bi_expect("2026-10", [80_000], "스탠다드", D("2026-10-08"))                     # 청구보다 더 빠짐 = 규칙 밖
+    assert amt is None and "확인 필요" in note and "2,752" in note, note
+    ok("입력 없음 = None+비고 · 남은 12,866 · 298,356 · 앞 달 시작 312,500 · 시작 전 0 · 표 없음·더 빠짐 = 확인 필요")
+
+
+def t8_saver():
+    print("[T8] 45·76 세이버 무료 체험 = 계정 시작 창 끝 다음 날부터 270일(D-332 ① · 윙 홈 띠 6/6) · 끝날 입력 없으면 미확정")
+    cases = [("2026-05-01", "2027-01-27"),     # sg0141n 창 05-01 → 화면 2027-01-27
+             ("2026-05-20", "2027-02-15"),     # oopean 창 05-18~20 → 2027-02-15
+             ("2026-06-03", "2027-03-01"),     # 91white 시작 06-04 → 2027-03-01
+             ("2026-08-12", "2027-05-10"),     # mrc098 시작 08-13 → 2027-05-10
+             ("2026-08-06", "2027-05-04")]     # nicoable 시작 08-07 → 2027-05-04
+    for wend, want in cases:
+        s, e = FR.saver_trial(D(wend))
+        assert s == D(wend) + timedelta(days=1) and e == D(want), (wend, s, e)
+    assert FR.saver_expect(D("2026-05-01"), D("2027-01-27"))[0] is True                           # 끝날 당일 = 체험 안(31~60일 보관 무료)
+    assert FR.saver_expect(D("2026-05-01"), D("2027-01-28"))[0] is False                          # 다음 날 = 유료(구독료 D-298)
+    assert FR.saver_expect(D("2026-05-01"), D("2026-05-01"))[0] is False                          # 시작 창 날 = 체험 전(시작 창 보관 B=A 따로)
+    amt, note = FR.saver_expect(None, D("2026-11-10"))
+    assert amt is None and FR.NO_INPUT in note and "S6" in note, note
+    ok("270일 끝날 5계정 원 화면값 · 끝날 당일 무료·다음 날 유료·시작 창 날 체험 전 · 입력 없음 = 미확정")
+
+
+def t9_return():
+    print("[T9] 4 반품배송비 예상(D-333) = 판매자접수 → 편도 · 주문자·쿠팡CS → R1 · 접수채널 없으면 R1 + '판매자 접수면 편도일 수 있음'")
+    assert FR.return_expect(7_000, 3_000, "판매자접수") == (3_000, "판매자접수 = 편도(등록 반품배송비 1회 · D-333 ②)")
+    assert FR.return_expect(7_000, 3_000, "주문자접수")[0] == 7_000
+    assert FR.return_expect(7_000, 3_000, "쿠팡CS")[0] == 7_000
+    amt, note = FR.return_expect(7_000, 3_000, None)
+    assert amt == 7_000 and "판매자 접수면 편도일 수 있음" in note and FR.NO_INPUT in note and "T-118" in note, note
+    amt, note = FR.return_expect(None, None, None)                                                # R1 도 모름 = 금액 없음
+    assert amt is None and "판매자 접수면 편도일 수 있음" in note, note
+    amt, note = FR.return_expect(7_000, 3_000, "택배사접수")                                         # 모르는 채널 = 확인 필요(조용히 R1 아님)
+    assert amt is None and "확인 필요" in note, note
+    ok("편도 3,000 · R1 7,000 · 채널 없음 = R1 + 표시 · R1 없음 = None · 모르는 채널 = 확인 필요")
+
+
+def t10_discount():
+    print("[T10] 신규-03 할인표 칸(D-331 ①) = 화면 표 먼저 · 화면과 원문이 다른 칸 = 원문 값 · 화면 표 없으면 미확정(S4)")
+    assert FR.discount_cell(600, 650) == (650, "원문 값(화면 600 ≠ 원문 · D-331 ①)")             # 휴대폰/액세서리 극소형 입출고
+    assert FR.discount_cell(800, None) == (800, "화면 표(D-331 ①)")
+    assert FR.discount_cell(800, 800) == (800, "화면 표(D-331 ①)")
+    amt, note = FR.discount_cell(None, 650)
+    assert amt is None and FR.NO_INPUT in note and "S4" in note, note
+    ok("원문 650 우선 · 화면 800 · 화면 없음 = 미확정")
+
+
 def main():
     t1_bi_supply()
     t2_bi_charge()
@@ -118,7 +175,11 @@ def main():
     t4_bi_table()
     t5_newfree_window()
     t6_newfree_expect()
-    print("정산 지급 전 예상 규칙값(비즈니스 인사이트·신상품 무료) 오프라인 검증 통과")
+    t7_bi_expect()
+    t8_saver()
+    t9_return()
+    t10_discount()
+    print("정산 지급 전 예상 규칙값(비즈니스 인사이트·신상품 무료·세이버·반품·할인표) 오프라인 검증 통과")
 
 
 if __name__ == "__main__":

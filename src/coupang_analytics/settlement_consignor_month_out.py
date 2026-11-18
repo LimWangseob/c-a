@@ -92,6 +92,8 @@ def common_out(st: MonthState) -> tuple[list, list]:
         r["coupang_amount"] += round(a)
         r["applied_amount"] += ap
         r["parts"].append({"name": n, "coupang_amount": round(a), "applied_amount": ap})
+    if getattr(st, "bi_note", "") and rows["bi"]["coupang_amount"]:     # T-121 남은 청구 예상 비고 — 금액 있는 줄에만
+        rows["bi"]["note"] = st.bi_note
     return list(rows.values()), applied
 
 
@@ -223,6 +225,8 @@ def evidence(st: MonthState, merged: dict, names: list) -> dict:
           "상품 등록상품ID": {n: merged[n] for n in names}}
     if st.missing:
         ev["상품명 판정 후보"] = st.missing
+    if getattr(st, "expect", None):
+        ev["예상값(T-121)"] = st.expect
     return ev
 
 
