@@ -10,7 +10,7 @@ from . import rank_schedule
 from .workbook_common import *  # noqa: F401,F403
 
 
-_REST_FILL = PatternFill("solid", fgColor=rank_schedule.REST_RGB)   # ③ 안 재는 날 빈 칸(계정 3묶음 D-257)
+_REST_FILL = PatternFill("solid", fgColor=rank_schedule.REST_RGB)   # ③ 안 재는 날 빈 칸(계정 묶음 쉬는 날 D-257·D-362)
 _NO_FILL = PatternFill()   # 일자 칸 색 지움 — 값은 날짜 따라 옮겨 가도 색은 칸에 남으므로 7일 밖은 매번 지운다(D-158)
 
 

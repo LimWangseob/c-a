@@ -245,6 +245,30 @@ def real_raw(root: str) -> None:
     print(f"  합계: 계정 {len(by_acc)} · 옵션 {tot} · categoryId 있는 옵션 {cat} · 없는 칸(계정 수) {dict(missing)}")
 
 
+def s8_base_day():
+    print("[S8] 기준일(D-362 · 통제 세션 11-19) — ① 이 넘긴 판매 조회 끝 날(date_to)을 상품정보·재고현황 파일 안 '기준일' 칸에 · "
+          "파일 이름·'날짜'·'수집' 은 그대로(저장 시각) · 안 넘기면 칸 없음")
+    from coupang_analytics import daily_snapshot as DSN
+    with tempfile.TemporaryDirectory() as tmp:
+        _freeze("2026-11-20T01:42:05")                       # 01:30 무인 ① = 다음 날 새벽 저장 · 판매 = 전날(11-19)
+        C.reset_raw()
+        C._raw_add("vendor_inventory", _body([_listing(11, 5986, [_option(101)])]))
+        C._raw_add("inventory", json.dumps({"viProperties": [{"vendorItemId": 101}]}))
+        logs: list[str] = []
+        PS._dump_raw("acc1", logs.append, out_dir=tmp, base_day="2026-11-19")
+        info = _read(Path(tmp) / PI.DIRNAME / "acc1" / "2026-11-20.json.gz")
+        inv = _read(Path(tmp) / DSN.INVENTORY_DIRNAME / "acc1" / "2026-11-20.json.gz")
+        for name, rec in (("상품정보", info), ("재고현황", inv)):
+            assert rec["기준일"] == "2026-11-19" and rec["날짜"] == "2026-11-20" and rec["수집"] == "2026-11-20T01:42:05", \
+                (name, {k: rec[k] for k in ("기준일", "날짜", "수집") if k in rec})
+        assert PI.lookup(tmp, "acc1")["101"]["날짜"] == "2026-11-20", "정산 조회(lookup) 날짜 = 파일 날짜 그대로"
+        _freeze("2026-11-20T14:00:00")
+        _dump(tmp, [_body([_listing(11, 5986, [_option(101)])])])
+        later = sorted((Path(tmp) / PI.DIRNAME / "acc1").glob("2026-11-20_*.json.gz"))
+        assert later and "기준일" not in _read(later[-1]), "기준일 안 넘기면 칸 없음(정산 쪽·옛 호출)"
+    ok("상품정보·재고현황 = 기준일 2026-11-19 + 날짜·수집 2026-11-20 01:42 · 파일 이름 그대로 · 안 넘기면 칸 없음")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--raw", help="받아 둔 output/_raw 폴더(실제 응답 칸 확인 · 게이트 밖)")
@@ -254,7 +278,7 @@ def main():
         return 0
     saved_now = DS._now
     try:
-        for s in (s1_extract, s2_field_appears, s3_broken, s4_wiring_and_files, s5_lookup, s6_save_failure, s7_raw_keep):
+        for s in (s1_extract, s2_field_appears, s3_broken, s4_wiring_and_files, s5_lookup, s6_save_failure, s7_raw_keep, s8_base_day):
             s()
     finally:
         DS._now = saved_now

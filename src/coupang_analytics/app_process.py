@@ -1,9 +1,9 @@
 """앱·정산 프로그램 프로세스 제어 — D-010(소유자 2026-10-09).
 
-- 18:00 무인(--auto) 앱이 시작되면 **기존 앱 창과 정산 프로그램을 끝낸다**(한 PC 에 앱 하나·정산 하나).
-- **D-021**: 18:00(·재부팅 복구) 앱이 시작하면서 **정산도 함께 띄운다** → 정산은 ①판매수집 완료까지 대기 후 받고,
-  다 받으면·다음 날 17:55 면 스스로 끝난다(settlement_watch.cycle_window). 예약작업은 없음(D-010 에서 폐지).
-- **D-020(소유자 2026-10-10)**: 무인 ①②③ 완주 뒤 앱이 끝나도 정산은 계속(다음 18:00 까지). 그러나 **사람이 앱을
+- 01:30 무인(--auto · D-362) 앱이 시작되면 **기존 앱 창과 정산 프로그램을 끝낸다**(한 PC 에 앱 하나·정산 하나).
+- **D-021**: 01:30(·재부팅 복구) 앱이 시작하면서 **정산도 함께 띄운다** → 정산은 ①판매수집 완료까지 대기 후 받고,
+  다 받으면·다음 날 01:20 이면 스스로 끝난다(settlement_watch.cycle_window). 예약작업은 없음(D-010 에서 폐지).
+- **D-020(소유자 2026-10-10)**: 무인 ①②③ 완주 뒤 앱이 끝나도 정산은 계속(다음 날 01:20 까지). 그러나 **사람이 앱을
   닫거나 강제 종료(재배포 등)하면 정산도 종료** — 정산이 앱 PID 를 감시(`watch_parent`)하고, 무인 정상 완료는
   앱이 남긴 표시(`mark_app_finished`)로 구분한다(작업 관리자 강제 종료도 같은 경로로 잡힘).
 
@@ -21,6 +21,8 @@ import sys
 import threading
 from datetime import datetime
 from pathlib import Path
+
+from .settlement_watch import cycle_hhmm
 
 _NO_CONSOLE = 0x08000000      # CREATE_NO_WINDOW
 _BREAKAWAY = 0x01000000       # CREATE_BREAKAWAY_FROM_JOB
@@ -63,7 +65,7 @@ def _spawn_detached(cmd: list[str], cwd: str) -> tuple[subprocess.Popen | None, 
 
 def start_settlement_watch(log, since: datetime | None = None, manual: bool = False) -> subprocess.Popen | None:
     """정산 프로그램을 창 없이 띄운다(이미 돌면 정산 쪽 잠금이 둘째를 바로 끝냄). 실패는 로그 후 None.
-    since = 사람이 누른 전체실행 시각(그 실행의 ① 완료를 기다림) — 18:00 무인은 None · manual = 정산 탭 버튼(D-354)."""
+    since = 사람이 누른 전체실행 시각(그 실행의 ① 완료를 기다림) — 01:30 무인은 None · manual = 정산 탭 버튼(D-354)."""
     cmd, cwd = settlement_watch_cmd(os.getpid(), since, manual)
     if getattr(sys, "frozen", False) and not Path(cmd[0]).exists():
         log(f"[정산] ⚠ {SETTLE_EXE} 를 찾을 수 없어 정산 자동 수집을 못 띄움: {cmd[0]}")
@@ -72,7 +74,7 @@ def start_settlement_watch(log, since: datetime | None = None, manual: bool = Fa
     if proc is None:
         log(f"[정산] ⚠ 정산 자동 수집 시작 실패: {err}")
         return None
-    log("[정산] 정산 자동 수집 시작 — ①판매수집 완료를 기다렸다가 받음·다 받거나 17:55 면 종료·"
+    log(f"[정산] 정산 자동 수집 시작 — ①판매수집 완료를 기다렸다가 받음·다 받거나 {cycle_hhmm()[1]} 이면 종료·"
         "앱을 사람이 끄면 함께 종료(상태=정산 탭)" + note)
     return proc
 
@@ -92,13 +94,13 @@ def transfer_login_cmd(retry: bool = False, file: str = "") -> tuple[list[str], 
 
 
 def transfer_settle_cmd(parent_pid: int) -> tuple[list[str], str]:
-    """셀독전환자 정산 자료 받기(D-187 · 매일 18시 뒤) — `--parent` = 앱 PID(사람이 앱을 끄면 함께 종료 D-020)."""
+    """셀독전환자 정산 자료 받기(D-187 · 매일 01:30 무인 뒤 · D-362) — `--parent` = 앱 PID(사람이 앱을 끄면 함께 종료 D-020)."""
     return _settle_program_cmd(["transfer-settle", "--parent", str(parent_pid)])
 
 
 def start_transfer_settle(log, parent_pid: int) -> subprocess.Popen | None:
-    """창 없이·작업 묶음에서 분리해 띄움(18:00 앱이 ③ 뒤 끝나도 계속) — 앱 실행·정산 자동 수집이 끝날 때까지 스스로 기다림.
-    [정산 중지]·18:00 시작 정리가 정산 프로그램을 끝낼 때 함께 끝난다(같은 exe). 실패는 로그 후 None."""
+    """창 없이·작업 묶음에서 분리해 띄움(01:30 앱이 ③ 뒤 끝나도 계속) — 앱 실행·정산 자동 수집이 끝날 때까지 스스로 기다림.
+    [정산 중지]·01:30 시작 정리가 정산 프로그램을 끝낼 때 함께 끝난다(같은 exe). 실패는 로그 후 None."""
     cmd, cwd = transfer_settle_cmd(parent_pid)
     if getattr(sys, "frozen", False) and not Path(cmd[0]).exists():
         log(f"[셀독전환] ⚠ {SETTLE_EXE} 를 찾을 수 없어 정산 자료 받기를 못 띄움: {cmd[0]}")
@@ -107,12 +109,14 @@ def start_transfer_settle(log, parent_pid: int) -> subprocess.Popen | None:
     if proc is None:
         log(f"[셀독전환] ⚠ 정산 자료 받기 시작 실패: {err}")
         return None
-    log("[셀독전환] 셀독전환자 정산 자료 받기 시작 — 앱 실행·정산 자동 수집이 끝난 뒤(20:40 이후) 받고 17:40 에 멈춤" + note)
+    from .transfer_login import UNTIL_DEFAULT, quiet_window
+    log(f"[셀독전환] 셀독전환자 정산 자료 받기 시작 — 앱 실행·정산 자동 수집이 끝난 뒤(조용한 시간 {quiet_window()} 밖) 받고 "
+        f"{UNTIL_DEFAULT} 에 멈춤" + note)
     return proc
 
 
 def start_transfer_login(log, retry: bool = False, file: str = "") -> subprocess.Popen | None:
-    """창 없이 띄움(로그 = output/정산_셀독전환/로그 — 화면이 읽어 보여 줌). 18:00 무인 시작·[정산 중지]가
+    """창 없이 띄움(로그 = output/정산_셀독전환/로그 — 화면이 읽어 보여 줌). 01:30 무인 시작·[정산 중지]가
     정산 프로그램을 끝낼 때 함께 끝난다(같은 exe — 런타임 병렬 금지). 실패는 로그 후 None."""
     cmd, cwd = transfer_login_cmd(retry, file)
     if getattr(sys, "frozen", False) and not Path(cmd[0]).exists():
@@ -209,12 +213,12 @@ def _kill(name: str, mark: str, log, what: str, tag: str) -> int:
 
 
 def stop_settlement(log, tag: str = "[시작]") -> int:
-    """정산 프로그램(배포 exe·개발 python)과 그 Chrome 종료 — 18:00 시작 정리·정산 탭 [정산 중지] 공용. 종료 수 반환."""
+    """정산 프로그램(배포 exe·개발 python)과 그 Chrome 종료 — 01:30 시작 정리·정산 탭 [정산 중지] 공용. 종료 수 반환."""
     return _kill(SETTLE_EXE, "settlement_download.py", log, "정산 프로그램", tag)
 
 
 def stop_other_apps(log) -> int:
-    """다른 앱 창(배포 exe·개발 app_qt.py) 종료 — 18:00 무인 실행만 남긴다(자기 자신 제외)."""
+    """다른 앱 창(배포 exe·개발 app_qt.py) 종료 — 01:30 무인 실행만 남긴다(자기 자신 제외)."""
     return _kill(APP_EXE, "app_qt.py", log, "이전 앱", "[시작]")
 
 
@@ -249,15 +253,15 @@ def _remove_legacy_elevated(log, failed: int) -> int:
     remain = int(left[1:]) if left[:1] == "N" and left[1:].isdigit() else failed
     done = max(failed - remain, 0)
     if done:
-        log(f"[시작] 옛 정산 예약작업(매일 08:00) {done}개 삭제(관리자 확인) — 정산은 18:00 앱과 함께만 돎(D-021)")
+        log(f"[시작] 옛 정산 예약작업(매일 08:00) {done}개 삭제(관리자 확인) — 정산은 {cycle_hhmm()[0]} 앱과 함께만 돎(D-021)")
     if remain:
         log(f"[시작] ⚠ 옛 정산 예약작업 {remain}개 남음({res[:120]}) — 작업 스케줄러에서 인자 'watch' 작업을 지워 주세요")
     return done
 
 
 def remove_legacy_settlement_task(log, elevate: bool = False) -> int:
-    """옛 정산 예약작업이 남아 있으면 지운다(D-091). 지운 수 반환 · 실패는 사유 그대로 로그(18:00 실행은 계속).
-    elevate = 사람이 직접 켠 실행 — 일반 권한으로 못 지우면 관리자 확인 창으로 지움(D-189). 무인(18:00·재부팅 복구)은
+    """옛 정산 예약작업이 남아 있으면 지운다(D-091). 지운 수 반환 · 실패는 사유 그대로 로그(01:30 실행은 계속).
+    elevate = 사람이 직접 켠 실행 — 일반 권한으로 못 지우면 관리자 확인 창으로 지움(D-189). 무인(01:30·재부팅 복구)은
     확인 창을 누를 사람이 없어 띄우지 않는다."""
     try:
         out = _ps(_LEGACY_WATCH_PS, {})
@@ -267,7 +271,7 @@ def remove_legacy_settlement_task(log, elevate: bool = False) -> int:
     lines = [s.strip() for s in out.splitlines() if s.strip()]
     n, fails = lines.count("R"), [s[2:].strip() for s in lines if s.startswith("F:")]
     if n:
-        log(f"[시작] 옛 정산 예약작업(매일 08:00) {n}개 삭제 — 정산은 18:00 앱과 함께만 돎(D-021)")
+        log(f"[시작] 옛 정산 예약작업(매일 08:00) {n}개 삭제 — 정산은 {cycle_hhmm()[0]} 앱과 함께만 돎(D-021)")
     if fails and elevate:
         return n + _remove_legacy_elevated(log, len(fails))
     if fails:
@@ -277,7 +281,7 @@ def remove_legacy_settlement_task(log, elevate: bool = False) -> int:
 
 
 def prepare_auto_start(log) -> None:
-    """18:00 무인 시작 정리 — 이전 앱·정산 프로그램 종료 + 옛 정산 예약작업 제거(업데이트로는 안 지워져 여기서도·D-091)."""
+    """01:30 무인 시작 정리 — 이전 앱·정산 프로그램 종료 + 옛 정산 예약작업 제거(업데이트로는 안 지워져 여기서도·D-091)."""
     stop_other_apps(log)
     stop_settlement(log)
     remove_legacy_settlement_task(log)

@@ -277,7 +277,7 @@ def track_ranks_stage(out_dir: str = "output", on_log=None,
         log("== 순위 조회: 결과 워크북이 없습니다 — 먼저 ①②를 실행하세요 ==")
         return None
     inject_company_stock(wb, stock_url, log)   # 회사보유재고 → 워크북(계정목록 5열) · apply_style 전
-    rank_schedule.refresh_groups(wb, run_date or date.today(), log)   # 계정 3묶음 배정·오늘 묶음 로그(D-257)
+    rank_schedule.refresh_groups(wb, run_date or date.today(), log)   # 계정 묶음(격일) 배정·오늘 묶음 로그(D-257·D-362)
     refresh_sales_sheet(wb, out, log, today=run_date)   # 첫 시트 통합판매현황(① 뒤 쌓인 판매 기록 · 전일 = 실행 날짜 전날)
 
     def _on_pass():   # 진전 있는 바퀴 끝마다 결과 반영 — 밤새 빈 칸을 다시 돌아도 시트가 따라옴(2026-10-13)
@@ -655,7 +655,7 @@ def _semi_next_pass(st: _SemiState, wb, date_label, on_pass, log) -> bool:
 
 def _rank_todo(wb, biz, pname, date):
     """순위를 채울 대상이면 (vids, 빈 키워드 목록), 아니면 None.
-    생략: 판매중지(rank_suppressed)·키워드 없음(2차 옵션)·다 채움·**그 날짜에 안 재는 키워드**(체험단 10일·계정 3묶음
+    생략: 판매중지(rank_suppressed)·키워드 없음(2차 옵션)·다 채움·**그 날짜에 안 재는 키워드**(체험단 10일·계정 묶음 격일
     D-257 — 옛 has_marketing 3일 주기 자리 · 쉬는 칸은 빈 칸 집계·재시도·지난 칸 보충에서도 빠짐). vids = sibling_vids."""
     if wb.rank_suppressed(biz, pname):     # 판매중지·임시저장·검토중·대장취소선 → 순위 제외(승인반려는 조사·D-114)
         return None

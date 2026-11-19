@@ -64,7 +64,7 @@ CHECKS = [
     ("상품 정보 날짜별 보관(categoryId·반품배송비·조회 함수 T-100)", "tools/verify_product_info_offline.py", True),
     ("셀독 계약자별 상품 현황(10건 규칙·판정 3단·양식·칸 폭·구글 교체·06:00 실행·빈 날 공란 T-132 D-358·D-361)", "tools/verify_contractor_sheet_offline.py", True),
     ("셀독전환자 로그인 확인(파일·비번 후보·멈춤·연락 필요 목록)", "tools/verify_transfer_offline.py", True),
-    ("셀독전환자 정산 자료 받기(매일 18시 뒤·대상·기다림·원장 파일 재사용·누적 파일)", "tools/verify_transfer_settle_offline.py", True),
+    ("셀독전환자 정산 자료 받기(매일 01:30 무인 뒤·대상·기다림·원장 파일 재사용·누적 파일)", "tools/verify_transfer_settle_offline.py", True),
     ("샵마인 비번↔관리대장 동기화(DPAPI·필드탐색·대조·되쓰기·비번 비노출)", "tools/verify_shopmine_sync_offline.py", True),
     ("계정 정지 감지→대장 취소선(판정·열·상태파일·백업먼저·가역)", "tools/verify_account_suspend_offline.py", True),
     ("회귀 게이트 자체(동시 실행·통과 기록)", "tools/verify_run_checks_offline.py", True),

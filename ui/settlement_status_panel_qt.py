@@ -164,7 +164,7 @@ class SettlementStatusMixin:
         ctrl.addWidget(self.settle_start_btn)
         ctrl.addWidget(self.settle_stop_btn)
         ctrl.addStretch(1)
-        hint = QtWidgets.QLabel("18:00 실행의 ①판매수집이 끝나면 자동 시작 — 다 받으면 스스로 종료")
+        hint = QtWidgets.QLabel("01:30 실행의 ①판매수집이 끝나면 자동 시작 — 다 받으면 스스로 종료")
         hint.setObjectName("muted")
         ctrl.addWidget(hint)
         v.addLayout(ctrl)
@@ -266,7 +266,7 @@ class SettlementStatusMixin:
 
     def _settle_stop(self) -> None:
         from coupang_analytics.app_process import stop_settlement
-        killed = stop_settlement(self.log, "[정산]") > 0   # 18:00 정리와 같은 한 경로(배포 exe·개발 python + 그 Chrome)
+        killed = stop_settlement(self.log, "[정산]") > 0   # 01:30 정리와 같은 한 경로(배포 exe·개발 python + 그 Chrome)
         self._settle_proc = None
         self._settle_write_status(
             "중지됨", "사용자가 정산 감시를 멈췄습니다." if killed else "중지 요청 — 실행 중인 정산이 없었습니다.")

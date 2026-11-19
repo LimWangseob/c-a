@@ -819,7 +819,7 @@ def pin_rank_sales_sheet_run_date():
 
 
 def _split_wb(start, *, measured=True):
-    """계정 3개(같은 무게 · 상품 1·키워드 2) + 가 계정에 체험단 상품 1 — 시작일 전 날짜에 기록이 있으면 '잰 적 있음'."""
+    """계정 3개(같은 무게 · 상품 1·키워드 2) + 가상사에 체험단 상품 1 — 시작일 전 날짜에 기록이 있으면 '잰 적 있음'."""
     from datetime import timedelta
     from coupang_analytics import rank_schedule as RS
     wb = OutputWorkbook.empty()
@@ -840,37 +840,43 @@ def _split_wb(start, *, measured=True):
 
 
 def pin_rank_split_schedule():
-    print("[핀 R1] ③ 순위 계정 3묶음 — 처음 배정 = 키워드 수 고르게 · 날짜마다 한 묶음 · 체험단 시작일 포함 10일 매일 · "
-          "새 키워드 첫 측정 · 시작일 전 = 전부 · 새 계정 = 가벼운 묶음 · 사라진 계정 줄 지움 (D-257)")
+    print("[핀 R1] ③ 순위 계정 2묶음 격일 — 처음 배정 = 키워드 수 고르게 · 날짜마다 한 묶음 · 체험단 시작일 포함 10일 매일 · "
+          "새 키워드 첫 측정 · 시작일 전 = 전부 · 새 계정 = 가벼운 묶음 · 사라진 계정 줄 지움 (D-257 · 격일 D-362)")
     from datetime import date, timedelta
     from coupang_analytics import rank_schedule as RS
     from coupang_analytics.workbook_common import _RANKGRP_SHEET
     start = date.today() - timedelta(days=20)
     day = lambda n: (start + timedelta(days=n)).isoformat()   # noqa: E731
-    _check(RS.assign({"a": 10, "b": 9, "c": 8, "d": 7, "e": 1}, {}) == {"a": 0, "b": 1, "c": 2, "d": 2, "e": 1},
-           "큰 것부터 가장 가벼운 묶음(10 | 9+1 | 8+7)")
-    _check(RS.assign({"a": 10, "b": 9, "n": 50}, {"a": 2, "b": 0}) == {"a": 2, "b": 0, "n": 1},
+    _check(RS.GROUPS == 2 and RS.PROMO_DAYS == 10, f"격일 · 체험단 10일 {RS.GROUPS} {RS.PROMO_DAYS}")
+    _check(RS.assign({"a": 10, "b": 9, "c": 8, "d": 7, "e": 1}, {}) == {"a": 0, "b": 1, "c": 1, "d": 0, "e": 0},
+           "큰 것부터 가장 가벼운 묶음(10+7+1 | 9+8 · 동률 = 앞 묶음)")
+    _check(RS.assign({"a": 10, "b": 9, "c": 8, "d": 7, "e": 1}, {}, 3) == {"a": 0, "b": 1, "c": 2, "d": 2, "e": 1},
+           "묶음 수 3(옛 기간 함수 그대로) = 10 | 9+1 | 8+7")
+    _check(RS.assign({"a": 10, "b": 9, "n": 50}, {"a": 1, "b": 0}) == {"a": 1, "b": 0, "n": 0},
            "기존 배정 그대로 · 새 열쇠만 가벼운 묶음")
     wb = _split_wb(start)
     plan = RS.load_plan(wb)
-    _check(plan.start == start and sorted(plan.groups.values()) == [0, 1, 2], f"시작일·3계정 각 묶음 {plan.groups}")
-    _check(plan.groups["id_a"] == 0, f"가장 무거운 계정(체험단 포함 3키워드) = 가 묶음 {plan.groups}")
+    _check(plan.start is None and plan.start2 == start and sorted(plan.groups2.values()) == [0, 1, 1],
+           f"처음 = 격일 시작일만·3계정 2묶음 {plan.start} {plan.groups2}")
+    _check(plan.groups2["id_a"] == 0, f"가장 무거운 계정(체험단 포함 3키워드) = 가 묶음 {plan.groups2}")
     _check(_RANKGRP_SHEET not in wb.account_sheets() and wb.wb[_RANKGRP_SHEET].sheet_state == "hidden",
            "숨긴 시트 · 계정 시트 아님(구글시트에 안 올라감)")
-    turn = {plan.groups[k]: biz for k, biz in (("id_a", "가상사"), ("id_b", "나상사"), ("id_c", "다상사"))}
+    turn: dict = {}
+    for k, biz in (("id_a", "가상사"), ("id_b", "나상사"), ("id_c", "다상사")):
+        turn.setdefault(plan.groups2[k], []).append(biz)
     promo = start + timedelta(days=4)
     wb.set_promo_start("가상사", "체험", promo.isoformat())   # 체험단 시작 = 4일째 → 4~13일째 매일
     for n in range(0, 16):
         got = sorted({(b, p) for b, p, _k in PR._unfilled(wb, day(n))})
-        want = {(turn[n % 3], f"{turn[n % 3]}상품")}
-        if 4 <= n <= 13 or n % 3 == 0:
+        want = {(b, f"{b}상품") for b in turn[n % 2]}
+        if 4 <= n <= 13 or n % 2 == plan.groups2["id_a"]:
             want.add(("가상사", "체험"))
-        _check(got == sorted(want), f"{n}일째 = {turn[n % 3]} 묶음만 + 체험단(4~13일째 매일) {got}")
+        _check(got == sorted(want), f"{n}일째 = {turn[n % 2]} 묶음만 + 체험단(4~13일째 매일) {got}")
     old = sorted({b for b, _p, _k in PR._unfilled(wb, (start - timedelta(days=2)).isoformat())})
     _check(old == ["가상사", "나상사", "다상사"], f"시작일 전 날짜 = 전부 잼 {old}")
     wb.ensure_product_block("나상사", "새상품", config.KIND_CONTRACT, ["new1"], registered="새상품")
     wb.set_product_vids("나상사", "새상품", ["v_new"])
-    rest_day = next(n for n in range(1, 4) if turn[n % 3] != "나상사")
+    rest_day = next(n for n in range(1, 4) if "나상사" not in turn[n % 2])
     got = [(p, k) for b, p, k in PR._unfilled(wb, day(rest_day)) if b == "나상사"]
     _check(got == [("새상품", "new1")], f"쉬는 날에도 기록 없는 새 키워드는 잼 · 기존 키워드는 안 잼 {got}")
     wb.ensure_account("라상사")
@@ -880,10 +886,10 @@ def pin_rank_split_schedule():
     del wb.wb["다상사"]
     logs: list = []
     p2 = RS.refresh_groups(wb, start + timedelta(days=30), logs.append)
-    _check(p2.start == start and p2.groups["id_a"] == plan.groups["id_a"] and p2.groups["id_b"] == plan.groups["id_b"],
-           f"다시 불러도 시작일·기존 묶음 그대로 {p2.groups}")
-    _check("id_c" not in p2.groups and p2.groups["id_d"] == plan.groups["id_c"],
-           f"사라진 계정 줄 지움 · 새 계정 = 가장 가벼운 묶음(빈 묶음) {p2.groups}")
+    _check(p2.start2 == start and p2.groups2["id_a"] == plan.groups2["id_a"]
+           and p2.groups2["id_b"] == plan.groups2["id_b"], f"다시 불러도 격일 시작일·기존 묶음 그대로 {p2.groups2}")
+    _check("id_c" not in p2.groups2 and p2.groups2["id_d"] == 0,
+           f"사라진 계정 줄 지움 · 새 계정 = 가장 가벼운 묶음(가 3 = 나 3 동률 → 앞 묶음) {p2.groups2}")
     _check(any("[순위 묶음]" in m and "새 계정 라상사" in m for m in logs), f"로그에 오늘 묶음·새 계정 {logs}")
 
 
@@ -892,21 +898,86 @@ def pin_rank_split_rest_not_blank():
     from datetime import date, timedelta
     from coupang_analytics import rank_schedule as RS
     _SPEC.clear(); _COUNT.clear()
-    start = date.today() - timedelta(days=2)               # 오늘 = 3일째 → 오늘 차례 = (2 mod 3) 묶음
+    start = date.today() - timedelta(days=1)               # 오늘 = 2일째 → 오늘 차례 = (1 mod 2) 묶음
     d = Path(tempfile.mkdtemp()); path = d / "s.xlsx"
     wb = _split_wb(start)
     plan = RS.load_plan(wb)
-    on = next(b for k, b in (("id_a", "가상사"), ("id_b", "나상사"), ("id_c", "다상사")) if plan.groups[k] == 2)
+    on = [b for k, b in (("id_a", "가상사"), ("id_b", "나상사"), ("id_c", "다상사")) if plan.groups2[k] == 1]
+    _check(on == ["나상사", "다상사"], f"나 묶음 = 가벼운 두 계정 {plan.groups2}")
     for b in ("가상사", "나상사", "다상사"):
         wb.ensure_date(b, date.today().isoformat())
     wb.save(path)
     pg = object()
     st = _install_rank_fakes([(pg, False)] * 10)
     P._track_ranks_semi(wb, path, lambda m: None, lambda: False)
-    _check(sorted(set(st["kws"])) == ["k1", "k2"] and len(st["kws"]) == 2, f"오늘 묶음({on}) 키워드 2개만 검색 {st['kws']}")
+    _check(sorted(set(st["kws"])) == ["k1", "k2"] and len(st["kws"]) == 4, f"오늘 묶음({on}) 키워드 4개만 검색 {st['kws']}")
     _check(PR.LAST_RANK.get("unfilled") == 0, f"쉬는 계정 빈 칸은 빈 칸 수 0 {PR.LAST_RANK}")
     q = wb.data_quality_summary()
-    _check(q["products"] == 4 and q["active_blank_rank"] == 0, f"쉬는 상품(3개)은 '판매중인데 순위 공란'에 안 셈 {q}")
+    _check(q["products"] == 4 and q["active_blank_rank"] == 0, f"쉬는 상품(가상사 2개)은 '판매중인데 순위 공란'에 안 셈 {q}")
+
+
+def pin_rank_two_periods():
+    print("[핀 R3] 3일 간격 → 격일 두 기간 보존(D-362 · 통제 세션 11-19) — 옛 숨긴 시트(B1·C열) 그대로 · 격일 시작일 전 칸 = 옛 3묶음 "
+          "판정(회색 유지) · 그 뒤 = 격일 · 새 계정은 옛 기간에 안 들어감 · 옛 코드가 읽는 칸 안 바뀜(되돌려도 안전)")
+    from datetime import date, timedelta
+    from coupang_analytics import rank_schedule as RS
+    from coupang_analytics.workbook_common import _RANKGRP_SHEET
+    start3, start2 = date.today() - timedelta(days=20), date.today() - timedelta(days=10)
+    wb = OutputWorkbook.empty()
+    before = (start3 - timedelta(days=1)).isoformat()
+    for biz, aid in (("가상사", "id_a"), ("나상사", "id_b"), ("다상사", "id_c")):
+        wb.ensure_account(biz)
+        wb.set_account_id(biz, aid)
+        wb.ensure_product_block(biz, f"{biz}상품", config.KIND_CONTRACT, ["k1", "k2"], registered=f"{biz}상품")
+        wb.set_product_vids(biz, f"{biz}상품", [f"v_{aid}"])
+        for kw in ("k1", "k2"):
+            wb.set_keyword_rank(biz, f"{biz}상품", kw, before, 5)
+    ws = wb.wb.create_sheet(_RANKGRP_SHEET)          # 옛 코드(3일 간격)가 쓴 꼴 그대로
+    ws.sheet_state = "hidden"
+    ws.cell(1, 1, "시작일"); ws.cell(1, 2, start3.isoformat())
+    for c, h in enumerate(("사업자", "계정ID", "묶음", "배정일"), 1):
+        ws.cell(2, c, h)
+    old = {"id_a": "가", "id_b": "나", "id_c": "다"}
+    for i, (key, biz) in enumerate((("id_a", "가상사"), ("id_b", "나상사"), ("id_c", "다상사")), 3):
+        for c, v in enumerate((biz, key, old[key], start3.isoformat()), 1):
+            ws.cell(i, c, v)
+    wb.ensure_account("라상사")                       # 격일 뒤에 생긴 계정
+    wb.set_account_id("라상사", "id_d")
+    wb.ensure_product_block("라상사", "라상품", config.KIND_CONTRACT, ["d1"], registered="라상품")
+    wb.set_product_vids("라상사", "라상품", ["v_d"])
+    wb.set_keyword_rank("라상사", "라상품", "d1", before, 7)
+    logs: list = []
+    plan = RS.refresh_groups(wb, start2, logs.append)
+    ws = wb.wb[_RANKGRP_SHEET]
+    _check(plan.start == start3 and plan.start2 == start2 and plan.groups == {"id_a": 0, "id_b": 1, "id_c": 2},
+           f"옛 시작일·옛 3묶음 그대로 + 격일 시작일 {plan.start} {plan.start2} {plan.groups}")
+    _check(ws.cell(1, 2).value == start3.isoformat() and ws.cell(1, 4).value == start2.isoformat(),
+           "숨긴 시트 B1 = 옛 시작일 그대로 · D1 = 격일 시작일")
+    rows = {ws.cell(r, 2).value: (ws.cell(r, 3).value, ws.cell(r, 5).value) for r in range(3, ws.max_row + 1)}
+    _check({k: v[0] for k, v in rows.items() if v[0]} == old, f"C열(옛 코드가 읽는 칸) = 옛 묶음 그대로 {rows}")
+    _check(rows["id_d"][0] in (None, "") and rows["id_d"][1] in RS.NAMES, f"새 계정 = 격일 묶음만(옛 기간 없음) {rows}")
+    _check(set(plan.groups2) == {"id_a", "id_b", "id_c", "id_d"} and set(plan.groups2.values()) == {0, 1},
+           f"격일 = 전 계정 2묶음 새 배정 {plan.groups2}")
+    _check(any("처음 배정(격일 시작일" in m for m in logs), f"로그 = 격일 처음 배정 {logs}")
+    biz_of = {"id_a": "가상사", "id_b": "나상사", "id_c": "다상사", "id_d": "라상사"}
+
+    def due(n):
+        return sorted({b for b, _p, _k in PR._unfilled(wb, (start3 + timedelta(days=n)).isoformat())})
+    for n in range(0, 10):                           # 3일 간격 기간 = 옛 묶음 차례 + 새 계정은 매일(그 기간 배정 없음)
+        want = sorted({biz_of[k] for k, g in plan.groups.items() if g == n % 3} | {"라상사"})
+        _check(due(n) == want, f"옛 기간 {n}일째 = 옛 3묶음 차례 {due(n)} ≠ {want}")
+    for n in range(10, 16):                          # 격일 기간
+        want = sorted(biz_of[k] for k, g in plan.groups2.items() if g == (n - 10) % 2)
+        _check(due(n) == want, f"격일 {n - 10}일째 = 격일 묶음 차례 {due(n)} ≠ {want}")
+    _check(due(-2) == ["가상사", "나상사", "다상사", "라상사"], "옛 시작일 전 = 전부 잼")
+    again = RS.refresh_groups(wb, start2 + timedelta(days=3))
+    _check(again.start2 == start2 and again.groups2 == plan.groups2 and again.groups == plan.groups,
+           "다시 불러도 두 기간 그대로")
+    ws2 = wb.wb[_RANKGRP_SHEET]                      # 옛 코드 읽기(B1 + C열 가·나·다)로 새 시트를 읽어도 옛 배정 그대로
+    legacy = {ws2.cell(r, 2).value: ("가", "나", "다").index(ws2.cell(r, 3).value)
+              for r in range(3, ws2.max_row + 1) if ws2.cell(r, 3).value in ("가", "나", "다")}
+    _check(ws2.cell(1, 2).value == start3.isoformat() and legacy == {"id_a": 0, "id_b": 1, "id_c": 2},
+           f"되돌림 안전 — 옛 코드가 읽는 값 {legacy}")
 
 
 def main() -> int:
@@ -958,6 +1029,7 @@ def main() -> int:
         pin_rank_sales_sheet_run_date()
         pin_rank_split_schedule()
         pin_rank_split_rest_not_blank()
+        pin_rank_two_periods()
     finally:
         for k, v in saved.items():   # 순위 config 원복(다른 검증 오염 방지 — 별 프로세스지만 방어적)
             setattr(config, k, v)

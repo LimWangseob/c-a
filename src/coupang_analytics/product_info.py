@@ -74,11 +74,14 @@ def extract(bodies) -> dict:
     return {"상품": rows, "응답에_없는_칸": missing, "쪽": good, "완전": bad == 0 and good >= total_pages}
 
 
-def archive(out_dir, account_id: str, bodies, log) -> Path | None:
-    """그 계정 상품조회 응답 원문을 날짜별 파일로 보관. 응답 없음 = no-op. 저장 실패 = 로그(비치명 · 수집은 계속)."""
+def archive(out_dir, account_id: str, bodies, log, base_day: str | None = None) -> Path | None:
+    """그 계정 상품조회 응답 원문을 날짜별 파일로 보관. 응답 없음 = no-op. 저장 실패 = 로그(비치명 · 수집은 계속).
+    base_day = ① 판매 조회 끝 날 → 파일 안 '기준일'(판매가·판매상태가 어느 날 끝 상태인지 · 이름·수집 시각은 그대로 · D-362)."""
     if not bodies:
         return None
     got = extract(bodies)
+    if base_day:
+        got["기준일"] = base_day
     try:
         path = daily_snapshot.save(out_dir, DIRNAME, account_id, got, partial=not got["완전"])
     except OSError as exc:
