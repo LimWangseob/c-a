@@ -3,7 +3,7 @@
 기대값 = 계획서 3절 S1 검산 규칙·결정 문장에서 손으로 정함(코드에서 뽑지 않음):
   ① 숫자 쪽: 누적 반올림 칸 합 = 목표 · 상품표 열 합 = 1쪽 1~8(확정 전 포함) · 금액 전혀 없는 상품 뺌 · 판매 금액 큰 순 ·
      6 종류별 합 = 1쪽 6(누적 반올림 · 끝전 줄 없음) · 검산 1원 이상 차이만 실패 · 판정표 파일 없음 = judgments 사유(조용히 넘기지 않음).
-  ①-2 고정 형식(D-343 · 승인 샘플 `output\\_샘플_261118_고정형식정산서\\` 11-19 "샘플 승인."): 6 종류별 9줄 · 9 계정 공통 9줄 · 10 별도 입금 2줄 ·
+  ①-2 고정 형식(D-343 · 승인 샘플 `output\\_샘플_261118_고정형식정산서\\` 11-19 "샘플 승인."): 6 종류별 9줄 · 9 계정 공통 9줄 · 10 별도 입금 3줄(우대수수료 2 + 추가지급 1 · 소유자 11-19 "줄 추가 (추천)") ·
      어디로 갔나요 4줄 = 계정·달과 상관없이 같은 이름·순서 · 값 0 = 공란 · '이번 기간 없음'·'끝전' 없음 · 상품 줄 = 2쪽에 다 들어가면 2쪽, 아니면
      전부 3쪽부터(2쪽엔 '상품 n개 — 상품별 줄은 3쪽부터' + 합계) · 한 쪽 최대 이름 한 줄 상품 35개 / 회색 줄 함께 19개 ·
      로켓그로스 리뷰 이벤트(PostPurchase) = 9 '리뷰 이벤트' 줄에 원문 값(D-324 ①④).
@@ -40,7 +40,8 @@ from coupang_analytics.settlement_consignor_month_calc import cum_round  # noqa:
 from coupang_analytics import settlement_statement_account as AC  # noqa: E402
 from coupang_analytics import settlement_fee_rules as FR  # noqa: E402
 from coupang_analytics.settlement_consignor_month_cost import BI_CAT, KINDS, PEND_KIND, _rg_notes, expect_values  # noqa: E402
-from coupang_analytics.settlement_consignor_month_dep import flow  # noqa: E402
+from coupang_analytics.settlement_consignor_month_dep import dep_rows, flow  # noqa: E402
+from coupang_analytics.settlement_consignor_month_sep import separate  # noqa: E402
 from coupang_analytics.settlement_consignor_month_out import LINE_NAMES, common_out, coupang_by_cat, product_table, rg_kinds  # noqa: E402
 
 ISSUED = "2026-11-18"
@@ -49,7 +50,8 @@ FIX_KINDS = ["입출고비 (창고에 넣고 꺼냄)", "고객 배송비", "보�
              "창고에서 빼내는 비용 (반출)", "반출 배송비", "종류별 내역 전 (정산 예정·쿠팡 미확정)"]
 FIX_COMMON = ["판매자서비스이용료", "로켓그로스 세이버 구독료", "비즈니스 인사이트 이용료", "쿠팡 라이브 수수료", "리뷰 이벤트 (체험단)",
               "3PM 매출채권", "채권추심", "상품 표시 없는 창고·운송·보상 비용", "그 밖의 쿠팡 공제"]
-FIX_SEP = ["우대수수료 환급 (관리 상품 몫)", "우대수수료 환급 (상품 확인 전 · 계정 전체)"]
+FIX_SEP = ["우대수수료 환급 (관리 상품 몫)", "우대수수료 환급 (상품 확인 전 · 계정 전체)",
+           "추가지급 (관리 상품 몫)"]         # 셋째 줄 = 소유자 11-19 "줄 추가 (추천)"(T-125 A1 · 통제 전달)
 FIX_FLOW = ["쿠팡 입금 완료", "빠른정산으로 먼저 받음", "쿠팡 입금 예정", "쿠팡페이 환급"]
 
 
@@ -105,7 +107,8 @@ def synthetic(pending: bool = True, month: str = "2026-09") -> dict:
             "products": [_product("합성 상품 가", a, pa), _product("합성 상품 나", b)], "rg_kinds": kinds,
             "common": {"items": common,
                        "basis_text": "판매 비중 60.0% · 등록 비중 2/5=40.0% 중 작은 쪽 40.0%", "total_coupang": 55_000, "total_applied": -33_000},
-            "separate": [{"name": FIX_SEP[0], "amount": 1_500}, {"name": FIX_SEP[1], "amount": 0}], "settle_amount": 716_500,
+            "separate": [{"name": FIX_SEP[0], "amount": 1_500}, {"name": FIX_SEP[1], "amount": 0}, {"name": FIX_SEP[2], "amount": 0}],
+            "settle_amount": 716_500,
             "pending_total": 168_400 if pending else 0, "pending_detail": [{"방법": "합성"}] if pending else [],
             "flow": fl, "deposits": deps, "checks": [], "judgments": []}
 
@@ -254,6 +257,43 @@ def test_flow_fixed() -> None:
     rows = [{"date": "2026-10-10", "desc": "쿠팡 입금 완료", "amount": 1_000, "_status": "지급 완료"}]
     got = flow(st, rows)
     assert [x["name"] for x in got] == FIX_FLOW and [x["amount"] for x in got] == [1_000, 0, 0, 0], got
+
+
+def _add(day: str, vid: str, amt: int, status: str = "PAID") -> dict:
+    return {"지급일": day, "옵션ID": vid, "지급금액": amt, "지급구분": status}
+
+
+def _sep_st(m: str, rows: list, managed: set, cdate: str = "2026-01-01", basis: str = "2026-11-15") -> SimpleNamespace:
+    return SimpleNamespace(m=m, mk=m.replace("-", ""), basis=basis, j=[], order_pids={}, is_m=lambda p: False, is_mv={v: True for v in managed},
+                           d={"v": {"favorable": {}}, "add": {"줄": rows}, "extras": [], "cdate": cdate})
+
+
+def test_t125_additional_pay() -> None:
+    """T-125 A1(D-236 별도 입금 = 정산 금액에 넣음 · D-308 ① 추가지급 = finalRewardAmount · 보류 해제와 따로): 10 셋째 줄 '추가지급 (관리 상품 몫)' =
+    이 달 지급일 PAID 줄의 관리 옵션 금액(옛 엑셀과 같은 옵션 → 관리 VID · 계약 전 0) · '이번 계산에 안 넣음' 문장 없음 · 날짜별 표 = 지급일 줄
+    '쿠팡 추가지급' · 기준일 뒤·지급일 없음 = '(지급일 미정)'(D-294 ②) · 지급일 없는 줄 = 확인 필요 문장.
+    실자료 모양 = output38 검증자료 roum0502 202610 PAID 16,897(옵션 95878257194 · 10-22) · freewin7777 202611 PAID 117,960(11-13)."""
+    rows = [_add("2026-10-22", "95878257194", 16_897), _add("2026-10-30", "111", 5_000), _add("2026-10-25", "95878257194", 7_000, "REJECT"),
+            _add("2026-11-13", "96036856804", 117_960)]
+    st = _sep_st("2026-10", rows, managed={"95878257194"})
+    separate(st)
+    assert [n for n, _ in st.sep] == FIX_SEP and st.sep[2][1] == 16_897, st.sep    # 관리 밖 5,000 · 반려 7,000 · 11월 지급 = 안 넣음
+    assert not [j for j in st.j if "이번 계산에 안 넣음" in j], st.j
+    rows_d = dep_rows(SimpleNamespace(dep_raw={}, unlocated={}, fast={"지급일": []}, fav_rows=[], add_rows=st.add_rows), 0,
+                      [(n, round(a)) for n, a in st.sep])
+    assert [(r["date"], r["amount"], r["_status"]) for r in rows_d] == [("2026-10-22", 16_897, "지급 완료")], rows_d
+    assert [x["amount"] for x in flow(SimpleNamespace(basis="2026-11-15"), rows_d)] == [16_897, 0, 0, 0]
+    pre = _sep_st("2026-10", [_add("2026-10-22", "95878257194", 16_897)], managed={"95878257194"}, cdate="2026-11-01")
+    separate(pre)
+    assert pre.sep[2][1] == 0, pre.sep                                                 # 계약 전 지급 = 0
+    later = _sep_st("2026-11", [_add("2026-11-13", "96036856804", 117_960), _add("", "96036856804", 300)], managed={"96036856804"}, basis="2026-11-10")
+    separate(later)
+    assert later.sep[2][1] == 117_960 and later.add_rows == [(None, 117_960)], (later.sep, later.add_rows)
+    assert any("지급일 없는 1줄 300원" in j for j in later.j), later.j
+    rows_d = dep_rows(SimpleNamespace(dep_raw={}, unlocated={}, fast={"지급일": []}, fav_rows=[], add_rows=later.add_rows), 0,
+                      [(n, round(a)) for n, a in later.sep])
+    assert [(r["date"], r["amount"], r["_status"]) for r in rows_d] == [("(지급일 미정)", 117_960, "예정")], rows_d
+    assert [x["amount"] for x in flow(SimpleNamespace(basis="2026-11-10"), rows_d)] == [0, 0, 117_960, 0]
 
 
 def test_failed_checks() -> None:
@@ -469,7 +509,7 @@ def test_fixed_render() -> None:
     """D-343: 확정·정산 예정 두 계정 = 고정 줄 이름·순서 같음 · 고정 줄 모두 있음 · 값 0 = 공란(숫자 0 칸 없음) · '이번 기간 없음'·'끝전' 없음 · 바닥 문구."""
     a = synthetic(True)
     b = {**synthetic(False), "account": "synth02", "ceo": "합성 위탁자 둘"}
-    b["separate"] = [{"name": FIX_SEP[0], "amount": 0}, {"name": FIX_SEP[1], "amount": 1_500}]
+    b["separate"] = [{"name": FIX_SEP[0], "amount": 0}, {"name": FIX_SEP[1], "amount": 1_000}, {"name": FIX_SEP[2], "amount": 500}]
     plan = GS.build_statement([a, b], ISSUED)
     ta, tb = plan.tabs[1], plan.tabs[2]
     assert _labels(ta) == _labels(tb) and sorted(set(_labels(ta))) == sorted(set(FIX_KINDS + FIX_COMMON + FIX_SEP + FIX_FLOW)), _labels(ta)
@@ -582,7 +622,7 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     except AttributeError:
         pass
-    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_expect_values, test_flow_fixed, test_failed_checks, test_load_judge,
+    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_expect_values, test_flow_fixed, test_t125_additional_pay, test_failed_checks, test_load_judge,
               test_sale_months_2025_excluded, test_render, test_fixed_render, test_product_pages, test_overflow, test_unsplittable, test_check_reject,
               test_multi_month, test_tool):
         f()

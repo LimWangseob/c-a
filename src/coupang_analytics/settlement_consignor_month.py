@@ -19,8 +19,9 @@ from coupang_analytics import settlement_statement_account as AC
 from coupang_analytics import settlement_statement_source as SRC
 from coupang_analytics.settlement_consignor_month_calc import MonthState, ads, pending_sales, sales, settle_by_channel
 from coupang_analytics.settlement_consignor_month_cost import (
-    alloc_pending_costs, compensation, expect_values, logistics, milkrun, other_common, separate, shares)
+    alloc_pending_costs, compensation, expect_values, logistics, milkrun, other_common, shares)
 from coupang_analytics.settlement_consignor_month_out import assemble
+from coupang_analytics.settlement_consignor_month_sep import separate
 from coupang_analytics.settlement_statement_deduct import Account
 
 NAMES_FILE = "상품이름_판정.json"
@@ -74,6 +75,7 @@ def _all_vids(a: Account, pa: list, inv: dict) -> set:
     allv |= {str(k.get("vendorItemId")) for s in (a.v.get("inbound") or []) for k in s.get("skus") or []}
     for p in inv.values():
         allv |= set(p["types"])
+    allv |= {str(x["옵션ID"]) for x in a.add["줄"]}                  # 10 추가지급 = 옵션 → 관리 VID(T-125 A1)
     return allv
 
 

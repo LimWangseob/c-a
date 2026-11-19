@@ -14,6 +14,7 @@ from coupang_analytics.settlement_consignor_month_calc import MonthState, cum_ro
 FAST = "(빠른정산)"
 NO_DATE = "(지급일 미정)"
 FAV = "쿠팡페이"
+ADD = "쿠팡 추가지급 (10번)"
 
 
 def _channel_ratio(st: MonthState) -> dict:
@@ -139,8 +140,18 @@ def _fav_rows(st: MonthState, sep_total: int) -> list:
     return rows
 
 
+def _add_rows(st: MonthState, add_total: int) -> list:
+    """10 추가지급 → 날짜별 줄 '쿠팡 추가지급' — 지급 끝(지급일 ≤ 기준일) = 그 날짜 · 그 밖 = '(지급일 미정)'(D-294 ② · T-125 A1)."""
+    by: dict = defaultdict(float)
+    for day, a in st.add_rows:
+        by[day or NO_DATE] += a
+    ks = sorted(by)
+    return [{"date": dt, "desc": ADD + ("" if dt != NO_DATE else " · 입금 예정"), "amount": a, "_status": "예정" if dt == NO_DATE else "지급 완료"}
+            for dt, a in zip(ks, cum_round([by[k] for k in ks], add_total)) if a]
+
+
 def dep_rows(st: MonthState, net_coupang: int, sep_int: list) -> list:
-    """날짜별 표 줄 — 쿠팡 몫(원 단위 누적 반올림 = 정산 금액 − 10) + 쿠팡페이 환급 줄(10)."""
+    """날짜별 표 줄 — 쿠팡 몫(원 단위 누적 반올림 = 정산 금액 − 10) + 쿠팡페이 환급 줄(10 우대수수료 2줄) + 쿠팡 추가지급 줄(10 셋째 줄)."""
     by: dict = defaultdict(float)
     for (dt, stt, _kind), a in st.dep_raw.items():
         by[(dt, stt)] += a
@@ -150,7 +161,7 @@ def dep_rows(st: MonthState, net_coupang: int, sep_int: list) -> list:
     fdates = sorted(set(st.fast["지급일"]))
     rows = [{"date": dt, "desc": _dep_desc(dt, stt, a, fdates), "amount": a, "_status": stt}
             for (dt, stt), a in zip(keys, cum_round([by[k] for k in keys], net_coupang)) if a]
-    rows += _fav_rows(st, sum(a for _, a in sep_int))
+    rows += _fav_rows(st, sum(a for _, a in sep_int[:2])) + _add_rows(st, sep_int[2][1])
     rows.sort(key=lambda r: (r["date"].startswith("("), r["date"]))
     return rows
 

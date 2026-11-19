@@ -1,4 +1,4 @@
-"""위탁자 정산서 3차 형식 — 6 창고·배송비 · 7 밀크런 · 8 재고 보상 · 6·7·8 상품 자료 전 금액 나누기 · 9 계정 공통 · 비중 · 10 별도 입금.
+"""위탁자 정산서 3차 형식 — 6 창고·배송비 · 7 밀크런 · 8 재고 보상 · 6·7·8 상품 자료 전 금액 나누기 · 9 계정 공통 · 비중(10 별도 입금 = `_sep`).
 T-38 S2(샘플 `s03_compute.py` logistics·milkrun·compensation·alloc_pending_costs·other_common·shares·separate 를 나눔).
 
 샘플 뒤 확정 규칙(그대로 따름): D-299 ① CFS 비용 조정 = 물류비 리포트 안에 이미 있음(9 에 더하지 않음) · D-299 ④ 판매자서비스이용료 =
@@ -33,7 +33,6 @@ RG_NOTE_KEYS = ("totalCoupangLiveDeductionAmount", "totalDebitCardDeductionAmoun
                 "totalSubscriptionFeeDeductionAmount", "totalBusinessInsightsDeductionAmount", "totalCarryOverSettlementDeductionAmount")
 RG_REVIEW = "totalPostPurchaseDeductionAmount"      # 로켓그로스 리뷰 이벤트 공제 = 원문 값 → 9 '리뷰 이벤트'(D-324 ①④)
 RG_REVIEW_CAT = "r:" + RG_REVIEW
-SEP_NAMES = ("우대수수료 환급 (관리 상품 몫)", "우대수수료 환급 (상품 확인 전 · 계정 전체)")     # 10 고정 2줄(D-343)
 # 계정 단위 정액 3종(D-271) — 9 반영 비중 = 등록 비중(판매 비중과 비교 안 함)
 BI_CAT = "o:businessInsightsOffsetYearMonthBreakdown"
 FIXED_FEE_CATS = ("w:" + AC.SVC, "o:subscriptionFeeOffsetYearMonthBreakdown", BI_CAT)
@@ -422,47 +421,3 @@ def item_share(st: MonthState, cat: str) -> float:
     if cat in FIXED_FEE_CATS and st.reg_share is not None:
         return st.reg_share
     return st.share
-
-
-# ── 10 별도 입금 ──
-def _fav_split(st: MonthState, rows: list) -> tuple[float, float, float]:
-    """우대수수료 환급 줄 → (관리 몫, 상품 모르는 주문 금액, 계정 전체) · 날짜별 표 줄(st.fav_rows)."""
-    st.fav_rows = []
-    m = unk = tot = 0.0
-    for x in rows:
-        a = num(x.get("refundAmount"))
-        tot += a
-        pids = sorted(st.order_pids.get(str(x.get("orderId"))) or [])
-        dt = x.get("realTransferDateStr") or x.get("expectedTransferDateStr")
-        if pids:
-            sh = sum(st.is_m(p) for p in pids) / len(pids)
-            m += a * sh
-            st.fav_rows.append((dt, x.get("transferStatus"), a * sh))
-        else:
-            unk += a
-            st.fav_rows.append((dt, x.get("transferStatus"), a))
-    return m, unk, tot
-
-
-def _sep_notes(st: MonthState) -> None:
-    add = [x for x in st.d["add"]["줄"] if str(x.get("지급일") or "")[:7] == st.m]
-    if add:
-        st.j.append(f"확인 필요: 이 달 추가지급 {len(add)}줄 — 이번 계산에 안 넣음")
-    ex = [x for x in st.d["extras"] if str(x.get("일자"))[:7] == st.m]
-    if ex:
-        st.j.append(f"확인 필요: 이 달 쿠팡 별도 보상 {ex} — 이번 계산에 안 넣음")
-
-
-def separate(st: MonthState) -> None:
-    """10 별도 입금 = 우대수수료 환급(D-236 · 정산 금액에 넣음) — 주문 → 상품 관리 몫 · 상품 모르는 주문 = 계정 전체 금액(D-241 ②)."""
-    fav = (st.d["v"].get("favorable") or {}).get(st.mk) or {}
-    rows = fav.get("rows") or []
-    m, unk, tot = _fav_split(st, rows)
-    if (fav.get("totalCount") or 0) != len(rows):
-        st.j.append(f"확인 필요: 우대수수료 환급 {st.mk} 목록 {len(rows)}줄 ≠ 쿠팡 전체 건수 {fav.get('totalCount')}")
-    st.fav = {"계정 전체": tot, "관리 몫(주문 → 상품)": m, "상품 모르는 주문(계정 전체 금액 그대로)": unk, "건수": len(rows)}
-    st.sep = [(SEP_NAMES[0], m), (SEP_NAMES[1], unk)]         # 늘 2줄 · 값 없으면 0(D-343)
-    if round(unk):
-        st.j.append(f"우대수수료 환급 중 주문이 아직 정산 파일에 없는 {unk:,.0f}원 = 상품을 몰라 계정 전체 금액 그대로 10 에 넣음"
-                    "(D-241 ② · 쿠팡 자료로 상품이 확인되면 그때 상품별로 나눔)")
-    _sep_notes(st)
