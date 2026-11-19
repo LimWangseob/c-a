@@ -48,7 +48,7 @@ class AccountSuspended(Exception):
     정상화되면 원복(account_suspend·소유자 2026-11-11)."""
 
 
-def _dump_raw(account_id: str, log, out_dir: str = "output") -> None:
+def _dump_raw(account_id: str, log, out_dir: str = "output", base_day: str | None = None) -> None:
     """수집한 3개 데이터 API 응답 **원문(가공 없음)** 을 계정별 gzip 사이드카로 저장 — 다양한 오프라인 분석용.
 
     파싱/요약이 아니라 **쿠팡이 준 응답 바디 그대로**(F12 네트워크와 동일)를 남긴다. 재수집·재빌드 없이
@@ -56,7 +56,8 @@ def _dump_raw(account_id: str, log, out_dir: str = "output") -> None:
     커서 run_log 오염 방지). 설정(config.SAVE_RAW_RESPONSES) 끄면 no-op·버퍼 비면 no-op. 저장 실패는
     비치명(로그만·수집은 계속). api = vendor_inventory | inventory | sales(각 페이지 p1·p2…).
     _raw 는 매 실행 덮어쓰므로 재고현황은 날짜별로도 남긴다(_archive_inventory) · 상품조회는 정산용 칸 날짜별(product_info) +
-    원문 통째 수집일별 보관(_keep_old_raw · D-341)."""
+    원문 통째 수집일별 보관(_keep_old_raw · D-341). base_day = ① 판매 조회 끝 날(기준일 D) → 재고현황·상품정보 파일 안
+    '기준일' 칸(파일 이름·'수집' 시각은 그대로 · D-362 · 통제 세션 11-19)."""
     if not config.SAVE_RAW_RESPONSES:
         return
     import gzip
@@ -79,8 +80,9 @@ def _dump_raw(account_id: str, log, out_dir: str = "output") -> None:
             log(f"  [원본저장] {account_id}: 응답 원문 {n}개 → output/_raw/{account_id}_*.json.gz (가공 없음·분석용)")
     except Exception as exc:   # 저장 실패해도 수집은 계속(비치명)
         log(f"  [원본저장] ⚠ {account_id} 응답 원문 저장 실패(비치명) — {exc.__class__.__name__}: {str(exc)[:80]}")
-    _archive_inventory(account_id, dumps.get("inventory"), log, out_dir)
-    product_info.archive(out_dir, account_id, dumps.get("vendor_inventory"), log)   # 상품 칸 날짜별(categoryId 등 · T-100)
+    _archive_inventory(account_id, dumps.get("inventory"), log, out_dir, base_day)
+    product_info.archive(out_dir, account_id, dumps.get("vendor_inventory"), log,   # 상품 칸 날짜별(categoryId 등 · T-100)
+                         base_day=base_day)
 
 
 def _keep_old_raw(path: Path, body: str) -> None:
@@ -92,13 +94,14 @@ def _keep_old_raw(path: Path, body: str) -> None:
         daily_snapshot.keep_before_overwrite(path)
 
 
-def _archive_inventory(account_id: str, bodies, log, out_dir) -> None:
+def _archive_inventory(account_id: str, bodies, log, out_dir, base_day: str | None = None) -> None:
     """재고현황 응답 원문(pricing 쿠폰·개당 비용)을 계정·날짜별로 쌓음(output/재고현황_일별/{계정}/{날짜}.json.gz). 추가 조회 없음·
     같은 날 다시 수집하면 앞 파일을 두고 시각 붙은 파일을 더 남김(daily_snapshot). 판매자배송 전용 계정은 재고 조회가 없어 no-op."""
     if not bodies:
         return
     try:
-        path = daily_snapshot.save(out_dir, daily_snapshot.INVENTORY_DIRNAME, account_id, {"응답": bodies})
+        rec = {"응답": bodies, **({"기준일": base_day} if base_day else {})}
+        path = daily_snapshot.save(out_dir, daily_snapshot.INVENTORY_DIRNAME, account_id, rec)
         log(f"  [재고 보관] {account_id}: 재고현황 원문 {len(bodies)}개 → {path}")
     except OSError as exc:   # 저장 실패해도 수집은 계속(비치명)
         log(f"  [재고 보관] ⚠ {account_id} 저장 실패(비치명) — {exc.__class__.__name__}: {str(exc)[:80]}")
@@ -150,7 +153,7 @@ def _login_and_discover(a: Account, date_from, date_to, get_password, log, login
             log(f"[정지해제] {a.business_name or a.account_id} — 계정 정상 전환 → 정지 표기 해제·수집 재개")
         collector.reset_raw()                # 계정별 응답 원문 버퍼 초기화(파일 분리)
         found = _discover_products(b, a, date_from, date_to, log, ai_key=ai_key, anchor_file=anchor_file)
-        _dump_raw(a.account_id, log)         # 3 API 응답 원문 저장(가공 없음·분석용). found None(데이터없음)이어도 남김
+        _dump_raw(a.account_id, log, base_day=date_to)   # 3 API 응답 원문 저장(가공 없음·분석용 · 기준일 D-362). found None(데이터없음)이어도 남김
         _record_sales_periods(b.page, a.account_id, "output", log)   # 통합 판매현황 월·주 합계(같은 세션·조회만)
         if found is not None:
             _record_sales_history(a.account_id, date_from, date_to, found[2], log)   # 판매금액 날짜별 누적
