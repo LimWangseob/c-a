@@ -55,6 +55,7 @@ CHECKS = [
     ("정산 다시받을목록 자동 재받기(T-122 D-339)", "tools/verify_settlement_refetch_offline.py", True),
     ("정산 윙 화면 보기·응답 기록 틀(T-122 D-340 · 첫 시험 전 칸 이름만)", "tools/verify_settlement_screen_view_offline.py", True),
     ("정산 지급 전 예상 규칙값(비즈니스 인사이트 일할·신상품 무료 창 T-116)", "tools/verify_settlement_fee_rules_offline.py", True),
+    ("정산 표본 전후 계산 도구(저장 자료·지문 다시 읽기·금액 칸 비교 S1 D-353)", "tools/verify_settlement_sample_offline.py", True),
     ("셀독 정산서(대상 계약·상품군·양식 1장·도달율)", "tools/verify_seldoc_statements_offline.py", True),
     ("위탁자 정산서 3차 형식(숫자 검산·시트 그리기·쪽·결정 문구·입구)", "tools/verify_consignor_statement_offline.py", True),
     ("판매분석 금액 날짜별 누적", "tools/verify_sales_history_offline.py", True),
