@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 
 import openpyxl
-from openpyxl.formatting.rule import CellIsRule, ColorScaleRule
+from openpyxl.formatting.rule import CellIsRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.page import PageMargins
@@ -47,16 +47,9 @@ S_HEAD = ["No", "계약자 (사업자)\n클릭 → 시트", "대표자", "계정
           "개인 0건\n(뺌)", "7일 판매\n셀독", "7일 판매\n개인", "7일 판매\n합계", "셀독\n비중"]
 S_W = [7, 28, 16, 26, 12, 9, 12, 12, 13, 13, 14, 11]
 HEAD_H, ROW_H = 40, 20                     # 머리글(2줄) · 데이터 줄 높이(포인트 · 소유자 11-19 "줄간격 조금 넓혀줘" 15→20)
-# 조건부 서식 = 구글시트도 지원하는 것만(소유자 11-19 '구글시트에서 일부 기능 미지원' — 데이터 막대 없음):
-# 색 농도(흰색 → 연보라 · 값이 클수록 진하게 · "색 농도로 진행해줘") + 그로스 재고 0 빨강(cellIs).
-C_SCALE_LO, C_SCALE_HI = "FFFFFF", "B39DDB"
+# 조건부 서식 = 그로스 재고 0 빨강(cellIs)만 — 구글시트도 지원(소유자 11-19 '구글시트에서 일부 기능 미지원').
+# 색 농도는 없음(소유자 11-19 '7일합계항목 … 동일하게 해줘' · '요약 시트도 다른 항목과 동일하게 해줘' = 바탕은 줄 색 그대로 D-360).
 NO_LINK = "  (링크 없음 · 상품ID 미수집)"
-
-
-def _scale(end_type: str = "max", end_value=None) -> ColorScaleRule:
-    """색 농도 2색(0 = 흰색 → 최댓값(또는 end_value) = 연보라) — 구글도 같은 규칙(gsheet_contractor 가 옮김)."""
-    return ColorScaleRule(start_type="num", start_value=0, start_color=C_SCALE_LO,
-                          end_type=end_type, end_value=end_value, end_color=C_SCALE_HI)
 
 
 def _fill(c: str) -> PatternFill:
@@ -205,8 +198,6 @@ def summary_sheet(ws, bizs: list[Biz], linked: dict[str, str]) -> None:
         ws.cell(r, k, f"=SUM({L}{hr + 1}:{L}{end})").number_format = NUM
     ws.cell(r, 12, f'=IF(K{r}>0,I{r}/K{r},"")').number_format = "0%"
     if end > hr:
-        ws.conditional_formatting.add(f"K{hr + 1}:K{end}", _scale())
-        ws.conditional_formatting.add(f"L{hr + 1}:L{end}", _scale(end_type="num", end_value=1))
         ws.auto_filter.ref = f"A{hr}:{get_column_letter(len(S_HEAD))}{end}"
     ws.freeze_panes = ws.cell(hr + 1, 3)
 
