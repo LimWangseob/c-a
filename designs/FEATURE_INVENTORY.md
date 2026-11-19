@@ -30,6 +30,7 @@
 | 정산 자동 수집(D-020·D-021) | 18:00 함께 기동·①완료 대기·다 받으면/17:55 종료·사람이 앱 끄면 함께 종료 | main(`--auto`/`--resume`)·정산 탭 | ✓ runtime P25~P27·e2e |
 | 셀독전환자 로그인 확인(D-111·1단계) | 미정산 셀독전환자 ①②계정 로그인 성공/실패 표 + '연락 필요' 목록(비번 오류·2단계 인증·비번 없음) · 다운로드 없음 | '셀독전환 정산' 탭 → `정산다운로드.exe transfer-login` → `transfer_login.run` | ✓ verify_transfer_offline T1~T7 |
 | 셀독전환자 정산 자료 받기(D-187·2단계) | 매일 18시 뒤 ①②계정(로그인 '실패' 제외) 정산 자료 2026-01~ → `output/정산_셀독전환/정산/` + 누적 엑셀(지급 내역·상품별 정산 = 상품 ID·VID·상품명·옵션명) · 원장 정산 파일은 복사 | 18:00/재부팅 복구 main·'셀독전환 정산' 탭 → `정산다운로드.exe transfer-settle` → `transfer_settle.run` | ✓ verify_transfer_settle_offline S1~S8 |
+| 셀독 계약자별 상품 현황(D-357~D-359·T-132) | 관리대장 사업자별 셀독/개인 상품 · 판매가·그로스 재고·최근 7일 판매 → `output/계약자별상품현황/셀독_계약자별상품현황_yymmdd.xlsx` + 설정 탭 등록 구글시트 통째 덮어쓰기 | ① 판매수집 직후 `pipeline_stages.run_stages` → `contractor_stage.run_stage`(로그인 없음 · 실패 = ❌ 후 계속) | ✓ verify_contractor_sheet_offline T1~T8 |
 
 ### 1-2. 로그인·매칭·출력
 | 기능 | 목표 결과 | 게이트 |
