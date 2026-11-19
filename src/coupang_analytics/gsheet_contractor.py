@@ -18,8 +18,7 @@ from .gsheet_stats import _rgb_to_color, worksheet_to_requests
 _LOC = re.compile(r"^#?'?(.*?)'?!")
 TMP_PREFIX = "~새탭"
 # 구글시트가 지원해 그대로 옮길 수 있는 조건부 서식(소유자 11-19 '구글시트에서 일부 기능 미지원' — 데이터 막대 등은 없음).
-SUPPORTED_CF = frozenset({"colorScale", "cellIs"})
-_CFVO = {"min": "MIN", "max": "MAX", "num": "NUMBER", "percent": "PERCENT", "percentile": "PERCENTILE"}
+SUPPORTED_CF = frozenset({"cellIs"})
 _CELLIS = {"equal": "NUMBER_EQ", "greaterThan": "NUMBER_GREATER", "lessThan": "NUMBER_LESS"}
 
 
@@ -53,24 +52,10 @@ def _row_heights(ws, gid: int) -> list[dict]:
         for r, dim in ws.row_dimensions.items() if r > 1 and dim.height]
 
 
-def _point(cfvo, color) -> dict:
-    p = {"type": _CFVO[cfvo.type], "color": _rgb_to_color(getattr(color, "rgb", None))}
-    if cfvo.val is not None:
-        v = float(cfvo.val)
-        p["value"] = str(int(v)) if v.is_integer() else str(v)
-    return p
-
-
 def _rule_body(rule) -> dict:
     """openpyxl 조건부 규칙 → 구글 규칙 본문. 지원 안 되는 종류 = 예외(조용히 빼지 않음 · 엑셀·구글 모양이 갈라지지 않게)."""
     if rule.type not in SUPPORTED_CF:
         raise ValueError(f"구글시트로 못 옮기는 조건부 서식: {rule.type}")
-    if rule.type == "colorScale":
-        cs = rule.colorScale
-        if len(cs.cfvo) != 2:
-            raise ValueError(f"색 농도는 2색만 옮김(받은 {len(cs.cfvo)}색)")
-        return {"gradientRule": {"minpoint": _point(cs.cfvo[0], cs.color[0]),
-                                 "maxpoint": _point(cs.cfvo[1], cs.color[1])}}
     if rule.operator not in _CELLIS:
         raise ValueError(f"구글시트로 못 옮기는 비교: {rule.operator}")
     f = rule.dxf.font
@@ -83,7 +68,7 @@ def _rule_body(rule) -> dict:
 
 
 def cond_format_requests(ws, gid: int) -> list[dict]:
-    """엑셀 조건부 서식(색 농도·값 비교) → addConditionalFormatRule — 엑셀과 같은 규칙을 구글에도 그대로."""
+    """엑셀 조건부 서식(값 비교) → addConditionalFormatRule — 엑셀과 같은 규칙을 구글에도 그대로."""
     out = []
     for cf in ws.conditional_formatting:
         ranges = [{"sheetId": gid, "startRowIndex": r.min_row - 1, "endRowIndex": r.max_row,
