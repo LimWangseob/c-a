@@ -133,3 +133,55 @@ def write_results(folder: Path, steps: dict) -> bool:
     if done:
         (folder / DONE).write_text(json.dumps(body, ensure_ascii=False, indent=1), encoding="utf-8")
     return done
+
+
+# ── 자동 증빙(정산 받기 회차 안 · D-363·D-365) ──────────────────────────
+STOP_BEFORE = timedelta(minutes=40)      # 회차 끝 40분 전부터 새 계정·새 단계 안 함(D-365 ③ — 옛 실행이 다음 회차 잠금을 안 넘기게)
+CHECK_AFTER = 2                          # 같은 단계가 이만큼 회차 연속 실패하면 '확인 필요'(D-365 ⑤)
+STREAK = "_연속실패.json"
+
+
+def stop_at(cycle_end: datetime) -> datetime:
+    """자동 증빙 멈춤 시각 = 회차 끝 − 40분(회차 시각 상수가 아니라 그 회차의 끝 시각에서 계산)."""
+    return cycle_end - STOP_BEFORE
+
+
+def _stamp(p: Path) -> datetime | None:
+    """결과·완료 기록의 '시각'(없으면 None · 깨졌으면 오류 그대로)."""
+    if not p.exists():
+        return None
+    return datetime.strptime(json.loads(p.read_text(encoding="utf-8"))["시각"], "%Y-%m-%d %H:%M")
+
+
+def renewal(folder: Path, now: datetime, start: date) -> tuple[bool, date, bool]:
+    """자동 증빙 대상인가 → (대상, 받을 시작일, 지난 단계 결과 무시). 완료 표시 없음 = 대상(이어받기) · 완료가 이번 달이면
+    대상 아님 · 지난달 이전 완료 = 매달 1일 지나면 다시 대상(D-365 ④): 시작일 = 완료한 달 1일(그 뒤 확정분만 — 정산 원본은
+    요청 기록이 있어 받은 파일을 다시 요청 안 함) · 이번 달 첫 시도면 지난 단계 결과 무시 · 이번 달 시도가 있으면 그 결과로 이어받기."""
+    done = _stamp(folder / DONE)
+    if done is None:
+        return True, start, False
+    month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if done >= month:
+        return False, start, False
+    tried = _stamp(folder / RESULT)
+    return True, max(start, done.date().replace(day=1)), not (tried is not None and tried >= month)
+
+
+def fail_streak(folder: Path, steps: dict, cycle: str) -> list[str]:
+    """단계별 연속 실패 회차 수(D-365 ⑤ · `_연속실패.json`) — 그 회차에 시도해 실패한 단계 +1(같은 회차는 한 번) · 정상/없음 = 지움 ·
+    멈춤 시각으로 시도 안 한 단계는 그대로. 반환 = CHECK_AFTER 회차 이상 연속 실패한 단계(확인 필요)."""
+    p = folder / STREAK
+    rec = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    for label, r in steps.items():
+        if r.get("멈춤"):
+            continue
+        if r.get("결과") != FAIL:
+            rec.pop(label, None)
+            continue
+        cur = rec.get(label, {"회차수": 0, "마지막": ""})
+        if cur["마지막"] != cycle:
+            cur = {"회차수": cur["회차수"] + 1, "마지막": cycle}
+        rec[label] = cur
+    folder.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(rec, ensure_ascii=False, indent=1), encoding="utf-8")
+    return [k for k, v in rec.items() if v["회차수"] >= CHECK_AFTER]
