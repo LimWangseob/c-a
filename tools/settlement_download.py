@@ -852,6 +852,7 @@ def cmd_probe(a, b, args, jobs: list) -> None:
 
 
 EVIDENCE_JOBS = BASE / "증빙" / "_요청기록.json"      # 증빙 전용 요청 기록 — 앱 기록에 '받음'인 파일도 원본을 다시 받게
+EVIDENCE_DIR = EVIDENCE_JOBS.parent                   # 자동 증빙 상위 폴더 = 배치(정산증빙_전체받기.bat --out output\정산\증빙)와 같은 곳
 
 
 def _evidence_step(name: str, label: str, fn) -> dict:
@@ -868,8 +869,9 @@ def _evidence_step(name: str, label: str, fn) -> dict:
     return res
 
 
-def cmd_evidence(a, b, args, jobs: list) -> None:
-    """계정 하나의 증빙 원본 전체(D-067): 정산 원본 → 정산 줄 없는 주 비용 → 판매분석 월별 → 지급 증빙 메뉴 → 목록·결과."""
+def cmd_evidence(a, b, args, jobs: list) -> dict:
+    """계정 하나의 증빙 원본 전체(D-067): 정산 원본 → 정산 줄 없는 주 비용 → 판매분석 월별 → 지급 증빙 메뉴 → 목록·결과.
+    반환 = 단계 결과(멈춤 시각으로 시작 안 한 단계 = '멈춤' 표시 — 자동 증빙 연속 실패 셈에서 뺌 D-365 ⑤)."""
     global ORIGINALS
     from coupang_analytics import settlement_evidence as EV
     from coupang_analytics import settlement_evidence_web as EW
@@ -899,7 +901,7 @@ def cmd_evidence(a, b, args, jobs: list) -> None:
             ("우대수수료 환급 받기", lambda: EW.refund_fetch(mod, b, name, steps.get("우대수수료 환급 요청", {}), menu))]
     for label, fn in plan:
         if past_until(args):
-            steps[label] = {"결과": EV.FAIL, "내용": f"멈춤 시각 {args.until} — 다음 실행에서", "파일": 0}
+            steps[label] = {"결과": EV.FAIL, "내용": f"멈춤 시각 {args.until} — 다음 실행에서", "파일": 0, "멈춤": True}
             continue
         if label in prev and not (label == "우대수수료 환급 요청" and prev.get("우대수수료 환급 받기", {}).get("결과") == EV.FAIL):
             steps[label] = {**prev[label], "내용": "지난 실행 결과 그대로 — " + str(prev[label].get("내용", ""))}
@@ -914,6 +916,30 @@ def cmd_evidence(a, b, args, jobs: list) -> None:
         steps["정산 원본"] = _evidence_step(name, "정산 원본(마저 받기)", rest)
     done = EV.write_results(folder, steps)
     LOG.record(name, "증빙", RL.OK if done else RL.FAIL, f"{'완료' if done else '미완(다시 실행하면 이어서)'} · {folder}")
+    return steps
+
+
+def _evidence_auto(a, b, args, jobs: list) -> None:
+    """자동 증빙 한 계정(D-363·D-365) — 정산 받기와 같은 방식의 로그인으로 cmd_evidence(배치와 같은 단계·같은 폴더·검증·광고 포함).
+    증빙 요청 기록·원본 폴더·기간은 이 계정 동안만 바꾸고 되돌림(예외여도 — 다음 계정 정산 받기에 섞이지 않게) · jobs(정산 기록)는 안 씀."""
+    global JOBS, ORIGINALS
+    from coupang_analytics import settlement_evidence as EV
+    name = name_of(a)
+    folder = EV.account_folder(EVIDENCE_DIR, name)
+    due, start, redo = EV.renewal(folder, datetime.now(), args.start)
+    if not due:
+        return
+    keep = (JOBS, ORIGINALS, args.out, args.start, args.redo)
+    EVIDENCE_JOBS.parent.mkdir(parents=True, exist_ok=True)
+    JOBS, args.out, args.start, args.redo = EVIDENCE_JOBS, str(EVIDENCE_DIR), start, redo
+    try:
+        with MEMLOG.around(f"증빙 {name}", log):          # 검증·광고 포함이라 큰 할당 후보(D-346 · D-365 ②)
+            steps = cmd_evidence(a, b, args, SJ.load_jobs(EVIDENCE_JOBS))
+    finally:
+        JOBS, ORIGINALS, args.out, args.start, args.redo = keep
+    for label in EV.fail_streak(folder, steps, args.cycle_since):
+        LOG.record(name, f"증빙 {label}", RL.FAIL,
+                   f"확인 필요 — 같은 단계 {EV.CHECK_AFTER}회차 연속 실패(D-365) · 처리기록·오류 로그 확인 · 다음 회차에도 다시 시도")
 
 
 def _evidence_targets(accts, args) -> list:
@@ -1021,7 +1047,7 @@ def _cmd_stats_main(args) -> int:
     return 0
 
 
-_PHASE = {"cmd_run": "정기", "cmd_backfill": "소급"}   # [메모리] 계정마다 줄의 단계 이름
+_PHASE = {"cmd_run": "정기", "cmd_backfill": "소급", "_evidence_auto": "증빙"}   # [메모리] 계정마다 줄의 단계 이름
 
 
 def _run_accounts(accts, run, args) -> int:
@@ -1063,6 +1089,7 @@ WATCH_POLL_SEC = 300             # ①판매수집 진행 중 정지·파일 생
 WATCH_CATCHUP_REST_SEC = 60      # 소급(받을 게 남음) 중 한 바퀴와 다음 바퀴 사이 짧은 쉼
 DONE_FILE = BASE / "로그" / "_완료.json"   # 같은 ①완료 기준 '완료' 기록(중복 실행 방지·D-010)
 CYCLE = RL.Totals()                        # watch 한 회차의 바퀴 합계 — 회차 끝 [실행 결과 종합](D-168)
+PASS_ACCOUNTS: list = []                   # 마지막 바퀴의 정산 계정 — 자동 증빙 대상 고르기(원장을 다시 읽지 않음 · D-365)
 
 
 def _sweep_work_count(lg) -> int:
@@ -1123,6 +1150,7 @@ def _one_pass(args) -> tuple[bool, int]:
         LOG.heartbeat("종료", reason)
         raise
     LOG.accounts = [name_of(a) for a in accts]
+    PASS_ACCOUNTS[:] = accts
     try:
         rc = _run_both(accts, args)
         work = _sweep_work_count(LOG)
@@ -1167,6 +1195,50 @@ def _memory_floor_exit(exc: BaseException) -> int:
     except (MemoryError, OSError):
         pass                                 # 더 쓸 곳이 없음 — 종료코드 3 으로 끝냄(창으로 멈춰 있지 않게)
     return 3
+
+
+def _evidence_targets_auto(now: datetime, start: date) -> list:
+    """자동 증빙 대상 = 이번 회차 정산 계정 중 증빙이 남았거나 새 달이 된 계정(로그인 전에 고름 — 끝난 계정은 로그인 안 함).
+    결과 기록이 깨진 계정은 그 계정만 오류로 남기고 뺌(무음 아님)."""
+    from coupang_analytics import settlement_evidence as EV
+    out = []
+    for a in PASS_ACCOUNTS:
+        try:
+            if EV.renewal(EV.account_folder(EVIDENCE_DIR, name_of(a)), now, start)[0]:
+                out.append(a)
+        except (OSError, ValueError, KeyError) as exc:
+            LOG.error(name_of(a), "증빙 대상 확인", exc)
+    return out
+
+
+def _evidence_sweep(args, action: str) -> None:
+    """D-363·D-365 ① — 회차 정산이 끝난(완료·미완료) 뒤 남은 시간에만 증빙. 회차 끝 40분 전부터 새 계정·새 단계 안 함(③ ·
+    args.until_at 을 그동안만 앞당김) · 남은 것은 다음 회차. 증빙 결과는 정산 완료 판정·_완료.json 을 바꾸지 않음(종합에만 줄)."""
+    global LOG
+    from coupang_analytics import settlement_evidence as EV
+    if action not in ("done", "giveup") or not PASS_ACCOUNTS:
+        return
+    stop = EV.stop_at(args.until_at)
+    gap = int(EV.STOP_BEFORE.total_seconds() // 60)
+    if datetime.now() >= stop:
+        log(f"[자동] 증빙 — 회차 끝 {gap}분 전({stop:%m-%d %H:%M}) 지남 — 다음 회차에 이어서(D-365)")
+        return
+    targets = _evidence_targets_auto(datetime.now(), args.start)
+    if not targets:
+        log("[자동] 증빙 — 받을 계정 없음(모두 이번 달 완료)")
+        return
+    keep = (args.until, args.until_at)
+    LOG = RL.RunLog(BASE)
+    LOG.accounts = [name_of(a) for a in targets]
+    args.until, args.until_at = f"{stop:%H:%M}", stop
+    log(f"[자동] 정산 받기 끝 → 증빙 받기 {len(targets)}계정 · {stop:%m-%d %H:%M} 부터 새 계정·새 단계 안 함(회차 끝 {gap}분 전 · D-365)")
+    LOG.heartbeat("작동중", f"정산 끝 · 증빙 받는 중 {len(targets)}계정 · {stop:%H:%M} 멈춤")
+    try:
+        _run_accounts(targets, _evidence_auto, args)
+    finally:
+        args.until, args.until_at = keep
+        CYCLE.add(LOG)                        # 증빙 줄도 회차 [실행 결과 종합]에(확인 필요 포함 · D-365 ⑤)
+    _between_passes()
 
 
 def _cycle_close(status: str, reason: str, *, stopped: bool = False) -> None:
@@ -1240,6 +1312,7 @@ def cmd_watch(args) -> int:
     try:
         with registry_lock(BASE / "_잠금" / "_watch.lock", wait_sec=0, on_log=log):
             cycle_start, cycle_end = W.cycle_window(datetime.now())
+            PASS_ACCOUNTS.clear()             # 자동 증빙 대상 = 이번 회차 바퀴의 계정만(D-365)
             args.cycle_since = cycle_start.isoformat(timespec="seconds")   # 소급 상한 = 회차(01:30~) 단위(D-170) · --since 와 무관
             if getattr(args, "since", ""):    # 사람이 누른 전체실행 — 그 실행 뒤에 끝난 ①만 기다림(2026-10-13)
                 cycle_start = max(cycle_start, datetime.fromisoformat(args.since))
@@ -1278,6 +1351,7 @@ def cmd_watch(args) -> int:
                     _sleep_until(WATCH_CATCHUP_REST_SEC if action == "again" else WATCH_POLL_SEC, cycle_end)
                     continue
                 W.write_done(DONE_FILE, key, action, reason, failed=len(fails))
+                _evidence_sweep(args, action)
                 _cycle_close(W.done_status(len(fails)) if action == "done" else "종료", reason, stopped=action != "done")
                 return 0 if action == "done" else 1
             reason = f"회차 종료 시각({cycle_end:%m-%d %H:%M}) — 정산 종료(남은 건 {W.CYCLE_START:%H:%M} 다음 회차에서 이어서 받음)"

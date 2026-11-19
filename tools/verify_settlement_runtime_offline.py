@@ -3419,6 +3419,167 @@ def p67_manual_start():
     ok("버튼 = --manual · 완료 기록·① 미완료여도 바로 받음 · ① 진행 중이면 대기 · 무인·전체실행 = 그대로(D-021·D-091)")
 
 
+def p68_evidence_auto():
+    print("[P68] 자동 증빙(D-363·D-365) — 정산 '완료' 뒤 남은 시간만 · 회차 끝 40분 전부터 새 계정·새 단계 안 함 · 완료 계정도 "
+          "매달 새 달분 · 같은 단계 2회차 연속 실패 = 확인 필요 · 정산 기록·원본 폴더 되돌림 · 검증·광고 포함(cmd_run)")
+    import contextlib
+    import inspect
+    import json as _json
+    import os
+    from datetime import datetime as RealDT, timedelta
+    from types import SimpleNamespace
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    from coupang_analytics import settlement_evidence as EV
+    from coupang_analytics import settlement_runlog as RLG
+    from coupang_analytics import settlement_watch as W
+    DT = RealDT
+    start = D("2026-01-01")
+    # ③ 멈춤 = 회차 끝 − 40분(회차 상수가 아니라 끝 시각에서 계산 — T-133 01:20 이든 17:55 든)
+    assert EV.STOP_BEFORE == timedelta(minutes=40) and EV.CHECK_AFTER == 2
+    assert EV.stop_at(DT(2026, 11, 21, 1, 20)) == DT(2026, 11, 21, 0, 40)
+    # ② 자동 증빙 '정산 원본' = cmd_run 그대로(검증 수집·광고 포함 · 빼지 않음) · 배치·run·소급·셀독전환에는 증빙 없음
+    assert "cmd_run(a, b, args, jobs)" in inspect.getsource(TD.cmd_evidence)
+    for fn in (TD._run_both, TD.cmd_backfill, TD.cmd_run, TD._transfer_settle, TD.main):
+        assert "_evidence_sweep" not in inspect.getsource(fn), fn.__name__
+
+    def mark(folder, name, at):
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / name).write_text(_json.dumps({"시각": f"{at:%Y-%m-%d %H:%M}"}), encoding="utf-8")
+
+    def step(res, stop=False):
+        return {"결과": res, "내용": "", "파일": 0, **({"멈춤": True} if stop else {})}
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / "증빙_x_쿠팡원본"
+        now = DT(2026, 12, 2, 3, 0)
+        # ④ 완료 표시 없음 = 대상(이어받기) · 이번 달 완료 = 대상 아님 · 지난달 이전 완료 = 매달 1일 지나면 다시(완료한 달 1일부터)
+        assert EV.renewal(f, now, start) == (True, start, False)
+        mark(f, EV.DONE, DT(2026, 12, 1, 5)), mark(f, EV.RESULT, DT(2026, 12, 1, 5))
+        assert EV.renewal(f, now, start)[0] is False, "이번 달 완료인데 다시 받음"
+        mark(f, EV.DONE, DT(2026, 11, 19, 20)), mark(f, EV.RESULT, DT(2026, 11, 19, 20))
+        assert EV.renewal(f, now, start) == (True, D("2026-11-01"), True), "새 달 첫 시도 = 지난 단계 결과 무시·완료한 달 1일부터"
+        mark(f, EV.RESULT, DT(2026, 12, 1, 23))
+        assert EV.renewal(f, now, start) == (True, D("2026-11-01"), False), "이번 달 시도가 있으면 이어받기"
+        # ⑤ 회차마다 1번만 셈 · 멈춤(시도 안 함)은 안 셈 · 2회차 = 확인 필요 · 정상이면 0
+        F, G = EV.FAIL, EV.OK
+        assert EV.fail_streak(f, {"광고": step(F), "월렛": step(G)}, "c1") == []
+        assert EV.fail_streak(f, {"광고": step(F)}, "c1") == [], "같은 회차 두 번 = 1회차"
+        assert EV.fail_streak(f, {"광고": step(F, stop=True)}, "c2") == [], "멈춤(시도 안 함)을 실패로 셈"
+        assert EV.fail_streak(f, {"광고": step(F)}, "c3") == ["광고"], "2회차 연속 실패인데 확인 필요 아님"
+        assert EV.fail_streak(f, {"광고": step(G)}, "c4") == [], "정상인데 확인 필요 남음"
+        assert not any(r["파일"].startswith("_") for r in EV.listing_rows(f)), "기록 파일이 증빙 목록에 섞임"
+
+        class Acc:
+            def __init__(self, i):
+                self.account_id = i
+        olds = (TD.LOG, TD.name_of, TD.JOBS, TD.ORIGINALS, TD.EVIDENCE_DIR, TD.EVIDENCE_JOBS, TD.datetime, TD.log,
+                TD.cmd_evidence, TD.session, TD._one_pass, TD._between_passes, TD._pending_jobs, TD._wait_accounts,
+                TD._watch_failures, TD._cycle_close, TD.time.sleep)
+        old_cwd = os.getcwd()
+        os.chdir(tmp)
+        try:
+            TD.name_of = lambda a: f"대표-사업{a.account_id}-{a.account_id}"
+            TD.LOG = RLG.RunLog(tmp, now=DT(2026, 11, 20, 1), echo=lambda m: None)
+            # cmd_evidence: 멈춤 시각 뒤 = 단계 0개 시작 · 단계마다 '멈춤' 표시 · 단계 결과 반환
+            args = SimpleNamespace(out=tmp, redo=False, start=start, end=D("2026-11-20"), until="00:40", until_at=DT(2000, 1, 1))
+            steps = TD.cmd_evidence(Acc("e0"), None, args, [])
+            TD.ORIGINALS = olds[3]
+            assert steps and all(v.get("멈춤") and v["결과"] == EV.FAIL for v in steps.values()), steps
+            # _evidence_auto: 증빙 기록·원본 폴더·기간은 그 계정 동안만 · 예외여도 되돌림 · [메모리] 줄 · 2회차 실패 = 확인 필요 줄
+            clock = {"now": DT(2026, 11, 20, 10)}
+
+            class FakeDT(RealDT):
+                @classmethod
+                def now(cls, tz=None):
+                    return clock["now"]
+            lines: list = []
+            seen: list = []
+            boom = {"on": False}
+            ev_dir = Path(tmp) / "output" / "정산" / "증빙"
+            TD.EVIDENCE_DIR, TD.EVIDENCE_JOBS = ev_dir, ev_dir / "_요청기록.json"
+            TD.datetime, TD.log = FakeDT, lines.append
+
+            def fake_ev(a, b, args, jobs):
+                seen.append({"acc": a.account_id, "jobs": TD.JOBS, "out": args.out, "start": args.start, "redo": args.redo,
+                             "until_at": args.until_at, "now": clock["now"], "done": TD.DONE_FILE.exists()})
+                TD.ORIGINALS = Path("다른곳")                       # cmd_evidence 처럼 바꿈
+                clock["now"] += fake_ev.took
+                if boom["on"]:
+                    raise RuntimeError("화면 바뀜")
+                return {"광고센터 월별 광고비": step(EV.FAIL)}
+            fake_ev.took = timedelta(minutes=5)
+            TD.cmd_evidence = fake_ev
+            jobs0, orig0 = TD.JOBS, TD.ORIGINALS
+            a_args = SimpleNamespace(out="", start=start, redo=False, cycle_since="c1", until_at=None)
+            TD._evidence_auto(Acc("a1"), None, a_args, ["정산기록"])
+            assert seen[-1]["jobs"] == TD.EVIDENCE_JOBS and seen[-1]["out"] == str(ev_dir), seen
+            assert (TD.JOBS, TD.ORIGINALS, a_args.out, a_args.redo) == (jobs0, orig0, "", False), "전역·인자 안 되돌림"
+            assert any("증빙 대표-사업a1-a1" in m and "[메모리]" in m for m in lines), lines
+            a_args.cycle_since = "c2"
+            TD._evidence_auto(Acc("a1"), None, a_args, [])
+            chk = [r for r in TD.LOG.rows if r["계정"].endswith("a1") and "확인 필요" in r["사유"]]
+            assert chk and chk[-1]["단계"] == "증빙 광고센터 월별 광고비" and chk[-1]["결과"] == RLG.FAIL, TD.LOG.rows[-3:]
+            boom["on"] = True
+            expect(RuntimeError, lambda: TD._evidence_auto(Acc("a1"), None, a_args, []), "증빙 예외")
+            assert (TD.JOBS, TD.ORIGINALS, a_args.out) == (jobs0, orig0, ""), "예외 때 전역 안 되돌림"
+            boom["on"] = False
+            mark(EV.account_folder(ev_dir, "대표-사업a2-a2"), EV.DONE, DT(2026, 11, 3, 4))
+            n = len(seen)
+            TD._evidence_auto(Acc("a2"), None, a_args, [])
+            assert len(seen) == n, "이번 달 완료 계정인데 증빙 받음"
+
+            # ① B2: cmd_watch — 정산 '완료' 기록 뒤에만 증빙 · 회차 끝 40분 전부터 새 계정 안 함 · 증빙 실패가 정산 완료를 안 바꿈
+            @contextlib.contextmanager
+            def fake_session(a, hidden, until=None):
+                yield None
+            TD.session = fake_session
+            TD._between_passes = lambda: None
+            TD._pending_jobs, TD._wait_accounts, TD._watch_failures = (lambda: 0), (lambda lg: 0), (lambda: {})
+            TD.time.sleep = lambda sec: None
+
+            def watch(now0, took, work=(0,)):
+                cs, ce = W.cycle_window(now0)
+                clock["now"] = now0
+                order: list = []
+                stage = Path("output") / "쿠팡데이타분석_실행단계.json"
+                stage.write_text(_json.dumps({"date": f"{cs:%Y-%m-%d}", "stage": "done", "at": (cs + timedelta(minutes=1)).isoformat()}),
+                                 encoding="utf-8")
+                TD.DONE_FILE.unlink(missing_ok=True)
+                works = list(work)
+
+                def one_pass(a):
+                    order.append("정산")
+                    TD.PASS_ACCOUNTS[:] = [Acc("w1"), Acc("w2"), Acc("w3")]
+                    return False, works.pop(0) if works else 0
+                TD._one_pass = one_pass
+                TD._cycle_close = lambda st, reason, stopped=False: order.append(("종합", st))
+                fake_ev.took = took
+                n0 = len(seen)
+                wargs = SimpleNamespace(parent=0, until="", until_at=None, hidden=False, since="", manual=False, start=start,
+                                        redo=False, out="", command="watch")
+                rc = TD.cmd_watch(wargs)
+                return rc, order, seen[n0:], ce
+            mark(EV.account_folder(ev_dir, "대표-사업w3-w3"), EV.DONE, DT(2026, 11, 20, 9))   # 이번 달 완료 = 로그인도 안 함
+            _, ce0 = W.cycle_window(DT(2026, 11, 20, 12))
+            rc, order, got, ce = watch(ce0 - timedelta(hours=3), timedelta(minutes=5), work=(4, 0))
+            assert rc == 0 and order[:2] == ["정산", "정산"] and order[-1][0] == "종합", order
+            assert [g["acc"] for g in got] == ["w1", "w2"], ("완료 계정 빼고 남은 계정만", got)
+            assert all(g["done"] and g["until_at"] == ce - timedelta(minutes=40) for g in got), ("정산 완료 기록 뒤·40분 전 멈춤", got)
+            assert TD.PASS_ACCOUNTS and order.index(("종합", "완료")) == len(order) - 1, "증빙 실패가 정산 완료 판정을 바꿈"
+            rc, order, got, ce = watch(ce0 - timedelta(hours=3), timedelta(hours=2, minutes=50))
+            assert [g["acc"] for g in got] == ["w1"], ("40분 전 지나면 새 계정 시작 안 함", got)
+            rc, order, got, ce = watch(ce0 - timedelta(minutes=30), timedelta(minutes=5))
+            assert got == [] and order[-1][0] == "종합", ("40분 안쪽에서 정산이 끝나면 증빙 0", got)
+        finally:
+            (TD.LOG, TD.name_of, TD.JOBS, TD.ORIGINALS, TD.EVIDENCE_DIR, TD.EVIDENCE_JOBS, TD.datetime, TD.log,
+             TD.cmd_evidence, TD.session, TD._one_pass, TD._between_passes, TD._pending_jobs, TD._wait_accounts,
+             TD._watch_failures, TD._cycle_close, TD.time.sleep) = olds
+            TD.PASS_ACCOUNTS.clear()
+            os.chdir(old_cwd)
+    ok("40분 전 멈춤(끝 시각 기준) · 새 달 다시(완료한 달 1일부터) · 2회차 연속 실패 = 확인 필요 · 전역 되돌림(예외 포함) · "
+       "정산 '완료' 기록 뒤에만 증빙 · 완료 계정 로그인 안 함 · 검증·광고 포함")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -3479,6 +3640,7 @@ def main():
     p65_settlement_memory_lines()
     p66_openblas_one_thread()
     p67_manual_start()
+    p68_evidence_auto()
     print("정산 런타임 오프라인 검증 통과")
 
 
