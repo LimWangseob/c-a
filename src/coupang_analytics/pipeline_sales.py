@@ -466,9 +466,39 @@ def _discover_products(b, a: Account, date_from, date_to, log, ai_key: str | Non
     vinv_ids = _vinv_ids_for_pid(listings, inv_pids, metrics, tracked_vids)
     item_pids = fetch_product_ids(b.page, vinv_ids, log) if vinv_ids else {}
     pid_by_vid = _pid_by_vid(inv_pids, metrics, item_pids)
+    _contractor_pids(b, a, listings, pid_by_vid, tracked_vids, anchor_file, log)   # 계약자별 현황 링크(D-358 ⑧)
     _log_discover_summary(a, products, metrics, inventory, sale_status, tracked, n_match, log)
     return (products, tracked, metrics, inventory, sale_status, upbundle_vids, live_all_vids,
             vid_meta, pid_by_vid)
+
+
+def _contractor_pids(b, a: Account, listings, pid_by_vid: dict, tracked_vids: set, anchor_file, log) -> None:
+    """셀독 계약자별 상품 현황 링크용 productId — **같은 로그인 세션 안 · 새 로그인 없음**(D-358 ⑧ · 설계안 5절 N1·N2).
+
+    N2 = 시트에 나올 상품 중 productId 를 모르는 등록상품만 GET(`contractor_sheet.link_targets` · 계정 전체 조회 아님) ·
+    N1 = 오늘 아는 productId 전부를 `output/_상품ID_전체.json` 에 덧붙임(판매분석_일별엔 productId 가 없고 _raw 는 덮어씀).
+    anchor_file 없음(도구·핀)·상품조회 실패 = 안 함. 파일 읽기·저장 실패 = ⚠ 로그(수집 계속)."""
+    if anchor_file is None or not listings:
+        return
+    from . import contractor_sheet as CS
+    from .collector import fetch_product_ids
+    out_dir = Path(anchor_file).parent
+    try:
+        known = {**(CS.load_pid_store(out_dir).get(a.account_id) or {}), **pid_by_vid}
+    except (OSError, ValueError) as exc:
+        log(f"  [{a.label}] ⚠ 상품ID 누적 파일 읽기 실패 — 계약자별 현황 링크 조회·누적 생략 · {exc.__class__.__name__}")
+        return
+    rows = [(lst.vendor_inventory_id, lst.product_name, lst.product_status, [o.vendor_item_id for o in lst.options])
+            for lst in listings]
+    targets = CS.link_targets(rows, set(known), tracked_vids)
+    got = fetch_product_ids(b.page, targets, log) if targets else {}
+    try:
+        added = CS.merge_pid_store(out_dir, a.account_id, {**pid_by_vid, **got})
+    except OSError as exc:
+        log(f"  [{a.label}] ⚠ 상품ID 누적 저장 실패(계약자별 현황 링크) — {exc.__class__.__name__}: {str(exc)[:80]}")
+        return
+    if targets or added:
+        log(f"  [{a.label}] [계약자별 현황 링크] productId 모르는 {len(targets)}상품 조회 → {len(got)}VID · 누적 새 VID {added}개")
 
 
 def _match_to_ledger(b, a: Account, products, metrics, inv_names: dict, date_to, ai_key,

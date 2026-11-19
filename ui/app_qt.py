@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # ui/ 형제 모듈(registry_ui 등)
 
 from coupang_analytics import appconfig, config, power, proxy_pool  # noqa: E402
+from coupang_analytics.contractor_sheet import KEY_URL as KEY_CONTRACTOR_URL  # noqa: E402
 from coupang_analytics.manual_keywords import ManualKeywordError, apply_manual_keywords  # noqa: E402
 from coupang_analytics.apppaths import output_dir as app_output_dir, set_workdir  # noqa: E402
 from coupang_analytics.app_process import (mark_app_finished, prepare_auto_start,  # noqa: E402
@@ -170,13 +171,14 @@ _LOG_COLORS = {"ok": "#4ade80", "err": "#f87171", "warn": "#fbbf24", "head": "#6
 _LOG_ALL = -1   # 진행 로그 줄의 주인 탭 = 모든 탭(앱 시작 때 줄 · 어느 탭 작업도 아님 — 소유자 2026-11-12 T-19)
 
 
-# 설정 탭 '구글 시트 연동' 카드의 링크 4개 — 종류 → (설정 키, 화면 이름). 링크 입력은 **설정 탭에서만**
+# 설정 탭 '구글 시트 연동' 카드의 링크 5개 — 종류 → (설정 키, 화면 이름). 링크 입력은 **설정 탭에서만**
 # (2026-10-03 소유자: 흩어진 설정 일원화 — 9/29 에 정산 탭으로 옮겼던 재고현황·원장 링크칸을 다시 설정으로).
 _GS_LINKS = {
     "input": ("gsheet/input_url", "관리대장(입력)"),
     "output": ("gsheet/output_url", "결과(출력)"),
     "stock": (KEY_STOCK_URL, "재고현황(회사 재고)"),
     "registry": (registry_ui.KEY_URL, "셀독계정상품이력관리원장"),
+    "contractor": (KEY_CONTRACTOR_URL, "셀독 계약자별 상품 현황"),   # 매일 ① 끝에 통째 덮어씀(D-358 ⑩ 안1)
 }
 
 
@@ -326,7 +328,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         save_row.addStretch(1)
         self.save_settings_btn = QtWidgets.QPushButton("💾 설정값 저장")
         self.save_settings_btn.setMinimumWidth(180)
-        self.save_settings_btn.setToolTip("구글시트 링크 4개·입력소스·순위 간격·프록시를 config.json(+레지스트리)에 한 번에 확정 저장")
+        self.save_settings_btn.setToolTip("구글시트 링크 5개·입력소스·순위 간격·프록시를 config.json(+레지스트리)에 한 번에 확정 저장")
         self.save_settings_btn.clicked.connect(self._save_all_settings)
         save_row.addWidget(self.save_settings_btn)
         v.addLayout(save_row)
@@ -616,9 +618,13 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self.stock_url_edit.setPlaceholderText("재고현황 구글시트 링크 또는 ID — 비우면 회사 재고 반영 안 함(서비스계정 공유)")
         self.reg_url_edit = QtWidgets.QLineEdit(st.value(registry_ui.KEY_URL, "", type=str))
         self.reg_url_edit.setPlaceholderText("원장 구글시트 링크 또는 ID — 비우면 원장 미사용(서비스계정 '편집자' 공유)")
+        self.contractor_url_edit = QtWidgets.QLineEdit(st.value(KEY_CONTRACTOR_URL, "", type=str))
+        self.contractor_url_edit.setPlaceholderText("셀독 계약자별 상품 현황 구글시트 링크 또는 ID — 매일 통째 덮어씀 · 비우면 PC 파일만"
+                                                    "(서비스계정 '편집자' 공유)")
         self._gs_edits = {"input": self.gs_input_edit, "output": self.gs_output_edit,
-                          "stock": self.stock_url_edit, "registry": self.reg_url_edit}
-        for row, kind in ((4, "stock"), (5, "registry")):
+                          "stock": self.stock_url_edit, "registry": self.reg_url_edit,
+                          "contractor": self.contractor_url_edit}
+        for row, kind in ((4, "stock"), (5, "registry"), (6, "contractor")):
             edit = self._gs_edits[kind]
             edit.editingFinished.connect(lambda k=kind: self._on_gs_link_edited(k))
             chk = QtWidgets.QPushButton("연결 확인")
@@ -2047,13 +2053,13 @@ def _check_icon_path() -> str:
 # ⚠ 내보낸 파일은 **평문**(API/SA 키 포함) → 배포 zip 안에서만·설치 시 즉시 이 PC용 암호화(DPAPI) 후 삭제.
 # 계정 비밀번호는 담지 않는다(관리대장 '비밀번호' 컬럼에서 매 실행 자동 로드).
 _KEY_RANK_MIN, _KEY_RANK_MAX = "rank/nav_delay_min", "rank/nav_delay_max"   # 순위 검색 간격(초·정수)
-_EXPORT_QKEYS = ("gsheet/input_url", "gsheet/output_url", "input/source", "registry/url", "stock/url",
+_EXPORT_QKEYS = ("gsheet/input_url", "gsheet/output_url", "input/source", "registry/url", "stock/url", KEY_CONTRACTOR_URL,
                  _KEY_RANK_MIN, _KEY_RANK_MAX)
 _EXPORT_CREDS = ("__naver__", "__openai__", "__gsheet_sa__", holiday_source.CRED_KEY)
 # config.json(보존 폴더)에 두는 **공유 설정** 키 — 무인/양쪽 UI 공통(구글시트 링크·입력소스·마지막 입력파일).
 # dir/*(마지막 폴더)는 per-PC UI 편의라 레지스트리에만 둔다.
 _CONFIG_SHARED_KEYS = ("gsheet/input_url", "gsheet/output_url", "input/source", "file/input", "registry/url",
-                       "stock/url", _KEY_RANK_MIN, _KEY_RANK_MAX)
+                       "stock/url", KEY_CONTRACTOR_URL, _KEY_RANK_MIN, _KEY_RANK_MAX)
 
 
 def _cfg_save_shared(key: str, value: str) -> None:

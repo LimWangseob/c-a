@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+from .contractor_stage import run_stage as contractor_report_stage
 from .pipeline import run_full, select_keywords_stage
 from .pipeline_gsheet import push_company_stock, push_ledger_inventory
 from .pipeline_paths import column_label, mark_run_day, read_last_run_stage, run_days, write_run_stage
@@ -121,6 +122,9 @@ def run_stages(input_list, plan: StagePlan, *, ai_key, naver, date_from: str, da
                               redo_today=redo_today, date_label=date_label, on_log=log,
                               gsheet_output_url=gsheet_output_url, registry_url=registry_url,
                               stock_url=stock_url, designated=designated)
+            if not should_stop():           # 셀독 계약자별 상품 현황(로그인 없음 · ① 끝·② 전 D-358 ⑥ · 실패해도 계속)
+                contractor_report_stage(input_list, date_to=date_to, run_day=run_day, ai_key=ai_key,
+                                        designated=designated, on_log=log)
             if not (plan.keywords or plan.ranks):   # ① 단독 실행 → 판매데이터만 채우고 끝(단계 기록 안 함)
                 return result
             write_run_stage("sales", day=run_day.isoformat(), record_day=not designated)

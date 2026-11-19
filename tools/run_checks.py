@@ -62,6 +62,7 @@ CHECKS = [
     ("통합 판매현황(첫 시트·월·주 조회)", "tools/verify_sales_summary_offline.py", True),
     ("쿠폰 목록·재고현황 날짜별 보관", "tools/verify_coupon_snapshot_offline.py", True),
     ("상품 정보 날짜별 보관(categoryId·반품배송비·조회 함수 T-100)", "tools/verify_product_info_offline.py", True),
+    ("셀독 계약자별 상품 현황(10건 규칙·판정 3단·양식·칸 폭·구글 교체 T-132 D-358)", "tools/verify_contractor_sheet_offline.py", True),
     ("셀독전환자 로그인 확인(파일·비번 후보·멈춤·연락 필요 목록)", "tools/verify_transfer_offline.py", True),
     ("셀독전환자 정산 자료 받기(매일 18시 뒤·대상·기다림·원장 파일 재사용·누적 파일)", "tools/verify_transfer_settle_offline.py", True),
     ("샵마인 비번↔관리대장 동기화(DPAPI·필드탐색·대조·되쓰기·비번 비노출)", "tools/verify_shopmine_sync_offline.py", True),
