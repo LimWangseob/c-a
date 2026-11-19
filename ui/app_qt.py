@@ -43,6 +43,7 @@ from coupang_analytics.promo_sheet import read_promo_sheet  # noqa: E402
 from coupang_analytics.kw_ai import recommend_title  # noqa: E402
 from coupang_analytics.kw_recommend import recommend, recommend_from_title  # noqa: E402
 from coupang_analytics.kw_volume import NaverAdApi, NaverCredentials, parse_credentials_file  # noqa: E402
+from coupang_analytics.pipeline_paths import run_day_column  # noqa: E402
 from coupang_analytics.pipeline import (column_dates, backup_sources,  # noqa: E402
                                         master_exists, plan_run_mode,
                                         read_run_stage, resumable_progress, restore_master_from_gsheet,
@@ -898,14 +899,15 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
 
         pbar = QtWidgets.QHBoxLayout()
         pbar.addWidget(QtWidgets.QLabel("수집 기간:"))
-        self.cb_today = QtWidgets.QRadioButton("당일(=어제, 최신 확정일)")
+        self.cb_today = QtWidgets.QRadioButton("당일(=어제 칸, 최신 확정일)")
         self.cb_today.setToolTip("쿠팡 판매분석은 당일 데이터를 익일 이후 생성합니다.\n"
-                                 "따라서 '당일'은 데이터가 확정된 어제(D-1) 날짜로 수집합니다.")
+                                 "따라서 '당일'은 데이터가 확정된 어제(D-1) 칸을 채웁니다(칸 날짜 = 판매일).\n"
+                                 "노출순위·재고는 지금 잰 값을 그 칸에 넣습니다.")
         self.cb_today.setChecked(True)
         self.cb_range = QtWidgets.QRadioButton("날짜 지정")
         self.cb_range.setToolTip("지정한 날짜 칸을 채웁니다(빈 칸만 — 이미 수집된 계정·순위는 건너뜀).\n"
-                                 "판매 = 그 날짜의 전날 데이터 · 노출순위 = 지금 측정한 값.\n"
-                                 "예: 10.10 에 10.09 지정 → 10.09 칸에 10/08 판매 + 지금 순위.")
+                                 "판매 = 그 날짜 하루 데이터 · 노출순위 = 지금 측정한 값.\n"
+                                 "예: 11.21 에 11.19 지정 → 11.19 칸에 11/19 판매 + 지금 순위.")
         self._period_group = QtWidgets.QButtonGroup(self)   # 하나만 선택(상호배타)
         self._period_group.setExclusive(True)
         self._period_group.addButton(self.cb_today)
@@ -913,11 +915,11 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self.cb_today.toggled.connect(self._toggle_range)
         pbar.addWidget(self.cb_today)
         pbar.addWidget(self.cb_range)
-        yday = (date.today() - timedelta(days=1)).isoformat()   # 기본값=어제 칸(중단된 어제 작업 채우기)
+        yday = (date.today() - timedelta(days=2)).isoformat()   # 기본값=어제 실행의 칸(그저께 판매 · 중단된 어제 작업 채우기 D-368)
         self.to_edit = QtWidgets.QLineEdit(yday)          # 채울 날짜 칸(YYYY-MM-DD)
         self.to_edit.setMaximumWidth(120)
         pbar.addWidget(self.to_edit)
-        hint = QtWidgets.QLabel("(그 날짜 칸에: 판매=전날 · 노출순위=지금 측정 · 빈 칸만)")
+        hint = QtWidgets.QLabel("(그 날짜 칸에: 판매=그날 · 노출순위=지금 측정 · 빈 칸만)")
         hint.setObjectName("muted")
         pbar.addWidget(hint)
         pbar.addStretch(1)
@@ -1638,15 +1640,14 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self.to_edit.setEnabled(self.cb_range.isChecked())
 
     def _run_dates(self):
-        """(판매조회_from, 판매조회_to, 컬럼라벨_실행날짜) 반환.
+        """(판매조회_from, 판매조회_to, 칸 라벨) 반환 — **칸 = 판매 기준일**(D-368).
 
-        쿠팡 판매분석은 당일 데이터를 익일 이후 생성 → **판매조회는 전일(D-1)**. 하지만 결과파일의
-        **컬럼 제목은 실제 작업한 날(오늘=실행날짜)**로 적는다(순위는 오늘 측정이므로 라벨과 일치, 판매는
-        전일 데이터가 그 컬럼에 함께 들어감). 새벽까지 이어져 날짜가 바뀌어도 이 값은 시작 시점에 한 번
-        정해져 실행날짜 기준으로 고정된다. **날짜 지정**(소유자 2026-10-10)도 같은 규칙: 칸=지정일, 판매=그 전날,
-        순위=지금 측정(그 칸에 기록)·빈 칸만 채움."""
-        label = date.today().isoformat() if self.cb_today.isChecked() else self.to_edit.text().strip()
-        return column_dates(label)   # (판매=전날, 판매=전날, 칸=label) — 형식 오류는 ValueError
+        쿠팡 판매분석은 당일 데이터를 익일 이후 생성 → 오늘 실행 = **어제(D-1) 칸**(01:30 실행이어도 전날 ·
+        `run_day_column`) · 순위·재고는 지금 잰 값을 그 칸에. 새벽까지 이어져 날짜가 바뀌어도 이 값은 시작 시점에
+        한 번 정해져 고정된다. **날짜 지정**(소유자 2026-10-10): 칸 = 지정일 = 판매일 · 순위 = 지금 측정 · 빈 칸만."""
+        label = (run_day_column(date.today()).isoformat() if self.cb_today.isChecked()
+                 else self.to_edit.text().strip())
+        return column_dates(label)   # (판매=칸, 판매=칸, 칸=label) — 형식 오류는 ValueError
 
     def _require_run_inputs(self) -> bool:
         """전체실행/판매수집 전 필수 키 확인 + 관리대장 다시 읽기(D-366: 켜 둔 앱도 실행마다 변경분 반영 · 앱 시작 때와 같은
@@ -1771,7 +1772,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         # 역기록)가 끝난 뒤에만 _auto_done 으로 종료**한다. 순위·로그인 단계는 자체 서킷브레이커(쿨다운 MAX·
         # 연속차단)로 스스로 끝나므로 무한 대기하지 않는다. (예전 _schedule_auto_stop 은 06:00에 순위를 중간에
         # 끊고 60초 뒤 강제 종료했다 — 미처리분 발생·소유자 불가 판정.) 절전만 실행 동안 방지.
-        df, dt, dlabel = self._run_dates()         # 판매조회=어제(D-1) · 컬럼라벨=실행날짜(오늘)
+        df, dt, dlabel = self._run_dates()         # 판매조회=어제(D-1) · 칸=어제(판매일 D-368)
         meta = resumable_progress()
         gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
         # fix ③: 마스터가 없지만 결과 구글시트가 있으면 복원(무인이라 팝업 없이 자동) → 첫 실행 오판·과거 통계 유실 방지.

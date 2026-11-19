@@ -797,12 +797,13 @@ def pin_rank_sales_sheet_run_date():
     from datetime import date
     got: list = []
     names = ("_load_latest_wb", "inject_company_stock", "refresh_sales_sheet", "_track_ranks_semi", "push_gsheet",
-             "_log_quality_summary")
+             "_log_quality_summary", "ensure_sales_date_basis")
     orig = {n: getattr(PR, n) for n in names + ("rank_schedule",)}
     groups: list = []
     try:
         PR._load_latest_wb = lambda out: (SimpleNamespace(apply_style=lambda: None, save=lambda p: None), Path("m.xlsx"))
-        PR.rank_schedule = SimpleNamespace(refresh_groups=lambda wb, day, log: groups.append(day))   # 묶음 = 실행 날짜(D-257)
+        PR.rank_schedule = SimpleNamespace(refresh_groups=lambda wb, day, log: groups.append(day))   # 묶음 = 그 실행의 칸(D-368)
+        PR.ensure_sales_date_basis = lambda out, log: "이미 판매일 기준"
         PR.inject_company_stock = lambda *a, **k: None
         PR.refresh_sales_sheet = lambda wb, out, log, today=None: got.append(today)
         PR._track_ranks_semi = lambda *a, **k: Path("m.xlsx")
@@ -810,7 +811,7 @@ def pin_rank_sales_sheet_run_date():
         PR._log_quality_summary = lambda *a, **k: None
         PR.track_ranks_stage(on_log=lambda m: None, date_label="2026-11-11", run_date=date(2026, 11, 12))
         _check(got == [date(2026, 11, 12)], f"실행 날짜(11-12)를 넘김 → 전일 = 11-11 {got}")
-        _check(groups == [date(2026, 11, 12)], f"오늘 묶음도 실행 날짜 기준(D-257) {groups}")
+        _check(groups == [date(2026, 11, 11)], f"묶음 갱신 날짜 = 실행(11-12)의 칸 11-11(D-368·D-369) {groups}")
         PR.track_ranks_stage(on_log=lambda m: None)
         _check(got[-1] is None, "순위 탭 단독(실행 날짜 없음) = 기존대로 오늘 기준")
     finally:

@@ -25,7 +25,8 @@ from .kw_recommend import rank_label
 from .product_naming import rename_to_exposed
 from .rank import human_type_query, make_matcher
 from .pipeline_gsheet import push_gsheet, inject_company_stock   # track_ranks_stage 종료 시 결과 반영·회사재고 주입(한 방향·순환 없음)
-from .pipeline_paths import _PROFILE, _load_latest_wb, column_label
+from .date_basis import ensure_sales_date_basis
+from .pipeline_paths import _PROFILE, _load_latest_wb, column_label, run_day_column
 from .workbook_sales import refresh_sales_sheet
 
 
@@ -272,12 +273,13 @@ def track_ranks_stage(out_dir: str = "output", on_log=None,
     config.apply_proxy_override(log)            # 노출순위 프록시 설정(config.json proxy/*) 런타임 적용 — 미설정=기본 ON
     config.apply_rank_images_override(log)      # 노출순위 이미지 로드 여부(config.json rank/block_images) — 미설정=기본(이미지 유지)
     out = Path(out_dir)
+    ensure_sales_date_basis(out, log)   # D-369: 옛 기준 마스터면 1회 하루 당김 · 판정 못 함·실패 = 이 실행 안 함
     wb, path = _load_latest_wb(out)
     if wb is None:
         log("== 순위 조회: 결과 워크북이 없습니다 — 먼저 ①②를 실행하세요 ==")
         return None
     inject_company_stock(wb, stock_url, log)   # 회사보유재고 → 워크북(계정목록 5열) · apply_style 전
-    rank_schedule.refresh_groups(wb, run_date or date.today(), log)   # 계정 묶음(격일) 배정·오늘 묶음 로그(D-257·D-362)
+    rank_schedule.refresh_groups(wb, run_day_column(run_date or date.today()), log)   # 묶음(격일) = 이 실행의 칸 날짜(D-368)
     refresh_sales_sheet(wb, out, log, today=run_date)   # 첫 시트 통합판매현황(① 뒤 쌓인 판매 기록 · 전일 = 실행 날짜 전날)
 
     def _on_pass():   # 진전 있는 바퀴 끝마다 결과 반영 — 밤새 빈 칸을 다시 돌아도 시트가 따라옴(2026-10-13)

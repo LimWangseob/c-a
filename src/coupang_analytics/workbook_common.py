@@ -122,8 +122,9 @@ _MKT_SHEET = "_마케팅"     # 숨김 시트: (사업자,상품)→마케팅 �
 _DISC_SHEET = "_중단"      # 숨김 시트: (사업자,상품) 판매중지/삭제(대장에서 사라짐) 표기. 데이터는 보존, 표시만 구분
 _SALES_SHEET = "통합판매현황"  # 첫 시트: 위탁계정 전체 계정·상품별 판매(전일·주간·월별) — 매번 통째 재생성(workbook_sales·2026-10-15)
 _RANKGRP_SHEET = "_순위묶음"  # 숨김 시트: ③ 순위 계정 묶음 배정(3일 간격 기간 + 격일 기간 · rank_schedule · D-257·D-362)
+_DATEBASIS_SHEET = "_날짜기준"  # 숨김 시트: 날짜 칸 기준 = 판매일 표시(옛 기준 마스터 1회 하루 당김 뒤 · date_basis · D-368·D-369)
 _SPECIAL_SHEETS = (_META_SHEET, _INDEX_SHEET, _ACCT_SHEET, _STAMP_SHEET, _MKT_SHEET, _DISC_SHEET, _SALES_SHEET,
-                   _RANKGRP_SHEET)
+                   _RANKGRP_SHEET, _DATEBASIS_SHEET)
 _MKT_COLS = ("체험단 시작일", "체험단 종료일", "모니터링 종료일")   # 계정목록 편집 열(직원 입력 = 체험단 기간)
 _MKT_COLS_LEGACY0 = "마케팅 시작일"   # 옛 라벨('마케팅 시작일') — 기존 마스터 계정목록에서 값 회수 시 인식용
 
@@ -245,6 +246,7 @@ __all__ = [
     '_MKT_SHEET',
     '_DISC_SHEET',
     '_RANKGRP_SHEET',
+    '_DATEBASIS_SHEET',
     '_SPECIAL_SHEETS',
     '_SALES_SHEET',
     '_MKT_COLS',

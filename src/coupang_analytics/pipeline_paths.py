@@ -6,7 +6,7 @@ pipeline.py 가 이 심볼들을 다시 import 해 `pipeline.X` 공개 API(UI·�
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import config
@@ -38,6 +38,12 @@ def _master_path(out_dir: str | Path) -> Path:
 def _snapshot_path(out_dir: str | Path, now: datetime) -> Path:
     """그날 완료본 스냅샷(감사·백업용). 마스터가 손상돼도 날짜별 본이 남는다."""
     return Path(out_dir) / f"{config.OUTPUT_FILE_PREFIX}_통계_{now.strftime('%y%m%d')}.xlsx"
+
+
+def run_day_column(day: date) -> date:
+    """실행한 날의 날짜 칸 = 그 전날(판매 기준일 D · D-368): 11-20 01:30 실행 = 11.19 칸(판매 11-19 · 순위·재고 = 실행 때 측정).
+    오늘 실행·무인·지난 칸 순위 보충·순위 묶음 갱신이 같은 규칙을 쓰게 하는 한 곳."""
+    return day - timedelta(days=1)
 
 
 def column_label(date_label: str) -> str:
