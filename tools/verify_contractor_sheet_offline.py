@@ -426,12 +426,13 @@ def t6_links_n1_n2_n3():
 
 
 def t7_stage_order():
-    print("[T7] 단계 위치 = ① 끝·② 전(① 단독 실행도 · 중지 요청이면 생략) — D-358 ⑥")
+    print("[T7] ① 판매수집 직후 실행은 없앰(①→②→③ 사이에 현황 없음) — D-361 ①(D-358 ⑥ 대체)")
     import coupang_analytics.pipeline_stages as stg
+    check(not hasattr(stg, "contractor_report_stage"), "단계 조립에 계약자 현황 호출 없음")
     keep = {k: getattr(stg, k) for k in ("run_full", "select_keywords_stage", "track_ranks_stage", "push_ledger_inventory",
-                                        "push_company_stock", "write_run_stage", "mark_run_day", "read_last_run_stage",
-                                        "contractor_report_stage")}
+                                        "push_company_stock", "write_run_stage", "mark_run_day", "read_last_run_stage")}
     calls: list = []
+    real_run_stage = ST.run_stage
     try:
         stg.run_full = lambda il, **k: calls.append("①")
         stg.select_keywords_stage = lambda *a, **k: calls.append("②")
@@ -440,20 +441,96 @@ def t7_stage_order():
         stg.write_run_stage = lambda s, **k: None
         stg.mark_run_day = lambda *a, **k: None
         stg.read_last_run_stage = lambda: None
-        stg.contractor_report_stage = lambda il, **k: calls.append(("현황", k["date_to"], k["designated"]))
+        ST.run_stage = lambda *a, **k: calls.append("현황")
         kw = dict(ai_key="k", naver=None, date_from=DATE_TO, date_to=DATE_TO, date_label=DATE_TO,
                   get_password=lambda a: None, carry=True, on_log=lambda m: None)
         stg.run_stages(None, stg.StagePlan(), **kw)
-        check(calls[:3] == ["①", ("현황", DATE_TO, False), "②"], f"①→현황→② {calls[:3]}")
+        check(calls[:3] == ["①", "②", "③"] and "현황" not in calls, f"①→②→③ · 현황 없음 {calls}")
         calls.clear()
         stg.run_stages(None, stg.StagePlan(keywords=False, ranks=False), **kw)
-        check(calls == ["①", ("현황", DATE_TO, False)], "① 단독 실행도 만듦")
-        calls.clear()
-        stg.run_stages(None, stg.StagePlan(), should_stop=lambda: True, **kw)
-        check(calls == ["①"], "중지 요청 = 생략")
+        check(calls == ["①"], f"① 단독 실행도 현황 안 만듦 {calls}")
     finally:
+        ST.run_stage = real_run_stage
         for k, v in keep.items():
             setattr(stg, k, v)
+
+
+def _put_sales_days(out: Path, acc: str, days: dict[str, dict[str, int]]) -> None:
+    """days = {날짜: {vid: 판매수량}} — 빈 dict = 그날 0건 기록 · 키 없는 날 = 판매 기록 없음."""
+    rec = {d: {"옵션": {v: {"판매수량": q} for v, q in by.items()}} for d, by in days.items()}
+    p = out / "판매분석_일별" / acc / "2026-11.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
+
+
+def t9_daily_0600():
+    print("[T9] 실행 = 매일 06:00 한 번 · 06:00 뒤 켜면 그날 몫 없을 때 한 번 · 최근 7일 = 실행일 전날까지 — D-361 ①②")
+    from datetime import datetime
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d)
+        # 11-19 18:00 ① 판매수집이 남긴 자료(파일 날짜 = 수집한 날 11-19) → 11-20 06:00 실행이 읽어야 함
+        put_products(out, "a1", [{"vid": "1", "name": "관리 상품"}], day="2026-11-19")
+        put_match(out, {"a1": {"관리 상품": ["1"]}})
+        _put_sales_days(out, "a1", {f"2026-11-{x:02d}": {"1": x - 12} for x in range(13, 20)})
+        il = type("IL", (), {"accounts": [acct("a1", "사업자A")]})()
+        check(not ST.daily_due(datetime(2026, 11, 20, 5, 59), out), "05:59 = 아직 아님")
+        check(ST.daily_due(datetime(2026, 11, 20, 6, 0), out), "06:00 = 실행할 때")
+        logs, log = _logs()
+        p = ST.run_daily(il, now=datetime(2026, 11, 20, 6, 0), out_dir=out, on_log=log, gsheet_url="", ask=no_ai)
+        check(p == out / "계약자별상품현황" / "셀독_계약자별상품현황_261120.xlsx" and p.is_file(), f"파일 이름 = 실행일 {p}")
+        check(any("11.13~11.19" in x for x in logs), f"7일 = 11-13~11-19(실행일 전날까지) {[x for x in logs if '기간' in x]}")
+        check(any("셀독 1" in x and "자료 없음 표시 0" in x for x in logs),
+              "전날 18시 ① 자료(파일 날짜 11-19)를 읽음 — '자료 없음' 아님")
+        from openpyxl import load_workbook
+        w = load_workbook(p).worksheets[1]
+        check([w.cell(4, k).value for k in range(9, 17)] == [7, 6, 5, 4, 3, 2, 1, 28], "최근(11-19)이 왼쪽 · 합계 28")
+        check(not ST.daily_due(datetime(2026, 11, 20, 6, 1), out) and not ST.daily_due(datetime(2026, 11, 20, 23, 0), out),
+              "같은 날 두 번 안 돎")
+        check(ST.daily_due(datetime(2026, 11, 21, 6, 0), out), "다음 날 06:00 = 다시")
+        check(ST.daily_due(datetime(2026, 11, 22, 14, 30), out), "06:00 에 앱이 꺼져 있었으면 켠 뒤 그날 한 번")
+        # 06:00 을 놓쳐 18:00 무인 앱이 켜진 직후 만들어도(그날 ① 은 아직) = 전날 18시 ① 자료로(06:00 과 같은 회차)
+        put_products(out, "a1", [{"vid": "1", "name": "관리 상품"}], day="2026-11-20")
+        logs, log = _logs()
+        ST.run_daily(il, now=datetime(2026, 11, 21, 18, 0, 5), out_dir=out, on_log=log, gsheet_url="", ask=no_ai)
+        check(any("셀독 1" in x and "자료 없음 표시 0" in x for x in logs), f"놓친 날 18:00 직후 = 전날 ① 자료 {logs[-2:]}")
+        logs, log = _logs()
+        check(ST.run_daily(type("IL", (), {"accounts": []})(), now=datetime(2026, 11, 22, 14, 30), out_dir=out,
+                           on_log=log) is None and not ST.daily_due(datetime(2026, 11, 22, 15, 0), out),
+              "만들지 못한 날도 기록 — 같은 날 되풀이 안 함")
+
+
+def t10_blank_days():
+    print("[T10] 판매 기록이 아예 없는 날 = 그 날 칸만 공란 · 0건 기록 = '-' · 합계는 있는 날만 · 엑셀·구글 같게 — D-361 ③")
+    from coupang_analytics.contractor_sheet_xlsx import build_workbook
+    from coupang_analytics.gsheet_stats import worksheet_to_requests
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d)
+        put_products(out, "a1", [{"vid": "1", "name": "관리 상품"}, {"vid": "2", "name": "개인 상품"}])
+        put_products(out, "a2", [{"vid": "5", "name": "다른 계정 상품"}])
+        put_match(out, {"a1": {"관리 상품": ["1"]}})
+        days = {x: {"1": 2, "2": 1} for x in DAYS}
+        days["2026-11-15"] = {}                    # 0건 기록
+        del days["2026-11-16"]                     # 기록 없음(그날 정산 받기 늦음·실패)
+        _put_sales_days(out, "a1", days)
+        _put_sales_days(out, "a2", {x: {"5": 1} for x in DAYS})
+        rep = ST.build_report([acct("a1", "사업자A"), acct("a2", "사업자A")], out, run_day=RUN, date_to=DATE_TO,
+                              ask=no_ai, log=lambda m: None)
+        rows = {r.name: r for r in rep.bizs[0].rows}
+        sel, own, other = rows["관리 상품"], rows["개인 상품"], rows["다른 계정 상품"]
+        check(sel.d7 == [2, 2, 2, 2, 2, 0, None] and sel.s7 == 10, f"셀독: 빈 날 None · 0건 0 · 합계 = 있는 날만 {sel.d7}")
+        check(own.d7 == [1, 1, 1, 1, 1, 0, None] and own.s7 == 5, f"개인도 같음 {own.d7}")
+        check(other.d7 == [1] * 7 and other.s7 == 7, "다른 계정(같은 사업자)은 그 날도 그대로")
+        wb = build_workbook(rep)
+        w = wb.worksheets[1]
+        r = next(i for i in range(4, 8) if str(w.cell(i, 3).value).startswith("관리 상품"))
+        check(w.cell(r, 9).value is None and w.cell(r, 10).value == 0 and w.cell(r, 16).value == 10,
+              "엑셀: 11.16일 칸 공란 · 11.15일 = 0('-' 서식) · 합계 10")
+        check(w.cell(r, 10).number_format.endswith('"-"'), "0건 = '-' 서식 그대로")
+        s = wb["요약"]
+        check(s.cell(4, 9).value == 10 and s.cell(4, 10).value == 12, "요약 7일 판매 = 있는 날만 합(셀독 10 · 개인 12)")
+        upd = next(x for x in worksheet_to_requests(w, 1) if "updateCells" in x)["updateCells"]["rows"][r - 1]["values"]
+        check("userEnteredValue" not in upd[8] and upd[9]["userEnteredValue"] == {"numberValue": 0},
+              "구글: 빈 날 = 값 없음 · 0건 = 0(같은 서식)")
 
 
 def t8_speed():
@@ -473,7 +550,7 @@ def t8_speed():
 
 def main() -> int:
     for t in (t1_ten_rule, t2_values_and_tiers, t3_ai_judge, t4_layout_xlsx, t5_stage_and_gsheet, t6_links_n1_n2_n3,
-              t7_stage_order, t8_speed):
+              t7_stage_order, t8_speed, t9_daily_0600, t10_blank_days):
         t()
     print(f"\n결과: {'통과' if not FAILS else f'실패 {len(FAILS)}건'}")
     for f in FAILS:

@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # ui/ 형제 모듈(registry_ui 등)
 
 from coupang_analytics import appconfig, config, power, proxy_pool  # noqa: E402
+from coupang_analytics import contractor_stage  # noqa: E402
 from coupang_analytics.contractor_sheet import KEY_URL as KEY_CONTRACTOR_URL  # noqa: E402
 from coupang_analytics.manual_keywords import ManualKeywordError, apply_manual_keywords  # noqa: E402
 from coupang_analytics.apppaths import output_dir as app_output_dir, set_workdir  # noqa: E402
@@ -178,7 +179,7 @@ _GS_LINKS = {
     "output": ("gsheet/output_url", "결과(출력)"),
     "stock": (KEY_STOCK_URL, "재고현황(회사 재고)"),
     "registry": (registry_ui.KEY_URL, "셀독계정상품이력관리원장"),
-    "contractor": (KEY_CONTRACTOR_URL, "셀독 계약자별 상품 현황"),   # 매일 ① 끝에 통째 덮어씀(D-358 ⑩ 안1)
+    "contractor": (KEY_CONTRACTOR_URL, "셀독 계약자별 상품 현황"),   # 매일 06:00 통째 덮어씀(D-358 ⑩ 안1 · D-361)
 }
 
 
@@ -216,6 +217,13 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             self._auto_load_input()     # 마지막 사용 입력 엑셀 자동 로드(무인 실행·재시작 후 즉시 실행 가능)
         if not auto:
             self._probe_gsheet_links()  # 구글시트 링크 4개 연결 상태를 뒤에서 확인해 라벨로(무인 실행은 생략)
+        # 셀독 계약자별 상품 현황 = 매일 06:00 한 번(D-361) — 켜진 동안 1분마다 확인 · 06:00 뒤 켰으면 곧바로 그날 몫
+        self._contractor_busy, self._contractor_warned = False, ""
+        self._contractor_timer = QtCore.QTimer(self)
+        self._contractor_timer.setInterval(60_000)
+        self._contractor_timer.timeout.connect(self._contractor_tick)
+        self._contractor_timer.start()
+        QtCore.QTimer.singleShot(5000, self._contractor_tick)
         scr = self.screen().availableGeometry()
         # 최대 크기 = 화면(작업영역)으로 제한 — 창이 화면보다 커지지 않게.
         self.setMaximumSize(scr.width(), scr.height())
@@ -1784,6 +1792,28 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
                 self.log(f"[무인] 실행 중 오류: {exc.__class__.__name__}: {exc}")
             return None
         self.run_bg(task, on_done=self._auto_done, btn=None, pipelinelock=True)
+
+    def _contractor_tick(self):
+        """06:00 이 지났고 그날 실행 기록이 없으면 셀독 계약자별 상품 현황을 뒤에서 한 번(contractor_stage.run_daily ·
+        로그인·브라우저 없음 → ①②③·정산과 같이 돌아도 됨 · 파이프라인 잠금 안 씀)."""
+        now = datetime.now()
+        if self._contractor_busy or not contractor_stage.daily_due(now):
+            return
+        if self.input_list is None:     # 관리대장을 아직 못 읽음 — 그날 한 번만 알리고, 읽히면 다음 확인 때 만듦
+            if self._contractor_warned != now.date().isoformat():
+                self._contractor_warned = now.date().isoformat()
+                self.log_all("[계약자별 현황] ⚠ 관리대장(입력)을 못 읽어 아직 못 만듦 — 입력을 불러오면 1분 안에 만듦")
+            return
+        self._contractor_busy = True
+        il, key = self.input_list, self.ai_key
+
+        def task():
+            try:
+                return contractor_stage.run_daily(il, now=now, ai_key=key or None, on_log=self.log)
+            finally:
+                self._contractor_busy = False
+        with self._log_owner(_LOG_ALL):   # 이 작업 줄 = 모든 탭(어느 탭에서 시작한 작업도 아님)
+            self.run_bg(task)
 
     def _auto_done(self, _result=None):
         left = LAST_RANK.get("unfilled")
