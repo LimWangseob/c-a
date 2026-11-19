@@ -2967,7 +2967,7 @@ umpy`) · 우리 코드는 numpy 를 직접 안 씀 · 정산 바퀴 끝 '남는
 - 근거: 입력 목록이 바뀌는 곳 = `ui/app_qt.py:1223`·`1291`·`ui/registry_panel_qt.py:159` 뿐(앱 시작 `ui/app_qt.py:217` · 수동 버튼) · `do_run_full` 은 `self.input_list` 그대로 씀 · 06:00 `ui/app_qt.py:1808` 도 같음 · 정산 = 바퀴마다 원장 읽음(`tools/settlement_download.py:1119`) · 원장 반영 = 앱 실행 시작 `registry_ui.presync`(01:30 동시 시작) · 비밀번호 = 대장 값(credstore) 먼저 → 원장 값(`settlement_accounts.login_passwords`) → 어제 비밀번호 먼저 넣으면 틀린 1회(5회 잠금·24시간 D-068).
 - 버린 대안: 몇 분마다 자동 다시 읽기 · 파이프라인 안에서 읽기(`pipeline.py` 공유) · 정산이 앱 반영을 기다리기 · 정산이 관리대장 직접 읽기(D-103 출처 변경).
 - 영향 범위: ① = 레인 H(`ui/app_qt.py`) · 오늘 배포 · ② = 정산 받기(`tools/settlement_download.py` · T-134 와 같은 파일) = T-134 병합 뒤.
-- 상태: ACTIVE (① 구현 R243 `8f2a95e` · ② 구현 전 T-136)
+- 상태: ACTIVE (① 구현 R243 `8f2a95e` · ② 구현 R243 `def15c4` — 실패 = 그 바퀴 중단·5분 뒤 재시도 · 운용 PC 첫 회차 확인 전)
 
 ### D-367 [SETTLE_EVIDENCE_AUTO] 자동 증빙 = 정산 회차가 '완료'든 '미완료'(진전 없어 다음 회차로 넘김)든 정산이 끝난 뒤 남은 시간에 받음 (2026-11-19, R243)
 - 결정(소유자 2026-11-19 · 통제 세션 질문 "정산 회차가 '미완료'… 로 끝났을 때도 남은 시간에 증빙을 받을까요?"에 선택): "미완료여도 받기 (Recommended)".
