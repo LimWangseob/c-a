@@ -17,7 +17,7 @@ from datetime import date, timedelta
 
 from .pipeline import run_full, select_keywords_stage
 from .pipeline_gsheet import push_company_stock, push_ledger_inventory
-from .pipeline_paths import column_label, mark_run_day, read_last_run_stage, run_days, write_run_stage
+from .pipeline_paths import column_label, mark_run_day, read_last_run_stage, run_day_column, run_days, write_run_stage
 from .pipeline_ranks import LAST_RANK, track_ranks_stage
 from .run_result import KEYWORDS, RANKS, SALES, STOCK, RunSummary
 
@@ -84,10 +84,11 @@ def _catch_up_missed_ranks(missed: list[str], ranks: dict, log, should_stop, res
     for day in missed:
         if should_stop():
             break
-        label = column_label(day)
+        col = run_day_column(date.fromisoformat(day)).isoformat()   # 기록 열쇠 = 실행일 · 칸 = 그 전날(D-368)
+        label = column_label(col)
         log.enter(RANKS)
-        log(f"[단계] ③ 지난 실행({label}) 순위 칸 채우기 — 그날 실행이 ③ 까지 못 끝냄(빈 칸만 검색)")
-        result = track_ranks_stage(**{**ranks, "date_label": day}) or result
+        log(f"[단계] ③ 지난 실행({label}) 순위 칸 채우기 — {column_label(day)} 실행이 ③ 까지 못 끝냄(빈 칸만 검색)")
+        result = track_ranks_stage(**{**ranks, "date_label": col}) or result
         left = int(LAST_RANK.get("unfilled") or 0)
         log(f"  [③ {label} 칸] 측정 {int(LAST_RANK.get('searched') or 0)}건 · 남은 빈 칸 {left}개")
         if "unfilled" in LAST_RANK and not left and not should_stop():

@@ -196,9 +196,10 @@ def _account_multi_option() -> InputList:
 
 
 def _sheets(path: Path) -> set[str]:
-    # 계정(사업자) 시트만 — 특수 시트(상품ID·목차·계정정보·수집스탬프·중단·순위묶음 D-257)는 제외
+    # 계정(사업자) 시트만 — 특수 시트(상품ID·목차·계정정보·수집스탬프·중단·순위묶음 D-257·날짜기준 D-369)는 제외
     return set(openpyxl.load_workbook(path).sheetnames) - {
-        "_상품ID", "목차", "계정 목록", "_계정정보", "_수집스탬프", "_마케팅", "_중단", "통합판매현황", "_순위묶음"}
+        "_상품ID", "목차", "계정 목록", "_계정정보", "_수집스탬프", "_마케팅", "_중단", "통합판매현황", "_순위묶음",
+        "_날짜기준"}
 
 
 def _has_value(path: Path, target) -> bool:
@@ -785,17 +786,18 @@ def scenario_e2e_warmup_timeout_then_catch_up():
     from coupang_analytics.pipeline_stages import StagePlan, run_stages
     from coupang_analytics.workbook import OutputWorkbook
     from playwright.sync_api import TimeoutError as PWTimeout
-    y, t = (date.today() - timedelta(days=1)).isoformat(), date.today().isoformat()
-    yl, tl = pipeline_paths.column_label(y), pipeline_paths.column_label(t)
+    y, t = (date.today() - timedelta(days=1)).isoformat(), date.today().isoformat()   # 실행한 날(어제·오늘)
+    yc = (date.today() - timedelta(days=2)).isoformat()   # 실행일의 칸 = 전날(판매일 D-368): 어제 실행 → yc · 오늘 → y
+    yl, tl = pipeline_paths.column_label(yc), pipeline_paths.column_label(y)
     il, d, cwd = _account_one_vid("vidE"), Path(tempfile.mkdtemp()), os.getcwd()
     orig = (proxy_pool.public_search_proxy, P.warmup, P._warmup_or_skip)
 
     def _timeout(browser):
         raise PWTimeout("Page.goto: Timeout 30000ms exceeded.")
 
-    def _day(day, logs):   # 운영 전체실행(app_qt·무인 --auto)과 같은 run_stages 호출 — 날짜만 그날
-        return run_stages(il, StagePlan(), ai_key="sim", naver=None, date_from=day, date_to=day, date_label=day,
-                          get_password=lambda a: None, carry=True, rank_date_label=day, on_log=logs.append)
+    def _day(col, logs):   # 운영 전체실행(app_qt·무인 --auto)과 같은 run_stages 호출 — 칸 = 그 실행의 판매일
+        return run_stages(il, StagePlan(), ai_key="sim", naver=None, date_from=col, date_to=col, date_label=col,
+                          get_password=lambda a: None, carry=True, rank_date_label=col, on_log=logs.append)
 
     def _marker():
         return json.loads(pipeline_paths._run_stage_path("output").read_text(encoding="utf-8"))
@@ -806,7 +808,7 @@ def scenario_e2e_warmup_timeout_then_catch_up():
         P.warmup = _timeout                           # 이틀 다 같은 불량 프록시 IP(첫 화면 30초 초과)
         P._warmup_or_skip = lambda browser, log: (P.warmup(browser), True)[1]   # 어제 = 옛 코드(보호 없이 호출)
         try:
-            _day(y, [])
+            _day(yc, [])
             raised = None
         except PWTimeout as exc:
             raised = exc
@@ -816,7 +818,7 @@ def scenario_e2e_warmup_timeout_then_catch_up():
                      encoding="utf-8")   # 날짜별 기록(days · D-248)도 어제 실행분
         P._warmup_or_skip = orig[2]                   # 오늘 = 배포본 코드(T-21·D-220)
         logs: list = []
-        _day(t, logs)
+        _day(y, logs)
         wb = OutputWorkbook.load(P._master_path(Path("output")))
         biz = wb.account_sheets()[0]
         pname = wb.products_of(biz)[0]

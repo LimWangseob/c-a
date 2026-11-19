@@ -72,7 +72,7 @@ def pin_carry_master_only():
     print("[핀 P5] 마스터만 있음(진행분 없음) — 오늘 컬럼 추가(이어쓰기)")
     p = plan_run_mode(newall=False, redo=False, meta=None, master=True, date_from=DF, date_to=DT)
     _check(p.carry and not p.resume and not p.redo_today, "carry만 True")
-    _check(f"오늘({DT})" in p.mode_desc and "컬럼 추가" in p.mode_desc, "오늘 컬럼 추가 안내")
+    _check(f"이번 칸({DT}" in p.mode_desc and "컬럼 추가" in p.mode_desc, "이번 칸(판매일) 컬럼 추가 안내(D-368)")
 
 
 def pin_first_run():
@@ -101,14 +101,14 @@ def pin_labels():
 
 
 def pin_designated_date():
-    print("[핀 P8] 날짜 지정(2026-10-10) — 칸=지정일·판매=전날·오늘 다른 날짜 진행분은 안 이어받음·빈 칸만")
-    _check(column_dates("2026-10-09") == ("2026-10-08", "2026-10-08", "2026-10-09"), "10.09 칸 = 10/08 판매")
-    _check(column_dates("2026-10-01") == ("2026-09-30", "2026-09-30", "2026-10-01"), "월 경계(10/01 칸=9/30 판매)")
-    meta = {"date_from": "2026-10-09", "date_to": "2026-10-09", "done": ["a"], "carry": True, "date_label": "2026-10-10"}
-    p = plan_run_mode(False, False, meta, True, "2026-10-08", "2026-10-08", "2026-10-09", designated=True)
+    print("[핀 P8] 날짜 지정(2026-10-10) — 칸=지정일=판매일(D-368)·오늘 다른 날짜 진행분은 안 이어받음·빈 칸만")
+    _check(column_dates("2026-10-09") == ("2026-10-09", "2026-10-09", "2026-10-09"), "10.09 칸 = 10/09 판매(D-368)")
+    _check(column_dates("2026-10-01") == ("2026-10-01", "2026-10-01", "2026-10-01"), "월 경계(10/01 칸=10/01 판매)")
+    meta = {"date_from": "2026-10-10", "date_to": "2026-10-10", "done": ["a"], "carry": True, "date_label": "2026-10-10"}
+    p = plan_run_mode(False, False, meta, True, "2026-10-09", "2026-10-09", "2026-10-09", designated=True)
     _check(not p.resume and p.carry and p.date_label == "2026-10-09", "오늘(10.10) 진행분 대신 지정 칸(10.09) 채우기")
-    _check(p.date_from == "2026-10-08" and "빈 칸만" in p.mode_desc, "판매=지정일 전날·안내 문구")
-    p2 = plan_run_mode(False, False, dict(meta, date_label="2026-10-09"), True, "2026-10-08", "2026-10-08",
+    _check(p.date_from == "2026-10-09" and "빈 칸만" in p.mode_desc, "판매=지정일·안내 문구")
+    p2 = plan_run_mode(False, False, dict(meta, date_label="2026-10-09"), True, "2026-10-09", "2026-10-09",
                        "2026-10-09", designated=True)
     _check(p2.resume and p2.date_label == "2026-10-09", "같은 지정 날짜 진행분이면 이어서")
     # D-032: '당일'·무인 실행도 같은 규칙 — 오늘 시작했어도 **다른 날짜 칸**의 진행분은 이어받지 않음(10-10 실측:
@@ -320,6 +320,7 @@ def pin_yesterday_rank_catchup():
     print("[핀 P12] 직전 실행이 어제 ③ 을 못 끝냄(단계 기록 어제 'sales'·'ranks') → 오늘 ③ 뒤 어제 칸 ③ 1회 (T-20 재발 방지 (가))")
     from datetime import date, timedelta
     y = (date.today() - timedelta(days=1)).isoformat()
+    yc = (date.today() - timedelta(days=2)).isoformat()   # 어제 실행의 칸 = 그 전날(판매일 D-368)
     orig = _st.read_last_run_stage
 
     def run(marker, plan=None, designated=False):
@@ -340,9 +341,9 @@ def pin_yesterday_rank_catchup():
     try:
         for stage in ("sales", "ranks"):
             calls, marks, labels, logs = run({"date": y, "stage": stage})
-            _check(calls == ["①", "②", "③", "재고", "회사재고", "③"] and labels[-1] == y,
-                   f"어제 '{stage}' → 오늘 ③·재고 뒤 어제 칸({y}) ③ 1회 {calls} {labels}")
-            _check(any("지난 실행" in m and "③" in m and y[5:].replace("-", ".") in m for m in logs), "지난 실행 칸 채우기 안내 줄(칸 이름 포함)")
+            _check(calls == ["①", "②", "③", "재고", "회사재고", "③"] and labels[-1] == yc,
+                   f"어제 '{stage}' → 오늘 ③·재고 뒤 어제 실행 칸({yc}) ③ 1회 {calls} {labels}")
+            _check(any("지난 실행" in m and "③" in m and yc[5:].replace("-", ".") in m for m in logs), "지난 실행 칸 채우기 안내 줄(칸 이름 포함)")
             _check(marks[-1] == "done", f"단계 기록 끝 = done {marks}")
         for marker, why in (({"date": y, "stage": "done"}, "어제 done"), (None, "기록 없음"),
                             ({"date": date.today().isoformat(), "stage": "sales"}, "오늘 기록(재부팅 복구 몫)")):
@@ -361,6 +362,7 @@ def pin_catchup_recent_days():
     from datetime import date, timedelta
     t = date.today()
     d = lambda n: (t - timedelta(days=n)).isoformat()   # noqa: E731
+    c = lambda n: (t - timedelta(days=n + 1)).isoformat()   # noqa: E731  그 실행일의 칸 = 전날(D-368)
     n = _st._CATCHUP_DAYS                              # 범위 끝 날(n) 포함 · n+1 일 전 제외(소유자 3일 D-253)
     orig = _st.read_last_run_stage
     try:
@@ -381,7 +383,7 @@ def pin_catchup_recent_days():
             run_stages(None, StagePlan(), ai_key="k", naver=None, date_from=DF, date_to=DT, date_label=DL,
                        get_password=lambda a: None, carry=True, should_stop=stop, on_log=logs.append)
             labels = [x for x, _ in seen]
-            _check(labels == [None, d(1), d(n)], f"오늘 ③ 뒤 {n}일 안 못 끝낸 날(최근부터) · done·{n + 1}일 전·오늘 제외 {labels}")
+            _check(labels == [None, c(1), c(n)], f"오늘 ③ 뒤 {n}일 안 못 끝낸 날(최근부터)의 칸 · done·{n + 1}일 전·오늘 제외 {labels}")
             _check(all(r == t for _, r in seen), f"③ 마다 실행 날짜(시작일) 넘김 {seen}")
             b = _block(logs)
             if not extra:
@@ -392,7 +394,7 @@ def pin_catchup_recent_days():
                        f"빈 칸 남은 날은 완료 표시 안 함(다음 실행이 다시) {DAY_MARKS}")
                 _check(b[1] == "판정: 순위 빈 칸 --> 확인 필요", f"오늘 빈 칸 0 이어도 보충 칸 빈 칸 → 확인 필요 {b[1]}")
                 _check("순위 빈 칸 3 " in b[-1], f"한 줄 요약 빈 칸 = 보충 칸 포함 {b[-1]}")
-                lab = d(n)[5:].replace("-", ".")
+                lab = c(n)[5:].replace("-", ".")
                 _check(any("지난 칸 보충" in x and f"{lab} 빈 칸 3" in x for x in b), "③ 줄에 보충 칸별 빈 칸")
             _st.track_ranks_stage = track
     finally:

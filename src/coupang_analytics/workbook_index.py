@@ -141,11 +141,12 @@ class _IndexMixin:
                 self.set_marketing(biz, prod, start, end, mon)
 
     def growth_asof(self) -> str:
-        """그로스재고 헤더의 자동갱신일자 — 마스터 전체에서 가장 최신 일자 컬럼 라벨('월.일'). 없으면 ''.
+        """그로스재고 헤더의 자동갱신일자 = **재고를 실제로 잰 날**('월.일') — 가장 최신 날짜 칸(판매일 D)의 다음 날
+        (재고는 D+1 새벽 실행 때 잼 · D-368·D-369 ④). 없으면 ''.
 
         엑셀 계정목록(_build_index)과 구글시트 계정목록(gsheet_index via pipeline_gsheet) 공통 SSOT."""
-        dates = [d for b in self.account_sheets() if (d := self.latest_date(b))]
-        return max(dates, default="")
+        days = [d for b in self.account_sheets() if (d := _parse_date(self.latest_date(b) or ""))]
+        return (max(days) + _td(days=1)).strftime("%m.%d") if days else ""
 
     def _build_index(self) -> None:
         """첫 시트 '계정 목록' 재생성 — 상품 단위 로스터 + 마케팅 기간 입력열 + 점프 링크 + 상태.

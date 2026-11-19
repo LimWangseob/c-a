@@ -5,6 +5,8 @@
 소유자 2026-11-19 "전에 3일간격에서 격일 간격으로 노출 순위 조사, 체험단 건은 제외함"(D-362) → 나머지 = 2묶음 격일.
 
 칸(사업자·상품·키워드·날짜)의 **날짜** 기준(실행 날짜 아님 — 보충·날짜 지정도 같은 규칙)으로, 아래 중 하나면 그날 잰다.
+칸 날짜 = 판매 기준일(D-368 · 실행일 전날) — 체험단 = 시작일 칸부터 10칸(측정 = 시작일 다음 날 01:30 부터 10번 D-369 ①) ·
+옛 기준 칸을 하루 당길 때 `_순위묶음` 시작일도 같이 당겨(date_basis) 같은 실행일 = 같은 묶음.
   ① 묶음 규칙 시작일 전 날짜  ② 체험단 시작일 ≤ 날짜 ≤ 시작일+9일  ③ 순위 기록이 한 번도 없는 키워드
   ④ 그 계정 묶음의 차례 — 격일 시작일부터 = (날짜 − 격일 시작일).일수 mod 2 · 그 전(3일 간격 기간) = (날짜 − 시작일) mod 3
 **두 기간 보존**(통제 세션 11-19): 3일 간격으로 잰 지난 칸은 그때 규칙(옛 묶음)으로 계속 판정해 회색이 그대로 남는다.
@@ -162,8 +164,8 @@ def _refresh_log(fresh: RankPlan, weights: dict[str, int], new: list[str], today
     groups2, names = fresh.groups2, fresh.names
     loads = [sum(weights[k] for k, g in groups2.items() if g == i) for i in range(GROUPS)]
     t = fresh.turn(today)
-    head = (f"오늘({today.month:02d}.{today.day:02d}) = {NAMES[t[1]]} 묶음(격일)" if t and t[0] == GROUPS
-            else "오늘은 격일 시작 전(전부 잼)")
+    head = (f"이번 칸({today.month:02d}.{today.day:02d}) = {NAMES[t[1]]} 묶음(격일)" if t and t[0] == GROUPS
+            else "이번 칸은 격일 시작 전(전부 잼)")   # today = 이 실행의 칸 날짜(실행일 전날 D-368)
     loads_txt = " · ".join(f"{NAMES[i]} {loads[i]}" for i in range(GROUPS))
     new_txt = (" · 새 계정 " + ", ".join(f"{names[k]}→{NAMES[groups2[k]]}" for k in new)) if new and not first else ""
     first_txt = f" · 처음 배정(격일 시작일 {fresh.start2.isoformat()})" if first and fresh.start2 else ""

@@ -13,10 +13,10 @@ import random
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 
-from . import config
+from . import config, date_basis
 from .browser import WingBrowser
 from .input_list import Account, InputList, InputValidationError, validate_input_list
 from .kw_ai import KeywordAIError
@@ -117,7 +117,7 @@ def plan_run_mode(newall: bool, redo: bool, meta: dict | None, master: bool,
     elif redo:
         if master:
             carry = redo_today = True
-            mode_desc = f"오늘 것만 다시 수집 — 오늘({date_to}) 초기화 후 전 계정 재수집(어제까지 유지·키워드 동결)"
+            mode_desc = f"오늘 것만 다시 수집 — 이번 칸({date_to} 판매) 초기화 후 전 계정 재수집(그 전 칸 유지·키워드 동결)"
         else:
             mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음·구글시트 복원 불가), 기간 {date_from}~{date_to}"
     elif meta and meta.get("date_label") not in (None, "") and meta["date_label"] != date_label:
@@ -130,7 +130,7 @@ def plan_run_mode(newall: bool, redo: bool, meta: dict | None, master: bool,
             mode_desc = (f"지정 날짜({date_label}) 칸 채우기 — 빈 칸만(이미 수집된 계정·순위는 건너뜀), "
                          f"판매 {date_from}~{date_to}")
         else:
-            mode_desc = (f"오늘({date_label}) 칸 추가 — 다른 날짜 칸({meta['date_label']}) 진행분은 이어받지 않음, "
+            mode_desc = (f"이번 칸({date_label} 판매) 추가 — 다른 날짜 칸({meta['date_label']}) 진행분은 이어받지 않음, "
                          f"판매 {date_from}~{date_to}")
     elif meta:
         resume = True
@@ -140,18 +140,17 @@ def plan_run_mode(newall: bool, redo: bool, meta: dict | None, master: bool,
         mode_desc = f"이어서 하기 — 오늘 미완료분 이어서(완료 {len(meta['done'])}개 건너뜀), 기간 {date_from}~{date_to}"
     elif master:
         carry = True
-        mode_desc = f"이어서 하기 — 오늘({date_to}) 컬럼 추가(키워드 동결)"
+        mode_desc = f"이어서 하기 — 이번 칸({date_to} 판매) 컬럼 추가(키워드 동결)"
     else:
         mode_desc = f"새 통계 시작(첫 실행 — 마스터 없음·구글시트 복원 불가), 기간 {date_from}~{date_to}"
     return RunPlan(resume, carry, redo_today, date_from, date_to, mode_desc, date_label)
 
 
 def column_dates(label_iso: str) -> tuple[str, str, str]:
-    """날짜 칸 하나의 (판매조회_from, 판매조회_to, 칸 라벨) — 칸=그 날짜, 판매=**그 전날**(쿠팡 판매분석 D-1 확정).
-    '오늘' 실행과 '날짜 지정' 실행 공통(소유자 2026-10-10: 10.10 에 10.09 지정 → 10.09 칸에 10/08 판매·순위=지금 측정)."""
-    label = date.fromisoformat(label_iso)
-    d1 = (label - timedelta(days=1)).isoformat()
-    return d1, d1, label.isoformat()
+    """날짜 칸 하나의 (판매조회_from, 판매조회_to, 칸 라벨) — **칸 = 판매 기준일 = 그 날짜**(D-368: 11-20 01:30 실행이어도
+    11.19 칸 = 11-19 판매 · 순위·재고는 실행 때 측정). '오늘' 실행(칸 = 실행일 전날 `run_day_column`)·'날짜 지정' 공통."""
+    label = date.fromisoformat(label_iso).isoformat()
+    return label, label, label
 
 
 def run_title(keywords_off: bool) -> str:
@@ -172,24 +171,24 @@ def run_log_labels(keywords_off: bool, resume: bool, redo_today: bool, carry: bo
 def _save_progress(out_dir, date_from, date_to, started_at, done, carry=False, date_label=None) -> None:
     _progress_path(out_dir).write_text(
         json.dumps({"date_from": date_from, "date_to": date_to, "started_at": started_at,
-                    "done": list(done), "carry": carry, "date_label": date_label},   # 컬럼 라벨=작업 실행날짜(판매조회 D-1과 분리) — 재개 시 동일 라벨 유지
+                    "done": list(done), "carry": carry, "date_label": date_label},   # 칸 = 판매 기준일(D-368 · 실행일 전날) — 재개 시 동일 라벨 유지
                    ensure_ascii=False, indent=2),
         encoding="utf-8")
 
 
 def _column_label(date_from: str, date_to: str, date_label: str | None, log) -> str:
-    """일자 컬럼 제목 = 작업 실행날짜(date_label)의 년도 없는 '월.일'. SSOT=designs/DESIGN.md §일자 컬럼.
+    """일자 컬럼 제목 = 판매 기준일(date_label = 판매조회일 · D-368)의 년도 없는 '월.일'. SSOT=designs/DESIGN.md §일자 컬럼.
 
-    판매데이터는 전일(D-1=date_from~date_to)에서 오지만 컬럼 제목은 실제 작업한 날로 적는다(새벽 넘겨도
-    시작일 기준). date_label 없으면 date_to 폴백, 기간지정이면 'from~to'. 라벨≠판매조회일이면 둘 다 안내.
+    01:30 실행이어도 칸 = 전날(판매일) · 순위·재고는 실행 때 측정한 값을 같은 칸에. 재개해도 시작 때 칸 그대로.
+    date_label 없으면 date_to, 기간지정이면 'from~to'. 라벨≠판매조회일(옛 진행분)이면 둘 다 안내.
     """
     label_src = date_label or date_to
     if date_from == date_to or date_label:
         col_label = column_label(label_src)   # 년도 없는 '월.일'(③과 같은 규칙)
     else:
         col_label = f"{date_from}~{date_to}"
-    if date_label and date_label != date_to:   # 라벨(실행일)과 판매조회일(전일)이 다르면 둘 다 안내
-        log(f"== 컬럼(작업 실행날짜): {col_label} · 판매조회 {date_from}~{date_to}(전일) ==")
+    if date_label and date_label != date_to:   # 라벨과 판매조회일이 다르면(옛 진행분) 둘 다 안내
+        log(f"== 컬럼: {col_label} · 판매조회 {date_from}~{date_to} ==")
     else:
         log(f"== 수집 대상 구간(컬럼): {col_label} ==")
     return col_label
@@ -657,6 +656,7 @@ def _finalize_run(ctx: _RunCtx, master: Path, prog: Path, now: datetime, gsheet_
     inject_company_stock(wb, stock_url, log)   # 회사보유재고 → 워크북(계정목록 5열) · apply_style 전
     refresh_sales_sheet(wb, ctx.out, log)      # 첫 시트 통합판매현황 다시 그림(designs/SALES_SUMMARY.md)
     wb.apply_style()         # 가독성 서식(헤더 고정·상품 구분·정렬) — 최종본에만
+    date_basis.mark(wb, "판매일 기준 실행")   # 시작 때 확인·당김 끝난(또는 새) 마스터 = 날짜 칸 판매일 기준 표시(D-369)
     wb.save(master)          # 다음 날 이어쓸 마스터
     wb.save(snapshot)        # 그날 백업본(감사용)
     push_gsheet(wb, gsheet_output_url, log, removed_accounts=removed_accounts,
@@ -738,6 +738,8 @@ def run_full(input_list: InputList, out_dir: str = "output",
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     partial, prog = _partial_path(out), _progress_path(out)
+    # D-369: 옛 기준(칸 = 판매일+1) 마스터면 첫 실행 때 1회 하루 당김(백업 먼저) · 판정 못 함·실패 = 이 실행 안 함
+    log(f"== {date_basis.ensure_sales_date_basis(out, log)} ==")
 
     master = _master_path(out)
     st = _init_run_state(input_list, out, partial, prog, master, now, resume, carry_forward,
