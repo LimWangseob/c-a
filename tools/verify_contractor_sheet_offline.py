@@ -468,8 +468,9 @@ def t9_daily_0600():
     from datetime import datetime
     with tempfile.TemporaryDirectory() as d:
         out = Path(d)
-        # 11-19 18:00 ① 판매수집이 남긴 자료(파일 날짜 = 수집한 날 11-19) → 11-20 06:00 실행이 읽어야 함
-        put_products(out, "a1", [{"vid": "1", "name": "관리 상품"}], day="2026-11-19")
+        # 11-20 01:30 ① 판매수집이 남긴 자료(파일 날짜 = 수집한 날 11-20 · D-362) → 11-20 06:00 실행이 읽어야 함
+        put_products(out, "a1", [{"vid": "1", "name": "관리 상품"}], day="2026-11-19")   # 전날 회차 자료 = 안 읽음
+        put_products(out, "a1", [{"vid": "1", "name": "관리 상품"}], day="2026-11-20")
         put_match(out, {"a1": {"관리 상품": ["1"]}})
         _put_sales_days(out, "a1", {f"2026-11-{x:02d}": {"1": x - 12} for x in range(13, 20)})
         il = type("IL", (), {"accounts": [acct("a1", "사업자A")]})()
@@ -480,7 +481,7 @@ def t9_daily_0600():
         check(p == out / "계약자별상품현황" / "셀독_계약자별상품현황_261120.xlsx" and p.is_file(), f"파일 이름 = 실행일 {p}")
         check(any("11.13~11.19" in x for x in logs), f"7일 = 11-13~11-19(실행일 전날까지) {[x for x in logs if '기간' in x]}")
         check(any("셀독 1" in x and "자료 없음 표시 0" in x for x in logs),
-              "전날 18시 ① 자료(파일 날짜 11-19)를 읽음 — '자료 없음' 아님")
+              "그날 01:30 ① 자료(파일 날짜 11-20)를 읽음 — '자료 없음' 아님")
         from openpyxl import load_workbook
         w = load_workbook(p).worksheets[1]
         check([w.cell(4, k).value for k in range(9, 17)] == [7, 6, 5, 4, 3, 2, 1, 28], "최근(11-19)이 왼쪽 · 합계 28")
@@ -488,15 +489,38 @@ def t9_daily_0600():
               "같은 날 두 번 안 돎")
         check(ST.daily_due(datetime(2026, 11, 21, 6, 0), out), "다음 날 06:00 = 다시")
         check(ST.daily_due(datetime(2026, 11, 22, 14, 30), out), "06:00 에 앱이 꺼져 있었으면 켠 뒤 그날 한 번")
-        # 06:00 을 놓쳐 18:00 무인 앱이 켜진 직후 만들어도(그날 ① 은 아직) = 전날 18시 ① 자료로(06:00 과 같은 회차)
-        put_products(out, "a1", [{"vid": "1", "name": "관리 상품"}], day="2026-11-20")
+        # 06:00 을 놓쳐 낮에 켜도 = 그날 01:30 ① 자료(06:00 과 같은 회차) · 전날 자료만 있으면 '자료 없음'
         logs, log = _logs()
-        ST.run_daily(il, now=datetime(2026, 11, 21, 18, 0, 5), out_dir=out, on_log=log, gsheet_url="", ask=no_ai)
-        check(any("셀독 1" in x and "자료 없음 표시 0" in x for x in logs), f"놓친 날 18:00 직후 = 전날 ① 자료 {logs[-2:]}")
+        ST.run_daily(il, now=datetime(2026, 11, 21, 14, 0, 5), out_dir=out, on_log=log, gsheet_url="", ask=no_ai)
+        check(not any("자료 없음 표시 0" in x for x in logs), f"그날 01:30 자료 없음 = 전날 자료로 안 채움 {logs[-2:]}")
+        put_products(out, "a1", [{"vid": "1", "name": "관리 상품"}], day="2026-11-23")
+        logs, log = _logs()
+        ST.run_daily(il, now=datetime(2026, 11, 23, 14, 0, 5), out_dir=out, on_log=log, gsheet_url="", ask=no_ai)
+        check(any("셀독 1" in x and "자료 없음 표시 0" in x for x in logs), f"놓친 날 낮 = 그날 01:30 ① 자료 {logs[-2:]}")
         logs, log = _logs()
         check(ST.run_daily(type("IL", (), {"accounts": []})(), now=datetime(2026, 11, 22, 14, 30), out_dir=out,
                            on_log=log) is None and not ST.daily_due(datetime(2026, 11, 22, 15, 0), out),
               "만들지 못한 날도 기록 — 같은 날 되풀이 안 함")
+
+
+def t9b_wait_sales():
+    print("[T9b] 06:00 에 ① 판매수집이 아직 돌면 = 끝날 때까지 미룸(기준일 섞임 방지) · 안 돌면 바로 — 통제 세션 11-19 ④")
+    import os
+    import time as _time
+    from datetime import datetime
+    from coupang_analytics.pipeline_paths import _progress_path
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d)
+        now = datetime.now()
+        check(ST.wait_reason(now, out) == "", "진행 파일 없음 = 기다리지 않음")
+        prog = _progress_path(out)
+        prog.parent.mkdir(parents=True, exist_ok=True)
+        prog.write_text("{}", encoding="utf-8")
+        why = ST.wait_reason(now, out)
+        check("판매수집" in why, f"방금 갱신된 진행 파일 = ① 도는 중 → 미룸 {why!r}")
+        old = _time.time() - 3600
+        os.utime(prog, (old, old))
+        check(ST.wait_reason(now, out) == "", "1시간 갱신 없음 = ① 멈춘 것(미완료 남김) → 기다리지 않음")
 
 
 def t10_blank_days():
@@ -550,7 +574,7 @@ def t8_speed():
 
 def main() -> int:
     for t in (t1_ten_rule, t2_values_and_tiers, t3_ai_judge, t4_layout_xlsx, t5_stage_and_gsheet, t6_links_n1_n2_n3,
-              t7_stage_order, t8_speed, t9_daily_0600, t10_blank_days):
+              t7_stage_order, t8_speed, t9_daily_0600, t9b_wait_sales, t10_blank_days):
         t()
     print(f"\n결과: {'통과' if not FAILS else f'실패 {len(FAILS)}건'}")
     for f in FAILS:

@@ -964,8 +964,30 @@ def p26_parent_watch():
     ok("앱 PID 전달·앱 살아있으면 계속·사람 종료=정산 종료·무인 정상 완료=계속·다른 앱 완료 표시 무효·앱 이미 없음=종료")
 
 
+def p27b_schedule_one_place():
+    print("[P27b] 시각 한 곳(D-362) — 예약 작업 시각 = 회차 시작 · 실행 제한 = 회차 길이 · 셀독전환 멈춤 = 회차 20분 전")
+    import re
+    from datetime import datetime as RealDT, timedelta
+    from coupang_analytics import settlement_watch as W
+    from coupang_analytics import transfer_login as TL
+    start = f"{W.CYCLE_START:%H:%M}"
+    assert start == "01:30" and W.CYCLE_END_GAP == timedelta(minutes=10), (start, W.CYCLE_END_GAP)
+    for name, pat in (("install.ps1", r"-Daily -At \(\[datetime\]'(\d\d:\d\d)'\)"),
+                      ("install_schedule_py.ps1", r"-Daily -At (\d\d:\d\d)")):
+        text = (ROOT / "deploy" / name).read_text(encoding="utf-8-sig")
+        got = re.findall(pat, text)
+        assert got == [start], f"{name} 예약 시각 {got} ≠ 회차 시작 {start}"
+        lim = re.findall(r"-ExecutionTimeLimit \(New-TimeSpan -Hours (\d+) -Minutes (\d+)\)", text)
+        assert lim and all(timedelta(hours=int(h), minutes=int(m)) == timedelta(days=1) - W.CYCLE_END_GAP
+                           for h, m in lim), f"{name} 실행 제한 {lim} ≠ 회차 길이"
+        assert "18:00" not in text, f"{name} 에 옛 18:00 글이 남음"
+    end = RealDT.combine(RealDT(2026, 1, 1), W.CYCLE_START) - timedelta(minutes=20)
+    assert TL.UNTIL_DEFAULT == f"{end:%H:%M}" == "01:10", TL.UNTIL_DEFAULT
+    ok(f"예약 {start} · 실행 제한 23시간50분 = 회차 끝 01:20 · 셀독전환 멈춤 {TL.UNTIL_DEFAULT}(설치 스크립트 2개 대조)")
+
+
 def p27_cycle():
-    print("[P27] 정산 회차(D-021) — 18:00 앱과 함께 기동·①완료까지 대기·다 받으면 종료·다음 날 17:55 종료")
+    print("[P27] 정산 회차(D-021·D-362) — 01:30 앱과 함께 기동·①완료까지 대기·다 받으면 종료·다음 날 01:20 종료")
     import json as _json
     import os
     from datetime import datetime as RealDT, timedelta
@@ -975,18 +997,21 @@ def p27_cycle():
     from coupang_analytics import settlement_runlog as RLG
     from coupang_analytics import settlement_watch as W
     D = RealDT
-    assert W.cycle_window(D(2026, 10, 10, 18, 0, 5)) == (D(2026, 10, 10, 18), D(2026, 10, 11, 17, 55))
-    assert W.cycle_window(D(2026, 10, 11, 3, 0)) == (D(2026, 10, 10, 18), D(2026, 10, 11, 17, 55)), "새벽=전날 18시 회차"
-    assert W.cycle_window(D(2026, 10, 11, 18, 0))[0] == D(2026, 10, 11, 18), "18:00 = 새 회차"
-    start = D(2026, 10, 10, 18)
-    assert W.sales_done_in_cycle({"stage": "sales", "at": D(2026, 10, 10, 19)}, start)
-    assert W.sales_done_in_cycle({"stage": "done", "at": D(2026, 10, 11, 2)}, start)
-    assert not W.sales_done_in_cycle({"stage": "sales", "at": D(2026, 10, 9, 19)}, start), "지난 회차 ① = 대기"
+    assert W.cycle_window(D(2026, 10, 10, 1, 30, 5)) == (D(2026, 10, 10, 1, 30), D(2026, 10, 11, 1, 20))
+    assert W.cycle_window(D(2026, 10, 10, 18, 0)) == (D(2026, 10, 10, 1, 30), D(2026, 10, 11, 1, 20)), "저녁=그날 01:30 회차"
+    assert W.cycle_window(D(2026, 10, 11, 0, 50)) == (D(2026, 10, 10, 1, 30), D(2026, 10, 11, 1, 20)), "자정 뒤=전날 회차"
+    s25, e25 = W.cycle_window(D(2026, 10, 11, 1, 25))
+    assert s25 == D(2026, 10, 10, 1, 30) and D(2026, 10, 11, 1, 25) >= e25, "01:20~01:30 = 지난 회차 끝남"
+    assert W.cycle_window(D(2026, 10, 11, 1, 30))[0] == D(2026, 10, 11, 1, 30), "01:30 = 새 회차"
+    start = D(2026, 10, 10, 1, 30)
+    assert W.sales_done_in_cycle({"stage": "sales", "at": D(2026, 10, 10, 3)}, start)
+    assert W.sales_done_in_cycle({"stage": "done", "at": D(2026, 10, 10, 11)}, start)
+    assert not W.sales_done_in_cycle({"stage": "sales", "at": D(2026, 10, 9, 3)}, start), "지난 회차 ① = 대기"
     assert not W.sales_done_in_cycle(None, start)
 
     def run(marker_at, sales_after=None):
         """가짜 시계로 cmd_watch 한 회차 실행 → (반환값, 한 바퀴 호출 수, 마지막 상태, until_at, 종료 시각)."""
-        clock = {"now": D(2026, 10, 10, 18, 0, 5)}
+        clock = {"now": D(2026, 10, 10, 1, 30, 5)}
         passes, hb = [], []
         stage = Path("output") / "쿠팡데이타분석_실행단계.json"
 
@@ -1027,16 +1052,16 @@ def p27_cycle():
             (Path(tmp) / "output").mkdir()
             rc, passes, last, until_at, end = run(None)                     # ① 이 끝나지 않는 회차
             assert passes == [] and last[0] == "종료" and "회차 종료" in last[1], (passes, last)
-            assert end <= D(2026, 10, 11, 17, 55) + timedelta(seconds=1) and until_at == D(2026, 10, 11, 17, 55)
-            rc, passes, last, _, _ = run(D(2026, 10, 9, 19))                # 지난 회차 ① 기록만 = 받지 않음
+            assert end <= D(2026, 10, 11, 1, 20) + timedelta(seconds=1) and until_at == D(2026, 10, 11, 1, 20)
+            rc, passes, last, _, _ = run(D(2026, 10, 9, 3))                 # 지난 회차 ① 기록만 = 받지 않음
             assert passes == [] and last[0] == "종료", (passes, last)
-            rc, passes, last, _, _ = run(None, sales_after=D(2026, 10, 10, 19, 30))   # 19:30 ① 완료 → 받기
-            assert passes and passes[0] >= D(2026, 10, 10, 19, 30), passes
+            rc, passes, last, _, _ = run(None, sales_after=D(2026, 10, 10, 3, 0))     # 03:00 ① 완료 → 받기
+            assert passes and passes[0] >= D(2026, 10, 10, 3, 0), passes
             assert rc == 0 and len(passes) == 2 and last == ("완료", W.plan_after_pass(False, 0, 0, 0, 1)[1]), \
                 (rc, passes, last)                                              # 3건 받음 → 다음 바퀴 0건 = 다 받음 → 종료
         finally:
             os.chdir(old_cwd)
-    ok("회차=18:00~다음 날 17:55·①완료 전/지난 회차 기록=대기만 하다 17:55 종료·① 완료 후 받기·다 받으면 바로 종료")
+    ok("회차=01:30~다음 날 01:20·①완료 전/지난 회차 기록=대기만 하다 01:20 종료·① 완료 후 받기·다 받으면 바로 종료")
 
 
 def p28_wait_app_profile():
@@ -1298,11 +1323,12 @@ def p36_same_cycle_done():
         os.chdir(tmp)
         try:
             (Path(tmp) / "output").mkdir()
-            # 실측: 10-20 18:48 ① 완료 기준 '완료'(21:31) → ③ 끝(04:29)에 단계 기록이 done 으로 바뀜 → 08:00 옛 예약작업
-            assert run(D(2026, 10, 21, 8, 0, 2), D(2026, 10, 21, 4, 29), "2026-10-20T18:48:17") == [], \
+            # 실측(10-21 · 18:00 회차 때): ① 완료 기준 '완료' → ③ 끝에 단계 기록이 done 으로 바뀜 → 옛 예약작업이 다시 띄움.
+            # 01:30 회차(D-362)로 옮김: 03:00 ① 완료 '완료' → 10:29 ③ 끝(done) → 14:00 다시 떠도 같은 회차 = 안 받음
+            assert run(D(2026, 10, 21, 14, 0, 2), D(2026, 10, 21, 10, 29), "2026-10-21T03:00:17") == [], \
                 "같은 회차 '완료'인데 단계 기록 시각이 바뀌었다고 다시 받음"
-            # 지난 회차의 '완료'는 이번 회차를 막지 않음(다음 날 18:00 이후 ① 완료 → 받음)
-            assert run(D(2026, 10, 21, 19, 0), D(2026, 10, 21, 18, 50), "2026-10-20T18:48:17"), "새 회차인데 안 받음"
+            # 지난 회차의 '완료'는 이번 회차를 막지 않음(다음 날 01:30 이후 ① 완료 → 받음)
+            assert run(D(2026, 10, 22, 4, 0), D(2026, 10, 22, 3, 50), "2026-10-21T03:00:17"), "새 회차인데 안 받음"
         finally:
             os.chdir(old_cwd)
     ok("같은 회차 완료 = 단계 기록 시각과 무관하게 종료 · 새 회차는 받음 · 옛 예약작업 제거")
@@ -3412,6 +3438,7 @@ def main():
     p25_app_launch()
     p26_parent_watch()
     p27_cycle()
+    p27b_schedule_one_place()
     p28_wait_app_profile()
     p29_monthly_failed_comment()
     p30_manual_full_run()

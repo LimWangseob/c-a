@@ -3,8 +3,8 @@
 app_qt.App 이 상속한다. 실행은 정산 프로그램의 `transfer-login` 명령(app_process.start_transfer_login · 창 없음)이고,
 이 탭은 결과 파일(output/정산_셀독전환/로그인확인_최신.json)과 로그 파일을 3초마다 읽어 보여 준다(배포 exe 는 콘솔이
 없어 화면 출력을 못 받음). 로그인 코드·규칙은 앱 ①과 같음(transfer_login 문서).
-2단계 = 정산 자료 받기(`transfer-settle` · D-187): 18:00 무인 앱이 매일 함께 띄우고(체크로 끔), [지금 받기]로도 띄움 —
-앱 실행·정산 자동 수집이 끝난 뒤 받고 17:40 에 멈춤. 결과 = output/정산_셀독전환/셀독전환_정산내역_누적.xlsx.
+2단계 = 정산 자료 받기(`transfer-settle` · D-187): 01:30 무인 앱이 매일 함께 띄우고(D-362)(체크로 끔), [지금 받기]로도 띄움 —
+앱 실행·정산 자동 수집이 끝난 뒤 받고 01:10 에 멈춤. 결과 = output/정산_셀독전환/셀독전환_정산내역_누적.xlsx.
 """
 from __future__ import annotations
 
@@ -56,8 +56,8 @@ class TransferPanelMixin:
         v = QtWidgets.QVBoxLayout(inner)
         v.setContentsMargins(14, 12, 14, 12)
         sub = QtWidgets.QLabel("미정산 셀독전환자(①셀독진행·②계정수령_상품미등록) 계정의 쿠팡 정산 내역을 받기 위한 탭입니다. "
-                               "1단계 = 로그인 확인(다운로드 없음) · 2단계 = 정산 자료 받기(매일 18시 뒤). 비밀번호 칸이 빈 계정은 "
-                               "관리대장 비밀번호를 씁니다. 앱 실행·정산 자동 다운로드가 도는 중에는 시작하지 않고, 17:40 이 지나면 "
+                               f"1단계 = 로그인 확인(다운로드 없음) · 2단계 = 정산 자료 받기(매일 {TL.CYCLE_START:%H:%M} 무인 뒤). 비밀번호 칸이 빈 계정은 "
+                               f"관리대장 비밀번호를 씁니다. 앱 실행·정산 자동 다운로드가 도는 중에는 시작하지 않고, {TL.UNTIL_DEFAULT} 이 지나면 "
                                "새 계정을 시작하지 않습니다.")
         sub.setObjectName("muted")
         sub.setWordWrap(True)
@@ -137,7 +137,8 @@ class TransferPanelMixin:
         ok = QtWidgets.QMessageBox.question(
             self, "셀독전환자 로그인 확인",
             f"{what} 쿠팡 로그인을 차례로 확인합니다(계정당 1~2분 + 사이 45~75초).\n"
-            "비밀번호가 틀리면 그 계정은 다시 넣지 않고 '연락 필요'로 남깁니다.\n17:40 이 지나면 새 계정을 시작하지 않습니다. 시작할까요?")
+            "비밀번호가 틀리면 그 계정은 다시 넣지 않고 '연락 필요'로 남깁니다.\n"
+            f"{TL.UNTIL_DEFAULT} 이 지나면 새 계정을 시작하지 않습니다. 시작할까요?")
         if ok != QtWidgets.QMessageBox.Yes:
             return
         self._tr_since = time.time()
@@ -180,7 +181,7 @@ class TransferPanelMixin:
         card = self._card("셀독전환자 정산 자료 받기 (2단계 · 2026-01-01 부터 · 계정당 한 번에 30건 · 받은 것은 다시 안 받음)")
         g = QtWidgets.QGridLayout(card)
         g.setColumnStretch(1, 1)
-        self.ts_daily_chk = QtWidgets.QCheckBox("매일 18시 뒤 자동으로 받기 — 18:00 무인 실행이 함께 띄움 · 앱 실행·정산 자동 수집이 "
+        self.ts_daily_chk = QtWidgets.QCheckBox(f"매일 자동으로 받기 — {TL.CYCLE_START:%H:%M} 무인 실행이 함께 띄움 · 앱 실행·정산 자동 수집이 "
                                                 "끝난 뒤 받음 · 로그인 '실패' 계정은 넣지 않음")
         self.ts_daily_chk.setChecked(TS.daily_on())
         self.ts_daily_chk.toggled.connect(lambda on: self._save_shared(TS.DAILY_KEY, "1" if on else "0"))
@@ -233,7 +234,8 @@ class TransferPanelMixin:
         ok = QtWidgets.QMessageBox.question(
             self, "셀독전환자 정산 자료 받기",
             "로그인 '실패'가 아닌 계정마다 로그인해 2026-01-01 부터 정산 자료를 받습니다(계정당 한 번에 30건 · 요청 사이 45~75초).\n"
-            "앱 실행·정산 자동 수집이 돌거나 17:40~20:40 이면 끝날 때까지 기다렸다 시작하고, 17:40 에 멈춥니다. 시작할까요?")
+            f"앱 실행·정산 자동 수집이 돌거나 {TL.quiet_window()} 이면 끝날 때까지 기다렸다 시작하고, {TL.UNTIL_DEFAULT} 에 "
+            "멈춥니다. 시작할까요?")
         if ok != QtWidgets.QMessageBox.Yes:
             return
         self._ts_since, self._ts_log = time.time(), None

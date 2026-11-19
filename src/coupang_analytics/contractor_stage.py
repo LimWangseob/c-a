@@ -2,7 +2,8 @@
 
 run_daily = 앱 타이머(ui/app_qt `_contractor_tick`)가 부름 — 06:00 이 지났고 그날 실행 기록이 없을 때 한 번(06:00 에 앱이 꺼져
 있었으면 켠 뒤 한 번) · 최근 7일 = 실행일 전날까지(D-361 ②) · 상품·판매가·그로스 재고 = 회차(settlement_watch
-`cycle_window` — 그날 06:00 이 든 회차 · 18:00 회차면 전날 18시 ①)부터의 보관본.
+`cycle_window` — 그날 06:00 이 든 회차 = 그날 01:30 ① · D-362)부터의 보관본. 06:00 에 ① 이 아직 돌면 끝날 때까지 미룸
+(`wait_reason` · 기준일 섞임 방지 · 통제 세션 11-19).
 
 run_stage = 관리대장 계정 → 사업자 묶음 → 계정마다 저장 자료(contractor_sheet) → 판정 3단(규칙 → AI · 판정표 덧붙임) →
 10개 규칙 → `output/계약자별상품현황/셀독_계약자별상품현황_yymmdd.xlsx`(매일 새 파일 · 같은 날 다시 = 그날 파일 교체) →
@@ -200,9 +201,18 @@ def daily_due(now: datetime, out_dir="output") -> bool:
     return now.time() >= DAILY_AT and _last_day(out_dir) != now.date().isoformat()
 
 
+def wait_reason(now: datetime, out_dir="output") -> str:
+    """① 판매수집이 지금 도는 중이면 그 이유(그동안 미룸 — 반쯤 받은 날 자료로 만들지 않게) · 아니면 ''.
+    판정 = 정산과 같은 `_진행중.json` 수정 시각(settlement_watch.sales_in_progress) — ① 이 멈춰 갱신이 끊기면 곧 ''."""
+    from .pipeline_paths import _progress_path
+    from .settlement_watch import sales_in_progress
+    busy, why = sales_in_progress(_progress_path(out_dir), now=now)
+    return why if busy else ""
+
+
 def run_daily(input_list, *, now: datetime, ai_key: str | None = None, out_dir="output", on_log=print,
               gsheet_url: str | None = None, client_factory=None, ask=None) -> Path | None:
-    """매일 06:00 실행(D-361) — 최근 7일 = 실행일 전날까지 · 보관본 = 그날 06:00 이 든 회차부터(06:00 을 놓쳐 18:00 앱이
+    """매일 06:00 실행(D-361) — 최근 7일 = 실행일 전날까지 · 보관본 = 그날 06:00 이 든 회차(그날 01:30 ①)부터(06:00 을 놓쳐 낮에 앱이
     켜진 직후 만들어도 그날 ① 이 아니라 전날 회차 ① 자료 · 그 뒤 것이 있으면 더 새것) · 성공·실패 모두 그날 기록."""
     from .settlement_watch import cycle_window
     if _last_day(out_dir) == "!":

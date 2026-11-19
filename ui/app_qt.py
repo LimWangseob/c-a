@@ -218,7 +218,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         if not auto:
             self._probe_gsheet_links()  # 구글시트 링크 4개 연결 상태를 뒤에서 확인해 라벨로(무인 실행은 생략)
         # 셀독 계약자별 상품 현황 = 매일 06:00 한 번(D-361) — 켜진 동안 1분마다 확인 · 06:00 뒤 켰으면 곧바로 그날 몫
-        self._contractor_busy, self._contractor_warned = False, ""
+        self._contractor_busy, self._contractor_warned, self._contractor_waited = False, "", ""
         self._contractor_timer = QtCore.QTimer(self)
         self._contractor_timer.setInterval(60_000)
         self._contractor_timer.timeout.connect(self._contractor_tick)
@@ -1089,7 +1089,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
 
     @staticmethod
     def _pipe_lock_path() -> str:
-        """교차 프로세스 파이프라인 실행 잠금 — 열어둔 GUI 와 18:00 무인(--auto)이 **동시에** 파이프라인을
+        """교차 프로세스 파이프라인 실행 잠금 — 열어둔 GUI 와 01:30 무인(--auto)이 **동시에** 파이프라인을
         돌려 마스터·계정이 충돌하는 것을 막는다. 유휴 GUI 는 잠금을 쥐지 않으므로 무인은 항상 실행된다."""
         d = app_output_dir() / "_잠금"
         d.mkdir(parents=True, exist_ok=True)
@@ -1740,7 +1740,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
                           gsheet_input_url=gs_in, gsheet_output_url=gs_out, registry_url=reg_url,
                           stock_url=self._stock_url(), on_log=self.log, **run_kw)
 
-    # ── 무인 자동 실행(--auto, 18:00 시작 → **모든 처리 완주 후 종료**·강제종료 없음) ───────
+    # ── 무인 자동 실행(--auto, 01:30 시작 · D-362 → **모든 처리 완주 후 종료**·강제종료 없음) ───────
     def start_auto(self):
         """무인 자동 실행 — 팝업 없이 **①반자동 판매수집 → ②키워드선정 → ③반자동 순위**, **모든 처리 완주 후에만 종료**(강제종료 없음).
 
@@ -1804,6 +1804,11 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
                 self._contractor_warned = now.date().isoformat()
                 self.log_all("[계약자별 현황] ⚠ 관리대장(입력)을 못 읽어 아직 못 만듦 — 입력을 불러오면 1분 안에 만듦")
             return
+        if contractor_stage.wait_reason(now):   # ① 이 아직 돎 → 끝날 때까지 미룸(그날 자료가 반만 있는 채로 만들지 않게)
+            if self._contractor_waited != now.date().isoformat():
+                self._contractor_waited = now.date().isoformat()
+                self.log_all("[계약자별 현황] ⏸ ① 판매수집이 아직 도는 중 — 끝나면 1분 안에 만듦(그날 자료가 다 모인 뒤)")
+            return
         self._contractor_busy = True
         il, key = self.input_list, self.ai_key
 
@@ -1823,7 +1828,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
 
     def _auto_quit(self):
         self._quitting = True   # 무인이 스스로 끝냄 — 창 닫힘 기록(closeEvent)에 '사람이 닫음'을 안 씀
-        mark_app_finished()   # D-020: 무인이 스스로 끝남 → 정산은 계속(17:55 까지). 사람이 끄면 이 표시 없음 → 함께 종료
+        mark_app_finished()   # D-020: 무인이 스스로 끝남 → 정산은 계속(다음 날 01:20 까지). 사람이 끄면 이 표시 없음 → 함께 종료
         power.keep_awake(False)
         QtWidgets.QApplication.quit()
 
@@ -2195,7 +2200,7 @@ def main():
     _root = set_workdir()           # 상태(output·data)를 **보존 폴더(프로젝트 루트)** 에 고정 — 실행 폴더 무관
     _sync_config_and_registry()     # config.json(보존 폴더) ↔ 레지스트리 동기화(설정 파일을 권위로·창 생성 전)
     print(f"[경로] 데이터 폴더(마스터·크롬 프로필·설정·로그) = {_root}")
-    auto = "--auto" in sys.argv     # 무인 자동 실행(작업 스케줄러가 18:00에 이 인자로 실행)
+    auto = "--auto" in sys.argv     # 무인 자동 실행(작업 스케줄러가 01:30에 이 인자로 실행 · D-362)
     resume = "--resume" in sys.argv  # 재부팅 복구(작업 스케줄러 '로그온 시' 트리거) — 중단분만 이어서, 없으면 종료
     app = QtWidgets.QApplication(sys.argv)
     app.setStyleSheet(_QSS.replace("__CHECK_ICON__", _check_icon_path()))
@@ -2212,16 +2217,16 @@ def main():
                 "Chrome 을 설치한 뒤 다시 실행하세요.")
         sys.exit(1)
     pre_logs: list[str] = []
-    if auto:                        # 18:00 무인 = 이전 앱·정산 프로그램 종료(트리째·D-024) — 남은 Chrome 은 아래 reap
+    if auto:                        # 01:30 무인 = 이전 앱·정산 프로그램 종료(트리째·D-024) — 남은 Chrome 은 아래 reap
         prepare_auto_start(pre_logs.append)
     elif not resume:                # 사람이 켠 실행 = 옛 정산 예약작업 제거(못 지우면 관리자 확인 창 · 무인은 창 없음 D-189)
         remove_legacy_settlement_task(pre_logs.append, elevate=True)
     reaped = reap_orphan_chrome()   # 이전 실행이 강제종료·크래시로 남긴 좀비 Chrome 정리(누적 원천 차단)
     if reaped:
         pre_logs.append(f"[시작] 잔여(좀비) Chrome {reaped}개 정리함")
-    if auto or resume:              # D-021: 18:00(·재부팅 복구) 앱과 함께 정산 기동 — 정산은 ① 완료까지 대기
+    if auto or resume:              # D-021: 01:30(·재부팅 복구) 앱과 함께 정산 기동 — 정산은 ① 완료까지 대기
         start_settlement_watch(pre_logs.append)
-        if transfer_settle.daily_on():   # D-187: 셀독전환자 정산 자료 — 매일 18시 뒤(앱·정산 자동 수집이 끝난 뒤 받음)
+        if transfer_settle.daily_on():   # D-187: 셀독전환자 정산 자료 — 매일 01:30 무인 뒤(앱·정산 자동 수집이 끝난 뒤 받음)
             start_transfer_settle(pre_logs.append, os.getpid())
     win = App(auto=(auto or resume))
     win.show()

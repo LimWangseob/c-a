@@ -119,7 +119,7 @@ def renames(old_names, accounts: list[SettleAccount], tok=lambda s: s) -> dict:
 
 
 # ── 정산 계정 출처 = 셀독계정상품이력관리원장(D-103) ─────────────────────────────
-SYNC_MAX_AGE_H = 26   # 원장 마지막 동기화가 이보다 오래면 정산 계정 구성 중단(18:00 실행이 하루 한 번 동기화)
+SYNC_MAX_AGE_H = 26   # 원장 마지막 동기화가 이보다 오래면 정산 계정 구성 중단(01:30 실행이 하루 한 번 동기화)
 
 
 class AccountSourceError(Exception):
@@ -145,10 +145,10 @@ def accounts_from_registry(reg, settle_rows: dict, last_sync: str, now,
     from .registry_history import managed_between
     from .registry_model import valid_account_id
     if not last_sync:
-        raise AccountSourceError("원장 동기화 기록이 없음 — 설정 탭 원장 링크·18:00 실행 확인(옛 정산 계정 파일로 대신하지 않음)")
+        raise AccountSourceError("원장 동기화 기록이 없음 — 설정 탭 원장 링크·01:30 실행 확인(옛 정산 계정 파일로 대신하지 않음)")
     age = now - _dt.fromisoformat(last_sync)
     if age > timedelta(hours=max_age_h):
-        raise AccountSourceError(f"원장 마지막 동기화 {last_sync} — {max_age_h}시간이 넘음(원장 링크가 바뀌었거나 18:00 실행이 "
+        raise AccountSourceError(f"원장 마지막 동기화 {last_sync} — {max_age_h}시간이 넘음(원장 링크가 바뀌었거나 01:30 실행이 "
                                  "안 됨). 설정 탭 원장 링크 확인 후 다시 실행(옛 정산 계정 파일로 대신하지 않음)")
     mistaken = reg.mistaken_ids()
     picked = [a for a in managed_between(reg, "0000-01-01", now.strftime("%Y-%m-%d")) if a not in mistaken and valid_account_id(a)]
