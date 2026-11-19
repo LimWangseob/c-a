@@ -6,6 +6,7 @@
 보관 칸(응답 원문 이름 그대로 · 2026-11-18 저장 응답 281쪽 12,601상품 실측):
 - 리스팅: vendorInventoryId · productName · categoryId(말단 · D-316 ④) · displayCategoryCode · categoryName ·
   deliveryChargeType · deliveryCharge(기본배송비) · freeShipOverAmount · returnCharge(반품배송비 편도 · D-318 ④)
+- 판매상태: productStatus(ON_SALE·PARTIAL_ON_SALE·SUSPENDED… · 셀독 계약자별 상품 현황 N3 · D-358)
 - 옵션: vendorItemId(=vid · 정산 옵션ID) · vendorInventoryItemId · itemName · registrationType · salePrice
 - deliveryChargeOnReturn(초도반품비) = 찾는 칸이지만 **이 응답에 없음**(실측 0/12,601) → 응답에 생기면 그대로 담고, 없으면 '응답에_없는_칸'에 적는다.
 - '상품 정보 수량' = 이 응답·재고현황 응답 어디에도 해당 칸 없음 → 칸 이름을 지어내지 않고 담지 않는다(보고서).
@@ -21,7 +22,7 @@ from pathlib import Path
 from . import daily_snapshot
 
 DIRNAME = daily_snapshot.PRODUCT_INFO_DIRNAME
-LISTING_KEYS = ("vendorInventoryId", "productName", "categoryId", "displayCategoryCode", "categoryName",
+LISTING_KEYS = ("vendorInventoryId", "productName", "productStatus", "categoryId", "displayCategoryCode", "categoryName",
                 "deliveryChargeType", "deliveryCharge", "freeShipOverAmount", "returnCharge", "deliveryChargeOnReturn")
 OPTION_KEYS = ("vendorItemId", "vendorInventoryItemId", "itemName", "registrationType", "salePrice")
 
