@@ -3323,6 +3323,76 @@ def p66_openblas_one_thread():
     ok(f"정산 프로그램 자식 = OPENBLAS_NUM_THREADS 1 · openpyxl+numpy 뒤 커밋 {mb}MB(< 100MB) · 앱 진입점 순서 맞음")
 
 
+def p67_manual_start():
+    print("[P67] 정산 탭 '정산 시작'(--manual · D-354) — 이번 회차 '완료' 기록·①완료 대기 없이 바로 받음 · ①이 도는 중이면 대기 · "
+          "무인(18:00)·전체실행은 그대로")
+    import json as _json
+    import os
+    from datetime import datetime as RealDT, timedelta
+    from types import SimpleNamespace
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    from coupang_analytics import app_process as AP
+    from coupang_analytics import settlement_runlog as RLG
+    from coupang_analytics import settlement_watch as W
+    D = RealDT
+    assert AP.settlement_watch_cmd(4321, manual=True)[0][-4:] == ["watch", "--parent", "4321", "--manual"]
+    assert "--manual" not in AP.settlement_watch_cmd(4321)[0], "무인(18:00)은 그대로"
+    assert "--manual" not in AP.settlement_watch_cmd(4321, since=D(2026, 11, 19, 9))[0], "전체실행은 그대로"
+    panel = (ROOT / "ui" / "settlement_status_panel_qt.py").read_text(encoding="utf-8")
+    assert "start_settlement_watch(self.log, manual=True)" in panel, "정산 탭 버튼 = 수동 모드"
+
+    def run(manual, marker_at, busy=False):
+        clock = {"now": D(2026, 11, 19, 11, 22, 29)}
+        passes = []
+        stage = Path("output") / "쿠팡데이타분석_실행단계.json"
+        if marker_at:
+            stage.write_text(_json.dumps({"date": f"{marker_at:%Y-%m-%d}", "stage": "sales", "at": marker_at.isoformat()}),
+                             encoding="utf-8")
+        W.write_done(TD.DONE_FILE, marker_at.isoformat(timespec="seconds") if marker_at else "x", "done",
+                     "받을 수 있는 정산 파일 다운로드 완료", failed=7)
+
+        class FakeDT(RealDT):
+            @classmethod
+            def now(cls, tz=None):
+                return clock["now"]
+
+        def fake_sleep(sec):
+            clock["now"] += timedelta(seconds=max(sec, 1))
+        olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG, W.sales_in_progress)
+        args = SimpleNamespace(parent=0, until="", until_at=None, hidden=False, manual=manual)
+        try:
+            TD.datetime, TD.time.sleep = FakeDT, fake_sleep
+            TD._one_pass = lambda a: (passes.append(clock["now"]), (False, 3 if len(passes) == 1 else 0))[1]
+            TD._pending_jobs, TD._wait_accounts = (lambda: 0), (lambda lg: 0)
+            TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
+            TD.LOG.heartbeat = lambda st, msg: None
+            W.sales_in_progress = lambda *a, **k: ((True, "①판매수집 진행 중") if busy and not passes and
+                                                   clock["now"] < D(2026, 11, 19, 12) else (False, ""))
+            rc = TD.cmd_watch(args)
+        finally:
+            TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG, W.sales_in_progress = olds
+        if stage.exists():
+            stage.unlink()
+        return rc, passes
+
+    old_cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            (Path(tmp) / "output").mkdir()
+            done_at = D(2026, 11, 19, 7, 48, 19)                              # 11-19 운용 PC 실측: 이번 회차 ① 07:48 · 정산 '완료'
+            assert run(False, done_at)[1] == [], "옛 동작(무인) = 이미 끝남 → 받지 않고 종료(D-091 그대로)"
+            rc, passes = run(True, done_at)
+            assert rc == 0 and passes and passes[0] == D(2026, 11, 19, 11, 22, 29), ("수동 = 완료 기록 있어도 바로 받음", passes)
+            assert run(True, None)[1], "수동 = 이번 회차 ① 기록이 없어도 받음(①완료 대기 없음)"
+            rc, passes = run(True, done_at, busy=True)
+            assert passes and passes[0] >= D(2026, 11, 19, 12), ("①이 도는 중 = 끝날 때까지 대기 뒤 받음", passes)
+        finally:
+            os.chdir(old_cwd)
+    ok("버튼 = --manual · 완료 기록·① 미완료여도 바로 받음 · ① 진행 중이면 대기 · 무인·전체실행 = 그대로(D-021·D-091)")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -3381,6 +3451,7 @@ def main():
     p64_memory_log_line()
     p65_settlement_memory_lines()
     p66_openblas_one_thread()
+    p67_manual_start()
     print("정산 런타임 오프라인 검증 통과")
 
 

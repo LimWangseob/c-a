@@ -29,13 +29,17 @@ SETTLE_EXE = "정산다운로드.exe"
 APP_EXE = "쿠팡애널리틱스.exe"
 
 
-def settlement_watch_cmd(parent_pid: int, since: datetime | None = None) -> tuple[list[str], str]:
+def settlement_watch_cmd(parent_pid: int, since: datetime | None = None,
+                         manual: bool = False) -> tuple[list[str], str]:
     """정산 자동 수집(watch)을 띄울 명령 + 작업 폴더. 배포=정산다운로드.exe(형제)·개발=python tools/...
     `--parent`=앱 PID(D-020: 사람이 앱을 끄면 정산도 끝나게 감시). `--since`=사람이 누른 전체실행 시각 —
-    그 뒤에 끝난 ①판매수집만 기다린다(같은 회차의 앞선 ① 기록으로 바로 받거나 '이미 끝남' 종료 방지·2026-10-13)."""
+    그 뒤에 끝난 ①판매수집만 기다린다(같은 회차의 앞선 ① 기록으로 바로 받거나 '이미 끝남' 종료 방지·2026-10-13).
+    `--manual`=정산 탭 '정산 시작' — 이번 회차 '완료' 기록·①완료 대기 없이 바로 받음(①이 도는 중이면 대기 · D-354)."""
     tail = ["watch", "--parent", str(parent_pid)]
     if since is not None:
         tail += ["--since", since.isoformat(timespec="seconds")]
+    if manual:
+        tail.append("--manual")
     if getattr(sys, "frozen", False):
         folder = Path(sys.executable).parent
         return [str(folder / SETTLE_EXE), *tail], str(folder)
@@ -57,10 +61,10 @@ def _spawn_detached(cmd: list[str], cwd: str) -> tuple[subprocess.Popen | None, 
     return None, err, ""
 
 
-def start_settlement_watch(log, since: datetime | None = None) -> subprocess.Popen | None:
+def start_settlement_watch(log, since: datetime | None = None, manual: bool = False) -> subprocess.Popen | None:
     """정산 프로그램을 창 없이 띄운다(이미 돌면 정산 쪽 잠금이 둘째를 바로 끝냄). 실패는 로그 후 None.
-    since = 사람이 누른 전체실행 시각(그 실행의 ① 완료를 기다림) — 18:00 무인·정산 탭 버튼은 None."""
-    cmd, cwd = settlement_watch_cmd(os.getpid(), since)
+    since = 사람이 누른 전체실행 시각(그 실행의 ① 완료를 기다림) — 18:00 무인은 None · manual = 정산 탭 버튼(D-354)."""
+    cmd, cwd = settlement_watch_cmd(os.getpid(), since, manual)
     if getattr(sys, "frozen", False) and not Path(cmd[0]).exists():
         log(f"[정산] ⚠ {SETTLE_EXE} 를 찾을 수 없어 정산 자동 수집을 못 띄움: {cmd[0]}")
         return None

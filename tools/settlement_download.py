@@ -1213,10 +1213,11 @@ def _between_passes() -> None:
         f"정산 프로세스 커밋 {_commit_text()}")
 
 
-def _watch_wait_reason(W, prog, stage_path, cycle_start) -> tuple[str, dict | None]:
-    """받기 전에 기다릴 이유('' = 지금 받아도 됨)와 앱 단계 기록. 이번 회차 ① 완료 전·①이 지금 도는 중이면 대기."""
+def _watch_wait_reason(W, prog, stage_path, cycle_start, manual: bool = False) -> tuple[str, dict | None]:
+    """받기 전에 기다릴 이유('' = 지금 받아도 됨)와 앱 단계 기록. 이번 회차 ① 완료 전·①이 지금 도는 중이면 대기.
+    manual(정산 탭 '정산 시작' · D-354) = ① 완료 대기는 건너뜀 · ①이 지금 도는 중이면 그대로 대기."""
     marker, _ = W.read_marker(stage_path)
-    if not W.sales_done_in_cycle(marker, cycle_start):
+    if not manual and not W.sales_done_in_cycle(marker, cycle_start):
         return f"①판매수집 완료 대기(이번 회차 {cycle_start:%m-%d %H:%M}~) — 완료되면 받기 시작", marker
     busy, why = W.sales_in_progress(prog)
     return (why if busy else ""), marker
@@ -1245,9 +1246,13 @@ def cmd_watch(args) -> int:
             args.until, args.until_at, args.hidden = f"{cycle_end:%H:%M}", cycle_end, True   # 17:55 뒤 새 요청·새 계정 안 함
             if args.parent:
                 _watch_app(args.parent)
+            manual = bool(getattr(args, "manual", False))
+            if manual:
+                log("[수동] 정산 탭 '정산 시작' — 이번 회차 '완료' 기록·①판매수집 완료 대기 없이 바로 받음"
+                    "(①이 지금 도는 중이면 끝날 때까지 대기 · D-354)")
             idle, last_state = 0, ""
             while datetime.now() < cycle_end:
-                why, marker = _watch_wait_reason(W, prog, stage_path, cycle_start)
+                why, marker = _watch_wait_reason(W, prog, stage_path, cycle_start, manual)
                 if why:
                     if why != last_state:
                         log(f"[자동] {why}")
@@ -1258,7 +1263,7 @@ def cmd_watch(args) -> int:
                 last_state = ""
                 key = W.sales_key(marker, datetime.now())
                 done = W.read_done(DONE_FILE)
-                if W.already_done(done, key, cycle_start):   # 같은 회차 '완료'면 ① 기록 시각이 바뀌어도 끝(D-091)
+                if not manual and W.already_done(done, key, cycle_start):   # 같은 회차 '완료'면 끝(D-091 · 수동 = D-354)
                     log(f"[자동] 이번 ①판매수집({key}) 기준 정산은 이미 끝남 — {done.get('reason', '')} — 종료")
                     LOG.heartbeat(W.done_status(int(done.get("failed") or 0)), f"이미 끝남 — {done.get('reason', '')}")
                     return 0
@@ -1367,6 +1372,7 @@ def main() -> int:
     ap.add_argument("--parent", type=int, default=0, help="watch·transfer-settle: 앱 PID — 사람이 앱을 끄면 정산도 종료(D-020)")
     ap.add_argument("--originals", default="", help="받은 쿠팡 원본(구매자명 포함)을 그대로 복사해 둘 폴더(증빙용·D-062)")
     ap.add_argument("--since", default="", help="watch: 이 시각(ISO) 뒤에 끝난 ①판매수집만 기다림(앱 전체실행 버튼)")
+    ap.add_argument("--manual", action="store_true", help="watch: 정산 탭 '정산 시작' — 이번 회차 완료 기록·①완료 대기 없이 바로 받음(D-354)")
     ap.add_argument("--out", default="", help="evidence: 증빙 상위 폴더(계정마다 증빙_{사업자}_쿠팡원본 — D-067)")
     ap.add_argument("--source", default="", help="view: 화면 출처 ID(settlement_screen_view.SPECS · 첫 시험 = 한 계정 1회)")
     ap.add_argument("--redo", action="store_true", help="evidence: 끝난 계정도 다시 받기")

@@ -257,7 +257,7 @@ class SettlementStatusMixin:
     def _settle_start(self) -> None:
         """무인 실행과 같은 한 경로(app_process.start_settlement_watch)로 띄움 — 이미 돌면 watch 잠금으로 1개만."""
         from coupang_analytics.app_process import start_settlement_watch
-        self._settle_proc = start_settlement_watch(self.log)
+        self._settle_proc = start_settlement_watch(self.log, manual=True)   # D-354: 이번 회차 완료여도 지금 받음
         if self._settle_proc is None:
             self._settle_write_status("오류", "정산 시작 실패 — 로그를 확인하세요.")
         else:
