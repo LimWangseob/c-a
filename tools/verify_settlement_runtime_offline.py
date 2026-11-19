@@ -1031,7 +1031,7 @@ def p27_cycle():
             if sales_after and clock["now"] >= sales_after and not stage.exists():
                 write_marker(clock["now"])                          # 앱의 ①판매수집이 끝남
         olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG)
-        args = SimpleNamespace(parent=0, until="", until_at=None, hidden=False)
+        args = SimpleNamespace(parent=0, ledger_synced=True, until="", until_at=None, hidden=False)   # 대장 반영(D-366 ②) = P69
         try:
             TD.datetime, TD.time.sleep = FakeDT, fake_sleep
             TD._one_pass = lambda a: (passes.append(clock["now"]), (False, 3 if len(passes) == 1 else 0))[1]   # 첫 바퀴 3건·다음 0건
@@ -1163,7 +1163,7 @@ def p30_manual_full_run():
                 clock["새①"] = True
                 write_marker(clock["now"])                          # 이번 전체실행의 ①판매수집이 끝남
         olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG)
-        args = SimpleNamespace(parent=0, until="", until_at=None, hidden=False, since=since)
+        args = SimpleNamespace(parent=0, ledger_synced=True, until="", until_at=None, hidden=False, since=since)   # 대장 반영(D-366 ②) = P69
         try:
             TD.datetime, TD.time.sleep = FakeDT, fake_sleep
             TD._one_pass = lambda a: (passes.append(clock["now"]), (False, 0))[1]
@@ -1305,7 +1305,7 @@ def p36_same_cycle_done():
         def fake_sleep(sec):
             clock["now"] += timedelta(seconds=max(sec, 1))
         olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG)
-        args = SimpleNamespace(parent=0, until="", until_at=None, hidden=False, since="")
+        args = SimpleNamespace(parent=0, ledger_synced=True, until="", until_at=None, hidden=False, since="")   # 대장 반영(D-366 ②) = P69
         try:
             TD.datetime, TD.time.sleep = FakeDT, fake_sleep
             TD._one_pass = lambda a: (passes.append(clock["now"]), (False, 0))[1]
@@ -3386,7 +3386,7 @@ def p67_manual_start():
         def fake_sleep(sec):
             clock["now"] += timedelta(seconds=max(sec, 1))
         olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG, W.sales_in_progress)
-        args = SimpleNamespace(parent=0, until="", until_at=None, hidden=False, manual=manual)
+        args = SimpleNamespace(parent=0, ledger_synced=True, until="", until_at=None, hidden=False, manual=manual)   # 대장 반영(D-366 ②) = P69
         try:
             TD.datetime, TD.time.sleep = FakeDT, fake_sleep
             TD._one_pass = lambda a: (passes.append(clock["now"]), (False, 3 if len(passes) == 1 else 0))[1]
@@ -3555,7 +3555,7 @@ def p68_evidence_auto():
                 TD._cycle_close = lambda st, reason, stopped=False: order.append(("종합", st))
                 fake_ev.took = took
                 n0 = len(seen)
-                wargs = SimpleNamespace(parent=0, until="", until_at=None, hidden=False, since="", manual=False, start=start,
+                wargs = SimpleNamespace(parent=0, ledger_synced=True, until="", until_at=None, hidden=False, since="", manual=False, start=start,   # 대장 반영(D-366 ②) = P69
                                         redo=False, out="", command="watch")
                 rc = TD.cmd_watch(wargs)
                 return rc, order, seen[n0:], ce
@@ -3578,6 +3578,142 @@ def p68_evidence_auto():
             os.chdir(old_cwd)
     ok("40분 전 멈춤(끝 시각 기준) · 새 달 다시(완료한 달 1일부터) · 2회차 연속 실패 = 확인 필요 · 전역 되돌림(예외 포함) · "
        "정산 '완료' 기록 뒤에만 증빙 · 완료 계정 로그인 안 함 · 검증·광고 포함")
+
+
+def p69_ledger_presync():
+    print("[P69] 정산 회차 첫 바퀴 전 관리대장→원장 반영 1회 + 대장 비밀번호 저장(D-366 ②) — 같은 rows 로 둘 다 · 원장 잠금 = "
+          "앱과 같은 run_sync · 못 읽으면 그 바퀴 중단·다음 바퀴 재시도 · 둘째 바퀴부터 안 함 · 사람이 누르는 명령은 그대로")
+    import inspect
+    import os
+    from datetime import datetime as RealDT, timedelta
+    from types import SimpleNamespace
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    from coupang_analytics import appconfig, credstore, gsheet_api
+    from coupang_analytics import input_list as IL
+    from coupang_analytics import registry_gsheet as RG
+    from coupang_analytics import settlement_accounts as SA
+    from coupang_analytics import settlement_runlog as RLG
+    assert issubclass(TD.LedgerSyncError, Exception)
+
+    class Store:
+        def __init__(self):
+            self.d = {}
+
+        def get_password(self, k):
+            return self.d.get(k)
+
+        def set_password(self, k, v):
+            self.d[k] = v
+    rows = [["사업자명", "계정아이디", "상품명", "비밀번호"],
+            ["가", "acc1", "상품1", "pw-one "], ["나", "acc2", "상품2", "pw-a"], ["나", "acc2", "상품3", "pw-a"],
+            ["나", "acc2", "상품4", "pw-b"]]
+    ledger = ("셀독리스트", rows, [[False] * 4 for _ in rows])
+    cfg = {"gsheet/input_url": "IN-URL", "registry/url": "REG-URL", "settlement/account_source": ""}
+    st = {"store": Store(), "reads": 0, "syncs": [], "read_exc": None, "sync_exc": None}
+    lines: list = []
+
+    def fake_read(url, *, store=None, sa_path=None):
+        assert url == "IN-URL" and store is st["store"], (url, store)
+        st["reads"] += 1
+        if st["read_exc"]:
+            raise st["read_exc"]
+        return ledger
+
+    class Client:
+        def __init__(self, url, store=None, on_log=None, **k):
+            self.url, self.store = url, store
+
+    def fake_sync(client, read_ledger, **kw):
+        if st["sync_exc"]:
+            raise st["sync_exc"]
+        st["syncs"].append((client.url, client.store, read_ledger(), kw))
+    olds = (appconfig.get, IL.read_ledger_rows, gsheet_api.GSheetClient, RG.run_sync, credstore.CredStore, TD.log)
+    old_cwd = os.getcwd()
+    tmpdir = tempfile.TemporaryDirectory()
+    try:
+        appconfig.get = lambda k, d="": cfg.get(k, d)
+        IL.read_ledger_rows, gsheet_api.GSheetClient, RG.run_sync = fake_read, Client, fake_sync
+        credstore.CredStore = lambda *a, **k: st["store"]
+        TD.log = lines.append
+        os.chdir(tmpdir.name)
+        TD._ledger_presync()
+        assert st["reads"] == 1, ("관리대장 읽기 = 1번(원장 반영·비밀번호 같은 rows)", st["reads"])
+        (url, store, got, kw), = st["syncs"]
+        assert url == "REG-URL" and store is st["store"] and got is ledger, "원장 반영 = 방금 읽은 같은 대장 값"
+        assert "lock_path" not in kw and "dry_run" not in kw, ("앱과 같은 원장 잠금(기본 경로)·실제 반영", kw)
+        assert kw.get("judge") is not None, "상품명 변경 자동 판단 = 앱 원장 반영과 같게(D-070)"
+        s = st["store"].d
+        assert s["acc1"] == "pw-one" and s["acc2"] == "pw-b", ("값1 = 앱 _apply_pw_candidates 와 같은 값(적은 줄 먼저 D-012)", s)
+        assert s[SA.alt_key("acc2")] == "pw-a", "줄마다 다른 값2 도 저장(D-190 save_ledger_alternates)"
+        text = "\n".join(map(str, lines))
+        assert "pw-" not in text, ("평문 비밀번호 로그 금지", text)
+        # 못 읽음 = LedgerSyncError(이유) · 원장 안 건드림 · 비밀번호 안 바뀜
+        st.update(store=Store(), syncs=[], read_exc=OSError("네트워크 끊김"))
+        try:
+            TD._ledger_presync()
+            raise AssertionError("대장 못 읽으면 실패로 올려야 함(조용히 넘어가기 금지)")
+        except TD.LedgerSyncError as exc:
+            assert "관리대장" in str(exc) and "네트워크 끊김" in str(exc), str(exc)
+        assert st["syncs"] == [] and st["store"].d == {}, "못 읽으면 원장·비밀번호 손대지 않음"
+        st["read_exc"], st["sync_exc"] = None, RuntimeError("원장 잠금 120초 초과")
+        expect(TD.LedgerSyncError, TD._ledger_presync, "원장 반영 실패 = 그 바퀴 중단")
+        st["sync_exc"] = None
+        cfg["gsheet/input_url"] = ""
+        expect(TD.LedgerSyncError, TD._ledger_presync, "관리대장 링크 없음")
+        cfg["gsheet/input_url"], cfg["registry/url"] = "IN-URL", ""
+        expect(TD.LedgerSyncError, TD._ledger_presync, "원장 링크 없음(정산 계정 출처 = 원장)")
+        cfg["settlement/account_source"], st["syncs"], st["store"] = "file", [], Store()
+        TD._ledger_presync()
+        assert st["syncs"] == [] and st["store"].d.get("acc1") == "pw-one", "옛 계정 파일 출처 = 비밀번호만 저장(원장 반영 없음)"
+    finally:
+        appconfig.get, IL.read_ledger_rows, gsheet_api.GSheetClient, RG.run_sync, credstore.CredStore, TD.log = olds
+        os.chdir(old_cwd)
+        tmpdir.cleanup()
+    # watch 회차: 첫 바퀴 계정 읽기 전 1회 · 실패 = 그 바퀴 안 돌고 5분 뒤 다시 · 성공 뒤 바퀴들은 다시 안 함
+    calls, passes, beats = [], [], []
+    clock = {"now": RealDT(2026, 11, 20, 2, 0)}
+
+    class FakeDT(RealDT):
+        @classmethod
+        def now(cls, tz=None):
+            return clock["now"]
+
+    def presync():
+        calls.append(clock["now"])
+        if len(calls) == 1:
+            raise TD.LedgerSyncError("관리대장 읽기 실패 — OSError: 네트워크 끊김")
+
+    def one_pass(a):
+        assert calls and len(calls) == 2, "바퀴(계정 읽기)는 반영 성공 뒤에만"
+        passes.append(clock["now"])
+        return False, (3 if len(passes) == 1 else 0)
+    olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG, TD._ledger_presync,
+            TD._evidence_sweep, TD._between_passes, TD._watch_failures)
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            (Path(tmp) / "output").mkdir()
+            TD.datetime = FakeDT
+            TD.time.sleep = lambda sec: clock.__setitem__("now", clock["now"] + timedelta(seconds=max(sec, 1)))
+            TD._one_pass, TD._ledger_presync = one_pass, presync
+            TD._pending_jobs, TD._wait_accounts, TD._watch_failures = (lambda: 0), (lambda lg: 0), (lambda: {})
+            TD._evidence_sweep, TD._between_passes = (lambda a, act: None), (lambda: None)
+            TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
+            TD.LOG.heartbeat = lambda status, msg="", **k: beats.append((status, msg))
+            rc = TD.cmd_watch(SimpleNamespace(parent=0, until="", until_at=None, hidden=False, manual=True))
+        finally:
+            (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG, TD._ledger_presync,
+             TD._evidence_sweep, TD._between_passes, TD._watch_failures) = olds
+            os.chdir(old_cwd)
+    assert rc == 0 and len(calls) == 2 and len(passes) == 2, ("반영 = 실패 1 + 성공 1 · 그 뒤 바퀴 2번", calls, passes)
+    assert calls[1] - calls[0] >= timedelta(seconds=TD.WATCH_POLL_SEC), ("다음 바퀴 = 5분 뒤 재시도", calls)
+    bad = [m for s, m in beats if "❌" in m and "관리대장" in m]
+    assert bad and "다음 바퀴" in bad[0], ("상태 카드에 실패 이유·재시도 안내", beats)
+    # 사람이 누르는 명령(run·evidence·request·download·probe 등)은 그대로 — 반영은 watch 회차에서만
+    assert "_ledger_presync" not in inspect.getsource(TD.main) and "_ledger_presync" not in inspect.getsource(TD._one_pass)
+    ok("같은 rows 로 원장 반영(앱 run_sync·기본 잠금·자동 판단)+비밀번호 값1·값2 저장 · 평문 로그 0 · 못 읽음/반영 실패 = "
+       "그 바퀴 중단·상태 카드 이유·5분 뒤 재시도 · 둘째 바퀴부터 안 함 · 사람 명령 그대로")
 
 
 def main():
@@ -3641,6 +3777,7 @@ def main():
     p66_openblas_one_thread()
     p67_manual_start()
     p68_evidence_auto()
+    p69_ledger_presync()
     print("정산 런타임 오프라인 검증 통과")
 
 

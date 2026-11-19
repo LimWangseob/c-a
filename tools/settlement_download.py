@@ -147,6 +147,65 @@ def _accounts_from_registry() -> list:
     return accts
 
 
+class LedgerSyncError(Exception):
+    """정산 회차 첫 바퀴 전 관리대장→원장 반영·비밀번호 저장 실패(D-366 ②) — 그 바퀴 중단·다음 바퀴 재시도."""
+
+
+def _ledger_presync() -> None:
+    """D-366 ② — 정산 회차 첫 바퀴가 계정을 읽기 직전, 정산이 스스로 관리대장을 1번 읽어 같은 값으로 ① 대장 비밀번호를
+    이 PC 암호 저장소에 저장(앱 _apply_pw_candidates 와 같은 값1·값2 — D-012·D-190) ② 원장 반영(앱 원장 반영과 같은
+    registry_gsheet.run_sync · 원장 잠금으로 앱과 차례 · 두 번 반영 = 같은 결과). 링크 = 앱과 같은 설정(gsheet/input_url·
+    registry/url). 실패 = LedgerSyncError(이유) — 평문 비밀번호는 로그·파일에 안 씀."""
+    from coupang_analytics import appconfig, credstore, gsheet_api, input_list as IL, registry_gsheet as RG
+    input_url = appconfig.get("gsheet/input_url", "").strip()
+    if not input_url:
+        raise LedgerSyncError("관리대장 링크(설정 탭 '관리대장(입력)')가 비어 있음 — 대장 변경분을 반영할 수 없음")
+    store = credstore.CredStore()
+    try:
+        ledger = IL.read_ledger_rows(input_url, store=store)
+    except Exception as exc:   # 링크·권한·인터넷 — 이유를 그대로 남기고 그 바퀴 중단
+        raise LedgerSyncError(f"관리대장 읽기 실패 — {exc.__class__.__name__}: {str(exc)[:150]}") from exc
+    _save_ledger_passwords(store, IL.parse_password_candidates(ledger[1]))
+    if (appconfig.get("settlement/account_source", "") or "registry").strip() == "file":
+        log("  [원장] 정산 계정 출처 = 계정 파일 — 원장 반영 안 함(비밀번호만 저장)")
+        return
+    registry_url = appconfig.get("registry/url", "").strip()
+    if not registry_url:
+        raise LedgerSyncError("원장 링크(설정 탭 '원장')가 비어 있음 — 관리대장 → 원장 반영 불가")
+    log("  [원장] 정산 회차 시작 전 원장 반영(관리대장 → 원장 · D-366)…")
+    try:
+        RG.run_sync(gsheet_api.GSheetClient(registry_url, store=store, on_log=log), lambda: ledger, log=log,
+                    judge=_rename_judge(store))
+    except Exception as exc:   # 잠금 대기 초과·계정 급감 보호·시트 오류 등 — 반영 안 된 원장으로 정산하지 않음
+        raise LedgerSyncError(f"관리대장 → 원장 반영 실패 — {exc.__class__.__name__}: {str(exc)[:150]}") from exc
+
+
+def _save_ledger_passwords(store, cands: dict) -> None:
+    """앱 _apply_pw_candidates 와 같은 저장 — 계정마다 값1(credstore set_password) + 줄마다 다른 값2(save_ledger_alternates)."""
+    try:
+        for aid, cs in cands.items():
+            store.set_password(aid, cs[0].password)
+        SA.save_ledger_alternates(store, cands)
+    except Exception as exc:   # 저장 실패 = 어제 비밀번호로 로그인할 수 있음(틀린 1회) → 그 바퀴 중단
+        raise LedgerSyncError(f"관리대장 비밀번호 저장 실패 — {exc.__class__.__name__}") from exc
+    log(f"  [비번] 관리대장 비밀번호 {len(cands)}계정 저장(이 PC 암호 저장소 · 회차 시작 전 · D-366)")
+
+
+def _rename_judge(store):
+    """원장 반영의 상품명 변경 자동 판단(D-070) — 앱 원장 반영(ui/registry_ui.rename_judge)과 같은 src 함수·같은 재료
+    (글자 규칙 → 매칭 고정 기록 → AI). 정산 exe 엔 ui 모듈이 없어 여기서 같은 함수로 묶음."""
+    from coupang_analytics import match_anchor, product_match_ai, registry_judge
+    key = store.get_password("__openai__")
+    if not key:
+        log("  [원장] OpenAI 키 없음 — 상품명 변경은 글자 규칙·상품번호로만 자동 판단(나머지는 다음 실행에서 다시)")
+    try:
+        anchors = registry_judge.load_anchor_file(match_anchor.anchor_path())
+    except (OSError, ValueError) as exc:
+        log(f"  [원장] ⚠ 매칭 고정 기록 읽기 실패 — 상품번호 판단 생략 · {exc.__class__.__name__}")
+        anchors = {}
+    return registry_judge.make_judge(product_match_ai.openai_ask(key) if key else None, anchors, log)
+
+
 def load_accounts(only: set) -> list:
     """정산 계정 목록 — 출처 = 설정 settlement/account_source: 'registry'(기본·D-103 원장) | 'file'(옛 정산 계정 파일).
     읽을 때마다 예전 이름으로 된 요청 기록·파일·금액 기록을 지금 이름으로 맞춘다(계정ID 기준)."""
@@ -1300,6 +1359,22 @@ def _sleep_until(sec: float, end: datetime) -> None:
     time.sleep(max(0.0, min(sec, (end - datetime.now()).total_seconds())))
 
 
+def _ledger_ready(args) -> bool:
+    """watch 회차의 관리대장 반영(D-366 ②) — 성공할 때까지 바퀴마다 1번, 성공 뒤엔 그 회차에서 다시 안 함.
+    실패 = 이유를 로그·상태 카드에 남기고 False(그 바퀴 안 돎 · 다음 바퀴에서 다시)."""
+    if getattr(args, "ledger_synced", False):
+        return True
+    try:
+        _ledger_presync()
+    except LedgerSyncError as exc:
+        reason = f"❌ {exc} — 이번 바퀴 정산 안 함 · {WATCH_POLL_SEC // 60}분 뒤 다음 바퀴에서 다시"
+        log(f"[자동] {reason}")
+        LOG.heartbeat("대기중", reason)
+        return False
+    args.ledger_synced = True
+    return True
+
+
 def cmd_watch(args) -> int:
     """01:30 앱과 함께 뜨는 정산 자동 수집(D-021·D-362). **이번 회차 ①판매수집 완료까지 기다렸다가** 받고, 다 받으면
     기록하고 종료·**다음 날 01:20** 이 되면 종료(남은 건 다음 회차). 중단(연속 실패/차단)·진전 없는 대기 초과도
@@ -1340,6 +1415,9 @@ def cmd_watch(args) -> int:
                     log(f"[자동] 이번 ①판매수집({key}) 기준 정산은 이미 끝남 — {done.get('reason', '')} — 종료")
                     LOG.heartbeat(W.done_status(int(done.get("failed") or 0)), f"이미 끝남 — {done.get('reason', '')}")
                     return 0
+                if not _ledger_ready(args):   # D-366 ②: 첫 바퀴 계정 읽기 전 대장→원장·비밀번호 · 실패 = 이 바퀴 중단
+                    _sleep_until(WATCH_POLL_SEC, cycle_end)
+                    continue
                 stopped, work = _one_pass(args)
                 _between_passes()
                 idle = 0 if work else idle + 1
