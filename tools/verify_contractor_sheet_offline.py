@@ -294,9 +294,11 @@ def t4_layout_xlsx():
               f"조건부 서식 = 구글시트 지원 종류만(데이터 막대 0개 · 색 농도·값 비교) {sorted(set(kinds))}")
         scales = [r.colorScale for ws_ in wb.worksheets for cf in ws_.conditional_formatting for r in cf.rules
                   if r.type == "colorScale"]
-        check(len(scales) == 2 + (len(wb.sheetnames) - 1) - sum(1 for b in rep.bizs if not b.rows)
+        check(len(scales) == 2 and not any(r.type == "colorScale" for ws_ in wb.worksheets[1:]
+                                           for cf in ws_.conditional_formatting for r in cf.rules)
               and all(c.color[0].rgb.endswith("FFFFFF") and c.color[1].rgb.endswith("B39DDB") for c in scales),
-              "색 농도 = 요약 7일 합계·셀독 비중 + 사업자 7일 합계 · 흰색 → 연보라(소유자 11-19 '색 농도')")
+              "색 농도 = 요약 7일 합계·셀독 비중만 · 흰색 → 연보라(소유자 11-19 '색 농도') · 사업자 7일 합계 = 줄 바탕색 그대로"
+              "(소유자 11-19 '7일합계항목 … 바탕색 음영 농도가 다른 항목과 다른데, 동일하게 해줘')")
         check(w.row_dimensions[3].height == 40 and w.row_dimensions[4].height == 20 and s.row_dimensions[4].height == 20,
               "줄 간격 = 데이터 줄 20pt(소유자 11-19 '줄간격 조금 넓혀줘' · 사업자·요약 둘 다) · 머리글 40pt(2줄)")
         check(all(h.count(chr(10)) <= 1 for h in heads), "사업자 머리글도 2줄 이하")
@@ -372,11 +374,13 @@ def t5_stage_and_gsheet():
     b4 = next(r for r in summ if "updateCells" in r)["updateCells"]["rows"][3]["values"][1]["userEnteredValue"]["formulaValue"]
     check(f"gid={gids[wb.sheetnames[1]]}" in b4, "요약 사업자 이름 = 그 사업자 탭 링크")
     check(min(gids.values()) > 7, "새 gid 는 옛 탭과 겹치지 않음")
-    grad = [r["addConditionalFormatRule"]["rule"] for r in biz if "addConditionalFormatRule" in r]
+    grad = [r["addConditionalFormatRule"]["rule"] for r in summ if "addConditionalFormatRule" in r]
+    brules = [r["addConditionalFormatRule"]["rule"] for r in biz if "addConditionalFormatRule" in r]
     check(any("gradientRule" in g and g["gradientRule"]["minpoint"] == {"type": "NUMBER", "value": "0", "color":
               {"red": 1.0, "green": 1.0, "blue": 1.0}} and g["gradientRule"]["maxpoint"]["type"] == "MAX" for g in grad)
-          and any(g.get("booleanRule", {}).get("condition", {}).get("type") == "NUMBER_EQ" for g in grad),
-          "구글 = 같은 규칙을 API 로 직접(색 농도 gradientRule 0→최대 · 재고 0 빨강 booleanRule)")
+          and any(g.get("booleanRule", {}).get("condition", {}).get("type") == "NUMBER_EQ" for g in brules)
+          and not any("gradientRule" in g for g in brules),
+          "구글 = 같은 규칙을 API 로 직접(요약 색 농도 gradientRule 0→최대 · 사업자 재고 0 빨강 booleanRule · 사업자 시트 색 농도 없음)")
     rows = {r["updateDimensionProperties"]["range"]["startIndex"]: r["updateDimensionProperties"]["properties"]["pixelSize"]
             for r in biz if "updateDimensionProperties" in r and r["updateDimensionProperties"]["range"]["dimension"] == "ROWS"}
     check(rows.get(2) == 53 and rows.get(3) == 26, f"구글 줄 높이 = 머리글 40pt → 53px(2줄 안 잘림) · 데이터 20pt → 26px {rows}")

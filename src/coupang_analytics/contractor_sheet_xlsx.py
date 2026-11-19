@@ -158,7 +158,6 @@ def biz_sheet(ws, b: Biz, days) -> None:
         _put_row(ws, r, it)
     if r > hr:
         col = lambda k: f"{get_column_letter(k)}{hr + 1}:{get_column_letter(k)}{r}"   # noqa: E731
-        ws.conditional_formatting.add(col(s7c), _scale())
         ws.conditional_formatting.add(col(8), CellIsRule(operator="equal", formula=["0"],
                                                          font=Font(bold=True, color=C_RED)))
         ws.auto_filter.ref = f"A{hr}:{get_column_letter(len(hs))}{r}"
