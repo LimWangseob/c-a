@@ -368,7 +368,7 @@ def pin_stray_url_cleanup() -> None:
 
 def pin_rank_rest_fill():
     print("[핀 S11] ③ 안 재는 날 빈 칸 = 옅은 회색(F2F2F2) — 재는 날 빈 칸·값 있는 칸·시작일 전·판매중지·체험단 10일은 회색 없음 · "
-          "날짜가 늘어도 칸 날짜로 다시 칠함 (D-257)")
+          "날짜가 늘어도 칸 날짜로 다시 칠함 (D-257 · 격일 D-362)")
     from datetime import date, timedelta
     from coupang_analytics import rank_schedule as RS
     from coupang_analytics.workbook_common import _parse_date
@@ -390,8 +390,8 @@ def pin_rank_rest_fill():
     wb.set_keyword_rank("휴식A", "중지품", "s1", (start - timedelta(days=1)).isoformat(), 2)
     wb.apply_sale_status("휴식A", {"vstop": True})
     plan = RS.refresh_groups(wb, start)
-    biz, g = "휴식A", plan.groups["ra"]
-    rest = lambda n: n >= 0 and n % 3 != g   # noqa: E731   (그 계정 묶음 차례가 아닌 날)
+    biz, g = "휴식A", plan.groups2["ra"]
+    rest = lambda n: n >= 0 and n % RS.GROUPS != g   # noqa: E731   (그 계정 격일 묶음 차례가 아닌 날)
     nv = next(n for n in range(1, 4) if rest(n))
     for n in range(-2, 9):
         wb.ensure_date(biz, (start + timedelta(days=n)).isoformat())

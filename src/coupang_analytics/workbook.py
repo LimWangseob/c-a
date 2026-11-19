@@ -546,7 +546,7 @@ class OutputWorkbook(_RenderMixin, _IndexMixin, _MetaMixin, _DateMixin, _Lifecyc
         - search_link = 상품링크가 검색폴백(pid 미확보) 수(정상상품인데 검색링크면 productId 미확보 신호)
         - miss_vid = vid 없는(미매칭) 상품 수
         - active_blank_rank = **판매중(비억제) 상품인데 최신 일자 순위가 전부 공란**(=미측정/차단 의심·핵심 이상치)
-          · 그 날짜에 안 재는 상품(계정 3묶음 쉬는 날 D-257)은 셈에서 뺌"""
+          · 그 날짜에 안 재는 상품(계정 묶음 쉬는 날 D-257·격일 D-362)은 셈에서 뺌"""
         from .rank_schedule import any_due
         search_link = miss_vid = active_blank = total = 0
         for biz in self.wb.sheetnames:

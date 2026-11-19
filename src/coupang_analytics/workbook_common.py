@@ -121,7 +121,7 @@ _STAMP_SHEET = "_수집스탬프"  # 숨김 시트: (계정ID)→판매수집일
 _MKT_SHEET = "_마케팅"     # 숨김 시트: (사업자,상품)→마케팅 시작·종료·모니터링종료. 계정목록 입력을 보존(재생성돼도 유지)
 _DISC_SHEET = "_중단"      # 숨김 시트: (사업자,상품) 판매중지/삭제(대장에서 사라짐) 표기. 데이터는 보존, 표시만 구분
 _SALES_SHEET = "통합판매현황"  # 첫 시트: 위탁계정 전체 계정·상품별 판매(전일·주간·월별) — 매번 통째 재생성(workbook_sales·2026-10-15)
-_RANKGRP_SHEET = "_순위묶음"  # 숨김 시트: ③ 순위 계정 3묶음 배정(시작일 + 사업자·계정ID·묶음·배정일 · rank_schedule · D-257)
+_RANKGRP_SHEET = "_순위묶음"  # 숨김 시트: ③ 순위 계정 묶음 배정(3일 간격 기간 + 격일 기간 · rank_schedule · D-257·D-362)
 _SPECIAL_SHEETS = (_META_SHEET, _INDEX_SHEET, _ACCT_SHEET, _STAMP_SHEET, _MKT_SHEET, _DISC_SHEET, _SALES_SHEET,
                    _RANKGRP_SHEET)
 _MKT_COLS = ("체험단 시작일", "체험단 종료일", "모니터링 종료일")   # 계정목록 편집 열(직원 입력 = 체험단 기간)
