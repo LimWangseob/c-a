@@ -37,8 +37,12 @@ rem 정산_상태확인.bat = 창 없는 정산 자동 다운로드의 '지금 �
 echo.
 echo [4/5] 이 PC 설정(구글시트 링크·입력소스 + 네이버/OpenAI/구글SA 키) 패키지에 포함...
 echo   * 새 PC에서 추가 입력 없이 쓰도록 담습니다. _설정값.json 은 평문이라 설치 시 자동 삭제됩니다.
+rem 설정 읽는 곳 = 이 저장소의 config.json(보존 폴더) — 안 주면 dist 안 exe 폴더 기준이라 config.json 이 없어 레지스트리만 읽고,
+rem 레지스트리에 없는 키(셀독 계약자별 상품 현황 링크 contractor/url·재고현황 stock/url)가 빠졌다(R242 실측).
+set "COUPANG_DATA_ROOT=%~dp0"
 "dist\coupang-analytics\쿠팡애널리틱스.exe" --export-settings "dist\coupang-analytics\_설정값.json"
 if errorlevel 1 echo   [경고] 설정 내보내기 실패 - 새 PC에서 설정 탭에 직접 입력해야 합니다(빌드는 계속).
+set "COUPANG_DATA_ROOT="
 echo.
 echo [4.5/5] 노트북 통계 마스터를 씨앗으로 동봉(새 PC **첫 설치 시에만** 복사·업데이트는 기존 보존)...
 if exist "%~dp0output\쿠팡데이타분석_통계.xlsx" (

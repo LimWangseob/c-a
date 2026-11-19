@@ -1,7 +1,7 @@
 """셀독 계약자별 상품 현황 — 자료 모으기·상품 묶기·셀독/개인 판정·10개 규칙(D-357·D-358 · T-132).
 
 설계 = `output/_설계_261119_셀독고객별시트/설계안.md`(2·3·4·5절) · 양식 = 같은 폴더 시안(서식은 contractor_sheet_xlsx).
-① 판매수집이 끝난 뒤 **로그인 없이 저장 자료만** 읽는다(① 끝·② 전 단계 · pipeline_stages).
+① 판매수집이 끝난 뒤 **로그인 없이 저장 자료만** 읽는다(매일 06:00 contractor_stage.run_daily · D-361).
 
 읽는 자료(계정마다 · 그 실행 날짜 이후 저장분만 — 로그인 실패한 계정의 옛 값을 조용히 쓰지 않음):
 - 상품 목록·판매상태·판매가 = `상품정보_일별/{계정}/{날짜}.json.gz`(product_info · 판매상태 = N3 productStatus 칸)
@@ -68,8 +68,8 @@ class Prod:
     price: int | None
     real: int | None
     growth: int | None
-    d7: list[int]                           # 옛 날짜 → 최근(엑셀에서 뒤집어 최근이 왼쪽)
-    s7: int
+    d7: list[int | None]                    # 옛 날짜 → 최근(엑셀에서 뒤집어 최근이 왼쪽) · None = 그날 판매 기록 없음(공란)
+    s7: int                                 # 기록 있는 날만 합(D-361 ③)
 
 
 @dataclass
@@ -137,14 +137,16 @@ def load_inventory(out_dir, acc: str, since: str) -> tuple[list[dict] | None, in
     return props, bad
 
 
-def load_week(out_dir, acc: str, days: list[date]) -> dict[str, list[int]]:
-    """{VID: [7일 판매수량(옛 → 최근)]} — 그날 기록에 없는 VID = 0(판매분석은 판매·노출 있던 VID 만 줌)."""
+def load_week(out_dir, acc: str, days: list[date]) -> tuple[dict[str, list[int | None]], list[int | None]]:
+    """({VID: [7일 판매수량(옛 → 최근)]}, 기록에 없는 VID 의 7일). 그날 기록에 없는 VID = 0(판매분석은 판매·노출 있던 VID 만 줌) ·
+    그 계정의 그날 판매 기록이 아예 없으면(정산 받기 늦음·실패) 그 날 = None(공란 · D-361 ③)."""
     rec = sales_history.load_account(out_dir, acc)
-    out: dict[str, list[int]] = {}
+    base: list[int | None] = [0 if d.isoformat() in rec else None for d in days]
+    out: dict[str, list[int | None]] = {}
     for i, d in enumerate(days):
         for vid, o in ((rec.get(d.isoformat()) or {}).get("옵션") or {}).items():
-            out.setdefault(str(vid), [0] * len(days))[i] = int(o.get("판매수량") or 0)
-    return out
+            out.setdefault(str(vid), list(base))[i] = int(o.get("판매수량") or 0)
+    return out, base
 
 
 def load_pid_store(out_dir) -> dict[str, dict[str, str]]:
@@ -240,27 +242,28 @@ def _group_growth(its: list[Item]) -> int | None:
     return sum(growth) if growth else None
 
 
-def _group(acc: str, opts: list[tuple[Item, list[int]]], basis: dict[str, str]) -> Prod:
+def _group(acc: str, opts: list[tuple[Item, list[int | None]]], basis: dict[str, str]) -> Prod:
     """옵션 합산 — 판매가·실구매가 = 최저 · 그로스 재고 = 그로스 옵션 합 · 링크 = productId 있는 옵션(판매 많은 순)."""
-    opts.sort(key=lambda o: (-sum(o[1]), o[0].opt or ""))
+    opts.sort(key=lambda o: (-sum(q or 0 for q in o[1]), o[0].opt or ""))
     its = [o[0] for o in opts]
     lead = next((it for it in its if it.pid), its[0])
     methods = {it.method for it in its}
-    d7 = [sum(o[1][i] for o in opts) for i in range(DAYS)]
+    d7 = [None if opts[0][1][i] is None else sum(o[1][i] or 0 for o in opts) for i in range(DAYS)]   # 빈 날 = 계정 단위
     bases = list(dict.fromkeys(basis[it.vid] for it in its if it.vid in basis))
     return Prod(acc, its[0].name, [it.vid for it in its], bool(bases), " · ".join(bases), lead.pid, lead.vid,
                 BOTH if len(methods) > 1 else its[0].method, _group_status(its), _min(it.price for it in its),
-                _min(it.real for it in its), _group_growth(its), d7, sum(d7))
+                _min(it.real for it in its), _group_growth(its), d7, sum(q or 0 for q in d7))
 
 
-def account_prods(acc: str, items: dict[str, Item], week: dict[str, list[int]], basis: dict[str, str]) -> list[Prod]:
+def account_prods(acc: str, items: dict[str, Item], week: dict[str, list[int | None]], basis: dict[str, str],
+                  empty: list[int | None] | None = None) -> list[Prod]:
     """등록상품 1줄씩(같은 상품명 옵션 합산). 판매중지 옵션은 대장 VID 만 넣음(셀독은 판매중지도 표시 · D-358 ② · 같은 상품명
     옵션은 판매중만 = 승인된 시안 규칙 — 판매중지된 판매자배송 사본이 판매방식·그로스 재고에 섞이지 않게)."""
-    groups: dict[str, list[tuple[Item, list[int]]]] = {}
+    groups: dict[str, list[tuple[Item, list[int | None]]]] = {}
     for vid, it in items.items():
         if basis.get(vid) != BASIS_VID and it.status == ST_OFF:
             continue
-        groups.setdefault(norm(it.name), []).append((it, week.get(vid, [0] * DAYS)))
+        groups.setdefault(norm(it.name), []).append((it, week.get(vid, empty or [0] * DAYS)))
     return [_group(acc, opts, basis) for opts in groups.values()]
 
 

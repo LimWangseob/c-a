@@ -1,32 +1,40 @@
-"""셀독 계약자별 상품 현황 단계 — ① 판매수집 끝·② 전, 로그인 없음(D-358 ⑥ · 설계안 4절 · T-132).
+"""셀독 계약자별 상품 현황 — 매일 06:00 앱이 한 번(D-361 ① · ① 판매수집 직후 실행 대체) · 로그인·브라우저 없음(설계안 4절 · T-132).
+
+run_daily = 앱 타이머(ui/app_qt `_contractor_tick`)가 부름 — 06:00 이 지났고 그날 실행 기록이 없을 때 한 번(06:00 에 앱이 꺼져
+있었으면 켠 뒤 한 번) · 최근 7일 = 실행일 전날까지(D-361 ②) · 상품·판매가·그로스 재고 = 회차(settlement_watch
+`cycle_window` — 그날 06:00 이 든 회차 · 18:00 회차면 전날 18시 ①)부터의 보관본.
 
 run_stage = 관리대장 계정 → 사업자 묶음 → 계정마다 저장 자료(contractor_sheet) → 판정 3단(규칙 → AI · 판정표 덧붙임) →
 10개 규칙 → `output/계약자별상품현황/셀독_계약자별상품현황_yymmdd.xlsx`(매일 새 파일 · 같은 날 다시 = 그날 파일 교체) →
 구글시트(설정 `contractor/url` · 없으면 ⚠ 생략 · 실패 = ❌ 로그 후 계속).
 
 - 로그인 실패·자료 없는 계정 = 옛 값을 쓰지 않고 요약 사업자 이름 옆에 '(로그인 실패)'·'(오늘 자료 없음)'(D-358 ⑦).
-- 이 단계의 실패는 ①②③을 멈추지 않는다 — ❌ 줄(실행 결과 종합의 오류 현황에 잡힘)로 남기고 다음 단계로.
+- 실패는 ❌ 줄로 남기고 앱·①②③을 멈추지 않는다 · 만들지 못한 날도 실행 기록을 남겨 같은 날 되풀이하지 않는다.
+- 계정의 어느 날 판매 기록이 아예 없으면 그 날 칸만 공란(contractor_sheet.load_week · D-361 ③).
 - 날짜 지정 실행은 만들지 않음(7일 기간이 그 날짜 기준이 되어 그날 파일을 다른 기간으로 바꿔 쓰게 됨).
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+import json
+from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 
 from . import contractor_sheet as CS
 from . import contractor_sheet_judge as CJ
 
 TAG = "[계약자별 현황]"
+DAILY_AT = dtime(6, 0)                      # 매일 실행 시각(D-361 ①)
+RUN_MARK = "_실행기록.json"                  # output/계약자별상품현황/ 아래 — 그날 실행했는지(같은 날 두 번 안 돎)
 
 
 def _ledger_names(acct) -> list[str]:
     return list(dict.fromkeys(" ".join(str(p.ledger_text or p.name).split()) for p in acct.products if p.name))
 
 
-def _login_reasons(out_dir, run_day: date, log) -> dict[str, str]:
+def _login_reasons(out_dir, days: list[date], log) -> dict[str, str]:
     from . import login_today
     try:
-        return login_today.reasons_today(out_dir=out_dir, today=run_day)
+        return {k: v for d in days for k, v in login_today.reasons_today(out_dir=out_dir, today=d).items()}
     except (OSError, ValueError) as exc:
         log(f"  {TAG} ⚠ 그날 로그인 기록 읽기 실패 — 자료 없는 계정은 '(오늘 자료 없음)'으로 표시 · {exc.__class__.__name__}")
         return {}
@@ -45,8 +53,8 @@ def _account(acct, out_dir, since: str, days, seldoc: set[str], pids: dict, log)
     if rows and all("productStatus" not in r for r in rows):
         log(f"  {TAG} ⚠ {acct.account_id}: 상품정보에 판매상태 칸 없음(옛 보관본) — 판매상태 '{CS.ST_UNKNOWN}'")
     items = CS.build_items(rows, props or [], pids)
-    week = CS.load_week(out_dir, acct.account_id, days)
-    return CS.account_prods(acct.account_id, items, week, CS.rule_basis(items, seldoc)), False
+    week, empty = CS.load_week(out_dir, acct.account_id, days)
+    return CS.account_prods(acct.account_id, items, week, CS.rule_basis(items, seldoc), empty), False
 
 
 def _mark(acct, n_accs: int, reasons: dict[str, str]) -> str:
@@ -55,12 +63,14 @@ def _mark(acct, n_accs: int, reasons: dict[str, str]) -> str:
 
 
 def build_report(accounts, out_dir, *, run_day: date, date_to: str, ask=None, log=print,
-                 now: str | None = None) -> CS.Report:
-    """관리대장 계정(input_list.accounts) → 보고서. ask = AI(system, user) → dict(None = AI 판정 생략 · ⚠ 로그)."""
+                 now: str | None = None, data_day: date | None = None) -> CS.Report:
+    """관리대장 계정(input_list.accounts) → 보고서. ask = AI(system, user) → dict(None = AI 판정 생략 · ⚠ 로그).
+    data_day = 상품·재고 보관본을 이 날짜 이후 것만 씀(None = run_day · 그보다 옛 값은 '자료 없음')."""
     from .match_anchor import load_match_results, match_result_path
     out = Path(out_dir)
     ctx = _Ctx(out, run_day, CS.week_days(date_to), load_match_results(match_result_path(out)), CS.load_pid_store(out),
                CJ.load(out / CJ.JUDGE_FILE), ask, log, now)
+    ctx.data_day = data_day or run_day
     groups: dict[str, list] = {}
     for a in accounts:
         groups.setdefault(a.label, []).append(a)
@@ -76,6 +86,7 @@ class _Ctx:
     def __init__(self, out: Path, run_day: date, days, match: dict, pids: dict, judged: dict, ask, log, now):
         self.out, self.run_day, self.days, self.match, self.pids = out, run_day, days, match, pids
         self.judged, self.ask, self.log, self.now = judged, ask, log, now
+        self.data_day = run_day
         self.reasons: dict[str, str] | None = None
         self.ai_calls = 0
 
@@ -86,7 +97,7 @@ class _Ctx:
 
     def login_reasons(self) -> dict[str, str]:
         if self.reasons is None:
-            self.reasons = _login_reasons(self.out, self.run_day, self.log)
+            self.reasons = _login_reasons(self.out, sorted({self.data_day, self.run_day}), self.log)
         return self.reasons
 
 
@@ -94,7 +105,7 @@ def _biz(name: str, accs: list, ctx: _Ctx) -> CS.Biz:
     """사업자 하나 — 계정마다 상품 줄 · 10개 규칙 · ③ AI 판정 · 자료 없는 계정 표시."""
     b = CS.Biz(name, list(dict.fromkeys(a.representative or "-" for a in accs)), [a.account_id for a in accs])
     for a in accs:
-        prods, missing = _account(a, ctx.out, ctx.run_day.isoformat(), ctx.days, ctx.seldoc(a.account_id),
+        prods, missing = _account(a, ctx.out, ctx.data_day.isoformat(), ctx.days, ctx.seldoc(a.account_id),
                                   ctx.pids.get(a.account_id) or {}, ctx.log)
         if missing:
             b.marks.append(_mark(a, len(accs), ctx.login_reasons()))
@@ -130,8 +141,8 @@ def push_gsheet(wb, url: str, log, client_factory=None) -> bool:
 
 def run_stage(input_list, *, date_to: str, run_day: date | None = None, ai_key: str | None = None,
               designated: bool = False, out_dir="output", on_log=print, gsheet_url: str | None = None,
-              client_factory=None, ask=None) -> Path | None:
-    """① 끝 단계(pipeline_stages) — 실패는 ❌ 줄로 남기고 None(①②③ 계속). 만든 파일 경로 반환."""
+              client_factory=None, ask=None, data_day: date | None = None) -> Path | None:
+    """만들기 한 번(run_daily 가 부름) — 실패는 ❌ 줄로 남기고 None. 만든 파일 경로 반환."""
     log = on_log
     accounts = list(getattr(input_list, "accounts", None) or [])
     if designated:
@@ -146,7 +157,7 @@ def run_stage(input_list, *, date_to: str, run_day: date | None = None, ai_key: 
             from .product_match_ai import openai_ask
             ask = openai_ask(ai_key)
         rep = build_report(accounts, out_dir, run_day=day, date_to=date_to, ask=ask, log=log,
-                           now=datetime.now().isoformat(timespec="seconds"))
+                           now=datetime.now().isoformat(timespec="seconds"), data_day=data_day)
         from .contractor_sheet_xlsx import build_workbook
         wb = build_workbook(rep)
         path = report_path(out_dir, day)
@@ -169,4 +180,43 @@ def run_stage(input_list, *, date_to: str, run_day: date | None = None, ai_key: 
     return path
 
 
-__all__ = ["build_report", "push_gsheet", "report_path", "run_stage"]
+def _mark_path(out_dir) -> Path:
+    return Path(out_dir) / CS.DIRNAME / RUN_MARK
+
+
+def _last_day(out_dir) -> str:
+    """실행 기록의 날짜 — 없음 = ''. 손상 = '!'(다시 한 번 돌고 새로 씀 · run_daily 가 ⚠ 로그)."""
+    p = _mark_path(out_dir)
+    if not p.is_file():
+        return ""
+    try:
+        return str(json.loads(p.read_text(encoding="utf-8")).get("날짜") or "")
+    except (OSError, ValueError, AttributeError):
+        return "!"
+
+
+def daily_due(now: datetime, out_dir="output") -> bool:
+    """06:00 이 지났고 오늘 실행 기록이 없으면 True(06:00 에 앱이 꺼져 있었으면 켠 뒤 그날 한 번)."""
+    return now.time() >= DAILY_AT and _last_day(out_dir) != now.date().isoformat()
+
+
+def run_daily(input_list, *, now: datetime, ai_key: str | None = None, out_dir="output", on_log=print,
+              gsheet_url: str | None = None, client_factory=None, ask=None) -> Path | None:
+    """매일 06:00 실행(D-361) — 최근 7일 = 실행일 전날까지 · 보관본 = 그날 06:00 이 든 회차부터(06:00 을 놓쳐 18:00 앱이
+    켜진 직후 만들어도 그날 ① 이 아니라 전날 회차 ① 자료 · 그 뒤 것이 있으면 더 새것) · 성공·실패 모두 그날 기록."""
+    from .settlement_watch import cycle_window
+    if _last_day(out_dir) == "!":
+        on_log(f"  {TAG} ⚠ 실행 기록 파일 손상 — 이번 실행 뒤 새로 씀 · {_mark_path(out_dir)}")
+    day = now.date()
+    on_log(f"  {TAG} 매일 {DAILY_AT:%H:%M} 실행 — {day:%m-%d}")
+    path = run_stage(input_list, date_to=(day - timedelta(days=1)).isoformat(), run_day=day, ai_key=ai_key,
+                     out_dir=out_dir, on_log=on_log, gsheet_url=gsheet_url, client_factory=client_factory, ask=ask,
+                     data_day=cycle_window(datetime.combine(day, DAILY_AT))[0].date())
+    mark = _mark_path(out_dir)
+    mark.parent.mkdir(parents=True, exist_ok=True)
+    mark.write_text(json.dumps({"날짜": day.isoformat(), "시각": datetime.now().isoformat(timespec="seconds"),
+                                "파일": str(path) if path else ""}, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+__all__ = ["DAILY_AT", "build_report", "daily_due", "push_gsheet", "report_path", "run_daily", "run_stage"]
