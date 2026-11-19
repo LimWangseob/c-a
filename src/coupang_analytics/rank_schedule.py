@@ -153,15 +153,21 @@ def refresh_groups(wb, today: date, log=None) -> RankPlan:
     fresh = RankPlan(plan.start, old, names, {k: plan.assigned.get(k, "") for k in old}, start2, groups2,
                      {k: (plan.assigned2.get(k) or today.isoformat()) for k in groups2})
     _write(wb, fresh)
+    log(_refresh_log(fresh, weights, new, today, first=not plan.groups2))
+    return fresh
+
+
+def _refresh_log(fresh: RankPlan, weights: dict[str, int], new: list[str], today: date, first: bool) -> str:
+    """refresh_groups 로그 한 줄 — 오늘 묶음 · 묶음별 키워드 수 · 처음 배정 / 새 계정."""
+    groups2, names = fresh.groups2, fresh.names
     loads = [sum(weights[k] for k, g in groups2.items() if g == i) for i in range(GROUPS)]
     t = fresh.turn(today)
     head = (f"오늘({today.month:02d}.{today.day:02d}) = {NAMES[t[1]]} 묶음(격일)" if t and t[0] == GROUPS
             else "오늘은 격일 시작 전(전부 잼)")
     loads_txt = " · ".join(f"{NAMES[i]} {loads[i]}" for i in range(GROUPS))
-    new_txt = (" · 새 계정 " + ", ".join(f"{names[k]}→{NAMES[groups2[k]]}" for k in new)) if new and plan.groups2 else ""
-    first = f" · 처음 배정(격일 시작일 {start2.isoformat()})" if not plan.groups2 else ""
-    log(f"  [순위 묶음] {head} · 묶음별 키워드 {loads_txt}{first}{new_txt} · 체험단 시작 {PROMO_DAYS}일·새 키워드는 매일")
-    return fresh
+    new_txt = (" · 새 계정 " + ", ".join(f"{names[k]}→{NAMES[groups2[k]]}" for k in new)) if new and not first else ""
+    first_txt = f" · 처음 배정(격일 시작일 {fresh.start2.isoformat()})" if first and fresh.start2 else ""
+    return f"  [순위 묶음] {head} · 묶음별 키워드 {loads_txt}{first_txt}{new_txt} · 체험단 시작 {PROMO_DAYS}일·새 키워드는 매일"
 
 
 def promo_start(wb, biz: str, product: str) -> date | None:
