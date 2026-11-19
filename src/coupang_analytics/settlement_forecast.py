@@ -25,6 +25,8 @@ _KEEP = ("정산일", "기간 시작", "기간 끝", "지급비율", "최종지�
          "totalArFactoringDeductionAmount", "totalAdditionalDeductionAmount", "totalFinalCfsFeeDeductionAmount",
          "totalNegativeDeductionAmount", "totalCarryOverSettlementDeductionAmount", "totalCfsInventoryCompensationAmount",
          "totalSalesAdjustment", "totalFinalSettlementAmount",
+         # 80 MCA 상환·81 체크카드 = 위탁자 본인 차감(D-312 ② · D-305 감지) — 없으면 예정 줄에서 '기타 공제'로 섞임(T-125 A2)
+         "totalMerchantCashAdvanceDeductionAmount", "totalDebitCardDeductionAmount", "debitCardOffsetYearMonthBreakdown",
          # 로켓그로스 정산대상 100% 를 쿠팡 칸 그대로 만드는 칸(D-081 — 70% 줄만 있어도 ÷0.7 없이)
          "totalSalesAmount", "totalRefundedAmount", "totalTakeRateAmountWithVat", "totalSellerDiscount")
 _RG_TARGET = ("totalSalesAmount", "totalRefundedAmount", "totalTakeRateAmountWithVat", "totalSellerDiscount")

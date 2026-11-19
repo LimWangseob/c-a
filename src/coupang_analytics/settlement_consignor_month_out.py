@@ -215,7 +215,7 @@ def evidence(st: MonthState, merged: dict, names: list) -> dict:
                     "계정 판매": sum(st.allsales.values()), "비중": st.sales_share,
                     "판매 상품 수": st.sold_n, "그중 관리": st.sold_m},
           "등록 비중": st.reg, "적용 비중": st.share, "광고": st.ad, "창고·배송비": st.cfs, "밀크런": st.milk,
-          "재고 보상": st.comp, "판매자서비스이용료": st.svc, "우대수수료 환급": st.fav,
+          "재고 보상": st.comp, "판매자서비스이용료": st.svc, "우대수수료 환급": st.fav, "추가지급": st.addpay,
           "배송비(관리 몫)": [round(st.ship_m[0]), round(st.ship_m[1])],
           "비용 위치 못 찾음(입금 예정으로)": {k: round(v) for k, v in st.unlocated.items()},
           "6·7·8 상품 자료 전 금액(계정 전체 → 관리 몫)": {k: [round(v), round(st.pend_cost_m.get(k, 0.0))] for k, v in st.pend_cost.items()},

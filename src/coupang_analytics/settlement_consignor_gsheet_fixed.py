@@ -1,7 +1,7 @@
 """위탁자 정산서(3차 형식 · 구글시트) 위탁자 탭 — 고정 형식(D-343): 항목 줄은 계정·달과 상관없이 늘 같은 자리 · 값 없으면 공란.
 
 승인 샘플(소유자 11-19 "샘플 승인." · `output\\_샘플_261118_고정형식정산서\\_render_fixed_sample.py`)의 1쪽·2쪽을 옮김.
-고정 줄 이름·순서 = 숫자 모듈이 늘 채워 넘김(6 종류별 9 · 9 계정 공통 9 · 10 별도 입금 2 · 어디로 갔나요 4) — 개수가 다르면 그리지 않고 중단.
+고정 줄 이름·순서 = 숫자 모듈이 늘 채워 넘김(6 종류별 9 · 9 계정 공통 9 · 10 별도 입금 3 · 어디로 갔나요 4) — 개수가 다르면 그리지 않고 중단.
 쪽: 1쪽 = 요약 · 2쪽 = 고정 표(6|9 · 10|11) · 상품 줄 = 2쪽 남은 자리에 전부 들어가면 2쪽, 아니면 전부 3쪽부터(2쪽엔 안내 + 합계 ·
 넘치면 '상품별 상세 (계속)' D-241 ④). 문구 = D-238·D-241 ⑦·D-242·D-251·D-259·D-260(머리·카드·회색 줄).
 """
@@ -15,7 +15,7 @@ from coupang_analytics.settlement_consignor_gsheet_pages import (
     DESC, NAME, NARROW_PAD, PCOLS, PENDING_CARD, PENDING_ROW, SHORT, coupang_took, line_amounts, separate_total, who_line,
 )
 
-FIXED_ROWS = {"rg_kinds": 9, "common": 9, "separate": 2, "flow": 4}
+FIXED_ROWS = {"rg_kinds": 9, "common": 9, "separate": 3, "flow": 4}      # 10 = 우대수수료 2 + 추가지급 1(소유자 11-19 "줄 추가 (추천)")
 FOOT = "항목은 계정·달과 상관없이 늘 같은 자리에 있고, 금액이 없는 항목은 비워 두었습니다 · 쿠팡 원본과 원 단위 대조 완료"
 
 
@@ -61,8 +61,8 @@ def _p1_table(d: dict, L: dict[int, int]) -> Page:
     pg.row(36, [(0, 264, cell(runs=[(CIRC[9] + " ", 11, True, "amber"), ("계정 공통 비용", 10, False, "ink"), ("  상품별로 안 나옴", 8, False, "amber")], bg="amber2")),
                 (264, 594, cell(f"쿠팡이 계정 전체로만 청구한 비용 중 관리 상품 몫 ({cm['basis_text']})", size=8, color="mute", bg="amber2")),
                 (594, 730, amt(cm["total_applied"], bg="amber2"))], borders=line)
-    pg.row(26, [(0, 264, numbered(10, "별도 입금 (우대수수료 환급)")),
-                (264, 594, cell("쿠팡페이가 대표 계좌로 직접 보냄", size=8, color="mute")),
+    pg.row(26, [(0, 264, numbered(10, "별도 입금 (우대수수료 환급·추가지급)")),
+                (264, 594, cell("쿠팡페이 환급(대표 계좌) · 쿠팡 추가지급", size=8, color="mute")),
                 (594, 730, amt(separate_total(d)))], borders=line)
     pg.row(32, [(0, 594, cell(runs=[("이번 정산 금액", 11, True, "ink"), ("  상품 정산액 − 9 + 10", 8, False, "mute")], bg="p2")),
                 (594, 730, amt(d["settle_amount"], signed=False, bold=True, size=11, bg="p2"))])
@@ -171,7 +171,7 @@ def _sep_dep_cells(left: list, right: list, i: int) -> tuple[list, list, list]:
 
 
 def _p2_sep_dep(d: dict) -> Page:
-    """10 별도 입금(왼쪽 2줄 고정) | 11 날짜별 입금(오른쪽 · 날짜 목록) — 넘치면 줄 단위로 다음 쪽(머리 2줄 반복)."""
+    """10 별도 입금(왼쪽 3줄 고정) | 11 날짜별 입금(오른쪽 · 날짜 목록) — 넘치면 줄 단위로 다음 쪽(머리 2줄 반복)."""
     pg = Page(keep=2)
     _side_title(pg, "10 별도 입금", "11 정산 금액 입금 내역 (날짜별)")
     pg.row(22, [(0, 264, cell("내용", size=8, color="mute", valign="BOTTOM")), (264, 359, cell("금액", size=8, color="mute", align="RIGHT", valign="BOTTOM")),

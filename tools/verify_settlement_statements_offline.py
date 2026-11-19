@@ -645,6 +645,36 @@ def test_d312_own_deduction() -> None:
     print("test_d312_own_deduction OK")
 
 
+def test_t125_forecast_keeps_own_cols() -> None:
+    """T-125 A2(80·81 · D-305 · D-312 ②): 정산 예정 기록에 MCA·체크카드 칸이 남아야 예정 줄도 '위탁자 본인 차감'(관리 몫 0)·D-305 감지.
+    칸 이름 = 쿠팡 원문(output38 `정산현황_원문\\…tellace83\\2026-11-16.json.gz` 51줄 · 예정 MCA 263,040 · 추가공제 1,006,565 ·
+    seankim137 2026-09-14 70% 줄 체크카드 6,500 · `debitCardOffsetYearMonthBreakdown` {'2026-08': 6500}). 옛 기록(칸 없음) = 지금 처리 그대로."""
+    from datetime import date
+    from coupang_analytics import settlement_forecast as FC
+    from coupang_analytics import settlement_statement_account as SA
+    own = ("totalMerchantCashAdvanceDeductionAmount", "totalDebitCardDeductionAmount", "debitCardOffsetYearMonthBreakdown")
+    add = 1_006_565 + 6_500
+    raw = {**_rg_line(totalPayableAmount=3_000_000, totalAdditionalDeductionAmount=add, totalMerchantCashAdvanceDeductionAmount=263_040,
+                      totalDebitCardDeductionAmount=6_500),
+           "debitCardOffsetYearMonthBreakdown": {"2026-11": 6_500},
+           "정산일": "2026-11-24", "기간 시작": "2026-11-10", "기간 끝": "2026-11-16", "지급비율": 70, "최종지급액": 3_000_000 - add, "지급상태": "예정"}
+    raw.pop("채널")
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / FC.FORECAST_FILE
+        FC.record(f, "x-y-tellace83", "로켓그로스", [raw], date(2026, 11, 16))
+        got = FC.load(f)
+    assert len(got) == 1 and all(k in got[0] for k in own), sorted(got[0])
+    r = {**got[0], "채널": "로켓그로스"}
+    _pay, _rel, parts = SA.deductions(r, False)
+    assert (parts[OWN_MCA], parts[OWN_CARD], parts["기타 공제"]) == (263_040, 6_500, add - 263_040 - 6_500), parts
+    assert dict(SA.watched(r)) == {"MCA 상환": 263_040, "체크카드 대금": 6_500}, SA.watched(r)
+    assert r["debitCardOffsetYearMonthBreakdown"] == {"2026-11": 6_500}             # 새 정산서 체크카드 = 달 칸(cost.py OWN_BR)
+    old = {k: v for k, v in r.items() if k not in own}                              # 옛 기록 = 칸 없음 → 기타 공제(지금 처리 그대로)
+    _pay, _rel, parts = SA.deductions(old, False)
+    assert (parts[OWN_MCA], parts[OWN_CARD], parts["기타 공제"]) == (0, 0, add), parts
+    print("test_t125_forecast_keeps_own_cols OK")
+
+
 class _Led:
     """장부 가짜(지급 줄만) — 윙·로켓그로스 원본 줄 → Ledger.account 의 rows 모양."""
 
@@ -866,6 +896,7 @@ def main() -> int:
     test_d279_svc_estimate_row_and_d304_note()
     test_d312_fast_used()
     test_d312_own_deduction()
+    test_t125_forecast_keeps_own_cols()
     test_d304_wing_negative_round()
     test_d319_scheduled_negative_kept()
     test_d308_additional_round()
