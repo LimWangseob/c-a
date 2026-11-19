@@ -219,6 +219,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             self._probe_gsheet_links()  # 구글시트 링크 4개 연결 상태를 뒤에서 확인해 라벨로(무인 실행은 생략)
         # 셀독 계약자별 상품 현황 = 매일 06:00 한 번(D-361) — 켜진 동안 1분마다 확인 · 06:00 뒤 켰으면 곧바로 그날 몫
         self._contractor_busy, self._contractor_warned, self._contractor_waited = False, "", ""
+        self._contractor_retry_at = None   # 대장을 못 읽은 뒤 다시 읽을 시각(D-366 · 10분 간격)
         self._contractor_timer = QtCore.QTimer(self)
         self._contractor_timer.setInterval(60_000)
         self._contractor_timer.timeout.connect(self._contractor_tick)
@@ -1648,16 +1649,18 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         return column_dates(label)   # (판매=전날, 판매=전날, 칸=label) — 형식 오류는 ValueError
 
     def _require_run_inputs(self) -> bool:
-        """전체실행/판매수집 전 필수 입력·키 확인 — 없으면 경고 후 False."""
-        if self.input_list is None:
-            QtWidgets.QMessageBox.warning(self, "입력 필요", "관리대장을 읽지 못했습니다. 설정 탭에서 '관리대장에서 불러오기'를 "
-                                                         "눌러 로그의 사유를 확인하세요.")
-            return False
+        """전체실행/판매수집 전 필수 키 확인 + 관리대장 다시 읽기(D-366: 켜 둔 앱도 실행마다 변경분 반영 · 앱 시작 때와 같은
+        함수·입력 소스 설정 그대로 · 확인 팝업 전) — 못 읽으면 경고 후 False(지난 대장·PC 엑셀로 대신 돌리지 않음 D-134)."""
         if self.naver_creds is None:
             QtWidgets.QMessageBox.warning(self, "키 필요", "설정 탭에서 네이버 API 키를 먼저 여세요.")
             return False
         if not self.ai_key:
             QtWidgets.QMessageBox.warning(self, "키 필요", "키워드 추출에 OpenAI(ChatGPT) API 키가 필요합니다.")
+            return False
+        self.log("[입력] 실행 전 관리대장 다시 읽는 중…(켜 둔 동안 바뀐 내용 반영 · D-366)")
+        if not self._auto_load_input():
+            QtWidgets.QMessageBox.warning(self, "입력 필요", "관리대장을 읽지 못해 실행하지 않습니다. 로그의 '[입력]' 사유"
+                                                         "(인터넷·구글시트 링크·서비스계정 공유)를 확인한 뒤 다시 실행하세요.")
             return False
         return True
 
@@ -1734,11 +1737,15 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
 
     def _stages_task(self, il, plan, naver_creds, key, gs_in, gs_out, **run_kw):
         """전체실행·무인·재부팅 복구 공통 — 작업 전 백업·원장 반영 후 run_stages(단계 조립 단일 구현, 정리 B6)."""
-        backup_sources(input_url=gs_in, output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
-        run_il, reg_url = self._registry_presync(il, gs_in)   # 원장 자동 반영(비치명·2-1)
-        return run_stages(run_il, plan, ai_key=key, naver=NaverAdApi(naver_creds), get_password=self._account_pw,
-                          gsheet_input_url=gs_in, gsheet_output_url=gs_out, registry_url=reg_url,
-                          stock_url=self._stock_url(), on_log=self.log, **run_kw)
+        self._stages_running = True   # D-366 ③: 도는 동안 06:00 계약자 현황이 대장을 다시 읽지 않음(시작 때 읽은 대장으로 끝까지)
+        try:
+            backup_sources(input_url=gs_in, output_url=gs_out, on_log=self.log)   # 작업 전 원본 백업(항상)
+            run_il, reg_url = self._registry_presync(il, gs_in)   # 원장 자동 반영(비치명·2-1)
+            return run_stages(run_il, plan, ai_key=key, naver=NaverAdApi(naver_creds), get_password=self._account_pw,
+                              gsheet_input_url=gs_in, gsheet_output_url=gs_out, registry_url=reg_url,
+                              stock_url=self._stock_url(), on_log=self.log, **run_kw)
+        finally:
+            self._stages_running = False
 
     # ── 무인 자동 실행(--auto, 01:30 시작 · D-362 → **모든 처리 완주 후 종료**·강제종료 없음) ───────
     def start_auto(self):
@@ -1799,18 +1806,16 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         now = datetime.now()
         if self._contractor_busy or not contractor_stage.daily_due(now):
             return
-        if self.input_list is None:     # 관리대장을 아직 못 읽음 — 그날 한 번만 알리고, 읽히면 다음 확인 때 만듦
-            if self._contractor_warned != now.date().isoformat():
-                self._contractor_warned = now.date().isoformat()
-                self.log_all("[계약자별 현황] ⚠ 관리대장(입력)을 못 읽어 아직 못 만듦 — 입력을 불러오면 1분 안에 만듦")
-            return
         if contractor_stage.wait_reason(now):   # ① 이 아직 돎 → 끝날 때까지 미룸(그날 자료가 반만 있는 채로 만들지 않게)
             if self._contractor_waited != now.date().isoformat():
                 self._contractor_waited = now.date().isoformat()
                 self.log_all("[계약자별 현황] ⏸ ① 판매수집이 아직 도는 중 — 끝나면 1분 안에 만듦(그날 자료가 다 모인 뒤)")
             return
+        il = self._contractor_input(now)
+        if il is None:
+            return
         self._contractor_busy = True
-        il, key = self.input_list, self.ai_key
+        key = self.ai_key
 
         def task():
             try:
@@ -1819,6 +1824,25 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
                 self._contractor_busy = False
         with self._log_owner(_LOG_ALL):   # 이 작업 줄 = 모든 탭(어느 탭에서 시작한 작업도 아님)
             self.run_bg(task)
+
+    def _contractor_input(self, now):
+        """06:00 계약자 현황 만들기 직전 관리대장 다시 읽기(D-366 · 앱 시작 때와 같은 함수 · 화면 스레드) → 입력 · 못 읽으면 None.
+        ①~③ 도는 중이면 다시 안 읽고 실행 시작 때 읽은 대장 그대로(③) · 못 읽으면 그날 한 번만 알리고 10분 뒤 다시(1분마다 구글 호출 안 함)."""
+        if getattr(self, "_stages_running", False) and self.input_list is not None:
+            return self.input_list
+        if self._contractor_retry_at is not None and now < self._contractor_retry_at:
+            return None
+        with self._log_owner(_LOG_ALL):
+            loaded = self._auto_load_input()
+        if loaded:
+            self._contractor_retry_at = None
+            return self.input_list
+        self._contractor_retry_at = now + timedelta(minutes=10)
+        if self._contractor_warned != now.date().isoformat():
+            self._contractor_warned = now.date().isoformat()
+            self.log_all("[계약자별 현황] ⚠ 관리대장(입력)을 다시 읽지 못해 아직 못 만듦 — 10분마다 다시 읽고 읽히면 만듦"
+                         "(지난 대장으로 대신 만들지 않음 · 위 '[입력]' 사유 확인)")
+        return None
 
     def _auto_done(self, _result=None):
         left = LAST_RANK.get("unfilled")
