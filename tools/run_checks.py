@@ -278,7 +278,21 @@ def _gate(a: argparse.Namespace, root: Path, waited: float = 0.0) -> int:
     print("=" * 64)
     if key and key == check_stamp.worktree_key(root):   # 검사 도중 내용이 바뀌었으면 기록 안 함
         check_stamp.record(root, key, a.quick)
+    _warn_untracked(root)
     return 0
+
+
+def _warn_untracked(root: Path) -> None:
+    """git 에 안 올린 파일이 있으면 이 통과 기록은 푸시 때 못 씀(커밋 내용과 키가 다름) → 이름을 보여 줌(D-379)."""
+    try:
+        files = check_stamp.untracked(root)
+    except (subprocess.CalledProcessError, OSError) as e:
+        print(f"  ⚠ git 에 안 올린 파일 확인 못 함({e})", flush=True)
+        return
+    if files:
+        shown = ", ".join(files[:5]) + (f" 외 {len(files) - 5}개" if len(files) > 5 else "")
+        print(f"  ⚠ git 에 안 올린 파일 {len(files)}개({shown}) — 푸시 때 이 통과 기록을 못 써 전체 검사를 다시 돕니다"
+              " · 필요 없는 파일이면 .gitignore 에 넣거나 커밋하세요(D-379)", flush=True)
 
 
 if __name__ == "__main__":

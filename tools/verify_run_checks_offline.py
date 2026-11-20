@@ -425,6 +425,37 @@ def s11_times_log():
     ok("통과·건너뜀·실패 3줄 · 종류·작업폴더·검사별 초 · 기록 실패 = 경고만")
 
 
+def s12_untracked_warn():
+    print("[S12] git 에 안 올린 파일(D-379) — 있으면 통과 때 경고(파일 이름) + 푸시 때 다시 검사 · .gitignore 로 빼면 경고 없음·커밋 뒤 푸시 건너뜀")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = _repo(tmp)
+        p = Path(tmp) / "gate.py"
+        p.write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
+        saved = RC.ROOT, RC.CHECKS
+        RC.ROOT, RC.CHECKS = root, [("게이트", str(p), True)]
+        try:
+            (root / "plans").mkdir()
+            (root / "plans" / "계획.md").write_text("메모\n", encoding="utf-8")
+            (root / "docs" / "memory" / "새메모.md").write_text("m2\n", encoding="utf-8")   # 키에서 빠지는 경로 = 경고 대상 아님
+            rc, out = _main([])
+            assert rc == 0 and "git 에 안 올린 파일 1개" in out and "plans/계획.md" in out, out
+            assert "새메모.md" not in out, "키에서 빠지는 메모리 사본까지 경고함: " + out
+            head = _git(root, "rev-parse", "HEAD")
+            ref = f"refs/heads/master {head} refs/heads/master {'0' * 40}\n"
+            rc, out = _main(["--skip-if-passed=push"], ref)
+            assert rc == 0 and "건너뜀" not in out, "안 올린 파일이 있는데 커밋 내용 통과로 봄(지금 판정 그대로여야 함)"
+            (root / ".gitignore").write_text("/data/\n/plans/\n", encoding="utf-8")
+            _git(root, "commit", "-qam", "plans 무시")
+            rc, out = _main([])
+            assert rc == 0 and "git 에 안 올린 파일" not in out, out
+            ref2 = f"refs/heads/master {_git(root, 'rev-parse', 'HEAD')} refs/heads/master {head}\n"
+            rc, out = _main(["--skip-if-passed=push"], ref2)
+            assert rc == 0 and "건너뜀" in out, "무시 목록에 넣었는데 푸시 때 다시 검사함: " + out
+        finally:
+            RC.ROOT, RC.CHECKS = saved
+    ok("경고(이름·개수·메모리 사본 제외)·푸시 다시 검사 · 무시 목록 뒤 경고 없음·푸시 건너뜀")
+
+
 def main():
     with tempfile.TemporaryDirectory() as lock_dir:      # 같은 프로세스 안 게이트(S5·S6·S7)도 실제 PC 잠금 대신 임시 잠금
         RC.LOCK_PATH = Path(lock_dir) / "gate.lock"
@@ -443,6 +474,7 @@ def _scenarios():
     s9_stale_lock()
     s10_priority()
     s11_times_log()
+    s12_untracked_warn()
     print("회귀 게이트 자체(동시 실행·통과 기록·PC 하나만·우선순위) 오프라인 검증 통과")
 
 

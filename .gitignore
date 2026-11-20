@@ -43,3 +43,6 @@ Thumbs.db
 /*.docx
 /*.txt
 !/requirements.txt
+
+# 로컬 계획 메모(git 밖 유지) — 안 올린 채 두면 통과 기록 키가 커밋과 달라 푸시 때마다 전체 검사를 다시 돌았음(D-379)
+/docs/plans/

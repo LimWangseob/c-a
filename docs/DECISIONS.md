@@ -3086,3 +3086,12 @@ umpy`) · 우리 코드는 numpy 를 직접 안 씀 · 정산 바퀴 끝 '남는
 - 남은 것(미승인 · STATE 미해결): B 바뀐 파일 검사만 · L 병합 검사 중복 없애기 · M 문서 다이어트 · C·E·F·G 빌드 시험 · 전역 CLAUDE.md 에 J·K·H 를 올릴지(검토안 = 이 결정 커밋 보고).
 - 영향 범위: `tools/run_checks.py`(`times_path`·`_log_times`·`_gate_lock` 기다린 초) · `tools/verify_run_checks_offline.py` S8(기다린 초 기록)·S11(시간 기록 3줄·기록 실패 경고) · 운영 방식(T-59 zip 절차·STATE 커밋·세션 운영) · 앱(exe) 동작 변화 없음.
 - 상태: ACTIVE
+
+### D-379 [GATE_SPEED] 푸시 때 검사 다시 도는 원인 = git 에 안 올린 docs/plans/ → .gitignore · 안 올린 파일 있으면 게이트가 이름 경고 (2026-11-21, R246)
+- 결정(소유자 2026-11-21 원문): 통제 세션 "1번과 3번으로 진행할까요?"(1 = `.gitignore` 에 `docs/plans/` · 3 = 안 올린 파일 경고) → 소유자 "1번 3번 진행해줘".
+  - 1 `.gitignore` 에 `/docs/plans/` 추가(지금처럼 git 밖 · 백업 안 됨 그대로).
+  - 3 `tools/run_checks.py` 가 통과 뒤 git 에 안 올린(무시 목록에도 없는) 파일이 있으면 개수·이름(앞 5개)을 경고 · `check_stamp.untracked`(`ls-files -z --others --exclude-standard` · 키에서 빠지는 docs/memory·.claude 제외). 판정 방식(키 = 작업 폴더 전체)은 그대로.
+- 근거: D-378 N 시간 기록 첫 실측 — 전체 통과 직후 커밋·푸시 2번 모두 푸시가 전체 검사를 다시 돎(193.1초 · 178.2초 · `%LOCALAPPDATA%\coupang-analytics\run_checks_times.csv` 11-21 00:12·00:22 줄). 재현(커밋 직후·추적 파일 변경 없음): 작업 폴더 키 `73763f1…`(통과 기록과 같음) ≠ 커밋 키 `6fef5dd…` · `docs/plans` 빼면 같음 · 추적 파일만(add -u) 키도 같음 → 원인 = 안 올린 `docs/plans/` 10파일(11-12~17 생성). 메모리 사본 동기화는 원인 아님(docs/memory 는 이미 키에서 빠짐). 대화 기록상 푸시 1번 평균 52초(9월) → 115초(11-16~20).
+- 버린 대안: 2 `docs/plans/` 커밋(STATE 'git 밖' 표기의 이유 미확인) · 키에서 안 올린 파일 통째로 빼기(그런 파일도 검사 결과에 영향 가능 → '같은 내용 통과' 판정 약화 · D-202).
+- 영향 범위: `.gitignore` 1줄 · `tools/check_stamp.py`(`untracked`) · `tools/run_checks.py`(`_warn_untracked`) · `tools/verify_run_checks_offline.py` S12 · 다른 작업 폴더(worktree)에 안 올린 파일이 있어도 이제 경고로 보임.
+- 상태: ACTIVE

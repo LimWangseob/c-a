@@ -73,6 +73,14 @@ def commit_key(root: Path, rev: str) -> str | None:
         return None
 
 
+def untracked(root: Path) -> list[str]:
+    """키에 들어가지만 커밋에는 없는 파일 = git 에 안 올린(무시 목록에도 없는) 파일 · EXCLUDE 제외(D-379).
+    있으면 작업 폴더 키 ≠ 커밋 키 → 푸시 때 통과 기록을 못 씀."""
+    out = _git(root, ["ls-files", "-z", "--others", "--exclude-standard", "--", ".",   # -z = 한글 이름 그대로
+                      *[f":(exclude){p}" for p in EXCLUDE]])
+    return [name for name in out.split("\0") if name]
+
+
 def pushed_revs(lines: list[str]) -> list[str]:
     """pre-push 표준입력 '<로컬ref> <로컬sha> <원격ref> <원격sha>' 에서 올라갈 커밋들(삭제 푸시 제외)."""
     revs = []
