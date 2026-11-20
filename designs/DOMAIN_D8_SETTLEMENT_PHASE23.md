@@ -62,7 +62,7 @@
 ### 2.1 무엇을·언제 (수집 대상·주기, 확정분은 SETTLEMENT_MODULE §9.0)
 | 데이터 | 주기(확정) | 실행 슬롯 | 1단계 투입처 |
 |---|---|---|---|
-| 판매현황(판매분석 vi-detail-search) | **매일**(현행 유지·변경 없음) | 기존 ①판매수집 야간 18:00 | `settlement_parse`(이미 적재 경로 있음) |
+| 판매현황(판매분석 vi-detail-search) | **매일**(현행 유지·변경 없음) | 기존 ①판매수집 야간 00:10(옛 18:00 · D-372) | `settlement_parse`(이미 적재 경로 있음) |
 | 윙 정산내역(settlement-histories) | **주 1회**(주 마감 다음날=월) | 야간 배치 직렬 슬롯 | `payout`(지급일 대조)·실지급 정본 |
 | 윙 매출내역 | 주 1회 | 〃 | `settlement_amount.mp_revenue`(E=A−B−C−D) |
 | 로켓그로스 판매수수료 리포트 | 주 1회 | 〃 | `settlement_amount.rg_payout`·`rg_home_profit` |
