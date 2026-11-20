@@ -14,13 +14,13 @@ if exist "output\정산\로그\_현재상태.txt" (
   echo   ^(정산 watch 가 한 번도 안 돌았거나, output 폴더가 아직 없음^)
 )
 echo.
-echo [2] 자동 실행 작업 등록 여부 ^(정산은 별도 작업 없음 - 01:30 야간 무인 실행이 함께 띄움^)
+echo [2] 자동 실행 작업 등록 여부 ^(정산은 별도 작업 없음 - 00:10 야간 무인 실행이 함께 띄움^)
 echo --------------------------------------------------
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$t=Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { (($_.Actions | ForEach-Object { [string]$_.Arguments }) -join ' ') -match '(^|\s)--auto(\s|$)' }; if($t){ exit 0 } else { exit 1 }" && (
-  echo   [등록됨] 01:30 야간 무인 작업이 있습니다 - 정산은 이 실행이 함께 띄웁니다.
+  echo   [등록됨] 00:10 야간 무인 작업이 있습니다 - 정산은 이 실행이 함께 띄웁니다.
 ) || (
-  echo   [작업 없음] 01:30 야간 무인 작업이 없습니다 - 설치.bat 로 등록하세요 ^(없으면 정산도 자동으로 안 돕니다^).
+  echo   [작업 없음] 00:10 야간 무인 작업이 없습니다 - 설치.bat 로 등록하세요 ^(없으면 정산도 자동으로 안 돕니다^).
 )
 echo.
 echo [3] 지금 프로세스가 떠 있나

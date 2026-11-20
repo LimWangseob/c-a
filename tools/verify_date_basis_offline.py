@@ -1,7 +1,7 @@
 """결과 통계 시트 날짜 칸 = 판매일(D-368·D-369) 오프라인 검증 — 로그인·쿠팡·구글 호출 없음(결정적).
 
 기대(설계 = DECISIONS D-368·D-369 · 분석 `output\\_설계_261119_날짜칸D-1\\분석_1단계.md` 3-5 a~g):
-  B1 날짜 입구: 칸 = 판매일 = 지정일(column_dates(L) = (L, L, L)) · 실행일의 칸 = 실행일−1(01:30 실행이어도 전날)
+  B1 날짜 입구: 칸 = 판매일 = 지정일(column_dates(L) = (L, L, L)) · 실행일의 칸 = 실행일−1(00:10 실행이어도 전날)
   B2 옛 기준 마스터(칸 = 판매일+1) → 새 판 첫 실행 때 한 번 하루 당김: 백업 먼저 · 사업자 시트 라벨 −1·값 그대로 ·
      `_수집스탬프` 2·3열 −1 · `_순위묶음` 시작일(B1·D1)·배정일 −1 · 숨긴 표시 `_날짜기준` · 판매분석_일별 대조가 +0 으로 뒤집힘
   B3 같은 실행일 = 같은 순위 묶음 · 지난 쉬는 칸(회색) 그대로(날짜 +1 로 맞춰 같음)
@@ -123,9 +123,15 @@ def b1_entry():
     print("[B1] 날짜 입구 — 칸 = 판매일 = 지정일 · 실행일의 칸 = 실행일−1")
     assert column_dates("2026-11-19") == ("2026-11-19", "2026-11-19", "2026-11-19"), column_dates("2026-11-19")
     assert column_dates("2026-03-01") == ("2026-03-01", "2026-03-01", "2026-03-01")
-    assert run_day_column(date(2026, 11, 20)) == date(2026, 11, 19)      # 11-20 01:30 실행 = 11.19 칸
+    assert run_day_column(date(2026, 11, 20)) == date(2026, 11, 19)      # 11-20 00:10 실행 = 11.19 칸
     assert run_day_column(date(2026, 3, 1)) == date(2026, 2, 28)          # 달 경계
-    ok("column_dates(L) = (L, L, L) · 11-20 실행 → 11.19 칸 · 03-01 → 02.28")
+    # D-372: 00:10 무인 = 방금 끝난 날 칸 · 같은 날 낮 수동 전체 실행도 같은 칸(실행일 − 1 한 규칙) · 그 실행 = 그날 00:10 정산 회차 안
+    from datetime import datetime
+    from coupang_analytics import settlement_watch as W
+    night, noon = datetime(2026, 11, 21, 0, 10, 3), datetime(2026, 11, 21, 14, 0)
+    assert run_day_column(night.date()) == run_day_column(noon.date()) == date(2026, 11, 20)
+    assert W.cycle_window(night)[0] == datetime(2026, 11, 21, 0, 10) == W.cycle_window(noon)[0]
+    ok("column_dates(L) = (L, L, L) · 11-20 실행 → 11.19 칸 · 03-01 → 02.28 · 11-21 00:10 무인·14:00 수동 = 둘 다 11.20 칸")
 
 
 def b2_shift(tmp: Path):

@@ -211,15 +211,17 @@ def t5_stops():
         called.clear()
         rc = TL.run(accts, lambda m: None, fp=FP, out_dir=d, passwords=pw, busy=lambda: "", sleep=lambda s: None,
                     now=_Clock(TL.UNTIL_DEFAULT), check=lambda a, p, h, lg: (called.append(a.account_id), (TL.OK, ""))[1])
-        assert rc == 0 and called == [], "01:10 지나면 새 계정 시작 안 함(01:30 앱 실행 보호)"
+        assert rc == 0 and called == [], "23:50 지나면 새 계정 시작 안 함(00:10 앱 실행 보호)"
     assert not TL.in_quiet("", datetime(2026, 10, 22, 18, 0)) and TL.in_quiet("17:40", datetime(2026, 10, 22, 19, 0))
     assert not TL.in_quiet("17:40", datetime(2026, 10, 22, 21, 0)) and not TL.in_quiet("17:40", datetime(2026, 10, 23, 2, 0))
     assert TL.in_quiet("17:40", datetime(2026, 10, 22, 20, 39)) and not TL.in_quiet("17:40", datetime(2026, 10, 22, 17, 39))
-    u = TL.UNTIL_DEFAULT                     # 기본 = 01:30 무인 20분 전(D-362) · 조용한 시간 01:10~04:10
-    assert u == "01:10" and TL.in_quiet(u, datetime(2026, 10, 22, 1, 30)) and TL.in_quiet(u, datetime(2026, 10, 22, 4, 9))
-    assert not TL.in_quiet(u, datetime(2026, 10, 22, 4, 10)) and not TL.in_quiet(u, datetime(2026, 10, 22, 0, 59))
-    assert TL.deadline_of(u, datetime(2026, 10, 22, 14, 0)) == datetime(2026, 10, 23, 1, 10), "낮 시작 = 다음 날 01:10"
-    ok("차단 연속 2 → 중단 · 재시도 = 성공 아닌 4계정 · 다른 실행 중 → 멈춤 · 기본 01:10~04:10(운용 PC 실행 시간대) 시작 안 함")
+    u = TL.UNTIL_DEFAULT                     # 기본 = 00:10 무인 20분 전(D-372) · 조용한 시간 23:50~02:50(자정 넘김)
+    assert u == "23:50" and TL.in_quiet(u, datetime(2026, 10, 22, 0, 10)) and TL.in_quiet(u, datetime(2026, 10, 22, 2, 49))
+    assert TL.in_quiet(u, datetime(2026, 10, 22, 23, 50)) and TL.quiet_window(u) == "23:50~02:50"
+    assert not TL.in_quiet(u, datetime(2026, 10, 22, 2, 50)) and not TL.in_quiet(u, datetime(2026, 10, 22, 23, 49))
+    assert TL.deadline_of(u, datetime(2026, 10, 22, 14, 0)) == datetime(2026, 10, 22, 23, 50), "낮 시작 = 그날 23:50"
+    assert TL.deadline_of(u, datetime(2026, 10, 22, 23, 55)) == datetime(2026, 10, 23, 23, 50), "23:50 뒤 시작 = 다음 날 23:50"
+    ok("차단 연속 2 → 중단 · 재시도 = 성공 아닌 4계정 · 다른 실행 중 → 멈춤 · 기본 23:50~02:50(운용 PC 실행 시간대) 시작 안 함")
 
 
 def t6_busy_lock():

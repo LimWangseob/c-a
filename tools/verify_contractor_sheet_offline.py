@@ -468,7 +468,7 @@ def t9_daily_0600():
     from datetime import datetime
     with tempfile.TemporaryDirectory() as d:
         out = Path(d)
-        # 11-20 01:30 ① 판매수집이 남긴 자료(파일 날짜 = 수집한 날 11-20 · D-362) → 11-20 06:00 실행이 읽어야 함
+        # 11-20 00:10 ① 판매수집이 남긴 자료(파일 날짜 = 수집한 날 11-20 · D-362) → 11-20 06:00 실행이 읽어야 함
         put_products(out, "a1", [{"vid": "1", "name": "관리 상품"}], day="2026-11-19")   # 전날 회차 자료 = 안 읽음
         put_products(out, "a1", [{"vid": "1", "name": "관리 상품"}], day="2026-11-20")
         put_match(out, {"a1": {"관리 상품": ["1"]}})
@@ -481,7 +481,7 @@ def t9_daily_0600():
         check(p == out / "계약자별상품현황" / "셀독_계약자별상품현황_261120.xlsx" and p.is_file(), f"파일 이름 = 실행일 {p}")
         check(any("11.13~11.19" in x for x in logs), f"7일 = 11-13~11-19(실행일 전날까지) {[x for x in logs if '기간' in x]}")
         check(any("셀독 1" in x and "자료 없음 표시 0" in x for x in logs),
-              "그날 01:30 ① 자료(파일 날짜 11-20)를 읽음 — '자료 없음' 아님")
+              "그날 00:10 ① 자료(파일 날짜 11-20)를 읽음 — '자료 없음' 아님")
         from openpyxl import load_workbook
         w = load_workbook(p).worksheets[1]
         check([w.cell(4, k).value for k in range(9, 17)] == [7, 6, 5, 4, 3, 2, 1, 28], "최근(11-19)이 왼쪽 · 합계 28")
@@ -489,7 +489,7 @@ def t9_daily_0600():
               "같은 날 두 번 안 돎")
         check(ST.daily_due(datetime(2026, 11, 21, 6, 0), out), "다음 날 06:00 = 다시")
         check(ST.daily_due(datetime(2026, 11, 22, 14, 30), out), "06:00 에 앱이 꺼져 있었으면 켠 뒤 그날 한 번")
-        # 06:00 을 놓쳐 낮에 켜도 = 그날 01:30 ① 자료(06:00 과 같은 회차) · 전날 자료만 있으면 '자료 없음'
+        # 06:00 을 놓쳐 낮에 켜도 = 그날 00:10 ① 자료(06:00 과 같은 회차) · 전날 자료만 있으면 '자료 없음'
         logs, log = _logs()
         pushed = []
 
@@ -498,7 +498,7 @@ def t9_daily_0600():
             raise ValueError("시험 — 올리지 않음")
         p21 = ST.run_daily(il, now=datetime(2026, 11, 21, 14, 0, 5), out_dir=out, on_log=log, gsheet_url="URL", ask=no_ai,
                            client_factory=fake_client)
-        check(not any("자료 없음 표시 0" in x for x in logs), f"그날 01:30 자료 없음 = 전날 자료로 안 채움 {logs[-2:]}")
+        check(not any("자료 없음 표시 0" in x for x in logs), f"그날 00:10 자료 없음 = 전날 자료로 안 채움 {logs[-2:]}")
         # 소유자 11-20: 운용 PC 새 판 설치 첫날 낮 — 모든 계정이 자료 없음인 빈 표가 구글시트를 덮어씀 → 덮어쓰지 않음
         check(p21 is None and not pushed and not (out / "계약자별상품현황" / "셀독_계약자별상품현황_261121.xlsx").exists()
               and any("❌" in x and "모든 계정" in x for x in logs),
@@ -506,7 +506,7 @@ def t9_daily_0600():
         put_products(out, "a1", [{"vid": "1", "name": "관리 상품"}], day="2026-11-23")
         logs, log = _logs()
         ST.run_daily(il, now=datetime(2026, 11, 23, 14, 0, 5), out_dir=out, on_log=log, gsheet_url="", ask=no_ai)
-        check(any("셀독 1" in x and "자료 없음 표시 0" in x for x in logs), f"놓친 날 낮 = 그날 01:30 ① 자료 {logs[-2:]}")
+        check(any("셀독 1" in x and "자료 없음 표시 0" in x for x in logs), f"놓친 날 낮 = 그날 00:10 ① 자료 {logs[-2:]}")
         logs, log = _logs()
         check(ST.run_daily(type("IL", (), {"accounts": []})(), now=datetime(2026, 11, 22, 14, 30), out_dir=out,
                            on_log=log) is None and not ST.daily_due(datetime(2026, 11, 22, 15, 0), out),
@@ -525,7 +525,7 @@ def t9b_wait_sales():
         out = Path(d)
         now = datetime.now()
         start = cycle_window(now)[0]
-        # 소유자 11-20: 이번 회차 ① 완료 기록이 없으면(설치 첫날 낮·01:30 실패·밤새 꺼짐) 지난 회차 자료뿐 → 미룸
+        # 소유자 11-20: 이번 회차 ① 완료 기록이 없으면(설치 첫날 낮·00:10 실패·밤새 꺼짐) 지난 회차 자료뿐 → 미룸
         why = ST.wait_reason(now, out)
         check("완료 기록 없음" in why, f"단계 기록 없음 = 이번 회차 ① 안 끝남 → 미룸 {why!r}")
         stage = _run_stage_path(out)

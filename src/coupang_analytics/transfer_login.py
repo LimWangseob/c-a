@@ -7,8 +7,8 @@ D-012 최대 2값·D-068 그날 거부된 값 재제출 금지·2단계 인증 �
 
 안전 규칙(런타임 병렬 금지·사무실 IP 보호):
 - 앱 파이프라인(output/_잠금/파이프라인.lock)·정산 자동 다운로드(output/정산/_잠금/_watch.lock)가 돌면 **시작·다음 계정 안 함**.
-- until(기본 01:10 = 01:30 무인 20분 전 · D-362) = **시작 뒤 처음 오는 그 시각**에 새 계정 시작 안 함(시작 뒤 처음 오는
-  01:10) — 01:30 무인 실행을 막지 않게. `--start HH:MM` = 그 시각까지 기다렸다 시작(밤에 이어 하기 — 운용 PC ①·정산 로그인과 안 겹치게).
+- until(기본 23:50 = 00:10 무인 20분 전 · D-372) = **시작 뒤 처음 오는 그 시각**에 새 계정 시작 안 함(시작 뒤 처음 오는
+  23:50) — 00:10 무인 실행을 막지 않게. `--start HH:MM` = 그 시각까지 기다렸다 시작(밤에 이어 하기 — 운용 PC ①·정산 로그인과 안 겹치게).
 - 계정 사이 45~75초 쉼(정산 요청 간격과 같음) · **차단·미완료·오류 2계정 연속 = 전체 중단**(IP 차단 의심 — 2026-10-22 실측:
   차단 화면이 '미완료'로 끝나고 다음 계정은 브라우저 연결 오류였음).
 - 재시도(--retry) = 성공·인증번호 필요(비밀번호는 맞음 — 계약자 연락 필요) 제외 · 비밀번호 오류는 **비밀번호가 바뀐 계정만**
@@ -28,8 +28,8 @@ from .settlement_watch import CYCLE_START
 OUT_DIR = Path("output") / "정산_셀독전환"
 STATE_FILE = "로그인확인_최신.json"
 GAP_SEC = (45, 75)
-UNTIL_DEFAULT = f"{datetime.combine(datetime.min, CYCLE_START) - timedelta(minutes=20):%H:%M}"   # 01:30 무인 20분 전 = 01:10
-QUIET_HOURS = 3                # 멈춤 시각부터 이 시간 동안은 시작·새 계정 안 함(01:10~04:10)
+UNTIL_DEFAULT = f"{datetime.combine(datetime(2000, 1, 2), CYCLE_START) - timedelta(minutes=20):%H:%M}"   # 00:10 무인 20분 전 = 23:50(D-372 · 자정 넘김 — datetime.min 은 범위 밖)
+QUIET_HOURS = 3                # 멈춤 시각부터 이 시간 동안은 시작·새 계정 안 함(23:50~02:50)
 BLOCK_STOP = 2                 # 차단·미완료·오류 연속 이만큼이면 전체 중단
 PW_WRONG_TAG, OTP_TAG = "비밀번호 오류", "2단계 인증"
 BUSY_LOCKS = (Path("output") / "_잠금" / "파이프라인.lock", Path("output") / "정산" / "_잠금" / "_watch.lock")
@@ -111,7 +111,7 @@ def busy_reason(locks=BUSY_LOCKS) -> str:
 
 
 def in_quiet(until: str, at: datetime) -> bool:
-    """운용 PC 01:30 실행(①판매수집·정산 로그인) 시간대 = 멈춤 시각부터 QUIET_HOURS 시간 — 이 PC 잠금으로는 다른 PC 를
+    """운용 PC 00:10 실행(①판매수집·정산 로그인) 시간대 = 멈춤 시각부터 QUIET_HOURS 시간 — 이 PC 잠금으로는 다른 PC 를
     못 보므로 시각으로 피함(같은 사무실 IP 동시 로그인 방지)."""
     if not until:
         return False
@@ -230,7 +230,7 @@ def run(accts, log, *, hidden: bool = False, until: str = UNTIL_DEFAULT, retry: 
             break
         if (stop_at and now() >= stop_at) or in_quiet(until, now()):
             log(f"  ⏸ 운용 PC {CYCLE_START:%H:%M} 실행 시간대({until} 부터 {QUIET_HOURS}시간)·멈춤 시각 — 새 계정 안 함. "
-                "남은 계정은 --retry 로 이어서(새벽이면 --start 04:10 처럼 그 뒤 시각 지정)")
+                f"남은 계정은 --retry 로 이어서(새벽이면 --start {quiet_window(until)[-5:]} 처럼 그 뒤 시각 지정)")
             break
         pws, src = passwords(a)
         at = now().isoformat(sep=" ", timespec="seconds")

@@ -193,25 +193,25 @@ if (Test-Path $cfg) {
 
 # ── 야간 무인 자동실행 등록/해제 (예전 install_schedule / uninstall_schedule 통합) ──
 function Register-AutoTasks {
-    # 1) 매일 01:30 무인 실행(D-362)(--auto, 앱은 ①②③+재고 역기록을 다 끝내면 스스로 종료 — 강제 종료 없음)
+    # 1) 매일 00:10 무인 실행(D-372)(--auto, 앱은 ①②③+재고 역기록을 다 끝내면 스스로 종료 — 강제 종료 없음)
     $action  = New-ScheduledTaskAction -Execute $exe -Argument '--auto' -WorkingDirectory $root
-    $trigger = New-ScheduledTaskTrigger -Daily -At ([datetime]'01:30')
-    # 첫 실행 = 다음 01:30 — 낮에 등록하면 시작 시각이 '오늘 01:30'(지남)이라 StartWhenAvailable 로 바로 뜰 수 있어 하루 뒤로(소유자 11-20)
+    $trigger = New-ScheduledTaskTrigger -Daily -At ([datetime]'00:10')
+    # 첫 실행 = 다음 00:10 — 낮에 등록하면 시작 시각이 '오늘 00:10'(지남)이라 StartWhenAvailable 로 바로 뜰 수 있어 하루 뒤로(소유자 11-20)
     $first = [datetime]$trigger.StartBoundary
     if ($first -lt (Get-Date)) { $trigger.StartBoundary = $first.AddDays(1).ToString('s') }
-    # WakeToRun=자는 PC 깨움 · StartWhenAvailable=놓치면 곧바로 · 23시간50분 제한(= 01:20 정산 회차 끝 · 백스톱 — 다음 날 01:30 실행이
+    # WakeToRun=자는 PC 깨움 · StartWhenAvailable=놓치면 곧바로 · 23시간50분 제한(= 24:00 정산 회차 끝 · 백스톱 — 다음 날 00:10 실행이
     # 막히지 않게만. 예전 13시간은 07:00 넘는 실행을 끊고 정산까지 함께 끝냈음 E3·D-020)
     $settings = New-ScheduledTaskSettingsSet -WakeToRun -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 23 -Minutes 50)
     Register-ScheduledTask -TaskName '쿠팡애널리틱스_야간무인' -Action $action -Trigger $trigger `
-        -Settings $settings -Description '매일 01:30 무인 실행(다 끝나면 스스로 종료)' -Force | Out-Null
+        -Settings $settings -Description '매일 00:10 무인 실행(다 끝나면 스스로 종료)' -Force | Out-Null
     # 2) 재부팅 복구: 로그온 시 --resume(오늘 중단분만 이어서, 없으면 즉시 종료)
     $actionR  = New-ScheduledTaskAction -Execute $exe -Argument '--resume' -WorkingDirectory $root
     $triggerR = New-ScheduledTaskTrigger -AtLogOn
     $triggerR.Delay = 'PT2M'      # 로그온 2분 뒤(세션·네트워크 안정 대기)
     Register-ScheduledTask -TaskName '쿠팡애널리틱스_재부팅복구' -Action $actionR -Trigger $triggerR `
         -Settings $settings -Description '재부팅/로그온 시 오늘 중단분 이어서(--resume)' -Force | Out-Null
-    # 3) 정산 자동 다운로드는 예약작업 없음(D-010·2026-10-09): 01:30 앱이 ①판매수집을 마치면 앱이 정산다운로드.exe 를
+    # 3) 정산 자동 다운로드는 예약작업 없음(D-010·2026-10-09): 00:10 앱이 ①판매수집을 마치면 앱이 정산다운로드.exe 를
     #    띄우고, 다 받으면 스스로 종료한다. 예전 정산 예약작업(로그온+08:00)이 남아 있으면 지운다(인자 'watch').
     Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
         ((($_.Actions | ForEach-Object { [string]$_.Arguments }) -join ' ') -match '(^|\s)watch(\s|$)')
@@ -229,15 +229,15 @@ function Unregister-AutoTasks {
     return @($tasks).Count
 }
 
-Write-Host '[4/4] 야간 무인 자동실행(매일 01:30 시작 -> 다 끝나면 스스로 종료)'
+Write-Host '[4/4] 야간 무인 자동실행(매일 00:10 시작 -> 다 끝나면 스스로 종료)'
 Write-Host '      * 설정(관리대장 링크·API 키)이 위에서 자동 적용됐으면 바로 무인 동작합니다.'
 Write-Host '        (자동 적용이 안 됐다면 프로그램을 1회 실행해 설정 탭에서 넣어 두세요.)'
 $ans = Read-Host '      등록=Y / 해제=R / 건너뛰기=N'
 if ($ans -match '^[Yy]') {
     try {
         Register-AutoTasks
-        Write-Host '  [확인] 자동실행 등록: 쿠팡애널리틱스_야간무인(01:30) · 쿠팡애널리틱스_재부팅복구(로그온)'
-        Write-Host '         ※ 정산 자동 다운로드는 01:30 실행의 ①판매수집이 끝나면 앱이 띄우고 다 받으면 스스로 종료합니다(예약작업 없음).'
+        Write-Host '  [확인] 자동실행 등록: 쿠팡애널리틱스_야간무인(00:10) · 쿠팡애널리틱스_재부팅복구(로그온)'
+        Write-Host '         ※ 정산 자동 다운로드는 00:10 실행의 ①판매수집이 끝나면 앱이 띄우고 다 받으면 스스로 종료합니다(예약작업 없음).'
         Write-Host '           계정·비번은 설정 탭 원장 링크(셀독계정상품이력관리원장)에서 읽습니다(링크가 틀리거나 원장이 26시간 넘게 안 갱신되면 기록 남기고 중단).'
         Write-Host '  ※ 재부팅 자동복구가 무인으로 동작하려면 Windows 설정>계정>로그인 옵션에서'
         Write-Host '     "업데이트/다시 시작 후 로그인 정보로 자동 로그인 완료"를 켜 두세요.'

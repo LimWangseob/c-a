@@ -1092,7 +1092,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
 
     @staticmethod
     def _pipe_lock_path() -> str:
-        """교차 프로세스 파이프라인 실행 잠금 — 열어둔 GUI 와 01:30 무인(--auto)이 **동시에** 파이프라인을
+        """교차 프로세스 파이프라인 실행 잠금 — 열어둔 GUI 와 00:10 무인(--auto)이 **동시에** 파이프라인을
         돌려 마스터·계정이 충돌하는 것을 막는다. 유휴 GUI 는 잠금을 쥐지 않으므로 무인은 항상 실행된다."""
         d = app_output_dir() / "_잠금"
         d.mkdir(parents=True, exist_ok=True)
@@ -1642,7 +1642,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
     def _run_dates(self):
         """(판매조회_from, 판매조회_to, 칸 라벨) 반환 — **칸 = 판매 기준일**(D-368).
 
-        쿠팡 판매분석은 당일 데이터를 익일 이후 생성 → 오늘 실행 = **어제(D-1) 칸**(01:30 실행이어도 전날 ·
+        쿠팡 판매분석은 당일 데이터를 익일 이후 생성 → 오늘 실행 = **어제(D-1) 칸**(00:10 실행이어도 전날 ·
         `run_day_column`) · 순위·재고는 지금 잰 값을 그 칸에. 새벽까지 이어져 날짜가 바뀌어도 이 값은 시작 시점에
         한 번 정해져 고정된다. **날짜 지정**(소유자 2026-10-10): 칸 = 지정일 = 판매일 · 순위 = 지금 측정 · 빈 칸만."""
         label = (run_day_column(date.today()).isoformat() if self.cb_today.isChecked()
@@ -1748,7 +1748,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         finally:
             self._stages_running = False
 
-    # ── 무인 자동 실행(--auto, 01:30 시작 · D-362 → **모든 처리 완주 후 종료**·강제종료 없음) ───────
+    # ── 무인 자동 실행(--auto, 00:10 시작 · D-372 → **모든 처리 완주 후 종료**·강제종료 없음) ───────
     def start_auto(self):
         """무인 자동 실행 — 팝업 없이 **①반자동 판매수집 → ②키워드선정 → ③반자동 순위**, **모든 처리 완주 후에만 종료**(강제종료 없음).
 
@@ -1854,7 +1854,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
 
     def _auto_quit(self):
         self._quitting = True   # 무인이 스스로 끝냄 — 창 닫힘 기록(closeEvent)에 '사람이 닫음'을 안 씀
-        mark_app_finished()   # D-020: 무인이 스스로 끝남 → 정산은 계속(다음 날 01:20 까지). 사람이 끄면 이 표시 없음 → 함께 종료
+        mark_app_finished()   # D-020: 무인이 스스로 끝남 → 정산은 계속(그날 24:00 까지). 사람이 끄면 이 표시 없음 → 함께 종료
         power.keep_awake(False)
         QtWidgets.QApplication.quit()
 
@@ -2226,7 +2226,7 @@ def main():
     _root = set_workdir()           # 상태(output·data)를 **보존 폴더(프로젝트 루트)** 에 고정 — 실행 폴더 무관
     _sync_config_and_registry()     # config.json(보존 폴더) ↔ 레지스트리 동기화(설정 파일을 권위로·창 생성 전)
     print(f"[경로] 데이터 폴더(마스터·크롬 프로필·설정·로그) = {_root}")
-    auto = "--auto" in sys.argv     # 무인 자동 실행(작업 스케줄러가 01:30에 이 인자로 실행 · D-362)
+    auto = "--auto" in sys.argv     # 무인 자동 실행(작업 스케줄러가 00:10에 이 인자로 실행 · D-372)
     resume = "--resume" in sys.argv  # 재부팅 복구(작업 스케줄러 '로그온 시' 트리거) — 중단분만 이어서, 없으면 종료
     app = QtWidgets.QApplication(sys.argv)
     app.setStyleSheet(_QSS.replace("__CHECK_ICON__", _check_icon_path()))
@@ -2243,16 +2243,16 @@ def main():
                 "Chrome 을 설치한 뒤 다시 실행하세요.")
         sys.exit(1)
     pre_logs: list[str] = []
-    if auto:                        # 01:30 무인 = 이전 앱·정산 프로그램 종료(트리째·D-024) — 남은 Chrome 은 아래 reap
+    if auto:                        # 00:10 무인 = 이전 앱·정산 프로그램 종료(트리째·D-024) — 남은 Chrome 은 아래 reap
         prepare_auto_start(pre_logs.append)
     elif not resume:                # 사람이 켠 실행 = 옛 정산 예약작업 제거(못 지우면 관리자 확인 창 · 무인은 창 없음 D-189)
         remove_legacy_settlement_task(pre_logs.append, elevate=True)
     reaped = reap_orphan_chrome()   # 이전 실행이 강제종료·크래시로 남긴 좀비 Chrome 정리(누적 원천 차단)
     if reaped:
         pre_logs.append(f"[시작] 잔여(좀비) Chrome {reaped}개 정리함")
-    if auto or resume:              # D-021: 01:30(·재부팅 복구) 앱과 함께 정산 기동 — 정산은 ① 완료까지 대기
+    if auto or resume:              # D-021: 00:10(·재부팅 복구) 앱과 함께 정산 기동 — 정산은 ① 완료까지 대기
         start_settlement_watch(pre_logs.append)
-        if transfer_settle.daily_on():   # D-187: 셀독전환자 정산 자료 — 매일 01:30 무인 뒤(앱·정산 자동 수집이 끝난 뒤 받음)
+        if transfer_settle.daily_on():   # D-187: 셀독전환자 정산 자료 — 매일 00:10 무인 뒤(앱·정산 자동 수집이 끝난 뒤 받음)
             start_transfer_settle(pre_logs.append, os.getpid())
     win = App(auto=(auto or resume))
     win.show()

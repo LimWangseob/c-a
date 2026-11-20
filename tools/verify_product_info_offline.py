@@ -250,7 +250,7 @@ def s8_base_day():
           "파일 이름·'날짜'·'수집' 은 그대로(저장 시각) · 안 넘기면 칸 없음")
     from coupang_analytics import daily_snapshot as DSN
     with tempfile.TemporaryDirectory() as tmp:
-        _freeze("2026-11-20T01:42:05")                       # 01:30 무인 ① = 다음 날 새벽 저장 · 판매 = 전날(11-19)
+        _freeze("2026-11-20T01:42:05")                       # 00:10 무인 ① = 다음 날 새벽 저장 · 판매 = 전날(11-19)
         C.reset_raw()
         C._raw_add("vendor_inventory", _body([_listing(11, 5986, [_option(101)])]))
         C._raw_add("inventory", json.dumps({"viProperties": [{"vendorItemId": 101}]}))

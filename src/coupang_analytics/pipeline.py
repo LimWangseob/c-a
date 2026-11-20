@@ -147,7 +147,7 @@ def plan_run_mode(newall: bool, redo: bool, meta: dict | None, master: bool,
 
 
 def column_dates(label_iso: str) -> tuple[str, str, str]:
-    """날짜 칸 하나의 (판매조회_from, 판매조회_to, 칸 라벨) — **칸 = 판매 기준일 = 그 날짜**(D-368: 11-20 01:30 실행이어도
+    """날짜 칸 하나의 (판매조회_from, 판매조회_to, 칸 라벨) — **칸 = 판매 기준일 = 그 날짜**(D-368: 11-20 00:10 실행이어도
     11.19 칸 = 11-19 판매 · 순위·재고는 실행 때 측정). '오늘' 실행(칸 = 실행일 전날 `run_day_column`)·'날짜 지정' 공통."""
     label = date.fromisoformat(label_iso).isoformat()
     return label, label, label
@@ -179,7 +179,7 @@ def _save_progress(out_dir, date_from, date_to, started_at, done, carry=False, d
 def _column_label(date_from: str, date_to: str, date_label: str | None, log) -> str:
     """일자 컬럼 제목 = 판매 기준일(date_label = 판매조회일 · D-368)의 년도 없는 '월.일'. SSOT=designs/DESIGN.md §일자 컬럼.
 
-    01:30 실행이어도 칸 = 전날(판매일) · 순위·재고는 실행 때 측정한 값을 같은 칸에. 재개해도 시작 때 칸 그대로.
+    00:10 실행이어도 칸 = 전날(판매일) · 순위·재고는 실행 때 측정한 값을 같은 칸에. 재개해도 시작 때 칸 그대로.
     date_label 없으면 date_to, 기간지정이면 'from~to'. 라벨≠판매조회일(옛 진행분)이면 둘 다 안내.
     """
     label_src = date_label or date_to

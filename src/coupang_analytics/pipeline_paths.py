@@ -41,7 +41,7 @@ def _snapshot_path(out_dir: str | Path, now: datetime) -> Path:
 
 
 def run_day_column(day: date) -> date:
-    """실행한 날의 날짜 칸 = 그 전날(판매 기준일 D · D-368): 11-20 01:30 실행 = 11.19 칸(판매 11-19 · 순위·재고 = 실행 때 측정).
+    """실행한 날의 날짜 칸 = 그 전날(판매 기준일 D · D-368): 11-20 00:10 실행 = 11.19 칸(판매 11-19 · 순위·재고 = 실행 때 측정).
     오늘 실행·무인·지난 칸 순위 보충·순위 묶음 갱신이 같은 규칙을 쓰게 하는 한 곳."""
     return day - timedelta(days=1)
 

@@ -6,7 +6,7 @@
   python tools/settlement_download.py request  [--from 2026-01-01] [--to 2026-01-31] [--cap 5] [--dry-run] [--accounts ID,ID]
   python tools/settlement_download.py download [--accounts ID,ID]       # 다음날: 완료분 받기
   python tools/settlement_download.py run      [--from …] [--to …] [--accounts …]   # 요청+받기 한 세션(전체 확대용)
-  python tools/settlement_download.py watch                             # 운용 PC 상시: 01:30 앱 ①판매수집 완료 후 받기·01:20 멈춤
+  python tools/settlement_download.py watch                             # 운용 PC 상시: 00:10 앱 ①판매수집 완료 후 받기·24:00 멈춤
   python tools/settlement_download.py stats                             # 받은 파일 집계 엑셀
   python tools/settlement_download.py merge --src output\정산\정산          # 다른 PC 정산 폴더 합치기(자동 실행 중지 후)
   (request·download·run 에 --originals <폴더> = 받은 쿠팡 원본을 그대로 증빙 폴더에 복사 — D-062)
@@ -94,7 +94,7 @@ class BlockDetected(Exception):
 
 
 def _is_browser_closed(exc: BaseException) -> bool:
-    """브라우저/탭이 닫혀 생긴 오류인지(차단이 아님). 01:30 앱 시작 시 reap_orphan_chrome 이 정산 Chrome 을
+    """브라우저/탭이 닫혀 생긴 오류인지(차단이 아님). 00:10 앱 시작 시 reap_orphan_chrome 이 정산 Chrome 을
     같이 종료하면 playwright 가 TargetClosedError 를 던진다 — 이걸 '차단'·'연속 실패'로 세면 안 된다(일시적·재시도)."""
     name = exc.__class__.__name__
     msg = str(exc)
@@ -440,7 +440,7 @@ def _save_amounts(name: str, ch: str, resp: dict) -> None:
 
 def past_until(args) -> bool:
     """멈춤 시각이 지났으면 True. watch=주기 끝 시각(until_at), 직접 실행=--until HH:MM(오늘 그 시각).
-    앱 01:30 무인 실행과 같은 계정 프로필이 겹치지 않게."""
+    앱 00:10 무인 실행과 같은 계정 프로필이 겹치지 않게."""
     if getattr(args, "until_at", None):
         return datetime.now() >= args.until_at
     if not getattr(args, "until", ""):
@@ -1131,7 +1131,7 @@ def _run_accounts(accts, run, args) -> int:
         except API.ServerBusy as exc:                     # 쿠팡 서버 일시 오류 = 차단 아님·연속 실패로 안 셈·다음 바퀴
             LOG.record(name, "계정", RL.WAIT, f"{exc} — 재시도해도 안 됨, 다음 바퀴에 다시")
         except Exception as exc:
-            if _is_browser_closed(exc):   # 브라우저 닫힘(예: 01:30 앱 시작 reap)=일시적 → '차단'·연속실패로 안 셈·다음 바퀴 재시도
+            if _is_browser_closed(exc):   # 브라우저 닫힘(예: 00:10 앱 시작 reap)=일시적 → '차단'·연속실패로 안 셈·다음 바퀴 재시도
                 LOG.record(name, "계정", RL.WAIT,
                            f"브라우저가 닫힘(일시적·차단 아님) — 다음 바퀴에 재시도 ({exc.__class__.__name__})")
             else:                                          # 그 계정만 중단(무음 아님·전체 추적은 오류 로그)
@@ -1376,8 +1376,8 @@ def _ledger_ready(args) -> bool:
 
 
 def cmd_watch(args) -> int:
-    """01:30 앱과 함께 뜨는 정산 자동 수집(D-021·D-362). **이번 회차 ①판매수집 완료까지 기다렸다가** 받고, 다 받으면
-    기록하고 종료·**다음 날 01:20** 이 되면 종료(남은 건 다음 회차). 중단(연속 실패/차단)·진전 없는 대기 초과도
+    """00:10 앱과 함께 뜨는 정산 자동 수집(D-021·D-372). **이번 회차 ①판매수집 완료까지 기다렸다가** 받고, 다 받으면
+    기록하고 종료·**그날 24:00** 이 되면 종료(남은 건 다음 회차). 중단(연속 실패/차단)·진전 없는 대기 초과도
     기록하고 종료. 같은 ①완료 기준으로 이미 '완료'면 바로 끝낸다. 앱을 사람이 끄면 함께 종료(--parent·D-020).
     같은 PC 에 둘 뜨지 않게 잠금."""
     from coupang_analytics import settlement_watch as W
@@ -1388,10 +1388,10 @@ def cmd_watch(args) -> int:
         with registry_lock(BASE / "_잠금" / "_watch.lock", wait_sec=0, on_log=log):
             cycle_start, cycle_end = W.cycle_window(datetime.now())
             PASS_ACCOUNTS.clear()             # 자동 증빙 대상 = 이번 회차 바퀴의 계정만(D-365)
-            args.cycle_since = cycle_start.isoformat(timespec="seconds")   # 소급 상한 = 회차(01:30~) 단위(D-170) · --since 와 무관
+            args.cycle_since = cycle_start.isoformat(timespec="seconds")   # 소급 상한 = 회차(00:10~) 단위(D-170) · --since 와 무관
             if getattr(args, "since", ""):    # 사람이 누른 전체실행 — 그 실행 뒤에 끝난 ①만 기다림(2026-10-13)
                 cycle_start = max(cycle_start, datetime.fromisoformat(args.since))
-            args.until, args.until_at, args.hidden = f"{cycle_end:%H:%M}", cycle_end, True   # 01:20 뒤 새 요청·새 계정 안 함
+            args.until, args.until_at, args.hidden = f"{cycle_end:%H:%M}", cycle_end, True   # 24:00 뒤 새 요청·새 계정 안 함
             if args.parent:
                 _watch_app(args.parent)
             manual = bool(getattr(args, "manual", False))
@@ -1520,7 +1520,7 @@ def main() -> int:
     ap.add_argument("--hidden", action="store_true", help="창 숨김(2차인증 필요하면 실패)")
     ap.add_argument("--channel", choices=("윙", "로켓그로스"), default="", help="한 채널만")
     ap.add_argument("--src", default="", help="merge: 합칠 정산 폴더(예: output\정산\정산 — 노트북에서 옮겨 온 것)")
-    ap.add_argument("--until", default="", help="HH:MM 이후엔 새 요청·새 계정 시작 안 함(앱 01:30 무인 실행 전 멈춤)")
+    ap.add_argument("--until", default="", help="HH:MM 이후엔 새 요청·새 계정 시작 안 함(앱 00:10 무인 실행 전 멈춤)")
     ap.add_argument("--parent", type=int, default=0, help="watch·transfer-settle: 앱 PID — 사람이 앱을 끄면 정산도 종료(D-020)")
     ap.add_argument("--originals", default="", help="받은 쿠팡 원본(구매자명 포함)을 그대로 복사해 둘 폴더(증빙용·D-062)")
     ap.add_argument("--since", default="", help="watch: 이 시각(ISO) 뒤에 끝난 ①판매수집만 기다림(앱 전체실행 버튼)")

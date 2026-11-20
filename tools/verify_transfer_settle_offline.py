@@ -2,14 +2,14 @@
 
 기대 동작 = `designs/SETTLEMENT_MODULE.md` §15 '2단계' 1~8 (코드에서 뽑지 않음):
  S1 대상 — 로그인 '실패'(비번 오류·2단계 인증·비번 없음)는 무인으로 다시 안 넣음 · 성공·미확인·차단·건너뜀은 받음
- S2 기다림 — 01:10~04:10·앱 파이프라인·정산 자동 수집이 모두 풀려야 시작 · 다음 01:10 까지 안 풀리면 끝 · 설정 빈 값 =
+ S2 기다림 — 23:50~02:50·앱 파이프라인·정산 자동 수집이 모두 풀려야 시작 · 다음 23:50 까지 안 풀리면 끝 · 설정 빈 값 =
     1단계 결과가 있는 PC 만 매일 켬
  S3 실행 — 계정마다 기다림 재확인(돌면 기다림·중단 아님) · 비번 없음 = 로그인 안 함 · 계정 사이 45~75초 · 결과를 로그인 기록에
     갱신(지문만) · 차단·미완료·오류 2연속 = 중단 · 멈춤 시각 뒤 새 계정 안 함
  S4 원장 정산 기록에 같은 파일이 있으면 요청 안 하고 복사(계정ID 끝 기준·긴 ID 우선·기간 다르면 아님)
  S5 저장 = output/정산_셀독전환/정산 (정산 계정 기록과 섞지 않음) · 지급 내역 2026-01-01~ · 한 실행 계정당 30건 · 재사용은 요청 안 함
  S6 누적 파일 — 시트 4개·상품 칸 = 쿠팡 파일 원본·돈 = 지급 내역·다시 만들어도 같음·비번 없음 · 열려 있으면 오류
- S7 띄우기 — 01:30 무인·재부팅 복구 앱이 함께 띄움(--parent) · 탭 버튼
+ S7 띄우기 — 00:10 무인·재부팅 복구 앱이 함께 띄움(--parent) · 탭 버튼
  S8 같은 잠금 — 1단계·2단계 한 번에 하나
 
     python tools/verify_transfer_settle_offline.py
@@ -91,25 +91,25 @@ def s1_targets():
 
 
 def s2_wait():
-    print("[S2] 기다림 — 01:10~04:10·앱 파이프라인·정산 자동 수집이 모두 풀려야 시작 · 01:10 까지 안 풀리면 끝 · 매일 기본 켬")
+    print("[S2] 기다림 — 23:50~02:50·앱 파이프라인·정산 자동 수집이 모두 풀려야 시작 · 23:50 까지 안 풀리면 끝 · 매일 기본 켬")
     lines: list[str] = []
-    assert TL.UNTIL_DEFAULT == "01:10", TL.UNTIL_DEFAULT          # 01:30 무인 20분 전(D-362)
-    c = _Clock(datetime(2026, 11, 10, 1, 30))
+    assert TL.UNTIL_DEFAULT == "23:50", TL.UNTIL_DEFAULT          # 00:10 무인 20분 전(D-372)
+    c = _Clock(datetime(2026, 11, 10, 0, 10))
     stop = TL.deadline_of(TL.UNTIL_DEFAULT, c())
-    assert stop == datetime(2026, 11, 11, 1, 10), stop
+    assert stop == datetime(2026, 11, 10, 23, 50), stop
     busy_until = datetime(2026, 11, 10, 6, 30)
     busy = lambda: "정산 자동 다운로드이 도는 중" if c() < busy_until else ""   # noqa: E731
     assert TS.wait_ready(TL.UNTIL_DEFAULT, stop, lines.append, busy=busy, now=c, sleep=c.sleep) is True
     assert c() >= busy_until and c() < busy_until + timedelta(seconds=TS.WAIT_POLL_SEC + 1), c()
     assert all(s <= TS.WAIT_POLL_SEC for s in c.slept), c.slept
-    assert any("01:30" in m or "01:10" in m for m in lines) and any("정산 자동" in m for m in lines), lines
-    c2 = _Clock(datetime(2026, 11, 10, 1, 30))
+    assert any("00:10" in m or "23:50" in m for m in lines) and any("정산 자동" in m for m in lines), lines
+    c2 = _Clock(datetime(2026, 11, 10, 0, 10))
     assert TS.wait_ready(TL.UNTIL_DEFAULT, stop, lambda m: None, busy=lambda: "", now=c2, sleep=c2.sleep) is True
-    assert datetime(2026, 11, 10, 4, 10) <= c2() < datetime(2026, 11, 10, 4, 16), c2()   # 운용 PC 01:30 시간대 끝까지
+    assert datetime(2026, 11, 10, 2, 50) <= c2() < datetime(2026, 11, 10, 2, 56), c2()   # 운용 PC 00:10 시간대 끝까지
     c3 = _Clock(datetime(2026, 11, 10, 4, 30))
     assert TS.wait_ready(TL.UNTIL_DEFAULT, TL.deadline_of(TL.UNTIL_DEFAULT, c3()), lambda m: None,
                          busy=lambda: "앱 실행(판매수집·순위)이 도는 중", now=c3, sleep=c3.sleep) is False
-    assert c3() >= datetime(2026, 11, 11, 1, 10), c3()
+    assert c3() >= datetime(2026, 11, 10, 23, 50), c3()
     c4 = _Clock(datetime(2026, 11, 10, 10, 0))
     assert TS.wait_ready(TL.UNTIL_DEFAULT, TL.deadline_of(TL.UNTIL_DEFAULT, c4()), lambda m: None, busy=lambda: "",
                          now=c4, sleep=c4.sleep) is True and c4.slept == []          # 낮·잠금 없음 = 바로
@@ -120,7 +120,7 @@ def s2_wait():
         assert TS.daily_on(lambda k, d="": "0", out_dir=d) is False
     with tempfile.TemporaryDirectory() as d:
         assert TS.daily_on(lambda k, d="": "1", out_dir=d) is True and TS.DAILY_KEY == "transfer/daily"
-    ok("01:30 시작 → 06:30(정산 자동 수집 끝) 시작 · 잠금 없어도 04:10 까지 · 계속 돌면 다음 날 01:10 에 끝 · 낮엔 바로 · "
+    ok("00:10 시작 → 06:30(정산 자동 수집 끝) 시작 · 잠금 없어도 02:50 까지 · 계속 돌면 그날 23:50 에 끝 · 낮엔 바로 · "
        "빈 설정 = 1단계 결과 있는 PC 만 켬 · '1' 켬 · '0' 끔")
 
 
@@ -142,7 +142,7 @@ def s3_run():
 
         def work(a, pws, stop_at):
             called.append(a.account_id)
-            assert pws == [PW] and stop_at == datetime(2026, 11, 11, 1, 10)
+            assert pws == [PW] and stop_at == datetime(2026, 11, 10, 23, 50)
             c.sleep(600)
             return plan[a.account_id]
         rc = TS.run(accts, lambda m: None, work, out_dir=d, passwords=pw, busy=busy, now=c, sleep=c.sleep, fp=FP,
@@ -171,14 +171,14 @@ def s3_run():
             called.append(a.account_id)
             if a.account_id == "acc1":
                 raise RuntimeError("브라우저 오류")
-            c.sleep(7200)                             # 23:30 → acc2 끝 01:30 넘음(멈춤 01:10) → acc3 은 시작 안 함
+            c.sleep(7200)                             # 23:30 → acc2 끝 01:30 넘음(멈춤 23:50) → acc3 은 시작 안 함
             return TL.OK, "x"
         rc = TS.run(accts, lambda m: None, work2, out_dir=d, passwords=lambda a: ([PW], "파일"), busy=lambda: "",
                     now=c, sleep=c.sleep, fp=FP, gap=lambda: 50.0)
         st = TL.load_state(d)
         assert rc == 0 and called == ["acc1", "acc2"], (rc, called)
         assert st["acc1"]["결과"] == TL.SKIP and "RuntimeError" in st["acc1"]["사유"], st["acc1"]
-    ok("기다렸다 계속·비번 없음 기록·쉼 3번·지문만·제외 계정 그대로 · 차단+오류 2연속 중단 · 예외 = 건너뜀 · 01:10 뒤 새 계정 안 함")
+    ok("기다렸다 계속·비번 없음 기록·쉼 3번·지문만·제외 계정 그대로 · 차단+오류 2연속 중단 · 예외 = 건너뜀 · 23:50 뒤 새 계정 안 함")
 
 
 def _touch(p: Path) -> Path:
@@ -274,7 +274,7 @@ def s5_store_and_request():
             import time as _t
             real_sleep, TD.time.sleep = _t.sleep, lambda s: None
             # S5 는 요청·재사용 로직만 검증(멈춤 시각 past_until 은 S3 가 모킹된 now 로 덮음) → 여기선 벽시계 의존을 없앤다.
-            # 안 그러면 게이트가 01:10(UNTIL_DEFAULT) 이후에 돌 때 cmd_request 가 첫 요청 전 break 해 requested 가 빈다(실측 11-10 17:54).
+            # 안 그러면 게이트가 23:50(UNTIL_DEFAULT) 이후에 돌 때 cmd_request 가 첫 요청 전 break 해 requested 가 빈다(실측 11-10 17:54).
             real_past_until, TD.past_until = TD.past_until, lambda a: False
             try:
                 TD.cmd_request(TS.settle_account(_accts(1)[0]), None, args, jobs)
@@ -408,7 +408,7 @@ def s6_cumulative():
 
 
 def s7_launch():
-    print("[S7] 띄우기 — 01:30 무인·재부팅 복구 앱이 정산 자동 수집과 함께(--parent) · 탭 버튼")
+    print("[S7] 띄우기 — 00:10 무인·재부팅 복구 앱이 정산 자동 수집과 함께(--parent) · 탭 버튼")
     from coupang_analytics import app_process as AP
     cmd, _cwd = AP.transfer_settle_cmd(4321)
     assert cmd[-3:] == ["transfer-settle", "--parent", "4321"], cmd
@@ -419,7 +419,7 @@ def s7_launch():
     assert "start_transfer_settle" in block and "daily_on()" in block, block
     panel = (ROOT / "ui" / "transfer_panel_qt.py").read_text(encoding="utf-8")
     assert "start_transfer_settle" in panel and "DAILY_KEY" in panel
-    ok("명령 = transfer-settle --parent PID · 01:30/재부팅 복구 블록에서 매일 설정이 켜져 있으면 띄움 · 탭 버튼·매일 체크")
+    ok("명령 = transfer-settle --parent PID · 00:10/재부팅 복구 블록에서 매일 설정이 켜져 있으면 띄움 · 탭 버튼·매일 체크")
 
 
 def s8_one_at_a_time():

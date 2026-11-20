@@ -32,7 +32,7 @@ copy /Y "%~dp0deploy\output_내보내기.bat" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0tools\output_export.py" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0tools\output_archive.py" "dist\coupang-analytics\" >nul
 if exist "%~dp0output\_내보내기_기준기록.json" copy /Y "%~dp0output\_내보내기_기준기록.json" "dist\coupang-analytics\" >nul
-rem 정산 다운로드는 예약작업 없음(D-010): 01:30 앱이 ①판매수집 뒤 정산다운로드.exe watch 를 띄우고 다 받으면 종료.
+rem 정산 다운로드는 예약작업 없음(D-010): 00:10 앱이 ①판매수집 뒤 정산다운로드.exe watch 를 띄우고 다 받으면 종료.
 rem 정산_상태확인.bat = 창 없는 정산 자동 다운로드의 '지금 상태'를 더블클릭으로 보는 모니터링 창(사람용).
 echo.
 echo [4/5] 이 PC 설정(구글시트 링크·입력소스 + 네이버/OpenAI/구글SA 키) 패키지에 포함...
