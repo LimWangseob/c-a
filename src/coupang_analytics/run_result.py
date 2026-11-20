@@ -17,6 +17,7 @@ from .login_today import OTP
 
 LAST_SALES: dict = {}   # ① 끝 정보 — run_stages 시작 때 비우고 pipeline.run_full 이 채움
 SALES, KEYWORDS, RANKS, STOCK, PREP = "① 판매수집", "② 키워드 선정", "③ 순위", "재고 역기록", "준비"
+MORNING = "노출·방문자 아침 보충"   # ①②③ 가 23:00 뒤 끝나 그날 보충을 못 함(D-374 보완) — 그 줄도 오류 현황에
 PW_HINT = "관리대장 비밀번호 확인 — 거부된 값은 24시간 다시 넣지 않음"
 MAX_LINES = 20          # 단계마다 오류 줄 표시 상한(넘으면 '외 N건')
 TITLE = "===== [실행 결과 종합] ====="
@@ -135,7 +136,7 @@ class RunSummary:
 
     def _error_lines(self) -> list[str]:
         out = []
-        for stage in (PREP, SALES, KEYWORDS, RANKS, STOCK):
+        for stage in (PREP, SALES, KEYWORDS, RANKS, STOCK, MORNING):
             rows = self.errors.get(stage, [])
             if rows:
                 out.append(f"  - {stage} {len(rows)}건:")

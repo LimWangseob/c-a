@@ -13,13 +13,14 @@ UI 는 무엇을 할지(StagePlan)만 정한다. 게이트: `tools/pin_run_plan.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from .pipeline import run_full, select_keywords_stage
 from .pipeline_gsheet import push_company_stock, push_ledger_inventory
 from .pipeline_paths import column_label, mark_run_day, read_last_run_stage, run_day_column, run_days, write_run_stage
 from .pipeline_ranks import LAST_RANK, track_ranks_stage
-from .run_result import KEYWORDS, RANKS, SALES, STOCK, RunSummary
+from . import traffic_morning
+from .run_result import KEYWORDS, MORNING, RANKS, SALES, STOCK, RunSummary
 
 
 @dataclass
@@ -149,7 +150,15 @@ def run_stages(input_list, plan: StagePlan, *, ai_key, naver, date_from: str, da
                 write_run_stage("done", day=run_day.isoformat(), record_day=not designated and not left)
                 if left and not designated:   # 그날 못 잰 칸 = 다음 실행이 보충(D-253 3일 · 맨 위는 'done' D-257)
                     mark_run_day(run_day.isoformat(), "ranks")
+        _note_morning_missed(input_list, log, designated)
         return result
+
+
+def _note_morning_missed(input_list, log, designated: bool) -> None:
+    """①②③ 이 23:00 뒤 끝나 그날 노출·방문자 아침 보충을 못 하게 됨 → 이 실행 종합 오류 현황에 ❌ 한 줄(D-374 보완 · 날짜 지정 제외)."""
+    if not designated and traffic_morning.missed_today(datetime.now()):
+        log.enter(MORNING)
+        traffic_morning.note_missed(getattr(input_list, "accounts", None) or [], log=log)
 
 
 __all__ = ["StagePlan", "plan_resume_stages", "run_stages"]

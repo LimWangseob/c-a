@@ -16,7 +16,7 @@ import json
 import sys
 import tempfile
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -273,8 +273,114 @@ def m6_zero_warn():
         check(len(w) == 1 and "acc1" in w[0] and "판매 3" in w[0], f"⚠ 1줄(acc1) {w}")
 
 
+def _stage_done(out: Path, at: str = "2026-11-21T03:00:00") -> None:
+    from coupang_analytics.pipeline_paths import _run_stage_path
+    _run_stage_path(out).write_text(json.dumps({"date": at[:10], "stage": "done", "at": at}), encoding="utf-8")
+
+
+def m8_missed_after_23():
+    print("[M8] 23:00 넘겨 그날 보충을 못 함 = ❌ '아침 보충 못 함' 한 줄(사유·계정 수 · 값 그대로) · 그날 종합 오류 현황에도 · 한 번만")
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d)
+        master(out)
+        late = datetime(2026, 11, 21, 23, 5)
+        check(not TM.missed_today(late, out), "이번 회차 ① 완료 기록 없음 = 못 함 대상 아님(보충 대상 없던 날)")
+        _stage_done(out)
+        check(not TM.missed_today(datetime(2026, 11, 21, 22, 59), out), "22:59 = 아직 시작 가능")
+        check(TM.missed_today(late, out), "23:05 · ① 완료 · 그날 기록 없음 = 못 함")
+        lines = []
+        ok = TM.give_up(accounts(), now=late, out_dir=out, log=lines.append, why="③ 순위가 23:00 뒤에 끝남")
+        bad = [x for x in lines if "❌ 노출·방문자 아침 보충 못 함" in x]
+        check(ok and len(bad) == 1 and "③ 순위가 23:00 뒤에 끝남" in bad[0] and "2계정" in bad[0]
+              and "11.20" in bad[0] and "00:10 값 그대로" in bad[0], f"❌ 줄 1개(사유·2계정·칸·값 그대로) {bad}")
+        check(val(out, "가게A", "상품A", config.M_VIEWS, LABEL) == 0, "값 대신 채우지 않음(0 그대로)")
+        check(TM.last_day(out) == "2026-11-21" and not TM.missed_today(late, out), "그날 기록 → 두 번 안 남김")
+        lines2 = []
+        with registry_lock(out / "_잠금" / "파이프라인.lock", wait_sec=0):
+            out2 = out / "b"
+            (out2).mkdir()
+            ok2 = TM.give_up(accounts(), now=late, out_dir=out2, log=lines2.append, why="x",
+                             pipe_lock=out / "_잠금" / "파이프라인.lock")
+        check(ok2 is False and not lines2, "다른 실행이 파이프라인을 쥠 = 여기서 안 남김(그 실행의 종합이 남김)")
+
+    import os
+    from coupang_analytics import pipeline_stages as PSt
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d) / "output"
+        out.mkdir()
+        master(out)
+        _stage_done(out)
+        here = os.getcwd()
+        saved = {k: getattr(PSt, k) for k in ("run_full", "select_keywords_stage", "track_ranks_stage",
+                                               "push_ledger_inventory", "push_company_stock", "write_run_stage")}
+        orig_dt = TM.datetime
+
+        class Late(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2026, 11, 21, 23, 5)
+        try:
+            os.chdir(d)
+            PSt.run_full = lambda *a, **k: None
+            PSt.select_keywords_stage = lambda *a, **k: None
+            PSt.track_ranks_stage = lambda **k: None
+            PSt.push_ledger_inventory = PSt.push_company_stock = lambda *a, **k: None
+            PSt.write_run_stage = lambda *a, **k: None
+            TM.datetime = PSt.datetime = Late
+            lines = []
+            il = type("IL", (), {"accounts": accounts()})()
+            PSt.run_stages(il, PSt.StagePlan(), ai_key="k", naver=None, date_from="2026-11-20", date_to="2026-11-20",
+                           date_label="2026-11-20", get_password=None, carry=True, on_log=lines.append)
+        finally:
+            os.chdir(here)
+            TM.datetime = PSt.datetime = orig_dt
+            for k, v in saved.items():
+                setattr(PSt, k, v)
+        blk = lines[lines.index(next(x for x in lines if "[실행 결과 종합]" in x)):]
+        check(any("노출·방문자 아침 보충 1건" in x for x in blk) and any("아침 보충 못 함" in x for x in blk),
+              f"①②③ 가 23:00 뒤 끝남 = 그 실행 종합 오류 현황에 들어감 {[x for x in blk if '오류' in x or '아침' in x]}")
+
+
+def m9_stop_new_2350():
+    print("[M9] 23:50 뒤 새 계정 시작 안 함 · 받은 계정까지 저장·구글 반영 · 남은 계정 ❌ 줄 · 자정 넘김 없음")
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d)
+        master(out)
+        cur = [datetime(2026, 11, 21, 23, 45)]
+        fake = Fake({"acc1": {"111": om("111", 70, 30)}, "acc2": {"222": om("222", 80, 40)}})
+
+        def fetch(a, day, gp, log):
+            cur[0] += timedelta(minutes=6)       # 계정 하나 6분
+            return fake(a, day, gp, log)
+        pushed, lines = [], []
+        TM.run_daily(accounts(), now=cur[0], out_dir=out, on_log=lines.append, gsheet_url="URL",
+                     pipe_lock=out / "_잠금" / "파이프라인.lock", fetch=fetch, in_use=lambda p: False,
+                     sleep=lambda s: cur.__setitem__(0, cur[0] + timedelta(seconds=s)),
+                     push=lambda wb, url, lg: pushed.append(url), lock_dir=out / "정산" / "_잠금", clock=lambda: cur[0])
+        check([c[0] for c in fake.calls] == ["acc1"], f"23:51 = acc2 새로 시작 안 함 {fake.calls}")
+        check(val(out, "가게A", "상품A", config.M_VIEWS, LABEL) == 70 and pushed == ["URL"],
+              "받은 계정(acc1)까지 마스터 저장·구글 반영")
+        check(val(out, "가게B", "상품B", config.M_VIEWS, LABEL) == 0, "남은 계정 = 00:10 값 그대로")
+        cut = [x for x in lines if "❌ 노출·방문자 아침 보충 못 함(23:50 넘음)" in x]
+        check(len(cut) == 1 and "남은 1계정" in cut[0] and "acc2" in cut[0], f"❌ 남은 계정 줄 {cut}")
+        check(TM.STOP_NEW.strftime("%H:%M") == "23:50", "23:50 = 한 곳 상수")
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d)
+        master(out)
+        cur = [datetime(2026, 11, 21, 23, 41)]   # 1바퀴 뒤 10분 쉼 = 23:51 → 다음 바퀴 안 감
+        fake = Fake({"acc1": [TM.LoginFailed("로그인 차단(Akamai)")] * 3, "acc2": {"222": om("222", 5, 5)}})
+        lines = []
+        TM.run_daily(accounts(), now=cur[0], out_dir=out, on_log=lines.append, gsheet_url="URL",
+                     pipe_lock=out / "_잠금" / "파이프라인.lock", fetch=fake, in_use=lambda p: False,
+                     sleep=lambda s: cur.__setitem__(0, cur[0] + timedelta(seconds=s)),
+                     push=lambda *a: None, lock_dir=out / "정산" / "_잠금", clock=lambda: cur[0])
+        check([c[0] for c in fake.calls].count("acc1") == 1, f"다시 시도 쉼(10분)이 23:50 을 넘기면 다음 바퀴 안 감 {fake.calls}")
+        cut = [x for x in lines if "❌" in x and "23:50 넘음" in x]
+        check(len(cut) == 1 and "acc1" in cut[0], f"남은 계정 = 다시 시도 남은 acc1 {cut}")
+
+
 def main() -> int:
-    for t in (m1_only_two_rows, m2_no_overlap, m3_three_tries, m4_once_a_day, m5_not_mixed, m6_zero_warn):
+    for t in (m1_only_two_rows, m2_no_overlap, m3_three_tries, m4_once_a_day, m5_not_mixed, m6_zero_warn, m8_missed_after_23, m9_stop_new_2350):
         t()
     print(f"\n결과: {'통과' if not FAILS else f'실패 {len(FAILS)}건'}")
     for f in FAILS:
