@@ -12,8 +12,9 @@
 - 정산 기동 시점은 D-021 로 바뀜(위 문단 — 00:10 앱과 함께 떠서 ① 완료를 기다림).
 - 정산은 ②키워드·③순위와 겹쳐도 계속 돈다(로그인을 쓰는 건 ①뿐·③은 비로그인 별도 프로필).
 - 받을 게 있으면(소급) 연속으로 바퀴를 돌고, **모든 정산 파일을 받으면 기록하고 정상 종료**한다.
-- 연속 실패·차단이면 이번 바퀴만 멈추고 다음 바퀴(D-031 — 종료하지 않음). 파일 생성 대기·서버 일시 오류만
-  남았으면 몇 바퀴 더 보고(MAX_IDLE_PASSES) 그래도 남으면 '미완료'로 종료(무한 재로그인 방지).
+- 연속 실패·차단이면 이번 바퀴만 멈추고 다음 바퀴(D-031 — 종료하지 않음).
+- 오류 = 계정·항목별 최대 3번(처음 + 다시 2번) 뒤 그 회차에 더 시도 안 함(settlement_retry · D-373) · 쿠팡 파일 생성 대기는
+  오류가 아니라 24:00 까지 기다림(옛 '진전 없음 3바퀴 → 미완료 종료' 폐지 · D-373 ②) · 모두 받음/3번 소진/예외면 24:00 전 종료.
 - 같은 ①완료 기준으로 이미 '완료'면 다시 돌지 않는다(`_완료.json`·재부팅 복구·수동 재시작 중복 방지).
 
 신호: `_진행중.json` 수정 시각(`sales_in_progress`)=①이 '지금' 도는지(그동안 정지) · `_실행단계.json`(`read_marker`)=
@@ -31,8 +32,7 @@ from pathlib import Path
 
 SALES_DONE = ("sales", "ranks", "done")
 SALES_STALE_MIN = 20   # _진행중.json 이 이보다 최근에 갱신됐으면 ①판매수집이 '지금 돌고 있다'고 본다
-MAX_IDLE_PASSES = 3    # 새로 받은 게 없는데 생성 대기·일시 오류만 남은 바퀴를 이만큼까지(그 뒤 '미완료' 종료)
-RESULT = {"done": "완료", "stop": "중단", "giveup": "미완료"}
+RESULT = {"done": "완료", "stop": "중단"}
 CYCLE_START = dtime(0, 10)              # 회차 시작 = 앱·정산 동시 기동(00:10 무인 · D-372)
 CYCLE_END_GAP = timedelta(minutes=10)   # 다음 회차 10분 전(24:00)에 정산 종료(D-372 '정산 다운로드는 24시까지')
 
@@ -112,25 +112,23 @@ def write_done(path, key: str, action: str, reason: str, now: datetime | None = 
     os.replace(tmp, p)
 
 
-def plan_after_pass(stopped: bool, work: int, pending: int, waits: int, idle_passes: int,
+def plan_after_pass(stopped: bool, work: int, pending: int, retry: int,
                     failed: dict | None = None) -> tuple[str, str]:
     """한 바퀴 뒤 다음 행동(순수). stopped=연속 실패/차단 중단 · work=이번에 새로 요청/받은 수 ·
-    pending=요청예정/요청됨(파일 생성 대기) 작업 수 · waits=일시 오류·브라우저 닫힘으로 '대기'된 계정 수 ·
-    idle_passes=새로 한 일 없이 끝난 연속 바퀴 수 · failed={계정: 실패 단계}(실패로 끝난 계정 — 완료 문구에 표시).
-      → 'again'(곧 다음 바퀴) · 'later'(5분 뒤 다음 바퀴) · 'done'(다 받음·종료) · 'stop'(중단·종료) · 'giveup'(미완료·종료)"""
+    pending=요청예정/요청됨(파일 생성 대기 — 오류 아님·24:00 까지 · 3번 소진된 작업은 뺀 수) 작업 수 ·
+    retry=이번 바퀴에 실패했고 아직 다시 시도할 수 있는 항목 수(D-373 — 3번째 실패·2차 인증·비밀번호 거부는 안 셈) ·
+    failed={계정: 실패 단계}(실패로 끝난 계정·더 시도 안 하는 계정 — 완료 문구에 표시).
+      → 'again'(곧 다음 바퀴) · 'later'(5분 뒤 다음 바퀴) · 'done'(다 받음·3번 소진·예외만 남음 — 종료)"""
     if stopped:   # D-031: 종료하지 않고 이번 바퀴만 멈춤 → 잠시 뒤 같은 사무실 IP 로 다음 바퀴(프록시 안 씀·🔒 로그인 정책)
         return "later", "연속 실패/차단 — 이번 바퀴만 멈춤, 잠시 뒤 다음 바퀴에 다시 시도"
     if work > 0:
         return "again", f"{work}건 처리 — 곧 다음 바퀴(아직 받을 것 확인)"
-    if pending or waits:
-        left = f"파일 생성 대기 {pending}건·일시 오류 대기 {waits}계정"
-        if idle_passes >= MAX_IDLE_PASSES:
-            return "giveup", f"{left} 남음({idle_passes}바퀴 진전 없음) — 다음 ①판매수집 완료 후 이어서"
-        return "later", f"{left} — 잠시 뒤 다시 확인"
+    if pending or retry:
+        return "later", f"파일 생성 대기 {pending}건·다시 시도할 오류 {retry}건 — 잠시 뒤 다시 확인(오류는 3번까지 · D-373)"
     if failed:   # 실패 계정이 있으면 '모든 파일 완료'가 아님(실측 10-12: 로그인 실패 10·계정 실패 1 인데 '모두 완료')
         what = "·".join(f"{step} {n}" for step, n in sorted(Counter(failed.values()).items()))
         return "done", (f"✅ 받을 수 있는 정산 파일 다운로드 완료 — 실패 {len(failed)}계정({what}) 확인 필요"
-                        "(처리기록·오류 로그) · 정상 종료")
+                        "(처리기록·오류 로그·재시도_오류기록.csv) · 정상 종료")
     return "done", "✅ 모든 정산 파일 다운로드 완료 — 정상 종료"
 
 

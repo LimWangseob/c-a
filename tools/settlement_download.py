@@ -57,6 +57,7 @@ from coupang_analytics import settlement_accounts as SA  # noqa: E402
 from coupang_analytics import settlement_files as SF  # noqa: E402
 from coupang_analytics import settlement_forecast as FC  # noqa: E402
 from coupang_analytics import settlement_jobs as SJ  # noqa: E402
+from coupang_analytics import settlement_retry as TR  # noqa: E402
 from coupang_analytics import settlement_runlog as RL  # noqa: E402
 from coupang_analytics import settlement_store as STORE  # noqa: E402
 from coupang_analytics.settlement_store import AMOUNTS, BASE, COSTS, FILES, JOBS, VERIFY  # noqa: E402,F401
@@ -78,6 +79,25 @@ def log(m: str) -> None:
         LOG.line(m)
 
 
+TRIES: TR.Tries | None = None   # watch 회차의 계정·항목별 시도 횟수(D-373) — 사람이 부르는 명령(한 번만 돎)은 None = 지금 그대로
+
+
+def _try_skip(name: str, item: str, data: str = "") -> str:
+    """이번 회차에 그 계정·항목을 다시 시도하면 안 되는 이유('' = 시도) — 3번 소진·2차 인증·이번 바퀴에 이미 실패(D-373)."""
+    return TRIES.why_not(name, item, data) if TRIES else ""
+
+
+def _try_fail(name: str, item: str, reason: str, data: str = "", kind: str = TR.ERROR) -> None:
+    """오류 1건을 회차 시도표·오류 로그(재시도_오류기록.csv + 실행 로그 줄)에 — 비밀 값은 넘기지 않음(사유 = 예외 글자)."""
+    if TRIES:
+        TRIES.fail(name, item, reason, data, kind)
+
+
+def _try_ok(name: str, item: str, data: str = "") -> None:
+    if TRIES:
+        TRIES.ok(name, item, data)
+
+
 MEMLOG = ML.Tracker("정산 프로세스")   # D-346 ④ 단계 경계 [메모리] 줄 · 회차 종합 한 줄(watch 1프로세스 = 1회차)
 
 
@@ -86,7 +106,12 @@ def _mem(stage: str, note: str = "") -> None:
 
 
 class SessionSkip(Exception):
-    """이 계정은 이번 실행에서 건너뜀(사용 중·비번 없음·로그인 미완료) — 오류 아님."""
+    """이 계정은 이번 실행에서 건너뜀(사용 중·비번 없음·로그인 미완료). kind = 로그인 실패 종류(settlement_retry — '' = 오류 아님:
+    사용 중·비번 없음·잠금 · 접속 차단·그 밖 = 회차 3번까지 · 2차 인증 = 다시 시도 안 함 · 비밀번호 거부 = 지금 방식 · D-373)."""
+
+    def __init__(self, msg: str, kind: str = ""):
+        super().__init__(msg)
+        self.kind = kind
 
 
 class BlockDetected(Exception):
@@ -287,15 +312,18 @@ def _login(b, a, pws: list, hidden: bool) -> None:
         ok = _login_with_candidates(b, a, pws, log, login=True, semi=not hidden)
     except LoginBlocked as exc:
         LOG.record(name, "로그인", RL.BLOCK, f"로그인 차단 — {exc}")
-        raise SessionSkip("로그인 차단(재시도 안 함)") from exc
+        raise SessionSkip(f"로그인 차단(Akamai Access Denied) {exc}".strip(), TR.BLOCK) from exc
     except LoginCredentialError as exc:
         LOG.record(name, "로그인", RL.FAIL, f"비밀번호 오류·잠금 의심 — 재시도 안 함 ({exc})")
-        raise SessionSkip("비밀번호 오류(재시도 안 함)") from exc
+        raise SessionSkip("비밀번호 오류(재시도 안 함)", TR.PASSWORD) from exc
     code, detail = b.classify_login()
     if not ok:
-        LOG.record(name, "로그인", RL.BLOCK if code in ("blocked", "akamai") else RL.FAIL, f"{code}: {detail}")
-        raise SessionSkip(f"로그인 미완료({code})")
+        blocked = code in ("blocked", "akamai")
+        LOG.record(name, "로그인", RL.BLOCK if blocked else RL.FAIL, f"{code}: {detail}")
+        raise SessionSkip(f"로그인 미완료({code}: {detail})",
+                          TR.HUMAN if code == "otp" else TR.BLOCK if blocked else TR.ERROR)
     LOG.record(name, "로그인", RL.OK, f"{code}: {detail}")
+    _try_ok(name, "로그인")
 
 
 @contextmanager
@@ -454,6 +482,11 @@ def _job_fields(j) -> dict:
             "period": f"{j.period_start}~{j.period_end}"}
 
 
+def _job_item(j) -> tuple[str, str]:
+    """정산 파일 하나의 (시도 항목, 데이터) — 회차 시도표·오류 로그(D-373)."""
+    return f"받기 {j.channel} {j.kind}·{j.report}", f"정산일 {j.settle_date} · 기간 {j.period_start}~{j.period_end}"
+
+
 # ── 명령 ──────────────────────────────────────────────────────────
 def _request_one(b, j, name: str) -> str:
     if j.channel == "윙":
@@ -610,7 +643,7 @@ def cmd_download(a, b, args, jobs: list) -> None:
     name = name_of(a)
     mine = [j for j in jobs if j.account == name]
     for ch in ("윙", "로켓그로스"):
-        want = [j for j in mine if j.channel == ch and j.status == SJ.ST_REQUESTED]
+        want = [j for j in mine if j.channel == ch and j.status == SJ.ST_REQUESTED and not _try_skip(name, *_job_item(j))]
         if not want or (CHANNELS and ch not in CHANNELS):
             continue
         pairs, notes = SJ.match_downloads(_list_rows(b, ch, want, name), want)
@@ -619,14 +652,18 @@ def cmd_download(a, b, args, jobs: list) -> None:
         for k, (j, row) in enumerate(pairs):
             if k:
                 time.sleep(random.uniform(*LOOKUP_GAP_SEC))
+            item, data = _job_item(j)
             try:
                 _fetch_one(b, j, row, name)
+                _try_ok(name, item, data)
             except BlockDetected:
                 raise
             except API.ServerBusy as exc:                 # 서버 일시 오류 = 그 파일만 다음 바퀴에(차단·실패 아님)
                 LOG.record(name, "받기", RL.WAIT, f"{exc} — 다음 바퀴에 다시", **_job_fields(j))
+                _try_fail(name, item, f"서버 일시 오류: {exc}", data)
             except Exception as exc:                       # 그 파일만 실패 기록 후 다음 파일(무음 아님)
                 LOG.error(name, "받기", exc, **_job_fields(j))
+                _try_fail(name, item, f"{exc.__class__.__name__}: {exc}", data)
             SJ.save_jobs(JOBS, jobs)
 
 
@@ -698,16 +735,32 @@ def collect_docs(a, b, args, jobs: list) -> int:
             raise BlockDetected(str(exc)) from exc
     goto(b, API.WING_URL, name)
     since = getattr(args, "cycle_since", "") or f"{date.today()}T00:00:00"
+    skip = DOC_FAILED.setdefault((since, tok), set())
+    before = set(skip)
     s = DOC.collect(lambda m, p, body: api(b, name, m, p, body), html, lambda url: _get_bytes(b, url), VERIFY / "월자료" / tok,
-                    date.today(), vendor=_rg_vendor(a, jobs), since=since, skip=DOC_FAILED.setdefault((since, tok), set()),
+                    date.today(), vendor=_rg_vendor(a, jobs), since=since, skip=skip,
                     gap=lambda: time.sleep(random.uniform(*LOOKUP_GAP_SEC)), page_gap=lambda: time.sleep(random.uniform(1, 2.5)),
                     note=lambda m: LOG.record(name, "월자료", RL.WAIT, m), fatal=(BlockDetected,))
+    _docs_retry(name, skip - before, s["실패"], skip)
     for f in s["파일"]:
         LOG.saved(name, f, "월자료")
     LOG.remaining(name, "월자료", s["남은 달"], "달")
     if s["받음"] or s["남은 달"]:
         LOG.record(name, "월자료", RL.OK, f"받음 {len(s['받음'])}개 {' · '.join(s['받음'])}" + f" · 남은 달 {s['남은 달']}")
     return len(s["받음"])
+
+
+def _docs_retry(name: str, failed: set, why: list, skip: set) -> None:
+    """이번 바퀴에 실패한 월자료 '종류 달' → 회차 시도표(D-373) · 아직 다시 시도할 수 있으면 skip 에서 빼 다음 바퀴에 다시 부름
+    (D-245 '그 회차 다시 안 부름'을 3번까지로) · 3번째 실패 뒤엔 skip 에 남아 그 회차 건너뜀. watch 밖(TRIES 없음) = 지금 그대로."""
+    if not TRIES:
+        return
+    reasons = dict(w.split(": ", 1) for w in why if ": " in w)    # '종류 달: 오류종류: 메시지'(settlement_docs._Run.attempt)
+    for label in sorted(failed):
+        kind, ym = label.rsplit(" ", 1)
+        e = TRIES.fail(name, f"월자료 {kind}", reasons.get(label, "실패(사유 = 처리기록 월자료 줄)"), ym)
+        if e is not None and e["결과"] == TR.RETRY:
+            skip.discard(label)
 
 
 def _run_both(accts, args) -> int:
@@ -806,6 +859,10 @@ def collect_ads(a, b, args) -> None:
     from coupang_analytics import settlement_ads as AD
     from coupang_analytics import settlement_evidence_web as EW
     name, q = name_of(a), None
+    why = _try_skip(name, "광고비", "광고비·밀크런 원천")
+    if why:                                               # 3번 소진 = 이번 회차 더 안 부름(D-373)
+        LOG.record(name, "광고비", RL.SKIP, why)
+        return
 
     def call(method: str, path: str, body):
         nonlocal q
@@ -822,6 +879,10 @@ def collect_ads(a, b, args) -> None:
         LOG.remaining(name, "광고", s["남은 달"], "달")
         for why in s.get("실패", ()):                              # 밀크런·광고센터 따로 실패(한쪽이 다른 쪽을 막지 않음 · D-245)
             LOG.record(name, "광고비", RL.FAIL, why)
+        if s.get("실패"):
+            _try_fail(name, "광고비", " / ".join(s["실패"]), "광고비·밀크런 원천")
+        else:
+            _try_ok(name, "광고비", "광고비·밀크런 원천")
         msg = [f"{k} {','.join(v)}" for k, v in s.items() if isinstance(v, list) and v and k not in ("받을 것", "파일", "실패")]
         if msg or s["남은 달"]:
             LOG.record(name, "광고비", RL.OK, " · ".join(msg + ([f"남은 달 {s['남은 달']}(다음 실행에)"] if s["남은 달"] else [])))
@@ -829,6 +890,7 @@ def collect_ads(a, b, args) -> None:
         raise
     except Exception as exc:                              # 광고비 원천은 정산 금액과 별개 — 그 단계만 실패 기록
         LOG.error(name, "광고비", exc)
+        _try_fail(name, "광고비", f"{exc.__class__.__name__}: {exc}", "광고비·밀크런 원천")
     finally:
         if q is not None:
             q.close()
@@ -1106,30 +1168,43 @@ def _cmd_stats_main(args) -> int:
     return 0
 
 
-_PHASE = {"cmd_run": "정기", "cmd_backfill": "소급", "_evidence_auto": "증빙"}   # [메모리] 계정마다 줄의 단계 이름
+_PHASE = {"cmd_run": "정기", "cmd_backfill": "소급", "_evidence_auto": "증빙", "_wait_run": "대기"}   # [메모리] 계정마다 줄의 단계 이름
+_PHASE_DATA = {"정기": "정기(정산 일정·요청·받기·검증·광고)", "소급": "소급(판매분석·쿠폰·월자료)", "증빙": "증빙 원본",
+               "대기": "생성 대기 정산 파일 받기"}
 
 
 def _run_accounts(accts, run, args) -> int:
     jobs = SJ.load_jobs(JOBS)
     bad = 0
+    phase = _PHASE.get(run.__name__, run.__name__)
+    item, data = f"계정 처리({phase})", _PHASE_DATA.get(phase, phase)   # 회차 시도표 항목(D-373 — 로그인은 '로그인' 따로)
     for a in accts:
         name = name_of(a)
         if past_until(args):
             LOG.record("(전체)", "중단", RL.WAIT, f"멈춤 시각 {args.until} 지남 — 남은 계정은 다음 실행에서 이어감")
             return 0
+        why = _try_skip(name, "로그인") or _try_skip(name, item, data)
+        if why:                                            # 3번 소진·2차 인증 = 이번 회차 더 시도 안 함(D-373)
+            LOG.record(name, "계정", RL.SKIP, why)
+            continue
         LOG.heartbeat("작동중", f"실행 중: {name}")   # 상태 화면에 '어느 계정 실행 중' 표시(정산일은 로그 줄에)
         log(f"== {name} {args.command} ==")
         try:
             with session(a, args.hidden, getattr(args, "until_at", None)) as b:
                 run(a, b, args, jobs)
             bad = 0
+            _try_ok(name, item, data)
         except SessionSkip as exc:
             LOG.record(name, "계정", RL.SKIP, str(exc))
+            if exc.kind:                                   # 로그인 실패(사용 중·비번 없음·잠금은 kind 없음 = 오류 아님)
+                _try_fail(name, "로그인", str(exc), kind=exc.kind)
         except BlockDetected as exc:
             bad += 1
             LOG.error(name, "계정", exc, RL.BLOCK)
+            _try_fail(name, item, f"차단 감지: {exc}", data, TR.BLOCK)
         except API.ServerBusy as exc:                     # 쿠팡 서버 일시 오류 = 차단 아님·연속 실패로 안 셈·다음 바퀴
             LOG.record(name, "계정", RL.WAIT, f"{exc} — 재시도해도 안 됨, 다음 바퀴에 다시")
+            _try_fail(name, item, f"서버 일시 오류: {exc}", data)
         except Exception as exc:
             if _is_browser_closed(exc):   # 브라우저 닫힘(예: 00:10 앱 시작 reap)=일시적 → '차단'·연속실패로 안 셈·다음 바퀴 재시도
                 LOG.record(name, "계정", RL.WAIT,
@@ -1137,7 +1212,8 @@ def _run_accounts(accts, run, args) -> int:
             else:                                          # 그 계정만 중단(무음 아님·전체 추적은 오류 로그)
                 bad += 1
                 LOG.error(name, "계정", exc)
-        _mem(f"{_PHASE.get(run.__name__, run.__name__)} {name} 끝")
+            _try_fail(name, item, f"{exc.__class__.__name__}: {exc}", data)
+        _mem(f"{phase} {name} 끝")
         if bad >= 2:
             LOG.record("(전체)", "중단", RL.BLOCK, "연속 2계정 실패/차단 — 전체 중단(화면 변경·차단 의심, probe 로 확인)")
             return 1
@@ -1146,6 +1222,7 @@ def _run_accounts(accts, run, args) -> int:
 
 WATCH_POLL_SEC = 300             # ①판매수집 진행 중 정지·파일 생성 대기 확인 간격
 WATCH_CATCHUP_REST_SEC = 60      # 소급(받을 게 남음) 중 한 바퀴와 다음 바퀴 사이 짧은 쉼
+WATCH_PENDING_SEC = 20 * 60      # 쿠팡 파일 생성 대기만 남으면 그 계정만 20분마다 확인(소유자 11-20 '20분으로 해줘' · D-373)
 DONE_FILE = BASE / "로그" / "_완료.json"   # 같은 ①완료 기준 '완료' 기록(중복 실행 방지·D-010)
 CYCLE = RL.Totals()                        # watch 한 회차의 바퀴 합계 — 회차 끝 [실행 결과 종합](D-168)
 PASS_ACCOUNTS: list = []                   # 마지막 바퀴의 정산 계정 — 자동 증빙 대상 고르기(원장을 다시 읽지 않음 · D-365)
@@ -1156,9 +1233,9 @@ def _sweep_work_count(lg) -> int:
     return sum(1 for r in lg.rows if r["단계"] in ("요청", "받기", "소급") and r["결과"] == RL.OK)
 
 
-def _wait_accounts(lg) -> int:
-    """이번 바퀴에 '대기'(서버 일시 오류·브라우저 닫힘)로 넘긴 계정 수 — 아직 다 받았다고 볼 수 없음."""
-    return len({r["계정"] for r in lg.rows if r["단계"] == "계정" and r["결과"] == RL.WAIT})
+def _retry_count() -> int:
+    """이번 바퀴에 실패했고 아직 다시 시도할 수 있는 계정·항목 수(D-373) — 0 보다 크면 회차를 끝내지 않음."""
+    return TRIES.retry_now() if TRIES else 0
 
 
 def _open_jobs() -> tuple[list, set]:
@@ -1171,11 +1248,61 @@ def _is_suspended(account: str, ids: set) -> bool:
     return any(account.endswith("-" + i) for i in ids)          # 계정명 = '대표자-사업자-계정ID'(display_name)
 
 
+def _waitable(j, ids: set) -> bool:
+    """이번 회차에 아직 받으러 갈 작업인가 — 정지 계정(D-247) · 3번 소진된 파일 · 로그인 안 하는 계정(비밀번호 거부·2차 인증·
+    로그인 3번 소진) · 대기 바퀴 3번 소진 계정은 뺌(D-373 — 다시 로그인하지 않으니 기다릴 것도 아님)."""
+    if _is_suspended(j.account, ids):
+        return False
+    return not (TRIES and (TRIES.ended(j.account, *_job_item(j)) or TRIES.cannot_login(j.account)
+                           or TRIES.ended(j.account, "계정 처리(대기)", _PHASE_DATA["대기"])))
+
+
 def _pending_jobs() -> int:
-    """요청예정·요청됨(쿠팡 파일 생성 대기) 작업 수 — 정지 계정 작업은 빼고 셈(받기는 D-215 대로 계속 · D-247 ·
+    """요청예정·요청됨(쿠팡 파일 생성 대기) 작업 수 — 받으러 갈 것만 셈(_waitable · 받기는 D-215 대로 계속 · D-247 ·
     실측 output (37) hide4u 요청됨 9건이 받기 500 반복으로 회차 '완료'를 막음)."""
     jobs, ids = _open_jobs()
-    return sum(1 for j in jobs if not _is_suspended(j.account, ids))
+    return sum(1 for j in jobs if _waitable(j, ids))
+
+
+def _wait_run(a, b, args, jobs: list) -> None:
+    """생성 대기 바퀴의 한 계정 — 요청예정이 남았으면 요청(+90초) 뒤, 요청됨 파일만 받음(검증·광고·소급 안 함)."""
+    if any(j.account == name_of(a) and j.status == SJ.ST_PLANNED for j in jobs):
+        cmd_request(a, b, args, jobs)
+        time.sleep(90)
+    cmd_download(a, b, args, jobs)
+
+
+def _wait_pass(args) -> tuple[bool, int]:
+    """생성 대기 바퀴(D-373 · 소유자 '20분으로 해줘') = 받으러 갈 파일이 있는 계정만 로그인 — 다 받은 계정·3번 소진·
+    예외(비밀번호 거부·2차 인증) 계정은 로그인 0. 반환 = _one_pass 와 같은 (중단됐나, 새로 한 일 수)."""
+    global LOG
+    LOG = RL.RunLog(BASE)
+    if TRIES:
+        TRIES.begin_pass(LOG.run_id)
+    jobs, ids = _open_jobs()
+    names = {j.account for j in jobs if _waitable(j, ids)}
+    accts = [a for a in PASS_ACCOUNTS if name_of(a) in names]
+    LOG.accounts = [name_of(a) for a in accts]
+    log(f"실행 {LOG.run_id} · 자동 · 생성 대기 파일만 확인 · {len(accts)}계정(나머지 계정 로그인 안 함)")
+    try:
+        rc = _run_accounts(accts, _wait_run, args)
+        work = _sweep_work_count(LOG)
+    except Exception as exc:                 # 그 바퀴만 실패 기록(다음 판단은 진전 없음으로)
+        LOG.error("(전체)", "자동실행", exc)
+        return False, 0
+    finally:
+        CYCLE.add(LOG)
+    LOG.summary(pending=_pending_jobs(), suspended=_suspended_pending())
+    return rc == 1, work
+
+
+def _next_rest(action: str, waiting: bool, stopped: bool, work: int, pending: int, retry: int) -> tuple[bool, int]:
+    """다음 바퀴 종류·쉼(초) — 생성 대기만 남으면(새로 한 일·다시 시도할 오류·중단 없음) 그 회차는 대기 바퀴로 바꿔 20분마다 ·
+    대기 바퀴 중 오류 다시 시도·연속 실패 중단 = 5분(지금 간격 그대로) · 그 밖 = 지금 그대로(곧 1분 · 잠시 뒤 5분)."""
+    waiting = waiting or (action == "later" and not (stopped or work or retry) and pending > 0)
+    if waiting:
+        return True, WATCH_POLL_SEC if (retry or stopped) else WATCH_PENDING_SEC
+    return False, WATCH_CATCHUP_REST_SEC if action == "again" else WATCH_POLL_SEC
 
 
 def _suspended_pending() -> dict[str, int]:
@@ -1189,14 +1316,18 @@ def _suspended_pending() -> dict[str, int]:
 
 
 def _watch_failures() -> dict[str, str]:
-    """완료 문구·상태의 '확인 필요' 계정 = 이번 바퀴 실패로 끝난 계정 + 정지 계정 받기 대기(D-247 — 완료·실패 확인)."""
-    return {**LOG.unresolved_failures(), **{a: "정지 계정 받기 대기" for a in _suspended_pending()}}
+    """완료 문구·상태의 '확인 필요' 계정 = 이번 바퀴 실패로 끝난 계정 + 회차에 더 시도 안 하는 계정(3번 소진·2차 인증 D-373)
+    + 정지 계정 받기 대기(D-247 — 완료·실패 확인)."""
+    return {**LOG.unresolved_failures(), **(TRIES.given_up() if TRIES else {}),
+            **{a: "정지 계정 받기 대기" for a in _suspended_pending()}}
 
 
 def _one_pass(args) -> tuple[bool, int]:
     """한 바퀴(전 계정) → (중단됐나, 새로 한 일 수). 예기치 못한 예외는 기록하고 '한 일 0'으로."""
     global LOG
     LOG = RL.RunLog(BASE)
+    if TRIES:
+        TRIES.begin_pass(LOG.run_id)          # 한 번의 시도 = 바퀴 1번(D-373 ①)
     args.end = date.today()
     log(f"실행 {LOG.run_id} · 자동 · 정산 수집 · 기간 {args.start}~{args.end}")
     LOG.heartbeat("작동중", f"정산 수집 · 기간 {args.start}~{args.end}")
@@ -1275,7 +1406,7 @@ def _evidence_sweep(args, action: str) -> None:
     args.until_at 을 그동안만 앞당김) · 남은 것은 다음 회차. 증빙 결과는 정산 완료 판정·_완료.json 을 바꾸지 않음(종합에만 줄)."""
     global LOG
     from coupang_analytics import settlement_evidence as EV
-    if action not in ("done", "giveup") or not PASS_ACCOUNTS:
+    if action != "done" or not PASS_ACCOUNTS:
         return
     stop = EV.stop_at(args.until_at)
     gap = int(EV.STOP_BEFORE.total_seconds() // 60)
@@ -1288,6 +1419,8 @@ def _evidence_sweep(args, action: str) -> None:
         return
     keep = (args.until, args.until_at)
     LOG = RL.RunLog(BASE)
+    if TRIES:
+        TRIES.begin_pass(LOG.run_id)
     LOG.accounts = [name_of(a) for a in targets]
     args.until, args.until_at = f"{stop:%H:%M}", stop
     log(f"[자동] 정산 받기 끝 → 증빙 받기 {len(targets)}계정 · {stop:%m-%d %H:%M} 부터 새 계정·새 단계 안 함(회차 끝 {gap}분 전 · D-365)")
@@ -1307,7 +1440,7 @@ def _cycle_close(status: str, reason: str, *, stopped: bool = False) -> None:
         return
     lines = RL.result_block(CYCLE, pending=_pending_jobs(), suspended=_suspended_pending(), stopped=stopped, note=reason,
                             title=f"실행 결과 종합 — 이번 회차 {CYCLE.passes}바퀴")
-    lines[-1:-1] = [MEMLOG.summary()]       # D-346 ④ 그날 최고 메모리(시각·단계)·⚠ 횟수 — '==>' 한 줄 요약 바로 위
+    lines[-1:-1] = [MEMLOG.summary(), *(TRIES.summary_lines() if TRIES else [])]   # D-346 ④ 최고 메모리 · D-373 더 시도 안 한 항목
     for ln in lines:
         LOG.line(ln)
     LOG.heartbeat(status, reason, extra=(f"결과 종합: {lines[-1].removeprefix('==> ')}",))
@@ -1377,18 +1510,20 @@ def _ledger_ready(args) -> bool:
 
 def cmd_watch(args) -> int:
     """00:10 앱과 함께 뜨는 정산 자동 수집(D-021·D-372). **이번 회차 ①판매수집 완료까지 기다렸다가** 받고, 다 받으면
-    기록하고 종료·**그날 24:00** 이 되면 종료(남은 건 다음 회차). 중단(연속 실패/차단)·진전 없는 대기 초과도
-    기록하고 종료. 같은 ①완료 기준으로 이미 '완료'면 바로 끝낸다. 앱을 사람이 끄면 함께 종료(--parent·D-020).
+    기록하고 종료·**그날 24:00** 이 되면 종료(남은 건 다음 회차). 오류는 계정·항목별 3번(처음 + 다시 2번) 뒤 그 회차에
+    더 시도 안 함 → 받은 것·3번 소진·예외(비밀번호 거부·2차 인증)만 남으면 24:00 전에도 종료 · 파일 생성 대기는 24:00 까지(D-373). 같은 ①완료 기준으로 이미 '완료'면 바로 끝낸다. 앱을 사람이 끄면 함께 종료(--parent·D-020).
     같은 PC 에 둘 뜨지 않게 잠금."""
     from coupang_analytics import settlement_watch as W
     from coupang_analytics.pipeline_paths import _progress_path, _run_stage_path
     from coupang_analytics.registry_lock import RegistryLockError, registry_lock
+    global TRIES
     prog, stage_path = _progress_path("output"), _run_stage_path("output")
     try:
         with registry_lock(BASE / "_잠금" / "_watch.lock", wait_sec=0, on_log=log):
             cycle_start, cycle_end = W.cycle_window(datetime.now())
             PASS_ACCOUNTS.clear()             # 자동 증빙 대상 = 이번 회차 바퀴의 계정만(D-365)
             args.cycle_since = cycle_start.isoformat(timespec="seconds")   # 소급 상한 = 회차(00:10~) 단위(D-170) · --since 와 무관
+            TRIES = TR.Tries(BASE / "로그", args.cycle_since, line=log)   # 오류 시도 횟수 = 회차마다 0부터(D-373 ④)
             if getattr(args, "since", ""):    # 사람이 누른 전체실행 — 그 실행 뒤에 끝난 ①만 기다림(2026-10-13)
                 cycle_start = max(cycle_start, datetime.fromisoformat(args.since))
             args.until, args.until_at, args.hidden = f"{cycle_end:%H:%M}", cycle_end, True   # 24:00 뒤 새 요청·새 계정 안 함
@@ -1398,7 +1533,7 @@ def cmd_watch(args) -> int:
             if manual:
                 log("[수동] 정산 탭 '정산 시작' — 이번 회차 '완료' 기록·①판매수집 완료 대기 없이 바로 받음"
                     "(①이 지금 도는 중이면 끝날 때까지 대기 · D-354)")
-            idle, last_state = 0, ""
+            last_state, waiting, swept = "", False, False
             while datetime.now() < cycle_end:
                 why, marker = _watch_wait_reason(W, prog, stage_path, cycle_start, manual)
                 if why:
@@ -1418,20 +1553,26 @@ def cmd_watch(args) -> int:
                 if not _ledger_ready(args):   # D-366 ②: 첫 바퀴 계정 읽기 전 대장→원장·비밀번호 · 실패 = 이 바퀴 중단
                     _sleep_until(WATCH_POLL_SEC, cycle_end)
                     continue
-                stopped, work = _one_pass(args)
+                stopped, work = (_wait_pass if waiting else _one_pass)(args)
                 _between_passes()
-                idle = 0 if work else idle + 1
                 fails = _watch_failures()
-                action, reason = W.plan_after_pass(stopped, work, _pending_jobs(), _wait_accounts(LOG), idle, failed=fails)
+                pending, retry = _pending_jobs(), _retry_count()
+                action, reason = W.plan_after_pass(stopped, work, pending, retry, failed=fails)
                 log(f"[자동] {reason}")
                 if action in ("again", "later"):
+                    waiting, rest = _next_rest(action, waiting, stopped, work, pending, retry)
+                    if waiting and not swept:   # 생성 대기 빈 시간 = 자동 증빙(D-367 '미완료여도 받기' · 회차 1번 · 23:20 멈춤 D-365)
+                        swept = True
+                        _evidence_sweep(args, "done")
+                    if waiting:
+                        reason = f"{reason} · 생성 대기 계정만 {rest // 60}분 뒤 확인(나머지 계정 로그인 안 함)"
                     LOG.heartbeat("대기중", reason)
-                    _sleep_until(WATCH_CATCHUP_REST_SEC if action == "again" else WATCH_POLL_SEC, cycle_end)
+                    _sleep_until(rest, cycle_end)
                     continue
                 W.write_done(DONE_FILE, key, action, reason, failed=len(fails))
                 _evidence_sweep(args, action)
-                _cycle_close(W.done_status(len(fails)) if action == "done" else "종료", reason, stopped=action != "done")
-                return 0 if action == "done" else 1
+                _cycle_close(W.done_status(len(fails)), reason)       # 남은 행동 = 'done' 뿐(미완료 종료 없음 · D-373 ②)
+                return 0
             reason = f"회차 종료 시각({cycle_end:%m-%d %H:%M}) — 정산 종료(남은 건 {W.CYCLE_START:%H:%M} 다음 회차에서 이어서 받음)"
             log(f"[자동] {reason}")
             _cycle_close("종료", reason)
@@ -1439,6 +1580,8 @@ def cmd_watch(args) -> int:
     except RegistryLockError:
         log("[자동] 정산 자동 실행이 이미 떠 있음 — 이 실행은 종료")
         return 0
+    finally:
+        TRIES = None                          # 시도표 = 이 회차 watch 동안만(사람이 부르는 명령은 지금 그대로)
 
 
 def _use_transfer_store() -> None:

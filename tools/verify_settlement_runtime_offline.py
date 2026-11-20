@@ -234,13 +234,12 @@ def p12_watch_decide():
     from coupang_analytics import settlement_watch as W
     T = datetime
     # 한 바퀴 뒤 판단: 중단 > 새로 한 일 있음(곧 다음 바퀴) > 대기 남음(잠시 뒤·진전 없으면 미완료 종료) > 완료
-    assert W.plan_after_pass(True, 5, 3, 1, 0)[0] == "later"                       # 연속 실패/차단 = 이번 바퀴만 멈춤(D-031)
-    assert W.plan_after_pass(False, 4, 9, 0, 0)[0] == "again"                       # 받는 중(소급) = 곧 다음 바퀴
-    assert W.plan_after_pass(False, 0, 2, 0, 1)[0] == "later"                       # 파일 생성 대기 = 잠시 뒤
-    assert W.plan_after_pass(False, 0, 0, 1, 1)[0] == "later"                       # 서버 일시 오류 계정 = 잠시 뒤
-    a, r = W.plan_after_pass(False, 0, 2, 0, W.MAX_IDLE_PASSES)
-    assert a == "giveup" and "남음" in r                                           # 진전 없이 반복 = 미완료 종료
-    a, r = W.plan_after_pass(False, 0, 0, 0, 1)
+    assert W.plan_after_pass(True, 5, 3, 1)[0] == "later"                          # 연속 실패/차단 = 이번 바퀴만 멈춤(D-031)
+    assert W.plan_after_pass(False, 4, 9, 0)[0] == "again"                          # 받는 중(소급) = 곧 다음 바퀴
+    assert W.plan_after_pass(False, 0, 2, 0)[0] == "later"                          # 파일 생성 대기 = 잠시 뒤(24:00 까지 · D-373 ②)
+    assert W.plan_after_pass(False, 0, 0, 1)[0] == "later"                          # 다시 시도할 오류 항목 = 다음 바퀴(D-373)
+    assert not hasattr(W, "MAX_IDLE_PASSES") and "giveup" not in W.RESULT        # 진전 없음 '미완료' 종료 없음(D-373 ②)
+    a, r = W.plan_after_pass(False, 0, 0, 0)
     assert a == "done" and "모든 정산 파일 다운로드 완료" in r                        # 다 받음 = 기록 후 정상 종료
     # 완료 기록 키 = ①완료 시각(앱이 띄움) / 없으면 오늘(수동) — 같은 키 '완료'면 다시 안 돎
     mk = {"stage": "sales", "at": T(2026, 10, 9, 19, 54, 35)}
@@ -1031,17 +1030,17 @@ def p27_cycle():
             clock["now"] += timedelta(seconds=max(sec, 1))
             if sales_after and clock["now"] >= sales_after and not stage.exists():
                 write_marker(clock["now"])                          # 앱의 ①판매수집이 끝남
-        olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG)
+        olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._retry_count, TD.LOG)
         args = SimpleNamespace(parent=0, ledger_synced=True, until="", until_at=None, hidden=False)   # 대장 반영(D-366 ②) = P69
         try:
             TD.datetime, TD.time.sleep = FakeDT, fake_sleep
             TD._one_pass = lambda a: (passes.append(clock["now"]), (False, 3 if len(passes) == 1 else 0))[1]   # 첫 바퀴 3건·다음 0건
-            TD._pending_jobs, TD._wait_accounts = (lambda: 0), (lambda lg: 0)
+            TD._pending_jobs, TD._retry_count = (lambda: 0), (lambda: 0)
             TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
             TD.LOG.heartbeat = lambda st, msg: hb.append((st, msg))
             rc = TD.cmd_watch(args)
         finally:
-            TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG = olds
+            TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._retry_count, TD.LOG = olds
         if stage.exists():
             stage.unlink()
         return rc, passes, hb[-1], args.until_at, clock["now"]
@@ -1058,7 +1057,7 @@ def p27_cycle():
             assert passes == [] and last[0] == "종료", (passes, last)
             rc, passes, last, _, _ = run(None, sales_after=D(2026, 10, 10, 3, 0))     # 03:00 ① 완료 → 받기
             assert passes and passes[0] >= D(2026, 10, 10, 3, 0), passes
-            assert rc == 0 and len(passes) == 2 and last == ("완료", W.plan_after_pass(False, 0, 0, 0, 1)[1]), \
+            assert rc == 0 and len(passes) == 2 and last == ("완료", W.plan_after_pass(False, 0, 0, 0)[1]), \
                 (rc, passes, last)                                              # 3건 받음 → 다음 바퀴 0건 = 다 받음 → 종료
         finally:
             os.chdir(old_cwd)
@@ -1114,9 +1113,9 @@ def p29_monthly_failed_comment():
         lg.record("C-3", "요청", RLG.OK, "다음 바퀴 정상")       # 실패 뒤 정상 = 해소(세지 않음)
         fails = lg.unresolved_failures()
         assert fails == {"A-1": "로그인", "B-2": "계정"}, f"해소 안 된 실패 계정: {fails}"
-    a, r = W.plan_after_pass(False, 0, 0, 0, 1, failed=fails)
+    a, r = W.plan_after_pass(False, 0, 0, 0, failed=fails)
     assert a == "done" and "실패 2계정" in r and "로그인 1" in r and "계정 1" in r and "확인 필요" in r, r
-    a0, r0 = W.plan_after_pass(False, 0, 0, 0, 1)
+    a0, r0 = W.plan_after_pass(False, 0, 0, 0)
     assert a0 == "done" and "실패" not in r0, r0
     ok("완료 문구 = '실패 N계정(로그인·계정) 확인 필요'·실패 뒤 정상 해소는 제외·실패 없으면 그대로")
     # ③ 계정 파일 '#' 주석 줄(사용 안 함 계정을 막아 두기) = 건너뜀 — 예전엔 '#id' 로 로그인 시도
@@ -1163,17 +1162,17 @@ def p30_manual_full_run():
             if clock["now"] >= D(2026, 10, 13, 15, 0) and not passes and "새①" not in clock:
                 clock["새①"] = True
                 write_marker(clock["now"])                          # 이번 전체실행의 ①판매수집이 끝남
-        olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG)
+        olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._retry_count, TD.LOG)
         args = SimpleNamespace(parent=0, ledger_synced=True, until="", until_at=None, hidden=False, since=since)   # 대장 반영(D-366 ②) = P69
         try:
             TD.datetime, TD.time.sleep = FakeDT, fake_sleep
             TD._one_pass = lambda a: (passes.append(clock["now"]), (False, 0))[1]
-            TD._pending_jobs, TD._wait_accounts = (lambda: 0), (lambda lg: 0)
+            TD._pending_jobs, TD._retry_count = (lambda: 0), (lambda: 0)
             TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
             TD.LOG.heartbeat = lambda st, msg: None
             TD.cmd_watch(args)
         finally:
-            TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG = olds
+            TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._retry_count, TD.LOG = olds
             stage.unlink(missing_ok=True)
         return passes
 
@@ -1305,17 +1304,17 @@ def p36_same_cycle_done():
 
         def fake_sleep(sec):
             clock["now"] += timedelta(seconds=max(sec, 1))
-        olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG)
+        olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._retry_count, TD.LOG)
         args = SimpleNamespace(parent=0, ledger_synced=True, until="", until_at=None, hidden=False, since="")   # 대장 반영(D-366 ②) = P69
         try:
             TD.datetime, TD.time.sleep = FakeDT, fake_sleep
             TD._one_pass = lambda a: (passes.append(clock["now"]), (False, 0))[1]
-            TD._pending_jobs, TD._wait_accounts = (lambda: 0), (lambda lg: 0)
+            TD._pending_jobs, TD._retry_count = (lambda: 0), (lambda: 0)
             TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
             TD.LOG.heartbeat = lambda st, msg: None
             TD.cmd_watch(args)
         finally:
-            TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG = olds
+            TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._retry_count, TD.LOG = olds
             stage.unlink(missing_ok=True)
         return passes
 
@@ -2736,7 +2735,7 @@ def p55_rg_vendor_fallback():
         pat = [(TD, "BASE", tmp / "정산"), (TD, "JOBS", tmp / "정산" / "_요청기록.json"), (TD, "INVENTORY", tmp / "재고현황_일별"),
                (TD, "LOG", log), (TD, "name_of", lambda _a: name), (TD, "goto", lambda *x: None),
                (TD, "collect_sales", lambda *x: 0),
-               (DOC, "collect", lambda *x, **k: (seen.__setitem__("vendor", k.get("vendor")), {"파일": [], "받음": [], "남은 달": 0})[1]),
+               (DOC, "collect", lambda *x, **k: (seen.__setitem__("vendor", k.get("vendor")), {"파일": [], "받음": [], "실패": [], "남은 달": 0})[1]),
                (DR, "plan", lambda _jobs, _acct, _t, _n, _s, rg: (seen.__setitem__("rg", rg), [])[1])]
         _patched(pat, lambda: TD.cmd_backfill(a, None, args, jobs))
         return seen.get("vendor"), seen.get("rg")
@@ -3034,7 +3033,7 @@ def p59_suspended_pending():
             lg = SimpleNamespace(rows=[], unresolved_failures=lambda: {})
             fails = _patched([(TD, "JOBS", jobs), (TD, "LOG", lg)], TD._watch_failures)
             assert fails == {hide: "정지 계정 받기 대기"}, fails
-            act, why = W.plan_after_pass(False, 0, 0, 0, 0, failed=fails)
+            act, why = W.plan_after_pass(False, 0, 0, 0, failed=fails)
             assert act == "done" and "확인 필요" in why and W.done_status(len(fails)) == "완료·실패 확인", (act, why)
         finally:
             os.chdir(cwd)
@@ -3386,19 +3385,19 @@ def p67_manual_start():
 
         def fake_sleep(sec):
             clock["now"] += timedelta(seconds=max(sec, 1))
-        olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG, W.sales_in_progress)
+        olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._retry_count, TD.LOG, W.sales_in_progress)
         args = SimpleNamespace(parent=0, ledger_synced=True, until="", until_at=None, hidden=False, manual=manual)   # 대장 반영(D-366 ②) = P69
         try:
             TD.datetime, TD.time.sleep = FakeDT, fake_sleep
             TD._one_pass = lambda a: (passes.append(clock["now"]), (False, 3 if len(passes) == 1 else 0))[1]
-            TD._pending_jobs, TD._wait_accounts = (lambda: 0), (lambda lg: 0)
+            TD._pending_jobs, TD._retry_count = (lambda: 0), (lambda: 0)
             TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
             TD.LOG.heartbeat = lambda st, msg: None
             W.sales_in_progress = lambda *a, **k: ((True, "①판매수집 진행 중") if busy and not passes and
                                                    clock["now"] < D(2026, 11, 19, 12) else (False, ""))
             rc = TD.cmd_watch(args)
         finally:
-            TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG, W.sales_in_progress = olds
+            TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._retry_count, TD.LOG, W.sales_in_progress = olds
         if stage.exists():
             stage.unlink()
         return rc, passes
@@ -3474,7 +3473,7 @@ def p68_evidence_auto():
             def __init__(self, i):
                 self.account_id = i
         olds = (TD.LOG, TD.name_of, TD.JOBS, TD.ORIGINALS, TD.EVIDENCE_DIR, TD.EVIDENCE_JOBS, TD.datetime, TD.log,
-                TD.cmd_evidence, TD.session, TD._one_pass, TD._between_passes, TD._pending_jobs, TD._wait_accounts,
+                TD.cmd_evidence, TD.session, TD._one_pass, TD._between_passes, TD._pending_jobs, TD._retry_count,
                 TD._watch_failures, TD._cycle_close, TD.time.sleep)
         old_cwd = os.getcwd()
         os.chdir(tmp)
@@ -3535,7 +3534,7 @@ def p68_evidence_auto():
                 yield None
             TD.session = fake_session
             TD._between_passes = lambda: None
-            TD._pending_jobs, TD._wait_accounts, TD._watch_failures = (lambda: 0), (lambda lg: 0), (lambda: {})
+            TD._pending_jobs, TD._retry_count, TD._watch_failures = (lambda: 0), (lambda: 0), (lambda: {})
             TD.time.sleep = lambda sec: None
 
             def watch(now0, took, work=(0,)):
@@ -3573,7 +3572,7 @@ def p68_evidence_auto():
             assert got == [] and order[-1][0] == "종합", ("40분 안쪽에서 정산이 끝나면 증빙 0", got)
         finally:
             (TD.LOG, TD.name_of, TD.JOBS, TD.ORIGINALS, TD.EVIDENCE_DIR, TD.EVIDENCE_JOBS, TD.datetime, TD.log,
-             TD.cmd_evidence, TD.session, TD._one_pass, TD._between_passes, TD._pending_jobs, TD._wait_accounts,
+             TD.cmd_evidence, TD.session, TD._one_pass, TD._between_passes, TD._pending_jobs, TD._retry_count,
              TD._watch_failures, TD._cycle_close, TD.time.sleep) = olds
             TD.PASS_ACCOUNTS.clear()
             os.chdir(old_cwd)
@@ -3689,7 +3688,7 @@ def p69_ledger_presync():
         assert calls and len(calls) == 2, "바퀴(계정 읽기)는 반영 성공 뒤에만"
         passes.append(clock["now"])
         return False, (3 if len(passes) == 1 else 0)
-    olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG, TD._ledger_presync,
+    olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._retry_count, TD.LOG, TD._ledger_presync,
             TD._evidence_sweep, TD._between_passes, TD._watch_failures)
     with tempfile.TemporaryDirectory() as tmp:
         os.chdir(tmp)
@@ -3698,13 +3697,13 @@ def p69_ledger_presync():
             TD.datetime = FakeDT
             TD.time.sleep = lambda sec: clock.__setitem__("now", clock["now"] + timedelta(seconds=max(sec, 1)))
             TD._one_pass, TD._ledger_presync = one_pass, presync
-            TD._pending_jobs, TD._wait_accounts, TD._watch_failures = (lambda: 0), (lambda lg: 0), (lambda: {})
+            TD._pending_jobs, TD._retry_count, TD._watch_failures = (lambda: 0), (lambda: 0), (lambda: {})
             TD._evidence_sweep, TD._between_passes = (lambda a, act: None), (lambda: None)
             TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
             TD.LOG.heartbeat = lambda status, msg="", **k: beats.append((status, msg))
             rc = TD.cmd_watch(SimpleNamespace(parent=0, until="", until_at=None, hidden=False, manual=True))
         finally:
-            (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._wait_accounts, TD.LOG, TD._ledger_presync,
+            (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._retry_count, TD.LOG, TD._ledger_presync,
              TD._evidence_sweep, TD._between_passes, TD._watch_failures) = olds
             os.chdir(old_cwd)
     assert rc == 0 and len(calls) == 2 and len(passes) == 2, ("반영 = 실패 1 + 성공 1 · 그 뒤 바퀴 2번", calls, passes)
@@ -3715,6 +3714,306 @@ def p69_ledger_presync():
     assert "_ledger_presync" not in inspect.getsource(TD.main) and "_ledger_presync" not in inspect.getsource(TD._one_pass)
     ok("같은 rows 로 원장 반영(앱 run_sync·기본 잠금·자동 판단)+비밀번호 값1·값2 저장 · 평문 로그 0 · 못 읽음/반영 실패 = "
        "그 바퀴 중단·상태 카드 이유·5분 뒤 재시도 · 둘째 바퀴부터 안 함 · 사람 명령 그대로")
+
+
+def p70_error_retry_three():
+    print("[P70] 정산 오류 = 계정·항목별 최대 3번(처음 + 다시 2번) · 그 뒤 더 시도 안 함 · 오류 로그(사유·시각·계정·데이터·항목·n번째) ·"
+          " 비밀번호 거부 = 지금 그대로 · 2차 인증 = 다시 시도 안 함 · 파일 생성 대기 = 안 셈 · 다 끝나면 조기 종료 · 회차마다 0부터(D-373)")
+    import contextlib
+    import csv
+    import json as _json
+    import os
+    from datetime import datetime as RealDT, timedelta
+    from types import SimpleNamespace
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    from coupang_analytics import pipeline_sales as PS
+    from coupang_analytics import settlement_jobs as SJ
+    from coupang_analytics import settlement_retry as TR
+    from coupang_analytics import settlement_runlog as RLG
+    from coupang_analytics import settlement_wing_api as API
+    CYC, CYC2 = "2026-11-21T00:10:00", "2026-11-22T00:10:00"
+
+    def rows(folder):
+        with (Path(folder) / TR.LOG_NAME).open(encoding="utf-8-sig") as f:
+            return list(csv.DictReader(f))
+
+    class Acc:
+        def __init__(self, i):
+            self.account_id, self.label = i, i
+
+    class Args:
+        until, until_at, hidden, command = "", None, True, "run"
+
+    # ① 시도표 단위 — 일시 오류 2번 뒤 성공 · 3번 실패 = 더 시도 안 함 · 같은 바퀴 두 번째 실패 안 셈 · 재시작 이어 셈 · 다음 회차 0부터
+    with tempfile.TemporaryDirectory() as tmp:
+        lines: list = []
+        t = TR.Tries(tmp, CYC, line=lines.append)
+        for p in ("p1", "p2"):
+            t.begin_pass(p)
+            assert t.why_not("A", "받기", "정산일 2026-11-20") == ""
+            assert t.fail("A", "받기", "ServerBusy: 504", "정산일 2026-11-20")["결과"] == TR.RETRY
+            assert t.fail("A", "받기", "ServerBusy: 504", "정산일 2026-11-20") is None, "같은 바퀴 두 번째 실패 = 안 셈(①)"
+            assert t.retry_now() == 1 and "이번 바퀴에 이미 실패" in t.why_not("A", "받기", "정산일 2026-11-20")
+        t.begin_pass("p3")
+        assert t.why_not("A", "받기", "정산일 2026-11-20") == "" and t.retry_now() == 0, "새 바퀴 = 다시 시도 가능 · 이번 바퀴 실패 0"
+        t.ok("A", "받기", "정산일 2026-11-20")                                      # 3번째에 성공
+        assert t.items == {} and t.given_up() == {}
+        for p in ("q1", "q2", "q3"):
+            t.begin_pass(p)
+            e = t.fail("B", "계정 처리(정기)", "SiteChangedError: 표 머리글 없음", "정기")
+        assert e["시도"] == 3 and e["결과"] == TR.GIVE_UP and t.retry_now() == 0, e
+        t.begin_pass("q4")
+        assert "3번 실패" in t.why_not("B", "계정 처리(정기)", "정기") and t.fail("B", "계정 처리(정기)", "x", "정기") is None
+        assert t.given_up() == {"B": "계정 처리(정기)"}
+        got = rows(tmp)
+        assert [(r["계정"], r["시도"], r["결과"]) for r in got] == [
+            ("A", "1/3", TR.RETRY), ("A", "2/3", TR.RETRY),
+            ("B", "1/3", TR.RETRY), ("B", "2/3", TR.RETRY), ("B", "3/3", TR.GIVE_UP)], got
+        last = got[-1]                                                                  # 로그 한 건 = 사유·시각·계정·데이터·항목·n번째
+        assert (last["시도 항목"], last["데이터"], last["회차"], last["실행ID"]) == ("계정 처리(정기)", "정기", CYC, "q3"), last
+        assert last["오류사유"] == "SiteChangedError: 표 머리글 없음" and RealDT.strptime(last["시각"], "%Y-%m-%d %H:%M:%S"), last
+        assert any("[오류 3/3] B · 계정 처리(정기) · 정기 → 더 시도 안 함" in m for m in lines), lines   # 실행 로그 한 줄
+        assert any("[오류 1/3] A · 받기" in m and "다음 바퀴에 다시 시도" in m for m in lines), lines
+        assert "오류로 더 시도 안 한 항목" in t.summary_lines()[0] and "B · 계정 처리(정기)" in t.summary_lines()[1]
+        t2 = TR.Tries(tmp, CYC, line=lines.append)                                      # 같은 회차 재시작(재부팅 복구) = 이어 셈
+        assert "3번 실패" in t2.why_not("B", "계정 처리(정기)", "정기")
+        t3 = TR.Tries(tmp, CYC2, line=lines.append)                                     # ④ 다음 회차 = 0부터
+        assert t3.items == {} and t3.why_not("B", "계정 처리(정기)", "정기") == ""
+        t3.begin_pass("r1")
+        assert t3.fail("B", "계정 처리(정기)", "x", "정기")["시도"] == 1
+        assert _json.loads((Path(tmp) / TR.STATE_NAME).read_text(encoding="utf-8"))["회차"] == CYC2
+        # 예외 2종 — 비밀번호 거부 = 막지 않음(지금 방식)·로그 한 번 · 2차 인증 = 처음부터 다시 시도 안 함
+        assert t3.fail("P", "로그인", "비밀번호 오류", kind=TR.PASSWORD)["결과"] == TR.NO_RETRY
+        assert t3.why_not("P", "로그인") == "" and t3.retry_now() == 1, "비밀번호 거부 = 다시 시도 수에 안 셈·막지도 않음"
+        t3.begin_pass("r2")
+        assert t3.fail("P", "로그인", "비밀번호 오류", kind=TR.PASSWORD) is None, "같은 회차 비밀번호 거부 로그 = 한 번"
+        assert t3.fail("H", "로그인", "otp: 2차 인증", kind=TR.HUMAN)["결과"] == TR.NO_RETRY
+        assert "사람 조치" in t3.why_not("H", "로그인") and t3.retry_now() == 0 and "P" not in t3.given_up()
+    ok("2번 실패 뒤 성공 = 기록 지움 · 3번째 실패 = 더 시도 안 함 · 바퀴당 1번 · 로그 9칸 · 재시작 이어 셈 · 다음 회차 0부터 · 비번·2차 인증 예외")
+
+    # ② 로그인 실패 종류 — 비밀번호 거부 / 2차 인증 / Akamai·차단 / 그 밖
+    class FB:
+        def __init__(self, code):
+            self.code = code
+
+        def classify_login(self):
+            return self.code, f"{self.code} 화면"
+
+    def kind_of(ret=None, exc=None, code="form"):
+        def cand(*_a, **_k):
+            if exc is not None:
+                raise exc
+            return ret
+        try:
+            _patched([(PS, "_login_with_candidates", cand), (TD, "name_of", lambda a: a.account_id)],
+                     lambda: TD._login(FB(code), Acc("x"), ["p"], True))
+        except TD.SessionSkip as e:
+            return e.kind
+        return "로그인됨"
+    with tempfile.TemporaryDirectory() as tmp:
+        lg = RLG.RunLog(tmp, now=RealDT(2026, 11, 21, 1), echo=lambda m: None)
+        got = _patched([(TD, "LOG", lg), (TD, "TRIES", None)], lambda: [
+            kind_of(exc=PS.LoginCredentialError("x")), kind_of(exc=PS.LoginBlocked()), kind_of(False, code="otp"),
+            kind_of(False, code="akamai"), kind_of(False, code="blocked"), kind_of(False, code="form"), kind_of(True, code="success")])
+    assert got == [TR.PASSWORD, TR.BLOCK, TR.HUMAN, TR.BLOCK, TR.BLOCK, TR.ERROR, "로그인됨"], got
+    ok("로그인 실패 종류 = 비밀번호 거부·접속 차단(LoginBlocked·akamai·blocked)·2차 인증(사람 조치)·그 밖 오류")
+
+    # ③ 계정 단위 — 서버 오류 3바퀴 뒤 건너뜀 · 2번 뒤 성공 · 2차 인증 1번만 · 비밀번호 거부 = 매 바퀴 지금 그대로
+    with tempfile.TemporaryDirectory() as tmp:
+        visits: dict = {}
+        ran: dict = {}
+
+        @contextlib.contextmanager
+        def fake_session(a, hidden, until=None):
+            visits[a.account_id] = visits.get(a.account_id, 0) + 1
+            if a.account_id == "otp":
+                raise TD.SessionSkip("로그인 미완료(otp: 2차 인증 화면)", TR.HUMAN)
+            if a.account_id == "pw":
+                raise TD.SessionSkip("비밀번호 오류(재시도 안 함)", TR.PASSWORD)
+            yield None
+
+        def cmd_run(a, b, args, jobs):                                   # 이름 = 정기 단계(항목 '계정 처리(정기)')
+            ran[a.account_id] = ran.get(a.account_id, 0) + 1
+            if a.account_id == "srv" or (a.account_id == "flaky" and ran["flaky"] <= 2):
+                raise API.ServerBusy("/tenants/x → 504 서버 일시 오류")
+        tries = TR.Tries(Path(tmp) / "로그", CYC, line=lambda m: None)
+        after: list = []
+
+        def passes():
+            for p in range(4):
+                TD.LOG = RLG.RunLog(tmp, now=RealDT(2026, 11, 21, 1, p), echo=lambda m: None)
+                tries.begin_pass(f"p{p}")
+                assert TD._run_accounts([Acc(i) for i in ("srv", "flaky", "otp", "pw", "good")], cmd_run, Args) == 0
+                after.append((TD._retry_count(), [r for r in TD.LOG.rows if r["결과"] == RLG.SKIP]))
+        _patched([(TD, "session", fake_session), (TD, "name_of", lambda a: a.account_id), (TD, "TRIES", tries),
+                  (TD, "LOG", None), (TD, "JOBS", Path(tmp) / "_요청기록.json")], passes)
+        assert ran == {"srv": 3, "flaky": 4, "good": 4}, ran                         # srv 4번째 바퀴 안 감 · flaky 3번째 성공
+        assert visits == {"srv": 3, "flaky": 4, "otp": 1, "pw": 4, "good": 4}, visits  # 2차 인증 1번만 · 비번 = 지금 그대로
+        assert [n for n, _ in after] == [2, 2, 0, 0], after                           # 이번 바퀴 실패·다시 시도 남은 항목 수
+        skips = [(r["계정"], r["사유"]) for r in after[3][1]]
+        assert any(a == "srv" and "3번 실패" in s for a, s in skips), skips
+        assert any(a == "otp" and "사람 조치" in s for a, s in skips), skips
+        log_rows = [(r["계정"], r["시도 항목"], r["시도"], r["결과"]) for r in rows(Path(tmp) / "로그")]
+        assert log_rows == [
+            ("srv", "계정 처리(정기)", "1/3", TR.RETRY), ("flaky", "계정 처리(정기)", "1/3", TR.RETRY),
+            ("otp", "로그인", "1/3", TR.NO_RETRY), ("pw", "로그인", "1/3", TR.NO_RETRY),
+            ("srv", "계정 처리(정기)", "2/3", TR.RETRY), ("flaky", "계정 처리(정기)", "2/3", TR.RETRY),
+            ("srv", "계정 처리(정기)", "3/3", TR.GIVE_UP)], log_rows
+        fails = _patched([(TD, "TRIES", tries), (TD, "LOG", SimpleNamespace(unresolved_failures=lambda: {})),
+                          (TD, "JOBS", Path(tmp) / "_요청기록.json")], TD._watch_failures)
+        assert set(fails) == {"srv", "otp"}, fails                                    # 회차 누적 '확인 필요'(마지막 바퀴는 건너뜀 줄만)
+    ok("계정 서버 오류 = 3바퀴 뒤 건너뜀 · 2번 실패 뒤 성공 · 2차 인증 1번만 · 비밀번호 거부 매 바퀴 그대로 · 확인 필요 = 회차 누적")
+
+    # ④ 정산 파일(받기) — 파싱 오류 3번 뒤 안 받음·생성 대기 수에서 뺌 · 쿠팡 파일 생성 대기 = 안 셈
+    with tempfile.TemporaryDirectory() as tmp:
+        jobs_p = Path(tmp) / "_요청기록.json"
+        bad = SJ.Job("A-1", "윙", "주정산", "정산", "2026-11-10", "2026-11-16", "2026-11-20", status=SJ.ST_REQUESTED, ref="r1")
+        wait = SJ.Job("A-1", "윙", "주정산", "정산", "2026-11-03", "2026-11-09", "2026-11-13", status=SJ.ST_REQUESTED, ref="r2")
+        js = [bad, wait]
+        SJ.save_jobs(jobs_p, js)
+        fetched: list = []
+
+        def fetch(b, j, row, name):
+            fetched.append(j.ref)
+            raise API.SiteChangedError("표 머리글 없음(파싱 오류)")
+
+        def match(rows_, want):                                                         # r2 = 쿠팡이 아직 파일을 안 만듦
+            return [(j, None) for j in want if j.ref == "r1"], [f"{j.ref} 아직 생성 중" for j in want if j.ref == "r2"]
+        tries = TR.Tries(Path(tmp) / "로그", CYC, line=lambda m: None)
+
+        def passes():
+            out = []
+            for p in range(4):
+                TD.LOG = RLG.RunLog(tmp, now=RealDT(2026, 11, 21, 2, p), echo=lambda m: None)
+                tries.begin_pass(f"p{p}")
+                TD.cmd_download(Acc("A-1"), None, Args, js)
+                out.append((TD._retry_count(), TD._pending_jobs()))
+            return out
+        out = _patched([(TD, "TRIES", tries), (TD, "name_of", lambda a: a.account_id), (TD, "JOBS", jobs_p),
+                        (TD, "_list_rows", lambda b, ch, want, name: []), (TD, "_fetch_one", fetch),
+                        (SJ, "match_downloads", match), (TD, "LOG", None)], passes)
+        assert fetched == ["r1", "r1", "r1"], fetched                                   # 4번째 바퀴 = 안 받음
+        assert out == [(1, 2), (1, 2), (0, 1), (0, 1)], out                            # 소진된 r1 = 생성 대기 수에서 뺌 · r2 = 그대로
+        items = {(e["항목"], e["데이터"]): e["시도"] for e in tries.items.values()}
+        assert items == {("받기 윙 주정산·정산", "정산일 2026-11-20 · 기간 2026-11-10~2026-11-16"): 3}, items   # r2(생성 대기) = 안 셈
+    ok("받기 파싱 오류 3번 뒤 안 받음·대기 수에서 뺌 · 파일 생성 대기 = 횟수 안 셈")
+
+    # ⑤ 회차(cmd_watch) — 3번 소진되면 24:00 전 조기 종료 · 생성 대기만 남으면 그 계정만 20분마다 24:00 까지(소유자 '20분으로 해줘')
+    def watch(one_pass, pending, wait_pass=lambda n: (False, 0)):
+        """pending = 바퀴 뒤 생성 대기 수(숫자 또는 지금까지 바퀴 수 → 수). 장면마다 시도표 새로(같은 회차 파일 이어 셈 방지)."""
+        (Path(TD.BASE) / "로그" / TR.STATE_NAME).unlink(missing_ok=True)
+        clock = {"now": RealDT(2026, 11, 21, 3, 0)}
+        passes: list = []
+        beats: list = []
+        sweeps: list = []
+
+        class FakeDT(RealDT):
+            @classmethod
+            def now(cls, tz=None):
+                return clock["now"]
+
+        def fake_sleep(sec):
+            clock["now"] += timedelta(seconds=max(sec, 1))
+
+        def op(kind, fn):
+            def run(args):
+                passes.append((kind, clock["now"]))
+                TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
+                TD.LOG.heartbeat = lambda st, msg="", **k: beats.append((st, msg))
+                TD.TRIES.begin_pass(f"p{len(passes)}")
+                return fn(len(passes))
+            return run
+        args = SimpleNamespace(parent=0, ledger_synced=True, until="", until_at=None, hidden=False, manual=True)
+        log0 = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
+        log0.heartbeat = lambda st, msg="", **k: beats.append((st, msg))
+        rc = _patched([(TD, "datetime", FakeDT), (TD.time, "sleep", fake_sleep), (TD, "_one_pass", op("전체", one_pass)),
+                       (TD, "_wait_pass", op("대기", wait_pass)),
+                       (TD, "_pending_jobs", lambda: pending(len(passes)) if callable(pending) else pending),
+                       (TD, "_between_passes", lambda: None), (TD, "_evidence_sweep", lambda a, act: sweeps.append(act)),
+                       (TD, "LOG", log0), (TD, "TRIES", None)],
+                      lambda: TD.cmd_watch(args))
+        return rc, passes, beats[-1], clock["now"], sweeps
+    cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            Path("output").mkdir()
+
+            def server_down(n):                                         # 매 바퀴 같은 계정 서버 오류
+                why = TD.TRIES.why_not("srv", "계정 처리(정기)", "정기")
+                if not why:
+                    TD.TRIES.fail("srv", "계정 처리(정기)", "ServerBusy: 504", "정기")
+                return False, 0
+            rc, passes, last, end, sweeps = watch(server_down, 0)
+            assert rc == 0 and [k for k, _ in passes] == ["전체"] * 3 and last[0] == "완료·실패 확인", (rc, passes, last)
+            assert end < RealDT(2026, 11, 21, 4, 0) and "확인 필요" in last[1], (end, last)   # 24:00 전 조기 종료
+            assert [b - a for (_, a), (_, b) in zip(passes, passes[1:])] == [timedelta(seconds=TD.WATCH_POLL_SEC)] * 2, passes
+            rc, passes, last, end, sweeps = watch(lambda n: (False, 0), 1)   # 쿠팡 파일 생성 대기만 계속
+            kinds = [k for k, _ in passes]
+            assert kinds[0] == "전체" and set(kinds[1:]) == {"대기"} and len(kinds) > 4, kinds   # 그 뒤 = 대기 계정만
+            gaps = {b - a for (_, a), (_, b) in zip(passes, passes[1:])}
+            assert gaps == {timedelta(minutes=20)} and TD.WATCH_PENDING_SEC == 1200, gaps                  # 20분마다
+            assert last[0] == "종료" and "회차 종료" in last[1] and RealDT(2026, 11, 22, 0, 0) <= end, (last, end)   # 24:00 끝
+            assert passes[-1][1] < RealDT(2026, 11, 22, 0, 0) and sweeps == ["done"], (passes[-1], sweeps)     # 빈 시간 증빙 1번
+            rc, passes, last, end, sweeps = watch(lambda n: (False, 0), lambda n: 1 if n < 3 else 0)   # 대기 바퀴 2번째에 다 받음
+            assert [k for k, _ in passes] == ["전체", "대기", "대기"] and last[0] == "완료", (passes, last)
+            assert end < RealDT(2026, 11, 21, 4, 0) and sweeps == ["done", "done"], (end, sweeps)      # 일찍 끝남 · 끝 증빙 = 남은 것만
+            rc, passes, last, end, sweeps = watch(lambda n: (False, 0), 1,
+                                                  wait_pass=lambda n: (TD.TRIES.fail("A", "받기", "504") and (False, 0)) or (False, 0))
+            assert {b - a for (_, a), (_, b) in zip(passes[1:], passes[2:4])} == {timedelta(seconds=TD.WATCH_POLL_SEC)}, passes[:4]
+            assert (Path(TD.BASE) / "로그" / TR.STATE_NAME).exists()
+        finally:
+            os.chdir(cwd)
+    ok("3번 소진 = 24:00 전 '완료·실패 확인' 종료 · 생성 대기만 = 대기 계정만 20분마다 24:00 까지(빈 시간 증빙 1번) · "
+       "대기 끝나면 일찍 종료 · 대기 중 오류 다시 시도 = 5분 그대로")
+
+    # ⑦ 대기 바퀴 대상 = 받으러 갈 파일이 있는 계정만(다 받은 계정·비밀번호 거부·3번 소진 = 로그인 0) · 그 계정은 받기만
+    with tempfile.TemporaryDirectory() as tmp:
+        jobs_p = Path(tmp) / "_요청기록.json"
+        SJ.save_jobs(jobs_p, [
+            SJ.Job("A", "윙", "주정산", "정산", "2026-11-10", "2026-11-16", "2026-11-20", status=SJ.ST_REQUESTED),
+            SJ.Job("B", "윙", "주정산", "정산", "2026-11-10", "2026-11-16", "2026-11-20", status=SJ.ST_DONE),
+            SJ.Job("P", "윙", "주정산", "정산", "2026-11-10", "2026-11-16", "2026-11-20", status=SJ.ST_REQUESTED),
+            SJ.Job("G", "윙", "주정산", "정산", "2026-11-10", "2026-11-16", "2026-11-20", status=SJ.ST_REQUESTED)])
+        tries = TR.Tries(Path(tmp) / "로그", CYC, line=lambda m: None)
+        tries.begin_pass("p0")
+        tries.fail("P", "로그인", "비밀번호 오류", kind=TR.PASSWORD)
+        for p in ("p1", "p2", "p3"):
+            tries.begin_pass(p)
+            tries.fail("G", "받기 윙 주정산·정산", "표 머리글 없음", "정산일 2026-11-20 · 기간 2026-11-10~2026-11-16")
+        visits: list = []
+        did: list = []
+
+        @contextlib.contextmanager
+        def fake_session(a, hidden, until=None):
+            visits.append(a.account_id)
+            yield None
+        res = _patched([(TD, "TRIES", tries), (TD, "JOBS", jobs_p), (TD, "BASE", Path(tmp)), (TD, "name_of", lambda a: a.account_id),
+                        (TD, "session", fake_session), (TD, "PASS_ACCOUNTS", [Acc(i) for i in ("A", "B", "P", "G")]),
+                        (TD, "cmd_download", lambda a, b, args, jobs: did.append(("받기", a.account_id))),
+                        (TD, "cmd_request", lambda a, b, args, jobs: did.append(("요청", a.account_id)))],
+                       lambda: (TD._wait_pass(Args), TD._pending_jobs()))
+        assert visits == ["A"] and did == [("받기", "A")], (visits, did)       # B 다 받음·P 비밀번호 거부·G 3번 소진 = 로그인 0
+        assert res == ((False, 0), 1), res                                     # 받으러 갈 것 = A 1건
+    ok("대기 바퀴 = 받으러 갈 파일 계정만 로그인(다 받음·비밀번호 거부·3번 소진 = 0) · 받기만(검증·광고·소급 안 함)")
+
+    # ⑥ 월자료 실패 달 — 다시 시도 남으면 다음 바퀴에 다시(D-245 '그 회차 다시 안 부름' 부분 대체) · 3번째 실패 뒤 건너뜀
+    with tempfile.TemporaryDirectory() as tmp:
+        tries = TR.Tries(Path(tmp), CYC, line=lambda m: None)
+        skip: set = set()
+        for p in range(3):
+            tries.begin_pass(f"p{p}")
+            skip.add("주문별매출 202609")
+            _patched([(TD, "TRIES", tries)], lambda: TD._docs_retry(
+                "A", {"주문별매출 202609"}, ["주문별매출 202609: SiteChangedError: 쪽 수 다름"], skip))
+            assert ("주문별매출 202609" in skip) == (p == 2), (p, skip)
+        e = next(iter(tries.items.values()))
+        assert (e["항목"], e["데이터"], e["시도"], e["사유"]) == ("월자료 주문별매출", "202609", 3, "SiteChangedError: 쪽 수 다름"), e
+        skip2: set = {"라이브정산 202610"}
+        _patched([(TD, "TRIES", None)], lambda: TD._docs_retry("A", {"라이브정산 202610"}, [], skip2))
+        assert skip2 == {"라이브정산 202610"}, "watch 밖(사람 명령) = 지금 그대로(그 실행에서 다시 안 부름)"
+    ok("월자료 실패 달 = 3번까지 다음 바퀴에 다시 · 그 뒤 건너뜀 · 사람 명령은 그대로")
 
 
 def main():
@@ -3779,6 +4078,7 @@ def main():
     p67_manual_start()
     p68_evidence_auto()
     p69_ledger_presync()
+    p70_error_retry_three()
     print("정산 런타임 오프라인 검증 통과")
 
 
