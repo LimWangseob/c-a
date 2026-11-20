@@ -1492,6 +1492,19 @@ def _sleep_until(sec: float, end: datetime) -> None:
     time.sleep(max(0.0, min(sec, (end - datetime.now()).total_seconds())))
 
 
+def _rest_open(sec: float, end: datetime) -> None:
+    """생성 대기 바퀴 사이 20분 쉼 — 쉬는 동안만 쉼 표시를 둬 셀독전환이 계정을 시작할 수 있게(D-375 B1 · watch 잠금은 계속 쥠 =
+    이중 watch 막기 그대로) · 깨면 지우고 다음 바퀴(그동안 전환은 지금처럼 기다림 · 같은 계정은 계정 잠금·Chrome 확인)."""
+    from coupang_analytics import settlement_watch as W
+    mark = BASE / "_잠금" / W.REST_MARK_NAME
+    now = datetime.now()
+    W.mark_rest(min(now + timedelta(seconds=sec), end), mark, now=now)
+    try:
+        _sleep_until(sec, end)
+    finally:
+        W.clear_rest(mark)
+
+
 def _ledger_ready(args) -> bool:
     """watch 회차의 관리대장 반영(D-366 ②) — 성공할 때까지 바퀴마다 1번, 성공 뒤엔 그 회차에서 다시 안 함.
     실패 = 이유를 로그·상태 카드에 남기고 False(그 바퀴 안 돎 · 다음 바퀴에서 다시)."""
@@ -1520,6 +1533,7 @@ def cmd_watch(args) -> int:
     prog, stage_path = _progress_path("output"), _run_stage_path("output")
     try:
         with registry_lock(BASE / "_잠금" / "_watch.lock", wait_sec=0, on_log=log):
+            W.clear_rest(BASE / "_잠금" / W.REST_MARK_NAME)   # 쉬다 죽은 watch 가 남긴 쉼 표시(D-375 B1)
             cycle_start, cycle_end = W.cycle_window(datetime.now())
             PASS_ACCOUNTS.clear()             # 자동 증빙 대상 = 이번 회차 바퀴의 계정만(D-365)
             args.cycle_since = cycle_start.isoformat(timespec="seconds")   # 소급 상한 = 회차(00:10~) 단위(D-170) · --since 와 무관
@@ -1567,7 +1581,7 @@ def cmd_watch(args) -> int:
                     if waiting:
                         reason = f"{reason} · 생성 대기 계정만 {rest // 60}분 뒤 확인(나머지 계정 로그인 안 함)"
                     LOG.heartbeat("대기중", reason)
-                    _sleep_until(rest, cycle_end)
+                    (_rest_open if waiting and rest == WATCH_PENDING_SEC else _sleep_until)(rest, cycle_end)
                     continue
                 W.write_done(DONE_FILE, key, action, reason, failed=len(fails))
                 _evidence_sweep(args, action)

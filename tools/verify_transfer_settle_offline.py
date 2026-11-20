@@ -444,6 +444,55 @@ def s8_one_at_a_time():
     ok("잠금이 잡혀 있으면 2단계·1단계 모두 시작 안 함(종료 코드 2)")
 
 
+def s9_cycle_done():
+    print("[S9] 회차 받기 완료(D-375 B2) — 그날 회차(00:10~)에 받기를 마친 계정은 재부팅 복구(--resume) 때 다시 로그인 안 함 · "
+          "받다 만(남은 요청)·건너뜀 계정은 마저 · 다음 회차엔 다시 · 탭 [지금 받기]도 같은 기록")
+    accts = _accts(4)
+    left = {"acc1": 0, "acc2": 1, "acc3": 0, "acc4": 0}         # acc2 = 쿠팡 파일 생성 중(요청됨 남음) = 받다 만
+    plan = {"acc1": (TL.OK, "받기 끝"), "acc2": (TL.OK, "받기 끝"), "acc3": (TL.SKIP, "원장 정산이 이 계정을 쓰는 중"),
+            "acc4": (TL.OK, "받기 끝")}
+
+    def go(d, c, called, stop_after=None):
+        def work(a, pws, stop_at):
+            if a.account_id == stop_after:
+                raise KeyboardInterrupt("재부팅(프로세스 끝남)")
+            called.append(a.account_id)
+            c.sleep(300)
+            return plan[a.account_id]
+        try:
+            return TS.run(accts, lambda m: None, work, out_dir=d, passwords=lambda a: ([PW], "파일"), busy=lambda: "",
+                          now=c, sleep=c.sleep, fp=FP, gap=lambda: 60.0, left=lambda a: left[a.account_id])
+        except KeyboardInterrupt:
+            return "끊김"
+    with tempfile.TemporaryDirectory() as d:
+        c = _Clock(datetime(2026, 11, 21, 3, 0))
+        first: list = []
+        assert go(d, c, first, stop_after="acc4") == "끊김" and first == ["acc1", "acc2", "acc3"], first   # acc4 하던 중 재부팅
+        done = TS.load_done(d)
+        assert set(done) == {"acc1"} and done["acc1"]["회차"] == "2026-11-21T00:10", done   # 남은 요청·건너뜀·못 끝냄 = 기록 없음
+        assert PW not in (Path(d) / TS.DONE_FILE).read_text(encoding="utf-8")
+        c.t = datetime(2026, 11, 21, 6, 33)                                          # 재부팅 복구 = 같은 회차
+        again: list = []
+        assert go(d, c, again) == 0 and again == ["acc2", "acc3", "acc4"], again    # acc1 = 다시 안 함
+        assert set(TS.load_done(d)) == {"acc1", "acc4"}
+        c.t = datetime(2026, 11, 21, 14, 0)                                          # 같은 날 낮 [지금 받기] = 같은 기록(받은 계정 로그인 0)
+        noon: list = []
+        left["acc2"] = 0
+        assert go(d, c, noon) == 0 and noon == ["acc2", "acc3"], noon
+        assert set(TS.load_done(d)) == {"acc1", "acc2", "acc4"}
+        c.t = datetime(2026, 11, 22, 0, 5)                                           # 24:00~00:10 = 아직 21일 회차
+        assert TS.pick_targets(accts, TL.load_state(d), TS.load_done(d), TS.cycle_key(c())) == [accts[2]]
+        c.t = datetime(2026, 11, 22, 0, 10, 2)                                       # 다음 회차 = 모두 다시
+        nxt: list = []
+        assert go(d, c, nxt) == 0 and nxt == ["acc1", "acc2", "acc3", "acc4"], nxt
+        st = TL.load_state(d)
+        assert st["acc1"]["결과"] == TL.OK and "acc1" in TS.load_done(d)
+    state = {"acc1": {"결과": TL.FAIL, "사유": "비밀번호 오류"}}
+    assert [a.account_id for a in TS.pick_targets(accts, state)] == ["acc2", "acc3", "acc4"], "기록 없이 부르면 지금 그대로"
+    ok("재부팅 전 받은 acc1 = 복구 뒤 로그인 0 · 받다 만 acc2(남은 요청)·건너뜀 acc3·하던 중 끊긴 acc4 = 마저 · 낮 [지금 받기] = 같은 기록 · "
+       "00:05 = 전날 회차 · 00:10 다음 회차 = 모두 다시 · 비밀번호 없음")
+
+
 def main() -> int:
     s1_targets()
     s2_wait()
@@ -453,6 +502,7 @@ def main() -> int:
     s6_cumulative()
     s7_launch()
     s8_one_at_a_time()
+    s9_cycle_done()
     print("셀독전환자 정산 자료 받기(2단계) 오프라인 검증 통과")
     return 0
 

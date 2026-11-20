@@ -23,7 +23,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .settlement_watch import CYCLE_START
+from .settlement_watch import CYCLE_START, REST_MARK_NAME, resting
 
 OUT_DIR = Path("output") / "정산_셀독전환"
 STATE_FILE = "로그인확인_최신.json"
@@ -33,6 +33,7 @@ QUIET_HOURS = 3                # 멈춤 시각부터 이 시간 동안은 시작
 BLOCK_STOP = 2                 # 차단·미완료·오류 연속 이만큼이면 전체 중단
 PW_WRONG_TAG, OTP_TAG = "비밀번호 오류", "2단계 인증"
 BUSY_LOCKS = (Path("output") / "_잠금" / "파이프라인.lock", Path("output") / "정산" / "_잠금" / "_watch.lock")
+WATCH_REST = BUSY_LOCKS[1].with_name(REST_MARK_NAME)   # watch 대기 바퀴 사이 쉼 표시 — 있으면 watch 잠금이 잡혀 있어도 계정 시작(D-375)
 RUN_LOCK = OUT_DIR / "_잠금" / "_실행.lock"   # 1단계(로그인 확인)·2단계(정산 자료 받기 transfer_settle) 한 번에 하나(D-187)
 
 OK, FAIL, BLOCK, SKIP = "성공", "실패", "차단", "건너뜀"
@@ -98,14 +99,18 @@ def counts(accts, state: dict) -> dict:
 
 
 # ── 실행 조건 ─────────────────────────────────────────────────
-def busy_reason(locks=BUSY_LOCKS) -> str:
-    """앱 파이프라인·정산 자동 다운로드가 도는 중이면 그 이유(아니면 '') — 잠금을 잠깐 잡아 보고 바로 놓음."""
+def busy_reason(locks=BUSY_LOCKS, now=None) -> str:
+    """앱 파이프라인·정산 자동 다운로드가 도는 중이면 그 이유(아니면 '') — 잠금을 잠깐 잡아 보고 바로 놓음.
+    정산 watch 가 대기 바퀴 사이에 쉬는 중(잠금 옆 쉼 표시 · 쉼 끝 전)이면 watch 잠금은 '도는 중 아님'(D-375 B1 — 같은 계정 겹침은
+    계정 잠금·Chrome 사용 중 확인이 막음) · 파이프라인 잠금은 그대로."""
     from .registry_lock import RegistryLockError, registry_lock
     for p in locks:
         try:
             with registry_lock(p, wait_sec=0):
                 pass
         except RegistryLockError:
+            if p.name == "_watch.lock" and resting(p.with_name(REST_MARK_NAME), (now or datetime.now)()):
+                continue
             return f"{'앱 실행(판매수집·순위)' if p.name == '파이프라인.lock' else '정산 자동 다운로드'}이 도는 중({p})"
     return ""
 

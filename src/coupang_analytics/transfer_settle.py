@@ -7,6 +7,8 @@
 안전 규칙(런타임 병렬 금지·사무실 IP 보호):
 - 23:50~02:50(운용 PC 00:10 시간대 · D-372) · 앱 파이프라인 · 정산 자동 수집(watch)이 **모두 끝나야** 계정을 시작 — 계정마다 다시 확인하고
   돌면 **기다림**(5분마다). 멈춤 = 시작 뒤 처음 오는 23:50 — 그때까지 못 하면 남은 계정은 다음 날.
+  단 watch 가 생성 대기 바퀴 사이 20분 쉬는 동안(쉼 표시)은 시작 가능(같은 계정 = 계정 잠금·Chrome 확인 · D-375 B1).
+- 그날 회차(00:10~)에 받기를 마친 계정(성공 + 남은 요청 0)은 같은 회차에 다시 띄워도(재부팅 복구·탭 버튼) 로그인 안 함(D-375 B2).
 - 로그인 '실패'(비밀번호 오류·2단계 인증·비밀번호 없음) 계정은 **무인으로 다시 넣지 않음**(같은 틀린 값 반복 = 계정 잠금 위험).
   비밀번호를 고친 뒤 사람이 1단계 '성공 안 된 계정만 다시'로 확인 → 성공하면 다음 날부터 받음.
 - 계정 사이 45~75초 · 차단·미완료·오류 2계정 연속 = 전체 중단(1단계와 같음) · 1단계·2단계는 같은 잠금으로 한 번에 하나.
@@ -24,10 +26,12 @@ from pathlib import Path
 from . import settlement_accounts as SA
 from . import settlement_files as SF
 from . import transfer_login as TL
+from .settlement_watch import cycle_window
 
 OUT_DIR = TL.OUT_DIR
 STORE_DIR = OUT_DIR / "정산"                       # 정산 계정과 같은 모양(_요청기록.json·파일·쿠팡지급내역·로그)
 CUMULATIVE = OUT_DIR / "셀독전환_정산내역_누적.xlsx"
+DONE_FILE = "_받기완료.json"                       # 계정별 '받기 완료 회차'(00:10 회차 · 재부팅 복구 때 다시 로그인 안 함 D-375 B2)
 RUN_LOCK = TL.RUN_LOCK                            # 1단계·2단계 한 번에 하나
 FROM = date(2026, 1, 1)                           # 정산 자료 시작(§15 · 지급일 기준)
 CAP = 30                                          # 한 실행 계정당 요청 — 윙 다운로드 목록이 최근 30건만 보임(STATE 사실)
@@ -75,9 +79,46 @@ def apply_args(args) -> None:
 
 
 # ── 대상·기다림 ─────────────────────────────────────────────────
-def pick_targets(accts, state: dict) -> list:
-    """로그인 '실패' 제외 — 성공·미확인·차단·건너뜀만(무인 재시도로 같은 틀린 비번을 넣지 않음)."""
-    return [a for a in accts if (state.get(a.account_id) or {}).get("결과") != TL.FAIL]
+def cycle_key(at: datetime) -> str:
+    """그 시각이 속한 회차(00:10~그날 24:00 · settlement_watch.cycle_window)의 시작 'YYYY-MM-DDTHH:MM'."""
+    return cycle_window(at)[0].isoformat(timespec="minutes")
+
+
+def load_done(out_dir=OUT_DIR) -> dict:
+    p = Path(out_dir) / DONE_FILE
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+
+def mark_done(out_dir, aid: str, cycle: str, at: str) -> None:
+    """그 회차에 받기를 마친 계정(로그인 성공 + 남은 요청 0) — 계정 하나 끝날 때마다 바로 저장(임시 파일 → 바꿔 끼움)."""
+    p = Path(out_dir) / DONE_FILE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    data = load_done(out_dir)
+    data[aid] = {"회차": cycle, "시각": at}
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(p)
+
+
+def _left(a, jobs: list) -> int:
+    """그 계정의 남은 요청(요청예정·요청됨 = 쿠팡 파일 생성 중·계정당 30건 넘은 몫)."""
+    from . import settlement_jobs as SJ
+    name = display_name(a)
+    return sum(1 for j in jobs if j.account == name and j.status in (SJ.ST_PLANNED, SJ.ST_REQUESTED))
+
+
+def open_left(a, store=STORE_DIR) -> int:
+    from . import settlement_jobs as SJ
+    p = Path(store) / "_요청기록.json"
+    return _left(a, SJ.load_jobs(p) if p.exists() else [])
+
+
+def pick_targets(accts, state: dict, done: dict | None = None, cycle: str = "") -> list:
+    """로그인 '실패' 제외 — 성공·미확인·차단·건너뜀만(무인 재시도로 같은 틀린 비번을 넣지 않음) · 이번 회차(cycle)에 받기를 마친
+    계정도 제외(재부팅 복구 때 다시 로그인 안 함 · 받다 만 계정 = 기록 없음 → 마저 받음 · D-375 B2)."""
+    done = done or {}
+    return [a for a in accts if (state.get(a.account_id) or {}).get("결과") != TL.FAIL
+            and not (cycle and (done.get(a.account_id) or {}).get("회차") == cycle)]
 
 
 def ready_reason(until: str, at: datetime, busy) -> str:
@@ -117,16 +158,21 @@ def _one(a, pws: list, src: str, work, fp, out_dir, at: str, stop_at, log) -> st
 
 
 def run(accts, log, work, *, until: str = TL.UNTIL_DEFAULT, out_dir=OUT_DIR, passwords=None, busy=TL.busy_reason,
-        sleep=time.sleep, now=datetime.now, fp=None, gap=None) -> int:
+        sleep=time.sleep, now=datetime.now, fp=None, gap=None, left=None) -> int:
     """대상 계정마다 기다림 확인 → work(a, 비번 후보, 멈춤 시각) → 결과 기록. 반환 0(끝·멈춤 시각) | 1(연속 문제 중단).
-    비밀번호 후보가 없으면 로그인 안 하고 '실패' 기록 · 쉼(45~75초)은 로그인한 계정 사이만."""
+    비밀번호 후보가 없으면 로그인 안 하고 '실패' 기록 · 쉼(45~75초)은 로그인한 계정 사이만 · 성공 + 남은 요청 0(left) =
+    이번 회차 받기 완료 기록(같은 회차 다시 띄워도 그 계정 로그인 안 함 · D-375 B2)."""
     from . import login_today
     from . import transfer_accounts as TA
     passwords, fp = passwords or TA.login_passwords, fp or login_today.fingerprint
     gap = gap or (lambda: random.uniform(*TL.GAP_SEC))
-    targets = pick_targets(accts, TL.load_state(out_dir))
+    left = left or (lambda a: open_left(a, Path(out_dir) / "정산"))
+    cycle, state = cycle_key(now()), TL.load_state(out_dir)
+    targets = pick_targets(accts, state, load_done(out_dir), cycle)
+    gone = len(pick_targets(accts, state)) - len(targets)
     stop_at = TL.deadline_of(until, now())
-    log(f"[셀독전환 정산] 대상 {len(targets)}계정 / 파일 {len(accts)}계정(로그인 '실패' 제외) · 멈춤 "
+    log(f"[셀독전환 정산] 대상 {len(targets)}계정 / 파일 {len(accts)}계정(로그인 '실패' 제외"
+        + (f" · 이번 회차({cycle.replace('T', ' ')}~) 받기 끝 {gone}계정 제외" if gone else "") + ") · 멈춤 "
         + (f"{stop_at:%m-%d %H:%M}" if stop_at else "없음"))
     trouble, tried = 0, 0
     for a in targets:
@@ -143,6 +189,8 @@ def run(accts, log, work, *, until: str = TL.UNTIL_DEFAULT, out_dir=OUT_DIR, pas
             sleep(gap())
         tried += 1
         status = _one(a, pws, src, work, fp, out_dir, now().isoformat(sep=" ", timespec="seconds"), stop_at, log)
+        if status == TL.OK and not left(a):
+            mark_done(out_dir, a.account_id, cycle, now().isoformat(sep=" ", timespec="seconds"))
         trouble = trouble + 1 if status in (TL.BLOCK, TL.SKIP) else 0
         if trouble >= TL.BLOCK_STOP:
             log(f"  ⛔ 차단·미완료·오류 {TL.BLOCK_STOP}계정 연속 — 전체 중단(사무실 IP 차단 의심·다른 계정 보호)")
@@ -188,7 +236,6 @@ PROD_HEAD = ("유형", "대표자명", "사업자명", "계정명", "채널", "�
 
 def _gather(a, store: Path, jobs: list, log) -> tuple[list, list, dict]:
     """계정 하나 → (지급 줄, 상품 줄, 요약 칸)."""
-    from . import settlement_jobs as SJ
     who = (a.kind, a.representative, a.business_name, a.account_id)
     tok = SF._token(display_name(a), "계정명")
     pays, prods, last = [], [], ""
@@ -211,8 +258,7 @@ def _gather(a, store: Path, jobs: list, log) -> tuple[list, list, dict]:
                           r.period_end.isoformat(), r.order_id, r.product_id, r.option_id, r.product_name, r.option_name,
                           r.qty, r.sales, r.coupon, r.fee, r.settle, r.recognized.isoformat() if r.recognized else "",
                           r.kind, f.name))
-    name = display_name(a)
-    left = sum(1 for j in jobs if j.account == name and j.status in (SJ.ST_PLANNED, SJ.ST_REQUESTED))
+    left = _left(a, jobs)
     costs = len(list((store / "파일" / "비용").glob(f"{tok}_*.xlsx")))
     return pays, prods, {"지급 줄": len(pays), "최종지급액 합": sum(int(x[9] or 0) for x in pays), "정산 파일": len(files),
                          "비용 리포트": costs, "상품 줄": len(prods), "마지막 정산일": last, "남은 요청": left}
