@@ -4038,6 +4038,88 @@ def p70_error_retry_three():
     ok("월자료 실패 달 = 3번까지 다음 바퀴에 다시 · 그 뒤 건너뜀 · 사람 명령은 그대로")
 
 
+def p71_wait_rest_open_to_transfer():
+    print("[P71] 대기 바퀴 사이 20분 쉼 = 셀독전환이 계정 시작 가능(쉼 표시) · 바퀴 도는 중·5분 다시 시도 쉼 = 지금처럼 기다림 · "
+          "남은 표시 = 새 watch 가 시작 때 지움 · 끝나면 없음 · 이중 watch 막기(잠금) 그대로(D-375 B1)")
+    import os
+    from datetime import datetime as RealDT, timedelta
+    from types import SimpleNamespace
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    from coupang_analytics import settlement_retry as TR
+    from coupang_analytics import settlement_runlog as RLG
+    from coupang_analytics import settlement_watch as W
+    from coupang_analytics import transfer_login as TL
+    from coupang_analytics.registry_lock import RegistryLockError, registry_lock
+    clock = {"now": RealDT(2026, 11, 21, 3, 0)}
+    seen: list = []                               # (언제, 표시 있음, 전환 busy_reason)
+
+    class FakeDT(RealDT):
+        @classmethod
+        def now(cls, tz=None):
+            return clock["now"]
+
+    def look(kind):
+        seen.append((kind, TL.WATCH_REST.exists(), TL.busy_reason(now=lambda: clock["now"] + timedelta(seconds=1))))
+
+    def fake_sleep(sec):
+        look(f"쉼 {int(sec)}")
+        clock["now"] += timedelta(seconds=max(sec, 1))
+
+    def op(kind, fn):
+        def run(args):
+            look(kind)
+            TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
+            TD.LOG.heartbeat = lambda st, msg="", **k: None
+            TD.TRIES.begin_pass(f"p{len(seen)}")
+            return fn()
+        return run
+    cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            Path("output").mkdir()
+            W.mark_rest(RealDT(2026, 11, 21, 3, 15), TL.WATCH_REST, now=RealDT(2026, 11, 21, 2, 55))   # 죽은 watch 가 남긴 표시
+            fails = {"n": 0}
+
+            def wait_pass():                     # 대기 바퀴 3번째 = 서버 오류 1번(다시 시도 5분 쉼)
+                fails["n"] += 1
+                if fails["n"] == 3:
+                    TD.TRIES.fail("A", "받기", "504")
+                return False, 0
+            log0 = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
+            log0.heartbeat = lambda st, msg="", **k: None
+            args = SimpleNamespace(parent=0, ledger_synced=True, until="", until_at=None, hidden=False, manual=True)
+            rc = _patched([(TD, "datetime", FakeDT), (TD.time, "sleep", fake_sleep),
+                           (TD, "_one_pass", op("전체", lambda: (False, 0))), (TD, "_wait_pass", op("대기", wait_pass)),
+                           (TD, "_pending_jobs", lambda: 1), (TD, "_between_passes", lambda: None),
+                           (TD, "_evidence_sweep", lambda a, act: None), (TD, "LOG", log0), (TD, "TRIES", None)],
+                          lambda: TD.cmd_watch(args))
+            assert rc == 0 and clock["now"] >= RealDT(2026, 11, 22, 0, 0), (rc, clock)
+            busy = "정산 자동 다운로드"
+            first = seen[0]
+            assert first[0] == "전체" and not first[1] and busy in first[2], f"시작 = 남은 표시 지움 · 바퀴 중 = 기다림: {first}"
+            passes = [s for s in seen if s[0] in ("전체", "대기")]
+            assert all(not m and busy in why for _, m, why in passes), f"바퀴 도는 중 = 표시 없음·기다림: {passes}"
+            rests20 = [s for s in seen if s[0] == f"쉼 {TD.WATCH_PENDING_SEC}"]
+            assert len(rests20) > 10 and all(m and why == "" for _, m, why in rests20), f"20분 쉼 = 계정 시작 가능: {rests20[:3]}"
+            rests5 = [s for s in seen if s[0] == f"쉼 {TD.WATCH_POLL_SEC}"]
+            assert rests5 and all(not m and busy in why for _, m, why in rests5), f"5분 다시 시도 쉼 = 기다림: {rests5}"
+            assert not TL.WATCH_REST.exists() and TL.busy_reason() == "", "끝나면 표시 없음·잠금 풀림"
+            with registry_lock(TL.BUSY_LOCKS[1], wait_sec=0):     # 이중 실행 막기 = 그대로(쉬는 중에도 잠금은 쥠)
+                try:
+                    with registry_lock(TL.BUSY_LOCKS[1], wait_sec=0):
+                        raise AssertionError("잠금이 두 번 잡힘")
+                except RegistryLockError:
+                    pass
+            assert Path(TD.BASE / "_잠금" / "_watch.lock") == TL.BUSY_LOCKS[1] and TL.WATCH_REST.parent == TD.BASE / "_잠금"
+            (Path(TD.BASE) / "로그" / TR.STATE_NAME).unlink(missing_ok=True)
+        finally:
+            os.chdir(cwd)
+    ok("시작 = 남은 표시 지움 · 전체·대기 바퀴 도는 중 = 표시 없음(전환 기다림) · 20분 쉼 = 표시(전환 계정 시작) · 5분 다시 시도 쉼 = "
+       "기다림 · 끝나면 표시 없음 · 같은 잠금 경로")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -4101,6 +4183,7 @@ def main():
     p68_evidence_auto()
     p69_ledger_presync()
     p70_error_retry_three()
+    p71_wait_rest_open_to_transfer()
     print("정산 런타임 오프라인 검증 통과")
 
 

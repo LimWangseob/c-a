@@ -329,6 +329,37 @@ def t8_night_rules():
     ok("밤 시작 → 다음 날 17:40 · 21:00 까지 대기 · 차단+오류 2연속 중단 · 재시도 = 비번 바뀐 계정·미완료·미확인만 · 지문만 저장")
 
 
+def t9_watch_rest():
+    print("[T9] 정산 watch 대기 바퀴 쉼(D-375 B1) — 쉼 표시가 있고 쉼 끝 전이면 '도는 중 아님' · 표시 없음(바퀴 도는 중)·"
+          "쉼 끝 지남·쓴 시각보다 앞·깨진 표시 = 도는 중 · 파이프라인 잠금은 그대로 · watch 가 죽어 표시만 남음 = 잠금이 풀려 원래대로")
+    from datetime import timedelta
+    from coupang_analytics import settlement_watch as W
+    t = datetime(2026, 11, 21, 9, 0)
+    at = lambda m: (lambda: t + timedelta(minutes=m))   # noqa: E731
+    assert TL.WATCH_REST == TL.BUSY_LOCKS[1].with_name(W.REST_MARK_NAME), TL.WATCH_REST
+    with tempfile.TemporaryDirectory() as d:
+        pipe, watch = Path(d) / "_잠금" / "파이프라인.lock", Path(d) / "정산" / "_잠금" / "_watch.lock"
+        mark = watch.with_name(W.REST_MARK_NAME)
+        with registry_lock(watch, wait_sec=0):
+            assert "정산 자동 다운로드" in TL.busy_reason((pipe, watch), now=at(0)), "표시 없음 = 바퀴 도는 중(지금처럼 기다림)"
+            W.mark_rest(t + timedelta(minutes=20), mark, now=t)
+            rec = json.loads(mark.read_text(encoding="utf-8"))
+            assert set(rec) >= {"pid", "쉼 끝", "쓴 시각"}, rec
+            assert TL.busy_reason((pipe, watch), now=at(5)) == "", "쉬는 동안 = 계정 시작 가능"
+            assert "정산 자동" in TL.busy_reason((pipe, watch), now=at(20)), "쉼 끝 = 곧 다음 바퀴"
+            assert "정산 자동" in TL.busy_reason((pipe, watch), now=at(-1)), "쓴 시각 앞(시계 되돌림) = 믿지 않음"
+            with registry_lock(pipe, wait_sec=0):
+                assert "앱 실행" in TL.busy_reason((pipe, watch), now=at(5)), "파이프라인 잠금은 쉼과 상관없이 기다림"
+            mark.write_text("{깨짐", encoding="utf-8")
+            assert "정산 자동" in TL.busy_reason((pipe, watch), now=at(5)), "깨진 표시 = 도는 중(안전한 쪽)"
+            W.clear_rest(mark)
+            assert not mark.exists()
+            W.clear_rest(mark)                                  # 없어도 그대로
+        W.mark_rest(t + timedelta(minutes=20), mark, now=t)    # watch 가 쉬다 죽음 → OS 가 잠금을 풂 → 표시와 상관없이 빈 값
+        assert TL.busy_reason((pipe, watch), now=at(5)) == "" and TL.busy_reason((pipe, watch), now=at(30)) == ""
+    ok("쉼 표시 + 쉼 끝 전 = 계정 시작 가능 · 표시 없음·쉼 끝·시계 되돌림·깨짐 = 기다림 · 파이프라인 = 그대로 · 남은 표시 = 잠금 기준")
+
+
 def main() -> int:
     t1_parse()
     t2_file_errors()
@@ -338,6 +369,7 @@ def main() -> int:
     t6_busy_lock()
     t7_check_one_mapping()
     t8_night_rules()
+    t9_watch_rest()
     print("셀독전환자 로그인 확인 오프라인 검증 통과")
     return 0
 

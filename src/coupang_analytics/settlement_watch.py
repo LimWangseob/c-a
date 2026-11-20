@@ -112,6 +112,38 @@ def write_done(path, key: str, action: str, reason: str, now: datetime | None = 
     os.replace(tmp, p)
 
 
+REST_MARK_NAME = "_watch_쉼.json"       # watch 잠금 옆 · 대기 바퀴 사이 쉬는 동안만 있음(D-375 B1)
+
+
+def mark_rest(until: datetime, path, now: datetime | None = None) -> None:
+    """대기 바퀴 사이 쉼 표시(원자적 쓰기) — 쉬는 동안 셀독전환이 계정을 시작해도 됨(`transfer_login.busy_reason`).
+    watch 잠금(_watch.lock)은 계속 쥠(같은 PC 이중 watch 막기) · pid = 기록용(판정은 잠금과 시각으로)."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    rec = {"pid": os.getpid(), "쉼 끝": until.isoformat(timespec="seconds"),
+           "쓴 시각": (now or datetime.now()).isoformat(timespec="seconds")}
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(rec, fh, ensure_ascii=False)
+    os.replace(tmp, p)
+
+
+def clear_rest(path) -> None:
+    Path(path).unlink(missing_ok=True)
+
+
+def resting(path, now: datetime) -> bool:
+    """watch 가 지금 대기 바퀴 사이에 쉬는 중인가 — 표시가 있고 '쓴 시각 ≤ 지금 < 쉼 끝'일 때만. 깨진 표시·쉼 끝 지남·
+    시계 되돌림 = False(기다리는 쪽). watch 잠금이 잡혀 있을 때만 부름(watch 가 죽으면 잠금이 풀려 표시는 보지 않음 ·
+    새 watch 는 시작 때 표시를 지움)."""
+    p = Path(path)
+    try:
+        rec = json.loads(p.read_text(encoding="utf-8"))
+        return datetime.fromisoformat(rec["쓴 시각"]) <= now < datetime.fromisoformat(rec["쉼 끝"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return False                    # 없음·깨진 표시 = 쉼 아님(전환은 기다림 — 안전한 쪽 · read_done 과 같은 규칙)
+
+
 def plan_after_pass(stopped: bool, work: int, pending: int, retry: int,
                     failed: dict | None = None) -> tuple[str, str]:
     """한 바퀴 뒤 다음 행동(순수). stopped=연속 실패/차단 중단 · work=이번에 새로 요청/받은 수 ·
