@@ -193,7 +193,7 @@ if (Test-Path $cfg) {
 
 # ── 야간 무인 자동실행 등록/해제 (예전 install_schedule / uninstall_schedule 통합) ──
 function Register-AutoTasks {
-    # 1) 매일 00:10 무인 실행(D-372)(--auto, 앱은 ①②③+재고 역기록을 다 끝내면 스스로 종료 — 강제 종료 없음)
+    # 1) 매일 00:10 무인 실행(D-372)(--auto, 앱은 ①②③+재고 역기록을 다 끝내고 08:00 노출·방문자 보충(D-374)까지 마치면 스스로 종료 — 강제 종료 없음)
     $action  = New-ScheduledTaskAction -Execute $exe -Argument '--auto' -WorkingDirectory $root
     $trigger = New-ScheduledTaskTrigger -Daily -At ([datetime]'00:10')
     # 첫 실행 = 다음 00:10 — 낮에 등록하면 시작 시각이 '오늘 00:10'(지남)이라 StartWhenAvailable 로 바로 뜰 수 있어 하루 뒤로(소유자 11-20)
