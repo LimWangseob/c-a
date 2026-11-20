@@ -11,6 +11,12 @@
 
 통과하면 그때 작업 폴더 내용의 키를 기록한다(check_stamp.py). 건너뛰기는 내용이 한 글자라도 다르면 일어나지 않는다.
 
+PC 전체에서 게이트는 한 번에 1개만 돈다(D-377 · 노트북 과부하 — 게이트 1개 ≈ 2.3GB). 다른 게이트(다른 작업 폴더·
+세션·git 훅 포함)가 돌고 있으면 누가(PID)·언제부터·어느 폴더인지 보여 주고 끝날 때까지 기다린다. 건너뛰기 판정은
+잠금을 얻은 **뒤에** 한다 — 앞 게이트가 같은 내용으로 통과 기록을 남겼으면 뒤 게이트(pre-push 등)는 돌지 않는다.
+잠금 = OS 파일 잠금(LOCK_PATH · registry_lock.py 와 같은 방식) — 게이트가 죽으면 OS 가 풀어 남은 파일은 막지 않는다.
+검사 프로세스는 낮은 우선순위(Windows BELOW_NORMAL)로 띄워 다른 작업을 덜 밀어낸다.
+
 개수는 적지 않는다(검증이 늘 때마다 문구가 어긋났음 — E7). 실행 끝 요약에 'N종'이 나온다.
 
 각 스크립트는 실패 시 non-zero로 끝난다(assert/SystemExit). 여기선 하나가 죽어도 나머지를 계속
@@ -19,9 +25,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -67,7 +75,7 @@ CHECKS = [
     ("셀독전환자 정산 자료 받기(매일 00:10 무인 뒤·대상·기다림·원장 파일 재사용·누적 파일)", "tools/verify_transfer_settle_offline.py", True),
     ("샵마인 비번↔관리대장 동기화(DPAPI·필드탐색·대조·되쓰기·비번 비노출)", "tools/verify_shopmine_sync_offline.py", True),
     ("계정 정지 감지→대장 취소선(판정·열·상태파일·백업먼저·가역)", "tools/verify_account_suspend_offline.py", True),
-    ("회귀 게이트 자체(동시 실행·통과 기록)", "tools/verify_run_checks_offline.py", True),
+    ("회귀 게이트 자체(동시 실행·통과 기록·PC 전체 1개·낮은 우선순위 D-377)", "tools/verify_run_checks_offline.py", True),
     ("앱 진행 로그창 탭별 표시(탭·작업·시작 줄·복사)", "tools/verify_ui_log_tabs_offline.py", True),
     ("켜 둔 앱 관리대장 다시 읽기(버튼 실행·06:00 계약자·실행 도중 안 읽음 D-366)", "tools/verify_ui_ledger_reread_offline.py", True),
     ("날짜 칸 = 판매일·옛 칸 하루 당기기(백업·스탬프·순위 묶음·두 번 방지 D-368·D-369)", "tools/verify_date_basis_offline.py", True),
@@ -80,8 +88,82 @@ CHECKS = [
 
 DEFAULT_JOBS = 3   # 실측(2026-11-08, 22코어 PC): 3개 동시 = 16종 94~149초 · 하나씩 = 약 209초
 
-# 자식 콘솔창 억제(무인/pythonw 실행 시 검은 창 깜빡임 방지, Windows 전용)
+# 자식 콘솔창 억제(무인/pythonw 실행 시 검은 창 깜빡임 방지) + 낮은 우선순위(D-377) — Windows 전용(다른 OS 는 0)
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+_LOW_PRIORITY = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+
+# PC 전체 게이트 잠금(D-377) — 작업 폴더·세션과 상관없는 한 곳(credstore 와 같은 LOCALAPPDATA 기준)
+LOCK_PATH = Path(os.environ.get("LOCALAPPDATA") or str(Path.home())) / "coupang-analytics" / "run_checks.lock"
+_LOCK_BYTE = 1 << 20     # Windows 잠금은 그 바이트를 남이 못 읽게 함 → 쥔 게이트 정보(앞부분)와 떨어진 곳을 잠근다
+_LOCK_POLL_SEC = 1.0
+
+if sys.platform == "win32":
+    import msvcrt
+
+    def _try_lock(fd: int) -> bool:
+        os.lseek(fd, _LOCK_BYTE, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+
+    def _unlock(fd: int) -> None:
+        os.lseek(fd, _LOCK_BYTE, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+else:
+    import fcntl
+
+    def _try_lock(fd: int) -> bool:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False
+        return True
+
+    def _unlock(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+def _holder(path: Path) -> str:
+    """잠금을 쥔 게이트가 적어 둔 'PID · 시작 · 작업 폴더'(쥔 직후 잠깐은 비어 있을 수 있음)."""
+    try:
+        return path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError as e:
+        return f"정보 못 읽음({e})"
+
+
+def _write_holder(fd: int, text: str) -> None:
+    os.ftruncate(fd, 0)
+    os.lseek(fd, 0, os.SEEK_SET)
+    os.write(fd, text.encode("utf-8"))
+
+
+@contextmanager
+def _gate_lock(root: Path):
+    """PC 전체 게이트 잠금 — 다른 게이트가 쥐고 있으면 끝날 때까지 기다림(시간 제한 없음 · 죽으면 OS 가 풂)."""
+    path = LOCK_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        started, shown = time.monotonic(), None
+        while not _try_lock(fd):
+            who = _holder(path) or "정보 아직 없음"
+            if who != shown:
+                print(f"  ⏳ 다른 회귀 게이트가 돌고 있어 끝날 때까지 기다립니다 — {who} (PC 전체 1개 · D-377 · {path})",
+                      flush=True)
+                shown = who
+            time.sleep(_LOCK_POLL_SEC)
+        if shown is not None:
+            print(f"  ▶ 앞 게이트가 끝나 시작합니다({time.monotonic() - started:.0f}초 기다림)", flush=True)
+        _write_holder(fd, f"PID {os.getpid()} · 시작 {time.strftime('%Y-%m-%d %H:%M:%S')} · 작업 폴더 {root}")
+        try:
+            yield
+        finally:
+            _write_holder(fd, "")
+            _unlock(fd)
+    finally:
+        os.close(fd)
 
 
 def _run(name: str, script: str, root: Path | None = None) -> tuple[bool, float, str]:
@@ -89,7 +171,7 @@ def _run(name: str, script: str, root: Path | None = None) -> tuple[bool, float,
     proc = subprocess.run(
         [sys.executable, script],
         cwd=str(root or ROOT), capture_output=True, text=True, encoding="utf-8", errors="replace",
-        creationflags=_NO_WINDOW,
+        creationflags=_NO_WINDOW | _LOW_PRIORITY,
     )
     dur = time.monotonic() - started
     return proc.returncode == 0, dur, (proc.stdout or "") + (proc.stderr or "")
@@ -137,6 +219,11 @@ def _args(argv: list[str] | None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     a = _args(argv)
     root = ROOT
+    with _gate_lock(root):               # 건너뛰기 판정도 잠금 안에서 — 앞 게이트의 통과 기록을 보고 판정(D-377)
+        return _gate(a, root)
+
+
+def _gate(a: argparse.Namespace, root: Path) -> int:
     checks = [c for c in CHECKS if not a.quick or c[2]]
     label = "빠른 검증(--quick)" if a.quick else "전체 검증"
     if a.skip_if_passed and _already_passed(root, a.skip_if_passed, a.quick):
