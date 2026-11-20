@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # ui/ 형제 모듈(registry_ui 등)
 
 from coupang_analytics import appconfig, config, power, proxy_pool  # noqa: E402
-from coupang_analytics import contractor_stage  # noqa: E402
+from coupang_analytics import contractor_stage, traffic_morning  # noqa: E402
 from coupang_analytics.contractor_sheet import KEY_URL as KEY_CONTRACTOR_URL  # noqa: E402
 from coupang_analytics.manual_keywords import ManualKeywordError, apply_manual_keywords  # noqa: E402
 from coupang_analytics.apppaths import output_dir as app_output_dir, set_workdir  # noqa: E402
@@ -224,6 +224,10 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self._contractor_timer = QtCore.QTimer(self)
         self._contractor_timer.setInterval(60_000)
         self._contractor_timer.timeout.connect(self._contractor_tick)
+        # 노출·방문자 아침 보충 = 매일 08:00 한 번(D-374 · traffic_morning) — 같은 1분 타이머 · 무인 앱은 끝낸 뒤 종료
+        self._morning_busy, self._morning_hold, self._morning_said = False, False, ""
+        self._morning_retry_at = None   # 대장을 못 읽은 뒤 다시 읽을 시각(10분 간격 · 계약자 현황과 같음)
+        self._contractor_timer.timeout.connect(self._morning_tick)
         self._contractor_timer.start()
         QtCore.QTimer.singleShot(5000, self._contractor_tick)
         scr = self.screen().availableGeometry()
@@ -1850,7 +1854,74 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         left = LAST_RANK.get("unfilled")
         self.log(f"== [무인 자동 실행] 끝 — ⚠ 순위 빈 칸 {left}개 남음(로그 ❌·[순위요약] 확인) — 종료 =="
                  if left else "== [무인 자동 실행] 완료 — 종료 ==")
-        self._auto_quit()
+        if not self._wait_morning():
+            self._auto_quit()
+
+    def _wait_morning(self) -> bool:
+        """무인 앱 종료를 08:00 아침 보충 뒤로 미룰지(D-374) — 이번 회차 ① 이 끝났고 그날 보충이 남았으면 켜 둔 채 기다림."""
+        now = datetime.now()
+        if not (traffic_morning.owed_today(now) and traffic_morning.sales_done(now)):
+            return False
+        self._morning_hold = True
+        self.log_all(f"{traffic_morning.TAG} ⏳ 무인 앱 = {traffic_morning.MORNING_AT:%H:%M} 노출·방문자 아침 보충까지 "
+                     "끝낸 뒤 종료(켜 둔 채 기다림)")
+        return True
+
+    def _morning_say(self, now, msg: str) -> None:
+        """⏸ 줄은 그날 같은 이유로 한 번만(1분마다 되풀이 안 함)."""
+        key = f"{now.date()}|{msg}"
+        if self._morning_said != key:
+            self._morning_said = key
+            self.log_all(f"{traffic_morning.TAG} {msg}")
+
+    def _morning_tick(self):
+        """08:00 이 지났고 그날 기록이 없으면 노출·방문자 아침 보충(traffic_morning.run_daily · 로그인 브라우저를 엶 →
+        파이프라인 잠금·정산 계정 잠금을 그 안에서 쥠 · 이 창의 다른 실행이 돌면 기다림)."""
+        now = datetime.now()
+        if self._morning_busy:
+            return
+        if self._morning_hold and not traffic_morning.owed_today(now):
+            self._morning_hold = False
+            return self._auto_quit()   # 무인 앱 = 보충 끝(또는 23:00 지남) → 종료
+        if not traffic_morning.daily_due(now):
+            return
+        busy = getattr(self, "_run_active", False) or getattr(self, "_stages_running", False)
+        why = traffic_morning.wait_reason(now) or ("이 창에서 다른 실행이 도는 중 — 끝나면 시작" if busy else "")
+        if why:
+            return self._morning_say(now, f"⏸ {why}")
+        if not self._morning_input(now):
+            return
+        self._morning_busy = self._run_active = True   # 이 창 버튼 실행 막음(_guard_busy · 로그인 브라우저 한 번에 하나)
+        accounts, lock, pw = list(self.input_list.accounts), self._pipe_lock_path(), self._account_pw
+        gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
+
+        def task():
+            try:
+                res = traffic_morning.run_daily(accounts, now=now, get_password=pw, on_log=self.log,
+                                                gsheet_url=gs_out, pipe_lock=lock)
+                if res is None:
+                    self._morning_say(now, "⏸ 다른 창·무인 실행이 파이프라인을 쓰는 중 — 끝나면 시작")
+                return res
+            except Exception as exc:   # 어떤 오류도 앱을 매달지 않음(그날 기록은 run_daily 가 남김 · 같은 날 되풀이 안 함)
+                self.log(f"{traffic_morning.TAG} ❌ 실행 중 오류: {exc.__class__.__name__}: {exc}")
+                return None
+            finally:
+                self._morning_busy = self._run_active = False
+        with self._log_owner(_LOG_ALL):   # 이 작업 줄 = 모든 탭
+            self.run_bg(task)
+
+    def _morning_input(self, now) -> bool:
+        """시작 직전 관리대장 다시 읽기(D-366 · 비밀번호 = 매 실행 현재 대장 값 D-012) · 못 읽으면 10분 뒤 다시(지난 대장으로 안 함)."""
+        if self._morning_retry_at is not None and now < self._morning_retry_at:
+            return False
+        with self._log_owner(_LOG_ALL):
+            loaded = self._auto_load_input()
+        if loaded and self.input_list is not None:
+            self._morning_retry_at = None
+            return True
+        self._morning_retry_at = now + timedelta(minutes=10)
+        self._morning_say(now, "⚠ 관리대장(입력)을 다시 읽지 못해 아직 시작 못 함 — 10분마다 다시 읽음(위 '[입력]' 사유 확인)")
+        return False
 
     def _auto_quit(self):
         self._quitting = True   # 무인이 스스로 끝냄 — 창 닫힘 기록(closeEvent)에 '사람이 닫음'을 안 씀
@@ -1891,7 +1962,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         plan = plan_resume_stages(marker, prog)
         if plan is None:
             self.log("[재부팅 복구] 오늘 이어서 할 중단 작업이 없습니다 — 종료")
-            return self._auto_quit()
+            return None if self._wait_morning() else self._auto_quit()   # ①②③ 끝난 뒤 재부팅 = 08:00 보충은 이 앱이(D-374)
         if self.input_list is None:
             self.log("[재부팅 복구] 입력 엑셀/관리대장이 없어 이어서 불가 — 종료")
             return self._auto_quit()
