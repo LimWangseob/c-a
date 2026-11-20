@@ -3899,11 +3899,14 @@ def p70_error_retry_three():
         assert items == {("받기 윙 주정산·정산", "정산일 2026-11-20 · 기간 2026-11-10~2026-11-16"): 3}, items   # r2(생성 대기) = 안 셈
     ok("받기 파싱 오류 3번 뒤 안 받음·대기 수에서 뺌 · 파일 생성 대기 = 횟수 안 셈")
 
-    # ⑤ 회차(cmd_watch) — 3번 소진되면 24:00 전 조기 종료 · 생성 대기만 남으면 '미완료' 없이 24:00 까지
-    def watch(one_pass, pending):
+    # ⑤ 회차(cmd_watch) — 3번 소진되면 24:00 전 조기 종료 · 생성 대기만 남으면 그 계정만 20분마다 24:00 까지(소유자 '20분으로 해줘')
+    def watch(one_pass, pending, wait_pass=lambda n: (False, 0)):
+        """pending = 바퀴 뒤 생성 대기 수(숫자 또는 지금까지 바퀴 수 → 수). 장면마다 시도표 새로(같은 회차 파일 이어 셈 방지)."""
+        (Path(TD.BASE) / "로그" / TR.STATE_NAME).unlink(missing_ok=True)
         clock = {"now": RealDT(2026, 11, 21, 3, 0)}
         passes: list = []
         beats: list = []
+        sweeps: list = []
 
         class FakeDT(RealDT):
             @classmethod
@@ -3913,20 +3916,24 @@ def p70_error_retry_three():
         def fake_sleep(sec):
             clock["now"] += timedelta(seconds=max(sec, 1))
 
-        def op(args):
-            passes.append(clock["now"])
-            TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
-            TD.LOG.heartbeat = lambda st, msg="", **k: beats.append((st, msg))
-            TD.TRIES.begin_pass(f"p{len(passes)}")
-            return one_pass(len(passes))
+        def op(kind, fn):
+            def run(args):
+                passes.append((kind, clock["now"]))
+                TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
+                TD.LOG.heartbeat = lambda st, msg="", **k: beats.append((st, msg))
+                TD.TRIES.begin_pass(f"p{len(passes)}")
+                return fn(len(passes))
+            return run
         args = SimpleNamespace(parent=0, ledger_synced=True, until="", until_at=None, hidden=False, manual=True)
         log0 = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
         log0.heartbeat = lambda st, msg="", **k: beats.append((st, msg))
-        rc = _patched([(TD, "datetime", FakeDT), (TD.time, "sleep", fake_sleep), (TD, "_one_pass", op),
-                       (TD, "_pending_jobs", lambda: pending), (TD, "_between_passes", lambda: None),
-                       (TD, "_evidence_sweep", lambda a, act: None), (TD, "LOG", log0), (TD, "TRIES", None)],
+        rc = _patched([(TD, "datetime", FakeDT), (TD.time, "sleep", fake_sleep), (TD, "_one_pass", op("전체", one_pass)),
+                       (TD, "_wait_pass", op("대기", wait_pass)),
+                       (TD, "_pending_jobs", lambda: pending(len(passes)) if callable(pending) else pending),
+                       (TD, "_between_passes", lambda: None), (TD, "_evidence_sweep", lambda a, act: sweeps.append(act)),
+                       (TD, "LOG", log0), (TD, "TRIES", None)],
                       lambda: TD.cmd_watch(args))
-        return rc, passes, beats[-1], clock["now"]
+        return rc, passes, beats[-1], clock["now"], sweeps
     cwd = os.getcwd()
     with tempfile.TemporaryDirectory() as tmp:
         os.chdir(tmp)
@@ -3938,16 +3945,58 @@ def p70_error_retry_three():
                 if not why:
                     TD.TRIES.fail("srv", "계정 처리(정기)", "ServerBusy: 504", "정기")
                 return False, 0
-            rc, passes, last, end = watch(server_down, 0)
-            assert rc == 0 and len(passes) == 3 and last[0] == "완료·실패 확인", (rc, passes, last)
+            rc, passes, last, end, sweeps = watch(server_down, 0)
+            assert rc == 0 and [k for k, _ in passes] == ["전체"] * 3 and last[0] == "완료·실패 확인", (rc, passes, last)
             assert end < RealDT(2026, 11, 21, 4, 0) and "확인 필요" in last[1], (end, last)   # 24:00 전 조기 종료
-            rc, passes, last, end = watch(lambda n: (False, 0), 1)       # 쿠팡 파일 생성 대기만 계속
-            assert len(passes) > 3 and last[0] == "종료" and "회차 종료" in last[1] and end >= RealDT(2026, 11, 22, 0, 0), \
-                (len(passes), last, end)                                  # 옛 코드 = 3바퀴 뒤 '미완료' 종료
+            assert [b - a for (_, a), (_, b) in zip(passes, passes[1:])] == [timedelta(seconds=TD.WATCH_POLL_SEC)] * 2, passes
+            rc, passes, last, end, sweeps = watch(lambda n: (False, 0), 1)   # 쿠팡 파일 생성 대기만 계속
+            kinds = [k for k, _ in passes]
+            assert kinds[0] == "전체" and set(kinds[1:]) == {"대기"} and len(kinds) > 4, kinds   # 그 뒤 = 대기 계정만
+            gaps = {b - a for (_, a), (_, b) in zip(passes, passes[1:])}
+            assert gaps == {timedelta(minutes=20)} and TD.WATCH_PENDING_SEC == 1200, gaps                  # 20분마다
+            assert last[0] == "종료" and "회차 종료" in last[1] and RealDT(2026, 11, 22, 0, 0) <= end, (last, end)   # 24:00 끝
+            assert passes[-1][1] < RealDT(2026, 11, 22, 0, 0) and sweeps == ["done"], (passes[-1], sweeps)     # 빈 시간 증빙 1번
+            rc, passes, last, end, sweeps = watch(lambda n: (False, 0), lambda n: 1 if n < 3 else 0)   # 대기 바퀴 2번째에 다 받음
+            assert [k for k, _ in passes] == ["전체", "대기", "대기"] and last[0] == "완료", (passes, last)
+            assert end < RealDT(2026, 11, 21, 4, 0) and sweeps == ["done", "done"], (end, sweeps)      # 일찍 끝남 · 끝 증빙 = 남은 것만
+            rc, passes, last, end, sweeps = watch(lambda n: (False, 0), 1,
+                                                  wait_pass=lambda n: (TD.TRIES.fail("A", "받기", "504") and (False, 0)) or (False, 0))
+            assert {b - a for (_, a), (_, b) in zip(passes[1:], passes[2:4])} == {timedelta(seconds=TD.WATCH_POLL_SEC)}, passes[:4]
             assert (Path(TD.BASE) / "로그" / TR.STATE_NAME).exists()
         finally:
             os.chdir(cwd)
-    ok("3번 소진 = 24:00 전 '완료·실패 확인' 종료 · 파일 생성 대기만 = 진전 없음 종료 없이 24:00 까지")
+    ok("3번 소진 = 24:00 전 '완료·실패 확인' 종료 · 생성 대기만 = 대기 계정만 20분마다 24:00 까지(빈 시간 증빙 1번) · "
+       "대기 끝나면 일찍 종료 · 대기 중 오류 다시 시도 = 5분 그대로")
+
+    # ⑦ 대기 바퀴 대상 = 받으러 갈 파일이 있는 계정만(다 받은 계정·비밀번호 거부·3번 소진 = 로그인 0) · 그 계정은 받기만
+    with tempfile.TemporaryDirectory() as tmp:
+        jobs_p = Path(tmp) / "_요청기록.json"
+        SJ.save_jobs(jobs_p, [
+            SJ.Job("A", "윙", "주정산", "정산", "2026-11-10", "2026-11-16", "2026-11-20", status=SJ.ST_REQUESTED),
+            SJ.Job("B", "윙", "주정산", "정산", "2026-11-10", "2026-11-16", "2026-11-20", status=SJ.ST_DONE),
+            SJ.Job("P", "윙", "주정산", "정산", "2026-11-10", "2026-11-16", "2026-11-20", status=SJ.ST_REQUESTED),
+            SJ.Job("G", "윙", "주정산", "정산", "2026-11-10", "2026-11-16", "2026-11-20", status=SJ.ST_REQUESTED)])
+        tries = TR.Tries(Path(tmp) / "로그", CYC, line=lambda m: None)
+        tries.begin_pass("p0")
+        tries.fail("P", "로그인", "비밀번호 오류", kind=TR.PASSWORD)
+        for p in ("p1", "p2", "p3"):
+            tries.begin_pass(p)
+            tries.fail("G", "받기 윙 주정산·정산", "표 머리글 없음", "정산일 2026-11-20 · 기간 2026-11-10~2026-11-16")
+        visits: list = []
+        did: list = []
+
+        @contextlib.contextmanager
+        def fake_session(a, hidden, until=None):
+            visits.append(a.account_id)
+            yield None
+        res = _patched([(TD, "TRIES", tries), (TD, "JOBS", jobs_p), (TD, "BASE", Path(tmp)), (TD, "name_of", lambda a: a.account_id),
+                        (TD, "session", fake_session), (TD, "PASS_ACCOUNTS", [Acc(i) for i in ("A", "B", "P", "G")]),
+                        (TD, "cmd_download", lambda a, b, args, jobs: did.append(("받기", a.account_id))),
+                        (TD, "cmd_request", lambda a, b, args, jobs: did.append(("요청", a.account_id)))],
+                       lambda: (TD._wait_pass(Args), TD._pending_jobs()))
+        assert visits == ["A"] and did == [("받기", "A")], (visits, did)       # B 다 받음·P 비밀번호 거부·G 3번 소진 = 로그인 0
+        assert res == ((False, 0), 1), res                                     # 받으러 갈 것 = A 1건
+    ok("대기 바퀴 = 받으러 갈 파일 계정만 로그인(다 받음·비밀번호 거부·3번 소진 = 0) · 받기만(검증·광고·소급 안 함)")
 
     # ⑥ 월자료 실패 달 — 다시 시도 남으면 다음 바퀴에 다시(D-245 '그 회차 다시 안 부름' 부분 대체) · 3번째 실패 뒤 건너뜀
     with tempfile.TemporaryDirectory() as tmp:

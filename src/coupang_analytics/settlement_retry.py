@@ -64,6 +64,11 @@ class Tries:
         e = self.items.get(self._key(account, item, data))
         return bool(e) and e["종류"] != PASSWORD and e["결과"] != RETRY
 
+    def cannot_login(self, account: str) -> bool:
+        """이번 회차에 그 계정 로그인을 다시 하지 않나(비밀번호 거부·2차 인증·로그인 3번 소진) — 생성 대기 바퀴 대상에서 뺌."""
+        e = self.items.get(self._key(account, "로그인", ""))
+        return bool(e) and (e["종류"] == PASSWORD or e["결과"] != RETRY)
+
     def fail(self, account: str, item: str, reason: str, data: str = "", kind: str = ERROR,
              now: datetime | None = None) -> dict | None:
         """실패 1건 — 이번 바퀴 첫 실패면 시도 수 +1·오류 로그 한 건. 이미 끝난 항목(소진·다시 시도 안 함)·같은 바퀴 두 번째 = None."""

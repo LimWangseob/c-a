@@ -1168,8 +1168,9 @@ def _cmd_stats_main(args) -> int:
     return 0
 
 
-_PHASE = {"cmd_run": "정기", "cmd_backfill": "소급", "_evidence_auto": "증빙"}   # [메모리] 계정마다 줄의 단계 이름
-_PHASE_DATA = {"정기": "정기(정산 일정·요청·받기·검증·광고)", "소급": "소급(판매분석·쿠폰·월자료)", "증빙": "증빙 원본"}
+_PHASE = {"cmd_run": "정기", "cmd_backfill": "소급", "_evidence_auto": "증빙", "_wait_run": "대기"}   # [메모리] 계정마다 줄의 단계 이름
+_PHASE_DATA = {"정기": "정기(정산 일정·요청·받기·검증·광고)", "소급": "소급(판매분석·쿠폰·월자료)", "증빙": "증빙 원본",
+               "대기": "생성 대기 정산 파일 받기"}
 
 
 def _run_accounts(accts, run, args) -> int:
@@ -1221,6 +1222,7 @@ def _run_accounts(accts, run, args) -> int:
 
 WATCH_POLL_SEC = 300             # ①판매수집 진행 중 정지·파일 생성 대기 확인 간격
 WATCH_CATCHUP_REST_SEC = 60      # 소급(받을 게 남음) 중 한 바퀴와 다음 바퀴 사이 짧은 쉼
+WATCH_PENDING_SEC = 20 * 60      # 쿠팡 파일 생성 대기만 남으면 그 계정만 20분마다 확인(소유자 11-20 '20분으로 해줘' · D-373)
 DONE_FILE = BASE / "로그" / "_완료.json"   # 같은 ①완료 기준 '완료' 기록(중복 실행 방지·D-010)
 CYCLE = RL.Totals()                        # watch 한 회차의 바퀴 합계 — 회차 끝 [실행 결과 종합](D-168)
 PASS_ACCOUNTS: list = []                   # 마지막 바퀴의 정산 계정 — 자동 증빙 대상 고르기(원장을 다시 읽지 않음 · D-365)
@@ -1246,12 +1248,61 @@ def _is_suspended(account: str, ids: set) -> bool:
     return any(account.endswith("-" + i) for i in ids)          # 계정명 = '대표자-사업자-계정ID'(display_name)
 
 
+def _waitable(j, ids: set) -> bool:
+    """이번 회차에 아직 받으러 갈 작업인가 — 정지 계정(D-247) · 3번 소진된 파일 · 로그인 안 하는 계정(비밀번호 거부·2차 인증·
+    로그인 3번 소진) · 대기 바퀴 3번 소진 계정은 뺌(D-373 — 다시 로그인하지 않으니 기다릴 것도 아님)."""
+    if _is_suspended(j.account, ids):
+        return False
+    return not (TRIES and (TRIES.ended(j.account, *_job_item(j)) or TRIES.cannot_login(j.account)
+                           or TRIES.ended(j.account, "계정 처리(대기)", _PHASE_DATA["대기"])))
+
+
 def _pending_jobs() -> int:
-    """요청예정·요청됨(쿠팡 파일 생성 대기) 작업 수 — 정지 계정 작업은 빼고 셈(받기는 D-215 대로 계속 · D-247 ·
+    """요청예정·요청됨(쿠팡 파일 생성 대기) 작업 수 — 받으러 갈 것만 셈(_waitable · 받기는 D-215 대로 계속 · D-247 ·
     실측 output (37) hide4u 요청됨 9건이 받기 500 반복으로 회차 '완료'를 막음)."""
     jobs, ids = _open_jobs()
-    return sum(1 for j in jobs if not _is_suspended(j.account, ids)
-               and not (TRIES and TRIES.ended(j.account, *_job_item(j))))   # 3번 소진 = 받을 것에서 뺌(D-373)
+    return sum(1 for j in jobs if _waitable(j, ids))
+
+
+def _wait_run(a, b, args, jobs: list) -> None:
+    """생성 대기 바퀴의 한 계정 — 요청예정이 남았으면 요청(+90초) 뒤, 요청됨 파일만 받음(검증·광고·소급 안 함)."""
+    if any(j.account == name_of(a) and j.status == SJ.ST_PLANNED for j in jobs):
+        cmd_request(a, b, args, jobs)
+        time.sleep(90)
+    cmd_download(a, b, args, jobs)
+
+
+def _wait_pass(args) -> tuple[bool, int]:
+    """생성 대기 바퀴(D-373 · 소유자 '20분으로 해줘') = 받으러 갈 파일이 있는 계정만 로그인 — 다 받은 계정·3번 소진·
+    예외(비밀번호 거부·2차 인증) 계정은 로그인 0. 반환 = _one_pass 와 같은 (중단됐나, 새로 한 일 수)."""
+    global LOG
+    LOG = RL.RunLog(BASE)
+    if TRIES:
+        TRIES.begin_pass(LOG.run_id)
+    jobs, ids = _open_jobs()
+    names = {j.account for j in jobs if _waitable(j, ids)}
+    accts = [a for a in PASS_ACCOUNTS if name_of(a) in names]
+    LOG.accounts = [name_of(a) for a in accts]
+    log(f"실행 {LOG.run_id} · 자동 · 생성 대기 파일만 확인 · {len(accts)}계정(나머지 계정 로그인 안 함)")
+    try:
+        rc = _run_accounts(accts, _wait_run, args)
+        work = _sweep_work_count(LOG)
+    except Exception as exc:                 # 그 바퀴만 실패 기록(다음 판단은 진전 없음으로)
+        LOG.error("(전체)", "자동실행", exc)
+        return False, 0
+    finally:
+        CYCLE.add(LOG)
+    LOG.summary(pending=_pending_jobs(), suspended=_suspended_pending())
+    return rc == 1, work
+
+
+def _next_rest(action: str, waiting: bool, stopped: bool, work: int, pending: int, retry: int) -> tuple[bool, int]:
+    """다음 바퀴 종류·쉼(초) — 생성 대기만 남으면(새로 한 일·다시 시도할 오류·중단 없음) 그 회차는 대기 바퀴로 바꿔 20분마다 ·
+    대기 바퀴 중 오류 다시 시도·연속 실패 중단 = 5분(지금 간격 그대로) · 그 밖 = 지금 그대로(곧 1분 · 잠시 뒤 5분)."""
+    waiting = waiting or (action == "later" and not (stopped or work or retry) and pending > 0)
+    if waiting:
+        return True, WATCH_POLL_SEC if (retry or stopped) else WATCH_PENDING_SEC
+    return False, WATCH_CATCHUP_REST_SEC if action == "again" else WATCH_POLL_SEC
 
 
 def _suspended_pending() -> dict[str, int]:
@@ -1482,7 +1533,7 @@ def cmd_watch(args) -> int:
             if manual:
                 log("[수동] 정산 탭 '정산 시작' — 이번 회차 '완료' 기록·①판매수집 완료 대기 없이 바로 받음"
                     "(①이 지금 도는 중이면 끝날 때까지 대기 · D-354)")
-            last_state = ""
+            last_state, waiting, swept = "", False, False
             while datetime.now() < cycle_end:
                 why, marker = _watch_wait_reason(W, prog, stage_path, cycle_start, manual)
                 if why:
@@ -1502,14 +1553,21 @@ def cmd_watch(args) -> int:
                 if not _ledger_ready(args):   # D-366 ②: 첫 바퀴 계정 읽기 전 대장→원장·비밀번호 · 실패 = 이 바퀴 중단
                     _sleep_until(WATCH_POLL_SEC, cycle_end)
                     continue
-                stopped, work = _one_pass(args)
+                stopped, work = (_wait_pass if waiting else _one_pass)(args)
                 _between_passes()
                 fails = _watch_failures()
-                action, reason = W.plan_after_pass(stopped, work, _pending_jobs(), _retry_count(), failed=fails)
+                pending, retry = _pending_jobs(), _retry_count()
+                action, reason = W.plan_after_pass(stopped, work, pending, retry, failed=fails)
                 log(f"[자동] {reason}")
                 if action in ("again", "later"):
+                    waiting, rest = _next_rest(action, waiting, stopped, work, pending, retry)
+                    if waiting and not swept:   # 생성 대기 빈 시간 = 자동 증빙(D-367 '미완료여도 받기' · 회차 1번 · 23:20 멈춤 D-365)
+                        swept = True
+                        _evidence_sweep(args, "done")
+                    if waiting:
+                        reason = f"{reason} · 생성 대기 계정만 {rest // 60}분 뒤 확인(나머지 계정 로그인 안 함)"
                     LOG.heartbeat("대기중", reason)
-                    _sleep_until(WATCH_CATCHUP_REST_SEC if action == "again" else WATCH_POLL_SEC, cycle_end)
+                    _sleep_until(rest, cycle_end)
                     continue
                 W.write_done(DONE_FILE, key, action, reason, failed=len(fails))
                 _evidence_sweep(args, action)
