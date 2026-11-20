@@ -3731,6 +3731,7 @@ def p70_error_retry_three():
     from coupang_analytics import settlement_jobs as SJ
     from coupang_analytics import settlement_retry as TR
     from coupang_analytics import settlement_runlog as RLG
+    from coupang_analytics import settlement_watch as W
     from coupang_analytics import settlement_wing_api as API
     CYC, CYC2 = "2026-11-21T00:10:00", "2026-11-22T00:10:00"
 
@@ -3789,7 +3790,7 @@ def p70_error_retry_three():
         t3.begin_pass("r2")
         assert t3.fail("P", "로그인", "비밀번호 오류", kind=TR.PASSWORD) is None, "같은 회차 비밀번호 거부 로그 = 한 번"
         assert t3.fail("H", "로그인", "otp: 2차 인증", kind=TR.HUMAN)["결과"] == TR.NO_RETRY
-        assert "사람 조치" in t3.why_not("H", "로그인") and t3.retry_now() == 0 and "P" not in t3.given_up()
+        assert "사람 조치" in t3.why_not("H", "로그인") and t3.retry_now() == 0 and t3.given_up() == {"P": "로그인", "H": "로그인"}
     ok("2번 실패 뒤 성공 = 기록 지움 · 3번째 실패 = 더 시도 안 함 · 바퀴당 1번 · 로그 9칸 · 재시작 이어 셈 · 다음 회차 0부터 · 비번·2차 인증 예외")
 
     # ② 로그인 실패 종류 — 비밀번호 거부 / 2차 인증 / Akamai·차단 / 그 밖
@@ -3862,7 +3863,7 @@ def p70_error_retry_three():
             ("srv", "계정 처리(정기)", "3/3", TR.GIVE_UP)], log_rows
         fails = _patched([(TD, "TRIES", tries), (TD, "LOG", SimpleNamespace(unresolved_failures=lambda: {})),
                           (TD, "JOBS", Path(tmp) / "_요청기록.json")], TD._watch_failures)
-        assert set(fails) == {"srv", "otp"}, fails                                    # 회차 누적 '확인 필요'(마지막 바퀴는 건너뜀 줄만)
+        assert set(fails) == {"srv", "otp", "pw"}, fails                                    # 회차 누적 '확인 필요'(마지막 바퀴는 건너뜀 줄만)
     ok("계정 서버 오류 = 3바퀴 뒤 건너뜀 · 2번 실패 뒤 성공 · 2차 인증 1번만 · 비밀번호 거부 매 바퀴 그대로 · 확인 필요 = 회차 누적")
 
     # ④ 정산 파일(받기) — 파싱 오류 3번 뒤 안 받음·생성 대기 수에서 뺌 · 쿠팡 파일 생성 대기 = 안 셈
@@ -3997,6 +3998,27 @@ def p70_error_retry_three():
         assert visits == ["A"] and did == [("받기", "A")], (visits, did)       # B 다 받음·P 비밀번호 거부·G 3번 소진 = 로그인 0
         assert res == ((False, 0), 1), res                                     # 받으러 갈 것 = A 1건
     ok("대기 바퀴 = 받으러 갈 파일 계정만 로그인(다 받음·비밀번호 거부·3번 소진 = 0) · 받기만(검증·광고·소급 안 함)")
+
+    # ⑧ 끝 상태 = 끝나는 방식과 상관없이 같음(배포 검증 sim S2·S2b·S2c 11-20) — 마지막이 대기 바퀴여도 비밀번호 거부 계정이 '실패'에 남음
+    with tempfile.TemporaryDirectory() as tmp:
+        tries = TR.Tries(Path(tmp) / "로그", CYC, line=lambda m: None)
+        tries.begin_pass("p1")
+        tries.fail("B", "로그인", "비밀번호 오류(재시도 안 함)", kind=TR.PASSWORD)
+        full = RLG.RunLog(tmp, now=RealDT(2026, 11, 21, 1), echo=lambda m: None)    # 마지막 = 전체 바퀴(B 로그인 실패 줄 있음)
+        full.record("B", "로그인", RLG.FAIL, "비밀번호 오류·잠금 의심 — 재시도 안 함")
+        wait = RLG.RunLog(tmp, now=RealDT(2026, 11, 21, 5), echo=lambda m: None)    # 마지막 = 대기 바퀴(B 안 들어감)
+        wait.record("C", "받기", RLG.OK, "정산 파일")
+
+        def fails(lg):
+            return _patched([(TD, "TRIES", tries), (TD, "LOG", lg), (TD, "JOBS", Path(tmp) / "_요청기록.json")], TD._watch_failures)
+        f_full, f_wait = fails(full), fails(wait)
+        assert f_full == f_wait == {"B": "로그인"}, (f_full, f_wait)
+        a_full, a_wait = W.plan_after_pass(False, 0, 0, 0, failed=f_full), W.plan_after_pass(False, 0, 0, 0, failed=f_wait)
+        assert a_full == a_wait and "실패 1계정(로그인 1)" in a_wait[1] and W.done_status(len(f_wait)) == "완료·실패 확인", a_wait
+        tries.begin_pass("p2")
+        tries.ok("B", "로그인")                                                      # 대장 비밀번호 고쳐 로그인 성공 = 빠짐
+        assert fails(wait) == {}, "로그인 성공한 계정은 실패에서 빠짐"
+    ok("끝 상태·문구 = 마지막이 대기 바퀴여도 비밀번호 거부 계정 '실패(로그인)' 그대로 · 로그인 성공하면 빠짐")
 
     # ⑥ 월자료 실패 달 — 다시 시도 남으면 다음 바퀴에 다시(D-245 '그 회차 다시 안 부름' 부분 대체) · 3번째 실패 뒤 건너뜀
     with tempfile.TemporaryDirectory() as tmp:

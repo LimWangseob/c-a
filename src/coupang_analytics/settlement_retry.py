@@ -95,10 +95,11 @@ class Tries:
         return sum(1 for e in self.items.values() if e["결과"] == RETRY and e["바퀴"] == self.pass_id)
 
     def given_up(self) -> dict[str, str]:
-        """더 시도 안 하는 계정 {계정: 항목}(3번 소진·사람 조치 — 비밀번호 거부는 로그인 실패 줄로 따로 셈)."""
+        """이번 회차에 실패로 끝난 계정 {계정: 항목}(3번 소진·사람 조치·비밀번호 거부 — 마지막 바퀴가 대기 바퀴라 그 계정이 안
+        들어가도 끝 상태 '완료·실패 확인'에 남게 · 로그인 성공하면 ok 로 빠짐)."""
         out: dict[str, str] = {}
         for e in self.items.values():
-            if e["결과"] in (GIVE_UP, NO_RETRY) and e["종류"] != PASSWORD:
+            if e["결과"] in (GIVE_UP, NO_RETRY):
                 out.setdefault(e["계정"], e["항목"])
         return out
 
