@@ -3,6 +3,11 @@
 기대값 출처 = 소유자 승인(2026-11-08 "1·2·4 적용"):
   ① 같은 내용을 두 번 검사하지 않음 — 내용이 한 글자라도 다르면 반드시 다시 검사(우회 아님)
   ② 검사를 동시에 실행 — 결과·실패 판정은 예전과 같음(하나라도 실패면 exit 1·전체 결과 표시)
+소유자 승인(2026-11-20 "A~C 모두 반영 (권장)" · D-377):
+  A PC 전체에서 게이트 1개만 — 다른 게이트가 돌면 누가·언제부터인지 보이며 기다림 · 남은 잠금 파일·죽은 게이트는 막지 않음
+  B 잠금을 얻은 뒤 건너뛰기 판정 — 앞 게이트가 통과 기록을 남기면 뒤 게이트(pre-push)는 건너뜀
+  C 검사 프로세스는 낮은 우선순위(Windows BELOW_NORMAL)
+시험의 게이트는 전부 임시 잠금 경로를 쓴다(실제 PC 잠금을 안 잡음 — 이 시험도 게이트 안에서 돈다).
 
     python tools/verify_run_checks_offline.py
 """
@@ -12,6 +17,7 @@ import io
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -229,7 +235,149 @@ def s7_hook_env():
     ok("훅 환경에서도 훅 저장소 설정·인덱스 그대로")
 
 
+# 다른 프로세스 게이트 시험의 최대 기다림 — 조건이 맞으면 바로 끝나므로 길어도 정상일 때 느려지지 않음.
+# 검사 자식이 낮은 우선순위(D-377)라 PC 가 바쁘면(다른 세션 게이트·메모리 부족) 시작이 수십 초 늦음(실측 20초 넘김).
+WAIT_SEC = 180
+
+
+def _gate_child(repo: Path, check: Path, lock: Path) -> str:
+    """다른 프로세스로 띄우는 가짜 게이트 — 임시 저장소·가짜 검사 1개·임시 잠금 경로."""
+    return ("import sys, pathlib\n"
+            f"sys.path.insert(0, r'{HERE}')\n"
+            "import run_checks as RC\n"
+            f"RC.ROOT = pathlib.Path(r'{repo}')\n"
+            f"RC.CHECKS = [('가짜', r'{check}', True)]\n"
+            f"RC.LOCK_PATH = pathlib.Path(r'{lock}')\n"
+            "raise SystemExit(RC.main(sys.argv[1:]))\n")
+
+
+def _hold_check(tmp: Path, release: Path) -> Path:
+    """시작 표시(ran_<WHO>)를 남기고 release 파일이 생길 때까지(최대 WAIT_SEC) 붙잡는 가짜 검사."""
+    p = tmp / "hold.py"
+    p.write_text("import os, pathlib, time\n"
+                 f"pathlib.Path(r'{tmp}', 'ran_' + os.environ['WHO']).write_text('1')\n"
+                 f"end = time.monotonic() + {WAIT_SEC}\n"
+                 f"while not pathlib.Path(r'{release}').exists() and time.monotonic() < end:\n    time.sleep(0.05)\n",
+                 encoding="utf-8")
+    return p
+
+
+def _spawn(code: str, who: str, out: Path, argv: tuple[str, ...] = (), stdin: str | None = None) -> subprocess.Popen:
+    env = {**CS.clean_env(), "WHO": who, "PYTHONUNBUFFERED": "1"}
+    with out.open("wb") as f:                            # 자식이 핸들을 물려받음 — 부모 쪽은 바로 닫음(임시 폴더 정리)
+        proc = subprocess.Popen([sys.executable, "-c", code, *argv], env=env, stdout=f,
+                                stderr=subprocess.STDOUT, stdin=subprocess.PIPE if stdin is not None else None)
+    if stdin is not None and proc.stdin is not None:
+        proc.stdin.write(stdin.encode("utf-8"))
+        proc.stdin.close()
+    return proc
+
+
+def _until(cond, sec: float) -> bool:
+    end = time.monotonic() + sec
+    while time.monotonic() < end:
+        if cond():
+            return True
+        time.sleep(0.05)
+    return cond()
+
+
+def _text(p: Path) -> str:
+    return p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
+
+
+def _finish(*procs: subprocess.Popen) -> None:
+    for p in procs:
+        try:
+            p.wait(timeout=WAIT_SEC)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+            raise AssertionError(f"게이트가 {WAIT_SEC}초 안에 안 끝남(잠금을 못 얻고 멈춤?)")
+
+
+def s8_lock_wait_then_skip():
+    print("[S8] PC 전체 게이트 1개(A) — 앞 게이트가 도는 동안 뒤 게이트(pre-push)는 누가·언제부터 쥐었는지 보이며 기다림 "
+          "· 잠금 뒤 건너뛰기 판정(B) — 앞 게이트 통과 기록으로 뒤 게이트는 검사 없이 건너뜀")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:   # 실패 때 남은 자식이 진짜 실패를 가리지 않게
+        t = Path(tmp)
+        root = _repo(tmp)
+        release, lock = t / "release", t / "gate.lock"
+        code = _gate_child(root, _hold_check(t, release), lock)
+        head = _git(root, "rev-parse", "HEAD")
+        a = _spawn(code, "A", t / "a.out")
+        b = None
+        try:
+            assert _until(lambda: (t / "ran_A").exists(), WAIT_SEC), "앞 게이트 검사가 시작 안 됨: " + _text(t / "a.out")
+            b = _spawn(code, "B", t / "b.out", ("--skip-if-passed=push",),
+                       f"refs/heads/master {head} refs/heads/master {'0' * 40}\n")
+            assert _until(lambda: "기다립니다" in _text(t / "b.out"), WAIT_SEC), "뒤 게이트가 기다린다고 안 함: " + _text(t / "b.out")
+            msg = _text(t / "b.out")
+            assert f"PID {a.pid}" in msg and str(root) in msg and "시작" in msg, "누가·언제부터·어느 폴더인지 안 보임: " + msg
+            assert not (t / "ran_B").exists(), "앞 게이트가 도는데 뒤 게이트 검사가 시작됨(동시에 2개)"
+        finally:
+            release.touch()
+            _finish(*[p for p in (a, b) if p])
+        assert a.returncode == 0, _text(t / "a.out")
+        assert b.returncode == 0 and "건너뜀" in _text(t / "b.out"), "앞 게이트가 통과 기록을 남겼는데 다시 돎: " + _text(t / "b.out")
+        assert not (t / "ran_B").exists(), "건너뛰어야 할 뒤 게이트가 검사를 돌림"
+    ok("기다림 표시(PID·시작·작업 폴더)·동시 2개 없음·잠금 뒤 건너뜀")
+
+
+def s9_stale_lock():
+    print("[S9] 남은 잠금 파일·죽은 게이트는 막지 않음 — 파일이 아니라 OS 잠금으로 판정(프로세스가 죽으면 OS 가 풂)")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:   # 실패 때 남은 자식이 진짜 실패를 가리지 않게
+        t = Path(tmp)
+        root = _repo(tmp)
+        release, lock = t / "release", t / "gate.lock"
+        lock.write_text("PID 99999 · 시작 2026-11-20 19:46:00 · 작업 폴더 X", encoding="utf-8")   # 죽은 게이트가 남긴 파일
+        code = _gate_child(root, _hold_check(t, release), lock)
+        release.touch()                                                  # 여기 검사는 붙잡지 않음(바로 끝남)
+        b = _spawn(code, "B", t / "b.out")
+        _finish(b)
+        assert b.returncode == 0 and "기다립니다" not in _text(t / "b.out"), "남은 잠금 파일에 막힘: " + _text(t / "b.out")
+        held = t / "held"
+        dying = ("import sys, pathlib, time\n"                            # 잠금을 쥔 채 도중에 죽을 게이트(검사 자식 없음)
+                 f"sys.path.insert(0, r'{HERE}')\n"
+                 "import run_checks as RC\n"
+                 f"RC.LOCK_PATH = pathlib.Path(r'{lock}')\n"
+                 f"with RC._gate_lock(pathlib.Path(r'{root}')):\n"
+                 f"    pathlib.Path(r'{held}').write_text('1')\n"
+                 "    time.sleep(60)\n")
+        a = _spawn(dying, "A", t / "a.out")
+        try:
+            assert _until(held.exists, WAIT_SEC), "잠금을 쥐지 못함: " + _text(t / "a.out")
+        finally:
+            a.kill()                                                       # 게이트가 도중에 죽음
+            a.wait(timeout=10)
+        c = _spawn(code, "C", t / "c.out")
+        _finish(c)
+        assert c.returncode == 0 and (t / "ran_C").exists(), "죽은 게이트의 잠금에 막힘: " + _text(t / "c.out")
+    ok("남은 파일·죽은 게이트 모두 바로 잠금 얻음")
+
+
+def s10_priority():
+    print("[S10] 검사 프로세스 = 낮은 우선순위(Windows BELOW_NORMAL · 다른 OS 는 해당 없음)")
+    if sys.platform != "win32":
+        ok("Windows 아님 — 해당 없음")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "prio.py"
+        p.write_text("import ctypes, sys\nk = ctypes.windll.kernel32\nk.GetCurrentProcess.restype = ctypes.c_void_p\n"
+                     "k.GetPriorityClass.argtypes = [ctypes.c_void_p]\nc = k.GetPriorityClass(k.GetCurrentProcess())\n"
+                     "print(hex(c))\nsys.exit(0 if c == 0x4000 else 1)\n", encoding="utf-8")
+        res = RC.run_all([("우선순위", str(p), True)], 1)
+        assert res[0][1], "검사 프로세스 우선순위가 BELOW_NORMAL(0x4000) 아님: " + res[0][3].strip()
+    ok("검사 프로세스 우선순위 0x4000(BELOW_NORMAL)")
+
+
 def main():
+    with tempfile.TemporaryDirectory() as lock_dir:      # 같은 프로세스 안 게이트(S5·S6·S7)도 실제 PC 잠금 대신 임시 잠금
+        RC.LOCK_PATH = Path(lock_dir) / "gate.lock"
+        _scenarios()
+
+
+def _scenarios():
     s1_key()
     s2_commit_same_key()
     s3_record()
@@ -237,7 +385,10 @@ def main():
     s5_parallel()
     s6_skip()
     s7_hook_env()
-    print("회귀 게이트 자체(동시 실행·통과 기록) 오프라인 검증 통과")
+    s8_lock_wait_then_skip()
+    s9_stale_lock()
+    s10_priority()
+    print("회귀 게이트 자체(동시 실행·통과 기록·PC 하나만·우선순위) 오프라인 검증 통과")
 
 
 if __name__ == "__main__":
