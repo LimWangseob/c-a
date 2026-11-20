@@ -194,11 +194,11 @@ def _ps(script: str, env_extra: dict[str, str], timeout: int = 30) -> str:
 
 
 # 배포 exe 이름이 같거나, **python 프로세스**인데 명령줄에 스크립트 표식이 있는 것(개발)만 — 편집기 등 같은 파일을
-# 연 다른 프로그램은 제외. 자기 PID 제외. 자식(그 프로그램이 띄운 Chrome)까지 트리째 종료. 종료한 것마다 'K' 한 줄.
+# 연 다른 프로그램은 제외. 자기 PID 제외. 자식(그 프로그램이 띄운 Chrome)까지 트리째 종료. taskkill 이 성공한 것마다 'K' 한 줄(D-376).
 _KILL_PS = ("Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne [int]$env:SM_SELF -and "
             "($_.Name -eq $env:SM_NAME -or ($_.Name -like 'python*' -and $_.CommandLine -and "
             "$_.CommandLine.Contains($env:SM_MARK))) } | "
-            "ForEach-Object { taskkill /F /T /PID $_.ProcessId 2>&1 | Out-Null; 'K' }")
+            "ForEach-Object { taskkill /F /T /PID $_.ProcessId 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) { 'K' } }")
 
 
 def _kill(name: str, mark: str, log, what: str, tag: str) -> int:
