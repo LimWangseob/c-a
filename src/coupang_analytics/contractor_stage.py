@@ -159,6 +159,11 @@ def run_stage(input_list, *, date_to: str, run_day: date | None = None, ai_key: 
             ask = openai_ask(ai_key)
         rep = build_report(accounts, out_dir, run_day=day, date_to=date_to, ask=ask, log=log,
                            now=datetime.now().isoformat(timespec="seconds"), data_day=data_day)
+        if sum(len(b.marks) for b in rep.bizs) >= len(accounts):
+            # 소유자 11-20: 새 판 설치 첫날 낮(지난 회차 자료뿐) — 전 사업자 '(오늘 자료 없음)' 빈 표가 구글시트를 덮어씀
+            log(f"  {TAG} ❌ 모든 계정 자료 없음({len(accounts)}계정 · 이번 회차 자료 없음) — PC 파일·구글시트 만들지 않음"
+                "(구글시트는 전날 내용 그대로)")
+            return None
         from .contractor_sheet_xlsx import build_workbook
         wb = build_workbook(rep)
         path = report_path(out_dir, day)
@@ -202,12 +207,19 @@ def daily_due(now: datetime, out_dir="output") -> bool:
 
 
 def wait_reason(now: datetime, out_dir="output") -> str:
-    """① 판매수집이 지금 도는 중이면 그 이유(그동안 미룸 — 반쯤 받은 날 자료로 만들지 않게) · 아니면 ''.
-    판정 = 정산과 같은 `_진행중.json` 수정 시각(settlement_watch.sales_in_progress) — ① 이 멈춰 갱신이 끊기면 곧 ''."""
-    from .pipeline_paths import _progress_path
-    from .settlement_watch import sales_in_progress
-    busy, why = sales_in_progress(_progress_path(out_dir), now=now)
-    return why if busy else ""
+    """만들기를 미룰 이유 · 아니면 ''. ① 판매수집이 지금 도는 중(반쯤 받은 날 자료로 만들지 않게 · 정산과 같은 `_진행중.json`
+    수정 시각 — ① 이 멈춰 갱신이 끊기면 곧 '') · 이번 회차(01:30~) ① 완료 기록이 없음(정산과 같은 `_실행단계.json` 판정 —
+    설치 첫날 낮·01:30 실패·밤새 꺼짐이면 지난 회차 자료뿐이라 전 사업자 '자료 없음' 빈 표가 됨 · 소유자 11-20)."""
+    from .pipeline_paths import _progress_path, _run_stage_path
+    from .settlement_watch import cycle_window, read_marker, sales_done_in_cycle, sales_in_progress
+    busy, _ = sales_in_progress(_progress_path(out_dir), now=now)
+    if busy:
+        return "① 판매수집이 아직 도는 중 — 끝나면 1분 안에 만듦(그날 자료가 다 모인 뒤)"
+    start = cycle_window(now)[0]
+    if not sales_done_in_cycle(read_marker(_run_stage_path(out_dir))[0], start):
+        return (f"이번 회차({start:%m-%d %H:%M}~) ① 판매수집 완료 기록 없음 — ① 이 끝나면 1분 안에 만듦"
+                "(지난 회차 자료로 만들지 않음 · 구글시트는 전날 내용 그대로)")
+    return ""
 
 
 def run_daily(input_list, *, now: datetime, ai_key: str | None = None, out_dir="output", on_log=print,

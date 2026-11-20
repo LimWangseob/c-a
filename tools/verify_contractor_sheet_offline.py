@@ -491,8 +491,18 @@ def t9_daily_0600():
         check(ST.daily_due(datetime(2026, 11, 22, 14, 30), out), "06:00 에 앱이 꺼져 있었으면 켠 뒤 그날 한 번")
         # 06:00 을 놓쳐 낮에 켜도 = 그날 01:30 ① 자료(06:00 과 같은 회차) · 전날 자료만 있으면 '자료 없음'
         logs, log = _logs()
-        ST.run_daily(il, now=datetime(2026, 11, 21, 14, 0, 5), out_dir=out, on_log=log, gsheet_url="", ask=no_ai)
+        pushed = []
+
+        def fake_client(url):              # 올리려 하면 기록만(실제 구글 호출 없음 · push_gsheet 는 ValueError 를 ❌ 로그로 받음)
+            pushed.append(url)
+            raise ValueError("시험 — 올리지 않음")
+        p21 = ST.run_daily(il, now=datetime(2026, 11, 21, 14, 0, 5), out_dir=out, on_log=log, gsheet_url="URL", ask=no_ai,
+                           client_factory=fake_client)
         check(not any("자료 없음 표시 0" in x for x in logs), f"그날 01:30 자료 없음 = 전날 자료로 안 채움 {logs[-2:]}")
+        # 소유자 11-20: 운용 PC 새 판 설치 첫날 낮 — 모든 계정이 자료 없음인 빈 표가 구글시트를 덮어씀 → 덮어쓰지 않음
+        check(p21 is None and not pushed and not (out / "계약자별상품현황" / "셀독_계약자별상품현황_261121.xlsx").exists()
+              and any("❌" in x and "모든 계정" in x for x in logs),
+              f"모든 계정 자료 없음 = PC 파일·구글시트 안 만듦(전날 내용 그대로) · ❌ 로그 {p21} {pushed} {logs[-2:]}")
         put_products(out, "a1", [{"vid": "1", "name": "관리 상품"}], day="2026-11-23")
         logs, log = _logs()
         ST.run_daily(il, now=datetime(2026, 11, 23, 14, 0, 5), out_dir=out, on_log=log, gsheet_url="", ask=no_ai)
@@ -508,11 +518,21 @@ def t9b_wait_sales():
     import os
     import time as _time
     from datetime import datetime
-    from coupang_analytics.pipeline_paths import _progress_path
+    from datetime import timedelta
+    from coupang_analytics.pipeline_paths import _progress_path, _run_stage_path
+    from coupang_analytics.settlement_watch import cycle_window
     with tempfile.TemporaryDirectory() as d:
         out = Path(d)
         now = datetime.now()
-        check(ST.wait_reason(now, out) == "", "진행 파일 없음 = 기다리지 않음")
+        start = cycle_window(now)[0]
+        # 소유자 11-20: 이번 회차 ① 완료 기록이 없으면(설치 첫날 낮·01:30 실패·밤새 꺼짐) 지난 회차 자료뿐 → 미룸
+        why = ST.wait_reason(now, out)
+        check("완료 기록 없음" in why, f"단계 기록 없음 = 이번 회차 ① 안 끝남 → 미룸 {why!r}")
+        stage = _run_stage_path(out)
+        stage.write_text(json.dumps({"stage": "done", "at": (start - timedelta(hours=1)).isoformat()}), encoding="utf-8")
+        check("완료 기록 없음" in ST.wait_reason(now, out), "지난 회차 ① 완료 = 미룸")
+        stage.write_text(json.dumps({"stage": "sales", "at": start.isoformat()}), encoding="utf-8")
+        check(ST.wait_reason(now, out) == "", "이번 회차 ① 완료 + 진행 파일 없음 = 기다리지 않음")
         prog = _progress_path(out)
         prog.parent.mkdir(parents=True, exist_ok=True)
         prog.write_text("{}", encoding="utf-8")

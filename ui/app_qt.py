@@ -1807,10 +1807,11 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         now = datetime.now()
         if self._contractor_busy or not contractor_stage.daily_due(now):
             return
-        if contractor_stage.wait_reason(now):   # ① 이 아직 돎 → 끝날 때까지 미룸(그날 자료가 반만 있는 채로 만들지 않게)
+        why = contractor_stage.wait_reason(now)   # ① 이 아직 돎·이번 회차 ① 안 끝남 → 미룸(그날 자료가 다 모인 뒤 만듦)
+        if why:
             if self._contractor_waited != now.date().isoformat():
                 self._contractor_waited = now.date().isoformat()
-                self.log_all("[계약자별 현황] ⏸ ① 판매수집이 아직 도는 중 — 끝나면 1분 안에 만듦(그날 자료가 다 모인 뒤)")
+                self.log_all(f"[계약자별 현황] ⏸ {why}")
             return
         il = self._contractor_input(now)
         if il is None:
