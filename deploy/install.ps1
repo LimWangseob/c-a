@@ -196,6 +196,9 @@ function Register-AutoTasks {
     # 1) 매일 01:30 무인 실행(D-362)(--auto, 앱은 ①②③+재고 역기록을 다 끝내면 스스로 종료 — 강제 종료 없음)
     $action  = New-ScheduledTaskAction -Execute $exe -Argument '--auto' -WorkingDirectory $root
     $trigger = New-ScheduledTaskTrigger -Daily -At ([datetime]'01:30')
+    # 첫 실행 = 다음 01:30 — 낮에 등록하면 시작 시각이 '오늘 01:30'(지남)이라 StartWhenAvailable 로 바로 뜰 수 있어 하루 뒤로(소유자 11-20)
+    $first = [datetime]$trigger.StartBoundary
+    if ($first -lt (Get-Date)) { $trigger.StartBoundary = $first.AddDays(1).ToString('s') }
     # WakeToRun=자는 PC 깨움 · StartWhenAvailable=놓치면 곧바로 · 23시간50분 제한(= 01:20 정산 회차 끝 · 백스톱 — 다음 날 01:30 실행이
     # 막히지 않게만. 예전 13시간은 07:00 넘는 실행을 끊고 정산까지 함께 끝냈음 E3·D-020)
     $settings = New-ScheduledTaskSettingsSet -WakeToRun -AllowStartIfOnBatteries `
