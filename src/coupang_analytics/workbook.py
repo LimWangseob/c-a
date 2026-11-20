@@ -12,6 +12,9 @@
 """
 from __future__ import annotations
 
+import errno
+import os
+
 # 상수·헬퍼·서식 dataclass·openpyxl 재노출은 leaf 모듈 workbook_common 으로 분리(순환 방지).
 from .workbook_render import _RenderMixin  # 렌더링 mixin(apply_style·서식)
 from .workbook_index import _IndexMixin    # 목차·체험단효과 mixin
@@ -22,6 +25,36 @@ from .workbook_common import *  # noqa: F401,F403
 from .workbook_common import (  # 명시 재확인(정적검사 가독성)
     _COL_KW, _COL_METRIC, _COL_NAME, _COL_SEARCH, _FIRST_DATE, _META_SHEET, _SPECIAL_SHEETS,
     _norm, _key)
+
+
+SAVE_TMP_SUFFIX = ".저장중.tmp"   # 저장 임시 파일 꼬리 — .xlsx 로 안 끝나 마스터·스냅샷 찾기에 안 걸림 · output 내보내기는 .tmp 를 뺌
+
+
+def save_tmp_path(path) -> Path:
+    """저장 임시 파일 = 같은 폴더 `{이름}.저장중.tmp`(이름 고정 → 강제 종료로 남은 것은 다음 저장이 덮어씀 · D-376)."""
+    p = Path(path)
+    return p.with_name(p.name + SAVE_TMP_SUFFIX)
+
+
+REPLACE_WAIT_SEC = 60.0   # 바꿔 끼우기가 막히면 다시 시도하는 시간 — 다른 창이 마스터를 읽는 중(열기 몇~수십 초)이면 끝나길 기다림
+
+
+def _replace_into(tmp: Path, path: Path, wait_sec: float | None = None) -> None:
+    """다 쓴 임시 파일을 마스터 자리에 바꿔 끼움. Windows 는 다른 프로세스가 마스터를 읽는 중이어도 바꿔 끼우기를 막으므로
+    (바로 쓰기는 됐음 · 실측 재현 R245b B 의 읽기 겹침) REPLACE_WAIT_SEC 까지 0.5초마다 다시 시도. 그래도 막히면(엑셀에 열림 등)
+    바로 쓰던 때와 같은 뜻의 PermissionError(errno 13 · 파일 = 마스터 경로)로 올리고 임시 파일은 지움(마스터는 그대로)."""
+    import time
+    end = time.monotonic() + (REPLACE_WAIT_SEC if wait_sec is None else wait_sec)
+    while True:
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError as exc:
+            if time.monotonic() < end:
+                time.sleep(0.5)
+                continue
+            tmp.unlink(missing_ok=True)
+            raise PermissionError(errno.EACCES, "Permission denied", str(path)) from exc
 
 
 class OutputWorkbook(_RenderMixin, _IndexMixin, _MetaMixin, _DateMixin, _LifecycleMixin):
@@ -56,9 +89,18 @@ class OutputWorkbook(_RenderMixin, _IndexMixin, _MetaMixin, _DateMixin, _Lifecyc
         return cls(xwb)
 
     def save(self, path: str | Path) -> None:
+        """같은 폴더 임시 파일에 다 쓴 뒤 바꿔 끼움(D-376) — 저장 도중 끊겨도(00:10 다른 앱 끄기 taskkill · 오류) 옛 파일이
+        그대로 남음(실측: 바로 쓰기 = 7.8MB 마스터가 2.1MB 로 잘려 BadZipFile). 도중 오류면 임시 파일 지우고 예외 그대로."""
         if not self.wb.worksheets:
             return   # 아직 계정 시트 없음(빈 워크북) — 저장 불가, 첫 계정 생성 후 저장됨
-        self.wb.save(path)
+        path = Path(path)
+        tmp = save_tmp_path(path)
+        try:
+            self.wb.save(tmp)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+        _replace_into(tmp, path)
 
     # ── 인덱스 복원 ───────────────────────────────────────────
     def _reindex(self) -> None:

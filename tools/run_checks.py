@@ -73,6 +73,7 @@ CHECKS = [
     ("날짜 칸 = 판매일·옛 칸 하루 당기기(백업·스탬프·순위 묶음·두 번 방지 D-368·D-369)", "tools/verify_date_basis_offline.py", True),
     ("output 내보내기·합치기·보관 이동(변경분·실행 중 멈춤·UTF-8·비밀번호 뺌 D-243)", "tools/verify_output_export_offline.py", True),
     ("노출·방문자 아침 보충(어제 칸 두 줄만·정산 계정 잠금·3번·하루 한 번·날짜 지정 안 섞임 D-374)", "tools/verify_traffic_morning_offline.py", True),
+    ("마스터 엑셀 저장 = 임시 파일 → 바꿔 끼우기(끊겨도 옛 마스터 · 엑셀 열림 PermissionError · 좀비 Chrome 경로 D-376)", "tools/verify_workbook_save_offline.py", True),
     ("노출·방문자 아침 보충 앱 연결(1분 타이머·다른 실행 중 기다림·무인 앱 08:00 보충 뒤 종료 D-374)", "tools/verify_ui_morning_offline.py", True),
     ("오프라인 실증(워크북·매칭·키워드선정)", "tools/verify_offline.py", False),
 ]

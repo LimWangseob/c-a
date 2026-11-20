@@ -112,7 +112,7 @@ def reap_orphan_chrome(data_dir: str = "data") -> int:
           "$_.CommandLine.Contains('--remote-debugging-port') } | "
           "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; 'K' }")
     env = dict(os.environ)
-    env["SM_DATA"] = base
+    env["SM_DATA"] = base.rstrip("\\") + "\\"   # 폴더 이름 + 구분자 — data2·data_old 처럼 앞부분만 같은 폴더는 안 잡음(D-376)
     try:
         r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
                            capture_output=True, text=True, timeout=15, env=env,
