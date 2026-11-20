@@ -1880,19 +1880,26 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         now = datetime.now()
         if self._morning_busy:
             return
+        busy = getattr(self, "_run_active", False) or getattr(self, "_stages_running", False)
+        lock = self._pipe_lock_path()
+        if not busy and traffic_morning.missed_today(now):   # 23:00 넘겨 그날 못 함 → ❌ 한 줄(다른 실행이 쥐면 그 실행 종합이 남김)
+            traffic_morning.give_up(list(getattr(self.input_list, "accounts", None) or []), now=now, log=self.log_all,
+                                    why="23:00 까지 시작 못 함(①②③·다른 실행이 파이프라인을 계속 씀 등 — 위 ⏸ 줄)",
+                                    pipe_lock=lock)
         if self._morning_hold and not traffic_morning.owed_today(now):
             self._morning_hold = False
-            return self._auto_quit()   # 무인 앱 = 보충 끝(또는 23:00 지남) → 종료
+            return self._auto_quit()   # 무인 앱 = 보충 끝(또는 23:00 지남 · 못 함 줄 남긴 뒤) → 종료
         if not traffic_morning.daily_due(now):
             return
-        busy = getattr(self, "_run_active", False) or getattr(self, "_stages_running", False)
         why = traffic_morning.wait_reason(now) or ("이 창에서 다른 실행이 도는 중 — 끝나면 시작" if busy else "")
+        if not why and traffic_morning.pipe_busy(lock):   # 관리대장 다시 읽기 전에 확인(D-366 취지 · 1분마다 구글 읽기 방지)
+            why = "다른 창·무인 실행이 파이프라인을 쓰는 중 — 끝나면 시작"
         if why:
             return self._morning_say(now, f"⏸ {why}")
         if not self._morning_input(now):
             return
         self._morning_busy = self._run_active = True   # 이 창 버튼 실행 막음(_guard_busy · 로그인 브라우저 한 번에 하나)
-        accounts, lock, pw = list(self.input_list.accounts), self._pipe_lock_path(), self._account_pw
+        accounts, pw = list(self.input_list.accounts), self._account_pw
         gs_out = QtCore.QSettings("coupang-analytics", "ui").value("gsheet/output_url", "", type=str).strip()
 
         def task():

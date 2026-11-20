@@ -26,7 +26,7 @@ import json
 import random
 import time
 from contextlib import contextmanager
-from datetime import date, datetime, time as dtime
+from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 
 from . import config
@@ -34,12 +34,14 @@ from . import config
 TAG = "[노출·방문자 아침 보충]"
 MORNING_AT = dtime(8, 0)    # 시작 시각(소유자 11-20 B안 · 시각 = 통제 세션 제안 08:00 · 바꾸려면 여기만)
 LAST_START = dtime(23, 0)   # 이 시각 뒤엔 그날 새로 시작 안 함(정산 회차 끝 24:00 · 다음 00:10 무인 전에 끝내기)
+STOP_NEW = dtime(23, 50)    # 도는 중이어도 이 시각 뒤엔 새 계정 시작 안 함 → 받은 데까지 저장(00:10 무인이 앱을 끝내기 전 · D-374 보완)
 MAX_TRIES = 3               # 계정마다 시도 수(처음 + 다시 2번 · D-373 과 같은 수)
 RETRY_GAP_SEC = 600         # 실패 계정 다시 시도 전 쉼(바퀴 사이 10분)
 BUSY_WAIT_SEC = 1800        # 정산이 그 계정을 쓰는 중일 때 기다리는 최대 시간(넘으면 그 번 실패)
 STATE_DIR = "노출방문_아침보충"   # output/ 아래 — 날짜별 기록(무엇을 몇 번 시도·어느 칸 바꿨는지) + 그날 실행 표시
 RUN_MARK = "_실행기록.json"
 FAIL = "노출·방문자 아침 보충 실패"
+MISSED = "노출·방문자 아침 보충 못 함"
 
 
 class LoginFailed(Exception):
@@ -99,6 +101,56 @@ def sales_done(now: datetime, out_dir="output") -> bool:
     from .pipeline_paths import _run_stage_path
     from .settlement_watch import cycle_window, read_marker, sales_done_in_cycle
     return sales_done_in_cycle(read_marker(_run_stage_path(out_dir))[0], cycle_window(now)[0])
+
+
+def pipe_busy(pipe_lock) -> bool:
+    """다른 실행(①②③·날짜 지정·다른 창)이 파이프라인 잠금을 쥐고 있나 — 잠깐 쥐어 보고 바로 놓음(관리대장 다시 읽기 전에 확인)."""
+    from .registry_lock import RegistryLockError, registry_lock
+    try:
+        with registry_lock(pipe_lock, wait_sec=0):
+            return False
+    except RegistryLockError:
+        return True
+
+
+def missed_today(now: datetime, out_dir="output") -> bool:
+    """그날 보충 대상이 있었는데(이번 회차 ① 완료) 23:00 을 넘겨 아직 기록이 없음 = '못 함' 줄을 남길 때."""
+    return (now >= datetime.combine(now.date(), LAST_START) and last_day(out_dir) != now.date().isoformat()
+            and sales_done(now, out_dir))
+
+
+def give_up(accounts, *, now: datetime, out_dir="output", log, why: str, pipe_lock=None) -> bool:
+    """그날 보충을 못 함 — ❌ 한 줄(사유·대상 계정 수 · 어제 칸 = 00:10 값 그대로) + 그날 기록(한 번만 · 값은 대신 채우지 않음).
+    pipe_lock 을 주면 다른 실행이 쥐고 있을 때 여기서 남기지 않음(False · 그 실행이 끝에 자기 종합에 남김)."""
+    from .registry_lock import RegistryLockError, registry_lock
+    if pipe_lock is None:
+        return _give_up(accounts, now, Path(out_dir), log, why)
+    try:
+        with registry_lock(pipe_lock, wait_sec=0):
+            return _give_up(accounts, now, Path(out_dir), log, why)
+    except RegistryLockError:
+        return False
+
+
+def _give_up(accounts, now: datetime, out: Path, log, why: str) -> bool:
+    from .pipeline_paths import _master_path, column_label
+    from .workbook import OutputWorkbook
+    if last_day(out) == now.date().isoformat():
+        return False
+    day_iso = target_day(now).isoformat()
+    st = _Run([], column_label(day_iso))
+    master = _master_path(out)
+    n = len(targets(OutputWorkbook.load(master), accounts, st.label)) if master.exists() else 0
+    note = f"{MISSED} — {why} · 대상 {n}계정"
+    log(f"  {TAG} ❌ {note} · {st.label} 칸 노출·방문자 = 00:10 값 그대로")
+    _record(out, now, day_iso, st, note)
+    return True
+
+
+def note_missed(accounts, *, out_dir="output", log, why: str = "①②③ 이 23:00 뒤에 끝남") -> bool:
+    """①②③ 끝(run_stages · 파이프라인 잠금 안) — 23:00 이 지나 그날 보충을 못 하게 됐으면 그 실행 종합 오류 현황에 ❌ 한 줄."""
+    now = datetime.now()
+    return missed_today(now, out_dir) and give_up(accounts, now=now, out_dir=out_dir, log=log, why=why)
 
 
 def targets(wb, accounts, label: str) -> list:
@@ -202,6 +254,10 @@ def fetch_live(a, day_iso: str, get_password, log) -> tuple[dict, bool]:
         return collector.fetch_sales_details(b.page, day_iso, day_iso, log), fresh
 
 
+class _PastStop(Exception):
+    """23:50(STOP_NEW) 지남 — 새 계정 시작 안 함."""
+
+
 class _Run:
     """한 번 실행의 상태(계정별 시도·결과·바뀐 칸)."""
 
@@ -212,6 +268,7 @@ class _Run:
         self.changed: list[dict] = []
         self.label = label
         self.fresh = False
+        self.cut = False   # 23:50 넘어 새 계정 시작 멈춤
 
     def fail(self, a, why: str, retry: bool, log) -> None:
         n = self.tries[a.account_id] = self.tries.get(a.account_id, 0) + 1
@@ -228,7 +285,10 @@ def _one(st: _Run, a, wb, day_iso: str, ctx: dict, log) -> None:
     """계정 하나 처리(잠금 → 로그인 → 하루 조회 → 두 줄 덮어쓰기). 예외는 st.fail 로."""
     if st.fresh:   # 새 로그인 뒤엔 사람 간격(① 과 같은 로그인 몰아치기 방지)
         ctx["sleep"](random.uniform(config.LOGIN_PACE_MIN_SEC, config.LOGIN_PACE_MAX_SEC))
-    with account_guard(a.account_id, lock_dir=ctx["lock_dir"], in_use=ctx["in_use"], wait_sec=ctx["busy_wait"],
+    left = (ctx["deadline"] - ctx["clock"]()).total_seconds()
+    if left <= 0:
+        raise _PastStop()
+    with account_guard(a.account_id, lock_dir=ctx["lock_dir"], in_use=ctx["in_use"], wait_sec=min(ctx["busy_wait"], left),
                        sleep=ctx["sleep"]):
         metrics, st.fresh = ctx["fetch"](a, day_iso, ctx["get_password"], log)
     ch = apply(wb, a.account_id, st.label, metrics)
@@ -251,7 +311,12 @@ def _pass(st: _Run, wb, day_iso: str, ctx: dict, log) -> None:
         a = queue.pop(0)
         busy_wait = 0 if a.account_id not in deferred else ctx["busy_wait_full"]
         try:
+            if ctx["clock"]() >= ctx["deadline"]:
+                raise _PastStop()
             _one(st, a, wb, day_iso, dict(ctx, busy_wait=busy_wait), log)
+        except _PastStop:
+            st.cut = True
+            return
         except AccountBusy as exc:
             if a.account_id not in deferred:   # 처음 = 기다리지 않고 맨 뒤로 · 두 번째 = BUSY_WAIT_SEC 까지 기다림
                 deferred.add(a.account_id)
@@ -263,6 +328,27 @@ def _pass(st: _Run, wb, day_iso: str, ctx: dict, log) -> None:
             st.fail(a, str(exc), exc.retry, log)
         except Exception as exc:   # 조회 오류 등 — 그 계정만 실패로 세고 다음 계정(00:10 값 그대로)
             st.fail(a, f"{exc.__class__.__name__}: {str(exc).splitlines()[0][:150] if str(exc) else ''}", True, log)
+
+
+def _passes(st: _Run, wb, day_iso: str, ctx: dict, log) -> None:
+    """최대 3바퀴 — 다시 시도 쉼이 23:50 을 넘기거나 23:50 이 지나면 멈추고 남은 계정을 ❌ 한 줄로(받은 데까지는 _finish 가 저장)."""
+    for n in range(1, MAX_TRIES + 1):
+        if not st.left or st.cut:
+            break
+        if n > 1:
+            if ctx["clock"]() + timedelta(seconds=RETRY_GAP_SEC) >= ctx["deadline"]:
+                st.cut = True
+                break
+            log(f"  {TAG} {RETRY_GAP_SEC // 60}분 뒤 {n}번째 바퀴 — 남은 {len(st.left)}계정")
+            ctx["sleep"](RETRY_GAP_SEC)
+        _pass(st, wb, day_iso, ctx, log)
+    if st.cut and st.left:
+        names = ", ".join(f"{a.label}({a.account_id})" for a in st.left)
+        for a in st.left:
+            st.result[a.account_id] = {"사업자": a.label, "결과": "못 함", "시도": st.tries.get(a.account_id, 0),
+                                       "사유": f"{STOP_NEW:%H:%M} 넘음"}
+        log(f"  {TAG} ❌ {MISSED}({STOP_NEW:%H:%M} 넘음) — 남은 {len(st.left)}계정: {names} · {st.label} 칸 노출·방문자 = "
+            "00:10 값 그대로(받은 계정까지는 저장)")
 
 
 def _finish(st: _Run, wb, out: Path, now: datetime, gsheet_url, log, push) -> None:
@@ -288,7 +374,7 @@ def _record(out: Path, now: datetime, day_iso: str, st: _Run, note: str) -> None
 
 def run_daily(accounts, *, now: datetime, get_password=None, out_dir="output", on_log=print, gsheet_url=None,
               pipe_lock, fetch=fetch_live, in_use=profile_in_use, sleep=time.sleep, push=None,
-              lock_dir=None) -> dict | None:
+              lock_dir=None, clock=None) -> dict | None:
     """그날 한 번. 파이프라인 잠금을 못 얻으면 None(기록 안 남김 → 다음 타이머에 다시). 시작했으면 성공·실패와 상관없이 그날 기록."""
     from .pipeline_paths import _master_path, column_label
     from .registry_lock import RegistryLockError, registry_lock
@@ -297,13 +383,14 @@ def run_daily(accounts, *, now: datetime, get_password=None, out_dir="output", o
     try:
         with registry_lock(pipe_lock, wait_sec=0):
             return _run_locked(accounts, now, out, log, gsheet_url, get_password, fetch, in_use, sleep,
-                               push, Path(lock_dir) if lock_dir else BASE / "_잠금", _master_path, column_label)
+                               push, Path(lock_dir) if lock_dir else BASE / "_잠금", _master_path, column_label,
+                               clock or datetime.now)
     except RegistryLockError:
         return None
 
 
 def _run_locked(accounts, now, out, log, gsheet_url, get_password, fetch, in_use, sleep, push, lock_dir,
-                master_path, column_label) -> dict:
+                master_path, column_label, clock) -> dict:
     from .pipeline_gsheet import push_gsheet
     from .workbook import OutputWorkbook
     day_iso = target_day(now).isoformat()
@@ -320,22 +407,18 @@ def _run_locked(accounts, now, out, log, gsheet_url, get_password, fetch, in_use
         st.left = targets(wb, accounts, st.label)
         log(f"  {TAG} 대상 {len(st.left)}계정(이번 ① 이 {st.label} 칸을 받은 계정)")
         ctx = {"fetch": fetch, "get_password": get_password, "in_use": in_use, "sleep": sleep, "lock_dir": lock_dir,
-               "busy_wait_full": BUSY_WAIT_SEC}
-        for n in range(1, MAX_TRIES + 1):
-            if not st.left:
-                break
-            if n > 1:
-                log(f"  {TAG} {RETRY_GAP_SEC // 60}분 뒤 {n}번째 바퀴 — 남은 {len(st.left)}계정")
-                sleep(RETRY_GAP_SEC)
-            _pass(st, wb, day_iso, ctx, log)
+               "busy_wait_full": BUSY_WAIT_SEC, "clock": clock, "deadline": datetime.combine(now.date(), STOP_NEW)}
+        _passes(st, wb, day_iso, ctx, log)
         _finish(st, wb, out, now, gsheet_url, log, push or push_gsheet)
         bad = [r for r in st.result.values() if r["결과"] == "실패"]
-        note = f"성공 {len(st.result) - len(bad)} · 실패 {len(bad)} · 바뀐 칸 {len(st.changed)}"
+        cut = [r for r in st.result.values() if r["결과"] == "못 함"]
+        note = (f"성공 {len(st.result) - len(bad) - len(cut)} · 실패 {len(bad)}"
+                + (f" · 못 함({STOP_NEW:%H:%M} 넘음) {len(cut)}" if cut else "") + f" · 바뀐 칸 {len(st.changed)}")
         log(f"== {TAG} 끝 — {note} ==")
         return st.result
     finally:
         _record(out, now, day_iso, st, note or "중간에 끝남(오류 — 위 로그)")
 
 
-__all__ = ["MORNING_AT", "MAX_TRIES", "FAIL", "apply", "daily_due", "owed_today", "run_daily", "sales_done", "targets",
-           "wait_reason"]
+__all__ = ["MORNING_AT", "MAX_TRIES", "FAIL", "MISSED", "STOP_NEW", "apply", "daily_due", "give_up", "missed_today",
+           "note_missed", "owed_today", "pipe_busy", "run_daily", "sales_done", "targets", "wait_reason"]

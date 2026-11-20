@@ -21,6 +21,8 @@ except AttributeError:
     pass
 
 FAILS: list[str] = []
+LOADS: list = []
+CLOCK = None
 
 
 def check(ok: bool, msg: str) -> None:
@@ -30,6 +32,7 @@ def check(ok: bool, msg: str) -> None:
 
 
 def m7_app_tick():
+    global LOADS, CLOCK
     print("[M7] 앱 1분 타이머 · 다른 실행 도는 중 = 기다림 · 무인 앱 = ①②③ 뒤 08:00 보충 끝낸 뒤 종료")
     import os
     from types import SimpleNamespace
@@ -45,7 +48,7 @@ def m7_app_tick():
     app_qt.power.keep_awake = lambda on: None
     il = SimpleNamespace(accounts=[SimpleNamespace(account_id="acc1", business_name="가게A", products=[])],
                          errors=[], struck=[])
-    loads = []
+    loads = LOADS = []
     app_qt.App._auto_load_input = lambda self: (loads.append(1), setattr(self, "input_list", il), True)[2]
     QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     w = app_qt.App(auto=True)
@@ -60,13 +63,14 @@ def m7_app_tick():
         @classmethod
         def now(cls, tz=None):
             return cls.cur
-    app_qt.datetime = Clock
+    app_qt.datetime = CLOCK = Clock
     state = {"owed": True, "done": True, "due": False, "why": ""}
     TM_ = app_qt.traffic_morning
     TM_.owed_today = lambda now, out_dir="output": state["owed"]
     TM_.sales_done = lambda now, out_dir="output": state["done"]
     TM_.daily_due = lambda now, out_dir="output": state["due"]
     TM_.wait_reason = lambda now, out_dir="output": state["why"]
+    TM_.missed_today = lambda now, out_dir="output": False   # 23:00 못 함 줄은 M9
 
     def fake_run(accounts, **k):
         calls.append((list(a.account_id for a in accounts), k["pipe_lock"], w._run_active))
@@ -107,8 +111,65 @@ def m7_app_tick():
 
 
 
+def m8_no_reread_while_locked():
+    print("[M8] 다른 창·무인 실행이 파이프라인 잠금을 쥔 동안 = 관리대장 다시 읽지 않음 · ⏸ 하루 한 번 · 풀리면 시작")
+    import app_qt
+    from coupang_analytics.registry_lock import registry_lock
+    TM_ = app_qt.traffic_morning
+    w = app_qt.App(auto=False)
+    w._contractor_timer.stop()
+    w.run_bg = lambda task, *a, **k: task()
+    loads0 = len(LOADS)
+    TM_.daily_due = lambda now, out_dir="output": True
+    TM_.wait_reason = lambda now, out_dir="output": ""
+    TM_.missed_today = lambda now, out_dir="output": False
+    runs = []
+    TM_.run_daily = lambda accounts, **k: runs.append(1) or {}
+    lock = w._pipe_lock_path()
+    with registry_lock(lock, wait_sec=0):          # 무인 앱 ③ 이 잠금을 쥠(다른 핸들 = 다른 실행)
+        for m in range(30):
+            CLOCK.cur = datetime(2026, 11, 21, 9, m, 30)
+            w._morning_tick()
+    check(len(LOADS) == loads0 and not runs, f"잠금 동안 30분 = 관리대장 다시 읽기 {len(LOADS) - loads0}번 · run_daily {len(runs)}번")
+    log = w._log_path.read_text(encoding="utf-8")
+    check(log.count("⏸ 다른 창·무인 실행이 파이프라인을 쓰는 중") == 1, "⏸ 줄 = 그날 한 번")
+    CLOCK.cur = datetime(2026, 11, 21, 11, 31)
+    w._morning_tick()
+    check(len(LOADS) == loads0 + 1 and runs == [1], "잠금 풀림 = 대장 1번 읽고 시작")
+
+
+def m9_missed_line_before_quit():
+    print("[M9] 무인 앱이 기다리다 23:00 을 넘김 = ❌ '아침 보충 못 함' 줄을 남긴 뒤 종료")
+    import app_qt
+    TM_ = app_qt.traffic_morning
+    w = app_qt.App(auto=True)
+    w._contractor_timer.stop()
+    quits, order = [], []
+    w._auto_quit = lambda: (order.append("종료"), quits.append(1))
+    w._morning_hold = True
+    TM_.owed_today = lambda now, out_dir="output": False
+    TM_.daily_due = lambda now, out_dir="output": False
+    TM_.missed_today = lambda now, out_dir="output": True
+    seen = {}
+
+    def give_up(accounts, **k):
+        order.append("못 함")
+        seen.update(k, n=len(accounts))
+        k["log"]("  [노출·방문자 아침 보충] ❌ 노출·방문자 아침 보충 못 함 — 시험")
+        return True
+    TM_.give_up = give_up
+    CLOCK.cur = datetime(2026, 11, 21, 23, 0, 30)
+    w._morning_tick()
+    check(order == ["못 함", "종료"], f"못 함 줄 → 종료 순서 {order}")
+    check(seen.get("pipe_lock", "").endswith("파이프라인.lock") and seen.get("n") == 1 and seen.get("why"),
+          f"사유·계정·잠금 경로 넘김 {seen}")
+
+
+
 def main() -> int:
     m7_app_tick()
+    m8_no_reread_while_locked()
+    m9_missed_line_before_quit()
     print(f"\n결과: {'통과' if not FAILS else f'실패 {len(FAILS)}건'}")
     for f in FAILS:
         print("  ✘", f)
