@@ -10,7 +10,7 @@
 | 구분 | 내용 |
 |---|---|
 | 배포 exe 3개 | `쿠팡애널리틱스.exe`(=`ui/app_qt.py`) · `정산다운로드.exe`(=`tools/settlement_download.py`) · `쿠팡진단.exe`(=`tools/verify_login_discover_live.py`) — `coupang_analytics.spec` |
-| 예약작업 2개 | 18:00 `--auto`(무인) · 로그온 `--resume`(재부팅 복구) — `deploy/install.ps1` |
+| 예약작업 2개 | 00:10 `--auto`(무인 · 실행 제한 23시간50분 D-372) · 로그온 `--resume`(재부팅 복구) — `deploy/install.ps1` |
 | **배포 안 됨** | `ui/app.py`(Tk 폴백, spec 이 tkinter 제외) · ~~`ui/app_integrated.py`~~(HQ 로 이전·삭제 D-037) |
 | 핵심 사실 ✔ | 운영의 모든 `run_full` 호출(①버튼·전체실행·`--auto`·`--resume`)은 **`keywords_off=True, skip_ranks=True, sales_semi=True`** 고정, ③은 **`semi=True`** 고정이었음 → `run_full` 안의 키워드·순위 분기와 자동(offscreen) 순위 분기는 운영에서 실행되지 않음 → **B5 에서 삭제**(`run_full`·`track_ranks_stage` 에서 그 인자들도 제거) |
 
@@ -27,10 +27,11 @@
 | 실행 모드(이어서/오늘 다시/새 통계/날짜 지정) | 칸·재개 규칙 | 전체실행 탭 → `plan_run_mode`·`column_dates` | ✓ pin_run_plan P1~P8 |
 | `--auto` 조립(①→재개→②→③→재고 역기록→종료) | 끝까지 완주 후 종료 | `start_auto` → `pipeline_stages.run_stages`(B6 단일 조립) | ✓ pin_run_plan P10·P11(순서·단계 기록·야간 1회 재개) |
 | `--resume` 재부팅 복구 | 남은 단계만 이어서 | `start_resume` → `plan_resume_stages` + `run_stages` | ✓ pin_run_plan P9·P10 |
-| 정산 자동 수집(D-020·D-021) | 18:00 함께 기동·①완료 대기·다 받으면/17:55 종료·사람이 앱 끄면 함께 종료 | main(`--auto`/`--resume`)·정산 탭 | ✓ runtime P25~P27·e2e |
+| 정산 자동 수집(D-020·D-021·D-372·D-373) | 00:10 함께 기동·①완료 대기·회차 00:10~그날 24:00(다 받으면 조기 종료)·오류 계정·항목별 최대 3번·파일 생성 대기만 남으면 대기 계정만 20분마다·사람이 앱 끄면 함께 종료 | main(`--auto`/`--resume`)·정산 탭 | ✓ runtime P25~P27·e2e |
 | 셀독전환자 로그인 확인(D-111·1단계) | 미정산 셀독전환자 ①②계정 로그인 성공/실패 표 + '연락 필요' 목록(비번 오류·2단계 인증·비번 없음) · 다운로드 없음 | '셀독전환 정산' 탭 → `정산다운로드.exe transfer-login` → `transfer_login.run` | ✓ verify_transfer_offline T1~T7 |
-| 셀독전환자 정산 자료 받기(D-187·2단계) | 매일 18시 뒤 ①②계정(로그인 '실패' 제외) 정산 자료 2026-01~ → `output/정산_셀독전환/정산/` + 누적 엑셀(지급 내역·상품별 정산 = 상품 ID·VID·상품명·옵션명) · 원장 정산 파일은 복사 | 18:00/재부팅 복구 main·'셀독전환 정산' 탭 → `정산다운로드.exe transfer-settle` → `transfer_settle.run` | ✓ verify_transfer_settle_offline S1~S8 |
-| 셀독 계약자별 상품 현황(D-357~D-359·T-132) | 관리대장 사업자별 셀독/개인 상품 · 판매가·그로스 재고·최근 7일 판매 → `output/계약자별상품현황/셀독_계약자별상품현황_yymmdd.xlsx` + 설정 탭 등록 구글시트 통째 덮어쓰기 | ① 판매수집 직후 `pipeline_stages.run_stages` → `contractor_stage.run_stage`(로그인 없음 · 실패 = ❌ 후 계속) | ✓ verify_contractor_sheet_offline T1~T8 |
+| 셀독전환자 정산 자료 받기(D-187·2단계) | 매일 00:10 무인 뒤 ①②계정(로그인 '실패' 제외 · 멈춤 23:50·조용한 시간 23:50~02:50 · 정산 watch 20분 쉼 동안 시작 가능 D-375) 정산 자료 2026-01~ → `output/정산_셀독전환/정산/` + 누적 엑셀(지급 내역·상품별 정산 = 상품 ID·VID·상품명·옵션명) · 원장 정산 파일은 복사 | 00:10 무인/재부팅 복구 main·'셀독전환 정산' 탭 → `정산다운로드.exe transfer-settle` → `transfer_settle.run` | ✓ verify_transfer_settle_offline S1~S8 |
+| 셀독 계약자별 상품 현황(D-357~D-359·T-132) | 관리대장 사업자별 셀독/개인 상품 · 판매가·그로스 재고·최근 7일 판매 → `output/계약자별상품현황/셀독_계약자별상품현황_yymmdd.xlsx` + 설정 탭 등록 구글시트 통째 덮어쓰기 | 매일 06:00 앱 타이머 `ui/app_qt._contractor_tick` → `contractor_stage.run_daily`(이번 회차 ① 완료 뒤에만 · 모든 계정 자료 없음 = 안 만듦 · 로그인 없음 · D-361·D-371) | ✓ verify_contractor_sheet_offline |
+| 노출·방문자 아침 보충(D-374) | 매일 08:00 이번 회차 ① 이 어제 칸을 받은 계정마다 다시 로그인 → 어제 하루 노출·방문자 두 줄만 마스터·그날 스냅샷·결과 구글시트에 덮어씀(판매·순위·재고 그대로 · 계정마다 최대 3번 · 실패 = 00:10 값 그대로 · 23:50 뒤 새 계정 안 함) · 무인 앱은 보충 뒤 종료 | 앱 타이머 `ui/app_qt._morning_tick` → `traffic_morning.run_daily` | ✓ verify_traffic_morning_offline M1~M9 · verify_ui_morning_offline M7~M9 |
 
 ### 1-2. 로그인·매칭·출력
 | 기능 | 목표 결과 | 게이트 |
@@ -66,7 +67,7 @@
 | E1 ✅ | **직원이 결과시트에 입력한 키워드가 반영 안 됨** | 역머지(`pull_gsheet_keywords`) 호출은 `keywords_off=False` 일 때만이라 운영에선 안 돌았고, B5 에서 그 분기와 함께 삭제 → 호출처 없음. **수정(D-025)** = ① `run_full` 시작에 무조건 호출(원래 설계 위치) — ② 시작안은 ① 끝의 결과시트 전체 교체 뒤라 이미 소실(정정). 게이트 simulate 17 | 직원 입력 키워드가 덮어써짐(소실) |
 | E2 ✅ | **마스터 복원이 막힌 경로 사용** — **수정(D-025)**: SA·저장 타입 그대로 읽기·`download_xlsx` 삭제·게이트 verify_gsheet[17]·실측 복원 성공 | `pipeline_gsheet.restore_master_from_gsheet` 가 공개 export(`gsheet.download_xlsx`) — 같은 파일 백업 주석: 결과시트는 401(2026-10-02 실측) | 마스터 없는 PC(재설치)에서 과거 시계열 복원 실패 → 새 통계로 시작 |
 | E3 ✅ | **18:00 예약작업 13시간 제한** — **수정**: 23시간50분(⚠ 운용 PC 설치.bat 재등록 필요) | `deploy/install.ps1:201` `-ExecutionTimeLimit 13h`(재부팅 복구 작업도 같은 설정) | 07:00 넘게 돌면 스케줄러가 앱 강제 종료 = '무인 강제 종료 금지' 위반 · D-020 상 **정산도 함께 종료** |
-| E4 ✅ | **정산 상태확인 bat 오안내** — **수정**: 18:00 야간 무인 작업(--auto) 조회·'실행 안 함=정상일 수 있음' | `deploy/정산_상태확인.bat:19-23` 이 없앤 예약작업을 조회 → "정산 자동 다운로드가 안 돕니다" | 정상인데 고장으로 안내 |
+| E4 ✅ | **정산 상태확인 bat 오안내** — **수정**: 야간 무인 작업(--auto · 지금 00:10) 조회·'실행 안 함=정상일 수 있음' | `deploy/정산_상태확인.bat:19-23` 이 없앤 예약작업을 조회 → "정산 자동 다운로드가 안 돕니다" | 정상인데 고장으로 안내 |
 | E5 ✅ | install.ps1·설치 안내 문구 "06:00 자동 종료" — **수정**: install.ps1·install_schedule_py.ps1·첫실행 안내·INSTALL.md | `install.ps1:196,199,203,228` — 06:00 강제 종료는 2026-09-23 폐지 | 잘못된 안내 |
 | E6 ✅ | `tools/simulate_stages.py` 고장 | B2 에서 도구 삭제로 해소 | — |
 | E7 ✅ | 게이트 설명 문구 불일치 — **수정**: 개수 표기 제거(run_checks·install_hooks·CLAUDE.md) | `run_checks.py` "9종/8종"·`install_hooks.py` "3종" vs 실제 16/15종 | 안내 오류 |
@@ -77,7 +78,7 @@
 - ✅ 삭제(B5): `run_full` 인라인 키워드·순위(`_finish` 인라인 drive_rank·역머지 호출[→E1 은 ① 시작에 재연결]·`_select_keywords_for_skipped`) + 그 인자 `naver`·`grow_keywords`·`skip_ranks`·`keywords_off` · `pipeline_process`(`_resolve_keywords`·`_frozen_keywords`·`_log_diagnose`·`_product_matcher`·대표 옵션 키워드/순위 분기) · wb `title_cache`(숨김 시트 4·5열은 '(미사용)' 표기로 위치만 유지).
 - ✅ 삭제(B5): 자동(offscreen) 순위 `track_ranks_stage(semi=False)`+`semi` 인자·`_measure_product_auto`·`_measure*`·`_rank_cooldown`·`RankHalt`·`_RANK_HALT`·`_best` · config `RANK_NAV_SERIAL`·`RANK_SLOW_ABS_SEC`·`RANK_COOLDOWN_SEC/MAX`.
 - ✅ 삭제(B5): 파이프라인의 `organic_ranks_batch` 병렬 경로 · 사람 Enter 대기 `_wait_user_search`·`RANK_SEMI_AUTOSUBMIT`(반자동은 자동제출만). `rank.organic_ranks/organic_ranks_batch` 는 **B7 에서 삭제**(D-026).
-- ⛔ 정정: `_semi_retry_login` 은 **운영에서 돈다** — 정산 다운로드 무인(`settlement_download --hidden` = 18:00 watch)이 `_ensure_login(semi=False)` → `unattended=True` 경로를 탄다. 삭제 안 함.
+- ⛔ 정정: `_semi_retry_login` 은 **운영에서 돈다** — 정산 다운로드 무인(`settlement_download --hidden` = 00:10 watch)이 `_ensure_login(semi=False)` → `unattended=True` 경로를 탄다. 삭제 안 함.
 - ✅ 게이트 이전(B5-1): simulate 1~16 전부 운영 조합(①→②→③) · verify_offline [23] 동결 규칙=② `_select_product_keywords` · 정밀 렌더=운영 조합 뒤 마스터 · 핀 N·O·O2(삭제 경로 전용)는 코드와 함께 삭제 · 인라인 `_rank_cooldown` 회전 핀 → ③ `_semi_on_miss` 회전 핀으로 이전.
 
 ### 3-2. 쓰기만 하고 읽지 않음
