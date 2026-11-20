@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import csv
 import io
 import subprocess
 import sys
@@ -321,7 +322,11 @@ def s8_lock_wait_then_skip():
         assert a.returncode == 0, _text(t / "a.out")
         assert b.returncode == 0 and "건너뜀" in _text(t / "b.out"), "앞 게이트가 통과 기록을 남겼는데 다시 돎: " + _text(t / "b.out")
         assert not (t / "ran_B").exists(), "건너뛰어야 할 뒤 게이트가 검사를 돌림"
-    ok("기다림 표시(PID·시작·작업 폴더)·동시 2개 없음·잠금 뒤 건너뜀")
+        with (t / "run_checks_times.csv").open(encoding="utf-8-sig", newline="") as f:
+            rows = list(csv.DictReader(f))
+        assert [r["결과"] for r in rows] == ["통과", "건너뜀"], rows
+        assert float(rows[1]["잠금대기초"]) > 0, "뒤 게이트가 기다린 초가 기록 안 됨(D-378 N): " + str(rows)
+    ok("기다림 표시(PID·시작·작업 폴더)·동시 2개 없음·잠금 뒤 건너뜀·기다린 초 기록")
 
 
 def s9_stale_lock():
@@ -371,6 +376,55 @@ def s10_priority():
     ok("검사 프로세스 우선순위 0x4000(BELOW_NORMAL)")
 
 
+def _times_rows() -> list[dict]:
+    p = RC.times_path()
+    if not p.exists():
+        return []
+    with p.open(encoding="utf-8-sig", newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def s11_times_log():
+    print("[S11] 시간 기록(D-378 N) — 게이트마다 한 줄: 종류·결과(통과/실패/건너뜀)·잠금 기다린 초·걸린 초·검사별 초 · 기록 못 쓰면 경고만(게이트 결과 그대로)")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = _repo(tmp)
+        flag = Path(tmp) / "fail_now"
+        p = Path(tmp) / "gate.py"
+        p.write_text(f"import sys, pathlib\nsys.exit(1 if pathlib.Path(r'{flag}').exists() else 0)\n", encoding="utf-8")
+        saved = RC.ROOT, RC.CHECKS
+        RC.ROOT, RC.CHECKS = root, [("검사가", str(p), True), ("검사나", str(p), True)]
+        before = len(_times_rows())
+        try:
+            assert _main(["--quick", "--skip-if-passed"])[0] == 0
+            assert _main(["--quick", "--skip-if-passed"])[0] == 0          # 같은 내용 → 건너뜀
+            flag.touch()
+            assert _main([])[0] == 1                                       # 전체 · 실패
+            rows = _times_rows()[before:]
+            assert [r["결과"] for r in rows] == ["통과", "건너뜀", "실패"], rows
+            assert [r["종류"] for r in rows] == ["빠른", "빠른", "전체"], rows
+            first = rows[0]
+            assert first["작업폴더"] == str(root) and first["검사수"] == "2", first
+            assert "검사가=" in first["검사별초"] and "검사나=" in first["검사별초"], first
+            for r in rows:
+                float(r["잠금대기초"]), float(r["걸린초"])
+                assert r["시작"][:4].isdigit(), r
+            assert rows[1]["검사별초"] == "" and rows[1]["검사수"] == "0", "건너뛰었는데 검사 기록이 있음"
+            saved_lock = RC.LOCK_PATH
+            bad = Path(tmp) / "막힘"
+            bad.mkdir()
+            (bad / "run_checks_times.csv").mkdir()                         # 기록 파일 자리에 폴더 → 쓰기 실패
+            RC.LOCK_PATH = bad / "gate.lock"
+            try:
+                flag.unlink()
+                rc, out = _main([])
+                assert rc == 0 and "시간 기록 못 함" in out, out
+            finally:
+                RC.LOCK_PATH = saved_lock
+        finally:
+            RC.ROOT, RC.CHECKS = saved
+    ok("통과·건너뜀·실패 3줄 · 종류·작업폴더·검사별 초 · 기록 실패 = 경고만")
+
+
 def main():
     with tempfile.TemporaryDirectory() as lock_dir:      # 같은 프로세스 안 게이트(S5·S6·S7)도 실제 PC 잠금 대신 임시 잠금
         RC.LOCK_PATH = Path(lock_dir) / "gate.lock"
@@ -388,6 +442,7 @@ def _scenarios():
     s8_lock_wait_then_skip()
     s9_stale_lock()
     s10_priority()
+    s11_times_log()
     print("회귀 게이트 자체(동시 실행·통과 기록·PC 하나만·우선순위) 오프라인 검증 통과")
 
 

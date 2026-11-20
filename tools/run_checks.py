@@ -16,6 +16,7 @@ PC 전체에서 게이트는 한 번에 1개만 돈다(D-377 · 노트북 과부
 잠금을 얻은 **뒤에** 한다 — 앞 게이트가 같은 내용으로 통과 기록을 남겼으면 뒤 게이트(pre-push 등)는 돌지 않는다.
 잠금 = OS 파일 잠금(LOCK_PATH · registry_lock.py 와 같은 방식) — 게이트가 죽으면 OS 가 풀어 남은 파일은 막지 않는다.
 검사 프로세스는 낮은 우선순위(Windows BELOW_NORMAL)로 띄워 다른 작업을 덜 밀어낸다.
+게이트마다 한 줄 시간 기록 = 잠금 파일 옆 `run_checks_times.csv`(잠금 기다린 초·걸린 초·검사별 초 · D-378 N).
 
 개수는 적지 않는다(검증이 늘 때마다 문구가 어긋났음 — E7). 실행 끝 요약에 'N종'이 나온다.
 
@@ -25,6 +26,7 @@ PC 전체에서 게이트는 한 번에 1개만 돈다(D-377 · 노트북 과부
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 import subprocess
 import sys
@@ -139,9 +141,35 @@ def _write_holder(fd: int, text: str) -> None:
     os.write(fd, text.encode("utf-8"))
 
 
+def times_path() -> Path:
+    """게이트 시간 기록(D-378 N) — 잠금 파일과 같은 PC 공용 폴더 · 작업 폴더·세션이 달라도 한 파일."""
+    return LOCK_PATH.with_name("run_checks_times.csv")
+
+
+_TIMES_HEAD = ["시작", "작업폴더", "종류", "결과", "잠금대기초", "걸린초", "검사합계초", "검사수", "검사별초"]
+
+
+def _log_times(root: Path, quick: bool, outcome: str, waited: float, wall: float, results: list) -> None:
+    """게이트 한 번 = 한 줄. 못 쓰면 경고만 출력(게이트 결과는 그대로 · 조용히 넘기지 않음)."""
+    p = times_path()
+    row = [time.strftime("%Y-%m-%d %H:%M:%S"), str(root), "빠른" if quick else "전체", outcome,
+           f"{waited:.1f}", f"{wall:.1f}", f"{sum(r[2] for r in results):.1f}", str(len(results)),
+           ";".join(f"{r[0]}={r[2]:.1f}" for r in results)]
+    try:
+        new = not p.exists()
+        with p.open("a", encoding="utf-8-sig" if new else "utf-8", newline="") as f:
+            w = csv.writer(f)
+            if new:
+                w.writerow(_TIMES_HEAD)
+            w.writerow(row)
+    except OSError as e:
+        print(f"  ⚠ 게이트 시간 기록 못 함({p}: {e}) — 검사 결과는 그대로", flush=True)
+
+
 @contextmanager
 def _gate_lock(root: Path):
-    """PC 전체 게이트 잠금 — 다른 게이트가 쥐고 있으면 끝날 때까지 기다림(시간 제한 없음 · 죽으면 OS 가 풂)."""
+    """PC 전체 게이트 잠금 — 다른 게이트가 쥐고 있으면 끝날 때까지 기다림(시간 제한 없음 · 죽으면 OS 가 풂).
+    기다린 초를 넘겨 줌(시간 기록용 · D-378 N)."""
     path = LOCK_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
@@ -156,9 +184,10 @@ def _gate_lock(root: Path):
             time.sleep(_LOCK_POLL_SEC)
         if shown is not None:
             print(f"  ▶ 앞 게이트가 끝나 시작합니다({time.monotonic() - started:.0f}초 기다림)", flush=True)
+        waited = time.monotonic() - started
         _write_holder(fd, f"PID {os.getpid()} · 시작 {time.strftime('%Y-%m-%d %H:%M:%S')} · 작업 폴더 {root}")
         try:
-            yield
+            yield waited
         finally:
             _write_holder(fd, "")
             _unlock(fd)
@@ -219,15 +248,16 @@ def _args(argv: list[str] | None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     a = _args(argv)
     root = ROOT
-    with _gate_lock(root):               # 건너뛰기 판정도 잠금 안에서 — 앞 게이트의 통과 기록을 보고 판정(D-377)
-        return _gate(a, root)
+    with _gate_lock(root) as waited:     # 건너뛰기 판정도 잠금 안에서 — 앞 게이트의 통과 기록을 보고 판정(D-377)
+        return _gate(a, root, waited)
 
 
-def _gate(a: argparse.Namespace, root: Path) -> int:
+def _gate(a: argparse.Namespace, root: Path, waited: float = 0.0) -> int:
     checks = [c for c in CHECKS if not a.quick or c[2]]
     label = "빠른 검증(--quick)" if a.quick else "전체 검증"
     if a.skip_if_passed and _already_passed(root, a.skip_if_passed, a.quick):
         print(f"  ⏭ {label} 건너뜀 — 같은 내용이 이미 통과함(통과 기록: check_stamp · D-180)")
+        _log_times(root, a.quick, "건너뜀", waited, 0.0, [])
         return 0
     key = check_stamp.worktree_key(root)
     print("=" * 64)
@@ -238,6 +268,7 @@ def _gate(a: argparse.Namespace, root: Path) -> int:
     wall = time.monotonic() - started
     total = sum(d for _, _, d, _ in results)
     failed = [n for n, ok, _, _ in results if not ok]
+    _log_times(root, a.quick, "실패" if failed else "통과", waited, wall, results)
     print("=" * 64)
     if failed:
         print(f"  ❌ 실패 {len(failed)}종: {', '.join(failed)}  (걸린 시간 {wall:.1f}s · 검사 합계 {total:.1f}s)")
