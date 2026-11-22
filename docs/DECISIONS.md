@@ -770,7 +770,7 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: (나) 대장에 적힌 옵션만(배송방식 무관) · (다) 지금처럼 블록 VID 만 · 등록명(대장)으로 묶기(판매 기록 상품명과 대부분 달라 못 묶음).
 - 한계(사실): 관리 VID 가 판매 기록에 한 번도 없으면(4/1 이후 판매 0) 그 상품의 다른 VID 판매도 못 묶음 — 관리 VID 판매가 생기면 그때부터 묶임. 위탁자가 관리 상품과 **똑같은 상품명**으로 따로 등록한 상품은 구분 불가(같은 상품으로 셈).
 - 영향 범위: `sales_summary.py`(managed_listings·scope) · `workbook_sales.refresh_sales_sheet` · `tools/verify_sales_summary_offline.py`(T9) · `designs/SALES_SUMMARY.md`. 정산서(git 밖·쿠팡 정산 세션)는 별도 — '7:3 계정 합산'과 '개인상품 제외' 규칙의 관계는 정산 세션 확인 필요.
-- 상태: ACTIVE
+- 상태: ACTIVE (부분 SUPERSEDED by D-380 — 통합판매현황의 같은 상품명 VID 는 관리 VID 와 등록상품·노출상품이 같을 때만 · 정산서 범위(`settlement_statement_context` managed_listings)는 그대로)
 
 ### D-108 [PROMO_END_NO_CADENCE] 계정목록 '체험단 종료일'만 적어도 수집·순위 주기는 그대로(매일) — 수집 주기 게이팅은 시작일·모니터링 종료일만으로 판정 (2026-10-21, R39)
 - 결정: `OutputWorkbook.has_marketing()`(3일 주기 게이팅 활성 조건)은 숨김 `_마케팅` 시트의 **시작(3열)·모니터링종료(5열)** 만 본다. 종료(4열)만 있는 상품은 게이팅을 켜지 않는다. 종료일은 그대로 저장돼 '체험단중/종료' 상태·기간 배경색에만 쓰인다.
@@ -3095,4 +3095,11 @@ umpy`) · 우리 코드는 numpy 를 직접 안 씀 · 정산 바퀴 끝 '남는
 - 근거: D-378 N 시간 기록 첫 실측 — 전체 통과 직후 커밋·푸시 2번 모두 푸시가 전체 검사를 다시 돎(193.1초 · 178.2초 · `%LOCALAPPDATA%\coupang-analytics\run_checks_times.csv` 11-21 00:12·00:22 줄). 재현(커밋 직후·추적 파일 변경 없음): 작업 폴더 키 `73763f1…`(통과 기록과 같음) ≠ 커밋 키 `6fef5dd…` · `docs/plans` 빼면 같음 · 추적 파일만(add -u) 키도 같음 → 원인 = 안 올린 `docs/plans/` 10파일(11-12~17 생성). 메모리 사본 동기화는 원인 아님(docs/memory 는 이미 키에서 빠짐). 대화 기록상 푸시 1번 평균 52초(9월) → 115초(11-16~20).
 - 버린 대안: 2 `docs/plans/` 커밋(STATE 'git 밖' 표기의 이유 미확인) · 키에서 안 올린 파일 통째로 빼기(그런 파일도 검사 결과에 영향 가능 → '같은 내용 통과' 판정 약화 · D-202).
 - 영향 범위: `.gitignore` 1줄 · `tools/check_stamp.py`(`untracked`) · `tools/run_checks.py`(`_warn_untracked`) · `tools/verify_run_checks_offline.py` S12 · 다른 작업 폴더(worktree)에 안 올린 파일이 있어도 이제 경고로 보임.
+- 상태: ACTIVE
+
+### D-380 [SALES_SCOPE_SAME_PRODUCT] 통합판매현황 같은 상품명 VID = 관리 VID 와 등록상품(vendorInventoryId)이나 노출상품(productId)이 같을 때만 — 이름만 같은 위탁자 본인 상품·번호 모르는 VID 제외 (2026-11-22, R247)
+- 결정(소유자 2026-11-22 "1.3번만 수정해줘" — 통제 세션 질문 3번 "'이름이 같다'만으로 합치지 말고, 같은 쿠팡 상품이거나 쿠팡 화면에서 같은 상품으로 나올 때만 합치도록 좁힐까요?"): D-107 ② 같은 상품명의 다른 VID 는 `sales_summary.related_vids` 에 든 VID 만 관리 상품으로 센다. related = 블록 VID + 블록 VID 와 등록상품 번호가 같은 VID + 노출상품 번호가 같은 VID. 등록상품 번호 = 판매분석 기록 '등록상품ID'(`inventory_ids` · 로그인 실패 계정·지워진 상품도 지난 기록에 남음) + `상품정보_일별`(`product_info.lookup`) · 노출상품 번호 = `_상품ID_전체.json`(`contractor_sheet.load_pid_store`). 번호 읽기 실패 = ⚠ 로그 + 블록 VID 만(넓히지 않음). 같은 질문의 1번('[자체판매상품]' 대장 줄)·2번(대장에 적은 옵션만) = 바꾸지 않음(지금대로 — 매칭된 쿠팡 상품의 모든 옵션 추적).
+- 근거: 하위 조사 `output/_분석_261122_시트대조/시트대조_보고.md`(운용 사본 output42 · 11-21 00:10 회차) — D-107 로 합쳐진 같은 이름 VID 360개 중 같은 등록상품·노출상품 339 · 다른 등록상품 12(0원) · 번호 모름 9(301,010원 · 55마켓·벅스). 수정 후 같은 자료 재계산(통제 세션): 같은 이름 VID 360 → 유지 341(같은 등록상품 243 · 노출상품 같음 96 · 등록상품 다르나 노출상품 같음 2) · 제외 19 = 301,010원(bux1004 보냉백 6 · aehee5505 캠핑테이블 2 등 — 판매 기록 '등록상품ID' 로 보면 블록과 다른 등록상품) · 4/1~ 관리 합계 604,027,080 → 603,726,070 · 계산 0.5초. 첫 구현(상품정보_일별만)은 로그인 실패 계정(bux1004·aehee5505)에 보관본이 없어 같은 등록상품 25개(2,979,410원)까지 뺌 → 판매 기록 '등록상품ID' 추가로 해결(시험 T9 추가).
+- 버린 대안: 상품정보_일별만으로 판정(실패 계정 자료 없음) · `_raw` 상품조회(덮어써짐 · `settlement_statement_scope.inventory` 는 workbook_sales 를 import 해 순환) · 상품명 비교 없이 번호만으로 묶기(질문 범위 밖 · 넓어짐).
+- 영향 범위: `src/coupang_analytics/sales_summary.py`(inventory_ids·related_vids·scope related 인자) · `src/coupang_analytics/workbook_sales.py`(_related·refresh_sales_sheet) · `tools/verify_sales_summary_offline.py` T9 · `docs/CURRENT_RULES.md` §7 · `designs/SALES_SUMMARY.md` §4. 정산서 범위(`settlement_statement_context.py:145`·`settlement_statement_scope.py` ② = D-107 그대로)는 바꾸지 않음 — 같은 기준을 정산서에도 쓸지는 별도 판단(STATE). 운용 PC 반영 = 다음 배포 zip.
 - 상태: ACTIVE

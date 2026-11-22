@@ -148,10 +148,36 @@ def managed_listings(stores, managed: dict) -> dict:
     return out
 
 
-def scope(store: dict, managed: dict | None, listings: dict | None = None) -> dict:
+def inventory_ids(stores) -> dict:
+    """{계정ID: {VID: 등록상품ID}} — 판매분석 기록(일별·기간)의 '등록상품ID'(D-129 · 상품조회 vendorInventoryId 와 같은 번호).
+    로그인 실패 계정·지워진 상품도 지난 기록에 남는다. 빈 칸·칸 없음(D-129 전 기록) = 모름(넣지 않음)."""
+    out: dict = {}
+    for store in stores:
+        for aid, recs in store.items():
+            ids = out.setdefault(aid, {})
+            for r in recs.values():
+                ids.update({str(v): str(o["등록상품ID"]) for v, o in (r.get("옵션") or {}).items() if o.get("등록상품ID")})
+    return out
+
+
+def related_vids(managed: dict, inventory_of: dict, product_of: dict) -> dict:
+    """{계정ID: VID 집합} — 관리 VID 와 **등록상품(vendorInventoryId)** 이나 **노출상품(productId)** 이 같은 VID(관리 VID 포함).
+    D-380(소유자 2026-11-22): 같은 상품명 VID(D-107)는 이 집합에 있을 때만 관리 상품 — 위탁자가 똑같은 이름으로 따로
+    올린 상품·등록상품/노출상품을 모르는 VID 는 뺀다. inventory_of·product_of = {계정ID: {VID: 번호}}(없는 계정 = 블록 VID 만)."""
+    out: dict = {}
+    for aid, vids in managed.items():
+        inv, pid = inventory_of.get(aid) or {}, product_of.get(aid) or {}
+        keys_i = {inv[v] for v in vids if inv.get(v)}
+        keys_p = {pid[v] for v in vids if pid.get(v)}
+        out[aid] = set(vids) | {v for v, k in inv.items() if k in keys_i} | {v for v, k in pid.items() if k in keys_p}
+    return out
+
+
+def scope(store: dict, managed: dict | None, listings: dict | None = None, related: dict | None = None) -> dict:
     """{계정: {키: 기록}} → 관리 상품만 남긴 사본. managed = {계정ID: VID 집합}(결과 사업자 시트 블록) ·
     listings = {계정ID: 관리 상품명 집합}(managed_listings — 있으면 같은 상품명의 다른 VID 도 포함·D-107) ·
-    None = 거르지 않음. managed 에 없는 계정(결과 파일에 없는 계정)은 뺀다."""
+    related = {계정ID: VID 집합}(related_vids — 있으면 같은 상품명 VID 는 여기 든 것만·D-380 · None = D-107 그대로) ·
+    managed None = 거르지 않음. managed 에 없는 계정(결과 파일에 없는 계정)은 뺀다."""
     if managed is None:
         return store
     out: dict = {}
@@ -159,8 +185,9 @@ def scope(store: dict, managed: dict | None, listings: dict | None = None) -> di
         if aid not in managed:
             continue
         vids, names = managed[aid], (listings or {}).get(aid) or set()
+        kin = None if related is None else related.get(aid) or set()
         out[aid] = {k: {**r, "옵션": {v: o for v, o in (r.get("옵션") or {}).items()
-                                     if v in vids or _listing(o) in names}}
+                                     if v in vids or (_listing(o) in names and (kin is None or v in kin))}}
                     for k, r in recs.items()}
     return out
 

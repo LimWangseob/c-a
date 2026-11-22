@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from . import sales_dashboard, sales_history, sales_summary
+from . import contractor_sheet, product_info, sales_dashboard, sales_history, sales_summary
 from .workbook_common import _SALES_SHEET
 
 SALES_SHEET = _SALES_SHEET
@@ -67,6 +67,24 @@ def managed_counts(owb) -> tuple[int, int, int]:
     return len(accts), prods, stop
 
 
+def _related(out_dir, managed: dict, stores, log) -> dict:
+    """D-380 — 같은 상품명 VID 를 관리 상품으로 셀 수 있는 VID: {VID: 등록상품번호}(판매분석 기록 '등록상품ID' +
+    상품정보_일별 · 지워진 상품도 마지막 값) · {VID: 노출상품번호}(`_상품ID_전체.json`) → sales_summary.related_vids.
+    읽기 실패 = ⚠ 로그 · 블록 VID 만(넓히지 않음)."""
+    inv = sales_summary.inventory_ids(stores)
+    try:
+        pids = contractor_sheet.load_pid_store(out_dir)
+        for aid in managed:
+            inv.setdefault(aid, {}).update({str(v): str(r["vendorInventoryId"])
+                                            for v, r in product_info.lookup(out_dir, aid).items()
+                                            if r.get("vendorInventoryId")})
+    except (OSError, ValueError) as exc:
+        log(f"  [통합판매현황] ⚠ 등록상품·노출상품 번호 읽기 실패 — 같은 상품명 VID 제외(블록 VID 만) · "
+            f"{exc.__class__.__name__}: {str(exc)[:80]}")
+        return {}
+    return sales_summary.related_vids(managed, inv, pids)
+
+
 def refresh_sales_sheet(owb, out_dir="output", log=None, today: date | None = None) -> str:
     """저장된 판매분석 기록으로 첫 시트를 다시 그린다(저장은 호출부). 반환 = 로그 한 줄."""
     log = log or (lambda m: None)
@@ -79,9 +97,10 @@ def refresh_sales_sheet(owb, out_dir="output", log=None, today: date | None = No
         return msg
     managed, labels = managed_vids(owb), account_labels(owb)
     listings = sales_summary.managed_listings((daily, periods), managed)   # D-107: 관리 상품 전체(옵션·윙·재등록 VID)
+    related = _related(out_dir, managed, (daily, periods), log)   # D-380: 같은 상품명이어도 등록상품·노출상품이 같은 VID 만
     all_d, all_p = ({a: r for a, r in raw.items() if a in managed} for raw in (daily, periods))   # 결과 계정 전체(D-130·D-132)
-    daily, periods = (sales_summary.scope(daily, managed, listings),
-                      sales_summary.scope(periods, managed, listings))
+    daily, periods = (sales_summary.scope(daily, managed, listings, related),
+                      sales_summary.scope(periods, managed, listings, related))
     summary = sales_summary.build(daily, labels, yesterday)
     board = sales_dashboard.build(daily, periods, labels, yesterday)
     board.managed = managed_counts(owb)
