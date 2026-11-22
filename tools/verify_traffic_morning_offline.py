@@ -105,7 +105,7 @@ def run(out: Path, fake, *, log=None, in_use=lambda p: False, sleep=lambda s: No
     res = TM.run_daily(accounts(), now=now, out_dir=out, on_log=(log or lines.append), gsheet_url="URL",
                        pipe_lock=out / "_잠금" / "파이프라인.lock", fetch=fake, in_use=in_use, sleep=sleep,
                        push=lambda wb, url, lg: (pushed if pushed is not None else []).append(url),
-                       lock_dir=out / "정산" / "_잠금")
+                       lock_dir=out / "정산" / "_잠금", clock=lambda: now)   # 23:50 마감도 시험 시각 기준(실제 시계 X)
     return res, lines
 
 
