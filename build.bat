@@ -20,6 +20,10 @@ copy /Y "%~dp0deploy\install.ps1" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0deploy\0_먼저실행_보안제외.bat" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0deploy\0_먼저실행_보안제외.bat" "dist\" >nul
 rem ⚠ Defender 오탐(미서명 PyInstaller exe) 대비 — 압축 전에 실행할 '보안 제외' 스크립트를 zip 루트에도 둔다.
+rem 업데이트(배포 때 정산 강제 종료 없이 — 소유자 11-23) = 새 zip 을 임시 폴더에 풀고 zip 루트 '업데이트.bat' 만 실행(앱·정산 멈춤 → 덮어쓰기 → 설치 → 이어서).
+copy /Y "%~dp0deploy\업데이트.bat" "dist\coupang-analytics\" >nul
+copy /Y "%~dp0deploy\업데이트.bat" "dist\" >nul
+copy /Y "%~dp0deploy\update.ps1" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0deploy\자동실행_삭제.bat" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0deploy\remove_autorun.ps1" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0deploy\첫실행_설정안내.txt" "dist\coupang-analytics\" >nul
@@ -74,7 +78,7 @@ echo.
 echo [5/5] 배포용 zip 압축(폴더째 — 개발·운용 폴더명 동일: coupang-analytics)...
 del /Q "dist\쿠팡애널리틱스_배포.zip" 2>nul
 rem zip 루트에 '0_먼저실행_보안제외.bat' 을 함께 넣는다(압축 풀기 전 관리자로 실행 → Defender 오탐 삭제 방지).
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path 'dist\coupang-analytics','dist\0_먼저실행_보안제외.bat' -DestinationPath 'dist\쿠팡애널리틱스_배포.zip' -Force"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path 'dist\coupang-analytics','dist\0_먼저실행_보안제외.bat','dist\업데이트.bat' -DestinationPath 'dist\쿠팡애널리틱스_배포.zip' -Force"
 if errorlevel 1 goto :err
 echo.
 echo 완료!
@@ -85,8 +89,9 @@ echo.
 echo   [새 PC · 처음] zip 풀기 → coupang-analytics\ 안의 "설치.bat" 더블클릭(관리자 권장) → 끝.
 echo     설치가 _씨앗\의 검증된 config.json·proxies.txt·통계마스터를 같은 폴더로 복사(첫 설치만) + 키 암호화이식
 echo     + 바로가기·야간무인 등록. 설정 탭에 다시 입력할 것 없음(노트북 설정 그대로 복사됨).
-echo   [새 PC · 업데이트] 새 zip 의 coupang-analytics\ 를 **같은 폴더에 덮어쓰기**만.
-echo     output·data·config.json 은 zip 에 없으니 덮어써도 그대로 보존됩니다(마스터·크롬 프로필·설정 유지).
+echo   [운용 PC · 업데이트] 새 zip 을 **임시 폴더**에 풀기 → zip 루트의 "업데이트.bat" 더블클릭(관리자 확인 '예') → 끝.
+echo     돌고 있는 앱·정산 프로그램을 스스로 멈추고(작업 관리자 강제 종료 불필요) 설치 폴더에 덮어쓴 뒤 설치(Y)·정산 이어서.
+echo     output·data·config.json·proxies.txt 는 건드리지 않습니다(마스터·크롬 프로필·설정 유지).
 echo   (실행 PC 에 Google Chrome 설치 필수)
 echo   ⚠ _설정값.json·배포 zip 에는 API/SA 키가 평문으로 들어있으니 외부 공유·업로드 금지, 설치 후 삭제하세요.
 echo.
