@@ -1226,7 +1226,10 @@ def p31_keep_originals():
             TD.ORIGINALS = None
             j = fetch()
             assert j.status == SJ.ST_DONE and (TD.FILES / j.file).read_bytes() == b"PK-scrubbed"
-            assert not (Path(tmp) / "원본").exists(), "지정 안 하면 원본 폴더 안 만듦(지금 동작)"
+            assert not (Path(tmp) / "원본").exists(), "지정 안 한 폴더는 안 만듦"
+            from coupang_analytics import settlement_evidence as EV
+            ev = EV.account_folder(TD.BASE / "증빙", "홍길동-가나-acc1") / EV.ORIG / j.file   # D-383 E2: 정기 받기 = 증빙 원본도
+            assert ev.read_bytes() == data, "정기 받기 = 그 계정 증빙 원본 폴더에 받은 바이트 그대로(D-383 E2)"
             TD.ORIGINALS = Path(tmp) / "원본"
             j = fetch()
             assert (TD.ORIGINALS / j.file).read_bytes() == data, "원본 = 받은 바이트 그대로(구매자명 포함)"
@@ -3473,7 +3476,7 @@ def p68_evidence_auto():
     assert EV.STOP_BEFORE == timedelta(minutes=40) and EV.CHECK_AFTER == 2
     assert EV.stop_at(W.cycle_window(DT(2026, 11, 21, 0, 10))[1]) == DT(2026, 11, 21, 23, 20)
     # ② 자동 증빙 '정산 원본' = cmd_run 그대로(검증 수집·광고 포함 · 빼지 않음) · 배치·run·소급·셀독전환에는 증빙 없음
-    assert "cmd_run(a, b, args, jobs)" in inspect.getsource(TD.cmd_evidence)
+    assert "cmd_run(a, b, args, jobs, every=EVIDENCE_BATCH)" in inspect.getsource(TD.cmd_evidence)   # 20건마다 받기(D-383 E3)
     for fn in (TD._run_both, TD.cmd_backfill, TD.cmd_run, TD._transfer_settle, TD.main):
         assert "_evidence_sweep" not in inspect.getsource(fn), fn.__name__
 
@@ -4360,6 +4363,138 @@ def p72_rest_pass_left_work_only():
     ok("남은 일 바퀴 중단 = 못 간 계정 계획 유지(다음 바퀴에)")
 
 
+def p73_evidence_reuse_batch_abort():
+    print("[P73] 증빙(D-383 · 소유자 11-23 E1 '수용임 … 매일 받는 자료에는 당연히 추가해서 받아야 함') — 원본 있으면 요청 안 함(정기 비용"
+          " 리포트 복사·정기 받기 때 저장한 원본) · 20건마다 받기 · 응답 없음 = 그 계정 중단 · 회차 끝 받기 의심(D-339) 무인 1번")
+    import contextlib
+    import inspect
+    from datetime import datetime as RealDT, timedelta
+    from types import SimpleNamespace
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    from coupang_analytics import settlement_evidence as EV
+    from coupang_analytics import settlement_files as SF
+    from coupang_analytics import settlement_jobs as SJ
+    from coupang_analytics import settlement_runlog as RLG
+    NAME = "홍길동-가나-acc1"
+
+    def job(ch, report, settle):
+        return SJ.Job(NAME, ch, "주정산", report, "2026-03-02", "2026-03-08", settle)
+
+    def fname(j):
+        return SF.settle_file_name(NAME, D(j.settle_date), j.channel, j.kind, j.report, D(j.period_start), D(j.period_end))
+    args = SimpleNamespace(start=D("2026-01-01"), end=D("2026-11-22"), until="", until_at=None, dry_run=False, cap=500)
+
+    # E1·E2 — 증빙 정산 원본: 비용 리포트(정기 = 쿠팡 원본 그대로) 복사 · 정기 받기 때 저장한 원본 = 받음 · 그 밖만 요청
+    with tempfile.TemporaryDirectory() as tmp:
+        base, orig = Path(tmp) / "정산", Path(tmp) / "증빙" / EV.ORIG
+        cost, wing_saved, wing_new = job("로켓그로스", "보관비", "2026-03-20"), job("윙", "주문상세", "2026-03-13"), \
+            job("윙", "주문상세", "2026-03-20")
+        jobs = [cost, wing_saved, wing_new]
+        (base / "파일" / "비용").mkdir(parents=True)
+        (base / "파일" / "비용" / fname(cost)).write_bytes(b"PK-cost-original")
+        orig.mkdir(parents=True)
+        (orig / fname(wing_saved)).write_bytes(b"PK-wing-original")
+        asked: list = []
+        pat = [(TD, "JOBS", TD.EVIDENCE_JOBS), (TD, "ORIGINALS", orig), (TD, "COSTS", base / "파일" / "비용"),
+               (TD, "LOG", RLG.RunLog(base, echo=lambda m: None)), (TD, "read_events", lambda *a, **k: []),
+               (SJ, "plan_requests", lambda ev, js, **k: [j for j in js if j.status == SJ.ST_PLANNED]),
+               (SJ, "save_jobs", lambda p, js: None), (TD, "_request_one", lambda b, j, n: asked.append(j) or "rid"),
+               (TD.time, "sleep", lambda s: None), (TD, "name_of", lambda a: NAME)]
+        n = _patched(pat, lambda: TD.cmd_request(SimpleNamespace(), None, args, jobs))
+        assert asked == [wing_new] and n == 1, asked                                    # 요청 3 → 1
+        assert (orig / fname(cost)).read_bytes() == b"PK-cost-original", "비용 리포트 = 원본 바이트 그대로 복사"
+        assert cost.status == wing_saved.status == SJ.ST_DONE and wing_new.status == SJ.ST_REQUESTED
+        asked.clear()
+        for j in jobs:
+            j.status = SJ.ST_PLANNED
+        _patched(pat[:1] + [(TD, "JOBS", Path(tmp) / "_요청기록.json")] + pat[2:],
+                 lambda: TD.cmd_request(SimpleNamespace(), None, args, jobs))         # 정기(증빙 아님) = 지금 그대로 전부 요청
+        assert asked == jobs, asked
+    ok("증빙 정산 원본 = 정기 비용 리포트 복사·정기 받기 때 저장한 원본 = 요청 안 함 · 그 밖만 요청 · 정기 받기 요청은 그대로")
+
+    # E3 — 증빙 = 요청 20건마다 90초 뒤 받기(요청 사이 간격 GAP_SEC 그대로) · 정기 = 지금처럼 전부 요청 뒤 한 번
+    with tempfile.TemporaryDirectory() as tmp:
+        seq: list = []
+        js = [job("윙", "주문상세", f"2026-0{m}-1{d}") for m in (3, 4, 5) for d in range(7)]   # 21건
+        pat = [(TD, "JOBS", Path(tmp) / "_요청기록.json"), (TD, "ORIGINALS", None), (TD, "LOG", RLG.RunLog(tmp, echo=lambda m: None)),
+               (TD, "read_events", lambda *a, **k: []), (SJ, "save_jobs", lambda p, x: None),
+               (SJ, "plan_requests", lambda ev, x, **k: [j for j in x if j.status == SJ.ST_PLANNED]),
+               (TD, "_request_one", lambda b, j, n: seq.append("요청") or "rid"),
+               (TD.time, "sleep", lambda s: seq.append(s) if s == 90 else seq.append("간격") if s >= 45 else None),
+               (TD, "cmd_download", lambda *a: seq.append("받기")), (TD, "collect_verify", lambda *a: None),
+               (TD, "collect_ads", lambda *a: None), (TD, "name_of", lambda a: NAME)]
+        _patched(pat, lambda: TD.cmd_run(SimpleNamespace(), None, args, js, every=TD.EVIDENCE_BATCH))
+        cut = seq.index(90)
+        assert TD.EVIDENCE_BATCH == 20 and seq[:cut].count("요청") == 20 and seq[cut + 1] == "받기", seq[:cut + 2]
+        assert seq[cut + 2:] == ["간격", "요청", 90, "받기"] and seq.count("받기") == 2, seq[cut:]
+        assert all(seq[i] == "간격" for i in range(1, cut, 2)), "요청 사이 = GAP_SEC 그대로"
+        for j in js:
+            j.status = SJ.ST_PLANNED
+        seq.clear()
+        _patched(pat, lambda: TD.cmd_run(SimpleNamespace(), None, args, js))          # 정기 = 지금 그대로
+        assert seq.count("요청") == 21 and seq.count("받기") == 1 and seq[-2:] == [90, "받기"], seq[-4:]
+    ok("증빙 = 20건마다 90초 뒤 받기(멈춤 시각에 걸려도 받은 파일 남음) · 요청 간격 그대로 · 정기 = 지금 그대로")
+
+    # E4 — 증빙 단계 응답 없음(Failed to fetch) = 그 계정 증빙 중단(다음 단계 안 부름) · 그 밖 실패 = 기록하고 다음 단계(지금 그대로)
+    with tempfile.TemporaryDirectory() as tmp:
+        lg = RLG.RunLog(tmp, echo=lambda m: None)
+
+        def boom(msg):
+            def fn():
+                raise RuntimeError(msg)
+            return fn
+        res = _patched([(TD, "LOG", lg)], lambda: TD._evidence_step(NAME, "판매분석 월별", boom("표 머리글 없음")))
+        assert res["결과"] == EV.FAIL, res
+        try:
+            _patched([(TD, "LOG", lg)], lambda: TD._evidence_step(NAME, "정산 원본", boom("Page.evaluate: TypeError: Failed to fetch")))
+            raise AssertionError("응답 없음인데 다음 단계로 감")
+        except RuntimeError as exc:
+            assert "Failed to fetch" in str(exc)
+        assert any("이 계정 증빙 중단" in r["사유"] for r in lg.rows), lg.rows
+    ok("증빙 응답 없음(Failed to fetch) = 그 계정 증빙 중단 · 그 밖 실패 = 기록 후 다음 단계")
+
+    # D-339 무인 — 회차 정산 받기가 끝난 때 받기 의심·자동 다시 받기 1번(생성 대기로 바뀔 때 또는 완료 때 · 둘 다면 1번) · 공개 웹 안 읽음
+    src = inspect.getsource(TD.cmd_watch)
+    assert src.count("_cycle_sources(args)") == 2 and "source_checks(web=False)" in inspect.getsource(TD._cycle_sources)
+    import os
+    calls: list = []
+    cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            Path("output").mkdir()
+            for pend in (0, 1):
+                clock = {"now": RealDT(2026, 11, 22, 3, 0)}
+
+                class FakeDT(RealDT):
+                    @classmethod
+                    def now(cls, tz=None):
+                        return clock["now"]
+
+                def adv(sec):
+                    clock["now"] += timedelta(seconds=max(sec, 1))
+                left = {"n": pend * 2}
+
+                def one(a):
+                    left["n"] = max(0, left["n"] - 1)
+                    return False, 0
+                lg0 = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
+                lg0.heartbeat = lambda *a, **k: None
+                calls.clear()
+                _patched([(TD, "datetime", FakeDT), (TD.time, "sleep", adv), (TD, "_one_pass", one), (TD, "_rest_pass", one),
+                          (TD, "_pending_jobs", lambda: left["n"]), (TD, "_between_passes", lambda: None),
+                          (TD, "_evidence_sweep", lambda a, act: calls.append("증빙")), (TD, "LOG", lg0), (TD, "TRIES", None),
+                          (TD, "source_checks", lambda web=True: calls.append(("받기 의심", web)))],
+                         lambda: TD.cmd_watch(SimpleNamespace(parent=0, ledger_synced=True, until="", until_at=None, hidden=False,
+                                                              manual=True)))
+                want = [("받기 의심", False), "증빙"] + (["증빙"] if pend else [])
+                assert calls == want, (pend, calls)
+        finally:
+            os.chdir(cwd)
+    ok("받기 의심·다시받을목록 자동 다시 받기(D-339) = 무인 회차에서도 받기 끝난 때 1번(공개 웹 안 읽음 · 증빙 앞)")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -4425,6 +4560,7 @@ def main():
     p70_error_retry_three()
     p71_wait_rest_open_to_transfer()
     p72_rest_pass_left_work_only()
+    p73_evidence_reuse_batch_abort()
     print("정산 런타임 오프라인 검증 통과")
 
 
