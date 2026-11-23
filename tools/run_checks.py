@@ -78,6 +78,8 @@ CHECKS = [
     ("샵마인 비번↔관리대장 동기화(DPAPI·필드탐색·대조·되쓰기·비번 비노출)", "tools/verify_shopmine_sync_offline.py", True),
     ("계정 정지 감지→대장 취소선(판정·열·상태파일·백업먼저·가역)", "tools/verify_account_suspend_offline.py", True),
     ("회귀 게이트 자체(동시 실행·통과 기록·PC 전체 1개·낮은 우선순위 D-377)", "tools/verify_run_checks_offline.py", True),
+    ("옵션 분리 이력 = 같은 VID 블록만·미매칭 확인 필요·빈 칸 채움 VID 대조·키워드 0 로그·이력 바로잡기 도구(T-162)",
+     "tools/verify_option_split_offline.py", True),
     ("앱 진행 로그창 탭별 표시(탭·작업·시작 줄·복사)", "tools/verify_ui_log_tabs_offline.py", True),
     ("켜 둔 앱 관리대장 다시 읽기(버튼 실행·06:00 계약자·실행 도중 안 읽음 D-366)", "tools/verify_ui_ledger_reread_offline.py", True),
     ("날짜 칸 = 판매일·옛 칸 하루 당기기(백업·스탬프·순위 묶음·두 번 방지 D-368·D-369)", "tools/verify_date_basis_offline.py", True),

@@ -173,6 +173,8 @@ def pull_gsheet_keywords(wb, output_url: str | None, log) -> None:
         n = gsheet_stats.merge_staff_keywords(client, wb, on_log=log)
         if n:
             log(f"== [구글시트] 직원 입력 키워드 반영 {n}개 상품 → 해당 상품 AI 선정 생략(동결) ==")
+        else:   # 0개인 날도 한 줄 — '읽었는데 바뀐 것 없음' ↔ '안 돎' 구별(T-162 ④)
+            log("== [구글시트] 직원 입력 키워드 읽음 — 바뀐 키워드 없음(반영 0개 상품) ==")
     except Exception as exc:
         log(f"== [구글시트] 직원 키워드 읽기 실패: {exc.__class__.__name__}: {exc} (AI 선정으로 진행) ==")
 
