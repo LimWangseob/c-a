@@ -42,6 +42,10 @@ class LoginCredentialError(Exception):
     같은 실행·야간 재개가 다시 제출하지 않게 한다. 사용자 지시(2026-09-15): 비번 1회 오류면 재시도 안 함."""
 
 
+class LoginPwRecentlyRefused(LoginCredentialError):
+    """이 값은 최근 24시간 안에 거부돼 **넣지 않음**(제출 0 · D-068·D-123) — 다음 후보 안내 문구를 '거부'와 구분(T-160)."""
+
+
 class AccountSuspended(Exception):
     """로그인은 됐으나 계정이 **정지(승인 반려)** — 윙 홈이 온보딩 화면(/unapproved 라우팅). 수집·받기·광고가
     막혀 오류만 쌓이므로 그 계정을 건너뛰고(재시도 안 함·'처리됨') 관리대장 계정아이디에 취소선을 쳐 표기한다.
@@ -258,24 +262,44 @@ def _pw_list(v) -> list:
 def _login_with_candidates(b, a: Account, pws: list, log, *, login: bool, semi: bool) -> bool:
     """관리대장 비번 후보를 차례로 — 첫 값은 평소 로그인(_ensure_login), **'비밀번호가 다릅니다'(LoginCredentialError)
     일 때만** 다음 값으로 1회 더(소유자 2026-10-09 D-012). 후보가 1개면 지금과 똑같다(재시도 없음). 모두 거부면 그대로 raise.
-    앞뒤 공백은 떼고 입력·공백만 다른 값은 하나로(D-018 을 정산·전환자 확인까지 — D-123 원장 원문 공백으로 정산만 거부)."""
+    앞뒤 공백은 떼고 입력·공백만 다른 값은 하나로(D-018 을 정산·전환자 확인까지 — D-123 원장 원문 공백으로 정산만 거부).
+    지난번 로그인에 성공한 값이 후보에 있으면 그 값 먼저(T-160 · 앱 ①·정산·아침 보충·전환자 확인 모두 이 함수)."""
     pws = list(dict.fromkeys((p.strip() or None) if isinstance(p, str) else p for p in pws)) or [None]
+    pws, orig = _success_first(a, pws, log)
+    skipped = False
     for k, pw in enumerate(pws):
         try:
             if k == 0:
                 return _ensure_login(b, a, pw, log, login=login, semi=semi)
-            log(f"  [{a.label}] ⚠ 관리대장 비밀번호 {k}번째 값 거부 → 같은 계정 다른 줄의 {k + 1}번째 값으로 다시 시도"
+            why = "은 최근 24시간 안에 거부된 값이라 넣지 않음" if skipped else " 거부"
+            log(f"  [{a.label}] ⚠ 관리대장 비밀번호 {k}번째 값{why} → 같은 계정 다른 줄의 {k + 1}번째 값으로 시도"
                 f"({k + 1}/{len(pws)}) — 대장의 이 계정 비밀번호를 한 값으로 맞춰 주세요")
             b.goto(WING_URL)
             b.page.wait_for_timeout(1500)
             ok = _fresh_login(b, a, pw, log, config.LOGIN_UNATTENDED and not semi)
             if ok:
-                log(f"  [{a.label}] ✅ {k + 1}번째 비밀번호 값으로 로그인 성공(시작 로그의 '[비번] … 값{k + 1}=행 …' 이 맞는 값)")
+                log(f"  [{a.label}] ✅ {k + 1}번째 비밀번호 값으로 로그인 성공(시작 로그의 '[비번] … 값{orig[k] + 1}=행 …' 이 맞는 값)")
             return ok
-        except LoginCredentialError:
+        except LoginCredentialError as exc:
+            skipped = isinstance(exc, LoginPwRecentlyRefused)
             if k + 1 >= len(pws):
                 raise
     return False
+
+
+def _success_first(a: Account, pws: list, log) -> tuple[list, list[int]]:
+    """지난번 성공 값 먼저(login_today.success_first) → (새 순서, 새 순서 각 값의 원래 위치). 기록을 못 읽으면 로그로
+    알리고 지금 순서 그대로(_refused_today 와 같은 처리)."""
+    keep = list(range(len(pws)))
+    try:
+        new, k = login_today.success_first(a.account_id, pws)
+    except (OSError, ValueError) as exc:
+        log(f"  [로그인기록] ⚠ 성공 값 기록 읽기 실패 — 대장 순서대로 시도 · {exc.__class__.__name__}: {str(exc)[:80]}")
+        return pws, keep
+    if k is None:
+        return pws, keep
+    log(f"  [{a.label}] [비번] 지난번 로그인에 성공한 값(후보 {k + 1}번째)을 먼저 넣음(T-160 · 값은 기록 안 함)")
+    return new, [k] + keep[:k] + keep[k + 1:]
 
 
 def _ensure_login(b, a: Account, pw, log, *, login: bool = True, semi: bool = False) -> bool:
@@ -307,7 +331,7 @@ def _fresh_login(b, a: Account, pw, log, unattended: bool) -> bool:
     if pw and _refused_today(a, pw, log):   # D-068·D-123: 거부된 값은 거부 시각부터 24시간 다시 넣지 않음
         log(f"  [{a.label}] ⛔ 이 비밀번호는 최근 24시간 안에 쿠팡에서 거부됨 — 거부 뒤 24시간은 다시 넣지 않음"
             "(계정 잠금 방지·D-068·D-123). 관리대장(정산은 원장) 비밀번호를 고치면 바로 다시 시도합니다")
-        raise LoginCredentialError(a.account_id)
+        raise LoginPwRecentlyRefused(a.account_id)
     shown = {"v": False}
 
     def _need_user():   # 2차인증·봇챌린지 등 사람이 꼭 필요할 때
@@ -318,7 +342,8 @@ def _fresh_login(b, a: Account, pw, log, unattended: bool) -> bool:
             log(f"  [{a.label}] ⚠ 로그인 창을 잠시 띄웁니다(2차인증/직접로그인 필요). 놀라지 마세요")
             b.show()
 
-    if pw and b.autofill_login(a.account_id, pw, on_log=log):
+    filled = bool(pw) and b.autofill_login(a.account_id, pw, on_log=log)
+    if filled:
         log(f"  [{a.label}] ID/비번 자동입력·제출 — 창 숨긴 채 로그인 확인 중"
             + (" (무인: 사람 필요 시 건너뜀)" if unattended else " (2차인증 필요할 때만 창 표시)"))
     elif unattended:
@@ -343,7 +368,7 @@ def _fresh_login(b, a: Account, pw, log, unattended: bool) -> bool:
     if not ok:
         return _resolve_login_failure(b, a, log, cred_fail, pw)   # False 반환 또는 LoginBlocked/CredentialError raise
     session_state.observe_auth_success(a.account_id, final_url=b.page.url)
-    _note_login(log, login_today.record_success, a.account_id)
+    _note_login(log, login_today.record_success, a.account_id, pw if filled else None)   # 넣은 값으로 성공 = 그 지문 기억(T-160)
     b.goto(WING_URL)                     # 신선 로그인 후 wing 안착(인증 리다이렉트 완료 대기)
     b.page.wait_for_timeout(1500)        # 페이지 안정 — discover fetch 가 진행중 네비에 중단(Failed to fetch)되는 것 방지
     b.hide()   # 로그인 끝나면 다시 숨김
