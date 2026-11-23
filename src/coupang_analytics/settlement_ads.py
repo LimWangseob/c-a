@@ -41,6 +41,7 @@ PA_EXCEL = "https://advertising.coupang.com/marketing-reporting/v2/api/excel-rep
 SETTLE_DAYS = 3
 FROM = date(2025, 11, 1)        # 받는 시작 달 — 2026 첫 지급에 걸친 2025-11분부터(D-166 · D-161 ④ 2025-12 에서 앞당김)
 PROGRESS = "광고정산진행"           # 끝나지 않은 달 일별(매일 덮어씀 · T-78 S2)
+SETTLE_FROM = "202601"              # 2025 판매 = 정산 대상 아님(D-328) → 2025 달 광고 세부 = 받지 않음(D-389)
 REFETCH = "_광고_다시받기.json"      # {계정: [YYYYMM]} — subtotals 없는 옛 달 중 다시 받을 달(T-90 필요분만 · D-291 ⑥)
 OLD_KEEP = "보관_옛질의"             # 다시 받기 전 옛 파일을 옮기는 하위 폴더(삭제 없음)
 MAX_MONTHS = 2                  # 하루(한 번 실행) 계정당 받는 달 수 — 밀린 달은 최근 달부터 날마다 나눠서(판매 소급 하루 60일과 같은 방식·D-120)
@@ -79,9 +80,10 @@ def progress_months(start: date, today: date) -> list[tuple[str, date, date]]:
 
 
 def refetch_months(folder: Path, acct: str) -> set:
-    """`_광고_다시받기.json` 에 적힌 이 계정 달 중 아직 subtotals 없는 달."""
+    """`_광고_다시받기.json` 에 적힌 이 계정 달 중 아직 subtotals 없는 달(2025 달 = 적혀 있어도 빼기 · D-389)."""
     p = Path(folder) / REFETCH
-    want = set((json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}).get(acct) or [])
+    want = {ym for ym in (json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}).get(acct) or []
+            if str(ym) >= SETTLE_FROM}
     out = set()
     for ym in want:
         f = Path(folder) / f"{acct}_광고정산_{ym}.json"

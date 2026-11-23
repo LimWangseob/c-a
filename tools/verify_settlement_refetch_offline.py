@@ -133,6 +133,7 @@ def r2_ads():
         assert s["표시"] == 1 and s["대상 아님"] == 1, s
         old = [r for r in rows if r["기간"] == "202512"][0]
         assert old["다시 받기"] == FC.NO and "D-328" in old["설명"], old
+        assert old["판정"] == FC.EXCLUDED and "D-389" in old["설명"], old     # 2025 달 = 제외(받지 않음) · 확인 필요 아님
         assert AD.refetch_months(ad, ACCT) == {"202602"}
 
         def call(method, path, body):                                    # 광고센터가 subtotals 없이 같은 응답(가짜)
@@ -148,7 +149,9 @@ def r2_ads():
         assert s["같은 결과"] == 1 and ACCT not in rjson(ad / AD.REFETCH), (s, rjson(ad / AD.REFETCH))
         n = AD.collect(call, lambda url: b"m", ad, ACCT, D("2026-02-01"), D("2026-03-10"))
         assert n["다시 받음"] == [], "같은 결과 뒤엔 다시 안 받음"
-    ok("다른 계정 줄 보존 + 202602 추가 · 202512 = 대상 아님(D-328) · 다시 받아도 subtotals 없음 = 확인 필요·다시받기 목록에서 빠짐·반복 없음")
+        wjson(ad / AD.REFETCH, {ACCT: ["202512"]})                       # 사람이 2025 달을 적어 둬도 다시 받지 않음(D-389)
+        assert AD.refetch_months(ad, ACCT) == set(), AD.refetch_months(ad, ACCT)
+    ok("다른 계정 줄 보존 + 202602 추가 · 202512 = 제외(D-328·D-389 · 목록에 적혀도 안 받음) · 다시 받아도 subtotals 없음 = 확인 필요·다시받기 목록에서 빠짐·반복 없음")
 
 
 def cost_row(p: Path) -> dict:

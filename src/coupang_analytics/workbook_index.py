@@ -131,7 +131,7 @@ class _IndexMixin:
         for r in range(3, ws.max_row + 1):
             biz = _norm(ws.cell(r, c_biz).value)
             prod = _key(ws.cell(r, c_prod).value)
-            if not biz:
+            if not biz or (biz, prod) in self._mkt_from_ledger:   # 이번 회차 대장 값이 우선(D-391 ③)
                 continue
             # D-087: 시작일 칸 = 체험단 시트 자동값 표시 → 회수하지 않고 기존 숨김값 유지(되읽으면 3일 주기 수집이 켜짐)
             start = self.marketing_of(biz, prod)[0]

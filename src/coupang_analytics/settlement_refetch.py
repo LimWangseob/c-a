@@ -5,7 +5,7 @@
 - 월자료(라이브정산 등 · 검증자료/월자료/{계정}/{종류}_{YYYYMM}.json) → 그 폴더 `_받은기록.json` 에서 그 달만 뺌 → collect_docs 가
   회차 예산(BUDGET_MONTHS)으로 다시 받음 · 옛 파일 = `_Run.save` 의 수집일별 보관(D-335). 받은 기록에 올라 영원히 안 받던 빈 파일 대상.
 - 광고정산 subtotals 없음 → `광고/_광고_다시받기.json`({계정: [YYYYMM]})에 추가 → settlement_ads.collect 가 옛 파일을 보관_옛질의/ 로
-  옮기고 다시(계정당 하루 MAX_MONTHS). 2025 달 = 정산 대상 아님(D-328) → 대상 아님(AD_FROM).
+  옮기고 다시(계정당 하루 MAX_MONTHS). 2025 달 = 정산 대상 아님(D-328) → 제외·받지 않음(AD.SETTLE_FROM · D-389).
 - 비용 리포트(로켓그로스) → 요청 기록(`_요청기록.json`) 그 줄을 '요청예정'·시도 0 → 다음 정기 단계가 계정당 요청 상한 안에서 요청·받기.
 - 밀크런(읽기 실패·머리글 칸 없음) → 파일을 `광고/보관_다시받기/` 로 옮김(삭제 없음) → 다음 광고 단계가 그 달을 없는 달로 보고 받음.
 - 리뷰 이벤트 = 검증자료가 매일 다시 받음(collect_verify) → 할 일 없음.
@@ -31,7 +31,6 @@ from . import settlement_jobs as SJ
 MEMO = "_다시받기기록.json"
 JOBS = "_요청기록.json"              # settlement_store.JOBS 와 같은 이름(정산 기록 폴더 바로 아래)
 MILK_KEEP = "보관_다시받기"           # 다시 받기 전 밀크런 파일을 옮기는 하위 폴더(광고 폴더 glob 에 안 걸림)
-AD_FROM = "202601"                  # 2025 판매 = 정산 대상 아님(D-328) → 2025 달 광고 일별은 정산서에 안 씀
 COUNTS = ("표시", "대기", "같은 결과", "대상 아님", "매일 받음", "길 없음")
 
 
@@ -125,8 +124,9 @@ def _one(base: Path, r: dict, memo: dict, today: date) -> str:
     """한 줄 처리 → COUNTS 중 하나."""
     if r["종류"] == "리뷰 이벤트":
         return "매일 받음"
-    if r["종류"] == "광고정산" and str(r["기간"]) < AD_FROM:
-        _note(r, "2025 달 — 정산 대상 아님(D-328) · 자동 다시 받기 안 함")
+    if r["종류"] == "광고정산" and str(r["기간"]) < AD.SETTLE_FROM:
+        r["판정"], r["다시 받기"] = FC.EXCLUDED, FC.NO
+        r["설명"] = f"{r['설명']} · 2025 달 — 정산 대상 아님(D-328) · 받지 않음(D-389)"
         return "대상 아님"
     p, rec = Path(r["근거 파일"]), memo.get(_key(r))
     if not p.exists():

@@ -652,12 +652,14 @@ def p11_review_event_report():
     expect(SF.SettlementParseError, lambda: SF.rg_cost_lines({"리뷰 이벤트": [*empty, row]}, "A", end), "줄 있는 리뷰 이벤트 상품별")
     amounts = [{"정산일": "2026-11-06", "기간 시작": "2026-10-05", "기간 끝": "2026-10-11", "totalPostPurchaseDeductionAmount": 6660.0},
                {"정산일": "2026-11-20", "기간 시작": "2026-10-05", "기간 끝": "2026-10-11", "totalPostPurchaseDeductionAmount": 0.0}]
-    gap = SF.review_gap(0, amounts, "2026-11-06", "2026-10-05", "2026-10-11")
-    assert "확인 필요" in gap and "6,660" in gap and "0원" in gap, gap
+    # D-324 ④·T-163 ④: 리포트 0줄(머리줄만)인데 공제 있음 = 쿠팡이 빈 리포트를 줌(재요청도 0줄) → 확인 필요 아님(금액 = 공제 원문)
+    assert SF.review_gap(0, amounts, "2026-11-06", "2026-10-05", "2026-10-11") == ""
+    gap = SF.review_gap(2220, amounts, "2026-11-06", "2026-10-05", "2026-10-11")   # 리포트 합이 있는데 공제와 다름 = 그대로 확인 필요
+    assert "확인 필요" in gap and "6,660" in gap and "2,220" in gap, gap
     assert SF.review_gap(6660, amounts, "2026-11-06", "2026-10-05", "2026-10-11") == ""
     assert SF.review_gap(0, amounts, "2026-11-20", "2026-10-05", "2026-10-11") == ""          # 30% 줄 = 차감 0
     assert "지급 내역 줄 없음" in SF.review_gap(0, amounts, "2026-12-01", "2026-10-05", "2026-10-11")
-    ok("PPIR 빈 리포트 0원·상품 줄 0 · 줄 있으면 오류 · 차감 6,660 ≠ 0 → 확인 필요 문구")
+    ok("PPIR 빈 리포트 0원·상품 줄 0 · 줄 있으면 오류 · 빈 리포트+공제 = 확인 필요 아님(D-324 ④) · 리포트 합 ≠ 공제 → 확인 필요")
 
 
 def main():

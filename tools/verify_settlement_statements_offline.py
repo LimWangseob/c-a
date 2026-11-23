@@ -239,6 +239,45 @@ def test_d328_product_rows_2025_excluded() -> None:
     print("test_d328_product_rows_2025_excluded OK")
 
 
+def test_d391_unknown_ship_same_month_wing_ratio() -> None:
+    """D-391 ④(소유자 11-23 "로그인 비번 오류로 안됨, 다른 계정에서 도출된 산출식을 적용할것.") — 같은 주문 상품·반품 조회로도 상품을 못 찾은
+    윙 배송비 줄 = 그 줄 달(구매확정 달)의 '같은 달 윙 상품 정산금 관리 비율'(ⓒ)로 나눔. 산식 근거 = 다른 계정 반품 조회 169줄을 정답으로 한
+    백테스트 오차 합 최소(ⓒ 61,554 < 계정 관리 비율 ⓐ 174,442 < 확인 필요 ⓑ 208,872 · `output\\_검증_261117_정산끝난달\\결과_1_배송비.md` 3·6절 ·
+    D-269 근거). 그 달 윙 상품 정산금이 없으면 관리 몫 0(백테스트와 같음). 기대값 = 손 계산(코드에서 뽑지 않음)."""
+    from types import SimpleNamespace
+
+    from coupang_analytics import settlement_files as SF
+    from coupang_analytics import settlement_statement_account as SA
+    h = ["계정", "월(매출인식)", "등록상품ID", "상품명", "윙 판매액", "로켓그로스 매출금액", "판매수수료(VAT포함)", "판매자할인쿠폰",
+         "쿠팡 정산금액 합계(부가비용 차감 전)", "로켓그로스 물류비(VAT포함)", "재고 손실 보상", "물류비·보상 반영 후(광고비 등 계정 차감 전)",
+         "윙 정산금액", "로켓그로스 정산대상액", "윙 수량", "로켓그로스 수량"]
+    acct = "가-사업자-x2"
+    rows = [[acct, "2026-02", "P1", "관리", 33_000, 0, 3_000, 0, 30_000, 0, 0, 30_000, 30_000, 0, 1, 0],
+            [acct, "2026-02", "P2", "비관리", 77_000, 0, 7_000, 0, 70_000, 0, 0, 70_000, 70_000, 0, 1, 0],
+            [acct, "2026-03", "P1", "관리", 0, 110_000, 10_000, 0, 100_000, 0, 0, 100_000, 0, 100_000, 0, 1],   # 로켓그로스만 = 윙 비율엔 안 듦
+            [acct, "2026-03", "P2", "비관리", 55_000, 0, 5_000, 0, 50_000, 0, 0, 50_000, 50_000, 0, 1, 0]]
+    ctx = SimpleNamespace(st={"data": {"상품별 월별": (h, rows)}}, unjudged={"x2": set()}, svc_judge={}, base=Path(tempfile.mkdtemp()))
+    a = SA.AccountBase(ctx, acct)
+    a.mpids, a.opt2pid, a.cdate = {"P1"}, {}, None
+
+    def srow(order, pid, day, sales, settle):
+        return SF.SettleRow("윙", acct, day, day, order, pid, "o1" if pid else "", "상품", "", 1 if pid else 0, sales, 0, 0, settle, day, "판매")
+    a.files = [SF.SettleFile("윙", acct, date(2026, 2, 1), date(2026, 4, 30), kind="주정산",
+                             rows=[srow("X", "", date(2026, 2, 10), 6_000, 5_802),       # 상품 줄·반품 자료 없음(검증자료 파일 없음)
+                                   srow("Y", "", date(2026, 3, 10), 6_000, 5_802),
+                                   srow("Z", "", date(2026, 4, 10), 6_000, 5_802)])]    # 그 달 윙 상품 정산 없음
+    a._ships()
+    assert a.ship["확인 필요"] == [18_000, 17_406] and a.ship["근거"]["반품 자료 없음"] == 3, a.ship
+    a._products()
+    a._gross_and_ship()
+    # ⓒ 2026-02 = 30,000 / (30,000+70,000) = 0.3 · 2026-03 = 0 / 50,000 = 0 · 2026-04 = 윙 상품 정산 없음 → 0
+    # (현행 ⓐ 계정 비율 = 130,000 / 250,000 = 0.52 → 17,406 × 0.52 = 9,051 — 이 값이면 실패)
+    assert [round(x, 1) for x in a.ship_u] == [1_800.0, 1_740.6], a.ship_u
+    assert round(a.tm["settle"], 1) == 130_000 + 1_740.6 and round(a.tx["settle"], 1) == 120_000 + 17_406 - 1_740.6, (a.tm, a.tx)
+    assert round(a.tm["sales"]) == 33_000 + 110_000 + 1_800 and round(a.tx["sales"]) == 77_000 + 55_000 + 18_000 - 1_800, (a.tm, a.tx)
+    print("test_d391_unknown_ship_same_month_wing_ratio OK")
+
+
 # ── test_additional_pay.py — additional_pay 시험 — D-116 ③①: 없으면 '없음', 있으면 지급금액 + '확인 필요(첫 실제 자료로 칸 확정)'. ──
 EMPTY = {"reports": [], "page": 1, "pageSize": 100, "totalPages": 0}      # 실측 응답(전 계정 0건)
 
@@ -906,6 +945,7 @@ def main() -> int:
     test_settlement_ledger()
     test_d329_sale_2025_excluded()
     test_d328_product_rows_2025_excluded()
+    test_d391_unknown_ship_same_month_wing_ratio()
     test_additional_pay()
     test_migration_inputs()
     test_managed_scope()

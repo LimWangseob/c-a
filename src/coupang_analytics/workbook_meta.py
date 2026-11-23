@@ -416,9 +416,12 @@ class _MetaMixin:
         ws.cell(1, 4, "종료"); ws.cell(1, 5, "모니터링종료")
         return ws
 
-    def set_marketing(self, biz: str, product: str, start, end, mon) -> None:
-        """마케팅 기간 저장(숨김 _마케팅). 셋 다 비면 기존 항목 비움. 상품 없는 계정행은 product=''."""
+    def set_marketing(self, biz: str, product: str, start, end, mon, *, from_ledger: bool = False) -> None:
+        """마케팅 기간 저장(숨김 _마케팅). 셋 다 비면 기존 항목 비움. 상품 없는 계정행은 product=''.
+        from_ledger=True = 관리대장 값(빈 칸=지움 포함) → 저장 때 계정목록 옛 칸 되읽기로 덮지 않음(D-391 ③)."""
         biz, product = _norm(biz), _key(product)
+        if from_ledger:
+            self._mkt_from_ledger.add((biz, product))
         start, end, mon = _norm(start), _norm(end), _norm(mon)
         ws = self._mkt_ws(create=bool(start or end or mon))
         if ws is None:
