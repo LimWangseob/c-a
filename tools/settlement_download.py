@@ -1341,6 +1341,57 @@ REST_PLAN: dict[str, set] = {}             # 다음 남은 일 바퀴의 {계정
 REST_STEPS = ("정기", "받기", "광고", "소급", "월자료")   # 한 계정에서 하는 순서(정기 = 받기·광고 포함 · 소급 = 월자료 포함)
 
 
+REST_STATE_NAME = "_남은일_상태.json"      # 같은 회차 재시작 = 남은 일 계획·끝낸 단계 이어감(D-395 ① · 시도 수 _재시도_상태.json 과 같은 방식)
+
+
+def _rest_state_path() -> Path:
+    return BASE / "로그" / REST_STATE_NAME
+
+
+def _save_rest(cycle: str) -> None:
+    """회차 첫 바퀴를 마친 뒤 바퀴마다 — 다음 남은 일 계획·끝낸 정기·소급 계정을 회차와 함께 남김(D-395 ① 소유자 11-23 '1번은 정기 1번 유지')."""
+    p = _rest_state_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"회차": cycle, "계획": {n: sorted(s) for n, s in REST_PLAN.items()},
+                               "끝낸 단계": {ph: sorted(ns) for ph, ns in PHASE_DONE.items()}}, ensure_ascii=False, indent=1),
+                   encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def _load_rest(cycle: str) -> bool:
+    """같은 회차 기록이 있으면 REST_PLAN·PHASE_DONE 을 채우고 True(첫 바퀴 = 남은 일 바퀴) · 다른 회차·없음 = False(전체 바퀴)."""
+    p = _rest_state_path()
+    if not p.exists():
+        return False
+    old = json.loads(p.read_text(encoding="utf-8"))
+    if old.get("회차") != cycle:
+        return False
+    REST_PLAN.update({n: set(s) for n, s in (old.get("계획") or {}).items()})
+    for ph, names in (old.get("끝낸 단계") or {}).items():
+        PHASE_DONE.setdefault(ph, set()).update(names)
+    return True
+
+
+def _cycle_begin(cycle: str, manual: bool) -> bool:
+    """회차 시작 — 바퀴 계정(자동 증빙 대상 D-365)·남은 일 계획·끝낸 단계(D-382)를 비우고, 같은 회차 재시작이면 기록에서 이어 받음
+    (D-395 ①). 반환 = 첫 바퀴가 전체 바퀴인가(다른 회차·기록 없음·수동 '정산 시작' D-354 = 전체 바퀴)."""
+    PASS_ACCOUNTS.clear()
+    REST_PLAN.clear()
+    for done in PHASE_DONE.values():
+        done.clear()
+    if manual or not _load_rest(cycle):
+        return True
+    log(f"[자동] 같은 회차({cycle}) 재시작 — 남은 일 바퀴로 이어감(정기 = 회차 첫 바퀴 1번 · 남은 일 {len(REST_PLAN)}계정 · D-395)")
+    return False
+
+
+def _work_left(stopped: bool, work: int, pending: int, retry: int) -> int:
+    """다음 행동 판단에 쓸 '새로 한 일' — 중단·남은 일 계획·생성 대기·다시 시도가 모두 없으면 0 = 그 바퀴로 바로 완료
+    (D-395 ② 소유자 11-23 '2번은 즉시 종료' — 옛 = 곧/20분 뒤 0계정 바퀴 1번 더)."""
+    return work if (stopped or REST_PLAN or pending or retry) else 0
+
+
 def _retry_step(item: str) -> str:
     """오류 시도 항목 → 다시 할 단계('' = 로그인·계정 처리 — 그 계정의 못 끝낸 단계·전 계획으로)."""
     if item.startswith("받기 "):
@@ -1421,6 +1472,8 @@ def _rest_pass(args) -> tuple[bool, int]:
     if TRIES:
         TRIES.begin_pass(LOG.run_id)
     args.end = date.today()
+    if not PASS_ACCOUNTS:                    # 같은 회차 재시작 첫 바퀴(D-395 ①) — 계정 목록만 다시 읽음(정기는 다시 안 함)
+        PASS_ACCOUNTS[:] = load_accounts(set())
     prev = {n: set(st) for n, st in REST_PLAN.items()}
     accts = [a for a in PASS_ACCOUNTS if prev.get(name_of(a))]
     LOG.accounts = [name_of(a) for a in accts]
@@ -1693,10 +1746,6 @@ def cmd_watch(args) -> int:
         with registry_lock(BASE / "_잠금" / "_watch.lock", wait_sec=0, on_log=log):
             W.clear_rest(BASE / "_잠금" / W.REST_MARK_NAME)   # 쉬다 죽은 watch 가 남긴 쉼 표시(D-375 B1)
             cycle_start, cycle_end = W.cycle_window(datetime.now())
-            PASS_ACCOUNTS.clear()             # 자동 증빙 대상 = 이번 회차 바퀴의 계정만(D-365)
-            REST_PLAN.clear()                 # 남은 일 바퀴 계획·끝낸 단계 = 회차마다 새로(D-382)
-            for done in PHASE_DONE.values():
-                done.clear()
             args.cycle_since = cycle_start.isoformat(timespec="seconds")   # 소급 상한 = 회차(00:10~) 단위(D-170) · --since 와 무관
             TRIES = TR.Tries(BASE / "로그", args.cycle_since, line=log)   # 오류 시도 횟수 = 회차마다 0부터(D-373 ④)
             if getattr(args, "since", ""):    # 사람이 누른 전체실행 — 그 실행 뒤에 끝난 ①만 기다림(2026-10-13)
@@ -1708,7 +1757,8 @@ def cmd_watch(args) -> int:
             if manual:
                 log("[수동] 정산 탭 '정산 시작' — 이번 회차 '완료' 기록·①판매수집 완료 대기 없이 바로 받음"
                     "(①이 지금 도는 중이면 끝날 때까지 대기 · D-354)")
-            last_state, waiting, swept, full = "", False, False, True   # full = 다음 바퀴가 전체 바퀴(회차 첫 바퀴 · D-382)
+            full = _cycle_begin(args.cycle_since, manual)   # full = 다음 바퀴가 전체 바퀴(회차 첫 바퀴 · D-382 · 재시작 D-395 ①)
+            last_state, waiting, swept = "", False, False
             while datetime.now() < cycle_end:
                 why, marker = _watch_wait_reason(W, prog, stage_path, cycle_start, manual)
                 if why:
@@ -1732,10 +1782,12 @@ def cmd_watch(args) -> int:
                 _between_passes()
                 fails = _watch_failures()
                 pending, retry = _pending_jobs(), _retry_count()
-                action, reason = W.plan_after_pass(stopped, work, pending, retry, failed=fails)
+                action, reason = W.plan_after_pass(stopped, _work_left(stopped, work, pending, retry), pending, retry, failed=fails)
                 log(f"[자동] {reason}")
                 if action in ("again", "later"):
                     full = full and stopped     # 전체 바퀴가 연속 실패로 중단 = 다시 전체(D-031) · 그 밖 = 남은 일 바퀴만(D-382)
+                    if not full:
+                        _save_rest(args.cycle_since)   # 재시작해도 정기 다시 안 함(D-395 ①)
                     waiting, rest = _next_rest(action, waiting, stopped, work, pending, retry)
                     if waiting and not swept:   # 생성 대기 빈 시간 = 자동 증빙(D-367 '미완료여도 받기' · 회차 1번 · 23:20 멈춤 D-365)
                         swept = True
