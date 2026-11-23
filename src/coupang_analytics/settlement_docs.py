@@ -197,37 +197,54 @@ def fetch_order_detail(call, f: date, t: date, gap=lambda: None) -> dict:
     q = {"confirmStart": f.isoformat(), "confirmEnd": t.isoformat(), "searchDateType": "CONFIRM_DATE",
          "searchDateStart": f.isoformat(), "searchDateEnd": t.isoformat()}
     pages = int(call("POST", f"{ORDER}-page-total", {**q, "size": ORDER_PAGE_SIZE}))
+    rows, raw, seen, row_page = _order_pages(call, q, f, pages, gap)
+    keys = {_order_key(x) for x in rows}
+    if not (ORDER_PAGE_SIZE * (pages - 1) < raw <= ORDER_PAGE_SIZE * pages or pages == raw == 0) or len(keys) != len(rows):
+        raise _order_fail(f"주문별 매출 {f:%Y%m} 쪽 수 {pages} · 원본 {raw} · 줄 {len(rows)} · 서로 다른 줄 {len(keys)} — 맞지 않음",
+                          f, pages, seen, rows, row_page)
+    total = {k: sum(x.get(k) or 0 for x in rows) for k in ("productGmv", "deliveryGmv", "trAmountIncVat", "apAmount")}
+    return {"쪽 수": pages, "원본 건수": raw, "줄 수": len(rows), "합계": total, "줄": rows}
+
+
+def _order_pages(call, q: dict, f: date, pages: int, gap) -> tuple[list, int, list, list]:
+    """주문별 매출 쪽 받기 → (줄, 원본 건수 합, 쪽별 근거, 줄마다 쪽 번호)."""
     rows: list = []
     raw, cursor = 0, ""
     row_page: list = []
-    seen: list = []                                      # 쪽마다 (쪽, 줄 수, 원본 건수, 커서 빈칸?, 최상위 칸) — 실패 근거(T-2)
+    seen: list = []                                      # 쪽마다 (쪽, 줄 수, 원본 건수, 커서 빈칸?, 요청쪽, 최상위 칸) — 실패 근거(T-2)
     for page in range(1, pages + 2):
         gap()
         r = call("POST", ORDER, {**q, "page": page, "size": ORDER_PAGE_SIZE, "cursorToken": cursor})
         got = r.get("orderDetails") or []
         seen.append({"쪽": page, "줄": len(got), "원본": r.get("rawRecordSize"), "커서 빈칸": not r.get("cursorToken"),
-                     "칸": sorted(r)})
+                     "요청쪽": r.get("requestPage"), "칸": sorted(r)})
         if not got:
             break
+        if page > 1 and not cursor and {_order_key(x) for x in got} <= {_order_key(x) for x in rows}:
+            raise _order_fail(f"주문별 매출 {f:%Y%m} {page}쪽(커서 없이 쪽 번호)이 앞 쪽 줄을 다시 줌 — 쪽 번호로 못 넘김",
+                              f, pages, seen, rows, row_page)
         raw += _raw_size(r, len(got), f"{f:%Y%m} {page}쪽")
         rows += [{k: v for k, v in x.items() if k != "customerName"} for x in got]
         row_page += [page] * len(got)
         cursor = r.get("cursorToken") or ""
-        if not cursor:      # 커서 '' = 다음 쪽 없음 — ''로 또 부르면 서버가 처음부터 다시 줌(실측 11-09 bf0621 1쪽 달 3개)
+        # 커서 '' + 서버 쪽 수까지 받음 = 끝 — 마지막 쪽 뒤를 ''로 또 부르면 서버가 처음부터 다시 줌(실측 11-09 bf0621 1쪽 달 3개).
+        # 커서 '' 인데 쪽이 남음 = 오래된 달(1~4월)은 1쪽부터 커서가 안 옴 → 쪽 번호로 쪽 수까지(T-51 · output43 실패 근거 45개)
+        if not cursor and page >= pages:
             break
     else:
         raise SiteChangedError(f"주문별 매출 {f:%Y%m} 쪽 수({pages}) 뒤에도 줄이 더 옴 — 다 받았는지 모름")
-    keys = {_order_key(x) for x in rows}
-    if not (ORDER_PAGE_SIZE * (pages - 1) < raw <= ORDER_PAGE_SIZE * pages or pages == raw == 0) or len(keys) != len(rows):
-        exc = SiteChangedError(f"주문별 매출 {f:%Y%m} 쪽 수 {pages} · 원본 {raw} · 줄 {len(rows)} · 서로 다른 줄 {len(keys)} — 맞지 않음")
-        exc.detail = _order_detail_evidence(f, pages, seen, rows, row_page)   # type: ignore[attr-defined]
-        raise exc
-    total = {k: sum(x.get(k) or 0 for x in rows) for k in ("productGmv", "deliveryGmv", "trAmountIncVat", "apAmount")}
-    return {"쪽 수": pages, "원본 건수": raw, "줄 수": len(rows), "합계": total, "줄": rows}
+    return rows, raw, seen, row_page
 
 
 def _order_key(x: dict) -> tuple:
-    return x.get("orderId"), x.get("transactionType"), x.get("vendorItemId"), x.get("shippingFeeId")
+    """같은 주문·유형·옵션·배송비라도 구매확정일이 다르면 다른 줄(부분 취소 두 번 — 실측 output43 Difpick 2026-05 CANCEL 2줄 · T-51)."""
+    return x.get("orderId"), x.get("transactionType"), x.get("vendorItemId"), x.get("shippingFeeId"), x.get("confirmDate")
+
+
+def _order_fail(msg: str, f: date, pages: int, seen: list, rows: list, row_page: list) -> SiteChangedError:
+    exc = SiteChangedError(msg)
+    exc.detail = _order_detail_evidence(f, pages, seen, rows, row_page)   # type: ignore[attr-defined]
+    return exc
 
 
 def _order_detail_evidence(f: date, pages: int, seen: list, rows: list, row_page: list) -> dict:
