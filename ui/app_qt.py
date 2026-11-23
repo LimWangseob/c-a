@@ -60,6 +60,7 @@ from registry_panel_qt import RegistryPanelMixin  # noqa: E402
 from settlement_status_panel_qt import SettlementStatusMixin  # noqa: E402
 from stock_panel_qt import KEY_STOCK_URL, StockPanelMixin  # noqa: E402
 from transfer_panel_qt import TransferPanelMixin  # noqa: E402
+from shopmine_login_qt import LBL_NONE as SHOPMINE_LBL_NONE, ShopmineLoginMixin  # noqa: E402
 
 _PROFILE = "data/chrome-ui"
 _IMG_PROFILE = "data/chrome-images"   # 상세이미지 전용 Chrome 프로필(사용자가 여기 코팡 로그인 → warm 영속)
@@ -185,7 +186,7 @@ _GS_LINKS = {
 
 
 class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatusMixin, TransferPanelMixin,
-          QtWidgets.QMainWindow):
+          ShopmineLoginMixin, QtWidgets.QMainWindow):
     log_signal = QtCore.Signal(str, int)   # (줄, 주인 탭 번호 · _LOG_ALL = 모든 탭)
     finish_signal = QtCore.Signal(object, object, object, object, object)   # (btn, on_done, result, err, 작업 표식)
     gs_status_signal = QtCore.Signal(str, object, str)   # (_GS_LINKS 종류, 연결됨 True/False/None=미확인, 설명)
@@ -316,11 +317,13 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         self.naver_lbl = QtWidgets.QLabel("(네이버 API 키 미선택)")
         self.openai_lbl = QtWidgets.QLabel("(OpenAI 키 미설정 — 키워드 추출 불가)")
         self.holiday_lbl = QtWidgets.QLabel("(공휴일 API 키 미설정 — 정산 지급일 계산용)")
+        self.shopmine_lbl = QtWidgets.QLabel(SHOPMINE_LBL_NONE)
         rows = [
             ("입력 엑셀 열기", self.load_input, self.input_lbl),
             ("네이버 API 키 열기", self.load_naver, self.naver_lbl),
             ("OpenAI(ChatGPT) API 키 입력", self.load_openai, self.openai_lbl),
             ("공휴일 API 키 입력", self.load_holiday_key, self.holiday_lbl),
+            ("샵마인 로그인 입력", self.load_shopmine_login, self.shopmine_lbl),   # 비번 동기화 자격(D-389)
         ]
         for i, (text, cmd, lbl) in enumerate(rows):
             b = QtWidgets.QPushButton(text)
@@ -1310,25 +1313,16 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
     def _maybe_shopmine_sync(self, url: str, sheet: str, rows: list) -> None:
         """하루 1회 샵마인 서버에서 쿠팡 위탁 계정 '현재 비밀번호'를 받아 관리대장과 대조·갱신(D-195).
 
-        담당자가 샵마인만 고쳐 어긋난 대장 비번을 샵마인 현재값(진실 소스)으로 맞춘다. 샵마인 로그인 자격이
-        없으면(미설정) **하루 1번 로그**(T-160 ① — 옛 '조용히 건너뜀'으로 운용 PC 0회를 몰랐음), 오늘 이미 돌았으면 재실행 안 함.
+        담당자가 샵마인만 고쳐 어긋난 대장 비번을 샵마인 현재값(진실 소스)으로 맞춘다. 순서 = `shopmine_sync.app_daily_hook`
+        (자격 없음/거부 = 하루 1번 안내 · 오늘 이미 함 = 안 함 · **첫날 = 대조 리포트만 · 다음 날부터 자동 반영** D-389).
         대장을 고쳤으면 비밀번호 후보를 그 자리에서 다시 반영(T-160 ④). 실패는 **비치명** — 로그만 남기고
-        ①②③·정산은 그대로 진행한다(보조 기능이 그날 수집을 막지 않게). 자격 저장 = tools/shopmine_sync.py setup."""
+        ①②③·정산은 그대로 진행한다(보조 기능이 그날 수집을 막지 않게). 자격 저장 = 설정 탭 '샵마인 로그인 입력'."""
         try:
             st = QtCore.QSettings("coupang-analytics", "ui")
-            today = datetime.now().strftime("%Y-%m-%d")
-            gate = shopmine_sync.daily_gate(self.creds_store, today, st.value("shopmine/last_sync_date", "", type=str),
-                                            st.value("shopmine/nocred_log_date", "", type=str))
-            if gate == shopmine_sync.GATE_NOCRED_LOG:
-                self.log(shopmine_sync.NOCRED_MSG)
-                _cfg_save_shared("shopmine/nocred_log_date", today)
-            if gate != shopmine_sync.GATE_RUN:
-                return                                   # 자격 없음(그날 1번 알림) · 오늘 이미 동기화함(하루 1회)
-            self.log("[샵마인] 서버에서 현재 비밀번호를 받아 관리대장과 대조 중…(하루 1회·값은 화면에 안 보임)")
-            shopmine_sync.run_daily_sync(url, sheet, rows, store=self.creds_store, log=self.log,
-                                         on_applied=lambda new_rows: self._apply_pw_candidates(
-                                             parse_password_candidates(new_rows)))
-            _cfg_save_shared("shopmine/last_sync_date", today)
+            shopmine_sync.app_daily_hook(
+                url, sheet, rows, store=self.creds_store, today=datetime.now().strftime("%Y-%m-%d"),
+                get_state=lambda k: st.value(k, "", type=str), set_state=_cfg_save_shared, log=self.log,
+                on_applied=lambda new_rows: self._apply_pw_candidates(parse_password_candidates(new_rows)))
         except Exception as exc:                         # noqa: BLE001  보조 기능 — 사유만 남기고 본 실행 계속
             self.log(f"[샵마인] 동기화 건너뜀(비치명·{exc.__class__.__name__}): {exc}")
 
@@ -1516,6 +1510,7 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
             hk = None
         if hk:
             self.holiday_lbl.setText("(공휴일 API 키: 저장됨 — 자동 로드)")
+        self._show_saved_shopmine()   # 샵마인 로그인 저장 상태(미입력/저장됨/거부 · 값 없음 D-389)
 
     # ── 키워드 추천 ───────────────────────────────────────────
     def do_recommend(self):

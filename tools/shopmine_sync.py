@@ -4,6 +4,8 @@
 
 앱(ui/app_qt.py)이 하루 1회 자동으로 도는 것과 **같은 코어**(coupang_analytics.shopmine_sync)를 쓴다. 이 CLI 는
 ①로그인 자격 저장(setup) ②응답 필드명·건수 확인(discover) ③수동 1회 동기화(sync) ④네트워크 없는 검증(selftest).
+평소에는 CLI 가 필요 없다(D-389): 앱 설정 탭 '샵마인 로그인 입력'에 한 번 넣으면 연결 확인(discover 자동)·첫날 대조
+리포트만·다음 날부터 자동 반영까지 앱이 한다. 이 CLI 는 수동 확인·문제 조사용.
 
 보안: 비번은 getpass 로 받아 화면·로그에 안 보이고, credstore(DPAPI·이 PC 전용)에만 저장한다. discover 는 값 없이
 필드명·건수만 출력한다. 본인 계정·본인 데이터. 샵마인 약관상 비공식 접근 제한 가능성 유의(저빈도 호출).
@@ -38,13 +40,9 @@ def cmd_setup(a) -> None:
     pw = getpass.getpass("비밀번호(UserPassword, 화면에 안 보임): ")
     if not pw:
         sys.exit("비밀번호가 비었습니다. 중단.")
-    creds = {
-        "CompanyId": company, "UserId": user, "UserPassword": pw,
-        "OsVersion": a.os_version, "ShopmineVersion": a.shopmine_version,
-        "IdKey": a.id_key, "PwKey": a.pw_key,
-        "StartPage": a.start_page, "PageSize": a.page_size,
-    }
-    sm.store_login(creds, CredStore())
+    creds = sm.make_login(company, user, pw, OsVersion=a.os_version, ShopmineVersion=a.shopmine_version,
+                          IdKey=a.id_key, PwKey=a.pw_key, StartPage=a.start_page, PageSize=a.page_size)
+    sm.store_login(creds, CredStore())   # 앱 설정 탭 '샵마인 로그인 입력'과 같은 함수(D-389)
     del pw, creds
     print("\n저장 완료(DPAPI·이 PC 현재 사용자 전용). 커밋·공유 금지.")
     print("다음: discover 로 필드명·건수 확인 → sync.")
@@ -95,12 +93,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("setup", help="샵마인 로그인 자격 DPAPI 저장(getpass)")
     sp.add_argument("--company-id")
     sp.add_argument("--user-id")
-    sp.add_argument("--os-version", default="Windows")
-    sp.add_argument("--shopmine-version", default="", help="거부되면 샵마인 앱 정보의 실제 버전 지정")
-    sp.add_argument("--id-key", default=sm.ID_KEY_DEFAULT)
-    sp.add_argument("--pw-key", default=sm.PW_KEY_DEFAULT)
-    sp.add_argument("--start-page", type=int, default=sm.START_PAGE_DEFAULT)
-    sp.add_argument("--page-size", type=int, default=sm.PAGE_SIZE_DEFAULT)
+    # 생략 = make_login 기본값(D-196 실서버 성공 로그인과 같은 값 · 앱 설정 탭과 동일)
+    sp.add_argument("--os-version", default=None)
+    sp.add_argument("--shopmine-version", default=None, help="거부되면 샵마인 앱 정보의 실제 버전 지정")
+    sp.add_argument("--id-key", default=None)
+    sp.add_argument("--pw-key", default=None)
+    sp.add_argument("--start-page", type=int, default=None)
+    sp.add_argument("--page-size", type=int, default=None)
 
     sub.add_parser("discover", help="응답 필드명·건수만 확인(값 숨김)")
 

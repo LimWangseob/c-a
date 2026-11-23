@@ -1469,7 +1469,7 @@ un_log_*.log`)로 확인 필요.
 - 근거(사실): 참조 분석 `D:\rea\evidence\shopmine`(PASSWORD_STORAGE.md — MarketPassword 는 클라이언트 암호화 없이 http 로 샵마인 서버에 저장·계정 조회 API 가 비번 반환 · LOGIN.md · AUTOMATION_PLAN.md pktmon 캡처로 요청 형식 확인) · 기존 비번 흐름 재사용(`input_list.parse_password_candidates`→`app_qt._apply_pw_candidates`→credstore · `settlement_accounts.login_passwords`·`alt_key` D-190) · 관리대장 = 마스터(D-134). 미확정 = ShopmineVersion 실제값·CurrentPageNumber 1-based 여부·계정 필드명(정적분석 추정 MarketId/MarketPassword) → 사용자 자격으로 discover 1회 확정.
 - 버린 대안: ①리포트만(소유자가 자동반영 선택) ②openpyxl(xlsx) 로 대장 수정(참조 스크립트 방식 — 우리 마스터는 구글시트라 gsheet_api 로 교체) ③별도 스크립트/스케줄러(앱 18시 흐름에 통합) ④샵마인 로컬 DB·캐시·엑셀에서 비번 추출(비번 없음 — 엑셀 별표 마스킹·로컬 SQLite 없음·크롬 저장소 0건, 유일 경로 = 서버 API) ⑤별도 DPAPI 저장소(앱 credstore 재사용).
 - 영향 범위: 새 `src/coupang_analytics/shopmine_sync.py`(코어) · `tools/shopmine_sync.py`(CLI setup/discover/sync/selftest) · `input_list.password_column`(공개 헬퍼 추가) · `ui/app_qt.py`(`_maybe_shopmine_sync` 훅 1곳) · 게이트 `tools/verify_shopmine_sync_offline.py`(run_checks 등록). 실서버 discover/sync 는 사용자 자격으로 1회 확인(비번 미노출).
-- 상태: ACTIVE (실서버 검증·로그인 원인 = D-196 · 부분 SUPERSEDED by D-385 — 자격 없음 = 조용히 건너뜀 → 하루 1번 로그 · 24시간 안 거부된 값이면 대장 안 덮음)
+- 상태: ACTIVE (실서버 검증·로그인 원인 = D-196 · 부분 SUPERSEDED by D-385 — 자격 없음 = 조용히 건너뜀 → 하루 1번 로그 · 24시간 안 거부된 값이면 대장 안 덮음 · D-388 — setup CLI 필수 → 설정 탭 한 번 입력·필드 확인·대조 자동)
 
 ### D-196 [SHOPMINE_PW_SYNC] 샵마인 실서버 검증 완료(로그인 원인 = 비번 값 오차) · sync `--dry-run` 추가 · 마스터 실쓰기는 앱 훅/소유자만 (2026-11-10, R126)
 - 결정: D-195 구현의 **실서버 로그인 거부(IsSuccess=False) 원인 = 비밀번호 '값' 오차 하나**로 확정하고(코드·요청 형식은 정답), 마무리 방식을 정한다.
@@ -3152,5 +3152,12 @@ umpy`) · 우리 코드는 numpy 를 직접 안 씀 · 정산 바퀴 끝 '남는
 - 근거: 하위 분석 `output/_분석_261123_마스터반영/마스터반영_확인.md` 6절 — 코드 `src/coupang_analytics/gsheet_stats.py:316-319`(삭제)와 문서 `docs/OPERATIONS_POLICY.md:13`·`CLAUDE.md`·`designs/GSHEET_UNIFIED.md:191`('추가만·제거 없음')이 어긋남(통제 세션 코드 대조 확인) · 코드 근거 = 소유자 09-20 '시트 값이 기준'.
 - 버린 대안: 지운 키워드 기록 보존(문서 쪽) — 소유자 원문과 다름.
 - 영향 범위: 코드 변경 0 · 문서 `docs/OPERATIONS_POLICY.md`·`CLAUDE.md`·`designs/GSHEET_UNIFIED.md`·`docs/CURRENT_RULES.md` 문구.
+- 상태: ACTIVE
+
+### D-388 [SHOPMINE_PW_SYNC_AUTO] 샵마인 동기화 = 앱 설정 탭에 한 번 입력 뒤 자동 (연결·필드 확인 자동 · 첫날 대조 리포트만 · 다음 날부터 반영 · 대장 값이 지난 로그인 성공값이면 안 덮음 · 거부된 자격은 다시 입력 전까지 재시도 안 함) (2026-11-23, R248)
+- 결정(소유자 2026-11-23 운용 PC setup·discover·dry-run 4단계 안내에 "내가 별도 작업 없이 진행되도록 수정해줘."): ① 설정 탭 [샵마인 로그인 입력](`ui/shopmine_login_qt.py` · 비번 가림 · DPAPI 저장 · 배경 연결 확인 · 라벨 = 미입력/저장됨(계정 N건)/거부) ② 필드 자동 확인(`shopmine_sync.resolve_fields` · CLI 와 같은 `make_login`) ③ `app_daily_hook`: 첫날 = 대조 리포트만(`output/샵마인동기화/대조_*.csv` · 값 없음) · 다음 날부터 반영 ④ 거부된 샵마인 자격 = 표시 후 다시 입력 전까지 매일 로그인 안 함(잠금 방지) ⑤ **[Claude 판단 — 소유자 지시 아님 · 확인 필요]** 대장 값이 지난번 자동입력 로그인에 성공한 값(D-385 지문)이고 샵마인 값이 그와 다르면 대장 안 덮음 ⑥ 자격 없음 로그 = '설정 탭 샵마인 칸에 한 번 입력' 안내 · 배포 평문 내보내기(`--export-settings`)에 샵마인 자격 제외(시험으로 막음).
+- 근거: 하위 작업 조사 — 업체ID·사용자ID·비번 없이 로그인 불가(`do_login` 5필드 · 사실) · 앱 저장소 샵마인 키 = `__shopmine_login__` 하나(키 이름만) · DPAPI = PC·사용자 전용이라 개발 PC 자격을 안전하게 옮길 방법 없음(암호 문구로 감싸면 그 문구 입력 = 같은 수고) · ⑤ 이유: D-385 안전장치는 24시간 안 거부값만 막는데, D-385 뒤 맞는 값이 먼저 들어가 옛 값이 다시 거부되지 않으므로 샵마인에 옛 값이 있으면 맞는 9줄이 지워질 수 있음 · 첫날은 성공 기억이 없어 리포트만. 구현 `2a3b368` · 시험 6종(`tools/verify_shopmine_sync_offline.py`) · 게이트 40종.
+- 버린 대안: 샵마인 앱 자동로그인 파일에서 자격 꺼내기(고정 키 AES 라 가능 — 구현 안 함 · 다른 프로그램 저장 자격 추출 = 소유자 판단) · 배포 zip 에 자격 동봉(평문 금지) · CLI setup 유지.
+- 영향 범위: `src/coupang_analytics/shopmine_sync.py` · `login_today.py`(proven_ok) · `ui/app_qt.py`(설정 줄·연결) · `ui/shopmine_login_qt.py`(새) · `tools/shopmine_sync.py` · `tools/verify_shopmine_sync_offline.py`. 남는 것: 소유자가 샵마인 비번을 평소 자동로그인으로만 써서 모르면 샵마인에서 확인·재설정 필요 · ShopmineVersion 고정값이 샵마인 업데이트 뒤에도 통하는지 미확인 · 샵마인에서만 비번 바꾼 계정 = 하루 1회 틀린 값 뒤 다음 날 반영. 운용 반영 = 다음 배포 zip.
 - 상태: ACTIVE
 
