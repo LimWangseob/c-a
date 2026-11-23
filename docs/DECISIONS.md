@@ -3147,3 +3147,10 @@ umpy`) · 우리 코드는 numpy 를 직접 안 씀 · 정산 바퀴 끝 '남는
 - 영향 범위: `tools/settlement_download.py`(_reuse_originals·_originals_dir·cmd_request every/between·cmd_run every·_evidence_step·_cycle_sources·EVIDENCE_BATCH·NO_RESPONSE) · `tools/verify_settlement_runtime_offline.py` P73·P68 · D-061 해석(비용 리포트 = 정기 받기가 같은 쿠팡 파일을 바이트 그대로 둔 것 = 원본) · D-339(무인 연결). 남은 위험 = `source_checks` 를 watch 프로세스 안에서 돌림(메모리 · MEMLOG 로 감쌈) · 배포 시뮬레이션 S2 = 배포 전 통제 세션. 운용 반영 = 다음 배포 zip.
 - 상태: ACTIVE
 
+### D-387 [STAFF_KEYWORD_REMOVE] 직원이 결과 시트에서 지운 키워드 = 마스터에서도 지우고 그 키워드 순위 기록까지 삭제 (지금 코드 그대로 · 문서 '추가만·제거 없음' 정정) (2026-11-23, R248)
+- 결정(소유자 2026-11-23 질문 '직원이 시트에서 키워드를 지우면 어떻게 할까요?' → "키워드 순위 기록 삭제해."): 실행 시작 때 직원 키워드 역머지(`gsheet_stats.merge_staff_keywords`)가 시트에서 사라진 키워드를 `wb.clear_keyword_row`로 행·순위 이력째 지우는 지금 동작을 정책으로 확정. AI 선정 키워드 동결(추가만·제거 없음)은 그대로.
+- 근거: 하위 분석 `output/_분석_261123_마스터반영/마스터반영_확인.md` 6절 — 코드 `src/coupang_analytics/gsheet_stats.py:316-319`(삭제)와 문서 `docs/OPERATIONS_POLICY.md:13`·`CLAUDE.md`·`designs/GSHEET_UNIFIED.md:191`('추가만·제거 없음')이 어긋남(통제 세션 코드 대조 확인) · 코드 근거 = 소유자 09-20 '시트 값이 기준'.
+- 버린 대안: 지운 키워드 기록 보존(문서 쪽) — 소유자 원문과 다름.
+- 영향 범위: 코드 변경 0 · 문서 `docs/OPERATIONS_POLICY.md`·`CLAUDE.md`·`designs/GSHEET_UNIFIED.md`·`docs/CURRENT_RULES.md` 문구.
+- 상태: ACTIVE
+
