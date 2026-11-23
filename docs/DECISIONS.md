@@ -3117,3 +3117,11 @@ umpy`) · 우리 코드는 numpy 를 직접 안 씀 · 정산 바퀴 끝 '남는
 - 버린 대안: '적은 줄 먼저' 뒤집기(정당하게 고친 값이 1줄인 경우 깨짐) · 저장소 값1 덮어쓰기(D-190 에서 버림) · 안전장치 없이 샵마인만 켜기(샵마인에 옛 값이 있으면 맞는 9줄을 지움 — 가짜 값 재현).
 - 영향 범위: `src/coupang_analytics/login_today.py`(record_success·success_first·_blocked) · `pipeline_sales.py`(_login_with_candidates·LoginPwRecentlyRefused) · `shopmine_sync.py` · `ui/app_qt.py`(_maybe_shopmine_sync) · `tools/pin_login_ranks.py` D3 · `tools/verify_shopmine_sync_offline.py`. 남는 것: 성공 기록 생기기 전 첫 로그인 1회 거부 가능 · 운용 PC 샵마인 자격 setup = 소유자. 운용 반영 = 다음 배포 zip.
 - 상태: ACTIVE
+
+### D-384 [GSHEET_PULL_BLANKS] 실행 시작 때 결과 구글시트 값으로 마스터의 빈 칸만 채움 (키워드 역머지 직전 · 이번 회차 칸 제외) (2026-11-23, R248)
+- 결정(소유자 2026-11-23 "운용 마스터는 매일 처음 시작시 현행화를 해야 함, 너가 지금 구글 시트를 열어서 반영하면 운용PC에서 마스터를 현행화 하면 문제가 해결됨, 검토해줘" → 검토 '현행화 기능 없음 · 마스터→시트 한 방향' 보고 뒤 "1~6 전부 수용, 진행해줘"): `pipeline.run_full` 이 키워드 역머지(`pull_gsheet_keywords`) **직전**에 `pipeline_gsheet.pull_gsheet_blank_cells` → `gsheet_fill.fill_blank_cells`. 사업자 = 시트 이름 같은 것만 · 행 = 마스터 행 번호 그대로이되 블록 머리줄 날짜 칸·상품명·지표 글자(순위행은 키워드까지)가 시트와 모두 같을 때만(다르면 그 블록 건너뜀 + 로그) · 열 = 블록 머리줄 **날짜 글자**(D-368·D-369 위치 이동 때문) · **마스터 칸이 비었고 시트에 값이 있을 때만** · 이번 회차 칸(col_label)·마스터에 없는 날짜 칸 = 안 씀 · 로그 = 사업자별 `결과 시트 → 마스터 빈 칸 채움 N칸` + 합계 + 시트에 없는 사업자 · 읽기 실패 = ⚠ 로그 후 진행 · 저장 = D-376 경로.
+- 근거: 결과 시트 반영 = 마스터 기준 값+서식 전체 교체(`gsheet_stats.push_statistics`) — 11-22 통제 세션이 시트 11.19 판매량 410칸을 썼으나 11-23 00:10 미러로 0/410(통제 세션 11-23 시트 읽기 · 머리줄 11.22 생김) · 운용 마스터 11.19 빈 칸(output43). 구현 `bbf86a1`(하위 작업 · `verify_gsheet_offline` [18] ①~⑦ · 시뮬레이션 시나리오 17 순서 fill→pull→push · 게이트 39종 통과).
+- 버린 대안: 칸 위치로 대응(날짜 칸 위치 이동) · 시트 값으로 덮어쓰기(마스터 값 훼손) · 키워드 역머지와 읽기 공유(그쪽은 표시값으로 읽어 숫자가 글자 · 핀 시그니처 변경) → 읽기 1번 더 · 운용 PC 에서 개발 PC 마스터 덮어쓰기(T-155 A · 그날 회차 결과 사라질 위험).
+- 영향 범위: `src/coupang_analytics/gsheet_fill.py`(새) · `pipeline_gsheet.py` · `pipeline.py` run_full(col_label 계산을 앞으로) · `tools/verify_gsheet_offline.py` [18] · `tools/simulate_pipeline.py` 17 · `tools/pin_l1_contract.py`. 남는 위험: 결과 시트가 날짜 당김(D-369) 전 기준인 채 한 번도 미러 안 됐으면 하루 어긋남(지금 시트는 판매일 기준 · 사실) · 실 시트 첫 확인 = 설치 뒤 첫 회차 로그 N칸. 운용 반영 = 다음 배포 zip(설치 직전 통제 세션이 시트 11.19 410칸 다시 씀 · T-155).
+- 상태: ACTIVE
+

@@ -96,6 +96,7 @@ FUNC_CONTRACTS: dict = {
         # ⚠ 옛 이름 _push_gsheet·_pull_gsheet_keywords 를 공개 이름으로 정리(2026-09-28).
         ("push_gsheet", "P:wb:0 P:output_url:0 P:log:0 P:removed_accounts:1 P:renamed_accounts:1"),
         ("pull_gsheet_keywords", "P:wb:0 P:output_url:0 P:log:0"),
+        ("pull_gsheet_blank_cells", "P:wb:0 P:output_url:0 P:skip_labels:0 P:log:0"),   # T-159 실행 시작 빈 칸 채움
         ("backup_sources", "P:out_dir:1 K:input_url:1 K:output_url:1 K:on_log:1"),
         ("restore_master_from_gsheet", "P:out_dir:0 P:url:0 P:on_log:1"),
         ("push_ledger_inventory", "P:input_url:0 P:log:0 P:out_dir:1"),

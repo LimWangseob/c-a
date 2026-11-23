@@ -1223,6 +1223,124 @@ def t17_restore_master_via_sa() -> None:
     _ok("결과시트→마스터 복원 = SA·저장 타입 그대로(숫자 보존)·인덱스 탭 제거")
 
 
+def _fill_master() -> OutputWorkbook:
+    """빈 칸 채움(T-159)용 마스터 — 가게A 상품 2개(텀블러·머그) · 날짜 칸 09.10~09.12 · 09.11 판매량·순위는 비어 있음."""
+    wb = OutputWorkbook.empty()
+    wb.ensure_product_block("가게A", "텀블러", config.KIND_CONTRACT, ["텀블러", "보온 텀블러"])
+    wb.ensure_product_block("가게A", "머그", config.KIND_CONTRACT, ["머그컵"])
+    for d in ("09.10", "09.11", "09.12"):
+        wb.ensure_date("가게A", d)
+    wb.set_product_metric("가게A", "텀블러", config.M_SALES, "09.10", 4)
+    wb.set_product_metric("가게A", "텀블러", config.M_SALES, "09.12", 6)
+    wb.set_product_metric("가게A", "텀블러", config.M_VISITORS, "09.11", 30)    # 마스터 값 있음(시트 값과 다름)
+    wb.set_product_metric("가게A", "머그", config.M_SALES, "09.10", 1)
+    return wb
+
+
+def _mirror(ws) -> list[list]:
+    """마스터 시트 → 결과 시트 격자(push_statistics 미러와 같은 위치)."""
+    return [[ws.cell(r, c).value for c in range(1, ws.max_column + 1)] for r in range(1, ws.max_row + 1)]
+
+
+class _FillFake(_StatsFake):
+    """읽기 실패 흉내(⑥) — 묶어 읽기에서 예외."""
+    def read_values_batch(self, sheets, unformatted=False):
+        raise RuntimeError("429 가짜 한도 초과")
+
+
+def t18_fill_blank_from_sheet() -> None:
+    print("[18] 결과 시트 → 마스터 빈 칸 채움(T-159) — 빈 칸만·날짜 글자로 열 찾기·행 다르면 블록 건너뜀·이번 회차 칸 뺌")
+    from coupang_analytics import gsheet_fill, pipeline_gsheet
+    wb = _fill_master()
+    ws = wb.wb["가게A"]
+    grid = _mirror(ws)
+    c10, c11, c12 = (wb._date_col["가게A"][d] for d in ("09.10", "09.11", "09.12"))
+    r_s, r_v = wb._metric_row[("가게A", "텀블러", config.M_SALES)], wb._metric_row[("가게A", "텀블러", config.M_VISITORS)]
+    r_k = wb._kw_row[("가게A", "텀블러", "텀블러")]
+    r_m = wb._metric_row[("가게A", "머그", config.M_SALES)]
+    grid[r_s - 1][c11 - 1] = 5           # ① 다른 PC 가 시트에 채운 11일 판매량(마스터 빈 칸)
+    grid[r_v - 1][c11 - 1] = 99          # ② 마스터 값(30) 있는 칸 → 안 바꿈
+    grid[r_s - 1][c10 - 1] = 444         # ② 마스터 값(4) 있는 칸 → 안 바꿈
+    grid[r_k - 1][c11 - 1] = "7위"        # 순위행(키워드 같음) → 채움
+    grid[r_m - 1][c12 - 1] = 2           # ⑤ 이번 회차 칸(09.12) → 안 씀
+    grid[r_m - 1][c11 - 1] = ""          # 시트도 빈 칸 → 그대로
+    got = gsheet_fill.fill_blank_cells(wb, {"가게A": grid}, skip_labels=["09.12"])
+    assert got == {"가게A": 2}, got
+    assert ws.cell(r_s, c11).value == 5 and ws.cell(r_k, c11).value == "7위", (ws.cell(r_s, c11).value, ws.cell(r_k, c11).value)
+    assert ws.cell(r_v, c11).value == 30 and ws.cell(r_s, c10).value == 4, "마스터 값 있는 칸을 바꿈"
+    assert ws.cell(r_m, c12).value is None, "이번 회차 칸을 채움"
+    assert gsheet_fill.fill_blank_cells(wb, {"가게A": grid}, skip_labels=["09.12"]) == {"가게A": 0}   # 재실행 무증가
+    _ok("① 빈 칸+시트 값 = 채움(판매량·순위) · ② 마스터 값 있는 칸 그대로 · ⑤ 이번 회차 칸 안 씀 · 재실행 0칸")
+
+    # ③ 시트 날짜 칸이 하루 밀림(시트엔 09.13 칸이 H 에 더 있음) → 위치 아닌 머리글 글자로 찾아야
+    wb = _fill_master()
+    ws = wb.wb["가게A"]
+    heads = list(wb._date_rows["가게A"])
+    shifted = [row[:7] + ["09.13" if (i + 1) in heads else None] + row[7:] for i, row in enumerate(_mirror(ws))]
+    shifted[r_s - 1][c11] = 5            # 시트 09.11 = 한 칸 오른쪽(c11+1, 0-based c11)
+    shifted[r_s - 1][c11 - 1] = 777      # 마스터 09.11 위치 칸(시트에선 09.12 칸 · 마스터 09.12 = 6 이라 안 씀)
+    got = gsheet_fill.fill_blank_cells(wb, {"가게A": shifted})
+    assert got == {"가게A": 1} and ws.cell(r_s, c11).value == 5, (got, ws.cell(r_s, c11).value)
+    _ok("③ 시트 날짜 칸 한 칸 밀림 → 머리글 '09.11' 로 찾아 5 채움(위치 값 777 안 씀)")
+
+    # ④ 상품명 다른 블록(시트 행 = 다른 상품) → 그 블록 건너뜀 + 로그 · 다른 블록은 채움
+    wb = _fill_master()
+    ws = wb.wb["가게A"]
+    grid = _mirror(ws)
+    grid[heads[0] - 1][2] = "다른상품"
+    grid[r_s - 1][c11 - 1] = 5
+    grid[r_m - 1][c11 - 1] = 3
+    logs: list[str] = []
+    got = gsheet_fill.fill_blank_cells(wb, {"가게A": grid}, on_log=logs.append)
+    assert got == {"가게A": 1} and ws.cell(r_s, c11).value is None and ws.cell(r_m, c11).value == 3, (got, logs)
+    assert any("건너뛴 블록 1개" in m and "상품명 다름" in m for m in logs), logs
+    # 지표 칸 글자 다름(행 밀림) → 블록 건너뜀 · 순위행 키워드만 다름 → 그 행만 건너뜀
+    wb = _fill_master()
+    ws = wb.wb["가게A"]
+    grid = _mirror(ws)
+    grid[r_v - 1][6] = config.M_VIEWS
+    grid[r_s - 1][c11 - 1] = 5
+    got = gsheet_fill.fill_blank_cells(wb, {"가게A": grid}, on_log=logs.append)
+    assert got == {"가게A": 0} and any("지표 다름" in m for m in logs), (got, logs)
+    wb = _fill_master()
+    ws = wb.wb["가게A"]
+    grid = _mirror(ws)
+    grid[r_k - 1][0] = "직원이 바꾼 키워드"
+    grid[r_k - 1][c11 - 1] = "3위"
+    grid[r_s - 1][c11 - 1] = 5
+    got = gsheet_fill.fill_blank_cells(wb, {"가게A": grid})
+    assert got == {"가게A": 1} and ws.cell(r_k, c11).value is None and ws.cell(r_s, c11).value == 5, got
+    _ok("④ 상품명 다름 = 블록 건너뜀+로그 · 지표 글자 다름 = 블록 건너뜀 · 키워드만 다름 = 그 순위행만 건너뜀")
+
+    # ⑥ 읽기 실패 → ⚠ 로그·0칸·마스터 그대로(실행 진행) / ⑦ 시트에 없는 사업자 → 건너뜀+로그
+    import coupang_analytics.gsheet_api as ga
+    orig_sa, orig_cl = ga.load_sa_info, ga.GSheetClient
+    wb = _fill_master()
+    ws = wb.wb["가게A"]
+    grid = _mirror(ws)
+    grid[r_s - 1][c11 - 1] = 5
+    try:
+        ga.load_sa_info = lambda *a, **k: {"client_email": "x@y.z"}
+        ga.GSheetClient = lambda url, on_log=None: _FillFake({"가게A": grid})
+        logs = []
+        assert pipeline_gsheet.pull_gsheet_blank_cells(wb, "https://docs.google.com/spreadsheets/d/X", ["09.12"], logs.append) == 0
+        assert any("⚠ 결과 시트 → 마스터 빈 칸 채움 실패" in m and "429" in m for m in logs), logs
+        assert ws.cell(r_s, c11).value is None
+        wb.ensure_product_block("가게B", "컵", config.KIND_CONTRACT, ["컵"])
+        fake = _StatsFake({"가게A": grid})
+        ga.GSheetClient = lambda url, on_log=None: fake
+        logs = []
+        assert pipeline_gsheet.pull_gsheet_blank_cells(wb, "https://docs.google.com/spreadsheets/d/X", ["09.12"], logs.append) == 1
+        assert fake.calls == 1, fake.calls
+        assert any("'가게A' 결과 시트 → 마스터 빈 칸 채움 1칸" in m for m in logs), logs
+        assert any("결과 시트에 없는 사업자 1개" in m and "가게B" in m for m in logs), logs
+        assert any(m == "== [구글시트] 결과 시트 → 마스터 빈 칸 채움 1칸(1개 사업자) ==" for m in logs), logs
+        assert pipeline_gsheet.pull_gsheet_blank_cells(wb, None, [], logs.append) == 0       # 결과 시트 주소 없음 = 생략
+    finally:
+        ga.load_sa_info, ga.GSheetClient = orig_sa, orig_cl
+    _ok("⑥ 읽기 실패 = ⚠ 로그·0칸·마스터 그대로 · ⑦ 시트에 없는 사업자 = 건너뜀+로그 · 묶어 읽기 1번 · 사업자별·합계 로그")
+
+
 def main() -> int:
     print("=== 구글 시트 통합 오프라인 검증 ===")
     for fn in (t1_ledger_rows, t1b_ledger_strike, t1d_ledger_hidden_rows, t1c_real_ledger_shape, t2_file_regression, t3_index_sync, t3b_full_and_incremental,
@@ -1231,7 +1349,8 @@ def main() -> int:
                t8_exec_retry, t8b_quota_429_batch, t9_legacy_format_mismatch, t10_stats_full_replace_mismatch,
                t11_move_across_title_merge, t11b_merge_failure_nonfatal, t11c_stock_migration_frozen_cols,
                t12_delete_ghost_product_rows, t13_backup_result_via_sa, t14_sheet_id_robust,
-               t15_password_candidates, t16_password_trim, t17_restore_master_via_sa):
+               t15_password_candidates, t16_password_trim, t17_restore_master_via_sa,
+               t18_fill_blank_from_sheet):
         fn()
     print("=== 전부 통과 ===")
     return 0

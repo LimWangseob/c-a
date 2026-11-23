@@ -604,7 +604,7 @@ def scenario_staff_keywords_pulled():
     accts = _accounts(["a1"])
     _ops(accts, d, date_from="2026-09-02", date_to="2026-09-02")           # 1일차: 상품·AI 키워드 생성
     order: list[str] = []
-    orig_pull, orig_push = P.pull_gsheet_keywords, P.push_gsheet
+    orig_pull, orig_push, orig_fill = P.pull_gsheet_keywords, P.push_gsheet, P.pull_gsheet_blank_cells
 
     def fake_pull(wb, url, log):                 # 직원이 결과시트에 '직원키워드' 를 타이핑해 둔 상태
         order.append("pull")
@@ -612,13 +612,15 @@ def scenario_staff_keywords_pulled():
         wb.add_product_keywords(biz, wb.products_of(biz)[0], ["직원키워드"])
 
     P.pull_gsheet_keywords = fake_pull
+    P.pull_gsheet_blank_cells = lambda wb, url, skip, log: order.append(f"fill:{skip}") or 0   # T-159 실 API 안 부름
     P.push_gsheet = lambda wb, url, log, **k: order.append("push")
     try:
         snap = _run1(accts, d, date_from="2026-09-03", date_to="2026-09-03", carry_forward=True,
                      gsheet_output_url="https://docs.google.com/spreadsheets/d/SIM/edit")
     finally:
-        P.pull_gsheet_keywords, P.push_gsheet = orig_pull, orig_push
-    _check(order[:1] == ["pull"] and "push" in order, f"① 시작에 역머지 → 그 뒤 미러링 {order}")
+        P.pull_gsheet_keywords, P.push_gsheet, P.pull_gsheet_blank_cells = orig_pull, orig_push, orig_fill
+    _check(order[:2] == ["fill:['09.03']", "pull"] and "push" in order,
+           f"① 시작에 빈 칸 채움(이번 회차 칸 뺌 T-159) → 역머지 → 그 뒤 미러링 {order}")
     _check("직원키워드" in _keywords_in(snap), "① 결과(→ 결과시트 미러링 원본)에 직원 키워드 보존")
 
 

@@ -35,7 +35,7 @@ from .pipeline_paths import (  # noqa: E402
 from .pipeline_paths import column_label, master_exists, read_run_stage, write_run_stage  # noqa: E402,F401
 # 구글시트 연동·백업·복원은 pipeline_gsheet 로 분리(대형 파일 정비). pipeline.X 로 다시 노출.
 from .pipeline_gsheet import (  # noqa: E402,F401
-    pull_gsheet_keywords, push_gsheet, push_coupang_checks, backup_sources,
+    pull_gsheet_blank_cells, pull_gsheet_keywords, push_gsheet, push_coupang_checks, backup_sources,
     push_ledger_inventory, push_company_stock, inject_company_stock, restore_master_from_gsheet)
 # ③ 순위(반자동 검색·egress 회전·스테이지)는 pipeline_ranks 로 분리. pipeline.X 로 다시 노출
 # (핀/시뮬 monkeypatch 대상은 pipeline_ranks).
@@ -747,6 +747,12 @@ def run_full(input_list: InputList, out_dir: str = "output",
     wb, date_from, date_to = st.wb, st.date_from, st.date_to
     started_at, done, date_label, carry = st.started_at, st.done, st.date_label, st.carry
 
+    # 일자 컬럼 라벨 = **작업 실행날짜**(date_label). 순위(③)는 같은 실행날짜 컬럼(latest_date)에 기록돼
+    # '오늘 순위 + 전일 판매'가 한 컬럼에 나란히 쌓인다. (T-159: 빈 칸 채움이 이번 회차 칸을 빼야 해 역머지보다 먼저 정함)
+    col_label = _column_label(date_from, date_to, date_label, log)
+    # T-159: 결과 시트 값으로 마스터 빈 칸만 채움(다른 PC 가 시트에 채운 지난 날짜 값 보존) — 키워드 역머지가 키워드 행을
+    # 넣고 빼기 **전에**(행 번호가 시트와 같을 때) 한다. 이번 회차 칸(col_label)은 안 채움.
+    pull_gsheet_blank_cells(wb, gsheet_output_url, [col_label], log)
     # 직원이 결과 통계 시트에 직접 넣은 키워드를 역머지(시트 값 기준 동기화 → 그 상품은 ②에서 동결). ①은 끝날 때 결과시트를
     # **전체 교체**하므로 그 전에 워크북에 들어가야 보존된다(E1: 예전엔 키워드 단계가 있는 실행만 호출 → 운영 ①에선 안 돌아 소실).
     # 구글시트는 아직 옛 사업자명 시트라 일원화보다 먼저.
@@ -762,9 +768,6 @@ def run_full(input_list: InputList, out_dir: str = "output",
         wb.set_account_id(_a.label, _a.account_id)
         wb.set_representative(_a.label, _a.representative)   # 계정목록 대표자 컬럼 표시용(관리대장 대표자명)
 
-    # 일자 컬럼 라벨 = **작업 실행날짜**(date_label). 순위(③)는 같은 실행날짜 컬럼(latest_date)에 기록돼
-    # '오늘 순위 + 전일 판매'가 한 컬럼에 나란히 쌓인다.
-    col_label = _column_label(date_from, date_to, date_label, log)
     if redo_today and carry:      # ② 오늘 처음(다시): 오늘 컬럼·완료스탬프 초기화 → 전 계정 오늘분 재수집
         c1 = wb.reset_date_column(col_label)
         c2 = wb.clear_sales_stamps()
