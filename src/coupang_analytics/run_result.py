@@ -4,7 +4,7 @@
 실행 끝(예외·중지 포함)에 블록을 찍는다. 재료:
 - ① = `LAST_SALES`(pipeline.run_full 이 채움 — 계정·비밀번호 오류·로그인 못 한 계정과 사유·수집 성공 수·저장 파일)
 - ③ = `LAST_RANK`(pipeline_ranks — 측정·빈 칸·VID 없음·차단) · 오류 = 단계별 '❌' 줄(②·재고 역기록은 '실패' 줄도)
-판정: 오류 발생 --> 중단 · 사람 중지 --> 중단 · 일부 실패[·순위 빈 칸] --> 확인 필요 · 정상 완료.
+판정: 오류 발생 --> 중단 · 사람 중지 --> 중단 · 일부 실패[·순위 빈 칸·매칭 안 된 새 상품] --> 확인 필요 · 정상 완료.
 비밀번호 값은 다루지 않음(계정 이름·사유만).
 """
 from __future__ import annotations
@@ -19,6 +19,8 @@ LAST_SALES: dict = {}   # ① 끝 정보 — run_stages 시작 때 비우고 pip
 SALES, KEYWORDS, RANKS, STOCK, PREP = "① 판매수집", "② 키워드 선정", "③ 순위", "재고 역기록", "준비"
 MORNING = "노출·방문자 아침 보충"   # ①②③ 가 23:00 뒤 끝나 그날 보충을 못 함(D-374 보완) — 그 줄도 오류 현황에
 PW_HINT = "관리대장 비밀번호 확인 — 거부된 값은 24시간 다시 넣지 않음"
+UNMATCHED = "매칭 안 된 새 상품"   # 관리대장 줄이 쿠팡 상품과 매칭 안 됨 = 블록 미생성(D-008) — '확인 필요'(T-162 ②)
+UNMATCHED_HINT = "관리대장 상품명·쿠팡 등록 여부 확인 — 매칭될 때까지 결과 블록 없음"
 MAX_LINES = 20          # 단계마다 오류 줄 표시 상한(넘으면 '외 N건')
 TITLE = "===== [실행 결과 종합] ====="
 HALTED = "도중 오류로 멈춤"   # 실행을 멈춘 예외가 난 단계(T-29 — 옛 = '함'·'수집 성공 ?/N')
@@ -31,13 +33,14 @@ def is_error(stage: str, msg: str) -> bool:
     return "❌" in msg or (stage in (KEYWORDS, STOCK) and "실패" in msg)
 
 
-def verdict(*, crashed: str, stopped: bool, failed: bool, unfilled: int) -> str:
-    """판정 = '원인 --> 결과'(D-172) — 결과만 쓰지 않는다."""
+def verdict(*, crashed: str, stopped: bool, failed: bool, unfilled: int, unmatched: int = 0) -> str:
+    """판정 = '원인 --> 결과'(D-172) — 결과만 쓰지 않는다. unmatched = 쿠팡 상품과 매칭 안 된 대장 상품 수(T-162 ②)."""
     if crashed:
         return "오류 발생 --> 중단"
     if stopped:
         return "사람 중지 --> 중단"
-    causes = [c for c, on in (("일부 실패", failed), ("순위 빈 칸", unfilled > 0)) if on]
+    causes = [c for c, on in (("일부 실패", failed), ("순위 빈 칸", unfilled > 0),
+                              (UNMATCHED, unmatched > 0)) if on]
     return f"{'·'.join(causes)} --> 확인 필요" if causes else "정상 완료"
 
 
@@ -188,11 +191,13 @@ class RunSummary:
         unfilled = self._unfilled_all() if RANKS in self.ran else 0   # 오늘 칸 + 지난 칸 보충 빈 칸(T-47)
         nerr = sum(len(v) for v in self.errors.values())
         stop = bool(self._stop()) if stopped is None else stopped
+        unmatched = _unmatched()
         judge = verdict(crashed=crashed, stopped=stop, failed=self._failed(pw, missed, unfilled),
-                        unfilled=unfilled)
+                        unfilled=unfilled, unmatched=len(unmatched))
         files = self._all_files()
         return [TITLE, f"판정: {judge}", *([f"오류 내용: {crashed}"] if crashed else []),
                 self._named("전체 작업 계정", accts), self._sales_line(len(accts)),
+                *self._unmatched_lines(unmatched),
                 self._named("비밀번호 오류로 수집 안 된 계정", pw, PW_HINT),
                 f"사람 조치 필요: {len(human)}개", *[f"  - {a}: {w}" for a, w in human.items()],
                 f"로그인 못 한 계정(다음 실행에서 다시): {len(lost)}개", *[f"  - {a}: {w}" for a, w in lost.items()],
@@ -202,7 +207,22 @@ class RunSummary:
                 f"이번 실행에서 저장한 파일: {len(files)}개", *[f"  - {w}: {p}" for w, p in files],
                 ML.APP.summary(),                     # D-346 ④ 그날 최고 메모리(시각·단계)·⚠ 횟수
                 f"==> {judge} · 계정 {len(accts)} · 비밀번호 오류 {len(pw)} · 사람 조치 {len(human)} · "
-                f"로그인 못 함 {len(lost)} · {self._rank_tail(unfilled)} · 오류 {nerr} · 저장 파일 {len(files)}"]
+                f"로그인 못 함 {len(lost)} · {_unmatched_tail(unmatched)}{self._rank_tail(unfilled)} · 오류 {nerr} · "
+                f"저장 파일 {len(files)}"]
+
+    def _unmatched_lines(self, items: list[str]) -> list[str]:
+        """매칭 안 된 새 상품 목록 줄(있을 때만 · T-162 ②)."""
+        return [self._named(f"{UNMATCHED}(관리대장 줄 · 결과 블록 안 만듦)", items, UNMATCHED_HINT)] if items else []
+
+
+def _unmatched() -> list[str]:
+    """① 이 모은 매칭 안 된 대장 상품 → ['사업자 / 대장 상품명', …](pipeline_process._finish_account 가 LAST_SALES 에 넣음)."""
+    return [f"{biz} / {n}" for biz, names in (LAST_SALES.get("unmatched") or {}).items() for n in names]
+
+
+def _unmatched_tail(items: list[str]) -> str:
+    """한 줄 요약의 미매칭 부분 — 없으면 빈 글자(옛 한 줄 요약 그대로)."""
+    return f"{UNMATCHED} {len(items)} · " if items else ""
 
 
 __all__ = ["ACTIVE", "LAST_SALES", "RunSummary", "is_error", "verdict"]

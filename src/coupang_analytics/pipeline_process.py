@@ -13,6 +13,7 @@ from . import config
 from .kw_volume import NaverAdApi
 from .workbook import OutputWorkbook
 from .pipeline_sales import _ilog   # 로그 헬퍼(로그인·발견 모듈과 공유·단방향)
+from .run_result import LAST_SALES   # [실행 결과 종합] ① 재료 — 매칭 안 된 대장 상품(T-162 ②)
 
 
 def _refresh_search_volumes(wb, biz: str, product: str, keywords: list[str],
@@ -231,13 +232,15 @@ def _migrate_product_blocks(wb, biz: str, base: str, rep_name: str, vids_all, op
                             log, names: list[str] | None = None) -> None:
     """정체성/마이그레이션(소유자 2026-09-20: vid=상품당 1개).
 
-    ① **같은 vid** = 같은 상품 → 기존 블록 승계 + 이름을 등록상품명으로 정규화(set_display_name 은
-       중단됐으니 이 한 번만). ② **등록상품명은 같은데 vid 가 다른**(교집합 없는) 옛 블록 = 정체성 바뀜
-       → **이전 데이터 삭제하고 새로 시작**(잘못된 이력 승계 방지). vid 없는 복원 잔재 블록도 대체 삭제한다
-       (단 이번에 이어쓸 블록·미매칭 상품은 보존).
+    ① **같은 vid** = 같은 상품 → 기존 블록 승계 + 이름을 대표 이름으로 정규화 — 대표(첫) 옵션 **자기 vid** 의
+       블록만(T-162 · 옵션이 나뉠 때 다른 옵션 vid 블록을 대표 이름으로 바꾸면 그 vid 이력이 대표 블록으로 감 —
+       실측 11-18 (DW) LED 스탠드 블랙 725 이력 → 화이트 726). ② **등록상품명은 같은데 vid 가 다른**(교집합 없는)
+       옛 블록 = 정체성 바뀜 → **이전 데이터 삭제하고 새로 시작**(잘못된 이력 승계 방지). vid 없는 복원 잔재
+       블록도 대체 삭제한다(단 이번에 이어쓸 블록·미매칭 상품은 보존).
     """
     vidset = set(vids_all)
-    old = wb.resolve_block_name(biz, vids_all)   # 새 vid 와 교집합 있는 기존 블록(같은 vid)
+    rep_vids = list(opts[0].vendor_item_ids)     # opts 는 비지 않음(_process_account: 옵션 없으면 [Option("")])
+    old = wb.resolve_block_name(biz, rep_vids)   # 대표 옵션 vid 와 교집합 있는 기존 블록(같은 vid)
     if old and old != rep_name and not wb.has_product(biz, rep_name):
         if wb.set_display_name(biz, old, rep_name):
             log(f"  [정체성] 기존 블록 '{old}' → '{rep_name}'(같은 vid·과거 이력 승계·이름 정규화)")
@@ -469,6 +472,8 @@ def _finish_account(wb, biz: str, report_acc, seen_products, unmatched, live_vid
     if unmatched:
         log(f"  ⚠ [{biz}] 쿠팡 상품과 매칭 안 된 대장 상품 {len(unmatched)}개 — 블록 미생성(D-008·대장 상품명/쿠팡 등록 "
             f"확인 필요): {unmatched[:5]}{'…' if len(unmatched) > 5 else ''}")
+        got = LAST_SALES.setdefault("unmatched", {}).setdefault(biz, [])   # [실행 결과 종합] '확인 필요'(T-162 ②)
+        got.extend(n for n in unmatched if n not in got)
     # 죽은 중복 블록 정리(안전 규칙): live 형제 있고 vid 가 상품조회서 소멸한 잔재만 삭제(reconcile 판매중지 표기 전)
     _sweep_dead_duplicates(wb, biz, live_vids, log)
     _purge_vidless_blocks(wb, biz, seen_products, report_acc.account_id, live_vids, log)   # VID 없는 잔재(D-008)

@@ -22,6 +22,7 @@ from .workbook_common import (_ALL_METRICS, _COL_KW, _COL_METRIC, _COL_NAME, _FI
                               _key, _norm)
 
 _ROW_LABELS = frozenset(_ALL_METRICS) | {config.M_RANK}   # 채우는 행 = 날짜 칸 지표행(판매량·방문자·…·판매상태) + 순위행
+_LABEL_VID = "VID"   # 블록 왼쪽 라벨 칸(A) 'VID' 줄 — 값 = C칸 'a / b'(workbook_render 레이아웃 v4)
 
 
 def read_stat_grids(client, wb) -> tuple[dict[str, list[list[Any]]], list[str]]:
@@ -67,12 +68,32 @@ def _row_kw(get, r: int) -> str:
     return _key(get(r, _COL_KW)) or _key(get(r, _COL_NAME))
 
 
+def _vid_text(v: Any) -> str:
+    """블록 'VID' 줄 C칸 값 → 비교 글자('a / b'). 시트를 저장 타입 그대로 읽으면 VID 가 숫자(정수·소수 .0)로 옴."""
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    return " / ".join(p.strip() for p in _norm(v).split("/") if p.strip())
+
+
+def _vid_differs(m_get, s_get, head: int, last: int) -> bool:
+    """블록 VID 대조(T-162 ③) — 블록 안 A칸 'VID' 줄(렌더 v4 = 머리줄+2)의 C칸이 마스터·시트 둘 다 있고 다르면 True.
+    같은 이름 블록의 VID 교체(옛 블록 삭제·새로 시작 D-009) 뒤 시트 반영이 실패한 날, 시트의 옛 VID 이력이 새 블록 빈 칸에
+    다시 들어가는 것을 막는다. 마스터에 VID 줄이 없거나 시트 그 줄이 'VID' 가 아니면 대조 안 함(옛 형식 · 행 대조는 지표 칸이 맡음)."""
+    row = next((r for r in range(head + 1, last + 1) if _norm(m_get(r, _COL_KW)) == _LABEL_VID), None)
+    if row is None or _norm(s_get(row, _COL_KW)) != _LABEL_VID:
+        return False
+    mv, sv = _vid_text(m_get(row, _COL_NAME)), _vid_text(s_get(row, _COL_NAME))
+    return bool(mv and sv and mv != sv)
+
+
 def _block_rows(ws, grid, head: int, last: int) -> tuple[list[int], str]:
     """블록이 시트와 같은지 확인 → (쓸 행 목록, 건너뛴 사유 ''=같음). 순위행 키워드가 다르면 그 행만 뺌."""
     m_get = lambda r, c: ws.cell(r, c).value   # noqa: E731
     s_get = lambda r, c: _at(grid, r, c)       # noqa: E731
     if _norm(s_get(head, _COL_METRIC)) != _LABEL_DATE or _key(s_get(head, _COL_NAME)) != _key(m_get(head, _COL_NAME)):
         return [], "상품명 다름"
+    if _vid_differs(m_get, s_get, head, last):
+        return [], "VID 다름"
     rows: list[int] = []
     for r in range(head + 1, last + 1):
         label = _norm(m_get(r, _COL_METRIC))
