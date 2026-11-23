@@ -494,11 +494,15 @@ def _request_one(b, j, name: str) -> str:
     return API.rg_request_id(api(b, name, "POST", API.RG_REQUEST, API.rg_request_body(j, int(time.time() * 1000))))
 
 
-def cmd_request(a, b, args, jobs: list) -> None:
+def cmd_request(a, b, args, jobs: list, every: int = 0, between=None) -> int:
+    """정산 일정 조회 → 이번 기간 파일 요청(요청 사이 GAP_SEC). 반환 = 이번에 새로 요청한 수(0 = 생성 대기 90초 안 기다림 · D-382 E).
+    every·between = 요청 every 건마다 between()(증빙 = 20건마다 받기 D-383 E3 — 멈춤 시각에 걸려도 받은 파일이 남게)."""
     name = name_of(a)
     events = read_events(b, name, args.start, args.end, amounts_from=AMOUNTS_FROM)
     if REUSE_FROM is not None:                            # 셀독전환자(D-187) — 원장 정산 기록에 있는 파일은 요청 상한 전에 복사
         _reuse_main(a, name, events, jobs)
+    if JOBS == EVIDENCE_JOBS and ORIGINALS is not None:   # 증빙(D-383 E1·E2) — 원본이 이미 있으면 요청 안 함
+        _reuse_originals(name, events, jobs)
     picked = [j for j in SJ.plan_requests(events, jobs, today=date.today(), now=datetime.now(),
                                           per_account_cap=args.cap)
               if j.account == name and args.start.isoformat() <= j.settle_date <= args.end.isoformat()]   # 이번 기간만
@@ -507,6 +511,7 @@ def cmd_request(a, b, args, jobs: list) -> None:
             LOG.record(name, "요청", RL.SKIP, j.note, **_job_fields(j))
     SJ.save_jobs(JOBS, jobs)
     log(f"  요청 대상 {len(picked)}건(상한 {args.cap})" + (" — 미리보기, 요청 안 함" if args.dry_run else ""))
+    asked = 0
     for k, j in enumerate(picked):
         if args.dry_run:
             LOG.record(name, "요청", RL.SKIP, "미리보기(--dry-run)", **_job_fields(j))
@@ -528,6 +533,33 @@ def cmd_request(a, b, args, jobs: list) -> None:
         SJ.mark_requested(j, datetime.now(), rid)
         SJ.save_jobs(JOBS, jobs)
         LOG.record(name, "요청", RL.OK, f"다운로드 요청함(요청번호 {rid})", **_job_fields(j))
+        asked += 1
+        if every and between and asked % every == 0 and k < len(picked) - 1:
+            between()
+    return asked
+
+
+def _reuse_originals(name: str, events: list, jobs: list) -> None:
+    """D-383 E1·E2 증빙: 받을 정산 파일의 쿠팡 원본이 PC 에 이미 있으면 요청하지 않음 — 증빙 원본 폴더에 있음(정기 받기가 같이
+    저장 E2) = 받음 표시만 · 로켓그로스 비용 리포트 = 정기 받기가 원본 바이트 그대로 보관(_keep_cost) → 증빙 원본 폴더로 복사."""
+    for j in SJ.plan_requests(events, jobs, today=date.today(), now=datetime.now(), per_account_cap=10 ** 9):
+        if j.account != name or j.kind == SJ.DOC_KIND:
+            continue
+        fname = SF.settle_file_name(name, date.fromisoformat(j.settle_date), j.channel, j.kind, j.report,
+                                    date.fromisoformat(j.period_start), date.fromisoformat(j.period_end))
+        cost = j.channel == "로켓그로스" and j.report != "판매수수료"
+        dst = ORIGINALS / fname
+        if dst.exists():
+            how = "증빙 원본 이미 있음(정기 받기 때 저장) — 요청 안 함"
+        elif cost and (COSTS / fname).exists():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(COSTS / fname, dst)
+            how = "정기 받기의 비용 리포트(쿠팡 원본 그대로) 복사 — 요청 안 함"
+            LOG.saved(name, dst, "증빙용 원본(정기 비용 리포트 복사)")
+        else:
+            continue
+        j.status, j.file = SJ.ST_DONE, f"비용/{fname}" if cost else fname
+        LOG.record(name, "받기", RL.OK, how, **_job_fields(j))
 
 
 def _reuse_main(a, name: str, events: list, jobs: list) -> None:
@@ -594,10 +626,11 @@ def _fetch_one(b, j, row, name: str) -> None:
     raw = BASE / "_받는중" / fname
     raw.parent.mkdir(parents=True, exist_ok=True)
     raw.write_bytes(data)
-    if ORIGINALS is not None:                              # 증빙용 원본(구매자명 포함·받은 그대로) — 아래 처리와 별개
-        ORIGINALS.mkdir(parents=True, exist_ok=True)
-        (ORIGINALS / fname).write_bytes(data)
-        LOG.saved(name, ORIGINALS / fname, "증빙용 원본")
+    orig = _originals_dir(name)
+    if orig is not None:                                   # 증빙용 원본(구매자명 포함·받은 그대로) — 아래 처리와 별개
+        orig.mkdir(parents=True, exist_ok=True)
+        (orig / fname).write_bytes(data)
+        LOG.saved(name, orig / fname, "증빙용 원본")
     if j.channel == "로켓그로스" and j.report != "판매수수료":
         _keep_cost(raw, j, name, fname)
         return
@@ -608,6 +641,17 @@ def _fetch_one(b, j, row, name: str) -> None:
     LOG.saved(name, FILES / fname, "정산 파일")
     LOG.record(name, "받기", RL.OK, f"{fname} · 줄 {len(f.rows)} · 정산합 {f.settle_total:,} · 검산경고 "
                f"{len(f.warnings)}", **_job_fields(j))
+
+
+def _originals_dir(name: str) -> Path | None:
+    """받은 쿠팡 원본을 그대로 둘 폴더 — 증빙·--originals = 그 폴더 · 정기 받기(원장 계정) = 그 계정 자동 증빙 원본 폴더(D-383 E2 ·
+    소유자 11-23 '매일 받는 자료에는 당연히 추가해서 받아야 함' — 그 뒤 증빙이 같은 파일을 다시 요청 안 함) · 셀독전환자 = 없음."""
+    if ORIGINALS is not None:
+        return ORIGINALS
+    if REUSE_FROM is not None:
+        return None
+    from coupang_analytics import settlement_evidence as EV
+    return EV.account_folder(Path(BASE) / EVIDENCE_DIR.name, name) / EV.ORIG   # 운용 = EVIDENCE_DIR(자동 증빙과 같은 곳)
 
 
 def _keep_cost(raw: Path, j, name: str, fname: str) -> None:
@@ -667,12 +711,17 @@ def cmd_download(a, b, args, jobs: list) -> None:
             SJ.save_jobs(JOBS, jobs)
 
 
-def cmd_run(a, b, args, jobs: list) -> None:
+def cmd_run(a, b, args, jobs: list, every: int = 0) -> None:
     """정기 단계(D-170) — 한 세션에서 요청 → (생성 약 1분) → 받기 → 검증 원자료 → 광고(최근 달부터 2달·D-120).
-    그날 정산에 필요한 것만. 판매분석 소급 등 밀린 몫은 전 계정 정기가 끝난 뒤 cmd_backfill."""
-    cmd_request(a, b, args, jobs)
-    if not args.dry_run:
+    그날 정산에 필요한 것만. 판매분석 소급 등 밀린 몫은 전 계정 정기가 끝난 뒤 cmd_backfill. every = 요청 그만큼마다 90초 뒤 받기(증빙 E3)."""
+    def wait_and_get() -> None:
         time.sleep(90)
+        cmd_download(a, b, args, jobs)
+    asked = (cmd_request(a, b, args, jobs, every=every, between=wait_and_get) if every and not args.dry_run
+             else cmd_request(a, b, args, jobs))
+    if not args.dry_run:
+        if asked:                                          # 방금 요청한 파일 생성 대기 — 새 요청 0건이면 안 기다림(D-382 E)
+            time.sleep(90)
         cmd_download(a, b, args, jobs)
         with MEMLOG.around(f"검증 수집 {name_of(a)}", log):        # 검증 json 최대 17MB 통째(D-346 큰 할당 후보 — 줄만)
             collect_verify(a, b, args)
@@ -974,10 +1023,12 @@ def cmd_probe(a, b, args, jobs: list) -> None:
 
 EVIDENCE_JOBS = BASE / "증빙" / "_요청기록.json"      # 증빙 전용 요청 기록 — 앱 기록에 '받음'인 파일도 원본을 다시 받게
 EVIDENCE_DIR = EVIDENCE_JOBS.parent                   # 자동 증빙 상위 폴더 = 배치(정산증빙_전체받기.bat --out output\정산\증빙)와 같은 곳
+EVIDENCE_BATCH = 20                                    # 증빙 정산 원본 = 요청 20건마다 받기(D-383 E3 · 요청 간격 GAP_SEC 그대로)
+NO_RESPONSE = "Failed to fetch"                       # 브라우저 응답 없음(세션 끊김·페이지 이동) — 증빙이면 그 계정 중단(D-383 E4)
 
 
 def _evidence_step(name: str, label: str, fn) -> dict:
-    """증빙 한 단계 — 차단은 그 계정 중단(올림), 그 밖의 실패는 기록하고 다음 단계(무음 아님)."""
+    """증빙 한 단계 — 차단·응답 없음(Failed to fetch · D-383 E4)은 그 계정 중단(올림), 그 밖의 실패는 기록하고 다음 단계(무음 아님)."""
     from coupang_analytics import settlement_evidence as EV
     try:
         res = fn()
@@ -985,6 +1036,9 @@ def _evidence_step(name: str, label: str, fn) -> dict:
         raise
     except Exception as exc:
         LOG.error(name, f"증빙 {label}", exc)
+        if NO_RESPONSE in str(exc):                         # 끊긴 세션에 다음 단계를 부르지 않음 → 그 계정 증빙 중단(다음 회차에 이어서)
+            LOG.record(name, f"증빙 {label}", RL.FAIL, f"응답 없음({NO_RESPONSE}) — 이 계정 증빙 중단 · 다음 회차에 이어서(D-383 E4)")
+            raise
         res = {"결과": EV.FAIL, "내용": f"{exc.__class__.__name__}: {str(exc)[:200]}", "파일": 0}
     LOG.record(name, f"증빙 {label}", RL.OK if res["결과"] != EV.FAIL else RL.FAIL, f"{res['결과']} — {res['내용']}")
     return res
@@ -1003,7 +1057,7 @@ def cmd_evidence(a, b, args, jobs: list) -> dict:
     prev = {} if args.redo else EV.previous_steps(folder)   # 지난 실행에서 정상/없음인 단계는 건너뜀(이어받기)
 
     def settle() -> dict:
-        cmd_run(a, b, args, jobs)
+        cmd_run(a, b, args, jobs, every=EVIDENCE_BATCH)
         if any(j.account == name and j.status == SJ.ST_REQUESTED for j in jobs):   # 생성이 늦은 파일 — 2분 뒤 한 번 더
             time.sleep(120)
             cmd_download(a, b, args, jobs)
@@ -1168,18 +1222,27 @@ def _cmd_stats_main(args) -> int:
     return 0
 
 
-_PHASE = {"cmd_run": "정기", "cmd_backfill": "소급", "_evidence_auto": "증빙", "_wait_run": "대기"}   # [메모리] 계정마다 줄의 단계 이름
+_PHASE = {"cmd_run": "정기", "cmd_backfill": "소급", "_evidence_auto": "증빙", "_rest_run": "남은 일"}   # [메모리] 계정마다 줄의 단계 이름
 _PHASE_DATA = {"정기": "정기(정산 일정·요청·받기·검증·광고)", "소급": "소급(판매분석·쿠폰·월자료)", "증빙": "증빙 원본",
-               "대기": "생성 대기 정산 파일 받기"}
+               "남은 일": "남은 일(오류 난 단계·생성 대기 받기·못 끝낸 정기·소급)"}
+PHASE_DONE: dict[str, set] = {"정기": set(), "소급": set()}   # 이번 회차에 끝낸 계정(D-382 — 남은 일 바퀴 대상 고르기 · 회차마다 비움)
+
+
+def _phase_item(name: str, phase: str) -> tuple[str, str]:
+    """회차 시도표 항목(D-373 — 로그인은 '로그인' 따로). 남은 일 바퀴는 그 계정이 다시 하는 단계(정기 > 소급 > 남은 일)로 세어
+    정기·소급 3번이 바퀴 종류와 상관없이 같게(D-382)."""
+    if phase == "남은 일":
+        phase = next((ph for ph in PHASE_DONE if ph in REST_PLAN.get(name, ())), phase)
+    return f"계정 처리({phase})", _PHASE_DATA.get(phase, phase)
 
 
 def _run_accounts(accts, run, args) -> int:
     jobs = SJ.load_jobs(JOBS)
     bad = 0
     phase = _PHASE.get(run.__name__, run.__name__)
-    item, data = f"계정 처리({phase})", _PHASE_DATA.get(phase, phase)   # 회차 시도표 항목(D-373 — 로그인은 '로그인' 따로)
     for a in accts:
         name = name_of(a)
+        item, data = _phase_item(name, phase)
         if past_until(args):
             LOG.record("(전체)", "중단", RL.WAIT, f"멈춤 시각 {args.until} 지남 — 남은 계정은 다음 실행에서 이어감")
             return 0
@@ -1194,6 +1257,7 @@ def _run_accounts(accts, run, args) -> int:
                 run(a, b, args, jobs)
             bad = 0
             _try_ok(name, item, data)
+            PHASE_DONE.get(phase, set()).add(name)
         except SessionSkip as exc:
             LOG.record(name, "계정", RL.SKIP, str(exc))
             if exc.kind:                                   # 로그인 실패(사용 중·비번 없음·잠금은 kind 없음 = 오류 아님)
@@ -1250,11 +1314,11 @@ def _is_suspended(account: str, ids: set) -> bool:
 
 def _waitable(j, ids: set) -> bool:
     """이번 회차에 아직 받으러 갈 작업인가 — 정지 계정(D-247) · 3번 소진된 파일 · 로그인 안 하는 계정(비밀번호 거부·2차 인증·
-    로그인 3번 소진) · 대기 바퀴 3번 소진 계정은 뺌(D-373 — 다시 로그인하지 않으니 기다릴 것도 아님)."""
+    로그인 3번 소진) · 남은 일 바퀴 3번 소진 계정은 뺌(D-373·D-382 — 다시 로그인하지 않으니 기다릴 것도 아님)."""
     if _is_suspended(j.account, ids):
         return False
     return not (TRIES and (TRIES.ended(j.account, *_job_item(j)) or TRIES.cannot_login(j.account)
-                           or TRIES.ended(j.account, "계정 처리(대기)", _PHASE_DATA["대기"])))
+                           or TRIES.ended(j.account, REST_ITEM, _PHASE_DATA["남은 일"])))
 
 
 def _pending_jobs() -> int:
@@ -1265,40 +1329,123 @@ def _pending_jobs() -> int:
 
 
 def _wait_run(a, b, args, jobs: list) -> None:
-    """생성 대기 바퀴의 한 계정 — 요청예정이 남았으면 요청(+90초) 뒤, 요청됨 파일만 받음(검증·광고·소급 안 함)."""
+    """받을 정산 파일이 있는 계정 — 요청예정이 남았으면 요청(새로 요청했을 때만 +90초 · D-382 E) 뒤, 요청됨 파일만 받음."""
     if any(j.account == name_of(a) and j.status == SJ.ST_PLANNED for j in jobs):
-        cmd_request(a, b, args, jobs)
-        time.sleep(90)
+        if cmd_request(a, b, args, jobs):
+            time.sleep(90)
     cmd_download(a, b, args, jobs)
 
 
-def _wait_pass(args) -> tuple[bool, int]:
-    """생성 대기 바퀴(D-373 · 소유자 '20분으로 해줘') = 받으러 갈 파일이 있는 계정만 로그인 — 다 받은 계정·3번 소진·
-    예외(비밀번호 거부·2차 인증) 계정은 로그인 0. 반환 = _one_pass 와 같은 (중단됐나, 새로 한 일 수)."""
+REST_ITEM = "계정 처리(남은 일)"            # 남은 일 바퀴 계정 단위 시도 항목(D-373 3번 규칙 그대로)
+REST_PLAN: dict[str, set] = {}             # 다음 남은 일 바퀴의 {계정: 단계}(D-382 — 바퀴 끝에 정함 · 회차마다 비움)
+REST_STEPS = ("정기", "받기", "광고", "소급", "월자료")   # 한 계정에서 하는 순서(정기 = 받기·광고 포함 · 소급 = 월자료 포함)
+
+
+def _retry_step(item: str) -> str:
+    """오류 시도 항목 → 다시 할 단계('' = 로그인·계정 처리 — 그 계정의 못 끝낸 단계·전 계획으로)."""
+    if item.startswith("받기 "):
+        return "받기"
+    if item.startswith("월자료 "):
+        return "월자료"
+    return "광고" if item == "광고비" else ""
+
+
+def _rest_run(a, b, args, jobs: list) -> None:
+    """남은 일 바퀴의 한 계정(D-382) — 계획된 단계만: 정기 = cmd_run 전부 · 받기 = 요청예정 요청 뒤 받기만 · 광고 = 광고비만 ·
+    소급 = cmd_backfill 전부 · 월자료 = 월자료만. 정기·소급을 끝내면 그 단계 끝남 표시(옛 '계정 처리' 시도 기록도 지움)."""
+    name = name_of(a)
+    steps = REST_PLAN.get(name, set())
+    if "정기" in steps:
+        cmd_run(a, b, args, jobs)
+        _phase_done(name, "정기")
+    else:
+        if "받기" in steps:
+            _wait_run(a, b, args, jobs)
+        if "광고" in steps:
+            collect_ads(a, b, args)
+    if "소급" in steps:
+        cmd_backfill(a, b, args, jobs)
+        _phase_done(name, "소급")
+    elif "월자료" in steps:
+        collect_docs(a, b, args, jobs)
+
+
+def _phase_done(name: str, phase: str) -> None:
+    PHASE_DONE[phase].add(name)
+    _try_ok(name, f"계정 처리({phase})", _PHASE_DATA[phase])
+
+
+def _plan_rest(prev: dict, stopped: bool, lg) -> None:
+    """바퀴 끝 — 다음 남은 일 바퀴의 {계정: 단계}(D-382 · 소유자 11-23 '1~6 전부 수용'). ① 이번 바퀴에 실패하고 다시 시도 남은
+    항목 = 그 단계만(받기·월자료·광고) · 로그인·계정 처리 실패 = 그 계정의 전 계획 ② 정기·소급을 못 끝낸 계정(사용 중·잠금·로그인·
+    계정 오류) = 그 단계 전부 ③ 받으러 갈 정산 파일(생성 대기·요청예정) = 받기 ④ 이번 바퀴 소급이 일을 했고 밀린 소급이 남음 = 소급
+    (정기는 회차 첫 바퀴 1번만 · D) ⑤ 중단된 바퀴 = 못 간 계정 계획 그대로. 로그인 안 하는 계정(비밀번호 거부·2차 인증·3번 소진)은 뺌."""
+    plan: dict[str, set] = {}
+
+    def add(n: str, *steps: str) -> None:
+        if steps:
+            plan.setdefault(n, set()).update(steps)
+    pid = TRIES.pass_id if TRIES else ""
+    for e in (TRIES.items.values() if TRIES else ()):
+        if e["결과"] == TR.RETRY and e["바퀴"] == pid:
+            n, step = e["계정"], _retry_step(e["항목"])
+            add(n, *([step] if step else (s for s in prev.get(n, ()) if n not in PHASE_DONE.get(s, ()))))
+    jobs, ids = _open_jobs()
+    for j in jobs:
+        if _waitable(j, ids):
+            add(j.account, "받기")
+    for a in PASS_ACCOUNTS:
+        n = name_of(a)
+        if TRIES and (TRIES.cannot_login(n) or TRIES.ended(n, REST_ITEM, _PHASE_DATA["남은 일"])):
+            continue
+        add(n, *(ph for ph in PHASE_DONE if n not in PHASE_DONE[ph]
+                 and not (TRIES and TRIES.ended(n, f"계정 처리({ph})", _PHASE_DATA[ph]))))
+    for r in lg.rows:
+        n = r["계정"]
+        if r["단계"] == "소급" and r["결과"] == RL.OK and any(lg.left.get((n, k), (0, ""))[0] > 0 for k in ("판매분석", "월자료")):
+            add(n, "소급")
+    if stopped:
+        for n, steps in prev.items():
+            add(n, *steps)
+    names = {name_of(a) for a in PASS_ACCOUNTS}
+    REST_PLAN.clear()
+    REST_PLAN.update({n: st for n, st in plan.items() if n in names})
+
+
+def _rest_pass(args) -> tuple[bool, int]:
+    """남은 일 바퀴(D-382 — 회차 첫 전체 바퀴 뒤) = 남은 일이 있는 계정만 로그인해 그 단계만(_plan_rest) — 오류 다시 시도·생성 대기
+    받기(D-373 대기 바퀴 포함)·못 끝낸 정기·소급·밀린 소급. 남은 일 없는 계정 = 로그인 0 · 새 파일이 있으면 바퀴 끝 집계.
+    반환 = _one_pass 와 같은 (중단됐나, 새로 한 일 수)."""
     global LOG
     LOG = RL.RunLog(BASE)
     if TRIES:
         TRIES.begin_pass(LOG.run_id)
-    jobs, ids = _open_jobs()
-    names = {j.account for j in jobs if _waitable(j, ids)}
-    accts = [a for a in PASS_ACCOUNTS if name_of(a) in names]
+    args.end = date.today()
+    prev = {n: set(st) for n, st in REST_PLAN.items()}
+    accts = [a for a in PASS_ACCOUNTS if prev.get(name_of(a))]
     LOG.accounts = [name_of(a) for a in accts]
-    log(f"실행 {LOG.run_id} · 자동 · 생성 대기 파일만 확인 · {len(accts)}계정(나머지 계정 로그인 안 함)")
+    todo = " · ".join(f"{name_of(a)}({'·'.join(s for s in REST_STEPS if s in prev[name_of(a)])})" for a in accts)
+    log(f"실행 {LOG.run_id} · 자동 · 남은 일만 · {len(accts)}계정(나머지 계정 로그인 안 함)" + (f" · {todo}" if todo else ""))
+    rc, work = 0, 0
     try:
-        rc = _run_accounts(accts, _wait_run, args)
+        rc = _run_accounts(accts, _rest_run, args)
         work = _sweep_work_count(LOG)
+        if LOG.files:
+            _stats_in_child()                # 새 파일이 있으면 바퀴 끝 집계(전체 바퀴와 같은 별도 프로세스)
     except Exception as exc:                 # 그 바퀴만 실패 기록(다음 판단은 진전 없음으로)
         LOG.error("(전체)", "자동실행", exc)
         return False, 0
     finally:
         CYCLE.add(LOG)
+        _plan_rest(prev, rc == 1, LOG)
     LOG.summary(pending=_pending_jobs(), suspended=_suspended_pending())
     return rc == 1, work
 
 
 def _next_rest(action: str, waiting: bool, stopped: bool, work: int, pending: int, retry: int) -> tuple[bool, int]:
-    """다음 바퀴 종류·쉼(초) — 생성 대기만 남으면(새로 한 일·다시 시도할 오류·중단 없음) 그 회차는 대기 바퀴로 바꿔 20분마다 ·
-    대기 바퀴 중 오류 다시 시도·연속 실패 중단 = 5분(지금 간격 그대로) · 그 밖 = 지금 그대로(곧 1분 · 잠시 뒤 5분)."""
+    """(생성 대기만 남았나, 다음 바퀴까지 쉼 초) — 생성 대기만 남으면(새로 한 일·다시 시도할 오류·중단 없음) 그 회차는 20분마다 ·
+    그 뒤 오류 다시 시도·연속 실패 중단 = 5분(지금 간격 그대로) · 그 밖 = 지금 그대로(곧 1분 · 잠시 뒤 5분). 바퀴 종류는 cmd_watch
+    (회차 첫 바퀴·전체 바퀴 중단 = 전체 · 그 밖 = 남은 일 바퀴 D-382)."""
     waiting = waiting or (action == "later" and not (stopped or work or retry) and pending > 0)
     if waiting:
         return True, WATCH_POLL_SEC if (retry or stopped) else WATCH_PENDING_SEC
@@ -1355,6 +1502,7 @@ def _one_pass(args) -> tuple[bool, int]:
         except MemoryError as exc:           # T-113 (다) 11-18 06:53 — finally 에서 새면 처리 안 된 예외 창·자기 종료 실패
             _note_memory_floor("남은 소급 계산", exc)
         CYCLE.add(LOG)                       # 회차 [실행 결과 종합] 재료(D-168)
+        _plan_rest({}, False, LOG)           # 다음 남은 일 바퀴 계획(D-382 · 전체 바퀴 중단이면 cmd_watch 가 다시 전체)
     LOG.summary(pending=_pending_jobs(), suspended=_suspended_pending())
     return rc == 1, work
 
@@ -1431,6 +1579,16 @@ def _evidence_sweep(args, action: str) -> None:
         args.until, args.until_at = keep
         CYCLE.add(LOG)                        # 증빙 줄도 회차 [실행 결과 종합]에(확인 필요 포함 · D-365 ⑤)
     _between_passes()
+
+
+def _cycle_sources(args) -> None:
+    """회차 정산 받기가 끝난 뒤(생성 대기만 남음·완료) 1번 — 받기 의심·다시받을목록 자동 다시 받기 표시(D-339)·원문 대조(D-383 ·
+    지금까지 사람 명령 run·sources 에서만 돎). 표시된 파일 = 남은 생성 대기 바퀴·다음 회차 평소 받기가 다시 받음. 공개 웹은 안 읽음
+    (무인 · 사람 명령 sources 그대로). 실패 = 단계마다 기록(source_checks · 정산 완료 판정과 별개)."""
+    if getattr(args, "dry_run", False):
+        return
+    with MEMLOG.around("받기 의심·자료 출처(D-339)", log):
+        source_checks(web=False)
 
 
 def _cycle_close(status: str, reason: str, *, stopped: bool = False) -> None:
@@ -1524,7 +1682,7 @@ def _ledger_ready(args) -> bool:
 def cmd_watch(args) -> int:
     """00:10 앱과 함께 뜨는 정산 자동 수집(D-021·D-372). **이번 회차 ①판매수집 완료까지 기다렸다가** 받고, 다 받으면
     기록하고 종료·**그날 24:00** 이 되면 종료(남은 건 다음 회차). 오류는 계정·항목별 3번(처음 + 다시 2번) 뒤 그 회차에
-    더 시도 안 함 → 받은 것·3번 소진·예외(비밀번호 거부·2차 인증)만 남으면 24:00 전에도 종료 · 파일 생성 대기는 24:00 까지(D-373). 같은 ①완료 기준으로 이미 '완료'면 바로 끝낸다. 앱을 사람이 끄면 함께 종료(--parent·D-020).
+    더 시도 안 함 → 받은 것·3번 소진·예외(비밀번호 거부·2차 인증)만 남으면 24:00 전에도 종료 · 파일 생성 대기는 24:00 까지(D-373). 회차 첫 바퀴 = 전 계정 정기+소급 · 그 뒤 바퀴 = 남은 일이 있는 계정의 그 단계만(D-382). 같은 ①완료 기준으로 이미 '완료'면 바로 끝낸다. 앱을 사람이 끄면 함께 종료(--parent·D-020).
     같은 PC 에 둘 뜨지 않게 잠금."""
     from coupang_analytics import settlement_watch as W
     from coupang_analytics.pipeline_paths import _progress_path, _run_stage_path
@@ -1536,6 +1694,9 @@ def cmd_watch(args) -> int:
             W.clear_rest(BASE / "_잠금" / W.REST_MARK_NAME)   # 쉬다 죽은 watch 가 남긴 쉼 표시(D-375 B1)
             cycle_start, cycle_end = W.cycle_window(datetime.now())
             PASS_ACCOUNTS.clear()             # 자동 증빙 대상 = 이번 회차 바퀴의 계정만(D-365)
+            REST_PLAN.clear()                 # 남은 일 바퀴 계획·끝낸 단계 = 회차마다 새로(D-382)
+            for done in PHASE_DONE.values():
+                done.clear()
             args.cycle_since = cycle_start.isoformat(timespec="seconds")   # 소급 상한 = 회차(00:10~) 단위(D-170) · --since 와 무관
             TRIES = TR.Tries(BASE / "로그", args.cycle_since, line=log)   # 오류 시도 횟수 = 회차마다 0부터(D-373 ④)
             if getattr(args, "since", ""):    # 사람이 누른 전체실행 — 그 실행 뒤에 끝난 ①만 기다림(2026-10-13)
@@ -1547,7 +1708,7 @@ def cmd_watch(args) -> int:
             if manual:
                 log("[수동] 정산 탭 '정산 시작' — 이번 회차 '완료' 기록·①판매수집 완료 대기 없이 바로 받음"
                     "(①이 지금 도는 중이면 끝날 때까지 대기 · D-354)")
-            last_state, waiting, swept = "", False, False
+            last_state, waiting, swept, full = "", False, False, True   # full = 다음 바퀴가 전체 바퀴(회차 첫 바퀴 · D-382)
             while datetime.now() < cycle_end:
                 why, marker = _watch_wait_reason(W, prog, stage_path, cycle_start, manual)
                 if why:
@@ -1567,16 +1728,18 @@ def cmd_watch(args) -> int:
                 if not _ledger_ready(args):   # D-366 ②: 첫 바퀴 계정 읽기 전 대장→원장·비밀번호 · 실패 = 이 바퀴 중단
                     _sleep_until(WATCH_POLL_SEC, cycle_end)
                     continue
-                stopped, work = (_wait_pass if waiting else _one_pass)(args)
+                stopped, work = (_one_pass if full else _rest_pass)(args)
                 _between_passes()
                 fails = _watch_failures()
                 pending, retry = _pending_jobs(), _retry_count()
                 action, reason = W.plan_after_pass(stopped, work, pending, retry, failed=fails)
                 log(f"[자동] {reason}")
                 if action in ("again", "later"):
+                    full = full and stopped     # 전체 바퀴가 연속 실패로 중단 = 다시 전체(D-031) · 그 밖 = 남은 일 바퀴만(D-382)
                     waiting, rest = _next_rest(action, waiting, stopped, work, pending, retry)
                     if waiting and not swept:   # 생성 대기 빈 시간 = 자동 증빙(D-367 '미완료여도 받기' · 회차 1번 · 23:20 멈춤 D-365)
                         swept = True
+                        _cycle_sources(args)
                         _evidence_sweep(args, "done")
                     if waiting:
                         reason = f"{reason} · 생성 대기 계정만 {rest // 60}분 뒤 확인(나머지 계정 로그인 안 함)"
@@ -1584,6 +1747,8 @@ def cmd_watch(args) -> int:
                     (_rest_open if waiting and rest == WATCH_PENDING_SEC else _sleep_until)(rest, cycle_end)
                     continue
                 W.write_done(DONE_FILE, key, action, reason, failed=len(fails))
+                if not swept:
+                    _cycle_sources(args)
                 _evidence_sweep(args, action)
                 _cycle_close(W.done_status(len(fails)), reason)       # 남은 행동 = 'done' 뿐(미완료 종료 없음 · D-373 ②)
                 return 0

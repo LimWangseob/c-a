@@ -1030,17 +1030,18 @@ def p27_cycle():
             clock["now"] += timedelta(seconds=max(sec, 1))
             if sales_after and clock["now"] >= sales_after and not stage.exists():
                 write_marker(clock["now"])                          # 앱의 ①판매수집이 끝남
-        olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._retry_count, TD.LOG)
+        olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._rest_pass, TD._pending_jobs, TD._retry_count, TD.LOG)
         args = SimpleNamespace(parent=0, ledger_synced=True, until="", until_at=None, hidden=False)   # 대장 반영(D-366 ②) = P69
         try:
             TD.datetime, TD.time.sleep = FakeDT, fake_sleep
             TD._one_pass = lambda a: (passes.append(clock["now"]), (False, 3 if len(passes) == 1 else 0))[1]   # 첫 바퀴 3건·다음 0건
+            TD._rest_pass = TD._one_pass                                     # 다음 바퀴 = 남은 일 바퀴(D-382)
             TD._pending_jobs, TD._retry_count = (lambda: 0), (lambda: 0)
             TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
             TD.LOG.heartbeat = lambda st, msg: hb.append((st, msg))
             rc = TD.cmd_watch(args)
         finally:
-            TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._retry_count, TD.LOG = olds
+            TD.datetime, TD.time.sleep, TD._one_pass, TD._rest_pass, TD._pending_jobs, TD._retry_count, TD.LOG = olds
         if stage.exists():
             stage.unlink()
         return rc, passes, hb[-1], args.until_at, clock["now"]
@@ -1225,7 +1226,10 @@ def p31_keep_originals():
             TD.ORIGINALS = None
             j = fetch()
             assert j.status == SJ.ST_DONE and (TD.FILES / j.file).read_bytes() == b"PK-scrubbed"
-            assert not (Path(tmp) / "원본").exists(), "지정 안 하면 원본 폴더 안 만듦(지금 동작)"
+            assert not (Path(tmp) / "원본").exists(), "지정 안 한 폴더는 안 만듦"
+            from coupang_analytics import settlement_evidence as EV
+            ev = EV.account_folder(TD.BASE / "증빙", "홍길동-가나-acc1") / EV.ORIG / j.file   # D-383 E2: 정기 받기 = 증빙 원본도
+            assert ev.read_bytes() == data, "정기 받기 = 그 계정 증빙 원본 폴더에 받은 바이트 그대로(D-383 E2)"
             TD.ORIGINALS = Path(tmp) / "원본"
             j = fetch()
             assert (TD.ORIGINALS / j.file).read_bytes() == data, "원본 = 받은 바이트 그대로(구매자명 포함)"
@@ -3415,11 +3419,13 @@ def p67_manual_start():
 
         def fake_sleep(sec):
             clock["now"] += timedelta(seconds=max(sec, 1))
-        olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._retry_count, TD.LOG, W.sales_in_progress)
+        olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._rest_pass, TD._pending_jobs, TD._retry_count, TD.LOG,
+                W.sales_in_progress)
         args = SimpleNamespace(parent=0, ledger_synced=True, until="", until_at=None, hidden=False, manual=manual)   # 대장 반영(D-366 ②) = P69
         try:
             TD.datetime, TD.time.sleep = FakeDT, fake_sleep
             TD._one_pass = lambda a: (passes.append(clock["now"]), (False, 3 if len(passes) == 1 else 0))[1]
+            TD._rest_pass = TD._one_pass                                     # 다음 바퀴 = 남은 일 바퀴(D-382)
             TD._pending_jobs, TD._retry_count = (lambda: 0), (lambda: 0)
             TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
             TD.LOG.heartbeat = lambda st, msg: None
@@ -3427,7 +3433,8 @@ def p67_manual_start():
                                                    clock["now"] < D(2026, 11, 19, 12) else (False, ""))
             rc = TD.cmd_watch(args)
         finally:
-            TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._retry_count, TD.LOG, W.sales_in_progress = olds
+            (TD.datetime, TD.time.sleep, TD._one_pass, TD._rest_pass, TD._pending_jobs, TD._retry_count, TD.LOG,
+             W.sales_in_progress) = olds
         if stage.exists():
             stage.unlink()
         return rc, passes
@@ -3469,7 +3476,7 @@ def p68_evidence_auto():
     assert EV.STOP_BEFORE == timedelta(minutes=40) and EV.CHECK_AFTER == 2
     assert EV.stop_at(W.cycle_window(DT(2026, 11, 21, 0, 10))[1]) == DT(2026, 11, 21, 23, 20)
     # ② 자동 증빙 '정산 원본' = cmd_run 그대로(검증 수집·광고 포함 · 빼지 않음) · 배치·run·소급·셀독전환에는 증빙 없음
-    assert "cmd_run(a, b, args, jobs)" in inspect.getsource(TD.cmd_evidence)
+    assert "cmd_run(a, b, args, jobs, every=EVIDENCE_BATCH)" in inspect.getsource(TD.cmd_evidence)   # 20건마다 받기(D-383 E3)
     for fn in (TD._run_both, TD.cmd_backfill, TD.cmd_run, TD._transfer_settle, TD.main):
         assert "_evidence_sweep" not in inspect.getsource(fn), fn.__name__
 
@@ -3503,7 +3510,7 @@ def p68_evidence_auto():
             def __init__(self, i):
                 self.account_id = i
         olds = (TD.LOG, TD.name_of, TD.JOBS, TD.ORIGINALS, TD.EVIDENCE_DIR, TD.EVIDENCE_JOBS, TD.datetime, TD.log,
-                TD.cmd_evidence, TD.session, TD._one_pass, TD._between_passes, TD._pending_jobs, TD._retry_count,
+                TD.cmd_evidence, TD.session, TD._one_pass, TD._rest_pass, TD._between_passes, TD._pending_jobs, TD._retry_count,
                 TD._watch_failures, TD._cycle_close, TD.time.sleep)
         old_cwd = os.getcwd()
         os.chdir(tmp)
@@ -3581,7 +3588,7 @@ def p68_evidence_auto():
                     order.append("정산")
                     TD.PASS_ACCOUNTS[:] = [Acc("w1"), Acc("w2"), Acc("w3")]
                     return False, works.pop(0) if works else 0
-                TD._one_pass = one_pass
+                TD._one_pass = TD._rest_pass = one_pass                       # 다음 바퀴 = 남은 일 바퀴(D-382)
                 TD._cycle_close = lambda st, reason, stopped=False: order.append(("종합", st))
                 fake_ev.took = took
                 n0 = len(seen)
@@ -3602,7 +3609,7 @@ def p68_evidence_auto():
             assert got == [] and order[-1][0] == "종합", ("40분 안쪽에서 정산이 끝나면 증빙 0", got)
         finally:
             (TD.LOG, TD.name_of, TD.JOBS, TD.ORIGINALS, TD.EVIDENCE_DIR, TD.EVIDENCE_JOBS, TD.datetime, TD.log,
-             TD.cmd_evidence, TD.session, TD._one_pass, TD._between_passes, TD._pending_jobs, TD._retry_count,
+             TD.cmd_evidence, TD.session, TD._one_pass, TD._rest_pass, TD._between_passes, TD._pending_jobs, TD._retry_count,
              TD._watch_failures, TD._cycle_close, TD.time.sleep) = olds
             TD.PASS_ACCOUNTS.clear()
             os.chdir(old_cwd)
@@ -3718,7 +3725,7 @@ def p69_ledger_presync():
         assert calls and len(calls) == 2, "바퀴(계정 읽기)는 반영 성공 뒤에만"
         passes.append(clock["now"])
         return False, (3 if len(passes) == 1 else 0)
-    olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._retry_count, TD.LOG, TD._ledger_presync,
+    olds = (TD.datetime, TD.time.sleep, TD._one_pass, TD._rest_pass, TD._pending_jobs, TD._retry_count, TD.LOG, TD._ledger_presync,
             TD._evidence_sweep, TD._between_passes, TD._watch_failures)
     with tempfile.TemporaryDirectory() as tmp:
         os.chdir(tmp)
@@ -3726,14 +3733,14 @@ def p69_ledger_presync():
             (Path(tmp) / "output").mkdir()
             TD.datetime = FakeDT
             TD.time.sleep = lambda sec: clock.__setitem__("now", clock["now"] + timedelta(seconds=max(sec, 1)))
-            TD._one_pass, TD._ledger_presync = one_pass, presync
+            TD._one_pass, TD._rest_pass, TD._ledger_presync = one_pass, one_pass, presync
             TD._pending_jobs, TD._retry_count, TD._watch_failures = (lambda: 0), (lambda: 0), (lambda: {})
             TD._evidence_sweep, TD._between_passes = (lambda a, act: None), (lambda: None)
             TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
             TD.LOG.heartbeat = lambda status, msg="", **k: beats.append((status, msg))
             rc = TD.cmd_watch(SimpleNamespace(parent=0, until="", until_at=None, hidden=False, manual=True))
         finally:
-            (TD.datetime, TD.time.sleep, TD._one_pass, TD._pending_jobs, TD._retry_count, TD.LOG, TD._ledger_presync,
+            (TD.datetime, TD.time.sleep, TD._one_pass, TD._rest_pass, TD._pending_jobs, TD._retry_count, TD.LOG, TD._ledger_presync,
              TD._evidence_sweep, TD._between_passes, TD._watch_failures) = olds
             os.chdir(old_cwd)
     assert rc == 0 and len(calls) == 2 and len(passes) == 2, ("반영 = 실패 1 + 성공 1 · 그 뒤 바퀴 2번", calls, passes)
@@ -3959,7 +3966,7 @@ def p70_error_retry_three():
         log0 = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
         log0.heartbeat = lambda st, msg="", **k: beats.append((st, msg))
         rc = _patched([(TD, "datetime", FakeDT), (TD.time, "sleep", fake_sleep), (TD, "_one_pass", op("전체", one_pass)),
-                       (TD, "_wait_pass", op("대기", wait_pass)),
+                       (TD, "_rest_pass", op("남은 일", wait_pass)),
                        (TD, "_pending_jobs", lambda: pending(len(passes)) if callable(pending) else pending),
                        (TD, "_between_passes", lambda: None), (TD, "_evidence_sweep", lambda a, act: sweeps.append(act)),
                        (TD, "LOG", log0), (TD, "TRIES", None)],
@@ -3971,24 +3978,24 @@ def p70_error_retry_three():
         try:
             Path("output").mkdir()
 
-            def server_down(n):                                         # 매 바퀴 같은 계정 서버 오류
+            def server_down(n=0):                                       # 매 바퀴 같은 계정 서버 오류
                 why = TD.TRIES.why_not("srv", "계정 처리(정기)", "정기")
                 if not why:
                     TD.TRIES.fail("srv", "계정 처리(정기)", "ServerBusy: 504", "정기")
                 return False, 0
-            rc, passes, last, end, sweeps = watch(server_down, 0)
-            assert rc == 0 and [k for k, _ in passes] == ["전체"] * 3 and last[0] == "완료·실패 확인", (rc, passes, last)
+            rc, passes, last, end, sweeps = watch(server_down, 0, wait_pass=server_down)
+            assert rc == 0 and [k for k, _ in passes] == ["전체", "남은 일", "남은 일"] and last[0] == "완료·실패 확인",                 (rc, passes, last)                                          # 오류 다시 시도 = 남은 일 바퀴(D-382 — 옛 = 전체 3번)
             assert end < RealDT(2026, 11, 21, 4, 0) and "확인 필요" in last[1], (end, last)   # 24:00 전 조기 종료
             assert [b - a for (_, a), (_, b) in zip(passes, passes[1:])] == [timedelta(seconds=TD.WATCH_POLL_SEC)] * 2, passes
             rc, passes, last, end, sweeps = watch(lambda n: (False, 0), 1)   # 쿠팡 파일 생성 대기만 계속
             kinds = [k for k, _ in passes]
-            assert kinds[0] == "전체" and set(kinds[1:]) == {"대기"} and len(kinds) > 4, kinds   # 그 뒤 = 대기 계정만
+            assert kinds[0] == "전체" and set(kinds[1:]) == {"남은 일"} and len(kinds) > 4, kinds   # 그 뒤 = 남은 일(대기 계정만)
             gaps = {b - a for (_, a), (_, b) in zip(passes, passes[1:])}
             assert gaps == {timedelta(minutes=20)} and TD.WATCH_PENDING_SEC == 1200, gaps                  # 20분마다
             assert last[0] == "종료" and "회차 종료" in last[1] and RealDT(2026, 11, 22, 0, 0) <= end, (last, end)   # 24:00 끝
             assert passes[-1][1] < RealDT(2026, 11, 22, 0, 0) and sweeps == ["done"], (passes[-1], sweeps)     # 빈 시간 증빙 1번
             rc, passes, last, end, sweeps = watch(lambda n: (False, 0), lambda n: 1 if n < 3 else 0)   # 대기 바퀴 2번째에 다 받음
-            assert [k for k, _ in passes] == ["전체", "대기", "대기"] and last[0] == "완료", (passes, last)
+            assert [k for k, _ in passes] == ["전체", "남은 일", "남은 일"] and last[0] == "완료", (passes, last)
             assert end < RealDT(2026, 11, 21, 4, 0) and sweeps == ["done", "done"], (end, sweeps)      # 일찍 끝남 · 끝 증빙 = 남은 것만
             rc, passes, last, end, sweeps = watch(lambda n: (False, 0), 1,
                                                   wait_pass=lambda n: (TD.TRIES.fail("A", "받기", "504") and (False, 0)) or (False, 0))
@@ -4020,11 +4027,17 @@ def p70_error_retry_three():
         def fake_session(a, hidden, until=None):
             visits.append(a.account_id)
             yield None
+        everyone = [Acc(i) for i in ("A", "B", "P", "G")]
+        done = {"정기": {"A", "B", "P", "G"}, "소급": {"A", "B", "P", "G"}}          # 회차 첫 전체 바퀴에서 정기·소급 끝남
+
+        def wait_once():
+            TD._plan_rest({}, False, RLG.RunLog(tmp, now=RealDT(2026, 11, 21, 4), echo=lambda m: None))
+            return TD._rest_pass(Args), TD._pending_jobs()
         res = _patched([(TD, "TRIES", tries), (TD, "JOBS", jobs_p), (TD, "BASE", Path(tmp)), (TD, "name_of", lambda a: a.account_id),
-                        (TD, "session", fake_session), (TD, "PASS_ACCOUNTS", [Acc(i) for i in ("A", "B", "P", "G")]),
+                        (TD, "session", fake_session), (TD, "PASS_ACCOUNTS", everyone), (TD, "PHASE_DONE", done),
+                        (TD, "REST_PLAN", {}), (TD, "CYCLE", RLG.Totals()),
                         (TD, "cmd_download", lambda a, b, args, jobs: did.append(("받기", a.account_id))),
-                        (TD, "cmd_request", lambda a, b, args, jobs: did.append(("요청", a.account_id)))],
-                       lambda: (TD._wait_pass(Args), TD._pending_jobs()))
+                        (TD, "cmd_request", lambda a, b, args, jobs: did.append(("요청", a.account_id)))], wait_once)
         assert visits == ["A"] and did == [("받기", "A")], (visits, did)       # B 다 받음·P 비밀번호 거부·G 3번 소진 = 로그인 0
         assert res == ((False, 0), 1), res                                     # 받으러 갈 것 = A 1건
     ok("대기 바퀴 = 받으러 갈 파일 계정만 로그인(다 받음·비밀번호 거부·3번 소진 = 0) · 받기만(검증·광고·소급 안 함)")
@@ -4121,7 +4134,7 @@ def p71_wait_rest_open_to_transfer():
             log0.heartbeat = lambda st, msg="", **k: None
             args = SimpleNamespace(parent=0, ledger_synced=True, until="", until_at=None, hidden=False, manual=True)
             rc = _patched([(TD, "datetime", FakeDT), (TD.time, "sleep", fake_sleep),
-                           (TD, "_one_pass", op("전체", lambda: (False, 0))), (TD, "_wait_pass", op("대기", wait_pass)),
+                           (TD, "_one_pass", op("전체", lambda: (False, 0))), (TD, "_rest_pass", op("대기", wait_pass)),
                            (TD, "_pending_jobs", lambda: 1), (TD, "_between_passes", lambda: None),
                            (TD, "_evidence_sweep", lambda a, act: None), (TD, "LOG", log0), (TD, "TRIES", None)],
                           lambda: TD.cmd_watch(args))
@@ -4148,6 +4161,338 @@ def p71_wait_rest_open_to_transfer():
             os.chdir(cwd)
     ok("시작 = 남은 표시 지움 · 전체·대기 바퀴 도는 중 = 표시 없음(전환 기다림) · 20분 쉼 = 표시(전환 계정 시작) · 5분 다시 시도 쉼 = "
        "기다림 · 끝나면 표시 없음 · 같은 잠금 경로")
+
+
+def p72_rest_pass_left_work_only():
+    print("[P72] 남은 일 바퀴(D-382 · 소유자 11-23 '1~6 전부 수용') — 회차 첫 바퀴 뒤 = 오류 남은 계정의 오류 단계만 · 못 끝낸 정기·소급"
+          " = 전부 · 생성 대기 = 받기 · 정기 = 회차 첫 바퀴 1번 · 새 요청 0 = 90초 안 기다림 · 3번 규칙·끝 문구 그대로")
+    import contextlib
+    from datetime import datetime as RealDT, timedelta
+    from types import SimpleNamespace
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    from coupang_analytics import settlement_jobs as SJ
+    from coupang_analytics import settlement_retry as TR
+    from coupang_analytics import settlement_runlog as RLG
+    from coupang_analytics import settlement_wing_api as API
+    CYC = "2026-11-22T00:10:00"
+    RealLog = RLG.RunLog
+
+    class Acc:
+        def __init__(self, i):
+            self.account_id, self.label = i, i
+
+    def world(tmp, ids, **beh):
+        """가짜 쿠팡(계정·단계별 동작) + 실제 _one_pass/_rest_pass/_run_accounts/cmd_run/cmd_backfill/_plan_rest."""
+        B = {k: set() for k in ("busy", "pw", "otp", "block", "srv", "boom", "ads_fail", "docs_fail", "dl_fail")}
+        B.update({"asked": {}, "days": {}, "left": {}}, **beh)
+        calls: list = []
+        sleeps: list = []
+        clock = {"t": RealDT(2026, 11, 22, 1, 0)}
+        tries = TR.Tries(Path(tmp) / "로그", CYC, line=lambda m: None)
+
+        def runlog(base, **k):                     # 바퀴마다 다른 실행ID(같은 초 = 같은 바퀴로 세지 않게)
+            clock["t"] += timedelta(minutes=7)
+            return RealLog(base, now=clock["t"], echo=lambda m: None)
+
+        @contextlib.contextmanager
+        def session(a, hidden, until=None):
+            n = a.account_id
+            calls.append((n, "로그인"))
+            if n in B["busy"]:
+                raise TD.SessionSkip("이 계정 Chrome 이 계속 실행 중")
+            for key, kind in (("pw", TR.PASSWORD), ("otp", TR.HUMAN), ("block", TR.BLOCK)):
+                if n in B[key]:
+                    raise TD.SessionSkip(f"로그인 실패({key})", kind)
+            TD._try_ok(n, "로그인")
+            yield None
+
+        def step(name, fn=None):
+            def run(a, *rest):
+                calls.append((a.account_id, name))
+                return fn(a.account_id) if fn else None
+            return run
+
+        def request(n):
+            if n in B["srv"]:
+                raise API.ServerBusy("/tenants/x → 504 서버 일시 오류")
+            if n in B["boom"]:
+                raise RuntimeError("표 머리글 없음")
+            return B["asked"].get(n, 0)
+
+        def download(n):
+            if n in B["dl_fail"]:
+                TD._try_fail(n, "받기 윙 주정산·정산", "SiteChangedError: 파싱", "정산일 2026-11-21")
+
+        def ads(n):
+            if n in B["ads_fail"]:
+                TD._try_fail(n, "광고비", "ServerBusy 500", "광고비·밀크런 원천")
+            else:
+                TD._try_ok(n, "광고비", "광고비·밀크런 원천")
+
+        def sales(n):
+            TD.LOG.remaining(n, "판매분석", B["left"].get(n, 0), "일")
+            return B["days"].get(n, 0)
+
+        def docs(n):
+            if n in B["docs_fail"]:
+                TD.TRIES.fail(n, "월자료 주문별매출", "SiteChangedError: 맞지 않음", "202609")
+            TD.LOG.remaining(n, "월자료", 0, "달")
+            return 0
+        args = SimpleNamespace(start=D("2026-01-01"), end=D("2026-11-22"), until="", until_at=None, hidden=True, dry_run=False,
+                               cap=99, command="watch", cycle_since=CYC)
+        accts = [Acc(i) for i in ids]
+        pat = [(TD, "session", session), (TD, "name_of", lambda a: a.account_id), (TD, "TRIES", tries), (TD, "LOG", None),
+               (TD, "BASE", Path(tmp)), (TD, "JOBS", Path(tmp) / "_요청기록.json"), (TD, "PASS_ACCOUNTS", []),
+               (TD, "PHASE_DONE", {"정기": set(), "소급": set()}), (TD, "REST_PLAN", {}), (TD, "CYCLE", RLG.Totals()),
+               (TD.RL, "RunLog", runlog), (TD, "load_accounts", lambda only: list(accts)), (TD, "_mem", lambda *a, **k: None),
+               (TD, "MEMLOG", SimpleNamespace(around=lambda *a, **k: contextlib.nullcontext())),
+               (TD, "_stats_in_child", lambda: calls.append(("(전체)", "집계"))), (TD, "_backlog_left", lambda accts, args: None),
+               (TD.time, "sleep", sleeps.append),
+               (TD, "cmd_request", step("조회", request)), (TD, "cmd_download", step("받기", download)),
+               (TD, "collect_verify", step("검증")), (TD, "collect_ads", step("광고", ads)),
+               (TD, "collect_sales", step("판매분석", sales)), (TD, "collect_docs", step("월자료", docs)),
+               (TD, "request_docs", step("월자료요청", lambda n: 0))]
+        return B, calls, sleeps, args, pat
+
+    last: dict = {}
+
+    def run(pat, kinds):
+        """kinds 순서대로 바퀴 → [(그 바퀴 부른 것, 그 뒤 다시 시도 수, 그 뒤 계획)] · 마지막 바퀴 기록 = last['log']."""
+        def go():
+            out = []
+            for k in kinds:
+                n0 = len(calls)
+                (TD._one_pass if k == "전체" else TD._rest_pass)(args)
+                out.append((calls[n0:], TD._retry_count(), {n: set(s) for n, s in TD.REST_PLAN.items()}))
+            last["log"] = TD.LOG
+            return out
+        return _patched(pat, go)
+
+    def after(pat, fn):                              # 마지막 바퀴 기록으로 fn(끝 문구·다시 계획)
+        return _patched(pat + [(TD, "LOG", last["log"])], fn)
+    FULL_A = [("A", "로그인"), ("A", "조회"), ("A", "받기"), ("A", "검증"), ("A", "광고")]
+    BACK_A = [("A", "로그인"), ("A", "판매분석"), ("A", "월자료"), ("A", "월자료요청")]
+
+    # 1·9 월자료 실패 → 다음 바퀴 = A 의 월자료만(조회·90초·광고·판매분석 0번 · B·C 로그인 0) · 성공하면 남은 일 없음
+    with tempfile.TemporaryDirectory() as tmp:
+        B, calls, sleeps, args, pat = world(tmp, ["A", "B", "C"], docs_fail={"A"})
+        (full, r1, p1), = run(pat, ["전체"])
+        assert ("B", "조회") in full and ("C", "판매분석") in full and 90 not in sleeps, (full, sleeps)   # E: 새 요청 0 = 안 기다림
+        assert r1 == 1 and p1 == {"A": {"월자료"}}, (r1, p1)
+        B["docs_fail"].clear()
+        (rest, r2, p2), = run(pat, ["남은 일"])
+        assert rest == [("A", "로그인"), ("A", "월자료")] and r2 == 0 and p2 == {}, (rest, r2, p2)
+    ok("월자료 실패 → 다음 바퀴 = 그 계정 월자료만(다른 계정 로그인 0 · 정산 일정 조회·90초·광고·판매분석 0) · 성공 = 남은 일 없음")
+
+    # 2 광고비 실패 → 광고만 · 3 받기 파싱 오류 → 받기만 · 3번째 실패 뒤 그 회차 안 들어감
+    with tempfile.TemporaryDirectory() as tmp:
+        B, calls, sleeps, args, pat = world(tmp, ["A", "B"], ads_fail={"A"}, dl_fail={"B"})
+        got = run(pat, ["전체", "남은 일", "남은 일", "남은 일"])
+        assert got[1][0] == [("A", "로그인"), ("A", "광고"), ("B", "로그인"), ("B", "받기")], got[1][0]
+        assert got[2][0] == got[1][0] and got[3][0] == [] and [g[1] for g in got] == [2, 2, 0, 0], got   # 처음 + 다시 2번
+        assert {e["시도"] for e in TD.TR.Tries(Path(tmp) / "로그", CYC).items.values()} == {3}
+    ok("광고비 실패 = 광고만 · 받기 실패 = 받기만 · 처음 + 다시 2번 뒤 그 회차 로그인 0(D-373 그대로)")
+
+    # 4 정기 서버 오류 → 정기만(그 바퀴 소급은 끝남) · 정기 3번 = 바퀴 종류 상관없이 · 5 로그인 차단 → 정기+소급 전부
+    with tempfile.TemporaryDirectory() as tmp:
+        B, calls, sleeps, args, pat = world(tmp, ["A", "K", "C"], srv={"A"}, block={"K"})
+        got = run(pat, ["전체", "남은 일"])
+        assert got[0][2] == {"A": {"정기"}, "K": {"정기", "소급"}}, got[0][2]
+        rest = got[1][0]
+        assert rest[:2] == [("A", "로그인"), ("A", "조회")] and ("A", "판매분석") not in rest, rest
+        assert rest[2:] == [("K", "로그인")] and ("C", "로그인") not in rest, rest
+        B["srv"].clear()
+        B["block"].clear()
+        got = run(pat, ["남은 일"])
+        assert got[0][0] == FULL_A + [("K", "로그인"), ("K", "조회"), ("K", "받기"), ("K", "검증"), ("K", "광고"),
+                                      ("K", "판매분석"), ("K", "월자료"), ("K", "월자료요청")] and got[0][2] == {}, got
+    with tempfile.TemporaryDirectory() as tmp:
+        B, calls, sleeps, args, pat = world(tmp, ["A"], srv={"A"})
+        got = run(pat, ["전체", "남은 일", "남은 일", "남은 일"])
+        assert [len([c for c in g[0] if c[1] == "조회"]) for g in got] == [1, 1, 1, 0] and got[3][2] == {}, got
+        e = TD.TR.Tries(Path(tmp) / "로그", CYC).items
+        assert [(v["항목"], v["시도"], v["결과"]) for v in e.values()] == [("계정 처리(정기)", 3, TR.GIVE_UP)], e
+    ok("정기 서버 오류 = 정기만(소급 끝남) · 정기 3번 = 전체·남은 일 바퀴 합쳐 3번 · 로그인 차단 = 정기+소급 전부")
+
+    # 6 '사용 중'으로 정기 못 끝낸 계정(시도표 밖) + 다른 계정 오류 → 그 계정 = 정기+소급 전부 · 오류 계정 = 오류 단계만
+    # 7 비밀번호 거부·2차 인증·3번 소진 = 남은 일 바퀴 로그인 0 · 끝 문구 '실패'에 그대로
+    with tempfile.TemporaryDirectory() as tmp:
+        B, calls, sleeps, args, pat = world(tmp, ["A", "U", "P", "H"], docs_fail={"A"}, busy={"U"}, pw={"P"}, otp={"H"})
+        got = run(pat, ["전체"])
+        assert got[0][2] == {"A": {"월자료"}, "U": {"정기", "소급"}}, got[0][2]
+        B["busy"].clear()
+        got = run(pat, ["남은 일"])
+        assert got[0][0] == [("A", "로그인"), ("A", "월자료"), ("U", "로그인"), ("U", "조회"), ("U", "받기"), ("U", "검증"),
+                             ("U", "광고"), ("U", "판매분석"), ("U", "월자료"), ("U", "월자료요청")], got[0][0]
+        fails = after(pat, TD._watch_failures)
+        assert {"P", "H"} <= set(fails), fails
+    ok("사용 중으로 못 끝낸 계정 = 정기+소급 전부 · 오류 계정 = 그 단계만 · 비밀번호 거부·2차 인증 = 로그인 0·끝 문구에 남음")
+
+    # 8 생성 대기 + 오류 = 한 바퀴에 같이(대기 계정 = 받기만 · 요청예정 = 요청 뒤 90초는 새 요청 있을 때만) · 12 'again' 뒤 = 정기 없음
+    with tempfile.TemporaryDirectory() as tmp:
+        B, calls, sleeps, args, pat = world(tmp, ["A", "W", "Q", "S"], docs_fail={"A"}, asked={"Q": 1},
+                                            days={"S": 60}, left={"S": 30})
+        got = run(pat, ["전체"])
+        SJ.save_jobs(Path(tmp) / "_요청기록.json", [
+            SJ.Job("W", "윙", "주정산", "정산", "2026-11-10", "2026-11-16", "2026-11-21", status=SJ.ST_REQUESTED, ref="r1"),
+            SJ.Job("Q", "윙", "주정산", "정산", "2026-11-10", "2026-11-16", "2026-11-21", status=SJ.ST_PLANNED)])
+        assert sleeps.count(90) == 1, sleeps                                  # 전체 바퀴 = 새 요청 있던 Q 만 90초(E)
+        after(pat, lambda: TD._plan_rest({}, False, TD.LOG))                   # 받을 파일이 생긴 뒤 다시 계획(같은 규칙)
+        plan = after(pat, lambda: dict(TD.REST_PLAN))
+        assert plan == {"A": {"월자료"}, "W": {"받기"}, "Q": {"받기"}, "S": {"소급"}}, plan   # S = 소급이 일했고 밀린 소급 남음(D)
+        B["days"], sleeps[:] = {}, []
+        got = run(pat, ["남은 일"])
+        assert got[0][0] == [("A", "로그인"), ("A", "월자료"), ("W", "로그인"), ("W", "받기"), ("Q", "로그인"), ("Q", "조회"),
+                             ("Q", "받기"), ("S", "로그인"), ("S", "판매분석"), ("S", "월자료"), ("S", "월자료요청")], got[0][0]
+        assert sleeps.count(90) == 1 and not [c for c in got[0][0] if c[1] in ("검증", "광고")], (sleeps, got)   # 정기 = 첫 바퀴 1번
+        B["asked"] = {}
+        after(pat, lambda: TD._plan_rest({}, False, TD.LOG))
+        sleeps[:] = []
+        got = run(pat, ["남은 일"])
+        assert ("Q", "조회") in got[0][0] and 90 not in sleeps, (got, sleeps)   # 새 요청 0 = 안 기다림
+    ok("생성 대기·요청예정·오류·밀린 소급 = 한 바퀴에 그 단계만 · 정기 다시 안 함 · 90초 = 새 요청 있을 때만")
+
+    # 10 남은 일 바퀴가 연속 실패로 중단 = 못 간 계정 계획 그대로 다음 바퀴에
+    with tempfile.TemporaryDirectory() as tmp:
+        B, calls, sleeps, args, pat = world(tmp, ["X", "G", "Y", "Z"], docs_fail={"Z"}, boom={"X", "Y"})   # 전체 = G 가 사이(중단 아님)
+        got = run(pat, ["전체", "남은 일"])
+        assert got[0][2] == {"X": {"정기"}, "Y": {"정기"}, "Z": {"월자료"}}, got[0][2]
+        assert [c for c in got[1][0] if c[1] == "로그인"] == [("X", "로그인"), ("Y", "로그인")], got[1][0]   # 연속 2계정 = 중단
+        assert got[1][2] == {"X": {"정기"}, "Y": {"정기"}, "Z": {"월자료"}}, got[1][2]                     # Z = 그대로
+    ok("남은 일 바퀴 중단 = 못 간 계정 계획 유지(다음 바퀴에)")
+
+
+def p73_evidence_reuse_batch_abort():
+    print("[P73] 증빙(D-383 · 소유자 11-23 E1 '수용임 … 매일 받는 자료에는 당연히 추가해서 받아야 함') — 원본 있으면 요청 안 함(정기 비용"
+          " 리포트 복사·정기 받기 때 저장한 원본) · 20건마다 받기 · 응답 없음 = 그 계정 중단 · 회차 끝 받기 의심(D-339) 무인 1번")
+    import contextlib
+    import inspect
+    from datetime import datetime as RealDT, timedelta
+    from types import SimpleNamespace
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    from coupang_analytics import settlement_evidence as EV
+    from coupang_analytics import settlement_files as SF
+    from coupang_analytics import settlement_jobs as SJ
+    from coupang_analytics import settlement_runlog as RLG
+    NAME = "홍길동-가나-acc1"
+
+    def job(ch, report, settle):
+        return SJ.Job(NAME, ch, "주정산", report, "2026-03-02", "2026-03-08", settle)
+
+    def fname(j):
+        return SF.settle_file_name(NAME, D(j.settle_date), j.channel, j.kind, j.report, D(j.period_start), D(j.period_end))
+    args = SimpleNamespace(start=D("2026-01-01"), end=D("2026-11-22"), until="", until_at=None, dry_run=False, cap=500)
+
+    # E1·E2 — 증빙 정산 원본: 비용 리포트(정기 = 쿠팡 원본 그대로) 복사 · 정기 받기 때 저장한 원본 = 받음 · 그 밖만 요청
+    with tempfile.TemporaryDirectory() as tmp:
+        base, orig = Path(tmp) / "정산", Path(tmp) / "증빙" / EV.ORIG
+        cost, wing_saved, wing_new = job("로켓그로스", "보관비", "2026-03-20"), job("윙", "주문상세", "2026-03-13"), \
+            job("윙", "주문상세", "2026-03-20")
+        jobs = [cost, wing_saved, wing_new]
+        (base / "파일" / "비용").mkdir(parents=True)
+        (base / "파일" / "비용" / fname(cost)).write_bytes(b"PK-cost-original")
+        orig.mkdir(parents=True)
+        (orig / fname(wing_saved)).write_bytes(b"PK-wing-original")
+        asked: list = []
+        pat = [(TD, "JOBS", TD.EVIDENCE_JOBS), (TD, "ORIGINALS", orig), (TD, "COSTS", base / "파일" / "비용"),
+               (TD, "LOG", RLG.RunLog(base, echo=lambda m: None)), (TD, "read_events", lambda *a, **k: []),
+               (SJ, "plan_requests", lambda ev, js, **k: [j for j in js if j.status == SJ.ST_PLANNED]),
+               (SJ, "save_jobs", lambda p, js: None), (TD, "_request_one", lambda b, j, n: asked.append(j) or "rid"),
+               (TD.time, "sleep", lambda s: None), (TD, "name_of", lambda a: NAME)]
+        n = _patched(pat, lambda: TD.cmd_request(SimpleNamespace(), None, args, jobs))
+        assert asked == [wing_new] and n == 1, asked                                    # 요청 3 → 1
+        assert (orig / fname(cost)).read_bytes() == b"PK-cost-original", "비용 리포트 = 원본 바이트 그대로 복사"
+        assert cost.status == wing_saved.status == SJ.ST_DONE and wing_new.status == SJ.ST_REQUESTED
+        asked.clear()
+        for j in jobs:
+            j.status = SJ.ST_PLANNED
+        _patched(pat[:1] + [(TD, "JOBS", Path(tmp) / "_요청기록.json")] + pat[2:],
+                 lambda: TD.cmd_request(SimpleNamespace(), None, args, jobs))         # 정기(증빙 아님) = 지금 그대로 전부 요청
+        assert asked == jobs, asked
+    ok("증빙 정산 원본 = 정기 비용 리포트 복사·정기 받기 때 저장한 원본 = 요청 안 함 · 그 밖만 요청 · 정기 받기 요청은 그대로")
+
+    # E3 — 증빙 = 요청 20건마다 90초 뒤 받기(요청 사이 간격 GAP_SEC 그대로) · 정기 = 지금처럼 전부 요청 뒤 한 번
+    with tempfile.TemporaryDirectory() as tmp:
+        seq: list = []
+        js = [job("윙", "주문상세", f"2026-0{m}-1{d}") for m in (3, 4, 5) for d in range(7)]   # 21건
+        pat = [(TD, "JOBS", Path(tmp) / "_요청기록.json"), (TD, "ORIGINALS", None), (TD, "LOG", RLG.RunLog(tmp, echo=lambda m: None)),
+               (TD, "read_events", lambda *a, **k: []), (SJ, "save_jobs", lambda p, x: None),
+               (SJ, "plan_requests", lambda ev, x, **k: [j for j in x if j.status == SJ.ST_PLANNED]),
+               (TD, "_request_one", lambda b, j, n: seq.append("요청") or "rid"),
+               (TD.time, "sleep", lambda s: seq.append(s) if s == 90 else seq.append("간격") if s >= 45 else None),
+               (TD, "cmd_download", lambda *a: seq.append("받기")), (TD, "collect_verify", lambda *a: None),
+               (TD, "collect_ads", lambda *a: None), (TD, "name_of", lambda a: NAME)]
+        _patched(pat, lambda: TD.cmd_run(SimpleNamespace(), None, args, js, every=TD.EVIDENCE_BATCH))
+        cut = seq.index(90)
+        assert TD.EVIDENCE_BATCH == 20 and seq[:cut].count("요청") == 20 and seq[cut + 1] == "받기", seq[:cut + 2]
+        assert seq[cut + 2:] == ["간격", "요청", 90, "받기"] and seq.count("받기") == 2, seq[cut:]
+        assert all(seq[i] == "간격" for i in range(1, cut, 2)), "요청 사이 = GAP_SEC 그대로"
+        for j in js:
+            j.status = SJ.ST_PLANNED
+        seq.clear()
+        _patched(pat, lambda: TD.cmd_run(SimpleNamespace(), None, args, js))          # 정기 = 지금 그대로
+        assert seq.count("요청") == 21 and seq.count("받기") == 1 and seq[-2:] == [90, "받기"], seq[-4:]
+    ok("증빙 = 20건마다 90초 뒤 받기(멈춤 시각에 걸려도 받은 파일 남음) · 요청 간격 그대로 · 정기 = 지금 그대로")
+
+    # E4 — 증빙 단계 응답 없음(Failed to fetch) = 그 계정 증빙 중단(다음 단계 안 부름) · 그 밖 실패 = 기록하고 다음 단계(지금 그대로)
+    with tempfile.TemporaryDirectory() as tmp:
+        lg = RLG.RunLog(tmp, echo=lambda m: None)
+
+        def boom(msg):
+            def fn():
+                raise RuntimeError(msg)
+            return fn
+        res = _patched([(TD, "LOG", lg)], lambda: TD._evidence_step(NAME, "판매분석 월별", boom("표 머리글 없음")))
+        assert res["결과"] == EV.FAIL, res
+        try:
+            _patched([(TD, "LOG", lg)], lambda: TD._evidence_step(NAME, "정산 원본", boom("Page.evaluate: TypeError: Failed to fetch")))
+            raise AssertionError("응답 없음인데 다음 단계로 감")
+        except RuntimeError as exc:
+            assert "Failed to fetch" in str(exc)
+        assert any("이 계정 증빙 중단" in r["사유"] for r in lg.rows), lg.rows
+    ok("증빙 응답 없음(Failed to fetch) = 그 계정 증빙 중단 · 그 밖 실패 = 기록 후 다음 단계")
+
+    # D-339 무인 — 회차 정산 받기가 끝난 때 받기 의심·자동 다시 받기 1번(생성 대기로 바뀔 때 또는 완료 때 · 둘 다면 1번) · 공개 웹 안 읽음
+    src = inspect.getsource(TD.cmd_watch)
+    assert src.count("_cycle_sources(args)") == 2 and "source_checks(web=False)" in inspect.getsource(TD._cycle_sources)
+    import os
+    calls: list = []
+    cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            Path("output").mkdir()
+            for pend in (0, 1):
+                clock = {"now": RealDT(2026, 11, 22, 3, 0)}
+
+                class FakeDT(RealDT):
+                    @classmethod
+                    def now(cls, tz=None):
+                        return clock["now"]
+
+                def adv(sec):
+                    clock["now"] += timedelta(seconds=max(sec, 1))
+                left = {"n": pend * 2}
+
+                def one(a):
+                    left["n"] = max(0, left["n"] - 1)
+                    return False, 0
+                lg0 = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
+                lg0.heartbeat = lambda *a, **k: None
+                calls.clear()
+                _patched([(TD, "datetime", FakeDT), (TD.time, "sleep", adv), (TD, "_one_pass", one), (TD, "_rest_pass", one),
+                          (TD, "_pending_jobs", lambda: left["n"]), (TD, "_between_passes", lambda: None),
+                          (TD, "_evidence_sweep", lambda a, act: calls.append("증빙")), (TD, "LOG", lg0), (TD, "TRIES", None),
+                          (TD, "source_checks", lambda web=True: calls.append(("받기 의심", web)))],
+                         lambda: TD.cmd_watch(SimpleNamespace(parent=0, ledger_synced=True, until="", until_at=None, hidden=False,
+                                                              manual=True)))
+                want = [("받기 의심", False), "증빙"] + (["증빙"] if pend else [])
+                assert calls == want, (pend, calls)
+        finally:
+            os.chdir(cwd)
+    ok("받기 의심·다시받을목록 자동 다시 받기(D-339) = 무인 회차에서도 받기 끝난 때 1번(공개 웹 안 읽음 · 증빙 앞)")
 
 
 def main():
@@ -4214,6 +4559,8 @@ def main():
     p69_ledger_presync()
     p70_error_retry_three()
     p71_wait_rest_open_to_transfer()
+    p72_rest_pass_left_work_only()
+    p73_evidence_reuse_batch_abort()
     print("정산 런타임 오프라인 검증 통과")
 
 
