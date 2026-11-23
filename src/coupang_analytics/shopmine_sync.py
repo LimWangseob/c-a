@@ -60,6 +60,14 @@ ST_DIFF = "다름→대장갱신"
 ST_SM_ONLY = "샵마인에만(대장 없음)"
 ST_LED_ONLY = "대장에만(샵마인 없음)"
 ST_SM_EMPTY = "샵마인 비번 없음"
+ST_SM_REFUSED = "샵마인값=24시간 안 쿠팡 거부값(대장 안 덮음)"   # T-160 안전장치 ②
+
+# 앱 하루 1회 훅 판정(T-160 안전장치 ① — 자격 없음을 조용히 건너뛰지 않음)
+GATE_RUN = "run"
+GATE_DONE = "done_today"
+GATE_NOCRED_LOG = "nocred_log"
+GATE_NOCRED_QUIET = "nocred_quiet"
+NOCRED_MSG = r"[샵마인] 자격 없음 — 동기화 안 함(tools\shopmine_sync.py setup 필요)"
 
 
 class ShopmineError(Exception):
@@ -83,6 +91,14 @@ def load_login(store=None) -> dict | None:
         store = CredStore()
     raw = store.get_password(SHOPMINE_KEY)
     return json.loads(raw) if raw else None
+
+
+def daily_gate(store, today: str, last_sync: str, nocred_logged: str) -> str:
+    """앱 훅(하루 1회)의 할 일 — 자격 없음이면 **하루 1번 로그**(NOCRED_MSG · 그날 이미 알렸으면 조용히) ·
+    오늘 이미 동기화했으면 안 함 · 아니면 실행. last_sync·nocred_logged = 마지막 날짜(YYYY-MM-DD · 없으면 '')."""
+    if load_login(store) is None:
+        return GATE_NOCRED_QUIET if nocred_logged == today else GATE_NOCRED_LOG
+    return GATE_DONE if last_sync == today else GATE_RUN
 
 
 # ─────────────────────────────────────────────── HTTP(서버 순회)
@@ -256,12 +272,13 @@ def ledger_password_map(rows: list):
     return cands, (_col_letter(idx) if idx is not None else None)
 
 
-def classify(shopmine: dict[str, str], ledger_cands: dict[str, list]) -> list[tuple[str, str]]:
+def classify(shopmine: dict[str, str], ledger_cands: dict[str, list], refused=None) -> list[tuple[str, str]]:
     """계정별 대조 상태(계정ID·상태만·비번 값 없음).
 
     '같음' = **그 계정의 모든 대장 줄이 이미 샵마인 현재값**일 때만. 한 계정이 여러 줄에 걸쳐 있고 일부 줄만
     현재값이면(담당자가 한 줄만 고친 경우·D-012·D-190) '다름→대장갱신'으로 봐서 **모든 줄을 현재값으로 통일**한다
-    (옛값 줄이 남아 로그인이 옛값을 집는 것을 막음)."""
+    (옛값 줄이 남아 로그인이 옛값을 집는 것을 막음). refused(계정ID, 값) = 그 값이 최근 24시간 안에 쿠팡에서
+    거부됐나(T-160 안전장치 ②) — 그러면 '다름' 대신 ST_SM_REFUSED(대장 안 덮음)."""
     led_pw = {aid: {c.password for c in cs} for aid, cs in ledger_cands.items()}
     out: list[tuple[str, str]] = []
     for aid in sorted(set(shopmine) | set(led_pw)):
@@ -274,23 +291,55 @@ def classify(shopmine: dict[str, str], ledger_cands: dict[str, list]) -> list[tu
             st = ST_SM_EMPTY
         elif led_pw[aid] == {sm}:          # 모든 줄이 이미 현재값일 때만 '같음'
             st = ST_MATCH
+        elif refused and refused(aid, sm):  # 샵마인 값이 방금 쿠팡에서 거부된 값 → 맞는 대장 값을 지우지 않음
+            st = ST_SM_REFUSED
         else:                               # 일부 줄만 맞거나 전부 다름 → 모든 줄 통일
             st = ST_DIFF
         out.append((aid, st))
     return out
 
 
-def updates_to_apply(shopmine: dict[str, str], ledger_cands: dict[str, list]) -> list[tuple[str, str, list[int]]]:
+def updates_to_apply(shopmine: dict[str, str], ledger_cands: dict[str, list],
+                     refused=None) -> list[tuple[str, str, list[int]]]:
     """갱신할 계정 목록 [(계정ID, 샵마인현재값, 되쓸 대장 행들)]. 조건 = 대장에 있고 · 샵마인값이 비어있지 않고 ·
     **대장의 모든 줄이 현재값인 것은 아님**(한 줄이라도 다르면 갱신). 되쓸 행 = 그 계정 비번이 적힌 **모든 대장 행**
-    (여러 줄 중 일부만 고쳐져 있어도 전부 현재값으로 통일 — '모두 변경')."""
+    (여러 줄 중 일부만 고쳐져 있어도 전부 현재값으로 통일 — '모두 변경'). refused 가 참인 값은 빼냄(T-160 ②)."""
     led_pw = {aid: {c.password for c in cs} for aid, cs in ledger_cands.items()}
     plan: list[tuple[str, str, list[int]]] = []
     for aid, cs in ledger_cands.items():
         sm = (shopmine.get(aid) or "").strip()
-        if sm and aid in shopmine and led_pw[aid] != {sm}:
+        if sm and aid in shopmine and led_pw[aid] != {sm} and not (refused and refused(aid, sm)):
             plan.append((aid, sm, sorted({r for c in cs for r in c.rows})))
     return plan
+
+
+def ledger_value_label(shopmine: dict[str, str], ledger_cands: dict[str, list]) -> dict[str, str]:
+    """{계정ID: 샵마인 값이 대장 후보 중 어느 것과 같은가} — '값1'·'값2'(시작 로그 '[비번] … 값N=행' 과 같은 번호) ·
+    '대장 값과 다름' · 대장/샵마인 한쪽에만 있거나 샵마인 값이 비면 '-'. 값 자체는 없음(T-160 안전장치 ③)."""
+    out: dict[str, str] = {}
+    for aid in set(shopmine) | set(ledger_cands):
+        sm = (shopmine.get(aid) or "").strip()
+        cs = ledger_cands.get(aid) or []
+        if not sm or not cs:
+            out[aid] = "-"
+            continue
+        hit = [k for k, c in enumerate(cs) if c.password == sm]
+        out[aid] = f"값{hit[0] + 1}" if hit else "대장 값과 다름"
+    return out
+
+
+def rows_with_plan(rows: list, plan: list) -> list:
+    """되쓰기 뒤 관리대장 값 격자(메모리 사본) — 앱이 비밀번호 후보를 바로 다시 반영하게(T-160 안전장치 ④).
+    ⚠ 비밀번호 값이 들어 있음 — 로그·파일에 쓰지 말 것."""
+    from .input_list import password_column
+    idx = password_column(rows)
+    out = [list(r) if r is not None else [] for r in rows]
+    for _aid, pw, rs in plan:
+        for r in rs:
+            row = out[r - 1]
+            row.extend([None] * (idx + 1 - len(row)))
+            row[idx] = pw
+    return out
 
 
 def apply_updates(client, sheet: str, pw_col: str, plan: list, store, log=lambda m: None) -> int:
@@ -320,15 +369,16 @@ def backup_ledger(client, sheet: str, now: datetime, log=lambda m: None) -> str:
     return name
 
 
-def write_report(classified: list[tuple[str, str]], out_dir: str, now: datetime) -> Path:
-    """대조 리포트 CSV(계정ID·상태만·비번 값 없음) 저장 → 경로."""
+def write_report(classified: list[tuple[str, str]], out_dir: str, now: datetime,
+                 which: dict[str, str] | None = None) -> Path:
+    """대조 리포트 CSV(계정ID·상태·샵마인=대장 어느 값[값1/값2/다름 — T-160 ③]·비번 값 없음) 저장 → 경로."""
     p = Path(out_dir)
     p.mkdir(parents=True, exist_ok=True)
     f = p / f"대조_{now:%Y%m%d_%H%M%S}.csv"
     with f.open("w", newline="", encoding="utf-8-sig") as fh:
         w = csv.writer(fh)
-        w.writerow(["계정ID", "상태"])
-        w.writerows(classified)
+        w.writerow(["계정ID", "상태", "샵마인=대장"])
+        w.writerows((aid, st, (which or {}).get(aid, "-")) for aid, st in classified)
     return f
 
 
@@ -347,26 +397,38 @@ def _gsheet_client(url: str, store):
 
 def run_daily_sync(url: str, sheet: str, rows: list, *, store, client=None, fetch=None,
                    log=print, now: datetime | None = None, out_dir: str = REPORT_DIR,
-                   apply: bool = True) -> dict:
+                   apply: bool = True, refused=None, on_applied=None) -> dict:
     """하루 1회 동기화 본체 — 샵마인 현재 비번 수신 → 관리대장 대조 → 리포트 + 불일치 자동 갱신.
 
     fetch: 테스트/주입용 `fetch(store, log) -> {계정ID: 비번}`(None 이면 실 서버). client: 구글시트 클라이언트
     (None 이면 url 로 생성). apply=False 면 **대조·리포트만** 하고 관리대장·credstore 에 쓰지 않는다(미리보기·dry-run —
-    첫 수동 실행 때 몇 계정이 바뀔지 먼저 확인용). 반환 = 요약 숫자(비번 값 없음). 실패는 예외로 올림(호출부가 비치명 처리)."""
+    첫 수동 실행 때 몇 계정이 바뀔지 먼저 확인용). 반환 = 요약 숫자(비번 값 없음). 실패는 예외로 올림(호출부가 비치명 처리).
+    T-160 안전장치: refused(계정ID, 값)(기본 = 쿠팡 로그인 24시간 거부 지문 login_today.refused_today)가 참인 샵마인 값은
+    대장을 덮지 않고 ⚠ 로그 · 리포트에 샵마인 값 = 대장 값1/값2/다름 · on_applied(되쓴 뒤 값 격자) = 앱이 비밀번호 후보를
+    그 자리에서 다시 반영(되쓴 게 있을 때만 부름)."""
     now = now or datetime.now()
+    if refused is None:
+        from . import login_today
+        refused = login_today.refused_today
     shopmine = (fetch or fetch_shopmine_passwords)(store, log)
     cands, pw_col = ledger_password_map(rows)
     if pw_col is None:
         log("[샵마인] 관리대장에서 비밀번호 열을 찾지 못해 대조 건너뜀")
         return {"skipped": "no_pw_col"}
-    classified = classify(shopmine, cands)
-    report = write_report(classified, out_dir, now)
-    plan = updates_to_apply(shopmine, cands)
+    classified = classify(shopmine, cands, refused)
+    report = write_report(classified, out_dir, now, ledger_value_label(shopmine, cands))
+    for aid, st in classified:
+        if st == ST_SM_REFUSED:
+            log(f"[샵마인] ⚠ {aid}: 샵마인 값이 최근 24시간 안에 쿠팡 로그인에서 거부된 값 — 관리대장을 덮지 않음"
+                "(샵마인 값을 확인해 주세요)")
+    plan = updates_to_apply(shopmine, cands, refused)
     n_cell = 0
     if plan and apply:
         cl = client or _gsheet_client(url, store)
         backup_ledger(cl, sheet, now, log)                 # 되쓰기 전 관리대장 백업(구글시트 안)
         n_cell = apply_updates(cl, sheet, pw_col, plan, store, log)
+        if on_applied is not None:
+            on_applied(rows_with_plan(rows, plan))
     note = "" if apply else f"  ※ 미리보기(dry-run) — 관리대장에 쓰지 않음(갱신 예정 {len(plan)}건)"
     log(_summary_line(classified, n_cell, report) + note)
     return {"accounts": len(classified), "updated": len(plan), "cells": n_cell, "report": str(report)}

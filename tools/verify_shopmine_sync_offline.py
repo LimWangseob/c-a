@@ -3,6 +3,8 @@
 덮는 범위: ①DPAPI 왕복(store_login/load_login·평문 비노출) ②응답 필드 탐색(인증키·레코드 리스트·필드명·비번 추출)
 ③관리대장 비번 열 탐지·열 문자 ④대조 분류(같음/다름/샵마인에만/대장에만/빈 비번) ⑤갱신 계획(빈 값 제외·여러 줄 통일)
 ⑥되쓰기(구글시트 셀·credstore 갱신·값2 비움) ⑦end-to-end(리포트에 비번 값 없음·요약 숫자). 비번 평문은 어디에도 안 남는다.
+T-160 안전장치: 자격 없음 하루 1번 로그 · 샵마인 값 = 24시간 안 쿠팡 거부값이면 대장 안 덮음 · 리포트 '샵마인=대장' 값1/값2 ·
+되쓴 뒤 비밀번호 후보 다시 반영(on_applied) · 앱 훅 연결.
 
     python tools/verify_shopmine_sync_offline.py
 """
@@ -20,6 +22,7 @@ try:
 except AttributeError:
     pass
 
+from coupang_analytics import login_today as LT  # noqa: E402
 from coupang_analytics import settlement_accounts as SA  # noqa: E402
 from coupang_analytics import shopmine_sync as sm  # noqa: E402
 from coupang_analytics.credstore import CredStore  # noqa: E402
@@ -252,8 +255,89 @@ def test_no_pw_col_skips():
     ok("비번 열 없으면 대조 건너뜀(쓰기 없음)")
 
 
+def test_daily_gate_nocred_logs_once():
+    # ⑤ 자격 없음 = 조용히 건너뛰지 않고 그날 1번 로그(운용 PC 0회를 몰랐던 원인 — T-160 ①)
+    with tempfile.TemporaryDirectory() as d:
+        store = CredStore(Path(d) / "creds.json")
+        assert sm.daily_gate(store, "2026-11-23", "", "") == sm.GATE_NOCRED_LOG, "자격 없음 첫 확인 = 로그"
+        assert sm.daily_gate(store, "2026-11-23", "", "2026-11-23") == sm.GATE_NOCRED_QUIET, "그날 두 번째부터 조용히"
+        assert sm.daily_gate(store, "2026-11-24", "", "2026-11-23") == sm.GATE_NOCRED_LOG, "다음 날 다시 1번"
+        sm.store_login({"CompanyId": "co1", "UserPassword": SECRET}, store)
+        assert sm.daily_gate(store, "2026-11-23", "", "2026-11-23") == sm.GATE_RUN, "자격 있으면 실행"
+        assert sm.daily_gate(store, "2026-11-23", "2026-11-23", "") == sm.GATE_DONE, "오늘 이미 함 = 안 함"
+    assert sm.NOCRED_MSG == r"[샵마인] 자격 없음 — 동기화 안 함(tools\shopmine_sync.py setup 필요)", sm.NOCRED_MSG
+    ok("자격 없음 — 하루 1번 로그(그날 두 번째 조용히·다음 날 다시) · 자격 있으면 실행 · 오늘 이미 함 = 안 함")
+
+
+def test_refused_value_not_written():
+    # ⑥ 샵마인 값 = 24시간 안 쿠팡 거부값 → 대장(맞는 값 9줄)을 덮지 않고 ⚠ 로그(실측 위험: 샵마인에 옛 값이면 맞는 값 지움)
+    rows = [HEADER, ["", "DW", "dw1", "oldA", "p1"], ["", "DW", "dw1", "newA", "p2"], ["", "DW", "dw1", "newA", "p3"],
+            ["", "B", "b1", "oldB", "p1"]]
+    shopmine = {"dw1": "oldA", "b1": "newB"}
+    LT.record_failure("dw1", LT.PW_WRONG, "oldA")                       # 쿠팡이 방금 oldA 를 거부
+    with tempfile.TemporaryDirectory() as d:
+        store, cl, logs = CredStore(Path(d) / "creds.json"), FakeClient(), []
+        out = sm.run_daily_sync("URL", "Sheet1", rows, store=store, client=cl, fetch=lambda s_, log: dict(shopmine),
+                                log=logs.append, now=datetime(2026, 11, 23, 0, 10), out_dir=str(Path(d) / "rep"))
+        assert out["updated"] == 1 and {c[1] for c in cl.writes} == {"D5"}, (out, cl.writes)
+        assert not store.get_password("dw1"), "거부값으로 credstore 도 안 바꿈"
+        assert any("dw1" in m and "덮지 않음" in m and "⚠" in m for m in logs), logs
+        text = Path(out["report"]).read_text(encoding="utf-8-sig")
+        assert f"dw1,{sm.ST_SM_REFUSED}" in text, text
+        for v in ("oldA", "newA", "oldB", "newB"):
+            assert v not in text and not any(v in m for m in logs), f"값 '{v}' 노출"
+    LT._path(None).unlink(missing_ok=True)
+    ok("샵마인 값 = 24시간 안 거부값 → 대장·credstore 안 덮음 · ⚠ 로그 · 리포트 상태 · 다른 계정은 그대로 갱신")
+
+
+def test_report_which_ledger_value():
+    # ③ 리포트(값 없이)에 샵마인 값 = 대장 값1/값2/다름
+    rows = [HEADER, ["", "DW", "dw1", "oldA", "p1"], ["", "DW", "dw1", "newA", "p2"], ["", "DW", "dw1", "newA", "p3"],
+            ["", "W", "w1", "x1", "p1"], ["", "Z", "z1", "zz", "p1"]]
+    cands, _ = sm.ledger_password_map(rows)
+    lab = sm.ledger_value_label({"dw1": "newA", "w1": "x1", "z1": "other", "e1": "e"}, cands)
+    assert lab == {"dw1": "값2", "w1": "값1", "z1": "대장 값과 다름", "e1": "-"}, lab
+    with tempfile.TemporaryDirectory() as d:
+        out = sm.run_daily_sync("URL", "Sheet1", rows, store=CredStore(Path(d) / "c.json"), client=FakeClient(),
+                                fetch=lambda s_, log: {"dw1": "newA", "w1": "x1"}, log=lambda m: None,
+                                now=datetime(2026, 11, 23), out_dir=str(Path(d) / "rep"), apply=False, refused=lambda a, p: False)
+        text = Path(out["report"]).read_text(encoding="utf-8-sig").splitlines()
+        assert text[0] == "계정ID,상태,샵마인=대장" and f"dw1,{sm.ST_DIFF},값2" in text and f"w1,{sm.ST_MATCH},값1" in text, text
+        assert not any(v in "\n".join(text) for v in ("oldA", "newA", "x1", "zz")), "리포트에 값 없음"
+    ok("리포트 '샵마인=대장' — 값1/값2(시작 로그 번호)·대장 값과 다름·- · 값 없음")
+
+
+def test_on_applied_reapplies_candidates():
+    # ⑦ 동기화로 대장이 바뀌면 비밀번호 후보를 그 자리에서 다시 반영(전엔 다음 대장 읽기까지 옛 순서 — 1번째 옛 값)
+    from coupang_analytics.input_list import parse_password_candidates
+    rows = [HEADER, ["", "DW", "dw1", "oldA", "p1"], ["", "DW", "dw1", "newA", "p2"], ["", "DW", "dw1", "newA", "p3"]]
+    assert [c.password for c in parse_password_candidates(rows)["dw1"]][0] == "oldA", "전: 1줄 옛 값이 1번째"
+    got = []
+    with tempfile.TemporaryDirectory() as d:
+        sm.run_daily_sync("URL", "Sheet1", rows, store=CredStore(Path(d) / "c.json"), client=FakeClient(),
+                          fetch=lambda s_, log: {"dw1": "newA"}, log=lambda m: None, now=datetime(2026, 11, 23),
+                          out_dir=str(Path(d) / "rep"), refused=lambda a, p: False,
+                          on_applied=lambda new_rows: got.append(parse_password_candidates(new_rows)))
+        assert len(got) == 1 and [c.password for c in got[0]["dw1"]] == ["newA"], got
+        assert [r[3] for r in rows[1:]] == ["oldA", "newA", "newA"], "원래 격자는 그대로(사본만 고침)"
+        got.clear()
+        sm.run_daily_sync("URL", "Sheet1", rows, store=CredStore(Path(d) / "c.json"), client=FakeClient(),
+                          fetch=lambda s_, log: {"dw1": "newA"}, log=lambda m: None, now=datetime(2026, 11, 23),
+                          out_dir=str(Path(d) / "rep"), apply=False, refused=lambda a, p: False,
+                          on_applied=lambda new_rows: got.append(1))
+        assert got == [], "미리보기(쓰기 없음)는 다시 반영 안 부름"
+    src = (ROOT / "ui" / "app_qt.py").read_text(encoding="utf-8")
+    body = src[src.index("def _maybe_shopmine_sync"):src.index("def _maybe_account_suspend")]
+    assert "shopmine_sync.daily_gate(" in body and "shopmine_sync.NOCRED_MSG" in body, "앱 훅 = 하루 1번 자격 없음 로그"
+    assert "on_applied=" in body and "_apply_pw_candidates(" in body, "앱 훅 = 되쓴 뒤 후보 다시 반영"
+    assert "load_login(self.creds_store) is None" not in body, "옛 '조용히 건너뜀' 분기 없음"
+    ok("되쓴 뒤 후보 다시 반영 — 한 값으로 통일된 후보 · 원 격자 불변 · 미리보기는 안 부름 · 앱 훅 연결")
+
+
 def main():
     print("[verify_shopmine_sync_offline] 샵마인↔관리대장 동기화 오프라인 검증")
+    LT.DEFAULT_DIR = tempfile.mkdtemp(prefix="sm_login_today_")   # 쿠팡 로그인 거부 기록 = 임시 폴더(운용 output 미접촉)
+    LT._key = lambda: b"sm-test-key"                              # 실 credstore 지문 키 미접촉
     test_dpapi_roundtrip()
     test_field_discovery()
     test_col_letter()
@@ -267,6 +351,10 @@ def main():
     test_login_strips_fields()
     test_dry_run_no_write()
     test_no_pw_col_skips()
+    test_daily_gate_nocred_logs_once()
+    test_refused_value_not_written()
+    test_report_which_ledger_value()
+    test_on_applied_reapplies_candidates()
     print("통과 — 실 API·실 자격 없이 결정적. 비번 평문 비노출 확인.")
 
 

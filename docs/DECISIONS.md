@@ -91,7 +91,7 @@
 - 근거: 소유자 지시(2026-10-09 "항상 현재 관리대장 비밀번호로 로그인·비밀번호가 바뀌어도 반영 안 됨·계정아이디/비밀번호/상품명 매번 비교")·질문 답("다른 값을 차례로 시도"·"빈 칸=예전 저장값"). 실측(관리대장 SA 읽기·값 미출력·지문 비교): (DW)커머스 9줄 중 40행만 다른 값·반달컴퍼니 57행≠60행 → 앱은 마지막 줄 값을 써 10/09 둘 다 '아이디 또는 비밀번호가 다릅니다'(정산 쪽 로그인은 같은 날 성공). 새 순서로는 두 계정 모두 10/09 실패 값이 아닌 값을 먼저 시도. 게이트 16종·verify_gsheet[15]·verify_offline[37].
 - 버린 대안: (a) 다르면 로그인 안 하고 경고만(수집 공백) (b) 첫 줄 값 고정(DW 는 첫 줄도 옛 값) (c) 마지막 줄 값(기존·실패 원인).
 - 영향 범위: `input_list`(PwCandidate·parse_password_candidates·read_xlsx_rows), `pipeline_sales`(_pw_list·_login_with_candidates), `ui/app_qt.py`(_apply_pw_candidates·_account_pw 가 후보 목록 반환·미사용 _store_passwords_from 삭제). ⚠ 값이 갈린 계정은 실행당 틀린 제출이 최대 1회 늘 수 있음 — 대장 정리 시 해소. 2026-09-15 '비번 1회 오류=재시도 금지'는 후보가 1개일 때 그대로 유지.
-- 상태: ACTIVE (부분 SUPERSEDED by D-022 — '단일 값 API parse_password_file 은 첫 후보로' → 정리 B1 에서 함수 삭제 · D-023 — 'parse_password_rows 는 첫 후보로' → 정리 B4 에서 함수 삭제·후보 목록 로그인 규칙은 그대로)
+- 상태: ACTIVE (부분 SUPERSEDED by D-022 — '단일 값 API parse_password_file 은 첫 후보로' → 정리 B1 에서 함수 삭제 · D-023 — 'parse_password_rows 는 첫 후보로' → 정리 B4 에서 함수 삭제·후보 목록 로그인 규칙은 그대로 · D-385 — 로그인 시도 순서: 지난번 자동입력으로 성공한 값(지문)이 지금 대장 후보에 있으면 맨 앞)
 
 ### D-013 [EXPOSED_NAME] 결과 블록 이름 = 현행 쿠팡 노출상품명·같은 VID 개명 시 이력 승계 (2026-10-09, R3)
 - 결정: 결과(통계 시트·계정목록) 블록 이름 = **쿠팡 노출상품명**(판매분석 productName·고객이 검색으로 보는 이름) + 옵션라벨(다중옵션만). 매 실행 추적 상품의 노출명을 확인(당일 판매분석 → 없으면 최근 30일 판매분석 1회 보충, `pipeline_sales._fill_exposed_names` → `Product.exposed_name`)하고, **같은 VID 의 기존 블록 이름이 다르면 새 이름으로 바꿔 이력 승계**(`pipeline_process._block_names` → `set_display_name`). 노출명을 모르는 날은 기존 이름 유지(등록명으로 되돌림 금지) — 단 등록상품명 자체가 바뀌면 새 등록상품명. 다른 상품 블록이 이미 그 이름이면 바꾸지 않고 경고(병합 방지). 등록상품명은 숨김 메타에 계속 최신화(`set_registered_name`).
@@ -1469,7 +1469,7 @@ un_log_*.log`)로 확인 필요.
 - 근거(사실): 참조 분석 `D:\rea\evidence\shopmine`(PASSWORD_STORAGE.md — MarketPassword 는 클라이언트 암호화 없이 http 로 샵마인 서버에 저장·계정 조회 API 가 비번 반환 · LOGIN.md · AUTOMATION_PLAN.md pktmon 캡처로 요청 형식 확인) · 기존 비번 흐름 재사용(`input_list.parse_password_candidates`→`app_qt._apply_pw_candidates`→credstore · `settlement_accounts.login_passwords`·`alt_key` D-190) · 관리대장 = 마스터(D-134). 미확정 = ShopmineVersion 실제값·CurrentPageNumber 1-based 여부·계정 필드명(정적분석 추정 MarketId/MarketPassword) → 사용자 자격으로 discover 1회 확정.
 - 버린 대안: ①리포트만(소유자가 자동반영 선택) ②openpyxl(xlsx) 로 대장 수정(참조 스크립트 방식 — 우리 마스터는 구글시트라 gsheet_api 로 교체) ③별도 스크립트/스케줄러(앱 18시 흐름에 통합) ④샵마인 로컬 DB·캐시·엑셀에서 비번 추출(비번 없음 — 엑셀 별표 마스킹·로컬 SQLite 없음·크롬 저장소 0건, 유일 경로 = 서버 API) ⑤별도 DPAPI 저장소(앱 credstore 재사용).
 - 영향 범위: 새 `src/coupang_analytics/shopmine_sync.py`(코어) · `tools/shopmine_sync.py`(CLI setup/discover/sync/selftest) · `input_list.password_column`(공개 헬퍼 추가) · `ui/app_qt.py`(`_maybe_shopmine_sync` 훅 1곳) · 게이트 `tools/verify_shopmine_sync_offline.py`(run_checks 등록). 실서버 discover/sync 는 사용자 자격으로 1회 확인(비번 미노출).
-- 상태: ACTIVE (실서버 검증·로그인 원인 = D-196)
+- 상태: ACTIVE (실서버 검증·로그인 원인 = D-196 · 부분 SUPERSEDED by D-385 — 자격 없음 = 조용히 건너뜀 → 하루 1번 로그 · 24시간 안 거부된 값이면 대장 안 덮음)
 
 ### D-196 [SHOPMINE_PW_SYNC] 샵마인 실서버 검증 완료(로그인 원인 = 비번 값 오차) · sync `--dry-run` 추가 · 마스터 실쓰기는 앱 훅/소유자만 (2026-11-10, R126)
 - 결정: D-195 구현의 **실서버 로그인 거부(IsSuccess=False) 원인 = 비밀번호 '값' 오차 하나**로 확정하고(코드·요청 형식은 정답), 마무리 방식을 정한다.
@@ -3109,4 +3109,11 @@ umpy`) · 우리 코드는 numpy 를 직접 안 씀 · 정산 바퀴 끝 '남는
 - 근거(하위 세션 t51-orders-evidence · 보고 `output/_분석_261123_T51_증빙/T51_증빙_원인_보고.md`): 운용 사본 output43 실패 근거 45개 전부 1쪽 응답부터 `cursorToken` '' · 서버 쪽 수 2~82 · 받은 달 분포 1~4월 여러 쪽 달 0(5~10월은 14~21/달) → 오래된 달은 서버가 커서를 안 줌 → D-182 ① 이 1쪽에서 멈춤(11-10 부터 매일 19계정 46달 3/3 같은 실패). 재현 P52 ④-d 옛 코드 '주문별 매출 202601 쪽 수 6 · 원본 10 · 줄 10 · 서로 다른 줄 10 — 맞지 않음'(운용 hk66597582 202601 과 같은 모양). Difpick 202605 = 같은 주문 CANCEL 2줄이 확정 05-04 −19,660 / 05-08 −19,659(부분 취소 2번 · 서버 반복 아님). [추정] 실서버가 커서 없이 쪽 번호로 넘겨 주는지는 미확인(11-08 gyi0101 2026-01 16쪽 실측이 근거) → 다음 회차 46달 결과로 확인 · 안 되면 ③ 문구로 바로 드러남.
 - 버린 대안: 실패 사유만 남기기(해결 아님) · 커서 '' 를 계속 '끝'으로 두고 달마다 사람 조회(사람 대기열 금지 D-070) · 같은 줄 키 그대로(부분 취소 2번을 중복으로 판정).
 - 영향 범위: `src/coupang_analytics/settlement_docs.py`(fetch_order_detail·_order_pages·_order_key·_order_fail) · `tools/verify_settlement_runtime_offline.py`(P52 ④-d·④-e·P56) · `docs/CURRENT_RULES.md` 주문별 매출 줄. 운용 PC 반영 = 다음 배포 zip.
+- 상태: ACTIVE
+
+### D-385 [LOGIN_PW_ORDER] 로그인 비밀번호 = 지난번 자동입력으로 성공한 값(지문)을 먼저 · 샵마인 동기화 안전장치 4종 (2026-11-23, R248)
+- 결정(소유자 2026-11-23 질문 '비밀번호를 넣을 때 지난번에 성공한 값을 먼저 넣도록 바꿀까요?'·'샵마인 동기화를 켤까요? … 그 전에 안전장치' → "1~6 전부 수용, 진행해줘"): ① `_login_with_candidates`(앱 ①·아침 보충·정산·셀독전환 확인이 모두 거치는 한 곳) 후보 순서 = 지금 대장 후보 중 `_로그인실패.json` 의 성공 지문(ok_fp · HMAC · 평문 없음)과 같은 값이 맨 앞 · 나머지는 D-012 순서 · 대장에서 그 값이 사라지면 기억 무시 · 성공 지문은 앱이 자동입력해 성공했을 때만(세션 재사용·사람 입력 = 안 남김) · 같은 값에 성공·거부가 겹치면 최신 쪽. D-123 24시간·최대 2개·앞뒤 공백(D-018·D-068)은 그대로. ② 24시간 막혀서 안 넣은 값은 '거부'가 아니라 '넣지 않음' 문구. ③ 샵마인(D-195): 자격 없음 = 하루 1번 로그 · 샵마인 값이 24시간 안에 쿠팡에서 거부된 값이면 대장·저장소 안 덮고 ⚠ · 리포트에 '샵마인=대장'(값1/값2/다름 · 값 없음) · 대장을 고치면 비밀번호 후보 바로 다시 반영.
+- 근거: 하위 분석 `output/_분석_261123_DW비번/DW비번_샵마인_확인.md` — dalbong1849 대장 행 46(1줄 옛 값)이 '적은 줄 먼저'(`input_list.py:253`)로 1번째 → 10-04~11-22 거부 46회(11월 16) · 맞는 값 = 행 45·48~55(9줄) · wavetech 행 65 같은 모양 20회 · 성공 기억 없음(옛 `login_today.record_success`) · 운용 사본 9-21~11-22 `[샵마인]` 줄 0 = 자격 없음으로 조용히 건너뜀(`ui/app_qt.py:1317`). 구현 `e699d72`(하위 작업 · 핀 D3 · 샵마인 시험 4종 · 게이트 39종 통과).
+- 버린 대안: '적은 줄 먼저' 뒤집기(정당하게 고친 값이 1줄인 경우 깨짐) · 저장소 값1 덮어쓰기(D-190 에서 버림) · 안전장치 없이 샵마인만 켜기(샵마인에 옛 값이 있으면 맞는 9줄을 지움 — 가짜 값 재현).
+- 영향 범위: `src/coupang_analytics/login_today.py`(record_success·success_first·_blocked) · `pipeline_sales.py`(_login_with_candidates·LoginPwRecentlyRefused) · `shopmine_sync.py` · `ui/app_qt.py`(_maybe_shopmine_sync) · `tools/pin_login_ranks.py` D3 · `tools/verify_shopmine_sync_offline.py`. 남는 것: 성공 기록 생기기 전 첫 로그인 1회 거부 가능 · 운용 PC 샵마인 자격 setup = 소유자. 운용 반영 = 다음 배포 zip.
 - 상태: ACTIVE

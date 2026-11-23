@@ -1311,17 +1311,23 @@ class App(RegistryPanelMixin, StockPanelMixin, ProxyPanelMixin, SettlementStatus
         """하루 1회 샵마인 서버에서 쿠팡 위탁 계정 '현재 비밀번호'를 받아 관리대장과 대조·갱신(D-195).
 
         담당자가 샵마인만 고쳐 어긋난 대장 비번을 샵마인 현재값(진실 소스)으로 맞춘다. 샵마인 로그인 자격이
-        없으면(미설정) 조용히 건너뛰고, 오늘 이미 돌았으면 재실행 안 함. 실패는 **비치명** — 로그만 남기고
+        없으면(미설정) **하루 1번 로그**(T-160 ① — 옛 '조용히 건너뜀'으로 운용 PC 0회를 몰랐음), 오늘 이미 돌았으면 재실행 안 함.
+        대장을 고쳤으면 비밀번호 후보를 그 자리에서 다시 반영(T-160 ④). 실패는 **비치명** — 로그만 남기고
         ①②③·정산은 그대로 진행한다(보조 기능이 그날 수집을 막지 않게). 자격 저장 = tools/shopmine_sync.py setup."""
         try:
-            if shopmine_sync.load_login(self.creds_store) is None:
-                return                                   # 미설정 → 설정 탭 안내로 1회 setup(조용히)
             st = QtCore.QSettings("coupang-analytics", "ui")
             today = datetime.now().strftime("%Y-%m-%d")
-            if st.value("shopmine/last_sync_date", "", type=str) == today:
-                return                                   # 오늘 이미 동기화함(하루 1회)
+            gate = shopmine_sync.daily_gate(self.creds_store, today, st.value("shopmine/last_sync_date", "", type=str),
+                                            st.value("shopmine/nocred_log_date", "", type=str))
+            if gate == shopmine_sync.GATE_NOCRED_LOG:
+                self.log(shopmine_sync.NOCRED_MSG)
+                _cfg_save_shared("shopmine/nocred_log_date", today)
+            if gate != shopmine_sync.GATE_RUN:
+                return                                   # 자격 없음(그날 1번 알림) · 오늘 이미 동기화함(하루 1회)
             self.log("[샵마인] 서버에서 현재 비밀번호를 받아 관리대장과 대조 중…(하루 1회·값은 화면에 안 보임)")
-            shopmine_sync.run_daily_sync(url, sheet, rows, store=self.creds_store, log=self.log)
+            shopmine_sync.run_daily_sync(url, sheet, rows, store=self.creds_store, log=self.log,
+                                         on_applied=lambda new_rows: self._apply_pw_candidates(
+                                             parse_password_candidates(new_rows)))
             _cfg_save_shared("shopmine/last_sync_date", today)
         except Exception as exc:                         # noqa: BLE001  보조 기능 — 사유만 남기고 본 실행 계속
             self.log(f"[샵마인] 동기화 건너뜀(비치명·{exc.__class__.__name__}): {exc}")

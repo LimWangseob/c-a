@@ -54,6 +54,7 @@ def _check(cond: bool, msg: str) -> None:
 # 동작은 모듈 전역 _SPEC(딕셔너리)로 시험마다 지정한다. 시퀀스 값은 호출 순서대로 소비(마지막 값 유지).
 _SPEC: dict = {}
 _COUNT: dict = {}
+_FILLED: list = []   # 자동입력에 넣은 값 순서(가짜 값만 — 성공 값 먼저 T-160 핀)
 
 
 def _seq(name: str, calls: int, default):
@@ -115,6 +116,7 @@ class _FakeWing:
 
     def autofill_login(self, account_id, pw, on_log=None) -> bool:
         _COUNT["autofill"] = _COUNT.get("autofill", 0) + 1
+        _FILLED.append(pw)
         return bool(_SPEC.get("autofill", True))
 
     def wait_for_login(self, **kwargs) -> bool:
@@ -298,6 +300,77 @@ def pin_pw_refused_same_day():
     _check(LT.refused_today("pin2", "pw2", now=night + timedelta(hours=4)), "어제 22:32 거부 → 오늘 02:32 정산도 다시 넣지 않음")
     LT.record_success("pin2", now=night + timedelta(hours=4))
     _check(LT.refused_today("pin2", "pw2", now=night + timedelta(hours=5)), "다른 값으로 로그인돼도 거부된 값은 24시간 막음")
+
+
+def pin_pw_success_first():
+    print("[핀 D3] 지난번 로그인에 성공한 값 먼저(T-160) · 대장에서 사라지면 기억 무시 · 성공/거부 최신 우선 · 평문 없음 · 24시간 막힘 문구")
+    import json
+    from datetime import datetime, timedelta
+    from coupang_analytics import login_today as LT
+    OLD, NEW, OTHER, NEW2 = "fake-OLD-x", "fake-NEW-y", "fake-OTHER-z", "fake-NEW2-w"   # 가짜 값(실제 비밀번호 아님)
+    f = LT._path(None)
+    f.unlink(missing_ok=True)
+
+    def run(pws, waits, logs):
+        _SPEC.clear(); _COUNT.clear(); _FILLED.clear()
+        _SPEC["authenticated"] = [False]
+        _SPEC["wait_for_login"] = waits
+        _SPEC["classify"] = ("error", "아이디 또는 비밀번호가 다릅니다.")
+        _install_collector_fakes()
+        try:
+            return P._login_and_discover(_ledger_account(), "2026-09-19", "2026-09-20",
+                                         lambda aid: list(pws), logs.append, login=True, semi=True)[0]
+        except P.LoginCredentialError:
+            return "cred"
+
+    def age(hours):   # 기록 시각을 hours 만큼 앞으로(24시간 지남 흉내)
+        d = json.loads(f.read_text(encoding="utf-8"))
+        back = lambda t: (datetime.fromisoformat(t) - timedelta(hours=hours)).isoformat(timespec="seconds")
+        for v in d.values():
+            v["fp_at"] = {fp: back(t) for fp, t in (v.get("fp_at") or {}).items()}
+            if v.get("ok_at"):
+                v["ok_at"] = back(v["ok_at"])
+        f.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+
+    logs: list = []
+    acct = run([OLD, NEW], [False, True], logs)   # 대장 순서 = 1줄 옛 값 먼저(D-012) → 거부 → 둘째 값 성공
+    _check(acct not in (None, "cred") and _FILLED == [OLD, NEW], "1회차 = 대장 순서(옛 값 거부 → 둘째 값으로 성공)")
+    rec = json.loads(f.read_text(encoding="utf-8"))["pin1"]
+    _check(rec.get("ok_fp") == LT.fingerprint("pin1", NEW), "성공한 값의 지문 기록(ok_fp)")
+    age(25)
+    logs = []
+    acct = run([OLD, NEW], [True], logs)
+    _check(acct not in (None, "cred") and _FILLED == [NEW], "① 24시간 뒤에도 성공 기록 있는 값 먼저 → 옛 값 제출 0")
+    _check(any("지난번 로그인에 성공한 값(후보 2번째)을 먼저" in x for x in logs), "먼저 넣는다는 로그(값 없이 위치만)")
+    age(25)
+    logs = []
+    acct = run([OLD, OTHER], [False, True], logs)   # 대장에서 NEW 가 사라짐
+    _check(acct not in (None, "cred") and _FILLED == [OLD, OTHER], "② 기록 값이 대장에서 사라지면 지금 순서 그대로")
+    _check(not any("지난번 로그인에 성공한" in x for x in logs), "② 사라진 값은 앞세우지 않음(로그 없음)")
+    _check(json.loads(f.read_text(encoding="utf-8"))["pin1"]["ok_fp"] == LT.fingerprint("pin1", OTHER), "새로 성공한 값으로 기억 갱신")
+    logs = []
+    acct = run([OLD, NEW2], [True], logs)   # OLD = 방금(24시간 안) 거부 → 넣지 않고 둘째 값
+    _check(acct not in (None, "cred") and _FILLED == [NEW2], "24시간 안 거부값은 넣지 않고 둘째 값만 제출")
+    _check(any("1번째 값은 최근 24시간 안에 거부된 값이라 넣지 않음" in x for x in logs)
+           and not any("1번째 값 거부" in x for x in logs), "넣지 않은 값을 '거부'라고 적지 않음(사실대로 문구)")
+    # ③ 성공 값이 24시간 거부 목록에도 있는 모순 → 더 최신 쪽을 따름
+    fp = LT.fingerprint("pin3", NEW)
+    now = datetime.now()
+    t1, t2 = ((now - timedelta(hours=h)).isoformat(timespec="seconds") for h in (2, 1))
+    d = json.loads(f.read_text(encoding="utf-8"))
+    d["pin3"] = {"reason": "", "fp_at": {fp: t1}, "ok_fp": fp, "ok_at": t2}
+    f.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    _check(LT.success_first("pin3", [OLD, NEW]) == ([NEW, OLD], 1) and not LT.refused_today("pin3", NEW),
+           "③ 거부 뒤 성공(성공이 최신) → 그 값 먼저·막지 않음")
+    d["pin3"] = {"reason": "", "fp_at": {fp: t2}, "ok_fp": fp, "ok_at": t1}
+    f.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    _check(LT.success_first("pin3", [OLD, NEW]) == ([OLD, NEW], None) and LT.refused_today("pin3", NEW),
+           "③ 성공 뒤 거부(거부가 최신) → 앞세우지 않음·24시간 막음")
+    LT.record_failure("pin3", LT.PW_WRONG, OLD)
+    _check(json.loads(f.read_text(encoding="utf-8"))["pin3"].get("ok_fp") == fp, "실패 기록이 성공 기억을 지우지 않음")
+    text = f.read_text(encoding="utf-8")
+    _check(not any(v in text for v in (OLD, NEW, OTHER, NEW2)), "④ 기록 파일에 비밀번호 평문 없음(지문만)")
+    f.unlink(missing_ok=True)
 
 
 def pin_login_reason_otp():
@@ -1007,6 +1080,7 @@ def main() -> int:
         pin_credential_error()
         pin_otp_skip()
         pin_pw_refused_same_day()
+        pin_pw_success_first()
         pin_login_reason_otp()
         pin_semi_retry_recover()
         pin_discover_empty_uses_vendor()
