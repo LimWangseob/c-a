@@ -1058,8 +1058,8 @@ def p27_cycle():
             assert passes == [] and last[0] == "종료", (passes, last)
             rc, passes, last, _, _ = run(None, sales_after=D(2026, 10, 10, 3, 0))     # 03:00 ① 완료 → 받기
             assert passes and passes[0] >= D(2026, 10, 10, 3, 0), passes
-            assert rc == 0 and len(passes) == 2 and last == ("완료", W.plan_after_pass(False, 0, 0, 0)[1]), \
-                (rc, passes, last)                                              # 3건 받음 → 다음 바퀴 0건 = 다 받음 → 종료
+            assert rc == 0 and len(passes) == 1 and last == ("완료", W.plan_after_pass(False, 0, 0, 0)[1]), \
+                (rc, passes, last)            # 3건 받음 · 남은 일·생성 대기·다시 시도 0 = 빈 바퀴 없이 바로 종료(D-395 ② · 옛 = 0건 바퀴 1번 더)
         finally:
             os.chdir(old_cwd)
     ok("회차=00:10~그날 24:00·①완료 전/지난 회차 기록=대기만 하다 24:00 종료·① 완료 후 받기·다 받으면 바로 종료")
@@ -3599,7 +3599,7 @@ def p68_evidence_auto():
             mark(EV.account_folder(ev_dir, "대표-사업w3-w3"), EV.DONE, DT(2026, 11, 20, 9))   # 이번 달 완료 = 로그인도 안 함
             _, ce0 = W.cycle_window(DT(2026, 11, 20, 12))
             rc, order, got, ce = watch(ce0 - timedelta(hours=3), timedelta(minutes=5), work=(4, 0))
-            assert rc == 0 and order[:2] == ["정산", "정산"] and order[-1][0] == "종합", order
+            assert rc == 0 and order.count("정산") == 1 and order[0] == "정산" and order[-1][0] == "종합", order   # D-395 ② 바로 끝
             assert [g["acc"] for g in got] == ["w1", "w2"], ("완료 계정 빼고 남은 계정만", got)
             assert all(g["done"] and g["until_at"] == ce - timedelta(minutes=40) for g in got), ("정산 완료 기록 뒤·40분 전 멈춤", got)
             assert TD.PASS_ACCOUNTS and order.index(("종합", "완료")) == len(order) - 1, "증빙 실패가 정산 완료 판정을 바꿈"
@@ -3734,7 +3734,8 @@ def p69_ledger_presync():
             TD.datetime = FakeDT
             TD.time.sleep = lambda sec: clock.__setitem__("now", clock["now"] + timedelta(seconds=max(sec, 1)))
             TD._one_pass, TD._rest_pass, TD._ledger_presync = one_pass, one_pass, presync
-            TD._pending_jobs, TD._retry_count, TD._watch_failures = (lambda: 0), (lambda: 0), (lambda: {})
+            TD._pending_jobs = lambda: 1 if len(passes) == 1 else 0     # 첫 바퀴 뒤 생성 대기 1건 = 둘째 바퀴(D-395 ② 남은 일 0 = 바로 끝)
+            TD._retry_count, TD._watch_failures = (lambda: 0), (lambda: {})
             TD._evidence_sweep, TD._between_passes = (lambda a, act: None), (lambda: None)
             TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
             TD.LOG.heartbeat = lambda status, msg="", **k: beats.append((status, msg))
@@ -4495,6 +4496,130 @@ def p73_evidence_reuse_batch_abort():
     ok("받기 의심·다시받을목록 자동 다시 받기(D-339) = 무인 회차에서도 받기 끝난 때 1번(공개 웹 안 읽음 · 증빙 앞)")
 
 
+def p74_restart_rest_and_finish_now():
+    print("[P74] D-395(소유자 11-23 '1번은 정기 1번 유지, 2번은 즉시 종료로 반영해줘.') — ① 같은 회차에 정산을 다시 켜도 첫 바퀴 = "
+          "남은 일 바퀴(계획·끝낸 단계 이어감 · 정기 다시 안 함) · 다른 회차·수동 '정산 시작' = 전체 바퀴 ② 남은 일·생성 대기·다시 시도 0 = "
+          "쉼·빈 바퀴 없이 바로 완료")
+    import os
+    from datetime import datetime as RealDT, timedelta
+    from types import SimpleNamespace
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import settlement_download as TD
+    from coupang_analytics import settlement_retry as TR
+    from coupang_analytics import settlement_runlog as RLG
+
+    class Crash(BaseException):
+        """가상 강제 종료(작업관리자·재부팅) — except Exception 에 안 잡힘."""
+
+    def watch(start, one_pass, rest_pass, pending, *, manual=False):
+        """가짜 시계로 cmd_watch 한 번 → (바퀴 [(종류, 시각, 그때 계획, 그때 끝낸 정기)], 마지막 상태, 끝 시각, 예외)."""
+        clock = {"now": start}
+        passes: list = []
+        beats: list = []
+
+        class FakeDT(RealDT):
+            @classmethod
+            def now(cls, tz=None):
+                return clock["now"]
+
+        def fake_sleep(sec):
+            clock["now"] += timedelta(seconds=max(sec, 1))
+
+        def op(kind, fn):
+            def run(args):
+                passes.append((kind, clock["now"], {n: set(v) for n, v in TD.REST_PLAN.items()}, set(TD.PHASE_DONE["정기"])))
+                TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
+                TD.LOG.heartbeat = lambda st, msg="", **k: beats.append((st, msg))
+                TD.TRIES.begin_pass(f"p{len(passes)}")
+                clock["now"] += timedelta(minutes=3)
+                return fn(len(passes))
+            return run
+        args = SimpleNamespace(parent=0, ledger_synced=True, until="", until_at=None, hidden=False, manual=manual)
+        log0 = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
+        log0.heartbeat = lambda st, msg="", **k: beats.append((st, msg))
+        err = None
+        try:
+            _patched([(TD, "datetime", FakeDT), (TD.time, "sleep", fake_sleep), (TD, "_one_pass", op("전체", one_pass)),
+                      (TD, "_rest_pass", op("남은 일", rest_pass)), (TD, "_pending_jobs", lambda: pending(len(passes))),
+                      (TD, "_watch_wait_reason", lambda *a, **k: ("", None)), (TD, "_between_passes", lambda: None),
+                      (TD, "_cycle_sources", lambda a: None), (TD, "_evidence_sweep", lambda a, act: None),
+                      (TD, "LOG", log0), (TD, "TRIES", None)], lambda: TD.cmd_watch(args))
+        except Crash as exc:
+            err = exc
+        return passes, (beats[-1] if beats else None), clock["now"], err
+
+    def first_full(n):                                  # 회차 첫 바퀴: A·B 정기 끝 · A 파일 생성 대기(받기 남음)
+        TD.PHASE_DONE["정기"].update({"A", "B"})
+        TD.REST_PLAN.clear()
+        TD.REST_PLAN["A"] = {"받기"}
+        return False, 1
+
+    def crash(n):
+        raise Crash("가상 강제 종료")
+    def kinds(ps):                                      # 실패 메시지 = 앞 6바퀴 종류·시각만
+        return [(k, f"{t:%H:%M}") for k, t, *_ in ps[:6]] + ([f"… 총 {len(ps)}바퀴"] if len(ps) > 6 else [])
+    cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            Path("output").mkdir()
+            day1 = RealDT(2026, 11, 21, 2, 0)
+            passes, last, end, err = watch(day1, first_full, crash, lambda n: 1)
+            assert err is not None and [p[0] for p in passes] == ["전체", "남은 일"], kinds(passes)   # 남은 일 바퀴 도중 강제 종료
+            # ① 같은 회차 다시 켬 = 첫 바퀴가 남은 일 바퀴 · 계획(A 받기)·끝낸 정기(A·B) 이어감
+            got = {}
+
+            def resumed(n):
+                got["plan"], got["done"] = {k: set(v) for k, v in TD.REST_PLAN.items()}, set(TD.PHASE_DONE["정기"])
+                TD.REST_PLAN.clear()
+                return False, 1
+            passes, last, end, err = watch(day1 + timedelta(minutes=10), first_full, resumed, lambda n: 0)
+            assert [p[0] for p in passes] == ["남은 일"], kinds(passes)                        # 전체 바퀴(정기 다시) 없음
+            assert got == {"plan": {"A": {"받기"}}, "done": {"A", "B"}}, got
+            # 다른 회차(다음 날 00:10~) = 처음부터 전체 바퀴(시도 수와 같게 회차마다 0부터)
+            (Path(TD.BASE) / "로그" / TR.STATE_NAME).unlink(missing_ok=True)
+            Path(TD.DONE_FILE).unlink(missing_ok=True)
+            passes, last, end, err = watch(RealDT(2026, 11, 22, 2, 0), first_full, crash, lambda n: 1)
+            assert [p[0] for p in passes][:1] == ["전체"] and passes[0][2] == {} and passes[0][3] == set(), kinds(passes)
+            # 수동 '정산 시작'(D-354) = 같은 회차 기록이 있어도 전체 바퀴
+            passes, last, end, err = watch(RealDT(2026, 11, 22, 3, 0), lambda n: (False, 0), crash, lambda n: 0, manual=True)
+            assert [p[0] for p in passes] == ["전체"], kinds(passes)
+        finally:
+            os.chdir(cwd)
+    ok("같은 회차 재시작 = 첫 바퀴 남은 일 바퀴(계획·끝낸 정기 이어감 · 정기 다시 안 함) · 다음 회차·수동 = 전체 바퀴")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            Path("output").mkdir()
+            t0 = RealDT(2026, 11, 21, 2, 0)
+
+            def all_got(n):                              # 이 바퀴에 마지막 파일을 받음(새로 한 일 1) · 남은 일 0
+                TD.REST_PLAN.clear()
+                return False, 1
+            # ② 첫 바퀴에 다 받음 = 그 바퀴로 끝(빈 바퀴·1분 쉼 없음)
+            passes, last, end, err = watch(t0, all_got, crash, lambda n: 0)
+            assert err is None and [p[0] for p in passes] == ["전체"] and last[0] == "완료", (kinds(passes), last)
+            assert end == t0 + timedelta(minutes=3), end
+            # 생성 대기 20분 바퀴 뒤 마지막 파일을 받음 = 바로 완료(20분 쉼·0계정 바퀴 없음)
+            (Path(TD.BASE) / "로그" / TR.STATE_NAME).unlink(missing_ok=True)
+            Path(TD.DONE_FILE).unlink(missing_ok=True)
+
+            def waiting(n):
+                TD.REST_PLAN.clear()
+                TD.REST_PLAN["C"] = {"받기"}
+                return False, 0
+            seq = {1: first_full, 2: waiting, 3: all_got}
+            passes, last, end, err = watch(t0, first_full, lambda n: seq[n](n), lambda n: 0 if n >= 3 else 1)
+            assert [p[0] for p in passes] == ["전체", "남은 일", "남은 일"] and last[0] == "완료", (kinds(passes), last)
+            assert end == passes[-1][1] + timedelta(minutes=3), (end, passes[-1][1])
+            gaps = [b[1] - a[1] for a, b in zip(passes, passes[1:])]
+            assert gaps[-1] == timedelta(minutes=23), gaps                     # 생성 대기 중 = 20분 간격 그대로
+        finally:
+            os.chdir(cwd)
+    ok("남은 일·생성 대기·다시 시도 0 = 그 바퀴로 바로 완료(빈 바퀴·쉼 없음) · 생성 대기 중 20분 간격 그대로")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -4561,6 +4686,7 @@ def main():
     p71_wait_rest_open_to_transfer()
     p72_rest_pass_left_work_only()
     p73_evidence_reuse_batch_abort()
+    p74_restart_rest_and_finish_now()
     print("정산 런타임 오프라인 검증 통과")
 
 
