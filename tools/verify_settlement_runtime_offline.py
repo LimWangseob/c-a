@@ -2539,6 +2539,36 @@ def p52_settlement_docs():
     assert od["쪽 수"] == 49 and od["줄 수"] == 478 and od["원본 건수"] == 481 and len(sent) == 49, (od["줄 수"], len(sent))
     expect(API.SiteChangedError, lambda: DOC.fetch_order_detail(real(27, raw_size=False)[0], D("2026-09-01"), D("2026-09-30")),
            "rawRecordSize 없음")
+    # ④-d 오래된 달(1~4월) = 1쪽부터 커서 '' · 쪽 수는 여러 쪽(T-51 · output43 실패 근거 45개 전부 1쪽 '커서 빈칸' · 서버 쪽 수 2~82 ·
+    #      1~4월 받은 달 중 여러 쪽 달 0 = 1쪽·0쪽 달만 받음 · 5~10월은 여러 쪽 달 14~21개 받음) → 커서 없으면 쪽 번호로 쪽 수까지
+    def by_page(total, restart=False):
+        sent: list = []
+
+        def c(m, p, b):
+            if p.endswith("-page-total"):
+                return -(-total // 10)
+            sent.append(b)
+            pg = 1 if restart else b["page"]                     # restart = 커서 '' 면 쪽 번호를 무시하고 처음부터(bf0621 모양)
+            lo = (pg - 1) * 10
+            got = [{"orderId": i, "transactionType": "ORDER", "apAmount": 1} for i in range(lo, min(lo + 10, total))]
+            return {"orderDetails": got, "rawRecordSize": len(got), "cursorToken": "", "requestPage": pg, "requestSize": 10}
+        return c, sent
+    c, sent = by_page(58)
+    od = DOC.fetch_order_detail(c, D("2026-01-01"), D("2026-01-31"))
+    assert od["줄 수"] == 58 and od["쪽 수"] == 6 and [b["page"] for b in sent] == [1, 2, 3, 4, 5, 6], (od["줄 수"], sent)
+    assert all(b["cursorToken"] == "" for b in sent), sent
+    c, sent = by_page(580, restart=True)                         # 쪽 번호가 안 먹으면 2쪽에서 바로 멈춤(58쪽 헛호출 안 함)
+    expect(API.SiteChangedError, lambda: DOC.fetch_order_detail(c, D("2026-01-01"), D("2026-01-31")), "쪽 번호 무시 = 처음부터")
+    assert len(sent) == 2, len(sent)
+    # ④-e 같은 주문·유형·옵션·배송비 번호라도 구매확정일이 다르면 다른 줄(T-51 · output43 Difpick 2026-05 4쪽·11쪽 CANCEL
+    #      13100182213074 확정 05-04 정산 −19,660 · 05-08 −19,659 — 수수료도 −2,650/−2,651 로 다름 = 서버 반복 아님)
+    def two_cancel(m, p, b):
+        if p.endswith("-page-total"):
+            return 1
+        x = {"orderId": 13, "transactionType": "CANCEL", "vendorItemId": 9, "shippingFeeId": 5, "apAmount": -19660, "confirmDate": "2026-05-04"}
+        return {"orderDetails": [x, {**x, "apAmount": -19659, "confirmDate": "2026-05-08"}], "rawRecordSize": 2, "cursorToken": ""}
+    od = DOC.fetch_order_detail(two_cancel, D("2026-05-01"), D("2026-05-31"))
+    assert od["줄 수"] == 2 and od["합계"]["apAmount"] == -39319, od
 
     # ⑤ RG 재고변동·반품 엑셀 판정
     def wb_bytes(sheets):
@@ -2672,8 +2702,8 @@ def p56_one_failure_not_blocking():
         r = DOC._Run(Path(tmp) / "o", no, (API.ApiBlocked,), datetime.now)
         assert r.attempt("주문별매출 202604", lambda: DOC.fetch_order_detail(one_page, D("2026-04-01"), D("2026-04-30"))) is None
         ev = json.loads((Path(tmp) / "o" / "_실패_주문별매출_202604.json").read_text(encoding="utf-8"))
-        assert ev["쪽 수(서버)"] == 2 and ev["쪽별"] == [{"쪽": 1, "줄": 10, "원본": 10, "커서 빈칸": True,
-                                                          "칸": ["cursorToken", "orderDetails", "rawRecordSize"]}], ev
+        page_ev = {"줄": 10, "원본": 10, "커서 빈칸": True, "요청쪽": None, "칸": ["cursorToken", "orderDetails", "rawRecordSize"]}
+        assert ev["쪽 수(서버)"] == 2 and ev["쪽별"] == [{"쪽": 1, **page_ev}, {"쪽": 2, **page_ev}], ev   # 2쪽 = 같은 줄 → 멈춤(T-51)
         assert "홍길동" not in json.dumps(ev, ensure_ascii=False), ev
 
         def dup(m, path, body):

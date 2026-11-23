@@ -1312,7 +1312,7 @@ un_log_*.log`)로 확인 필요.
 - 버린 대안: 실패 사유 문구만 남기기(소유자 11-09 — 원인 해결 아님) · 같은 줄이 다시 오면 그 쪽을 버리고 끝내기(서버 신호 대신 추측 · 진짜 중복을 가림) · `pages` 쪽까지만 부르기(쪽 수가 틀린 경우를 못 잡음) · 줄 수 조건을 느슨하게(예 ±몇 줄) 하기(근거 없는 허용치 — 서버가 준 원본 건수로 정확히 대조).
 - 확인 범위: 11-08 실패 12건 = ① 1쪽 달 10건(bf0621 실측) + ② 2쪽 이상 2건(oopean·guarisen2024 실측) — 전부 실제 응답으로 원인 확인.
 - 영향 범위: `src/coupang_analytics/settlement_docs.py`(fetch_order_detail·_raw_size·_Run.attempt 기록) · `tools/verify_settlement_runtime_offline.py`(P52 ④ 가짜 응답에 rawRecordSize · ④-b · ④-c). size 10 고정(D-171)·중복 확인은 그대로.
-- 상태: ACTIVE
+- 상태: ACTIVE (부분 SUPERSEDED by D-381 — ① 커서 '' = 끝은 서버 쪽 수까지 받은 뒤만 · 중복 키에 구매확정일)
 
 ### D-183 [COMPANY_STOCK_FIRST_TAB] 회사보유재고 = 재고현황 시트의 늘 첫 탭만 읽음(링크 gid 안 씀) · 3PL인천 수량도 지금처럼 총입고수량 (2026-11-09, R114)
 - 결정(소유자 2026-11-09 "재고 표기 방식이 과거로 회귀 했어 · 확인 후 앱에 반영" → 선택지 답 '항상 첫 탭'·'지금처럼 총입고수량'): `company_stock.resolve_tab(client)` = 파일의 첫 탭. 설정에 넣은 재고현황 링크의 gid 는 쓰지 않는다(링크는 파일을 찾는 데만). 새 재고 탭은 맨 앞에 둔다. 관리대장 역기록(`run_company_stock`)·계정목록 표기(`pipeline_gsheet` 회사재고 주입) 둘 다 같은 함수. 첫 탭 오른쪽(L·M칸) '3PL인천창고 출고가능한 정확한 수량 (11/4기준) - 출처: 이벗매니저' 표(28품목)는 읽지 않음 — 3PL인천도 '총입고수량' 창고별 합산(D-141 그대로).
@@ -3102,4 +3102,11 @@ umpy`) · 우리 코드는 numpy 를 직접 안 씀 · 정산 바퀴 끝 '남는
 - 근거: 하위 조사 `output/_분석_261122_시트대조/시트대조_보고.md`(운용 사본 output42 · 11-21 00:10 회차) — D-107 로 합쳐진 같은 이름 VID 360개 중 같은 등록상품·노출상품 339 · 다른 등록상품 12(0원) · 번호 모름 9(301,010원 · 55마켓·벅스). 수정 후 같은 자료 재계산(통제 세션): 같은 이름 VID 360 → 유지 341(같은 등록상품 243 · 노출상품 같음 96 · 등록상품 다르나 노출상품 같음 2) · 제외 19 = 301,010원(bux1004 보냉백 6 · aehee5505 캠핑테이블 2 등 — 판매 기록 '등록상품ID' 로 보면 블록과 다른 등록상품) · 4/1~ 관리 합계 604,027,080 → 603,726,070 · 계산 0.5초. 첫 구현(상품정보_일별만)은 로그인 실패 계정(bux1004·aehee5505)에 보관본이 없어 같은 등록상품 25개(2,979,410원)까지 뺌 → 판매 기록 '등록상품ID' 추가로 해결(시험 T9 추가).
 - 버린 대안: 상품정보_일별만으로 판정(실패 계정 자료 없음) · `_raw` 상품조회(덮어써짐 · `settlement_statement_scope.inventory` 는 workbook_sales 를 import 해 순환) · 상품명 비교 없이 번호만으로 묶기(질문 범위 밖 · 넓어짐).
 - 영향 범위: `src/coupang_analytics/sales_summary.py`(inventory_ids·related_vids·scope related 인자) · `src/coupang_analytics/workbook_sales.py`(_related·refresh_sales_sheet) · `tools/verify_sales_summary_offline.py` T9 · `docs/CURRENT_RULES.md` §7 · `designs/SALES_SUMMARY.md` §4. 정산서 범위(`settlement_statement_context.py:145`·`settlement_statement_scope.py` ② = D-107 그대로)는 바꾸지 않음 — 같은 기준을 정산서에도 쓸지는 별도 판단(STATE). 운용 PC 반영 = 다음 배포 zip.
+- 상태: ACTIVE
+
+### D-381 [SETTLE_ORDER_DETAIL_PAGES] 주문별 매출 = 커서 '' 라도 서버 쪽 수까지 쪽 번호로 받음 · 앞 쪽 줄을 다시 주면 즉시 실패 · 같은 줄 키에 구매확정일(confirmDate) (2026-11-23, R248)
+- 결정(소유자 2026-11-23 "2-2 … 별도 세션에서 진행" → 원인·수정 보고 뒤 "1~6 전부 수용, 진행해줘"): `settlement_docs.fetch_order_detail` 쪽 받기(`_order_pages`) ① 받은 쪽 커서가 '' 이고 **쪽 번호가 서버 쪽 수(`-page-total`) 이상**일 때만 끝 ② 커서 '' 인데 쪽이 남으면 커서 '' + 다음 쪽 번호로 쪽 수까지 부름 ③ 커서 없이 부른 2쪽 이상 응답의 줄이 모두 앞 쪽 줄이면 그 자리에서 `SiteChangedError`('쪽 번호로 못 넘김' · 헛호출 1번) ④ 같은 줄 판정 키 = 주문·유형·옵션·배송비 + `confirmDate` ⑤ 실패 근거 쪽마다 `requestPage`. 쪽 수·원본 건수 대조(D-182 ②)·size 10(D-171)은 그대로.
+- 근거(하위 세션 t51-orders-evidence · 보고 `output/_분석_261123_T51_증빙/T51_증빙_원인_보고.md`): 운용 사본 output43 실패 근거 45개 전부 1쪽 응답부터 `cursorToken` '' · 서버 쪽 수 2~82 · 받은 달 분포 1~4월 여러 쪽 달 0(5~10월은 14~21/달) → 오래된 달은 서버가 커서를 안 줌 → D-182 ① 이 1쪽에서 멈춤(11-10 부터 매일 19계정 46달 3/3 같은 실패). 재현 P52 ④-d 옛 코드 '주문별 매출 202601 쪽 수 6 · 원본 10 · 줄 10 · 서로 다른 줄 10 — 맞지 않음'(운용 hk66597582 202601 과 같은 모양). Difpick 202605 = 같은 주문 CANCEL 2줄이 확정 05-04 −19,660 / 05-08 −19,659(부분 취소 2번 · 서버 반복 아님). [추정] 실서버가 커서 없이 쪽 번호로 넘겨 주는지는 미확인(11-08 gyi0101 2026-01 16쪽 실측이 근거) → 다음 회차 46달 결과로 확인 · 안 되면 ③ 문구로 바로 드러남.
+- 버린 대안: 실패 사유만 남기기(해결 아님) · 커서 '' 를 계속 '끝'으로 두고 달마다 사람 조회(사람 대기열 금지 D-070) · 같은 줄 키 그대로(부분 취소 2번을 중복으로 판정).
+- 영향 범위: `src/coupang_analytics/settlement_docs.py`(fetch_order_detail·_order_pages·_order_key·_order_fail) · `tools/verify_settlement_runtime_offline.py`(P52 ④-d·④-e·P56) · `docs/CURRENT_RULES.md` 주문별 매출 줄. 운용 PC 반영 = 다음 배포 zip.
 - 상태: ACTIVE
