@@ -85,6 +85,7 @@ CHECKS = [
     ("노출·방문자 아침 보충(어제 칸 두 줄만·정산 계정 잠금·3번·하루 한 번·날짜 지정 안 섞임 D-374)", "tools/verify_traffic_morning_offline.py", True),
     ("마스터 엑셀 저장 = 임시 파일 → 바꿔 끼우기(끊겨도 옛 마스터 · 엑셀 열림 PermissionError · 좀비 Chrome 경로 D-376)", "tools/verify_workbook_save_offline.py", True),
     ("노출·방문자 아침 보충 앱 연결(1분 타이머·다른 실행 중 기다림·무인 앱 08:00 보충 뒤 종료 D-374)", "tools/verify_ui_morning_offline.py", True),
+    ("배포 업데이트(실행 중 앱·정산 멈춤 → 복사 · output·data·config 보존 · 멈추기 실패 = 복사 안 함)", "tools/verify_deploy_update_offline.py", True),
     ("오프라인 실증(워크북·매칭·키워드선정)", "tools/verify_offline.py", False),
 ]
 
