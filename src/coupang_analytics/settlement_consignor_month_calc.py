@@ -177,6 +177,9 @@ def _sales_row(st: MonthState, p: dict) -> None:
         c[4] += sett - (s - cp - fee)
 
 
+SHIP_EST = "상품 모름(같은 주문·반품 조회 없음) → 이 달 윙 상품 정산금 비율로 나눔(D-391 ④)"
+
+
 def ships(st: MonthState) -> None:
     """상품 없는 윙 배송비 줄 = 같은 주문 상품 → 없으면 반품 조회 상품(기존 코드 _split 과 같은 규칙)."""
     rows = st.d["file_rows"]
@@ -192,6 +195,7 @@ def ships(st: MonthState) -> None:
             found[(oid, opt, rec, s, sett)] = (oid, s, cp, fee, sett, (rec or pe)[:7])
     st.ship_m = [0, 0]
     st.ship_all = [0, 0]
+    st.ship_w = MA.wing_month_weights(st.d["prows"], st.m, st.opt2pid)
     unk: list = []
     for item in found.values():
         if item[5] == st.m:
@@ -208,6 +212,8 @@ def _ship_pids(st: MonthState, oid: str) -> tuple[list, str]:
         return pids, "같은 주문 상품"
     returns = st.d["v"].get("returns") or {}
     vids = [str(i.get("vendorItemId")) for r_ in returns.get(oid) or [] for i in r_.get("items") or []]
+    if not vids:
+        return [], SHIP_EST
     return sorted({st.vid_pid(v) for v in vids if st.vid_pid(v)}), "반품 조회 상품"
 
 
@@ -216,11 +222,11 @@ def _ship_one(st: MonthState, item: tuple, unk: list) -> None:
     st.ship_all[0] += s
     st.ship_all[1] += sett
     pids, how = _ship_pids(st, oid)
-    if not pids:
+    ks = {p: 1 / len(pids) for p in pids} or (st.ship_w if how == SHIP_EST else {})    # 주문 안 상품마다 같은 몫
+    if not ks:
         unk.append((oid, s, sett))
         return
-    for pid in pids:                                    # 주문 안 상품마다 같은 몫
-        k = 1 / len(pids)
+    for pid, k in ks.items():
         st.allsales[pid] += s * k
         if st.managed(pid):
             c = st.cols[pid]

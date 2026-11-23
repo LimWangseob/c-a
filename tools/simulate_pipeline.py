@@ -935,6 +935,37 @@ def scenario_promo_end_keeps_daily():
         _check(wb.is_rank_filled(biz, prod, "kw1", "09.03"), f"{biz} 09.03 도 순위 측정")
 
 
+def scenario_ledger_mkt_cleared():
+    print("[시나리오 26c] 대장에서 마케팅 날짜를 지우면 마스터에서도 지움 · 마케팅 열 없는 입력(원장)은 기존 값 유지(D-391 ③)")
+    _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set())
+    from coupang_analytics.workbook import OutputWorkbook
+    d = Path(tempfile.mkdtemp())
+    master = P._master_path(d)
+    accts = _accounts(["a1", "b1"])
+    for a in accts.accounts:                      # 첫날: 대장(마케팅 열 있음)에 두 상품 모두 마케팅 날짜
+        p = a.products[0]
+        p.mkt_from_ledger = True
+        p.mkt_start, p.mkt_end, p.mkt_mon = "2026-09-01", "2026-09-20", "2026-09-30"
+    _ops(accts, d, date_from="2026-09-01", date_to="2026-09-01", resume=False)
+    wb = OutputWorkbook.load(master)
+    _check(wb.marketing_of("비즈-a1", "상품-a1") == ("2026-09-01", "2026-09-20", "2026-09-30"), "첫날 대장 마케팅 기록")
+    accts.accounts[0].products[0].mkt_end = "2026-09-25"   # 둘째 날: 대장에서 종료일 바꿈 → 마스터도 바뀜(계정목록 옛 칸이 덮지 않음)
+    _ops(accts, d, date_from="2026-09-02", date_to="2026-09-02", carry_forward=True)
+    wb = OutputWorkbook.load(master)
+    _check(wb.marketing_of("비즈-a1", "상품-a1")[1] == "2026-09-25",
+           f"대장에서 바꾼 종료일 = 마스터 반영 {wb.marketing_of('비즈-a1', '상품-a1')}")
+    for a in accts.accounts:                      # 셋째 날: a1 = 대장에서 지움 · b1 = 마케팅 열 없는 입력(원장 경로)
+        p = a.products[0]
+        p.mkt_start = p.mkt_end = p.mkt_mon = ""
+        p.mkt_from_ledger = a.account_id == "a1"
+    _ops(accts, d, date_from="2026-09-03", date_to="2026-09-03", carry_forward=True)
+    wb = OutputWorkbook.load(master)
+    _check(wb.marketing_of("비즈-a1", "상품-a1") == ("", "", ""),
+           f"대장에서 지운 마케팅 = 마스터에서도 지움 {wb.marketing_of('비즈-a1', '상품-a1')}")
+    _check(wb.marketing_of("비즈-b1", "상품-b1") == ("2026-09-01", "2026-09-20", "2026-09-30"),
+           f"마케팅 열 없는 입력 = 기존 값 유지 {wb.marketing_of('비즈-b1', '상품-b1')}")
+
+
 def scenario_pwfail_still_ranked():
     print("[시나리오 26] 비밀번호 오류 계정도 그날 날짜 칸 생성 → ③ 순위 측정·판매 공란(D-089, 실측 10-20 유라이프·반달컴퍼니 칸 없음)")
     _STATE.update(discover_calls=0, crash_at=None, error_at=None, need_login=set(), block_login=set(), pw_fail=set())
@@ -1049,6 +1080,7 @@ def main():
     scenario_stale_account_id_pruned()
     scenario_promo_start_keeps_daily()
     scenario_promo_end_keeps_daily()
+    scenario_ledger_mkt_cleared()
     print("=" * 60)
     print("  [완료] 모든 시나리오 통과")
     print("=" * 60)

@@ -27,7 +27,7 @@ from . import daily_snapshot as DS
 from . import settlement_files as SF
 from .settlement_wing_api import _COST_FIELDS, CFS_KINDS
 
-SUSPECT, CHECK = "받기 의심", "확인 필요"
+SUSPECT, CHECK, EXCLUDED = "받기 의심", "확인 필요", "제외"   # 제외 = 정산 대상 아님(받지 않음 · D-389)
 YES, NO, T90 = "예", "아니오", "T-90 필요분만"
 COLUMNS = ("판정", "종류", "계정", "정산일", "기간", "항목", "받은 값", "대조 값", "다시 받기", "근거 파일", "설명")
 LIVE_FIELD = "totalCoupangLiveDeductionAmount"

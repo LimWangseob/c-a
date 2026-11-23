@@ -72,6 +72,7 @@ class OutputWorkbook(_RenderMixin, _IndexMixin, _MetaMixin, _DateMixin, _Lifecyc
         # 회사보유재고(판매자배송 자체재고) — 매 실행 재고현황 시트에서 주입(company_stock.apply_to_workbook).
         # 계정목록 렌더 전용·마스터에 저장 안 함(재로드 시 비고, 다음 실행이 재주입). {(사업자,상품): '창고 , 수량개'}.
         self._company_stock: dict[tuple[str, str], str] = {}
+        self._mkt_from_ledger: set[tuple[str, str]] = set()   # 이번 회차 대장이 정한 마케팅 — 계정목록 되읽기로 덮지 않음(D-391 ③)
         self._reindex()
 
     # ── 생성/로드/저장 ────────────────────────────────────────

@@ -14,16 +14,17 @@ def _split(flags: list[bool]) -> float:
 
 
 def ship_split(ship_rows: list, order_pids: dict, mpids: set, returns: dict, is_managed_vid) -> dict:
-    """윙 배송비 줄(주문번호, 판매액, 정산금액) → 관리/제외/확인 필요 금액.
-    같은 주문의 상품 줄이 있으면 그 상품을 따르고, 없으면(구매확정 전 반품의 왕복배송비) 반품 조회의 반품 상품을 따른다."""
-    out: dict[str, Any] = {"관리": [0.0, 0.0], "제외": [0.0, 0.0], "확인 필요": [0.0, 0.0], "근거": Counter()}
+    """윙 배송비 줄(주문번호, 판매액, 정산금액[, 구매확정 달]) → 관리/제외/확인 필요 금액.
+    같은 주문의 상품 줄이 있으면 그 상품을 따르고, 없으면(구매확정 전 반품의 왕복배송비) 반품 조회의 반품 상품을 따른다.
+    '확인 필요 달' = 확인 필요 금액의 달별 합(호출부가 같은 달 윙 상품 정산금 관리 비율로 나눔 · D-391 ④)."""
+    out: dict[str, Any] = {"관리": [0.0, 0.0], "제외": [0.0, 0.0], "확인 필요": [0.0, 0.0], "확인 필요 달": {}, "근거": Counter()}
 
     def put(share: float, sales: float, settle: float) -> None:
         out["관리"][0] += sales * share
         out["관리"][1] += settle * share
         out["제외"][0] += sales * (1 - share)
         out["제외"][1] += settle * (1 - share)
-    for order, sales, settle in ship_rows:
+    for order, sales, settle, *ym in ship_rows:
         pids = order_pids.get(order)
         if pids:
             put(_split([p in mpids for p in sorted(pids)]), sales, settle)
@@ -37,8 +38,25 @@ def ship_split(ship_rows: list, order_pids: dict, mpids: set, returns: dict, is_
         else:
             out["확인 필요"][0] += sales
             out["확인 필요"][1] += settle
+            u = out["확인 필요 달"].setdefault(ym[0] if ym else "", [0.0, 0.0])
+            u[0] += sales
+            u[1] += settle
             out["근거"]["반품 자료 없음" if rec is None else "반품 기록 없음"] += 1
     return out
+
+
+def wing_month_weights(prows: list, month: str, opt2pid: dict) -> dict:
+    """상품 모르는 윙 배송비(같은 주문·반품 조회로도 못 찾음) 나눔(D-391 ④) = 그 달 상품별 윙 정산금액 몫 → 관리 몫 = 같은 달 윙 상품 정산금
+    관리 비율(다른 계정 반품 조회 줄 백테스트 오차 합 최소 · D-269) · 상품별 월별 줄(배송비·상품 미표기 줄 제외) · 합 0 = {}(나누지 않음)."""
+    w: Counter = Counter()
+    for p in prows:
+        pid = str(p["등록상품ID"])
+        if pid.startswith("옵션 "):
+            pid = opt2pid.get(pid[3:], pid)
+        if str(p["월(매출인식)"])[:7] == month and pid != "배송비" and not pid.startswith("("):
+            w[pid] += p["윙 정산금액"] or 0
+    tot = sum(w.values())
+    return {p: a / tot for p, a in w.items() if a} if tot else {}
 
 
 SVC_FEE = 55000.0

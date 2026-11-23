@@ -428,8 +428,10 @@ def _process_account(report_acc, wb, metrics, inv_by_vid, date_iso, log, save_pa
         rep_name = names[0]
         _migrate_product_blocks(wb, biz, base, rep_name, vids_all, opts, multi, log, names)
         # 수집 주기·마케팅은 상품(대표) 단위. 오늘 대상 아니면 이 상품의 모든 옵션 블록을 오늘치 생략.
-        if product.mkt_start or product.mkt_end or product.mkt_mon:   # 대장에 마케팅 값 있을 때만 반영
-            wb.set_marketing(biz, rep_name, product.mkt_start, product.mkt_end, product.mkt_mon)
+        # 대장에 마케팅 열이 있으면 빈 칸 = 지움도 반영(D-391 ③) · 열 없는 입력(원장)은 값 있을 때만
+        if product.mkt_from_ledger or product.mkt_start or product.mkt_end or product.mkt_mon:
+            wb.set_marketing(biz, rep_name, product.mkt_start, product.mkt_end, product.mkt_mon,
+                             from_ledger=product.mkt_from_ledger)
         if wb.has_marketing():
             _due, _why = wb.product_due(biz, rep_name, date_iso)
             if not _due:

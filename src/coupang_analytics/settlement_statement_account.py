@@ -249,7 +249,7 @@ class AccountBase:
                 elif f.channel == "윙" and (r.sales or r.settle) and not SL.sold_2025(f"{(r.recognized or f.period_end):%Y-%m}"):
                     ships[(str(r.order_id), r.option_id, r.recognized, r.sales, r.settle)] = (       # 2025 판매 배송비 = 정산 밖(D-328)
                         str(r.order_id), r.sales, r.settle, f"{(r.recognized or f.period_end):%Y-%m}")
-        ship_rows = [x[:3] for x in ships.values() if not MA.pre_contract(x[3], self.cdate)]
+        ship_rows = [x for x in ships.values() if not MA.pre_contract(x[3], self.cdate)]
         self.v = verify_json(self.ctx.base, self.acct)
         self.ship = MA.ship_split(ship_rows, self.order_pids, self.mpids, self.v.get("returns") or {}, self.is_mv)
         for _o, s_, e_, ym_ in ships.values():                 # 계약 전 배송비 = 관리 밖(D-185 ②)
@@ -337,10 +337,15 @@ class AccountBase:
         tm, tx, ship = self.tm, self.tx, self.ship
         for k in ("관리", "제외"):
             (tm if k == "관리" else tx).update({"sales": ship[k][0], "settle": ship[k][1]})
-        ship_r = tm["settle"] / (tm["settle"] + tx["settle"]) if tm["settle"] + tx["settle"] else 0.0   # 상품을 모르는 배송비 = 확정 정산금의 관리 비율(D-162)
-        tm.update({"sales": ship["확인 필요"][0] * ship_r, "settle": ship["확인 필요"][1] * ship_r})
-        tx.update({"sales": ship["확인 필요"][0] * (1 - ship_r), "settle": ship["확인 필요"][1] * (1 - ship_r)})
-        self.ship_u = (ship["확인 필요"][0] * ship_r, ship["확인 필요"][1] * ship_r)   # 위 관리 몫 — 검산·배송비 줄에도 같은 값
+        u = [0.0, 0.0]          # 상품을 모르는 배송비 = 그 줄 달의 같은 달 윙 상품 정산금 관리 비율(D-391 ④ · 다른 계정 반품 조회 줄 백테스트 오차 최소 D-269)
+        for ym, (s_, e_) in ship["확인 필요 달"].items():
+            m_, all_ = self.mset.get(("윙", ym), (0.0, 0.0))
+            r = m_ / all_ if all_ else 0.0                  # 그 달 윙 상품 정산 없음 = 관리 몫 0
+            u[0] += s_ * r
+            u[1] += e_ * r
+        tm.update({"sales": u[0], "settle": u[1]})
+        tx.update({"sales": ship["확인 필요"][0] - u[0], "settle": ship["확인 필요"][1] - u[1]})
+        self.ship_u = (u[0], u[1])   # 위 관리 몫 — 검산·배송비 줄에도 같은 값
         tm["other"] = tm["sales"] - tm["coupon"] - tm["fee"] - tm["settle"]
 
     # ── 정산 중 판매(D-262 · D-264 · D-266 · D-269 — 나누기 = settlement_statement_pending) ──

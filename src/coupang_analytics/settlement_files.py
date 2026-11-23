@@ -261,12 +261,13 @@ def _review_rows(name: str, rows: list) -> list | None:
 
 
 def review_gap(total: int, amounts: list, settle_date: str, start: str, end: str) -> str:
-    """리뷰 이벤트 리포트 합계 ↔ 그 정산 줄(지급 내역)의 리뷰 이벤트 차감액. 같으면 '', 다르면 '확인 필요' 문구(D-183)."""
+    """리뷰 이벤트 리포트 합계 ↔ 그 정산 줄(지급 내역)의 리뷰 이벤트 차감액. 같으면 '', 다르면 '확인 필요' 문구(D-183).
+    리포트 0줄(합 0)인데 차감 있음 = 쿠팡이 빈 리포트를 줌(재요청도 0줄 · 금액 = 차감 원문) → '' (D-324 ④)."""
     hit = [r for r in amounts if (r.get("정산일"), r.get("기간 시작"), r.get("기간 끝")) == (settle_date, start, end)]
     if not hit:
         return f"확인 필요 — 리뷰 이벤트 리포트 {total:,}원 · 대조할 지급 내역 줄 없음(정산일 {settle_date})"
     want = sum(int(r.get(REVIEW_FIELD) or 0) for r in hit)
-    if want == total:
+    if want == total or total == 0:
         return ""
     return f"확인 필요 — 리뷰 이벤트 리포트 {total:,}원 ≠ 정산 차감 {want:,}원(쿠팡 리포트 줄 없음·상품별 금액 모름)"
 

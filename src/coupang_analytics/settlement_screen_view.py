@@ -19,17 +19,22 @@ from . import daily_snapshot as DS
 WING = "https://wing.coupang.com"
 DIRNAME = "화면응답"
 WAIT_MS = 5000                     # 보기 전환 뒤 화면이 표를 채우는 시간(S4 실측 2~5초)
-VIEW_ONLY = frozenset({"검색", "조회", "구독 관리", "구독 내역 보기"})   # D-340 조회 전용(화면만 바꿈 · 근거표 7·12·13·17)
+VIEW_ONLY = frozenset({"검색", "조회", "구독 관리", "구독 내역 보기",
+                       "검색 열기"})   # D-340 조회 전용(화면만 바꿈 · 근거표 7·12·13·17 · '검색 열기' = 검색 조건 펼치기 nicoable 11-23)
 FORBIDDEN = ("동의", "신청", "저장", "보고서", "만들기", "해지", "변경", "가입", "구독하기", "삭제", "수정", "등록", "취소",
              "확인", "적용", "다운로드", "요청", "결제", "충전")
+# 공지 팝업 닫기 글자 — 일반 버튼에는 쓰지 않음(check_button 은 그대로 거부). 출처 '팝업' 의 표지 글자가 전부 든 팝업 1개 안에서만,
+# 그 팝업에 금지 낱말(닫기 글자 자신 빼고)이 없을 때만 누른다(nicoable 11-23 BI 공지 팝업 · Esc 로 안 닫힘 · '다시 보지 않기' 안 누름).
+POPUP_CLOSE = frozenset({"확인"})
 # 출처ID → 화면(None = 기록 없음) · 버튼(조회 전용 · 순서대로) · 응답(주소 경로 조각 — 이 조각이 든 응답만 기록) · 저장칸(None = 칸 이름만) ·
+# 팝업(있으면 = 화면 열자마자 덮는 공지 팝업 {표지: 팝업에 든 글자들, 닫기: POPUP_CLOSE 글자}) ·
 # ②번 = 정산자료_수집진행률_1118.md 2절 ②표 번호 · 없음 = 그 조각 기록 없음(NeedLive 사유).
 SPECS: dict = {
     "SV-RG-HOME": {"②": 6, "화면": f"{WING}/tenants/rfm/settlements/home", "버튼": (), "응답": ("/tenants/rfm/",),
                    "저장칸": None, "설명": "로켓그로스 정산현황 홈 띠 '무료 체험 종료일'(이용권 관리·지금 가입 버튼 금지)"},
     "SV-NOTICES": {"②": 5, "화면": f"{WING}/tenants/wing-account/partner/notices?page=0&keyword=", "버튼": (),
                    "응답": ("/tenants/wing-account/",), "저장칸": None, "설명": "윙 공지 목록(본문 주소 = 기록 없음 · 첫 시험 뒤)"},
-    "SV-RETURN-CHANNEL": {"②": 7, "화면": f"{WING}/tenants/sfl-portal/return-delivery/list", "버튼": ("검색",),
+    "SV-RETURN-CHANNEL": {"②": 7, "화면": f"{WING}/tenants/sfl-portal/return-delivery/list", "버튼": ("검색 열기", "검색"),
                           "응답": ("/tenants/sfl-portal/return-delivery/search",), "저장칸": None,
                           "설명": "반품 접수채널(T-118 · D-333) — 응답 칸(접수채널 칸 이름) 기록 없음 · 구매자 정보 = 값 저장 안 함"},
     "SV-RETURN-BOX": {"②": 12, "화면": None, "버튼": (), "응답": (), "저장칸": None,
@@ -39,7 +44,8 @@ SPECS: dict = {
                    "저장칸": None, "없음": "정산차감액(F) 클릭 대상 글자·응답 주소 기록 없음(seankim137 로그인 막힘 T-5)",
                    "설명": "매출내역 F(정산차감) 상세 팝업(T-39)"},
     "SV-BI-SUB": {"②": 17, "화면": f"{WING}/tenants/business-insight/sales-analysis", "버튼": ("구독 관리", "구독 내역 보기"),
-                  "응답": ("/tenants/business-insight/",), "저장칸": None,
+                  "응답": ("/tenants/rfm-ss/api/subscription/",), "저장칸": None,
+                  "팝업": {"표지": ("베타 버전 출시", "다시 보지 않기"), "닫기": "확인"},
                   "설명": "비즈니스 인사이트 플랜·유료 시작일(T-121·T-116 · 구독 해지하기·카테고리 변경·다시 구독하기 금지)"},
     "SV-REVIEW-DETAIL": {"②": 15, "화면": f"{WING}/tenants/rfm-ss/manage-review-campaign/landing", "버튼": (), "응답": (),
                          "저장칸": None, "없음": "캠페인 상세(리뷰별) 화면 주소·여는 글자 기록 없음(목록만 받음)",
@@ -69,12 +75,48 @@ def check_button(text: str) -> None:
         raise NotViewOnly(f"'{text}' = 조회 전용 목록 밖(애매) — 누르지 않음 · 확인 필요")
 
 
+def check_popup(pop: dict) -> None:
+    """공지 팝업 정의 판정(화면 열기 전) — 닫기 = POPUP_CLOSE 글자만 · 표지 1개 이상 · 표지에 금지 낱말 없음."""
+    if pop.get("닫기") not in POPUP_CLOSE:
+        raise NotViewOnly(f"팝업 닫기 '{pop.get('닫기')}' = 닫기 허용 목록 밖 — 누르지 않음")
+    if not pop.get("표지"):
+        raise NotViewOnly("팝업 표지 글자 없음 — 어느 팝업인지 몰라 누르지 않음")
+    hit = [w for t in pop["표지"] for w in FORBIDDEN if w in t]
+    if hit:
+        raise NotViewOnly(f"팝업 표지 {list(pop['표지'])} 에 금지 낱말 {hit} — 누르지 않음")
+
+
 def ready(spec: dict) -> None:
     """받을 수 있는 출처인지(누르기 전·화면 열기 전에 판정) — 아니면 NeedLive/NotViewOnly."""
     if not spec.get("화면") or not spec.get("응답"):
         raise NeedLive(spec.get("없음") or "화면 주소·응답 주소 기록 없음")
     for t in spec.get("버튼") or ():
         check_button(t)
+    if spec.get("팝업"):
+        check_popup(spec["팝업"])
+
+
+def close_popup(page, pop: dict, wait_ms: int) -> str:
+    """화면을 덮은 공지 팝업 닫기 — 표지 첫 글자가 안 보이면 '없음'. 보이면 표지 전부 든 dialog 1개 · 그 안 금지 낱말 0(닫기 글자 빼고) ·
+    닫기 버튼 1개일 때만 누르고, 닫혔는지 다시 본다. 어긋나면 NeedLive/NotViewOnly(누르지 않음 · '다시 보지 않기' 는 안 누름)."""
+    if page.get_by_text(pop["표지"][0]).count() == 0:
+        return "없음"
+    dlg = page.get_by_role("dialog")
+    for t in pop["표지"]:
+        dlg = dlg.filter(has_text=t)
+    if dlg.count() != 1:
+        raise NeedLive(f"팝업 표지 {list(pop['표지'])} 든 dialog {dlg.count()}개 — 팝업 구조 확인 필요(누르지 않음)")
+    hit = [w for w in FORBIDDEN if w != pop["닫기"] and dlg.filter(has_text=w).count()]
+    if hit:
+        raise NotViewOnly(f"팝업에 금지 낱말 {hit} — '{pop['닫기']}' 누르지 않음 · 확인 필요")
+    btn = dlg.get_by_role("button", name=pop["닫기"], exact=True)
+    if btn.count() != 1:
+        raise NeedLive(f"팝업 '{pop['닫기']}' 버튼 {btn.count()}개 — 팝업 구조 확인 필요(누르지 않음)")
+    btn.click()
+    page.wait_for_timeout(wait_ms)
+    if dlg.count():
+        raise NeedLive(f"팝업 '{pop['닫기']}' 눌렀는데 안 닫힘 — 확인 필요")
+    return "닫음"
 
 
 def schema(obj, path: str = "") -> list[str]:
@@ -118,9 +160,12 @@ def capture(page, spec: dict, wait_ms: int = WAIT_MS) -> dict:
         if any(f in urlsplit(resp.url).path for f in frags):
             got.append(resp)
     page.on("response", on_response)
+    popup = None
     try:
         page.goto(spec["화면"])
         page.wait_for_timeout(wait_ms)
+        if spec.get("팝업"):
+            popup = close_popup(page, spec["팝업"], wait_ms)
         for t in spec.get("버튼") or ():
             btn = page.get_by_role("button", name=t, exact=True)
             if btn.count() != 1:
@@ -131,8 +176,11 @@ def capture(page, spec: dict, wait_ms: int = WAIT_MS) -> dict:
         page.remove_listener("response", on_response)
     if not got:
         raise NeedLive(f"화면이 {list(frags)} 응답을 부르지 않음 — 화면·응답 기록 정정 필요")
-    return {"화면": urlsplit(spec["화면"]).path, "버튼": list(spec.get("버튼") or ()),
-            "응답": [_entry(r, spec.get("저장칸")) for r in got]}
+    rec = {"화면": urlsplit(spec["화면"]).path, "버튼": list(spec.get("버튼") or ()),
+           "응답": [_entry(r, spec.get("저장칸")) for r in got]}
+    if popup:
+        rec["팝업"] = popup
+    return rec
 
 
 def save(base: Path, sid: str, account_id: str, rec: dict) -> Path:

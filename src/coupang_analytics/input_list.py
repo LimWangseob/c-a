@@ -33,6 +33,7 @@ class Product:
     mkt_start: str = ""             # 마케팅 시작일(관리대장 입력) — 그 상품만 매일 수집·비고·배경색
     mkt_end: str = ""               # 마케팅 종료일
     mkt_mon: str = ""               # 모니터링 종료일(이후 수집 중단)
+    mkt_from_ledger: bool = False   # 대장에 마케팅 열이 있음 → 빈 칸 = 지움을 마스터에 반영(D-391 ③) · 열 없는 입력(원장) = 기존 값 유지
     inbound_summary: str = ""       # 로켓그로스 최근입고 요약(관리대장) — 헤더 '최근입고 : …'(소유자 2026-09-24)
     discontinued: bool = False      # 대장 판매중지/취소선(#8 2026-09-27): 수집은 하되 ③순위만 제외
     sale_status: str = ""           # 발견 상품의 쿠팡 판매상태(판매중/부분판매중/판매중지 등) — 중복 리스팅 중 판매중지 제외용(2026-09-29)
@@ -467,6 +468,7 @@ def _handle_product_row(st: "_ParseState", prod: str, acct: str, row, row_no: in
     st.current_prod = Product(prod, mkt_start=_norm_date(_cell(row, idx.get("mkt_start"))),
                               mkt_end=_norm_date(_cell(row, idx.get("mkt_end"))),
                               mkt_mon=_norm_date(_cell(row, idx.get("mkt_mon"))),
+                              mkt_from_ledger=any(k in idx for k in ("mkt_start", "mkt_end", "mkt_mon")),
                               inbound_summary=_inbound_summary(row, idx), discontinued=disc)
     if st.current_acct is None:
         st.errors.append(f"{row_no}행: 소속 계정 없이 상품 '{prod}'")

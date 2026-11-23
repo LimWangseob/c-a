@@ -66,6 +66,11 @@ def t1_ledger_rows() -> None:
     # 줄이 존재하는 계정ID는 모두 ledger_account_ids(삭제/판매중지 상태여도 '줄은 있음' → 완전삭제 대상 아님)
     assert il.ledger_account_ids >= {"id_a", "id_b", "id_c"}, il.ledger_account_ids
     assert il.accounts[0].products[0].mkt_mon == "2026-10-31"
+    # D-391 ③: 대장에 마케팅 열이 있으면 빈 칸도 '대장 값'(=지움 반영) · 열 자체가 없는 대장은 모름(=기존 값 유지)
+    assert all(p.mkt_from_ledger for a in il.accounts for p in a.products), "마케팅 열 있는 대장 = mkt_from_ledger"
+    assert il.accounts[1].products[0].mkt_start == "" and il.accounts[1].products[0].mkt_from_ledger
+    il_nomkt = parse_input_rows([["대표자명", "사업자명", "계정아이디", "상품명"], ["홍길동", "가게1", "id_a", "텀블러"]])
+    assert not il_nomkt.accounts[0].products[0].mkt_from_ledger, "마케팅 열 없는 대장 = 지움 판단 안 함"
     assert any("보온병" in s for s in il.struck) and any("id_c" in s for s in il.struck)
     pw = _first_pw(rows)
     assert pw["id_a"] == "pass1" and pw["id_b"] == "pass2"

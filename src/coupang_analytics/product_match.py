@@ -344,12 +344,14 @@ def build_tracked(ledger: list[Product], res: dict[int, Product]) -> tuple[list[
     def _unmatched(lp: Product) -> Product:
         return Product(name=lp.name, title=lp.name, kind=config.KIND_PERSONAL, options=[Option("")],
                        mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon,
+                       mkt_from_ledger=lp.mkt_from_ledger,
                        inbound_summary=lp.inbound_summary, discontinued=lp.discontinued, ledger_name=lp.name)
 
     def _tracked(lp: Product, d: Product, opts: list[Option], name: str) -> Product:
         return Product(name=name, title=name, kind=d.kind,
                        options=[Option(o.label, list(o.vendor_item_ids), list(o.product_ids)) for o in opts],
                        mkt_start=lp.mkt_start, mkt_end=lp.mkt_end, mkt_mon=lp.mkt_mon,
+                       mkt_from_ledger=lp.mkt_from_ledger,
                        inbound_summary=lp.inbound_summary, discontinued=lp.discontinued,
                        ledger_name=lp.name)                 # 대장 마케팅·입고·판매중지·대장명 이월
 

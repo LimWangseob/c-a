@@ -48,16 +48,71 @@ class Btn:
         return self.page.buttons.get(self.name, 0)
 
     def click(self):
+        if any(d.open for d in self.page.dialogs):
+            raise Blocked(f"'{self.name}' — 팝업이 화면을 덮어 눌리지 않음")
         self.page.clicked.append(self.name)
+        self.page.buttons.update(self.page.reveal.get(self.name, {}))
         for r in self.page.on_click.get(self.name, ()):
             self.page.fire(r)
 
 
-class FakePage:
-    """화면 열기·버튼 누르기 때 응답을 '스스로' 받는 가짜(Playwright 쪽 이름만 같음)."""
+class Blocked(Exception):
+    """팝업이 덮은 화면의 버튼을 누름(실제 Playwright = 클릭 시간 초과)."""
 
-    def __init__(self, buttons=None, on_goto=(), on_click=None):
+
+class Dialog:
+    """화면을 덮는 팝업 — text = 팝업 안 글자 전부(버튼 글자 포함) · buttons = 팝업 안 버튼 · closes = 닫기 누르면 닫힘."""
+
+    def __init__(self, text, buttons, closes=True):
+        self.text, self.buttons, self.closes, self.open = text, dict(buttons), closes, True
+
+
+class DialogLoc:
+    def __init__(self, page, pred=lambda d: True):
+        self.page, self.pred = page, pred
+
+    def _hits(self):
+        return [d for d in self.page.dialogs if d.open and self.pred(d)]
+
+    def filter(self, has_text):
+        return DialogLoc(self.page, lambda d, p=self.pred: p(d) and has_text in d.text)
+
+    def count(self):
+        return len(self._hits())
+
+    def get_by_role(self, role, name, exact):
+        assert role == "button" and exact is True
+        return DialogBtn(self, name)
+
+
+class DialogBtn:
+    def __init__(self, loc, name):
+        self.loc, self.name = loc, name
+
+    def count(self):
+        return sum(d.buttons.get(self.name, 0) for d in self.loc._hits())
+
+    def click(self):
+        self.loc.page.clicked.append(f"팝업:{self.name}")
+        for d in self.loc._hits():
+            d.open = not d.closes
+
+
+class TextLoc:
+    def __init__(self, page, text):
+        self.page, self.text = page, text
+
+    def count(self):
+        return sum(1 for d in self.page.dialogs if d.open and self.text in d.text)
+
+
+class FakePage:
+    """화면 열기·버튼 누르기 때 응답을 '스스로' 받는 가짜(Playwright 쪽 이름만 같음) · dialogs = 화면을 덮는 팝업 ·
+    reveal = 버튼을 누르면 새로 보이는 버튼(예: '검색 열기' → '검색')."""
+
+    def __init__(self, buttons=None, on_goto=(), on_click=None, dialogs=(), reveal=None):
         self.buttons, self.on_goto, self.on_click = buttons or {}, list(on_goto), on_click or {}
+        self.dialogs, self.reveal = list(dialogs), reveal or {}
         self.listeners: list = []
         self.visited: list = []
         self.clicked: list = []
@@ -81,9 +136,14 @@ class FakePage:
     def wait_for_timeout(self, ms):
         pass
 
-    def get_by_role(self, role, name, exact):
+    def get_by_role(self, role, name=None, exact=None):
+        if role == "dialog":
+            return DialogLoc(self)
         assert role == "button" and exact is True
         return Btn(self, name)
+
+    def get_by_text(self, text):
+        return TextLoc(self, text)
 
     def evaluate(self, *a, **k):
         raise AssertionError("페이지 안 스크립트 금지(D-296)")
@@ -94,7 +154,7 @@ class FakePage:
 
 def v1_buttons():
     print("[V1] 조회 전용 버튼만 — 금지 낱말·목록 밖(애매) = 누르지 않음")
-    for t in ("검색", "조회", "구독 관리", "구독 내역 보기"):
+    for t in ("검색", "조회", "구독 관리", "구독 내역 보기", "검색 열기"):
         SV.check_button(t)
     for t in ("보고서 만들기", "구독 해지하기", "다시 구독하기", "카테고리 변경", "반출 신청", "동의", "저장", "이용권 관리", "지금 가입",
               "확인", "엑셀 다운로드", "상세"):
@@ -103,17 +163,18 @@ def v1_buttons():
             raise AssertionError(f"'{t}' 가 눌릴 수 있음")
         except SV.NotViewOnly:
             pass
-    ok("조회 4종만 허용 · 보고서 만들기·해지·변경·신청·동의·저장·가입·확인·다운로드·목록 밖('이용권 관리'·'상세') = 거부")
+    ok("조회 5종만 허용(검색 열기 = nicoable 11-23) · 보고서 만들기·해지·변경·신청·동의·저장·가입·확인·다운로드·목록 밖('이용권 관리'·'상세') = 거부")
 
 
 def v2_return_channel():
     print("[V2] 반품 접수채널(②7) — 화면 열기 → '검색' → 화면이 받은 search 응답 = 칸 이름·형만(구매자 값 없음) · 쿼리 안 남김")
     body = {"data": {"content": [{"receiptChannel": "SELLER", "customerName": "홍길동", "orderId": 1}], "total": 1}}
-    page = FakePage(buttons={"검색": 1}, on_goto=[Resp("https://wing.coupang.com/tenants/sfl-portal/return-delivery/dashboard", {})],
+    page = FakePage(buttons={"검색 열기": 1, "검색": 1},
+                    on_goto=[Resp("https://wing.coupang.com/tenants/sfl-portal/return-delivery/dashboard", {})],
                     on_click={"검색": [Resp("https://wing.coupang.com/tenants/sfl-portal/return-delivery/search?from=1", body),
                                       Resp("https://wing.coupang.com/tenants/other/x", {"a": 1})]})
     rec = SV.capture(page, SV.SPECS["SV-RETURN-CHANNEL"])
-    assert page.visited == ["https://wing.coupang.com/tenants/sfl-portal/return-delivery/list"] and page.clicked == ["검색"]
+    assert page.visited == ["https://wing.coupang.com/tenants/sfl-portal/return-delivery/list"] and page.clicked == ["검색 열기", "검색"]
     assert [e["주소"] for e in rec["응답"]] == ["/tenants/sfl-portal/return-delivery/search"], rec
     e = rec["응답"][0]
     assert "data.content[].receiptChannel:str" in e["칸"] and "data.content[].customerName:str" in e["칸"], e
@@ -124,15 +185,15 @@ def v2_return_channel():
         assert p.parent == Path(td) / "자료출처" / SV.DIRNAME / "SV-RETURN-CHANNEL" / "acc1", p
         with gzip.open(p, "rt", encoding="utf-8") as fh:
             assert json.load(fh)["응답"][0]["칸"] == e["칸"]
-    ok("주소 이동 1 · 검색 1 · search 응답만 · 칸 목록(접수채널·구매자명 칸 이름) · 값·쿼리 없음 · 날짜별 파일")
+    ok("주소 이동 1 · 검색 열기 1 · 검색 1 · search 응답만 · 칸 목록(접수채널·구매자명 칸 이름) · 값·쿼리 없음 · 날짜별 파일")
 
 
 def v3_bi_two_buttons_and_keep():
     print("[V3] BI 구독(②17) — 조회 버튼 2개 차례로 · 저장칸 정하면 그 칸 값만 · JSON 아닌 응답 = 형만")
     sub = {"plan": "BASIC", "paidStartDate": "2026-03-01", "card": "1234"}
     page = FakePage(buttons={"구독 관리": 1, "구독 내역 보기": 1},
-                    on_click={"구독 관리": [Resp("https://wing.coupang.com/tenants/business-insight/api/subscription", sub)],
-                              "구독 내역 보기": [Resp("https://wing.coupang.com/tenants/business-insight/history", "<html>")]})
+                    on_click={"구독 관리": [Resp("https://wing.coupang.com/tenants/rfm-ss/api/subscription/current", sub)],
+                              "구독 내역 보기": [Resp("https://wing.coupang.com/tenants/rfm-ss/api/subscription/v2/history", "<html>")]})
     spec = dict(SV.SPECS["SV-BI-SUB"], 저장칸=("plan", "paidStartDate"))
     rec = SV.capture(page, spec)
     assert page.clicked == ["구독 관리", "구독 내역 보기"], page.clicked
@@ -150,7 +211,7 @@ def v4_need_live():
             raise AssertionError(sid)
         except SV.NeedLive as exc:
             assert page.visited == [] and str(exc), sid
-    page = FakePage(buttons={"검색": 2})
+    page = FakePage(buttons={"검색 열기": 2})
     try:
         SV.capture(page, SV.SPECS["SV-RETURN-CHANNEL"])
         raise AssertionError("버튼 2개인데 누름")
@@ -204,6 +265,97 @@ def v6_cli():
     ok("SV-RG-HOME 칸 목록 저장 · SV-SALES-F = 확인 필요(화면 안 엶) · 모르는 출처 = 실패 줄")
 
 
+# ── nicoable 실측(2026-11-23 · output/_분석_261123_윙화면_nicoable/nicoable_화면4종.md) — 기대값 = 그 문서 줄(코드에서 뽑지 않음) ──
+NICO_NOTICE = ("베타 버전 출시 무료로 구매 고객 통계를 이용할 수 있어요! 이용 기간 11월 16일~11월 30일 12월 1일부터 신규 요금제 "
+               "'프로' 이상 필요 다시 보지 않기 확인")                # 문서 43줄 공지 팝업 글자(버튼 = '다시 보지 않기' 체크박스 · '확인')
+W = "https://wing.coupang.com"
+
+
+def _bi_page(dialogs):
+    """문서 74~77줄: 처음 열 때 = 화면 문서(HTML)·vendor-summary · '구독 관리' = 카테고리 2개 · '구독 내역 보기' = 구독 내역."""
+    return FakePage(buttons={"구독 관리": 1, "구독 내역 보기": 1}, dialogs=dialogs,
+                    on_goto=[Resp(f"{W}/tenants/business-insight/sales-analysis?start_date=2026-11-17", "<html>"),
+                             Resp(f"{W}/tenants/rfm-ss/api/business-insight/vendor-summary", {"a": 1})],
+                    on_click={"구독 관리": [Resp(f"{W}/tenants/rfm-ss/api/category-insight/vendor/categories", []),
+                                         Resp(f"{W}/tenants/rfm-ss/api/info/categories", [])],
+                              "구독 내역 보기": [Resp(f"{W}/tenants/rfm-ss/api/subscription/v2/subscription-change-history",
+                                                 {"content": [{"type": "해지 예약", "plan": "스탠다드"}]})]})
+
+
+def v7_bi_fragment_nicoable():
+    print("[V7] BI 구독(②17) 응답 조각 = nicoable 실측 — 구독 내역 = /tenants/rfm-ss/api/subscription/… · 화면 문서(HTML) 안 잡음")
+    frags = SV.SPECS["SV-BI-SUB"]["응답"]
+    hist = "/tenants/rfm-ss/api/subscription/v2/subscription-change-history"   # 문서 74줄 '(확실 · 누를 때마다 부름)'
+    assert any(f in hist for f in frags), f"구독 내역 응답을 못 잡음 — 지금 조각 {frags}"
+    assert not any(f in "/tenants/business-insight/sales-analysis" for f in frags), f"화면 문서(HTML)를 잡음 — {frags}"
+    page = _bi_page([Dialog(NICO_NOTICE, {"확인": 1})])
+    rec = SV.capture(page, SV.SPECS["SV-BI-SUB"])
+    assert [e["주소"] for e in rec["응답"]] == [hist], rec
+    assert "content[].type:str" in rec["응답"][0]["칸"] and "값" not in rec["응답"][0], rec
+    ok("구독 내역 응답 1개만(카테고리·vendor-summary·HTML 안 잡음) · 칸 이름만")
+
+
+def v8_bi_notice_popup():
+    print("[V8] BI 공지 팝업 — 표지 글자가 다 든 팝업 안 '확인' 1개만 닫기로 누름 · 금지 낱말 '확인'은 그대로(일반 버튼 = 거부)")
+    assert "확인" in SV.FORBIDDEN, "금지 낱말 약화 금지"
+    try:
+        SV.check_button("확인")
+        raise AssertionError("일반 버튼 '확인' 이 눌릴 수 있음")
+    except SV.NotViewOnly:
+        pass
+    page = _bi_page([Dialog(NICO_NOTICE, {"확인": 1})])
+    rec = SV.capture(page, SV.SPECS["SV-BI-SUB"])
+    assert page.clicked == ["팝업:확인", "구독 관리", "구독 내역 보기"], page.clicked      # 문서 5줄 '다시 보지 않기' 안 누름
+    assert rec["팝업"] == "닫음", rec
+    page = _bi_page([])                                                                    # 팝업이 안 뜬 날 = 그대로 진행
+    assert SV.capture(page, SV.SPECS["SV-BI-SUB"])["팝업"] == "없음" and page.clicked == ["구독 관리", "구독 내역 보기"]
+    # 표지가 없는 다른 팝업(예: 해지 확인 창)의 '확인' = 누르지 않음 → 그 팝업이 화면을 덮으면 진행 못 함(조용히 넘어가지 않음)
+    page = _bi_page([Dialog("구독을 해지하시겠습니까? 취소 확인", {"확인": 1, "취소": 1})])
+    try:
+        SV.capture(page, SV.SPECS["SV-BI-SUB"])
+        raise AssertionError("표지 없는 팝업이 덮었는데 지나감")
+    except Blocked:
+        assert "팝업:확인" not in page.clicked, page.clicked
+    # 표지는 다 있는데 금지 낱말이 섞인 팝업 = 누르지 않음(NotViewOnly)
+    page = _bi_page([Dialog(NICO_NOTICE + " 약관에 동의", {"확인": 1})])
+    try:
+        SV.capture(page, SV.SPECS["SV-BI-SUB"])
+        raise AssertionError("금지 낱말 든 팝업의 '확인' 을 누름")
+    except SV.NotViewOnly:
+        assert page.clicked == [], page.clicked
+    # 표지 글자는 보이는데 팝업 구조가 아님 · '확인' 2개 · 눌러도 안 닫힘 = NeedLive(확인 필요)
+    for dlg in ([Dialog(NICO_NOTICE, {"확인": 1}), Dialog(NICO_NOTICE, {"확인": 1})],
+                [Dialog(NICO_NOTICE, {"확인": 2})], [Dialog(NICO_NOTICE, {"확인": 1}, closes=False)]):
+        page = _bi_page(dlg)
+        try:
+            SV.capture(page, SV.SPECS["SV-BI-SUB"])
+            raise AssertionError(dlg)
+        except SV.NeedLive:
+            assert "구독 관리" not in page.clicked and not page.listeners, page.clicked
+    # 출처 정의 자체가 위험하면 화면도 안 엶(닫기 글자 = 허용 목록 밖 · 표지에 금지 낱말 · 표지 없음)
+    for pop in ({"표지": ("베타 버전 출시",), "닫기": "동의"}, {"표지": ("신청 안내",), "닫기": "확인"}, {"표지": (), "닫기": "확인"}):
+        page = _bi_page([Dialog(NICO_NOTICE, {"확인": 1})])
+        try:
+            SV.capture(page, dict(SV.SPECS["SV-BI-SUB"], 팝업=pop))
+            raise AssertionError(pop)
+        except SV.NotViewOnly:
+            assert page.visited == [] and page.clicked == [], pop
+    ok("공지 팝업 '확인'만 닫음('다시 보지 않기' 안 누름) · 일반 '확인' 거부 그대로 · 다른 팝업·금지 낱말 팝업 안 누름 · 애매 = NeedLive")
+
+
+def v9_return_open_search():
+    print("[V9] 반품(②7) — 검색 조건 접힘 → '검색 열기' → '검색' 차례(문서 83·84줄) · 접힌 채 '검색' 0개")
+    SV.check_button("검색 열기")
+    body = {"data": {"content": [{"receiptChannel": "SELLER"}]}}
+    page = FakePage(buttons={"검색 열기": 1}, reveal={"검색 열기": {"검색": 1}},
+                    on_goto=[Resp(f"{W}/tenants/sfl-portal/return-delivery/dashboard?to=2026-11-23", {})],
+                    on_click={"검색": [Resp(f"{W}/tenants/sfl-portal/return-delivery/search", body)]})
+    rec = SV.capture(page, SV.SPECS["SV-RETURN-CHANNEL"])
+    assert page.clicked == ["검색 열기", "검색"], page.clicked
+    assert [e["주소"] for e in rec["응답"]] == ["/tenants/sfl-portal/return-delivery/search"], rec
+    ok("'검색 열기' → '검색' · search 응답만")
+
+
 def main() -> int:
     v1_buttons()
     v2_return_channel()
@@ -211,6 +363,9 @@ def main() -> int:
     v4_need_live()
     v5_registry()
     v6_cli()
+    v7_bi_fragment_nicoable()
+    v8_bi_notice_popup()
+    v9_return_open_search()
     print("윙 화면 보기·응답 기록 틀 — 전부 통과")
     return 0
 

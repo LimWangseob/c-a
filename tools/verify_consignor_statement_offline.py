@@ -296,6 +296,36 @@ def test_t125_additional_pay() -> None:
     assert [x["amount"] for x in flow(SimpleNamespace(basis="2026-11-10"), rows_d)] == [0, 0, 117_960, 0]
 
 
+def _ship_st(m: str, prows: list, file_rows: list) -> SimpleNamespace:
+    cols: dict = defaultdict(lambda: [0.0] * 9)
+    return SimpleNamespace(m=m, opt2pid={}, j=[], chk=[], ship_stats=0, cols=cols, allsales=defaultdict(float),
+                           managed=lambda p: p == "P1", vid_pid=lambda v: "", d={"file_rows": file_rows, "v": {}, "prows": prows})
+
+
+def test_d391_unknown_ship_same_month_wing_ratio() -> None:
+    """D-391 ④(소유자 11-23 "로그인 비번 오류로 안됨, 다른 계정에서 도출된 산출식을 적용할것.") — 같은 주문 상품·반품 조회로도 상품을 못 찾은
+    윙 배송비 줄 = 그 달 윙 상품 정산금 비율로 상품에 나눔 → 관리 몫 = '같은 달 윙 상품 정산금 관리 비율'(ⓒ · 다른 계정 반품 조회 169줄 백테스트 오차
+    합 최소 `output\\_검증_261117_정산끝난달\\결과_1_배송비.md` 3·6절 · D-269). 그 달 윙 상품 정산이 없으면 금액에 넣지 않고 '확인 필요' 문장.
+    기대값 = 손 계산(배송비 6,000 · 수수료 198 · 정산 5,802 = gbseller808 실측 줄 모양 · 관리 비율 30,000/100,000 = 0.3)."""
+    from coupang_analytics.settlement_consignor_month_calc import ships
+
+    def prow(ym: str, pid: str, wing_settle: int) -> dict:
+        return {"월(매출인식)": ym, "등록상품ID": pid, "윙 정산금액": wing_settle, "쿠팡 정산금액 합계(부가비용 차감 전)": wing_settle}
+
+    def frow(oid: str, day: str) -> tuple:     # (파일, 판매 방식, 종류, 기간 시작, 기간 끝, 주문, 상품, 옵션, 상품명, 수량, 판매, 쿠폰, 수수료, 정산, 구매확정, 구분, 총액)
+        return (0, "윙", "주정산", day, day, oid, "", "", "", 0, 6_000, 0, 198, 5_802, day, "판매", 6_000)
+    prows = [prow("2026-02", "P1", 30_000), prow("2026-02", "P2", 70_000), prow("2026-02", "배송비", 5_802)]
+    st = _ship_st("2026-02", prows, [frow("X", "2026-02-10")])
+    ships(st)
+    assert [round(x, 1) for x in st.ship_m] == [1_800.0, 1_740.6] and st.ship_all == [6_000, 5_802], (st.ship_m, st.ship_all)
+    assert [round(x, 1) for x in st.cols["P1"][1:5]] == [1_800.0, 0.0, -59.4, 0.0] and "P2" not in st.cols, dict(st.cols)
+    assert round(st.allsales["P1"], 1) == 1_800.0 and round(st.allsales["P2"], 1) == 4_200.0, st.allsales
+    assert any("D-391" in j for j in st.j) and not [j for j in st.j if "금액에 넣지 않음" in j], st.j
+    none = _ship_st("2026-04", [prow("2026-04", "P1", 0)], [frow("Z", "2026-04-10")])   # 그 달 윙 상품 정산 없음
+    ships(none)
+    assert none.ship_m == [0, 0] and any("확인 필요" in j and "금액에 넣지 않음" in j for j in none.j), (none.ship_m, none.j)
+
+
 def test_failed_checks() -> None:
     cash = "검산(실제 = 정산금액 − 공제 − 판매 조정)"
     d = {"checks": [{"검사": "a", "차이": 0}, {"검사": "b", "차이": 0.6}, {"검사": "c", "차이": -1}, {"검사": "참고", cash: 2}]}
@@ -622,7 +652,7 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     except AttributeError:
         pass
-    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_expect_values, test_flow_fixed, test_t125_additional_pay, test_failed_checks, test_load_judge,
+    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_expect_values, test_flow_fixed, test_t125_additional_pay, test_d391_unknown_ship_same_month_wing_ratio, test_failed_checks, test_load_judge,
               test_sale_months_2025_excluded, test_render, test_fixed_render, test_product_pages, test_overflow, test_unsplittable, test_check_reject,
               test_multi_month, test_tool):
         f()
