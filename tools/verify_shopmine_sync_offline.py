@@ -5,6 +5,9 @@
 ⑥되쓰기(구글시트 셀·credstore 갱신·값2 비움) ⑦end-to-end(리포트에 비번 값 없음·요약 숫자). 비번 평문은 어디에도 안 남는다.
 T-160 안전장치: 자격 없음 하루 1번 로그 · 샵마인 값 = 24시간 안 쿠팡 거부값이면 대장 안 덮음 · 리포트 '샵마인=대장' 값1/값2 ·
 되쓴 뒤 비밀번호 후보 다시 반영(on_applied) · 앱 훅 연결.
+D-389(소유자 2026-11-23 '내가 별도 작업 없이 진행되도록 수정해줘'): 설정 탭 입력 = make_login(CLI 와 같은 함수·D-196 기본값) ·
+discover 자동(필드 대소문자·0건·없음) · 샵마인 로그인 거부 = 표시 후 매일 재시도 안 함 · 첫날 = 대조 리포트만 · 다음 날 자동 반영 ·
+⑤ 대장 값 = 지난 로그인 성공값이고 샵마인 값은 아니면 대장 안 덮음 · 설정 탭 화면(비번 칸 가림·값 미노출).
 
     python tools/verify_shopmine_sync_offline.py
 """
@@ -12,7 +15,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -265,7 +268,7 @@ def test_daily_gate_nocred_logs_once():
         sm.store_login({"CompanyId": "co1", "UserPassword": SECRET}, store)
         assert sm.daily_gate(store, "2026-11-23", "", "2026-11-23") == sm.GATE_RUN, "자격 있으면 실행"
         assert sm.daily_gate(store, "2026-11-23", "2026-11-23", "") == sm.GATE_DONE, "오늘 이미 함 = 안 함"
-    assert sm.NOCRED_MSG == r"[샵마인] 자격 없음 — 동기화 안 함(tools\shopmine_sync.py setup 필요)", sm.NOCRED_MSG
+    assert "설정 탭" in sm.NOCRED_MSG and "샵마인 로그인 입력" in sm.NOCRED_MSG and "setup" not in sm.NOCRED_MSG, sm.NOCRED_MSG
     ok("자격 없음 — 하루 1번 로그(그날 두 번째 조용히·다음 날 다시) · 자격 있으면 실행 · 오늘 이미 함 = 안 함")
 
 
@@ -328,10 +331,191 @@ def test_on_applied_reapplies_candidates():
         assert got == [], "미리보기(쓰기 없음)는 다시 반영 안 부름"
     src = (ROOT / "ui" / "app_qt.py").read_text(encoding="utf-8")
     body = src[src.index("def _maybe_shopmine_sync"):src.index("def _maybe_account_suspend")]
-    assert "shopmine_sync.daily_gate(" in body and "shopmine_sync.NOCRED_MSG" in body, "앱 훅 = 하루 1번 자격 없음 로그"
+    assert "shopmine_sync.app_daily_hook(" in body, "앱 훅 = app_daily_hook(하루 1번 자격 안내·첫날 리포트만 D-389)"
     assert "on_applied=" in body and "_apply_pw_candidates(" in body, "앱 훅 = 되쓴 뒤 후보 다시 반영"
     assert "load_login(self.creds_store) is None" not in body, "옛 '조용히 건너뜀' 분기 없음"
     ok("되쓴 뒤 후보 다시 반영 — 한 값으로 통일된 후보 · 원 격자 불변 · 미리보기는 안 부름 · 앱 훅 연결")
+
+
+def test_make_login_defaults():
+    # D-196 실서버 성공 로그인 본문 = OsVersion "" · ShopmineVersion 26.8.24.866 · 필드 MarketId/MarketPassword
+    c = sm.make_login(" co1 ", " user1 ", SECRET)
+    assert c == {"CompanyId": "co1", "UserId": "user1", "UserPassword": SECRET, "OsVersion": "",
+                 "ShopmineVersion": "26.8.24.866", "IdKey": "MarketId", "PwKey": "MarketPassword",
+                 "StartPage": 1, "PageSize": 100}, c
+    c2 = sm.make_login("co1", "", SECRET, ShopmineVersion="9.9", OsVersion=None)
+    assert c2["ShopmineVersion"] == "9.9" and c2["OsVersion"] == "", "CLI 가 준 값만 바꿈(None=기본값)"
+    cli = (ROOT / "tools" / "shopmine_sync.py").read_text(encoding="utf-8")
+    assert "sm.make_login(" in cli and '"OsVersion": a.os_version' not in cli, "CLI setup = 앱과 같은 make_login"
+    ok("로그인 블록 — 설정 탭·CLI 같은 make_login · D-196 성공값 기본 · CLI 지정값만 덮음")
+
+
+def test_resolve_fields():
+    assert sm.resolve_fields([{"marketid": "a", "MARKETPASSWORD": "p"}], "MarketId", "MarketPassword") == \
+        ("marketid", "MARKETPASSWORD"), "대소문자만 다르면 실제 이름"
+    for recs, want in (([], "0건"), ([{"Id": "a", "Pw": "zz-secret"}], "필드")):
+        try:
+            sm.resolve_fields(recs, "MarketId", "MarketPassword")
+            assert False, "ShopmineError 기대"
+        except sm.ShopmineError as exc:
+            assert want in str(exc) and "zz-secret" not in str(exc), str(exc)
+    ok("discover 자동 — 필드 대소문자 맞춤 · 0건/필드 없음 = 오류(필드명만·값 없음)")
+
+
+def _fake_server(login_ok=True, recs=None):
+    """post_failover 대역 — 로그인 응답 / 계정 목록 응답. 호출 기록 반환."""
+    calls = []
+
+    def fake(path, body, log=None):
+        calls.append(path)
+        if path == "api/login":
+            return "srv", ({"AuthenticationKey": "K", "IsSuccess": True} if login_ok
+                           else {"AuthenticationKey": "", "IsSuccess": False})
+        return "srv", {"DataTable": list(recs or [])}
+    return fake, calls
+
+
+def test_login_rejected_marks_and_stops():
+    real = sm.post_failover
+    with tempfile.TemporaryDirectory() as d:
+        store, logs = CredStore(Path(d) / "c.json"), []
+        sm.store_login(sm.make_login("co1", "u1", SECRET), store)
+        try:
+            sm.post_failover, calls = _fake_server(login_ok=False)
+            okk, msg = sm.check_login(store, logs.append)
+            assert not okk and "거부" in msg and SECRET not in msg, msg
+            assert sm.load_login(store)[sm.REJECTED_FLAG] is True, "거부 표시"
+            assert sm.daily_gate(store, "2026-11-24", "", "") == sm.GATE_REJECTED_LOG, "거부 = 그날 1번 안내"
+            assert sm.daily_gate(store, "2026-11-24", "", "2026-11-24") == sm.GATE_NOCRED_QUIET, "그날 두 번째 조용히"
+            assert "설정 탭" in sm.REJECTED_MSG and sm.NOTICE_MSG[sm.GATE_REJECTED_LOG] == sm.REJECTED_MSG
+            n_before = len(calls)
+            st = {}
+            gate = sm.app_daily_hook("URL", "S", LEDGER_ROWS, store=store, today="2026-11-24",
+                                     get_state=lambda k: st.get(k, ""), set_state=st.__setitem__, log=logs.append)
+            assert gate == sm.GATE_REJECTED_LOG and len(calls) == n_before, "거부된 자격으로 다시 로그인하지 않음(잠금 방지)"
+            assert logs[-1] == sm.REJECTED_MSG, logs
+            sm.store_login(sm.make_login("co1", "u1", "other"), store)          # 다시 입력 = 표시 풀림
+            assert sm.daily_gate(store, "2026-11-24", "", "2026-11-24") == sm.GATE_RUN
+            sm.post_failover, calls = _fake_server(recs=[{"marketid": "shopA", "marketpassword": "newA"},
+                                                         {"marketid": "shopC", "marketpassword": "cpw"}])
+            okk, msg = sm.check_login(store, logs.append)
+            assert okk and "2건" in msg, msg
+            assert sm.load_login(store)["IdKey"] == "marketid", "실제 필드명 저장(discover 자동)"
+        finally:
+            sm.post_failover = real
+        for v in (SECRET, "other", "newA", "cpw"):
+            assert not any(v in m for m in logs), f"로그에 값 '{v}' 노출"
+    ok("샵마인 로그인 거부 — 표시·하루 1번 안내·재로그인 0 · 다시 입력하면 풀림 · 연결 확인 = 건수·필드명 저장 · 값 미노출")
+
+
+def test_proven_guard():
+    # ⑤ DW 모양: 대장 옛값 1줄 + 맞는 값 2줄 · 지난 로그인 성공 = newA. 샵마인이 옛값이면 덮지 않음, 성공값이면 통일.
+    rows = [HEADER, ["", "DW", "dw1", "oldA", "p1"], ["", "DW", "dw1", "newA", "p2"], ["", "DW", "dw1", "newA", "p3"],
+            ["", "B", "b1", "oldB", "p1"]]
+    LT.record_success("dw1", "newA", now=datetime.now() - timedelta(hours=2))
+    try:
+        cands, _ = sm.ledger_password_map(rows)
+        st = dict(sm.classify({"dw1": "oldA", "b1": "newB"}, cands, None, LT.proven_ok))
+        assert st == {"dw1": sm.ST_LED_PROVEN, "b1": sm.ST_DIFF}, st
+        assert dict(sm.classify({"dw1": "newA"}, cands, None, LT.proven_ok))["dw1"] == sm.ST_DIFF, "샵마인=성공값 → 통일"
+        with tempfile.TemporaryDirectory() as d:
+            cl, logs = FakeClient(), []
+            out = sm.run_daily_sync("URL", "Sheet1", rows, store=CredStore(Path(d) / "c.json"), client=cl,
+                                    fetch=lambda s_, log: {"dw1": "oldA", "b1": "newB"}, log=logs.append,
+                                    now=datetime(2026, 11, 24), out_dir=str(Path(d) / "rep"))
+            assert out["updated"] == 1 and {c[1] for c in cl.writes} == {"D5"}, (out, cl.writes)
+            assert any("dw1" in m and "성공한 값" in m and "덮지 않음" in m for m in logs), logs
+            assert f"dw1,{sm.ST_LED_PROVEN}" in Path(out["report"]).read_text(encoding="utf-8-sig")
+            for v in ("oldA", "newA", "oldB", "newB"):
+                assert not any(v in m for m in logs), f"로그에 값 '{v}' 노출"
+        LT.record_failure("dw1", LT.PW_WRONG, "newA", now=datetime.now() - timedelta(hours=1))   # 그 뒤 쿠팡이 성공값을 거부 = 비번 바뀜
+        assert not LT.proven_ok("dw1", "newA"), "성공 뒤 거부 = 더는 성공값 아님"
+        assert dict(sm.classify({"dw1": "oldX"}, cands, None, LT.proven_ok))["dw1"] == sm.ST_DIFF, "→ 샵마인 값 반영"
+        assert not LT.proven_ok("dw1", "") and not LT.proven_ok("zz", "newA")
+    finally:
+        LT._path(None).unlink(missing_ok=True)
+    ok("⑤ 대장 성공값 보호 — 샵마인 옛값이면 대장 유지·⚠·리포트 · 샵마인=성공값이면 통일 · 성공값이 거부되면 해제")
+
+
+def test_app_daily_hook_first_day_preview():
+    with tempfile.TemporaryDirectory() as d:
+        store, st, logs = CredStore(Path(d) / "c.json"), {}, []
+        kw = dict(store=store, get_state=lambda k: st.get(k, ""), set_state=st.__setitem__, log=logs.append)
+        assert sm.app_daily_hook("URL", "Sheet1", LEDGER_ROWS, today="2026-11-24", **kw) == sm.GATE_NOCRED_LOG
+        assert logs == [sm.NOCRED_MSG] and st == {sm.K_NOTICE: "2026-11-24"}, (logs, st)
+        sm.app_daily_hook("URL", "Sheet1", LEDGER_ROWS, today="2026-11-24", **kw)
+        assert logs == [sm.NOCRED_MSG], "그날 두 번째 조용히"
+        sm.store_login(sm.make_login("co1", "u1", SECRET), store)
+        sync = dict(fetch=lambda s_, log: dict(SHOPMINE), out_dir=str(Path(d) / "rep"),
+                    refused=lambda a, p: False, proven=lambda a, p: False)
+        cl1, got = FakeClient(), []
+        sm.app_daily_hook("URL", "Sheet1", LEDGER_ROWS, today="2026-11-24", client=cl1,
+                          now=datetime(2026, 11, 24, 18), on_applied=got.append, **sync, **kw)
+        assert cl1.writes == [] and cl1.backups == [] and got == [], "첫날 = 대조 리포트만(대장·백업 0)"
+        assert st[sm.K_FIRST_REPORT] == "2026-11-24" and st[sm.K_LAST_SYNC] == "2026-11-24", st
+        assert any("첫 동기화" in m and "리포트만" in m for m in logs) and any("미리보기" in m for m in logs), logs
+        assert list((Path(d) / "rep").glob("대조_*.csv")), "첫날 리포트 생성"
+        assert sm.app_daily_hook("URL", "Sheet1", LEDGER_ROWS, today="2026-11-24", client=cl1, **sync, **kw) \
+            == sm.GATE_DONE
+        cl2 = FakeClient()
+        sm.app_daily_hook("URL", "Sheet1", LEDGER_ROWS, today="2026-11-25", client=cl2,
+                          now=datetime(2026, 11, 25, 18), on_applied=got.append, **sync, **kw)
+        assert len(cl2.writes) == 4 and len(cl2.backups) == 1 and len(got) == 1, "다음 날 = 자동 반영(백업 먼저)"
+        assert st[sm.K_FIRST_REPORT] == "2026-11-24" and st[sm.K_LAST_SYNC] == "2026-11-25", st
+        assert not any(v in m for m in logs for v in SM_VALUES + [SECRET]), "로그에 값 없음"
+    assert sm.REPORT_DIR == "output/샵마인동기화"
+    ok("앱 훅 — 자격 없음 하루 1번 · 첫날 대조 리포트만(쓰기·백업 0) · 같은 날 다시 안 함 · 다음 날 자동 반영")
+
+
+def test_settings_tab_ui():
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    sys.path.insert(0, str(ROOT / "ui"))
+    from PySide6 import QtCore, QtWidgets
+    import shopmine_login_qt as UI
+    _qa = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    seen = {}
+
+    def fill():
+        dlg = next(w for w in QtWidgets.QApplication.topLevelWidgets()
+                   if isinstance(w, QtWidgets.QDialog) and w.isVisible())
+        company, user, pw = dlg.fields
+        seen["echo"] = pw.echoMode()
+        company.setText(" co1 ")
+        user.setText("u1")
+        pw.setText(SECRET)
+        dlg.accept()
+    QtCore.QTimer.singleShot(0, fill)
+    assert UI.ask_login(None) == ("co1", "u1", SECRET)
+    assert seen["echo"] == QtWidgets.QLineEdit.Password, "비밀번호 칸 = 화면에 안 보임"
+    with tempfile.TemporaryDirectory() as d:
+        store = CredStore(Path(d) / "c.json")
+        assert UI.saved_label(store) == UI.LBL_NONE
+        logs, lbl = [], QtWidgets.QLabel()
+        fake = type("F", (UI.ShopmineLoginMixin,), {})()
+        fake.creds_store, fake.log, fake.shopmine_lbl = store, logs.append, lbl
+        fake.run_bg = lambda task, on_done=None, **k: on_done(task())
+        real_ask, real_chk = UI.ask_login, sm.check_login
+        try:
+            UI.ask_login = lambda parent: ("co1", "u1", SECRET)
+            sm.check_login = lambda s_, log: (True, "연결됨 — 샵마인 계정 59건(비밀번호 값은 안 보임)")
+            fake.load_shopmine_login()
+        finally:
+            UI.ask_login, sm.check_login = real_ask, real_chk
+        assert sm.load_login(store) == sm.make_login("co1", "u1", SECRET), "입력 즉시 DPAPI 저장(make_login)"
+        assert SECRET not in (Path(d) / "c.json").read_text(encoding="utf-8"), "디스크 평문 없음"
+        assert "59건" in lbl.text() and SECRET not in lbl.text(), lbl.text()
+        assert not any(SECRET in m for m in logs), logs
+        fake._show_saved_shopmine()
+        assert lbl.text() == UI.LBL_SAVED
+        sm.mark_rejected(store)
+        assert UI.saved_label(store) == UI.LBL_REJECTED
+    src = (ROOT / "ui" / "app_qt.py").read_text(encoding="utf-8")
+    assert '("샵마인 로그인 입력", self.load_shopmine_login, self.shopmine_lbl)' in src, "설정 탭 '파일 · API 키' 줄"
+    assert "ShopmineLoginMixin, QtWidgets.QMainWindow" in src and "self._show_saved_shopmine()" in src
+    export = src[src.index("_EXPORT_CREDS = ("):].split("\n", 1)[0]
+    assert "shopmine" not in export.lower(), "샵마인 자격은 배포 설정 내보내기(평문)에 안 담음"
+    ok("설정 탭 — '샵마인 로그인 입력' 줄 · 비번 칸 가림 · 입력 즉시 DPAPI · 연결 확인 라벨 · 저장/거부 표시 · 배포 내보내기 제외")
 
 
 def main():
@@ -355,6 +539,12 @@ def main():
     test_refused_value_not_written()
     test_report_which_ledger_value()
     test_on_applied_reapplies_candidates()
+    test_make_login_defaults()
+    test_resolve_fields()
+    test_login_rejected_marks_and_stops()
+    test_proven_guard()
+    test_app_daily_hook_first_day_preview()
+    test_settings_tab_ui()
     print("통과 — 실 API·실 자격 없이 결정적. 비번 평문 비노출 확인.")
 
 

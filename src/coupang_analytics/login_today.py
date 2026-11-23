@@ -146,6 +146,16 @@ def success_first(account_id: str, pws: list, *, out_dir=None, now: datetime | N
     return pws, None
 
 
+def proven_ok(account_id: str, pw: str | None, *, out_dir=None, now: datetime | None = None) -> bool:
+    """이 값이 지난번 자동입력 로그인에 성공한 값(ok_fp)이고 그 뒤 24시간 안에 거부되지 않았나 — 샵마인 동기화가
+    쿠팡에서 맞다고 확인된 대장 값을 덮지 않게(D-389 안전장치 ⑤). 평문 비교 없음(지문만)."""
+    if not pw:
+        return False
+    cur = _load(out_dir).get(account_id) or {}
+    ok_fp = cur.get("ok_fp")
+    return bool(ok_fp) and ok_fp not in _blocked(cur, now) and fingerprint(account_id, pw) == ok_fp
+
+
 def refused_today(account_id: str, pw: str | None, *, out_dir=None, now: datetime | None = None) -> bool:
     """이 비밀번호 값이 최근 24시간 안에 쿠팡에서 거부됐나(그러면 다시 넣지 않음·D-123)."""
     if not pw:
