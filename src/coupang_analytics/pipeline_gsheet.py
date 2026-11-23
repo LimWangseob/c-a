@@ -177,6 +177,35 @@ def pull_gsheet_keywords(wb, output_url: str | None, log) -> None:
         log(f"== [구글시트] 직원 키워드 읽기 실패: {exc.__class__.__name__}: {exc} (AI 선정으로 진행) ==")
 
 
+def pull_gsheet_blank_cells(wb, output_url: str | None, skip_labels, log) -> int:
+    """실행 시작 때 결과 통계 시트 값으로 **마스터의 빈 칸만** 채움(T-159 · 대응 규칙 = gsheet_fill). 채운 칸 수 반환.
+
+    skip_labels = 이번 회차가 쓸 날짜 칸(그 칸은 안 채움). output_url 없거나 SA 미등록 = 생략(키워드 역머지와 같음).
+    읽기 실패 = ⚠ 로그 후 진행(비치명 · 마스터는 그대로). 채운 값은 이 실행의 기존 저장(D-376)으로 마스터에 들어감."""
+    if not output_url:
+        return 0
+    try:
+        from . import gsheet_api, gsheet_fill
+        if not gsheet_api.load_sa_info():
+            return 0
+        client = gsheet_api.GSheetClient(output_url, on_log=log)
+        grids, missing = gsheet_fill.read_stat_grids(client, wb)
+        filled = gsheet_fill.fill_blank_cells(wb, grids, skip_labels=skip_labels, on_log=log)
+    except Exception as exc:
+        log(f"== [구글시트] ⚠ 결과 시트 → 마스터 빈 칸 채움 실패(마스터 그대로 진행): "
+            f"{exc.__class__.__name__}: {str(exc)[:120]} ==")
+        return 0
+    for biz, n in filled.items():
+        if n:
+            log(f"  [구글시트] '{biz}' 결과 시트 → 마스터 빈 칸 채움 {n}칸")
+    if missing:
+        log(f"  [구글시트] 결과 시트에 없는 사업자 {len(missing)}개 — 빈 칸 채움 건너뜀: {', '.join(missing[:5])}"
+            + (" …" if len(missing) > 5 else ""))
+    total = sum(filled.values())
+    log(f"== [구글시트] 결과 시트 → 마스터 빈 칸 채움 {total}칸({sum(1 for n in filled.values() if n)}개 사업자) ==")
+    return total
+
+
 def push_ledger_inventory(input_url: str | None, log, out_dir: str = "output") -> None:
     """관리대장(**입력** 구글시트)의 '그로스 재고' 컬럼을 최신 마스터 재고로 역기록(전체실행·무인 종료 시).
 
