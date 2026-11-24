@@ -155,11 +155,15 @@ def numbered(no: int, name: str, color="p", extra=None) -> dict:
     return cell(runs=runs)
 
 
-def name_h(name: str, chars_per_line: float, base=24, per=14) -> int:
+def text_lines(text: str, chars_per_line: float) -> int:
     """글자 줄 수 추정 — 한글·기호 = 1 · 영문·숫자·공백 = 0.6 (글자 크기는 그대로 · 줄 수만 셈)."""
-    w = sum(1.0 if ord(ch) > 0x2000 else 0.6 for ch in name)
-    n = max(1, -(-w // chars_per_line))
-    return int(max(base, 10 + per * n))
+    w = sum(1.0 if ord(ch) > 0x2000 else 0.6 for ch in text)
+    return int(max(1, -(-w // chars_per_line)))
+
+
+def name_h(name: str, chars_per_line: float, base=24, per=14) -> int:
+    """글자 줄 수 추정(text_lines)으로 행 높이."""
+    return int(max(base, 10 + per * text_lines(name, chars_per_line)))
 
 
 def cards_row(pg: Page, left, mid, main_runs, tall: bool) -> None:
