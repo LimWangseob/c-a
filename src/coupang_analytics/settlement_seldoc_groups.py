@@ -15,7 +15,7 @@ from pathlib import Path
 from coupang_analytics import settlement_statement_context as CTX
 from coupang_analytics import settlement_statement_scope as SCOPE
 from coupang_analytics import settlement_statement_source as SRC
-from coupang_analytics.settlement_seldoc_source import SeldocInputError
+from coupang_analytics.settlement_seldoc_source import ProductError, SeldocInputError
 from coupang_analytics.settlement_statement_book import book
 from coupang_analytics.settlement_statement_deduct import Account
 
@@ -37,11 +37,14 @@ def assign(managed: set, judged: dict, docs: list) -> dict:
             continue
         if j.get("결정대기"):
             why = f"확인 필요 — 소유자 결정 대기({j['결정대기']})"
+        elif j.get("판정") == "확인 필요" and j.get("사유"):
+            why = f"확인 필요 — {j['사유']}"                      # 예: 관리대장에 없음(오류) — 소유자 11-24
         else:
             why = "판정 없음" if doc is None else f"문서ID {doc} = 이 계정 대상 계약 아님"
-        bad.append(f"관리 상품 {pid} 상품군 {why}")
+        amt = j.get("판매금액")
+        bad.append((pid, why, j.get("상품명"), amt if isinstance(amt, (int, float)) and not isinstance(amt, bool) else None))
     if bad:
-        raise SeldocInputError("시작 전 중단 — " + " · ".join(bad))
+        raise ProductError("시작 전 중단 — " + " · ".join(f"관리 상품 {pid} 상품군 {why}" for pid, why, *_ in bad), bad)
     return out
 
 
@@ -134,7 +137,7 @@ def _failed(exc: Exception) -> str:
 
 
 def run(args: CTX.StatementArgs, jobs: list, judge: dict, out_dir: Path, held: dict | None = None, on_log=print) -> tuple[list, dict]:
-    """계약이 여럿인 계정(Job.split)마다 계약별 상품군 위탁정산서 → ([(계정ID, 문서ID, 경로, G)], {계정ID: 못 만든 사유}).
+    """계약이 여럿인 계정(Job.split)마다 계약별 상품군 위탁정산서 → ([(계정ID, 문서ID, 경로, G)], {계정ID: {"reason", "products"}}).
     계정별 격리(D-399) — 한 계정이 막혀도 다른 계정은 만든다 · held = {계정ID: [미확정 같은 계정 문서ID]}(상품 배정에만)."""
     split = [j for j in jobs if j.split]
     aids = list(dict.fromkeys(j.aid for j in split))
@@ -144,7 +147,7 @@ def run(args: CTX.StatementArgs, jobs: list, judge: dict, out_dir: Path, held: d
         ctx = CTX.load(args)
         inv = SCOPE.inventory(args.managed_output)
     except (FileNotFoundError, SeldocInputError) as exc:
-        return [], {aid: f"상품군 정산서 입력을 못 읽음 — {exc}" for aid in aids}
+        return [], {aid: {"reason": f"상품군 정산서 입력을 못 읽음 — {exc}", "products": []} for aid in aids}
     accts = {SRC.aid_of(a): a for a in ctx.accts}
     out, failed = [], {}
     for aid in aids:
@@ -154,8 +157,8 @@ def run(args: CTX.StatementArgs, jobs: list, judge: dict, out_dir: Path, held: d
             out += _account(ctx, accts[aid], [j.contract.doc_id for j in split if j.aid == aid], _products(judge, aid),
                             inv.get(aid) or {}, out_dir, (held or {}).get(aid, ()), on_log)
         except Exception as exc:                                    # 계정 하나의 계산 오류 = 그 계정만 못 만듦(사유를 보고 · 삼키지 않음)
-            failed[aid] = _failed(exc)
-            on_log(f"❌ {aid} 상품군 정산서 못 만듦 — {failed[aid]}")
+            failed[aid] = {"reason": _failed(exc), "products": getattr(exc, "items", [])}
+            on_log(f"❌ {aid} 상품군 정산서 못 만듦 — {failed[aid]['reason']}")
     return out, failed
 
 

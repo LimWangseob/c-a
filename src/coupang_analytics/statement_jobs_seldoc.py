@@ -1,6 +1,8 @@
 """셀독 정산서 배치 작업(D-399 레인 D · T-25 4단계) — 상품군 위탁정산서(groups) → 셀독 정산서(make) 를 한 번에.
 
-`run_job(opts, on_log) -> {"ok": [id], "skipped": [{"id", "reason", "kind"}], "files": [경로], "group_files": [경로], "abort": str|None}`
+`run_job(opts, on_log) -> {"ok": [id], "skipped": [건너뜀], "files": [경로], "group_files": [경로], "abort": str|None}`
+- 건너뜀 = {"id", "reason", "kind"(건너뜀|확인 필요), "aid", "doc_id", "product_id", "상품명", "금액", "사유"} — 로그를 읽지 않아도
+  운용자가 알 수 있게(소유자 11-24 '확인필요는 로그를 분석해야 만 인식됨') · 관리대장에 없는 상품 등 = 상품 단위 줄(id = 계정ID:상품:등록상품ID).
 - 계약별 격리: 판정 없음·규칙 밖 유형·DB 에 없음·위탁정산서 1개 아님·같은 이름 파일 = 그 계약만 skipped · 나머지 계약은 만든다.
   미확정 계약이 있는 계정의 나머지 계약 = 상품군 정산서로만(계정 전체 숫자를 한 계약에 몰지 않음 · `SS.Skip.held`).
 - abort = 입력 자체가 없을 때만(셀독 입력 폴더의 판정표·사업자 대응표·계약 DB 사본 없음 · DB '관리대상' 칸 없음 · 날짜 틀림).
@@ -76,14 +78,19 @@ class _Result:
         self.group_files: list[str] = []
         self.blocked: list[str] = []          # 막는 사유(strict = 이게 있으면 아무것도 안 씀) — 원래 문장
 
-    def skip(self, aid: str, doc: str, reason: str, *, blocking: bool = True, wait: str = "") -> None:
+    def skip(self, aid: str, doc: str, reason: str, *, blocking: bool = True, wait: str = "", product: tuple = (),
+             unsure: bool = False) -> None:
         if wait:
             shown, kind = f"확인 필요 — 소유자 결정 대기({wait}) · {reason}", "확인 필요"
-        elif blocking:
+        elif blocking and not unsure:
             shown, kind = reason, "건너뜀"
         else:
             shown, kind = f"확인 필요 — {reason}", "확인 필요"
-        self.skipped.append({"id": _sid(aid, doc), "reason": shown, "kind": kind})
+        pid, name, amount = (product + (None, None, None))[:3]
+        if pid:
+            kind = "확인 필요"
+        self.skipped.append({"id": f"{aid}:상품:{pid}" if pid else _sid(aid, doc), "reason": shown, "kind": kind, "aid": aid,
+                             "doc_id": doc or None, "product_id": pid, "상품명": name, "금액": amount, "사유": shown})
         if blocking:
             self.blocked.append(reason)
 
@@ -94,6 +101,7 @@ class _Result:
 def _load(opts: dict):
     inp, db = resolve_inputs(opts)
     judge, people, contracts = SS.load_judge(inp), SS.load_people(inp), SS.load_contracts(db)
+    judge["유형"] = SS.load_types(inp)
     basis = opts["basis"]
     date.fromisoformat(basis)
     issued = opts.get("issued") or f"{date.today():%Y-%m-%d}"
@@ -119,9 +127,12 @@ def _groups(opts: dict, jobs: list, judge: dict, held: dict, res: _Result, on_lo
     for aid, doc, p, g in made:
         res.group_files.append(str(p))
         on_log(f"  {aid} {doc[:8]} G {g:,} → {p}")
+    for aid, f in failed.items():
+        for pid, why, name, amount in f["products"]:
+            res.skip(aid, "", f"{aid} 관리 상품 {pid} {name or ''} — {why}", product=(pid, name, amount))
     for j in jobs:
         if j.split and j.aid in failed:
-            res.skip(j.aid, j.contract.doc_id, f"{j.aid} 계약 {j.contract.doc_id} 상품군 정산서 못 만듦 — {failed[j.aid]}")
+            res.skip(j.aid, j.contract.doc_id, f"{j.aid} 계약 {j.contract.doc_id} 상품군 정산서 못 만듦 — {failed[j.aid]['reason']}")
     return {(aid, doc): p for aid, doc, p, _ in made}
 
 
@@ -146,6 +157,10 @@ def _statement(opts: dict, job, made: dict | None) -> Path:
 
 
 def _perf(opts: dict, job, made: dict | None):
+    if job.form == SS.INVEST and job.paid is None:
+        raise SS.SeldocInputError(f"{PREFIX}{job.aid} 계약 {job.contract.doc_id} 투자형인데 판정표 '지급완료' 금액 없음")
+    if job.form not in ("", SS.INVEST):
+        raise SS.SeldocInputError(f"{PREFIX}{job.aid} 계약 {job.contract.doc_id} 판정표 '양식' {job.form!r} 모름")
     pf = SS.read_statement(_statement(opts, job, made))
     if pf.aid != job.aid:
         raise SS.SeldocInputError(f"{PREFIX}{job.aid} 위탁정산서의 쿠팡 계정이 {pf.aid}")
@@ -187,7 +202,7 @@ def _plan(opts: dict, people: dict, contracts: dict, judge: dict, res: _Result) 
     jobs, skips = SS.plan_isolated(people, contracts, judge, aids)
     held: dict = {}
     for s in skips:
-        res.skip(s.aid, s.doc, s.reason, blocking=s.blocking, wait=s.wait)
+        res.skip(s.aid, s.doc, s.reason, blocking=s.blocking, wait=s.wait, unsure=s.unsure)
         if s.held and s.doc:
             held.setdefault(s.aid, []).append(s.doc)
     return jobs, held
@@ -196,7 +211,7 @@ def _plan(opts: dict, people: dict, contracts: dict, judge: dict, res: _Result) 
 def _write(ready: list, out: Path, basis: str, issued: str, res: _Result, on_log) -> None:
     for name, j, pf in ready:
         try:
-            p = SH.write(out / name, j.contract, pf, basis, issued)
+            p = SH.write(out / name, j.contract, pf, basis, issued, note=j.note, paid=j.paid if j.form == SS.INVEST else None)
         except FileExistsError as exc:
             res.skip(j.aid, j.contract.doc_id, f"{j.aid} 계약 {j.contract.doc_id} 같은 이름 파일 있음(덮지 않음) — {exc}")
             continue

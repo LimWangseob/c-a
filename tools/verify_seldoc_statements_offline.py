@@ -635,6 +635,89 @@ def test_batch_inputs_install() -> None:
         _raises(JOB.install_inputs, dest, src, make_db(base / "db.xlsx"), word="이름")
     print("test_batch_inputs_install OK")
 
+
+# ── 9. 소유자 11-24 결정 4건(통제 세션 전달 · 질문 카드 원문) ──
+# ① 투자형 = '카드에 약정·지급완료 표시'(도달률 대신 약정·지급 완료·남은 지급) ② 규칙 밖 36유형 = '제안대로 확정'(유형 판정표 · 확인 필요 = 건너뜀)
+# ③ "관리대장에도 없는 상품은 오류임. 확인필요 탬에 넣어줘." + "확인필요는 로그를 분석해야 만 인식됨" → skipped 에 상품명·금액·사유
+# ④ rladygks0221 = '두 장 다' · 상계 관계는 비고
+def test_decision_types() -> None:
+    from coupang_analytics import settlement_seldoc_source as SS
+    from coupang_analytics import statement_jobs_seldoc as JOB
+    e1, e2, e3 = ("eeeeeeee-0000-0000-0000-00000000000" + x for x in "123")
+    rows = CONTRACTS + [_contract(e1, "물품 공급(납품) 계약", "2026-01-01", None, "가나상사", "", 1),
+                        _contract(e2, "유튜브 광고 영상 제작", "2026-01-02", None, "가나상사", "", 1),
+                        _contract(e3, "운영대행", "2026-01-03", None, "가나상사", "", 1)]
+    types = {"유형": {"물품 공급(납품) 계약": {"판정": "대상", "근거": "x"}, "유튜브 광고 영상 제작": {"판정": "제외", "근거": "x"},
+                      "운영대행": {"판정": "확인 필요", "근거": "x"}}}
+    judge = json.loads(json.dumps(JUDGE))
+    judge["계약"][e1] = {"계정ID": "ga1", "판정": "대상", "근거": "x"}
+    with tempfile.TemporaryDirectory() as d:
+        opts = _batch_dir(Path(d), judge, rows)
+        inp = JOB.default_inputs(Path(d))
+        no = _reasons(JOB.run_job(opts, lambda _m: None))                      # 유형 판정표 없음 = 규칙 밖 3건 그대로 건너뜀(결정 대기)
+        assert all(f"ga1:{x}" in no and "규칙 밖 유형 확정" in no[f"ga1:{x}"] for x in (e1, e2, e3)), no
+        (inp / SS.TYPES).write_text(json.dumps(types, ensure_ascii=False), encoding="utf-8")
+        assert SS.target_kind(SS.load_contracts(JOB.find_db(inp))[e1], SS.load_types(inp)) == "대상"
+        res = JOB.run_job({**opts, "out": Path(d) / "o2"}, lambda _m: None)
+        why = _reasons(res)
+        assert f"ga1:{e2}" not in why, why                                                  # 제외 확정 = 뺌(대상 확정 e1 = 아래 상품군 단계까지 감)
+        assert why[f"ga1:{e3}"].startswith("확인 필요 — ") and "유형 판정표 '확인 필요'" in why[f"ga1:{e3}"], why                          # 확인 필요 유형 = 그 계약만 건너뜀
+        assert "상품군 정산서 없음" in why[f"ga1:{e1}"] and "상품군 정산서 없음" in why[f"ga1:{DOC_A}"], why   # ga1 계약 여럿 = 상품군만
+        (inp / SS.TYPES).write_text(json.dumps({"유형": {"운영대행": {"판정": "몰라"}}}, ensure_ascii=False), encoding="utf-8")
+        bad = JOB.run_job({**opts, "out": Path(d) / "o3"}, lambda _m: None)
+        assert bad["abort"] and "유형 판정표" in bad["abort"], bad                           # 모양 틀림 = 중단
+    print("test_decision_types OK")
+
+
+def test_decision_invest_note() -> None:
+    from coupang_analytics import statement_jobs_seldoc as JOB
+    judge = json.loads(json.dumps(JUDGE))
+    judge["계약"][DOC_A].update({"양식": "투자형", "지급완료": 8_000_000, "지급근거": "송금대조 확실 2건"})
+    judge["계약"][DOC_B1]["비고"] = "2026-06-19 조기 종료된 계약의 정산종료금액 26,000,000원을 이 계약 계약금에서 상계함"
+    with tempfile.TemporaryDirectory() as d:
+        res = JOB.run_job(_batch_dir(Path(d), judge), lambda _m: None)
+        assert res["abort"] is None and len(res["files"]) == 5, res
+        sheets = {openpyxl.load_workbook(f).active["F13"].value: openpyxl.load_workbook(f).active for f in res["files"]}
+        ws = sheets["2026-05-14"]                                                         # 투자형 = 카드 약정·지급 완료·지급율·남은 지급
+        c = _cells(ws)
+        assert (ws["A4"].value, ws["F4"].value, ws["K4"].value, ws["P4"].value) == ("약정 지급 총액", "지급 완료", "지급율", "남은 지급")
+        assert (ws["A5"].value, ws["F5"].value, ws["P5"].value) == (10_000_000, 8_000_000, 2_000_000) and abs(ws["K5"].value - .8) < 1e-12
+        assert ws["A8"].value == "지급율  80.0%" and "약정 지급 총액" in c.values() and "목표 정산 총액" not in c.values()
+        assert _right_of(ws, _find(c, "정산 기준 실적", 12), "Q") == 4_000_000                 # 쿠팡 정산 요약은 그대로(따로 나란히)
+        _assert_page(openpyxl.load_workbook(res["files"][0]))
+        b1 = sheets["2026-03-27"]
+        cb = _cells(b1)
+        assert _right_of(b1, _find(cb, "비고"), "F") == judge["계약"][DOC_B1]["비고"] and b1["A4"].value == "목표 정산 총액"
+        assert "비고" not in _cells(sheets["2026-06-09"]).values()                          # 비고 없는 계약 = 줄 없음
+    judge["계약"][DOC_A].pop("지급완료")
+    with tempfile.TemporaryDirectory() as d:
+        why = _reasons(JOB.run_job(_batch_dir(Path(d), judge), lambda _m: None))
+        assert "투자형인데 판정표 '지급완료' 금액 없음" in why[f"ga1:{DOC_A}"], why            # 지급 완료 모름 = 0 으로 그리지 않음
+    print("test_decision_invest_note OK")
+
+
+def test_decision_products_structured() -> None:
+    from coupang_analytics import settlement_seldoc_groups as G
+    from coupang_analytics import settlement_seldoc_source as SS
+    from coupang_analytics import statement_jobs_seldoc as JOB
+    judged = {"P1": {"문서ID": DOC_B1}, "P7": {"상품명": "기저귀가방 CL02", "문서ID": None, "판정": "확인 필요", "사유": "관리대장에 없음(오류)",
+                                               "판매금액": 123_000}}
+    try:
+        G.assign({"P1", "P7", "P8"}, judged, [DOC_B1])
+        raise AssertionError("ProductError 안 남")
+    except SS.ProductError as exc:
+        assert exc.items == [("P7", "확인 필요 — 관리대장에 없음(오류)", "기저귀가방 CL02", 123_000), ("P8", "판정 없음", None, None)], exc.items
+    r = JOB._Result()
+    r.skip("da1", "", "da1 관리 상품 P7 — 확인 필요 — 관리대장에 없음(오류)", product=("P7", "기저귀가방 CL02", 123_000))
+    r.skip("da1", DOC_B1, "da1 계약 … 판정 없음")
+    got = r.out()["skipped"]
+    assert got[0]["id"] == "da1:상품:P7" and got[0]["kind"] == "확인 필요" and (got[0]["상품명"], got[0]["금액"]) == ("기저귀가방 CL02", 123_000)
+    assert "관리대장에 없음(오류)" in got[0]["사유"] and got[0]["doc_id"] is None
+    assert got[1]["id"] == f"da1:{DOC_B1}" and got[1]["doc_id"] == DOC_B1 and got[1]["product_id"] is None
+    keys = {"id", "reason", "kind", "aid", "doc_id", "product_id", "상품명", "금액", "사유"}
+    assert all(set(x) == keys for x in got), got
+    print("test_decision_products_structured OK")
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -655,8 +738,11 @@ def main() -> int:
     test_batch_abort()
     test_batch_names()
     test_batch_inputs_install()
-    print("✅ 셀독 정산서 시험 15종 통과(규칙·읽기·대상 계약·관리대상 계약·상품군·양식 1장·목표수익금·입구·칸 이름"
-          "·배치 꼴·계약별 격리·상품군 격리·입력 없음 중단·이름 겹침·입력 준비)")
+    test_decision_types()
+    test_decision_invest_note()
+    test_decision_products_structured()
+    print("✅ 셀독 정산서 시험 18종 통과(규칙·읽기·대상 계약·관리대상 계약·상품군·양식 1장·목표수익금·입구·칸 이름"
+          "·배치 꼴·계약별 격리·상품군 격리·입력 없음 중단·이름 겹침·입력 준비·유형 판정·투자형 카드·비고·상품 단위 확인 필요)")
     return 0
 
 
