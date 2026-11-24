@@ -53,21 +53,18 @@ def put(ws, r: int, c1: int, c2: int, v=None, *, size=10, bold=False, color=BLAC
     return x
 
 
-def _head(ws, c: Contract, pf: Perf, basis: str, issued: str, paid: int | None = None, left_check: str = "") -> None:
+def _head(ws, c: Contract, pf: Perf, basis: str, issued: str, paid: int | None = None) -> None:
     put(ws, 1, 1, 20, SHEET, size=20, bold=True, color=PURPLE)
     put(ws, 2, 1, 20, f"계약자  {pf.label}     기준일  {basis}     발행일  {issued}", color=GRAY)
     target = goal_total(c.amount, c.profit)
     result = pf.result if paid is None else paid
     rate = reach(result, c.amount, c.profit)
-    left = f"확인 필요 — {left_check}" if paid is not None and left_check else max(target - result, 0)   # 차이 근거 없음 = 금액 대신 사유
-    vals = (target, result, rate, left)
+    vals = (target, result, rate, max(target - result, 0))
     cards, word = (CARDS, "목표 도달율") if paid is None else (CARDS_INVEST, "지급율")
     for k, ((title, note, color, fmt), v) in enumerate(zip(cards, vals)):
         c1 = 1 + 5 * k
         put(ws, 4, c1, c1 + 4, title, size=9, bold=True, color=GRAY, fill=LIGHT, align="center", border=CARD)
-        text = isinstance(v, str)
-        put(ws, 5, c1, c1 + 4, v, size=9 if text else 16, bold=True, color=color, fill=LIGHT, fmt=None if text else fmt, align="center",
-            border=CARD)
+        put(ws, 5, c1, c1 + 4, v, size=16, bold=True, color=color, fill=LIGHT, fmt=fmt, align="center", border=CARD)
         put(ws, 6, c1, c1 + 4, note, size=8, color=GRAY, fill=LIGHT, align="center", border=CARD)
     put(ws, 8, 1, 20, f"{word}  {rate:.1%}", size=11, bold=True)
     filled = min(BAR, max(0, round(rate * BAR)))
@@ -204,7 +201,7 @@ def _page(ws, last: int) -> None:
     ws.sheet_view.showGridLines = False
 
 
-def write(path: Path, c: Contract, pf: Perf, basis: str, issued: str, note: str = "", paid: int | None = None, left_check: str = "") -> Path:
+def write(path: Path, c: Contract, pf: Perf, basis: str, issued: str, note: str = "", paid: int | None = None) -> Path:
     """계약 1건 = 셀독 정산서 1장(새 파일 · 있으면 덮어쓰지 않고 FileExistsError) · note = 비고 줄 · paid = 투자형 지급 완료(카드 바뀜)."""
     if path.exists():
         raise FileExistsError(path)
@@ -213,7 +210,7 @@ def write(path: Path, c: Contract, pf: Perf, basis: str, issued: str, note: str 
     ws.title = SHEET
     for k in range(20):
         ws.column_dimensions[chr(65 + k)].width = 4.6
-    _head(ws, c, pf, basis, issued, paid, left_check)
+    _head(ws, c, pf, basis, issued, paid)
     r = _contract(ws, 12, c, note, paid is not None) + 1
     r = max(_sales(ws, r, pf, basis), _settle(ws, r, pf)) + 1
     r = _products(ws, r, pf) + 1

@@ -3,7 +3,8 @@
 `run_job(opts, on_log) -> {"ok": [id], "skipped": [건너뜀], "files": [경로], "group_files": [경로], "abort": str|None}`
 - 건너뜀 = {"id", "reason", "kind"(건너뜀|확인 필요), "aid", "doc_id", "product_id", "상품명", "금액", "사유"} — 로그를 읽지 않아도
   운용자가 알 수 있게(소유자 11-24 '확인필요는 로그를 분석해야 만 인식됨') · 관리대장에 없는 상품 등 = 상품 단위 줄(id = 계정ID:상품:등록상품ID).
-- 계약별 격리: 판정 없음·규칙 밖 유형·DB 에 없음·위탁정산서 1개 아님·같은 이름 파일 = 그 계약만 skipped · 나머지 계약은 만든다.
+- 계약별 격리: 판정 없음·규칙 밖 유형·DB 에 없음·위탁정산서 1개 아님·같은 이름 파일·투자형 남은 지급 근거 없음(판정표 '남은지급확인')
+  = 그 계약만 skipped · 나머지 계약은 만든다(고객용 정산서에 '확인 필요' 같은 내부 글자를 쓰지 않음 · D-221 ②).
   미확정 계약이 있는 계정의 나머지 계약 = 상품군 정산서로만(계정 전체 숫자를 한 계약에 몰지 않음 · `SS.Skip.held`).
 - abort = 입력 자체가 없을 때만(셀독 입력 폴더의 판정표·사업자 대응표·계약 DB 사본 없음 · DB '관리대상' 칸 없음 · 날짜 틀림).
 - strict(손 실행 기본) = 예전처럼 막는 사유가 하나라도 있으면 아무 파일도 만들지 않고 abort.
@@ -211,9 +212,7 @@ def _plan(opts: dict, people: dict, contracts: dict, judge: dict, res: _Result) 
 def _write(ready: list, out: Path, basis: str, issued: str, res: _Result, on_log) -> None:
     for name, j, pf in ready:
         try:
-            invest = j.form == SS.INVEST
-            p = SH.write(out / name, j.contract, pf, basis, issued, note=j.note, paid=j.paid if invest else None,
-                         left_check=j.left_check if invest else "")
+            p = SH.write(out / name, j.contract, pf, basis, issued, note=j.note, paid=j.paid if j.form == SS.INVEST else None)
         except FileExistsError as exc:
             res.skip(j.aid, j.contract.doc_id, f"{j.aid} 계약 {j.contract.doc_id} 같은 이름 파일 있음(덮지 않음) — {exc}")
             continue
@@ -223,9 +222,6 @@ def _write(ready: list, out: Path, basis: str, issued: str, res: _Result, on_log
                f" · 남은 {max(target - pf.result, 0):,} → {p}")
         res.ok.append(_sid(j.aid, c.doc_id))
         res.files.append(str(p))
-        if invest and j.left_check:                                   # 정산서는 만듦 · 남은 지급 칸 = '확인 필요' → 운용자 목록에도 한 줄
-            res.skip(j.aid, c.doc_id, f"{j.aid} 투자형 계약 {c.doc_id} 남은 지급 = {j.left_check}(정산서는 만듦 · 칸에 '확인 필요')",
-                     blocking=False)
 
 
 def _read_all(opts: dict, jobs: list, made: dict | None, res: _Result, on_log) -> list:
@@ -234,6 +230,10 @@ def _read_all(opts: dict, jobs: list, made: dict | None, res: _Result, on_log) -
     ready = []
     for j in jobs:
         if _sid(j.aid, j.contract.doc_id) in done:
+            continue
+        if j.form == SS.INVEST and j.left_check:                     # 고객용 정산서에 내부 글자를 쓰지 않음(D-221 ②) = 만들지 않고 확인 필요 탭
+            res.skip(j.aid, j.contract.doc_id, f"{j.aid} 투자형 계약 {j.contract.doc_id} 남은 지급 근거 없음 — {j.left_check}"
+                     " (판정표 '남은지급확인' · 정산서 안 만듦)", unsure=True)
             continue
         try:
             ready.append((j, _perf(opts, j, made)))
