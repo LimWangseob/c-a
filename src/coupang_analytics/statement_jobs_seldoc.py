@@ -211,7 +211,9 @@ def _plan(opts: dict, people: dict, contracts: dict, judge: dict, res: _Result) 
 def _write(ready: list, out: Path, basis: str, issued: str, res: _Result, on_log) -> None:
     for name, j, pf in ready:
         try:
-            p = SH.write(out / name, j.contract, pf, basis, issued, note=j.note, paid=j.paid if j.form == SS.INVEST else None)
+            invest = j.form == SS.INVEST
+            p = SH.write(out / name, j.contract, pf, basis, issued, note=j.note, paid=j.paid if invest else None,
+                         left_check=j.left_check if invest else "")
         except FileExistsError as exc:
             res.skip(j.aid, j.contract.doc_id, f"{j.aid} 계약 {j.contract.doc_id} 같은 이름 파일 있음(덮지 않음) — {exc}")
             continue
@@ -221,6 +223,9 @@ def _write(ready: list, out: Path, basis: str, issued: str, res: _Result, on_log
                f" · 남은 {max(target - pf.result, 0):,} → {p}")
         res.ok.append(_sid(j.aid, c.doc_id))
         res.files.append(str(p))
+        if invest and j.left_check:                                   # 정산서는 만듦 · 남은 지급 칸 = '확인 필요' → 운용자 목록에도 한 줄
+            res.skip(j.aid, c.doc_id, f"{j.aid} 투자형 계약 {c.doc_id} 남은 지급 = {j.left_check}(정산서는 만듦 · 칸에 '확인 필요')",
+                     blocking=False)
 
 
 def _read_all(opts: dict, jobs: list, made: dict | None, res: _Result, on_log) -> list:

@@ -718,6 +718,31 @@ def test_decision_products_structured() -> None:
     assert all(set(x) == keys for x in got), got
     print("test_decision_products_structured OK")
 
+
+def test_decision_invest_left_check() -> None:
+    """통제 세션 11-24 ⓓ: 투자형 약정−지급 차이의 근거가 계약 DB 송금 기록에 없음 = 추정 금지 → 판정표 '남은지급확인'(사유) 이 있으면
+    남은 지급 칸 = '확인 필요 — 사유'(금액을 지어내지 않음) · 정산서는 만듦 · 운용자 확인 목록에 한 줄(kind 확인 필요)."""
+    from coupang_analytics import statement_jobs_seldoc as JOB
+    judge = json.loads(json.dumps(JUDGE))
+    why = "회차 지급액이 약정보다 적은 사유 원문 없음"
+    judge["계약"][DOC_A].update({"양식": "투자형", "지급완료": 9_802_000, "남은지급확인": why})
+    with tempfile.TemporaryDirectory() as d:
+        res = JOB.run_job(_batch_dir(Path(d), judge), lambda _m: None)
+        assert res["abort"] is None and len(res["files"]) == 5 and f"ga1:{DOC_A}" in res["ok"], res
+        ws = next(openpyxl.load_workbook(f).active for f in res["files"] if openpyxl.load_workbook(f).active["F13"].value == "2026-05-14")
+        assert (ws["A5"].value, ws["F5"].value, ws["P4"].value, ws["P5"].value) == (10_000_000, 9_802_000, "남은 지급", f"확인 필요 — {why}")
+        assert abs(ws["K5"].value - .9802) < 1e-12 and ws["A8"].value == "지급율  98.0%"           # 지급율 = 실제 지급 ÷ 약정(사실 값 그대로)
+        row = next(x for x in res["skipped"] if x["id"] == f"ga1:{DOC_A}")
+        assert row["kind"] == "확인 필요" and why in row["사유"] and "정산서는 만듦" in row["사유"], row
+        assert len(res["skipped"]) == 1, res["skipped"]
+    judge["계약"][DOC_A].pop("남은지급확인")
+    with tempfile.TemporaryDirectory() as d:                                       # 사유 없음 = 남은 지급 금액 그대로(예전과 같음)
+        res = JOB.run_job(_batch_dir(Path(d), judge), lambda _m: None)
+        ws = next(openpyxl.load_workbook(f).active for f in res["files"] if openpyxl.load_workbook(f).active["F13"].value == "2026-05-14")
+        assert ws["P5"].value == 198_000 and res["skipped"] == [], res
+    print("test_decision_invest_left_check OK")
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -741,8 +766,10 @@ def main() -> int:
     test_decision_types()
     test_decision_invest_note()
     test_decision_products_structured()
-    print("✅ 셀독 정산서 시험 18종 통과(규칙·읽기·대상 계약·관리대상 계약·상품군·양식 1장·목표수익금·입구·칸 이름"
-          "·배치 꼴·계약별 격리·상품군 격리·입력 없음 중단·이름 겹침·입력 준비·유형 판정·투자형 카드·비고·상품 단위 확인 필요)")
+    test_decision_invest_left_check()
+    print("✅ 셀독 정산서 시험 19종 통과(규칙·읽기·대상 계약·관리대상 계약·상품군·양식 1장·목표수익금·입구·칸 이름"
+          "·배치 꼴·계약별 격리·상품군 격리·입력 없음 중단·이름 겹침·입력 준비·유형 판정·투자형 카드·비고·상품 단위 확인 필요"
+          "·투자형 남은 지급 확인 필요)")
     return 0
 
 

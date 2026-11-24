@@ -170,6 +170,7 @@ class Job:
     note: str = ""           # 판정표 계약 줄 '비고'(정산서 계약 내용에 한 줄 · 예: 상계 관계)
     form: str = ""           # 판정표 계약 줄 '양식'(INVEST = 투자형 카드)
     paid: int | None = None  # 판정표 계약 줄 '지급완료'(투자형 · 근거 원문과 함께)
+    left_check: str = ""     # 판정표 계약 줄 '남은지급확인'(투자형 · 약정−지급 차이 근거 없음 = 남은 지급 칸 '확인 필요 — 사유' · 금액 안 지어냄)
 
 
 def candidates(contracts: dict, people: tuple) -> list:
@@ -265,7 +266,7 @@ def plan_isolated(people: dict, contracts: dict, judge: dict, aids: list) -> tup
 def _job(aid: str, c: Contract, split: bool, people: tuple, j: dict) -> Job:
     paid = j.get("지급완료")
     return Job(aid, c, split, people, str(j.get("비고") or ""), str(j.get("양식") or ""),
-               round(paid) if isinstance(paid, (int, float)) and not isinstance(paid, bool) else None)
+               round(paid) if isinstance(paid, (int, float)) and not isinstance(paid, bool) else None, str(j.get("남은지급확인") or "").strip())
 
 
 def plan(people: dict, contracts: dict, judge: dict, aids: list) -> list:
