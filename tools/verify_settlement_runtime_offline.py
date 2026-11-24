@@ -4620,6 +4620,59 @@ def p74_restart_rest_and_finish_now():
     ok("남은 일·생성 대기·다시 시도 0 = 그 바퀴로 바로 완료(빈 바퀴·쉼 없음) · 생성 대기 중 20분 간격 그대로")
 
 
+def p75_stale_fail_evidence_cleared():
+    print("[P75] T-169 — 받은 달의 옛 실패 근거(_실패_주문별매출_YYYYMM.json)는 남기지 않음(output44 실측: 11-24 정상 받은 35달에 "
+          "D-381 전 '1쪽 커서 빈칸' 실패 파일이 그대로) · 지우기 전 수집일별보관에 보관 · 아직 못 받은 달의 실패 파일은 그대로")
+    import json
+    import os
+    from datetime import datetime
+
+    from coupang_analytics import daily_snapshot as DS
+    from coupang_analytics import settlement_docs as DOC
+    from coupang_analytics import settlement_wing_api as API
+
+    def no(*_a):
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        fo = Path(tmp)
+        old = datetime(2026, 11, 20, 3, 0).timestamp()
+
+        def fail_file(ym, *, mtime=old):
+            p = fo / f"_실패_주문별매출_{ym}.json"
+            p.write_text(json.dumps({"달": ym, "쪽 수(서버)": 3, "쪽별": [{"쪽": 1, "커서 빈칸": True}]}), encoding="utf-8")
+            os.utime(p, (mtime, mtime))
+            return p
+        # 이미 받은 달(받은기록에 있음) + 옛 실패 파일 = output44 의 35달 모양
+        (fo / DOC.LEDGER).write_text(json.dumps({"주문별매출": {"202610": "2026-11-16T02:55:52"}}), encoding="utf-8")
+        stale = fail_file("202610")
+        retry_ok = fail_file("202609")                                   # 옛날 실패 → 이번에 받음
+        still = fail_file("202608")                                      # 옛날 실패 → 이번에도 실패
+        untouched = fail_file("202601")                                  # 예산 밖(이번 회차에 안 부름)
+
+        def fetch(kind, ym, f, t):
+            if ym == "202608":
+                raise API.SiteChangedError(f"{ym} 맞지 않음")
+            return b"{}", "json", "0줄"
+        r = DOC._Run(fo, no, (API.ApiBlocked,), lambda: datetime(2026, 11, 24, 9, 0))
+        r.kind("주문별매출", date(2026, 11, 24), "2026-11-24T00:00:00", fetch, no)
+        assert (fo / "주문별매출_202609.json").exists(), r.out
+        assert not stale.exists() and not retry_ok.exists(), sorted(p.name for p in fo.iterdir())   # 옛 코드 = 둘 다 남음
+        assert still.exists() and untouched.exists(), sorted(p.name for p in fo.iterdir())
+        for p in (stale, retry_ok):
+            kept = list((fo / DS.KEEP_DIRNAME / p.name).glob("2026-11-20*.json.gz"))
+            assert len(kept) == 1, (p.name, kept)
+
+        # 같은 날 실패 → 같은 날 다음 바퀴에 받음 = 같은 날 파일이어도 지우기 전에 보관(근거 안 잃음)
+        today_ts = datetime(2026, 11, 24, 8, 0).timestamp()
+        same_day = fail_file("202605", mtime=today_ts)                  # 첫 바퀴 예산(3달 = 09·07·06) 밖 달
+        r = DOC._Run(fo, no, (API.ApiBlocked,), lambda: datetime(2026, 11, 24, 10, 0))
+        r.kind("주문별매출", date(2026, 11, 24), "", fetch, no)
+        assert (fo / "주문별매출_202605.json").exists() and not same_day.exists(), r.out
+        assert len(list((fo / DS.KEEP_DIRNAME / same_day.name).glob("2026-11-24*.json.gz"))) == 1
+        assert still.exists(), "이번에도 실패한 달은 남음"
+    ok("받은 달 옛 실패 파일 = 보관 후 치움(받은기록에 있던 달·이번에 받은 달·같은 날) · 못 받은 달 실패 파일은 그대로")
+
+
 def main():
     p10_wing_api_parse()
     p11_runlog()
@@ -4687,6 +4740,7 @@ def main():
     p72_rest_pass_left_work_only()
     p73_evidence_reuse_batch_abort()
     p74_restart_rest_and_finish_now()
+    p75_stale_fail_evidence_cleared()
     print("정산 런타임 오프라인 검증 통과")
 
 
