@@ -4674,6 +4674,8 @@ def p75_stale_fail_evidence_cleared():
 
 
 def main():
+    import settlement_download as TD
+    TD._start_statements = lambda cycle, args: None   # 시험이 실제 정산서 배치(구글시트 쓰기 포함)를 띄우지 않게(D-399 · 띄우기 시험 = verify_statement_batch_offline)
     p10_wing_api_parse()
     p11_runlog()
     p12_watch_decide()
