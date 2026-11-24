@@ -3251,7 +3251,7 @@ umpy`) · 우리 코드는 numpy 를 직접 안 씀 · 정산 바퀴 끝 '남는
 - 근거: 11-24 조사 — 완료 신호 = `settlement_download.py:1801` `write_done` 한 곳 · 24:00 미완료는 안 씀(1807-1810) · 정산서 도구 3개 = exe·앱 연결 없음(spec 진입점 3개) · 계정별 격리 없음(statements:48-58·consignor:92-99·groups:123-130) · 개발 PC 실측 위탁정산서 약 21분·셀독 공통 읽기 약 7분 · 산식 121항목 = 완료 64·미완료 35·해당 없음 22(`output\_점검_261118_정산항목체크\정산식_산식미완료_1119.md`).
 - 버린 대안: 운용 PC 18시 배치(D-204 ① 시각 — 지금 받기 회차 00:10 · 받기 끝나는 시각이 날마다 다름) · 앱 1분 타이머로 띄우기(무인 앱이 08:00 보충 뒤 종료 · 정산은 24:00까지) · 실패 계정 있으면 전부 중단 · 미완료 날에도 있는 자료로 생성 · 파일 생성까지만(발행은 사람) · 확인 필요 = 보고 파일만.
 - 영향 범위: 레인 A `statement_batch.py`·`tools/settlement_download.py`·`deploy/정산_상태확인.bat`·`ui/settlement_status_panel_qt.py`·`tools/verify_statement_batch_offline.py`·`run_checks.py` · 레인 B `statement_jobs_consignor.py`·`settlement_statements.py`·`settlement_statement_context.py`·`tools/settlement_consignor.py`·`tools/statement_inputs_pack.py`·`deploy/정산서입력_반영.bat` · 레인 C 계산 모듈 · 레인 D `statement_jobs_seldoc.py`·`settlement_seldoc_*` · 배포 spec a_settle datas 에 `tools/check_settlement_statements.py` 추가(병합 때) · 정산 탭 화면 표시 = T-171 · 위탁자 새 달 시트 자동 만들기 = T-43 OAuth 뒤.
-- 상태: ACTIVE (구현·병합 R253 — B `bffb47b`·C `a8be2c3`·D `2fe81a4`·A `8752887` · 남은 = 운용 사본 끝까지 검증 · 고객용 셀독 정산서 '확인 필요' 글자 정리(T-174) · 산식 남은 반영 T-173 · 배포 전)
+- 상태: ACTIVE (구현·병합 R253 — B `bffb47b`·C `a8be2c3`·D `2fe81a4`·A `8752887` · T-174 `5c085f4`·T-177 `3133c55`·산식 `e75ab0f`·`8a5e64a`·`a835727` 병합 · 세부 = D-403·D-404 · 남은 = 운용 사본 끝까지 검증(T-179) · 배포 전)
 
 ### D-400 [SELDOC_DECISIONS_4_BATCH] 셀독 정산서 결정 4건 — 투자형 카드 = 약정·지급완료 표시 · 규칙 밖 36유형 제안대로 확정 · 나머지 관리 상품 = 관리대장 기준(대장에 없으면 오류 = 확인 필요 탭) · rladygks0221 두 장 (2026-11-24, R252)
 - 결정(소유자 2026-11-24 질문 카드 원문 답):
@@ -3277,3 +3277,17 @@ umpy`) · 우리 코드는 numpy 를 직접 안 씀 · 정산 바퀴 끝 '남는
 - 버린 대안: 두 쪽 모두 '정산 확인 중' · 확인 필요 달은 위탁자 PDF 를 만들지 않음(그 달 위탁자가 정산서를 못 받음).
 - 영향 범위: `settlement_consignor_gsheet_pages.py`(`shown_status`·`_summary_status`)·`settlement_consignor_gsheet_fixed.py`(`page2_head`) · 시험 `tools/verify_consignor_statement_offline.py` test_d402_check_status_header(고치기 전 실패 → 통과) · CURRENT_RULES 위탁자 정산서 줄.
 - 상태: ACTIVE (구현 R253)
+
+### D-403 [SETTLE_STATEMENT_BATCH_DETAILS] 정산서 배치 세부 통제 판단 — 기준일·검산 실패 달·원장 읽기 · 셀독 '제외' 상품·근거 없는 상품·판정표 대조 · 시험이 실제 배치를 띄우지 않음 (2026-11-25, R253)
+- 결정(통제 세션 판단 · D-288 위임 · 소유자 지시 아님 · D-399·D-400 범위 안 세부): ① 기준일·발행일 = 배치 실행일 ② 검산 실패 달 = 그 달만 구글시트에서 빼고 금액과 함께 확인 필요(`skipped`) ③ 원장 계정이력·정산전용상품 = 구글 실시간 읽기(메모리만 · 평문 사본 안 만듦 · 배치는 ledger_backup 안 넘김) ④ 셀독 상품 판정 '제외'(D-400 ② 제외 유형 품목) = 그 상품만 뺌(계정 안 막음) ⑤ 못 넣은 상품이 전부 '근거 없음'이고 실제 계산이 0 = 확인 필요 한 줄(계정 안 막음) · 관리대장에 없음(오류)·판정 없음 = 0원이어도 막음(소유자 D-400 ③) ⑥ 배정은 판정표만 따르고 코드는 매번 대장 계열 출처와 대조해 어긋나면 '판정표 갱신 필요' 한 줄 ⑦ 투자형 '남은지급확인' 계약 = 고객용 정산서 안 만들고 확인 필요(D-221 ②) ⑧ 시험은 실제 정산서 배치를 띄우지 않음(`_start_statements` 막음).
+- 근거: T-177 보고(배치 꼴 실제 인자 = 0장 → 38장 · 건너뜀 111 · abort 없음 · 게이트 42종) · ⑤는 처음 판단 '판매 0원 = 금액 영향 0' 을 실제 계산으로 고침(sg0141n 근거 없음 3개 −30,938) · ⑧ 정산 런타임 시험 1회에 배치 11번(로그 128→139→150 두 번 재현 → 고친 뒤 0 · `f004f3f`).
+- 버린 대안: 판매 0원 상품을 무조건 안 막음(−30,938 사례) · 코드가 대장으로 자동 배정(소유자 D-400 ③ '관리대장에도 없는 상품은 오류' · 매번 배정이 달라질 수 있음).
+- 영향 범위: `statement_jobs_seldoc.py`·`settlement_seldoc_groups.py`·`statement_batch.py`·`statement_jobs_consignor.py` · 판정표(git 밖) ljung0622 18개 '제외' · CURRENT_RULES 배치 줄 · 남은 것 T-179(끝까지 실행·새 산식 금액 확인·'제외' 상품 정액 배분 몫).
+- 상태: ACTIVE (구현 R253 — B `bffb47b`·D `2fe81a4`·A `8752887`·T-174 `5c085f4`·T-177 `3133c55` · 운용 사본 끝까지 검증 전 · 배포 전)
+
+### D-404 [SETTLE_FORMULA_APPLY_R253] 산식 코드 반영 통제 판단 — 17·74·세이버 옛 경로 = D-271 · 신규-01 금액 = D-317 ② · 보류 해제 = '확인 필요' · E1 = 막는 검사 (2026-11-25, R253)
+- 결정(통제 세션 판단 · D-288 위임 · 소유자 지시 아님): ① 17 판매자서비스이용료·74 비즈니스 인사이트·세이버 구독료의 옛 경로(옛 엑셀 위탁정산서) 관리 몫 = D-271(소유자 11-17 '등록 상품 비율') · 세이버·BI 는 '기타 공제'에서 떼어 따로 항목 ② 신규-01 캠페인 없는 광고 조정 = 금액 나누기 D-317 ② · 줄 위치만 D-347 ① ③ 21 보류 해제 줄이 있는 달 = 금액 그대로 '확인 필요 — 보류 해제 규칙 미확정' · 상태 '확인 필요'(정산 예정 포함이 먼저) — 차이 0 인 규칙을 하나로 못 정함(roum0502 후보 4개 0 · ski1121 0개 · 2~4월은 달로 나눌 자료 없음 · 추정 금지) ④ 산식 23 정산일 지난 최종액(30%) 회차 지급 줄 없는 달 = 금액 그대로 '확인 필요'(D-399 ⑦) ⑤ D-261 ① '정산 예정 판매 ≥ 0' 을 새 형식 검산(check)에 넣음 — 걸리는 달은 시트에서 빠짐(T-174 모의 305달 중 11달 · 계산을 D-262~D-282 순서로 맞추는 일 = T-178) ⑥ 정산 예정 기록 RG 칸 8개 저장(앞으로 기록분) · 옛 기록은 0 으로 숨기지 않고 '확인 필요'.
+- 근거: 감사 표 `output\_점검_261124_산식코드반영\산식_코드반영_감사.md` · 전후(옛 엑셀 관리 지급): roum0502 +15,129 · gyi0101 +279,616 · nicoable +5,802 · 새 정산서 금액 변화 0(측정한 것) · 예정 기록 = `settlement_forecast` RG_DETAIL(output44 RG 예정 59,418줄 중 이 칸 든 기록 0).
+- 버린 대안: 보류 해제액을 그대로 더함(PENDING 지급 줄 돈 757,462 를 두 번 셈) · E1 경고만(D-261 원문과 다름).
+- 영향 범위: `settlement_statement_deduct.py`·`settlement_statement_account.py`·`settlement_consignor_month_*`·`settlement_forecast.py`·`settlement_consignor_gsheet.py` · 이미 낸 정산서 재발행 = 소유자(T-72).
+- 상태: ACTIVE (구현·병합 R253 — `e75ab0f`·`8a5e64a`·`a835727`·`35f3a19` · 배포 전)
