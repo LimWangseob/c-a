@@ -36,6 +36,16 @@ echo --------------------------------------------------
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$d='output\정산\로그'; $f=Get-ChildItem $d -Filter '실행_*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if($f){ Write-Host ('파일: '+$f.Name+'  (마지막 기록 '+$f.LastWriteTime.ToString('MM-dd HH:mm:ss')+')'); Write-Host ''; Get-Content -LiteralPath $f.FullName -Tail 25 -Encoding UTF8 } else { Write-Host '  상세 로그가 아직 없습니다.' }"
 echo.
+echo [5] 정산서 배치 ^(정산 받기 '완료' 뒤 자동 - 위탁정산서·셀독 정산서·차이 비교·보고 D-399^)
+echo --------------------------------------------------
+if exist "output\정산서\_현재상태.txt" (
+  type "output\정산서\_현재상태.txt"
+) else (
+  echo   아직 정산서 배치 상태 파일이 없습니다 ^(정산 받기가 '완료'된 날에만 돕니다^).
+)
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$d='output\정산서\보고'; $f=Get-ChildItem $d -Filter '배치보고_*.md' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if($f){ Write-Host ''; Write-Host ('최신 보고: '+$f.FullName); Get-Content -LiteralPath $f.FullName -TotalCount 30 -Encoding UTF8 } else { Write-Host '  정산서 배치 보고가 아직 없습니다.' }"
+echo.
 echo ==================================================
 echo  * 처리 결과표(엑셀): output\정산\로그\처리기록_누적.csv
 echo  * 이 창은 지금 이 순간의 상태입니다. 다시 보려면 이 파일을 또 더블클릭하세요.

@@ -68,7 +68,8 @@ a_settle = Analysis(
     ["tools/settlement_download.py"],
     pathex=["src"],
     binaries=binaries,
-    datas=datas,
+    # 정산서 배치(D-399) 차이 비교 도구 = 묶음 폴더 tools/ 에서 실행(statement_batch.tools_dir)
+    datas=datas + [("tools/check_settlement_statements.py", "tools")],
     hiddenimports=hiddenimports,
     excludes=_EXCLUDES,
     noarchive=False,
