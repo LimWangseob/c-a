@@ -560,11 +560,30 @@ def p19_verify_sheet():
     assert [x["판정"] for x in ws if x["기준"] == "202605"] == [SV.OK] * 4
     assert all(x["판정"] == SV.PENDING for x in ws if x["기준"] == "202609")                  # 최근 달·우리 0 = 미정산
     assert any(x["기준"] == "202610" and x["판정"] == SV.NODATA for x in ws)                   # 조회 실패 달
-    wp = SV.wing_pay("A", [{"정산일": "2026-07-01", "기간 시작": "2026-05-01", "최종지급액": 7579266, "paidAmount": 7634266,
-                            "totalDeductionAmount": 55000, "지급상태": "DONE"},
-                           {"정산일": "2026-06-01", "기간 시작": "2026-05-04", "최종지급액": 0, "지급상태": "HOLD"}], v)
+    wp = SV.wing_pay("A", [{"정산일": "2026-07-01", "기간 시작": "2026-05-01", "기간 끝": "2026-05-31", "지급비율": 30,
+                            "최종지급액": 7579266, "paidAmount": 7634266, "totalDeductionAmount": 55000, "지급상태": "DONE"},
+                           {"정산일": "2026-06-01", "기간 시작": "2026-05-04", "기간 끝": "2026-05-10", "지급비율": 70,
+                            "최종지급액": 0, "지급상태": "HOLD"}], v)
     assert [x["판정"] for x in wp if x["기준"] == "202605"] == [SV.OK] * 3
     assert any(x["항목"] == "지급상태" and x["판정"] == SV.CHECK and x["비고"] == "HOLD" for x in wp)
+    # T-172 실측 rladygks0221 2026-04(output44): 매출내역 최종 = 정산대상 − 차감 → 보류 줄과 그 돈을 푼 해제 줄을 두 번 세지 않음 ·
+    # 해제 줄의 차감(ski1121 2026-05-12 광고비 28,132)은 셈 · 추가지급(roum0502 2026-10-22 16,897 꼴)은 매출내역 밖
+    def pay(day, s, e, pct, fin, paid, pend, ded=0, state="DONE"):
+        return {"정산일": day, "기간 시작": s, "기간 끝": e, "지급비율": pct, "최종지급액": fin, "paidAmount": paid,
+                "pendingAmount": pend, "totalDeductionAmount": ded, "지급상태": state, "targetAmount": paid}
+    hold = [pay("2026-05-26", "2026-04-27", "2026-04-30", 70, 10687, 10687, 0),
+            pay("2026-06-01", "2026-04-27", "2026-04-30", 30, 4580, 4580, 0, state="PENDING"),
+            pay("2026-07-20", "2026-04-30", "2026-04-30", 100, 4580, 0, 4580)]
+
+    def final(rows, ded=0):
+        vv = {**v, "purchase": {"202604": {"purchaseReports": [{"apAmount": 15267, "deductionAmount": ded,
+                                                                "finalPaidAmount": 15267 - ded}]}}}
+        return {x["항목"]: (x["우리(계산)"], x["판정"]) for x in SV.wing_pay("A", rows, vv) if x["기준"] == "202604"}
+    assert final(hold) == {"정산대상": (15267, SV.OK), "최종": (15267, SV.OK)}, final(hold)
+    ad = hold[:2] + [pay("2026-07-20", "2026-04-30", "2026-04-30", 100, 4000, 0, 4580, 580)]          # 풀 때 광고비 차감
+    assert final(ad, 580) == {"정산대상": (15267, SV.OK), "차감": (580, SV.OK), "최종": (14687, SV.OK)}, final(ad, 580)
+    extra = hold + [pay("2026-04-22", "2026-04-22", "2026-04-22", 100, 16897, 0, 0)]
+    assert final(extra)["최종"] == (15267, SV.OK), final(extra)
     vt = SV.vat("A", ours, {"202607": {"판매액": 20039260, "쿠폰": 10134700}}, v)
     assert [x["판정"] for x in vt] == [SV.OK, SV.OK, SV.OK], vt
     h = {x["대조"]: x["판정"] for x in SV.holds("A", v)}

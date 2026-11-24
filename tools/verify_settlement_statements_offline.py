@@ -344,6 +344,33 @@ def _inv(created: str, **types) -> dict:
     return {"created": created, "name": f"상품{created}", "types": {k[1:]: t for k, t in types.items()}}
 
 
+def test_t142_inventory_old_pages_ignored() -> None:
+    """T-142 실측(rladygks0221 output44): 쪽 수가 줄면(192→72) `_raw` 옛 뒤쪽 파일이 남음 — 1쪽이 말한 전체 쪽까지만 등록 상품으로 셈."""
+    import gzip
+    import json
+
+    from coupang_analytics import settlement_statement_scope as SCOPE
+
+    def page(d: Path, aid: str, n: int, total: int, ids: list) -> None:
+        body = {"success": True, "data": {"pagination": {"page": n, "totalPages": total}, "productList": [
+            {"vendorInventoryId": i, "createdOn": "2026-01-02T00:00:00", "productName": f"상품{i}",
+             "vendorInventoryItems": [{"vendorItemId": i * 10, "registrationType": "RFM"}]} for i in ids]}}
+        (d / f"{aid}_vendor_inventory_p{n}.json.gz").write_bytes(gzip.compress(json.dumps(body, ensure_ascii=False).encode("utf-8")))
+
+    with tempfile.TemporaryDirectory() as t:
+        raw = Path(t) / "_raw"
+        raw.mkdir()
+        for n, total, ids in ((1, 2, [1, 2]), (2, 2, [3]), (3, 11, [98]), (11, 11, [99])):   # 11쪽이던 계정이 2쪽으로 줄어듦
+            page(raw, "a1", n, total, ids)
+        for n in range(1, 12):                                                               # 쪽 수가 그대로인 계정 = 전부
+            page(raw, "b1", n, 11, [100 + n])
+        page(raw, "c1", 1, 1, [])                                                            # 등록 상품 0
+        inv = SCOPE.inventory(Path(t))
+    assert set(inv.get("a1", {})) == {"1", "2", "3"}, inv.get("a1")
+    assert set(inv["b1"]) == {str(100 + n) for n in range(1, 12)} and not inv.get("c1")
+    assert inv["a1"]["3"] == {"created": "2026-01-02", "name": "상품3", "types": {"30": "RFM"}}
+
+
 def test_managed_scope() -> None:
     from types import SimpleNamespace
 
@@ -1189,6 +1216,7 @@ def main() -> int:
     test_d391_unknown_ship_same_month_wing_ratio()
     test_additional_pay()
     test_migration_inputs()
+    test_t142_inventory_old_pages_ignored()
     test_managed_scope()
     test_scope_priority()
     test_scope_judge()
