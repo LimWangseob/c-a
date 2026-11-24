@@ -975,11 +975,94 @@ def test_formula23_status_check_when_final_round_missing() -> None:
     print("test_formula23_status_check_when_final_round_missing OK")
 
 
+# ── 계정별 격리(D-399 계획 설계 5 · 소유자 11-24 '성공 계정만 생성') — 계산은 가짜(경계만) · 반복·보고·파일만 봄 ──
+class _Patch:
+    """모듈 속성 잠깐 바꾸기(끝나면 되돌림)."""
+
+    def __init__(self, *items):
+        self.items, self.old = items, []
+
+    def __enter__(self):
+        for mod, name, val in self.items:
+            self.old.append((mod, name, getattr(mod, name)))
+            setattr(mod, name, val)
+        return self
+
+    def __exit__(self, *exc):
+        for mod, name, val in reversed(self.old):
+            setattr(mod, name, val)
+
+
+def fake_statement_layer(out: Path, accts: list[str], bad: set, none: frozenset | set = frozenset()):
+    """settlement_statements 의 계산 경계(CTX.load·account·shown·summary_row·book·summary_book)를 가짜로 — 반환 = _Patch."""
+    from types import SimpleNamespace
+
+    from coupang_analytics import settlement_statement_context as CTX
+    from coupang_analytics import settlement_statements as ST
+
+    def account(ctx, acct):
+        aid = acct.rsplit("-", 1)[-1]
+        if aid in bad:
+            raise KeyError(f"합성 오류 {aid}")
+        return {"aid": aid, "info": {"사업자": f"상회{aid}", "대표자": "합성"}, "mpids": set() if aid in none else {"1"},
+                "scope": "관리 상품 자료 없음" if aid in none else "관리대장 상품", "ship_stats": 0,
+                "ship": {"관리": (0, 0), "제외": (0, 0), "확인 필요": (0, 0)}}
+
+    def row(a, v):
+        return [a["info"]["사업자"], "합성", a["aid"], a["scope"], *([0] * 10), "일치", ""]
+
+    def book(ctx, a, dest):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(f"정산서 {a['aid']}", encoding="utf-8")
+
+    def summary_book(ctx, res, skipped):
+        p = ctx.out / "전체_합성.xlsx"
+        p.write_text(f"{len(res)}/{len(skipped)}", encoding="utf-8")
+        return p
+
+    ctx = SimpleNamespace(accts=accts, out=out, issued="2026-11-24", basis="2026-11-24")
+    return _Patch((CTX, "load", lambda a, rows=None: ctx), (ST, "account", account), (ST, "shown", lambda a: {}), (ST, "summary_row", row),
+                  (ST, "book", book), (ST, "summary_book", summary_book))
+
+
+def touch_inputs(inp: Path) -> None:
+    from coupang_analytics import settlement_statement_context as CTX
+    inp.mkdir(parents=True, exist_ok=True)
+    for n in CTX.REQUIRED:
+        (inp / n).write_text("", encoding="utf-8")
+
+
+def test_account_isolation() -> None:
+    import contextlib
+    import io
+
+    from coupang_analytics import settlement_statement_context as CTX
+    from coupang_analytics import settlement_statements as ST
+    accts = ["가-상회-a1", "나-상회-b2", "다-상회-c3", "라-상회-d4"]
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        touch_inputs(base / "입력")
+        args = CTX.StatementArgs(out=base / "출력", managed_output=base, settle_dir=base, stats=base / "x.xlsx", basis="2026-11-24",
+                                 inputs=base / "입력", issued="2026-11-24")
+        buf = io.StringIO()
+        with fake_statement_layer(args.out, accts, bad={"b2"}, none={"c3"}), contextlib.redirect_stdout(buf):
+            got = ST.run(args, skip=("d4",))
+        assert got["made_ids"] == ["a1"], got                       # b2 예외 = 그 계정만 · d4 = 건너뜀 · c3 = 정산서 없음
+        assert [x[0] for x in got["failed"]] == ["b2"] and "합성 오류 b2" in got["failed"][0][1], got
+        assert got["none"] == [("c3", "관리 상품 자료 없음")] and got["made"] == 1 and got["skipped"] == 1, got
+        names = sorted(Path(f).name for f in got["files"])
+        assert names == ["전체_합성.xlsx", "정산서_상회a1_합성_a1_관리상품.xlsx"], names
+        assert (args.out / "정산서_상회a1_합성_a1_관리상품.xlsx").is_file() and not list(args.out.glob("*b2*")), list(args.out.iterdir())
+        assert "❌ 정산서 못 만듦 b2" in buf.getvalue(), buf.getvalue()
+    print("test_account_isolation OK")
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except AttributeError:
         pass
+    test_account_isolation()
     test_d342_deduction_window_2026()
     test_d279_svc_estimate_row_and_d304_note()
     test_d312_fast_used()
