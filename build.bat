@@ -31,6 +31,8 @@ copy /Y "%~dp0deploy\라이브검증_안내.txt" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0INSTALL.md" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0deploy\정산_상태확인.bat" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0deploy\정산증빙_전체받기.bat" "dist\coupang-analytics\" >nul
+rem 정산서입력_반영.bat = 개발 PC 가 만든 정산서입력_YYMMDD.zip 을 output\정산서\입력\ 에 더하기만(지우기 없음 · D-399 계획 6).
+copy /Y "%~dp0deploy\정산서입력_반영.bat" "dist\coupang-analytics\" >nul
 rem output 내보내기(D-243 ①②) = bat + 표준 라이브러리만 쓰는 .py 2개(운용 PC py -3) · 기준본 기록은 개발 PC output 에 있을 때만(처음 1회용).
 copy /Y "%~dp0deploy\output_내보내기.bat" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0tools\output_export.py" "dist\coupang-analytics\" >nul

@@ -647,11 +647,164 @@ def test_tool() -> None:
     assert T._args(base + ["--month", "2026-01"]).month == "2026-01"
 
 
+# ── ④ 배치 실행 경로 run_job(D-399 계획 설계 3·5·6 · 레인 B) — 계산 경계만 가짜 · 반복·격리·시트 고르기·보고 꼴을 봄 ──
+def _vs():
+    spec = importlib.util.spec_from_file_location("verify_statements_tool", ROOT / "tools" / "verify_settlement_statements_offline.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class BrokenClient(FakeClient):
+    def batch_update(self, requests: list[dict]) -> dict:
+        raise RuntimeError("합성 시트 오류")
+
+
+def _job_output(base: Path, V) -> None:
+    V.touch_inputs(base / "정산서" / "입력")
+    (base / "정산").mkdir()
+    for n in ("정산집계_261123_010101.xlsx", "정산집계_261124_010101.xlsx"):
+        (base / "정산" / n).write_text("", encoding="utf-8")
+
+
+def _job_fakes(V, out: Path, accts: list[str]):
+    """b2 = 옛 위탁정산서 예외 · c3 = 새 형식 계정 예외 · e5 = 2026-10 검산 실패 · 나머지 = 2026-09·10 둘 다 통과."""
+    def source(ctx, acct):
+        if acct.endswith("-c3"):
+            raise ValueError("합성 계정 오류 c3")
+        return {"aid": acct.rsplit("-", 1)[-1]}
+
+    def build(ctx, src, m, judge):
+        d = synthetic(True, m)
+        d["account"] = src["aid"]
+        if src["aid"] == "e5" and m == "2026-10":
+            d["settle_amount"] += 1
+        return d
+
+    layer = V.fake_statement_layer(out, accts, bad={"b2"})
+    return layer, V._Patch((CM, "account_source", source), (CM, "sale_months", lambda src: ["2026-09", "2026-10"]),
+                           (CM, "build_month", build))
+
+
+def test_run_job_abort() -> None:
+    from coupang_analytics import settlement_statement_context as CTX
+    from coupang_analytics import statement_jobs_consignor as J
+    with tempfile.TemporaryDirectory() as d:
+        logs: list[str] = []
+        got = J.run_job({"output": d}, logs.append)
+        assert set(got) == {"ok", "skipped", "files", "abort", "sheet", "sheets"} and got["sheet"] is None, got
+        assert (got["ok"], got["skipped"], got["files"]) == ([], [], []), got
+        assert all(n in got["abort"] for n in CTX.REQUIRED) and "정산집계" in got["abort"] and "정산 폴더" in got["abort"], got
+        assert logs and "시작 전 중단" in logs[0], logs
+        assert not (Path(d) / "정산서" / "위탁정산서_" ).exists() and not any(Path(d).rglob("*.xlsx")), "중단인데 파일 생김"
+
+
+def test_run_job_isolation_and_sheets() -> None:
+    from coupang_analytics import statement_jobs_consignor as J
+    V = _vs()
+    accts = ["가-상회-a1", "나-상회-b2", "다-상회-c3", "라-상회-d4", "마-상회-e5"]
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        _job_output(base, V)
+        out = base / "결과"
+        (base / "정산서" / "입력" / J.SHEETS_FILE).write_text(json.dumps({"_설명": "합성", "2026-09": "S09"}), encoding="utf-8")
+        fakes: dict = {}
+
+        def client_for(s):
+            fakes[s] = FakeClient()
+            return fakes[s]
+
+        layer, cm = _job_fakes(V, out, accts)
+        buf = io.StringIO()
+        with layer, cm, contextlib.redirect_stdout(buf):
+            got = J.run_job({"output": str(base), "out": str(out), "basis": "2026-11-24", "issued": "2026-11-24", "sheet": True,
+                             "skip_accounts": {"라-상회-d4": "로그인 막힘"}, "cycle": "x", "run_id": "y"}, print, client_for=client_for)
+        log = buf.getvalue()
+        assert got["abort"] is None and got["ok"] == ["a1"], got                      # 성공 계정만
+        assert all(set(x) == {"id", "account", "contract", "month", "product", "amount", "reason"} for x in got["skipped"]), got["skipped"]
+        assert got["sheet"] == "S09" and got["sheets"] == {"2026-09": "S09"}, got                 # 레인 A 가 '확인 필요' 탭을 쓸 시트
+        why = {x["id"]: x for x in got["skipped"]}
+        assert len(got["skipped"]) == 5 and set(why) == {"d4", "b2", "c3", "e5", "시트 2026-10"}, got["skipped"]
+        assert why["d4"]["reason"] == f"{J.SKIP_REASON} — 로그인 막힘" and why["d4"]["account"] == "라-상회-d4", why["d4"]
+        assert "위탁정산서 못 만듦" in why["b2"]["reason"] and "합성 계정 오류 c3" in why["c3"]["reason"], why
+        assert why["e5"]["reason"].startswith("검산 실패") and why["e5"]["month"] == "2026-10", why["e5"]
+        assert why["e5"]["amount"] == 716_501 and why["e5"]["account"] == "마-상회-e5", why["e5"]   # 그 달 시트에 못 넣은 정산 금액
+        assert J.NO_SHEET in why["시트 2026-10"]["reason"] and why["시트 2026-10"]["amount"] == 716_500, why["시트 2026-10"]
+        assert "정산집계_261124_010101.xlsx" in log, "최신 정산집계 자동 선택 안 됨"
+        assert log.count("❌ 정산서 못 만듦 b2") == 1, log                          # print 를 on_log 로 줘도 되돌아 들어오지 않음
+        names = {Path(f).name for f in got["files"]}
+        assert {"a1_202609.json", "e5_202610.json", "b2_202609.json", "_요약.json", "전체_합성.xlsx"} <= names, names
+        assert not any(n.startswith(("c3", "d4")) for n in names) and all(Path(f).is_file() for f in got["files"]), names
+        assert set(fakes) == {"S09"}                                                 # 시트 있는 달만 · 없는 달 = 확인 필요
+        titles = [r["addSheet"]["properties"]["title"] for r in fakes["S09"].calls[0] if "addSheet" in r]
+        assert [t for t in titles if "(" in t] == ["9월 합성 위탁자 (a1)", "9월 합성 위탁자 (e5)"], titles   # b2·c3·d4 = 안 씀
+        layer, cm = _job_fakes(V, out, accts)
+        with layer, cm, contextlib.redirect_stdout(io.StringIO()):
+            off = J.run_job({"output": str(base), "out": str(out), "issued": "2026-11-24", "skip": ["d4"]}, print,
+                            client_for=client_for)
+            bad = J.run_job({"output": str(base), "out": str(out), "issued": "2026-11-24", "write_sheet": True,
+                             "sheets": {"2026-09": "X", "2026-10": "Y"}}, print, client_for=lambda s: BrokenClient())
+        assert off["ok"] == ["a1"] and not any(x["id"].startswith("시트") for x in off["skipped"]) and off["sheet"] is None, off  # 시트 쓰기 끔
+        assert {x["id"]: x["reason"][:10] for x in bad["skipped"] if x["id"].startswith("시트")} == \
+            {"시트 2026-09": "시트 쓰기 실패 —", "시트 2026-10": "시트 쓰기 실패 —"}, bad["skipped"]
+
+
+def test_inputs_pack() -> None:
+    spec = importlib.util.spec_from_file_location("statement_inputs_pack", ROOT / "tools" / "statement_inputs_pack.py")
+    assert spec and spec.loader
+    P = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(P)
+    import zipfile
+    from datetime import datetime
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        inp, sel, dest = base / "입력", base / "입력_셀독", base / "보내기"
+        (inp / "_대안").mkdir(parents=True)
+        (inp / "보관").mkdir()
+        (sel / "판정").mkdir(parents=True)
+        for p, t in ((inp / "ledger.json", '{"accounts": []}'), (inp / "사업자_대응표.csv", "계정ID,사업자\n"),
+                     (inp / "_준비_보고.md", "x"), (inp / "_대안" / "a.json", "{}"), (inp / "보관" / "old.json", "{}"),
+                     (sel / "판정" / "상품군.json", "{}")):
+            p.write_text(t, encoding="utf-8")
+        before = sorted((p, p.read_bytes()) for p in base.rglob("*") if p.is_file())
+        now = datetime(2026, 11, 24, 21, 0, 0)
+        z1 = P.pack(inp, sel, dest, now=now, log=lambda s: None)
+        z2 = P.pack(inp, sel, dest, now=now, log=lambda s: None)
+        assert z1.name == "정산서입력_261124.zip" and z2.name == "정산서입력_261124_210000.zip" and z1.is_file(), (z1, z2)
+        with zipfile.ZipFile(z1) as z:
+            got = sorted(i.filename for i in z.infolist())
+            assert all(i.flag_bits & 0x800 for i in z.infolist()), "이름 UTF-8 표시 없음"
+        assert got == ["입력/ledger.json", "입력/사업자_대응표.csv", "입력_셀독/판정/상품군.json"], got
+        after = sorted((p, p.read_bytes()) for p in base.rglob("*") if p.is_file() and p.parent != dest)
+        assert after == before, "묶음 도구가 원본을 바꾸거나 지움"
+        (inp / "ledger.json").write_text('{"accounts": [{"id": "a", "비밀번호": "x"}]}', encoding="utf-8")
+        try:
+            P.pack(inp, sel, dest, now=now, log=lambda s: None)
+            raise AssertionError("비밀번호 칸이 있는데 묶음")
+        except ValueError as exc:
+            assert "비밀번호" in str(exc)
+        assert len(list(dest.iterdir())) == 2, "중단인데 zip 생김"
+        (inp / "ledger.json").write_text('{"accounts": []}', encoding="utf-8")
+        assert P.seldoc_missing(sel) == ["사업자_대응표.csv", "셀독_계약상품군_판정.json", P.SELDOC_DB]
+        for n in ("사업자_대응표.csv", "셀독_계약상품군_판정.json", "계약서_정밀분석_DB_v6.xlsx", "계약서_정밀분석_DB_v5.xlsx"):
+            (sel / n).write_text("{}" if n.endswith(".json") else "계정ID\n", encoding="utf-8")
+        try:
+            P.pack(inp, sel, dest, now=now, log=lambda s: None)
+            raise AssertionError("계약 DB 가 둘인데 묶음")
+        except ValueError as exc:
+            assert "1개만" in str(exc)
+        (sel / "계약서_정밀분석_DB_v5.xlsx").unlink()
+        assert P.seldoc_missing(sel) == []
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except AttributeError:
         pass
+    for f in (test_run_job_abort, test_run_job_isolation_and_sheets, test_inputs_pack):
+        f()
     for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_expect_values, test_flow_fixed, test_t125_additional_pay, test_d391_unknown_ship_same_month_wing_ratio, test_failed_checks, test_load_judge,
               test_sale_months_2025_excluded, test_render, test_fixed_render, test_product_pages, test_overflow, test_unsplittable, test_check_reject,
               test_multi_month, test_tool):

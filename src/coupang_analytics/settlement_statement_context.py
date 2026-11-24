@@ -137,7 +137,14 @@ def _accounts(a: StatementArgs, c: SimpleNamespace) -> None:
     c.rgf = SRC.rg_file_targets(a.settle_dir)
 
 
-def _managed(a: StatementArgs, c: SimpleNamespace) -> None:
+def _account_history(a: StatementArgs, rows: list | None) -> tuple[dict, str]:
+    """원장 '계정이력' — 메모리 행(rows · 원장 백업에서 읽음 · 평문 비밀번호 사본 파일 안 만듦)이 있으면 그것, 없으면 사본 json·구글 실시간(옛 동작)."""
+    if rows is not None:
+        return SCOPE.first_starts(rows), ""
+    return SCOPE.account_history(a.account_history)
+
+
+def _managed(a: StatementArgs, c: SimpleNamespace, history_rows: list | None = None) -> None:
     """관리 상품 기준 — 출처 순위(D-230·D-231): ① 대장(결과 엑셀 + 날짜별 사본) VID·같은 상품명(D-107)·옛 대장 ② 원장 정산전용상품
     (모든 계정)·이력원장 ③ 계약서 ④ 되찾은 로켓그로스 상품(1~3순위로 정한 상품 뺌) · 체험단."""
     c.ledger = SCOPE.ledger_vids(a.managed_output)
@@ -150,17 +157,17 @@ def _managed(a: StatementArgs, c: SimpleNamespace) -> None:
     inv = c.inv = SCOPE.inventory(a.managed_output)
     c.src_vids = {aid: SCOPE.source_vids(rk, inv.get(aid) or {}, SCOPE.sales_groups(c.periods.get(aid) or {})) for aid, rk in c.ranked.items()}
     c.rg = SCOPE.recover_all(c.ledger, c.listings, (c.daily, c.periods), inv, c.contracts,
-                             SCOPE.account_history(a.account_history), SCOPE.load_judge(a.inputs / SCOPE.JUDGE), c.ranked)
+                             _account_history(a, history_rows), SCOPE.load_judge(a.inputs / SCOPE.JUDGE), c.ranked)
     c.xrows = XP.load(a.out, None, a.inputs / "체험단_보충.json")
 
 
-def load(a: StatementArgs) -> SimpleNamespace:
-    """공통 자료를 한 번 읽음(옛 모듈 전역과 같은 순서·같은 값)."""
+def load(a: StatementArgs, history_rows: list | None = None) -> SimpleNamespace:
+    """공통 자료를 한 번 읽음(옛 모듈 전역과 같은 순서·같은 값). history_rows = 원장 '계정이력' 행(메모리 · 배치용 · 없으면 옛 동작)."""
     c = SimpleNamespace(args=a, base=a.settle_dir, basis=a.basis, issued=a.issued, out=a.out)
     a.out.mkdir(parents=True, exist_ok=True)
     c.extras = SRC.extras(a.inputs / "쿠팡_별도보상.json")
     _accounts(a, c)
-    _managed(a, c)
+    _managed(a, c, history_rows)
     c.svc_judge = json.loads((a.inputs / "svc_digital_judge.json").read_text(encoding="utf-8"))
     oj = a.inputs / OWN_JUDGE          # 선택 파일 · 없으면 빈 판정표 = 감지 항목 전부 '확인 필요' 사유(D-305 · 조용한 대체 아님)
     c.own_judge = json.loads(oj.read_text(encoding="utf-8"))["계정"] if oj.is_file() else {}
