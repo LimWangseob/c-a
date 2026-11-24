@@ -17,6 +17,7 @@ import openpyxl
 
 from coupang_analytics import settlement_files as SF
 from coupang_analytics import settlement_ledger as SL
+from coupang_analytics import settlement_forecast as FC
 from coupang_analytics import settlement_managed_alloc as MA
 from coupang_analytics import settlement_statement_pending as PEND
 from coupang_analytics import settlement_statement_scope as SCOPE
@@ -27,6 +28,7 @@ AD, LOGI, MILK, SVC, ETC, COMP, REL, FAST = ("광고비", "로켓그로스 물�
                                              "판매자서비스이용료", "기타 공제", "재고 분실·파손 보상(쿠팡이 줌)", "보류됐다 풀린 돈",
                                              "빠른정산 계좌인출액")
 BI = "비즈니스 인사이트 이용료"     # 로켓그로스 추가공제 안 계정 정액(산식 74) — 관리 몫 = 그 달 등록 상품 비율(D-271)
+SAVER = "로켓그로스 세이버 구독료"  # 추가공제 안 계정 정액(D-271 3종 · T-175 · 옛 D-162 '기타 공제') — 새 정산서 9 줄 이름과 같음
 STS = ("지급 완료", "예정", "보류")
 # 위탁자 본인 차감(D-312 ② · D-305 따로 줄) = 쿠팡이 계정 정산에서 뺀 위탁자 개인 대출 상환·체크카드 대금 — 계정 합계엔 차감 · 관리 몫 0
 PM3 = "3PM_매출채권"              # 윙 차감 사유 원문 이름(D-304 음수 최종 회차 되돌림도 같은 항목)
@@ -132,9 +134,10 @@ def deductions(r: dict, done: bool = True) -> tuple[float, float, Counter]:
     ar = num(r.get("totalArFactoringDeductionAmount"))        # 빠른정산(셀러월렛) 상환 — 추가공제 안(KB §1-14)
     mca, card = num(r.get("totalMerchantCashAdvanceDeductionAmount")), num(r.get("totalDebitCardDeductionAmount"))  # 80·81 추가공제 안(D-312 ②)
     bi = num(r.get("totalBusinessInsightsDeductionAmount"))   # 74 추가공제 안 · 관리 몫 D-271(기타 공제에서 뗌)
+    sv = num(r.get("totalSubscriptionFeeDeductionAmount"))    # 세이버 구독료 추가공제 안(output44 64줄 실측) · 관리 몫 D-271
     # 판매 조정(totalSalesAdjustment)은 추가공제에도 같은 금액으로 들어 있어 서로 지워짐(줄 공식 E2 와 같은 결과)
-    parts.update({AD: ad, MILK: mr, FAST: ar, OWN_MCA: mca, OWN_CARD: card, **({BI: bi} if bi else {}),
-                  ETC: num(r.get("totalAdditionalDeductionAmount")) - ad - mr - ar - mca - card - bi - num(r.get("totalSalesAdjustment")),
+    parts.update({AD: ad, MILK: mr, FAST: ar, OWN_MCA: mca, OWN_CARD: card, **({BI: bi} if bi else {}), **({SAVER: sv} if sv else {}),
+                  ETC: num(r.get("totalAdditionalDeductionAmount")) - ad - mr - ar - mca - card - bi - sv - num(r.get("totalSalesAdjustment")),
                   LOGI: num(r.get("totalFinalCfsFeeDeductionAmount")), COMP: -num(r.get("totalCfsInventoryCompensationAmount"))})
     return num(r.get("totalPayableAmount")), 0.0, parts
 
@@ -212,10 +215,13 @@ class AccountBase:
         self.rows_out, self.bad = [], 0
         self.line_info: list = []          # (상태, 판매 방식, 판매 시작 달, 정산금액, 보류 해제액, 공제 항목, 장부 줄) — 관리 상품 입금 나누기용
         self.watch: Counter = Counter()    # D-305 감지 항목 계정 합
+        self.old_fc: list = []             # T-175 전 예정 기록 줄의 기타 공제(BI·세이버·라이브·리뷰를 못 나눔)
         for row, r in lines:
             st = row[6].split(" ·")[0]
             pay, rel, parts = deductions(r, st == STS[0])
             self.watch.update(watched(r))
+            if FC.old_record(r) and round(parts.get(ETC, 0.0)):
+                self.old_fc.append(parts[ETC])
             self.line_info.append((st, r["채널"], str(row[3])[:7], pay, rel, parts, row))
             final = num(r["최종지급액"])
             if r["채널"] == "윙" and st == STS[0]:

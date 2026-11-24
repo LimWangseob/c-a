@@ -17,6 +17,9 @@ from pathlib import Path
 
 FORECAST_FILE = "정산예정기록.jsonl"
 AHEAD_DAYS = 70                    # 정산현황을 오늘 뒤 며칠까지 조회할지(윙 최종액 = 익익월 1일까지 덮음)
+RG_DETAIL = ("totalBusinessInsightsDeductionAmount", "totalSubscriptionFeeDeductionAmount", "totalCoupangLiveDeductionAmount",
+             "totalPostPurchaseDeductionAmount", "businessInsightsOffsetYearMonthBreakdown", "subscriptionFeeOffsetYearMonthBreakdown",
+             "coupangLiveOffsetYearMonthBreakdown", "adSalesOffsetYearMonthBreakdown")
 _KEEP = ("정산일", "기간 시작", "기간 끝", "지급비율", "최종지급액", "지급상태",
          # 윙
          "targetAmount", "totalDeductionAmount", "paidAmount", "pendingAmount", "차감 사유",
@@ -28,7 +31,10 @@ _KEEP = ("정산일", "기간 시작", "기간 끝", "지급비율", "최종지�
          # 80 MCA 상환·81 체크카드 = 위탁자 본인 차감(D-312 ② · D-305 감지) — 없으면 예정 줄에서 '기타 공제'로 섞임(T-125 A2)
          "totalMerchantCashAdvanceDeductionAmount", "totalDebitCardDeductionAmount", "debitCardOffsetYearMonthBreakdown",
          # 로켓그로스 정산대상 100% 를 쿠팡 칸 그대로 만드는 칸(D-081 — 70% 줄만 있어도 ÷0.7 없이)
-         "totalSalesAmount", "totalRefundedAmount", "totalTakeRateAmountWithVat", "totalSellerDiscount")
+         "totalSalesAmount", "totalRefundedAmount", "totalTakeRateAmountWithVat", "totalSellerDiscount",
+         # 74·76·79·리뷰·광고 달 표시(T-175 · T-145 같은 뿌리) — 없으면 예정 줄의 BI·세이버·라이브·리뷰 공제가 새 정산서 9 에서 빠지고
+         # 옛 위탁정산서는 '기타 공제'로 섞임 · 쿠팡 줄엔 총액 4칸이 늘 있고 달 표시 칸은 값 있을 때만 옴(output44 지급 줄 2,150줄 실측)
+         *RG_DETAIL)
 _RG_TARGET = ("totalSalesAmount", "totalRefundedAmount", "totalTakeRateAmountWithVat", "totalSellerDiscount")
 # 정확도 비교 칸: (보여 줄 이름, 쿠팡 칸) — 채널마다 있는 칸만
 COMPARE = (("정산대상(윙)", "targetAmount"), ("공제(윙)", "totalDeductionAmount"),
@@ -36,6 +42,11 @@ COMPARE = (("정산대상(윙)", "targetAmount"), ("공제(윙)", "totalDeductio
            ("밀크런(RG)", "totalMilkRunDeductionAmount"), ("빠른정산(RG)", "totalArFactoringDeductionAmount"),
            ("물류비(RG)", "totalFinalCfsFeeDeductionAmount"), ("보상(RG)", "totalCfsInventoryCompensationAmount"),
            ("판매조정(RG)", "totalSalesAdjustment"), ("최종지급액", "최종지급액"))
+
+
+def old_record(r: dict) -> bool:
+    """RG_DETAIL 저장 전(T-175 전) 예정 기록 로켓그로스 줄 — 총액 칸이 없음(쿠팡 원문 줄엔 늘 있음) → BI·세이버·라이브·리뷰·광고 달을 모름."""
+    return "수집일" in r and r.get("채널") == "로켓그로스" and "totalPostPurchaseDeductionAmount" not in r
 
 
 def rg_target(r: dict) -> int | None:
