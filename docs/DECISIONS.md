@@ -3251,7 +3251,7 @@ umpy`) · 우리 코드는 numpy 를 직접 안 씀 · 정산 바퀴 끝 '남는
 - 근거: 11-24 조사 — 완료 신호 = `settlement_download.py:1801` `write_done` 한 곳 · 24:00 미완료는 안 씀(1807-1810) · 정산서 도구 3개 = exe·앱 연결 없음(spec 진입점 3개) · 계정별 격리 없음(statements:48-58·consignor:92-99·groups:123-130) · 개발 PC 실측 위탁정산서 약 21분·셀독 공통 읽기 약 7분 · 산식 121항목 = 완료 64·미완료 35·해당 없음 22(`output\_점검_261118_정산항목체크\정산식_산식미완료_1119.md`).
 - 버린 대안: 운용 PC 18시 배치(D-204 ① 시각 — 지금 받기 회차 00:10 · 받기 끝나는 시각이 날마다 다름) · 앱 1분 타이머로 띄우기(무인 앱이 08:00 보충 뒤 종료 · 정산은 24:00까지) · 실패 계정 있으면 전부 중단 · 미완료 날에도 있는 자료로 생성 · 파일 생성까지만(발행은 사람) · 확인 필요 = 보고 파일만.
 - 영향 범위: 레인 A `statement_batch.py`·`tools/settlement_download.py`·`deploy/정산_상태확인.bat`·`ui/settlement_status_panel_qt.py`·`tools/verify_statement_batch_offline.py`·`run_checks.py` · 레인 B `statement_jobs_consignor.py`·`settlement_statements.py`·`settlement_statement_context.py`·`tools/settlement_consignor.py`·`tools/statement_inputs_pack.py`·`deploy/정산서입력_반영.bat` · 레인 C 계산 모듈 · 레인 D `statement_jobs_seldoc.py`·`settlement_seldoc_*` · 배포 spec a_settle datas 에 `tools/check_settlement_statements.py` 추가(병합 때) · 정산 탭 화면 표시 = T-171 · 위탁자 새 달 시트 자동 만들기 = T-43 OAuth 뒤.
-- 상태: ACTIVE (구현 중 R252 — 레인 A `86474fb`·C `f4f212f`·D `7d77a59` 브랜치 커밋 · B 작업 중 · 병합·검증 전)
+- 상태: ACTIVE (구현·병합 R253 — B `bffb47b`·C `a8be2c3`·D `2fe81a4`·A `8752887` · 남은 = 운용 사본 끝까지 검증 · 고객용 셀독 정산서 '확인 필요' 글자 정리(T-174) · 산식 남은 반영 T-173 · 배포 전)
 
 ### D-400 [SELDOC_DECISIONS_4_BATCH] 셀독 정산서 결정 4건 — 투자형 카드 = 약정·지급완료 표시 · 규칙 밖 36유형 제안대로 확정 · 나머지 관리 상품 = 관리대장 기준(대장에 없으면 오류 = 확인 필요 탭) · rladygks0221 두 장 (2026-11-24, R252)
 - 결정(소유자 2026-11-24 질문 카드 원문 답):
@@ -3262,4 +3262,4 @@ umpy`) · 우리 코드는 numpy 를 직접 안 씀 · 정산 바퀴 끝 '남는
 - 근거: 레인 D 1차 배정 후보표 `output\_작업_261124_T166_상품군판정\상품배정_1124\`(상품 166 = 대상 84·확인 필요 82 · 결정 대기 계약 0) · 투자형 양식 점검 `투자형_양식점검\`(3건 모두 2025-10 지급 끝 · 지금 카드는 도달률·남은 금액 틀림).
 - 버린 대안: ① 지급 내역서 따로·셀독 정산서에서 뺌 ② 36개 목록 보고 정함 ③ 가장 최근 계약에 배정·실적에서 빼고 보고만 ④ 새 계약 1장만.
 - 영향 범위: `settlement_seldoc_*`·`statement_jobs_seldoc.py`(레인 D-2 · 카드 task_c7204a45) · 판정표 후보 → 앱 판정표 반영 = 통제 세션 · D-398 ⑤(투자형 '넣기')에 양식을 더함.
-- 상태: ACTIVE (구현 전 — 코드 반영 = 레인 D-2)
+- 상태: ACTIVE (구현·병합 R253 `2fe81a4` — ①②④ 코드 · ③ 대장 대조 = 상품 90개 계약 배정 AI 판정 남음(T-174) · ① 투자형 남은 지급 근거 없는 계약 = 고객용 정산서 대신 확인 필요로(D-221 ② · T-174))
