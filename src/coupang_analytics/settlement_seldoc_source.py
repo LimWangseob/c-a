@@ -1,9 +1,10 @@
 """셀독 정산서 입력 읽기 — 위탁정산서 결과 파일 · 계약서 분석 DB · 셀독 입력 폴더(사업자 대응표 + 계약·상품군 판정표). T-25 4단계.
 
 - D-225 ① 쿠팡 판매·정산 숫자 = 위탁정산서 결과 파일에서만(따로 받거나 계산하지 않음) ② 계약 내용 = 계약서 분석 DB 값 그대로 ③ 없으면 없는 대로.
-- 대상 계약 = DB '관리대상' 계약(D-398 · 유형 글자와 관계없음) + DB '계약유형(소)' 규칙(TARGET_TYPES·TARGET_WORDS 대상 · EXCLUDE_WORDS 제외 · 그 밖 = 규칙 밖 → 중단) + 계약자↔계정 판정표(D-229 · AI 판정 · 근거 원문).
+- 대상 계약 = DB '관리대상' 계약(D-398 · 유형 글자와 관계없음) + DB '계약유형(소)' 규칙(TARGET_TYPES·TARGET_WORDS 대상 · EXCLUDE_WORDS 제외 · 그 밖 = 규칙 밖 → 손 실행 중단·배치는 그 계약만 건너뜀) + 계약자↔계정 판정표(D-229 · AI 판정 · 근거 원문).
   후보 = 계약자 명칭·대표가 계정 사업자·대표자와 이름 글자로 같은 계약(같은 사람인지는 판정표가 정함).
-- 판정표 없음·판정 없는 대상 계약·DB 에 없는 계약 = SeldocInputError(시작 전 중단 · fallback 없음).
+- 판정표 없음·DB 없음 = SeldocInputError(시작 전 중단 · fallback 없음).
+- 판정 없는 대상 계약·DB 에 없는 계약·규칙 밖 유형 = 그 계약만 Skip(`plan_isolated` · 배치 D-399) · `plan` = 하나라도 있으면 중단(손 실행).
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ JUDGE = "셀독_계약상품군_판정.json"
 TARGET_TYPES = ("셀독 상품공급 OEM", "보냉백 OEM 생산공급")        # 준비 문서 3절 규칙 — 대상
 TARGET_WORDS = ("제로셀",)                                          # D-397 ①(D-206 ③) 제로셀 계약 = 대상(제외 낱말보다 먼저)
 EXCLUDE_WORDS = ("제로리스크", "투자", "위임")                       # 같은 규칙 — 제외
+RULE_OUT_WAIT = "규칙 밖 유형 확정"                                  # 규칙 밖 유형 = 소유자 결정 대기 항목 이름(보고용)
 G_LABEL, EXTRA_PREFIX, HOLD_LABEL = "G 최종 지급액", "쿠팡 별도 보상 — ", "입금 보류"
 BOOK_LABELS = (G_LABEL, EXTRA_PREFIX, "입금 ", "월별 판매", "상품별 판매", "계산 근거", "판매 기간", "쿠팡 계정")
 
@@ -144,54 +146,104 @@ def candidates(contracts: dict, people: tuple) -> list:
     return [c for c in contracts.values() if keys & ({_norm(c.party), _norm(c.rep)} - {""})]
 
 
-def _from_candidates(aid: str, people: tuple, contracts: dict, judged: dict) -> list:
-    """이름이 같은 후보 중 규칙 '대상' + 판정표 '이 계정·대상' · 규칙 밖 유형·판정 없는 대상 계약 = 중단."""
-    picked = []
-    for c in candidates(contracts, people):
-        kind = target_kind(c)
-        if kind == "규칙 밖":
-            raise SeldocInputError(f"시작 전 중단 — {aid} 후보 계약 {c.doc_id} 유형 '{c.kind}' = 대상 규칙 밖")
-        if kind != "대상":
-            continue
-        j = judged.get(c.doc_id)
-        if j is None:
-            raise SeldocInputError(f"시작 전 중단 — {aid} 대상 계약 {c.doc_id}({c.signed} {c.kind}) 판정 없음")
-        if j.get("계정ID") == aid and j.get("판정") == "대상":
-            picked.append(c)
-    return picked
+@dataclass
+class Skip:
+    """계약(또는 계정) 하나를 만들지 않는 사유 — 배치는 이것만 건너뛰고 나머지를 만든다(D-399 · 계약별 격리).
+    blocking = 예전 '시작 전 중단' 사유(손 실행 strict 는 하나라도 있으면 중단) · held = 계정 계약 수를 모르게 하는 미확정 계약
+    (그 계정의 나머지 계약은 상품군 정산서로만 만든다 — 계정 전체 정산서를 한 계약에 몰아 쓰지 않음) · wait = 판정표의 '결정대기'."""
+    aid: str
+    doc: str
+    reason: str
+    blocking: bool = True
+    held: bool = False
+    wait: str = ""
 
 
-def _from_judge(aid: str, contracts: dict, judged: dict) -> list:
-    """판정표가 이 계정 대상으로 둔 계약 — DB 에 없음·대상 유형 아님 = 중단."""
-    out = []
+def _candidate(aid: str, c: Contract, judged: dict, picked: list, skips: list) -> bool:
+    """이름 후보 하나 — 규칙 밖 = Skip(held) · 대상 유형 = 판정표대로 · 처리한 후보면 True(판정표 쪽에서 다시 안 봄)."""
+    kind = target_kind(c)
+    if kind == "규칙 밖":
+        skips.append(Skip(aid, c.doc_id, f"{aid} 후보 계약 {c.doc_id} 유형 '{c.kind}' = 대상 규칙 밖", held=True, wait=RULE_OUT_WAIT))
+        return True
+    if kind != "대상":
+        return False                                    # 제외 유형 후보를 판정표가 '대상'으로 두면 판정표 쪽에서 '대상 유형 아님'
+    j = judged.get(c.doc_id)
+    if j is None:
+        skips.append(Skip(aid, c.doc_id, f"{aid} 대상 계약 {c.doc_id}({c.signed} {c.kind}) 판정 없음", held=True))
+    elif j.get("계정ID") == aid and j.get("판정") == "대상":
+        picked.append(c)
+    elif j.get("계정ID") == aid and j.get("판정") == "확인 필요":
+        skips.append(_unsure(aid, c.doc_id, j))
+    return True
+
+
+def _judged(aid: str, doc: str, j: dict, contracts: dict, picked: list, skips: list) -> None:
+    """판정표가 이 계정으로 둔 계약(이름 후보 밖) — 결정 대기 = Skip · DB 에 없음·대상 유형 아님 = Skip(held)."""
+    if j.get("판정") == "확인 필요" and j.get("결정대기"):
+        skips.append(_unsure(aid, doc, j))
+    elif j.get("판정") != "대상":
+        return
+    elif doc not in contracts:
+        skips.append(Skip(aid, doc, f"{aid} 판정표 계약 {doc} 계약 못 찾음(DB 에 없음)", held=True))
+    elif target_kind(contracts[doc]) != "대상":
+        skips.append(Skip(aid, doc, f"{aid} 판정표 계약 {doc} 유형 '{contracts[doc].kind}' = 대상 유형 아님", held=True))
+    else:
+        picked.append(contracts[doc])
+
+
+def _account_plan(aid: str, people: tuple, contracts: dict, judged: dict) -> tuple[list, list]:
+    """한 계정 → ([대상 Contract], [Skip]). 후보(이름 같음) 중 규칙 '대상' + 판정표 '이 계정·대상' + 판정표가 이 계정 대상으로 둔 계약."""
+    picked: list = []
+    skips: list = []
+    seen = {c.doc_id for c in candidates(contracts, people) if _candidate(aid, c, judged, picked, skips)}
     for doc, j in judged.items():
-        if j.get("계정ID") != aid or j.get("판정") != "대상":
+        if j.get("계정ID") == aid and doc not in seen:
+            _judged(aid, doc, j, contracts, picked, skips)
+    if not picked and not any(s.held for s in skips):
+        skips.append(Skip(aid, "", f"{aid} 대상 계약 없음"))
+    return sorted(picked, key=lambda c: (c.signed, c.doc_id)), skips
+
+
+def _unsure(aid: str, doc: str, j: dict) -> Skip:
+    """판정표 '확인 필요' — '결정대기'(소유자 결정 대기 항목)가 있으면 이 계정 계약으로 보고 계약 수에 셈(held) · 없으면 알림만(예전처럼 뺌)."""
+    wait = str(j.get("결정대기") or "")
+    if wait:
+        return Skip(aid, doc, f"{aid} 계약 {doc} 판정표 '확인 필요'", held=True, wait=wait)
+    return Skip(aid, doc, f"{aid} 계약 {doc} 판정표 '확인 필요' — {j.get('근거') or ''}".rstrip(" —"), blocking=False)
+
+
+def plan_isolated(people: dict, contracts: dict, judge: dict, aids: list) -> tuple[list, list]:
+    """계정마다 대상 계약 → ([Job], [Skip]) — 문제 있는 계약만 Skip(중단 없음 · D-399). 미확정 계약(held)이 있는 계정 = 계약 여럿으로 봄."""
+    jobs, skips = [], []
+    for aid in aids:
+        if aid not in people:
+            skips.append(Skip(aid, "", f"{aid} 가 사업자 대응표에 없음"))
             continue
-        if doc not in contracts:
-            raise SeldocInputError(f"시작 전 중단 — {aid} 판정표 계약 {doc} 계약 못 찾음(DB 에 없음)")
-        if target_kind(contracts[doc]) != "대상":
-            raise SeldocInputError(f"시작 전 중단 — {aid} 판정표 계약 {doc} 유형 '{contracts[doc].kind}' = 대상 유형 아님")
-        out.append(contracts[doc])
-    return out
-
-
-def _account_jobs(aid: str, people: tuple, contracts: dict, judged: dict) -> list:
-    picked = _from_candidates(aid, people, contracts, judged)
-    picked += [c for c in _from_judge(aid, contracts, judged) if c not in picked]
-    if not picked:
-        raise SeldocInputError(f"시작 전 중단 — {aid} 대상 계약 없음")
-    picked.sort(key=lambda c: (c.signed, c.doc_id))
-    return [Job(aid, c, len(picked) > 1, people) for c in picked]
+        picked, sk = _account_plan(aid, people[aid], contracts, judge["계약"])
+        skips += sk
+        split = len(picked) + sum(1 for s in sk if s.held) > 1
+        jobs += [Job(aid, c, split, people[aid]) for c in picked]
+    return jobs, skips
 
 
 def plan(people: dict, contracts: dict, judge: dict, aids: list) -> list:
-    """계정마다 대상 계약 → [Job] (계정 순서 · 계약일 순)."""
-    jobs = []
-    for aid in aids:
-        if aid not in people:
-            raise SeldocInputError(f"시작 전 중단 — {aid} 가 사업자 대응표에 없음")
-        jobs += _account_jobs(aid, people[aid], contracts, judge["계약"])
+    """계정마다 대상 계약 → [Job] (계정 순서 · 계약일 순) · 막는 사유가 하나라도 있으면 SeldocInputError(손 실행 strict)."""
+    jobs, skips = plan_isolated(people, contracts, judge, aids)
+    first = next((s for s in skips if s.blocking), None)
+    if first is not None:
+        raise SeldocInputError(f"시작 전 중단 — {first.reason}")
     return jobs
+
+
+def auto_accounts(people: dict, contracts: dict, judge: dict) -> list:
+    """계정을 주지 않은 배치 = 대응표 계정 중 판정표에 계약이 있거나 이름 후보에 대상·규칙 밖 계약이 있는 계정
+    + 판정표가 '대상'으로 둔 대응표 밖 계정(→ '대응표에 없음'으로 보고)."""
+    judged = judge["계약"]
+    owners = {j.get("계정ID") for j in judged.values()}
+    out = [aid for aid in people
+           if aid in owners or any(target_kind(c) != "제외" for c in candidates(contracts, people[aid]))]
+    out += sorted({str(j["계정ID"]) for j in judged.values() if j.get("판정") == "대상" and j.get("계정ID") and j["계정ID"] not in people})
+    return out
 
 
 # ── 위탁정산서 결과 파일 ──

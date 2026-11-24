@@ -1,75 +1,55 @@
-"""셀독 정산서 만들기 — 명령줄 입구(T-25 4단계 · 계약 1건 = 파일 1개·시트 1장). 계산 없음: 숫자 = 위탁정산서 결과 파일(D-225 ①).
+"""셀독 정산서 만들기 — 명령줄 껍데기(T-25 4단계 · 본체 = `src/coupang_analytics/statement_jobs_seldoc.py` · 배치 D-399 와 같은 코드).
+계약 1건 = 파일 1개·시트 1장 · 계산 없음: 숫자 = 위탁정산서 결과 파일(D-225 ①).
 
 1) 계약이 여럿인 계정(서달원 등)만 — 계약별 상품군 위탁정산서(D-155 · 위탁정산서와 같은 규칙 · 범위만 상품군):
-    python tools/settlement_seldoc.py groups --db <계약서 분석 DB> --seldoc-inputs <셀독 입력 폴더> --accounts a,b
-        --out <상품군 정산서 폴더> --managed-output … --settle-dir … --stats … --basis YYYY-MM-DD --inputs <위탁정산서 입력 폴더>
-        [--issued …] [--settle-only …] [--account-history …]          (뒤 인자 = tools/settlement_statements.py 와 같음)
+    python tools/settlement_seldoc.py groups --accounts a,b --out <상품군 정산서 폴더> --managed-output … --settle-dir … --stats …
+        --basis YYYY-MM-DD [--inputs <위탁정산서 입력 폴더>] [--issued …] [--settle-only …] [--account-history …]
 2) 셀독 정산서:
     python tools/settlement_seldoc.py make --statements <위탁정산서 결과 폴더> [--group-statements <상품군 정산서 폴더>]
-        --db <계약서 분석 DB> --seldoc-inputs <셀독 입력 폴더> --out <출력 폴더> --basis YYYY-MM-DD --issued YYYY-MM-DD --accounts a,b
+        --out <출력 폴더> --basis YYYY-MM-DD --issued YYYY-MM-DD [--accounts a,b] [--isolate]
+3) 셀독 입력 1회 준비(복사만 · 원본 그대로 · 덮어쓰기 없음):
+    python tools/settlement_seldoc.py inputs --from <판정표·대응표가 있는 폴더> --db <계약서 분석 DB> [--to <셀독 입력 폴더>]
 
-셀독 입력 폴더 고정 이름 = 사업자_대응표.csv · 셀독_계약상품군_판정.json(계약자↔계정·상품↔계약 AI 판정 · 근거 원문).
-판정표 없음·판정 없는 대상 계약·DB 에 없는 계약·위탁정산서/상품군 정산서 없음 = ❌ 시작 전 중단(파일 안 만듦).
+셀독 입력 폴더 기본 = output\\정산서\\입력_셀독\\ (사업자_대응표.csv · 셀독_계약상품군_판정.json · 계약 DB 사본 계약서_정밀분석_DB*.xlsx 1개)
+· --seldoc-inputs·--db = 덮어쓰기용 · --accounts 없음 = 판정표·이름 후보가 있는 계정 전부.
+손 실행 기본 = 막는 사유(판정 없음·DB 에 없는 계약·위탁정산서/상품군 정산서 없음 등)가 하나라도 있으면 ❌ 시작 전 중단(파일 안 만듦) ·
+--isolate = 배치처럼 그 계약만 건너뛰고 나머지를 만듦(건너뛴 사유 출력).
 """
 from __future__ import annotations
 
 import argparse
 import sys
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-sys.path.insert(0, str(ROOT / "tools"))
 
-from coupang_analytics import settlement_seldoc_groups as G  # noqa: E402
-from coupang_analytics import settlement_seldoc_sheet as SH  # noqa: E402
 from coupang_analytics import settlement_seldoc_source as SS  # noqa: E402
-from coupang_analytics.settlement_statement_book import safe_name  # noqa: E402
+from coupang_analytics import statement_jobs_seldoc as JOB  # noqa: E402
 
 
 def _common(ap: argparse.ArgumentParser) -> None:
-    ap.add_argument("--db", required=True, type=Path)
-    ap.add_argument("--seldoc-inputs", required=True, type=Path)
-    ap.add_argument("--accounts", required=True, help="쉼표로 나눈 계정ID")
+    ap.add_argument("--db", type=Path, help="계약서 분석 DB(기본 = 셀독 입력 폴더의 사본)")
+    ap.add_argument("--seldoc-inputs", type=Path, help=f"셀독 입력 폴더(기본 = {JOB.default_inputs(ROOT)})")
+    ap.add_argument("--accounts", default="", help="쉼표로 나눈 계정ID(없으면 판정표·이름 후보가 있는 계정 전부)")
+    ap.add_argument("--basis", required=True)
+    ap.add_argument("--issued", default=f"{date.today():%Y-%m-%d}")
+    ap.add_argument("--isolate", action="store_true", help="막힌 계약만 건너뛰고 나머지를 만듦(배치와 같음)")
 
 
-def _jobs(a) -> tuple[list, dict]:
-    judge = SS.load_judge(a.seldoc_inputs)
-    people = SS.load_people(a.seldoc_inputs)
-    aids = [x.strip() for x in a.accounts.split(",") if x.strip()]
-    return SS.plan(people, SS.load_contracts(a.db), judge, aids), judge
+def _opts(a, **kw) -> dict:
+    return {"root": ROOT, "seldoc_inputs": a.seldoc_inputs, "db": a.db, "basis": a.basis, "issued": a.issued,
+            "accounts": [x.strip() for x in a.accounts.split(",") if x.strip()] or None, "strict": not a.isolate, **kw}
 
 
-def _statement(a, job) -> Path:
-    if job.split:
-        if a.group_statements is None:
-            raise SS.SeldocInputError(f"시작 전 중단 — {job.aid} 계약이 {job.contract.doc_id} 등 여럿 — --group-statements 필요")
-        p = G.group_path(a.group_statements, job.aid, job.contract.doc_id)
-        if not p.is_file():
-            raise SS.SeldocInputError(f"시작 전 중단 — {job.aid} 계약 {job.contract.doc_id} 상품군 정산서 없음 {p}")
-        return p
-    found = sorted(a.statements.glob(f"정산서_*_{job.aid}_관리상품.xlsx"))
-    if len(found) != 1:
-        raise SS.SeldocInputError(f"시작 전 중단 — {job.aid} 위탁정산서 {len(found)}개(1개여야 함) · {a.statements}")
-    return found[0]
-
-
-def _perf(a, job):
-    pf = SS.read_statement(_statement(a, job))
-    if pf.aid != job.aid:
-        raise SS.SeldocInputError(f"시작 전 중단 — {job.aid} 위탁정산서의 쿠팡 계정이 {pf.aid}")
-    if job.split and any(x for _, x in pf.extras):
-        raise SS.SeldocInputError(f"시작 전 중단 — {job.aid} 쿠팡 별도 보상(상품 구분 없음)은 계약별로 나눌 수 없음")
-    return pf
-
-
-def _name(job, basis: str, stamp: str) -> str:
-    c = job.contract
-    first = safe_name(c.items[0][0])[:14] if c.items else "품목없음"
-    tag = f"{c.signed[2:].replace('-', '')}_{first}" + (f"외{len(c.items) - 1}" if len(c.items) > 1 else "")
-    who = safe_name(job.people[1] or job.people[0])
-    return f"셀독정산서_{who}_{tag}_{basis.replace('-', '')}기준_{stamp}.xlsx"
+def _report(res: dict) -> int:
+    for s in res["skipped"]:
+        print(f"  건너뜀 {s['id']} — {s['reason']}")
+    if res["abort"]:
+        print(f"❌ {res['abort']}")
+        return 1
+    return 0
 
 
 def make(argv: list) -> int:
@@ -78,33 +58,36 @@ def make(argv: list) -> int:
     ap.add_argument("--statements", required=True, type=Path)
     ap.add_argument("--group-statements", type=Path)
     ap.add_argument("--out", required=True, type=Path)
-    ap.add_argument("--basis", required=True)
-    ap.add_argument("--issued", default=f"{date.today():%Y-%m-%d}")
     a = ap.parse_args(argv)
-    date.fromisoformat(a.basis)
-    date.fromisoformat(a.issued)
-    jobs, _judge = _jobs(a)
-    perfs = [_perf(a, j) for j in jobs]                        # 모두 읽고 맞는지 본 뒤에만 파일을 씀
-    stamp = datetime.now().strftime("%y%m%d_%H%M%S")
-    for j, pf in zip(jobs, perfs):
-        p = SH.write(a.out / _name(j, a.basis, stamp), j.contract, pf, a.basis, a.issued)
-        c = j.contract
-        target = SS.goal_total(c.amount, c.profit)
-        print(f"{j.aid} {c.doc_id[:8]} {c.signed} 목표 {target:,} · 실적 {pf.result:,} · 도달율 {SS.reach(pf.result, c.amount, c.profit):.1%}"
-              f" · 남은 {max(target - pf.result, 0):,} → {p}")
-    print(f"셀독 정산서 {len(jobs)}개 → {a.out}")
-    return 0
+    return _report(JOB.run_job(_opts(a, statements=a.statements, group_statements=a.group_statements, out=a.out, steps=("make",))))
 
 
 def groups(argv: list) -> int:
-    import settlement_statements as ST
     ap = argparse.ArgumentParser(prog="settlement_seldoc.py groups")
     _common(ap)
-    a, rest = ap.parse_known_args(argv)
-    args = ST._args(rest)
-    jobs, judge = _jobs(a)
-    for aid, doc, p, g in G.run(args, jobs, judge, args.out):
-        print(f"  {aid} {doc[:8]} G {g:,} → {p}")
+    ap.add_argument("--out", required=True, type=Path, help="상품군 정산서 폴더")
+    ap.add_argument("--managed-output", required=True, type=Path)
+    ap.add_argument("--settle-dir", required=True, type=Path)
+    ap.add_argument("--stats", required=True, type=Path)
+    ap.add_argument("--inputs", type=Path, default=ROOT / "output" / "정산서" / "입력", help="위탁정산서 입력 폴더")
+    for k in ("--settle-only", "--supp", "--snap", "--account-history"):
+        ap.add_argument(k, type=Path)
+    ap.add_argument("--only", default="")
+    a = ap.parse_args(argv)
+    g = {k: getattr(a, k) for k in JOB.GROUP_KEYS if k != "only"}
+    g["only"] = tuple(x.strip() for x in a.only.split(",") if x.strip())
+    return _report(JOB.run_job(_opts(a, out=a.out, group_statements=a.out, groups=g, steps=("groups",))))
+
+
+def inputs(argv: list) -> int:
+    ap = argparse.ArgumentParser(prog="settlement_seldoc.py inputs")
+    ap.add_argument("--from", dest="src", required=True, type=Path, help="판정표·사업자 대응표가 있는 폴더")
+    ap.add_argument("--db", required=True, type=Path)
+    ap.add_argument("--to", type=Path, default=JOB.default_inputs(ROOT))
+    a = ap.parse_args(argv)
+    for line in JOB.install_inputs(a.to, a.src, a.db):
+        print(f"  {line}")
+    print(f"셀독 입력 준비 끝 → {a.to}")
     return 0
 
 
@@ -114,14 +97,14 @@ def main(argv: list[str] | None = None) -> int:
     except AttributeError:
         pass
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv or argv[0] not in ("make", "groups"):
-        print("사용: settlement_seldoc.py make|groups …")
+    cmds = {"make": make, "groups": groups, "inputs": inputs}
+    if not argv or argv[0] not in cmds:
+        print("사용: settlement_seldoc.py make|groups|inputs …")
         return 2
     try:
-        return (make if argv[0] == "make" else groups)(argv[1:])
-    except (SS.SeldocInputError, FileNotFoundError, FileExistsError) as exc:
-        msg = str(exc)
-        print(f"❌ {msg}" if "시작 전 중단" in msg else f"❌ 시작 전 중단 — {msg}")
+        return cmds[argv[0]](argv[1:])
+    except SS.SeldocInputError as exc:
+        print(f"❌ {exc}")
         return 1
 
 

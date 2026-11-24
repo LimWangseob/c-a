@@ -6,7 +6,7 @@ D-155 ① 원문 규칙: 상품군 실지급 = 정산서와 같은 규칙으로 
 셀독 정산서가 위탁정산서 결과 파일만 읽게 한다(D-225 ①). 위탁정산서 계산 코드 자체는 바꾸지 않음.
 
 상품 → 계약 = 판정표(`셀독_계약상품군_판정.json` '상품' · 등록상품ID 단위 · AI 판정 · 근거 원문 · D-229). 판정 없는 관리 상품·
-등록상품을 못 찾는 관리 VID = SeldocInputError(중단 · fallback 없음).
+등록상품을 못 찾는 관리 VID = SeldocInputError(그 계정만 못 만듦 · fallback 없음 · D-399 계정별 격리).
 """
 from __future__ import annotations
 
@@ -26,14 +26,22 @@ def group_path(folder: Path, aid: str, doc_id: str) -> Path:
 
 
 def assign(managed: set, judged: dict, docs: list) -> dict:
-    """관리 등록상품ID → {문서ID: {등록상품ID}} (판정표대로 · 판정 없거나 이 계정 계약이 아닌 문서ID = 중단)."""
+    """관리 등록상품ID → {문서ID: {등록상품ID}} (판정표대로 · 판정 없거나 이 계정 계약이 아닌 문서ID = 중단 · 문제 상품 전부를 한 번에 알림)."""
     out: dict = {d: set() for d in docs}
+    bad = []
     for pid in sorted(managed):
-        doc = (judged.get(pid) or {}).get("문서ID")
-        if doc not in out:
+        j = judged.get(pid) or {}
+        doc = j.get("문서ID")
+        if doc in out:
+            out[doc].add(pid)
+            continue
+        if j.get("결정대기"):
+            why = f"확인 필요 — 소유자 결정 대기({j['결정대기']})"
+        else:
             why = "판정 없음" if doc is None else f"문서ID {doc} = 이 계정 대상 계약 아님"
-            raise SeldocInputError(f"시작 전 중단 — 관리 상품 {pid} 상품군 {why}")
-        out[doc].add(pid)
+        bad.append(f"관리 상품 {pid} 상품군 {why}")
+    if bad:
+        raise SeldocInputError("시작 전 중단 — " + " · ".join(bad))
     return out
 
 
@@ -96,37 +104,60 @@ def _base(ctx, acct: str) -> Account:
     return b
 
 
-def _account(ctx, acct: str, docs: list, judged: dict, inv: dict, out_dir: Path) -> list:
-    """계정 하나 — 계정 전체 계산(관리 시작 달) → 판정표대로 상품군 → 계약마다 상품군 위탁정산서."""
+def _account(ctx, acct: str, docs: list, judged: dict, inv: dict, out_dir: Path, held=(), on_log=print) -> list:
+    """계정 하나 — 계정 전체 계산(관리 시작 달) → 판정표대로 상품군 → 계약마다 상품군 위탁정산서.
+    held = 아직 못 만드는 같은 계정 계약(상품 배정에만 씀 · 파일 안 만듦) · 모두 계산해 맞는지 본 뒤에만 파일을 씀."""
     base = _base(ctx, acct)
     vp = vid_pids(base.opt2pid, inv, ctx.periods.get(base.aid) or {})
-    groups = assign(managed_pids(base.result["mpids"], vp, lambda v: Account.is_mv(base, v), base.vids), judged, docs)
-    made = []
+    all_docs = list(docs) + [d for d in held if d not in docs]
+    groups = assign(managed_pids(base.result["mpids"], vp, lambda v: Account.is_mv(base, v), base.vids), judged, all_docs)
+    done = []
     for doc in docs:
         g = GroupAccount(ctx, acct, groups[doc], base, inv)
         a = g.run()
         if g.unmapped:
             raise SeldocInputError(f"시작 전 중단 — {base.aid} 등록상품을 못 찾는 관리 VID {sorted(g.unmapped)}")
+        done.append((doc, a))
+    made = []
+    for doc, a in done:
         dest = group_path(out_dir, base.aid, doc)
         book(ctx, a, dest)
         made.append((base.aid, doc, dest, round(a["pay_m"])))
     total, whole = sum(x[3] for x in made), round(base.result["pay_m"])
-    print(f"{base.aid} 상품군 {len(made)}개 G 합 {total:,} · 계정 G {whole:,} · 차이 {total - whole:,}")
+    rest = f" · 못 만든 같은 계정 계약 {len(all_docs) - len(docs)}개" if len(all_docs) > len(docs) else ""
+    on_log(f"{base.aid} 상품군 {len(made)}개 G 합 {total:,} · 계정 G {whole:,} · 차이 {total - whole:,}{rest}")
     return made
 
 
-def run(args: CTX.StatementArgs, jobs: list, judge: dict, out_dir: Path) -> list:
-    """계약이 여럿인 계정(Job.split)마다 계약별 상품군 위탁정산서를 쓴다 → [(계정ID, 문서ID, 경로, G)] + 계정 G 대조 출력."""
+def _failed(exc: Exception) -> str:
+    return str(exc).removeprefix("시작 전 중단 — ") if isinstance(exc, SeldocInputError) else f"{type(exc).__name__}: {exc}"
+
+
+def run(args: CTX.StatementArgs, jobs: list, judge: dict, out_dir: Path, held: dict | None = None, on_log=print) -> tuple[list, dict]:
+    """계약이 여럿인 계정(Job.split)마다 계약별 상품군 위탁정산서 → ([(계정ID, 문서ID, 경로, G)], {계정ID: 못 만든 사유}).
+    계정별 격리(D-399) — 한 계정이 막혀도 다른 계정은 만든다 · held = {계정ID: [미확정 같은 계정 문서ID]}(상품 배정에만)."""
     split = [j for j in jobs if j.split]
-    if not split:
-        return []
-    ctx = CTX.load(args)
-    inv = SCOPE.inventory(args.managed_output)
+    aids = list(dict.fromkeys(j.aid for j in split))
+    if not aids:
+        return [], {}
+    try:
+        ctx = CTX.load(args)
+        inv = SCOPE.inventory(args.managed_output)
+    except (FileNotFoundError, SeldocInputError) as exc:
+        return [], {aid: f"상품군 정산서 입력을 못 읽음 — {exc}" for aid in aids}
     accts = {SRC.aid_of(a): a for a in ctx.accts}
-    out = []
-    for aid in dict.fromkeys(j.aid for j in split):
-        if aid not in accts:
-            raise SeldocInputError(f"시작 전 중단 — {aid} 정산 자료 없음")
-        docs = [j.contract.doc_id for j in split if j.aid == aid]
-        out += _account(ctx, accts[aid], docs, (judge.get("상품") or {}).get(aid) or {}, inv.get(aid) or {}, out_dir)
-    return out
+    out, failed = [], {}
+    for aid in aids:
+        try:
+            if aid not in accts:
+                raise SeldocInputError(f"{aid} 정산 자료 없음")
+            out += _account(ctx, accts[aid], [j.contract.doc_id for j in split if j.aid == aid], _products(judge, aid),
+                            inv.get(aid) or {}, out_dir, (held or {}).get(aid, ()), on_log)
+        except Exception as exc:                                    # 계정 하나의 계산 오류 = 그 계정만 못 만듦(사유를 보고 · 삼키지 않음)
+            failed[aid] = _failed(exc)
+            on_log(f"❌ {aid} 상품군 정산서 못 만듦 — {failed[aid]}")
+    return out, failed
+
+
+def _products(judge: dict, aid: str) -> dict:
+    return (judge.get("상품") or {}).get(aid) or {}
