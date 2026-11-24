@@ -1,7 +1,7 @@
 """셀독 정산서 입력 읽기 — 위탁정산서 결과 파일 · 계약서 분석 DB · 셀독 입력 폴더(사업자 대응표 + 계약·상품군 판정표). T-25 4단계.
 
 - D-225 ① 쿠팡 판매·정산 숫자 = 위탁정산서 결과 파일에서만(따로 받거나 계산하지 않음) ② 계약 내용 = 계약서 분석 DB 값 그대로 ③ 없으면 없는 대로.
-- 대상 계약 = DB '계약유형(소)' 규칙(TARGET_TYPES 대상 · EXCLUDE_WORDS 제외 · 그 밖 = 규칙 밖 → 중단) + 계약자↔계정 판정표(D-229 · AI 판정 · 근거 원문).
+- 대상 계약 = DB '계약유형(소)' 규칙(TARGET_TYPES·TARGET_WORDS 대상 · EXCLUDE_WORDS 제외 · 그 밖 = 규칙 밖 → 중단) + 계약자↔계정 판정표(D-229 · AI 판정 · 근거 원문).
   후보 = 계약자 명칭·대표가 계정 사업자·대표자와 이름 글자로 같은 계약(같은 사람인지는 판정표가 정함).
 - 판정표 없음·판정 없는 대상 계약·DB 에 없는 계약 = SeldocInputError(시작 전 중단 · fallback 없음).
 """
@@ -20,7 +20,8 @@ from coupang_analytics.settlement_statement_sheets import SHIP_LABEL
 
 JUDGE = "셀독_계약상품군_판정.json"
 TARGET_TYPES = ("셀독 상품공급 OEM", "보냉백 OEM 생산공급")        # 준비 문서 3절 규칙 — 대상
-EXCLUDE_WORDS = ("제로리스크", "제로셀", "투자", "위임")             # 같은 규칙 — 제외
+TARGET_WORDS = ("제로셀",)                                          # D-397 ①(D-206 ③) 제로셀 계약 = 대상(제외 낱말보다 먼저)
+EXCLUDE_WORDS = ("제로리스크", "투자", "위임")                       # 같은 규칙 — 제외
 G_LABEL, EXTRA_PREFIX, HOLD_LABEL = "G 최종 지급액", "쿠팡 별도 보상 — ", "입금 보류"
 BOOK_LABELS = (G_LABEL, EXTRA_PREFIX, "입금 ", "월별 판매", "상품별 판매", "계산 근거", "판매 기간", "쿠팡 계정")
 
@@ -37,7 +38,7 @@ def _int(v) -> int:
 def contract_kind(kind: str) -> str:
     """'대상' | '제외' | '규칙 밖'."""
     k = str(kind or "").strip()
-    if k in TARGET_TYPES:
+    if k in TARGET_TYPES or any(w in k for w in TARGET_WORDS):
         return "대상"
     return "제외" if any(w in k for w in EXCLUDE_WORDS) else "규칙 밖"
 

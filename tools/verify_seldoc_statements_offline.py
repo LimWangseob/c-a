@@ -6,7 +6,8 @@
   → 수익금 빈 칸 = 목표수익금 '없음' · 분모 = 계약금액
 - D-218 판매실적과 정산 자료는 따로 나란히(더하거나 한쪽으로 대신하지 않음)
 - D-152 ⑥·D-224 정산 요약 = 입금 완료 · 입금 예정 · 보류 · 보상 → 정산 기준 실적 = 넷의 합 · A4 세로 1쪽
-- 대상 계약(준비 문서 3절): '셀독 상품공급 OEM'·'보냉백 OEM 생산공급' = 대상 · 제로리스크·제로셀·투자·위임 = 제외
+- 대상 계약(준비 문서 3절): '셀독 상품공급 OEM'·'보냉백 OEM 생산공급' = 대상 · 제로리스크·투자·위임 = 제외
+- D-397 ①(D-206 ③) 제로셀 계약 = 대상(유형 이름에 '제로셀' · 계정별 최종 = 판정표 · 판정 없으면 중단 = 빠뜨리지 않음)
 - D-155 서달원 = 계약별 상품군 · D-229 개별 판정 = 판정표 파일 · 판정표 없거나 계약 못 찾으면 시작 전 중단(fallback 금지)
 
     python tools/verify_seldoc_statements_offline.py
@@ -35,7 +36,7 @@ DOC_B3 = "bbbbbbbb-0000-0000-0000-000000000003"    # 셀독 OEM 가방(다라커
 DOC_Z = "cccccccc-0000-0000-0000-000000000001"     # 제로리스크(제외)
 DOC_INV = "cccccccc-0000-0000-0000-000000000002"   # 투자계약(제외)
 DOC_POA = "cccccccc-0000-0000-0000-000000000003"   # 위임장(제외)
-DOC_ZS = "cccccccc-0000-0000-0000-000000000004"    # 제로셀(제외)
+DOC_ZS = "cccccccc-0000-0000-0000-000000000004"    # 제로셀(대상 D-397 · 다라커머스 대표 이다라)
 HEAD = ["관계그룹ID", "그룹 대표 이름", "문서ID(누르면 원문 PDF)", "파일명", "문서제목(원문)", "문서종류", "계약유형(대)", "계약유형(소)",
         "계약일(서명일)", "계약종료일", "회사측 명칭", "계약자 명칭", "계약자 대표", "계약금액(원금)", "수익금", "수익률(%)", "품목"]
 INTERNAL = ("D-", "확인 필요", "출처", "판정", "Claude", "추정", "R1")
@@ -141,7 +142,8 @@ def make_inputs(d: Path, judge: dict | None) -> Path:
 JUDGE = {"계약": {DOC_A: {"계정ID": "ga1", "판정": "대상", "근거": "계약자 명칭 '가나상사' = 계정 사업자"},
                   DOC_B1: {"계정ID": "da1", "판정": "대상", "근거": "계약자 '이다라' = 계정 대표자"},
                   DOC_B2: {"계정ID": "da1", "판정": "대상", "근거": "계약자 '이다라' = 계정 대표자"},
-                  DOC_B3: {"계정ID": "da1", "판정": "대상", "근거": "계약자 명칭 '다라커머스' = 계정 사업자"}},
+                  DOC_B3: {"계정ID": "da1", "판정": "대상", "근거": "계약자 명칭 '다라커머스' = 계정 사업자"},
+                  DOC_ZS: {"계정ID": "da1", "판정": "대상", "근거": "계약자 대표 '이다라' = 계정 대표자 · 제로셀 상품공급(D-397)"}},
          "상품": {"da1": {"P1": {"상품명": "수영장 HW1", "문서ID": DOC_B1, "근거": "계약 품목 '수영장 HW1' 과 같은 상품"},
                           "P2": {"상품명": "매트 MN1", "문서ID": DOC_B2, "근거": "계약 품목 '매트 MN1' 과 같은 상품"},
                           "P3": {"상품명": "가습기 N1", "문서ID": DOC_B2, "근거": "계약 외 상품 — 나머지 상품 계약"}}}}
@@ -161,7 +163,10 @@ def _raises(fn, *a, word: str = "") -> str:
 def test_rules() -> None:
     from coupang_analytics import settlement_seldoc_source as SS
     assert SS.contract_kind("셀독 상품공급 OEM") == SS.contract_kind("보냉백 OEM 생산공급") == "대상"
-    for t in ("OEM 제품공급 제로리스크", "제로리스크 OEM(재고보증 전량사입)", "제로셀 상품공급 OEM(3자)", "투자계약(확정지급)",
+    for t in ("제로셀 상품공급 OEM", "제로셀 상품공급 OEM(3자)", "제로셀(분할지급·원금반환)", "제로셀 상품공급",
+              "OEM 제품공급 제로셀", "제로셀(분할지급형 제로리스크)"):                  # D-397 제로셀 계약 = 대상(제외 낱말보다 먼저)
+        assert SS.contract_kind(t) == "대상", t
+    for t in ("OEM 제품공급 제로리스크", "제로리스크 OEM(재고보증 전량사입)", "투자계약(확정지급)",
               "토탈셀러 미정산 채권 회수 협의체 위임장", "계약자 협의체 위임·동의(토탈셀러 미정산 채권 회수)"):
         assert SS.contract_kind(t) == "제외", t
     assert SS.contract_kind("물품 공급(납품) 계약") == "규칙 밖"                   # 규칙에 없는 유형 = 혼자 넣거나 빼지 않음
@@ -205,7 +210,14 @@ def test_plan() -> None:
         people = SS.load_people(inp)
         jobs = SS.plan(people, db, SS.load_judge(inp), ["ga1", "da1"])
         assert [(j.aid, j.contract.doc_id, j.split) for j in jobs] == [
-            ("ga1", DOC_A, False), ("da1", DOC_B1, True), ("da1", DOC_B3, True), ("da1", DOC_B2, True)]   # 계약일 순 · 제외 유형 4건 빠짐
+            ("ga1", DOC_A, False), ("da1", DOC_ZS, True), ("da1", DOC_B1, True), ("da1", DOC_B3, True), ("da1", DOC_B2, True)]
+        # 계약일 순 · 제로셀 포함(D-397) · 제외 유형 3건(제로리스크·위임·투자) 빠짐
+        bad = json.loads(json.dumps(JUDGE))
+        del bad["계약"][DOC_ZS]
+        _raises(SS.plan, people, db, bad, ["da1"], word=DOC_ZS)                         # 제로셀 계약인데 판정 없음 = 중단(조용히 빼지 않음)
+        other = json.loads(json.dumps(JUDGE))
+        other["계약"][DOC_ZS] = {"계정ID": "zz1", "판정": "대상", "근거": "같은 이름 다른 사람"}
+        assert DOC_ZS not in [j.contract.doc_id for j in SS.plan(people, db, other, ["da1"])]   # 판정표가 다른 계정으로 둠 = 이 계정에서 뺌
         bad = json.loads(json.dumps(JUDGE))
         del bad["계약"][DOC_B3]
         _raises(SS.plan, people, db, bad, ["da1"], word=DOC_B3)                         # 대상 계약인데 판정 없음 = 중단
@@ -338,7 +350,7 @@ def test_cli() -> None:
         make_statement(st / "정산서_가나상사_김가나_ga1_관리상품.xlsx", "가나상사 (대표 김가나)", "ga1", 3_000_000, 1_000_000, 0,
                        months=[("2026-06", 4_000_000, "끝남")], prods=[("보냉백 YG1", 300, 4_000_000)])
         make_statement(st / "정산서_다라커머스_이다라_da1_관리상품.xlsx", "다라커머스 (대표 이다라)", "da1", 9, 9, 0)
-        for doc, done in ((DOC_B1, 1_000_000), (DOC_B2, 2_000_000)):
+        for doc, done in ((DOC_B1, 1_000_000), (DOC_B2, 2_000_000), (DOC_ZS, 700_000)):
             make_statement(G.group_path(gs, "da1", doc), "다라커머스 (대표 이다라)", "da1", done, 0, 0)
         argv = ["make", "--statements", str(st), "--group-statements", str(gs), "--db", str(db), "--out", str(out),
                 "--basis", "2026-11-03", "--issued", "2026-11-12", "--accounts", "ga1,da1"]
@@ -354,12 +366,13 @@ def test_cli() -> None:
         code, log = _run(argv + ["--seldoc-inputs", str(inp)])
         assert code == 0, log
         files = sorted(out.glob("셀독정산서_*_20261103기준_*.xlsx"))
-        assert len(files) == 4, files                                                    # 계약 1건 = 1파일
+        assert len(files) == 5, files                                                    # 계약 1건 = 1파일(제로셀 포함 D-397)
         got = {}
         for f in files:
             ws = openpyxl.load_workbook(f).active
             got[ws["F13"].value] = ws["F5"].value
-        assert got == {"2026-05-14": 4_000_000, "2026-03-27": 1_000_000, "2026-06-09": 2_000_000, "2026-05-21": 0}, got
+        assert got == {"2026-05-14": 4_000_000, "2026-01-09": 700_000, "2026-03-27": 1_000_000, "2026-06-09": 2_000_000,
+                       "2026-05-21": 0}, got
         bad = json.loads(json.dumps(JUDGE))
         bad["계약"]["dddddddd-0000-0000-0000-000000000009"] = {"계정ID": "ga1", "판정": "대상", "근거": "x"}
         (inp / "셀독_계약상품군_판정.json").write_text(json.dumps(bad, ensure_ascii=False), encoding="utf-8")
