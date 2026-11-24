@@ -13,7 +13,10 @@
 
 opts: root · seldoc_inputs · db · accounts(없으면 `SS.auto_accounts`) · statements(위탁정산서 결과 폴더) · out · basis · issued ·
       group_statements(상품군 정산서 폴더 · 기본 out\\상품군) · groups(dict = 위탁정산서 인자 managed_output·settle_dir·stats·inputs·
-      settle_only·supp·snap·account_history·only → 주면 상품군 정산서를 이번에 만듦) · steps(("groups", "make") 기본) · strict(False)
+      settle_only·supp·snap·account_history·only → 주면 상품군 정산서를 이번에 만듦) · steps(("groups", "make") 기본) · strict(False) ·
+      skip_accounts({계정명 '대표자-사업자-계정ID': 사유} = 정산 받기 실패 → 그 계정은 안 만들고 skipped)
+배치 꼴(레인 A `statement_batch._job_opts` · 칸 consignor = 위탁 단계 결과): statements = consignor.out · groups = 배치 칸 managed_output·
+settle_dir·stats·inputs(원장 계정이력·정산전용상품 = 구글 실시간 읽기 · 사본 안 만듦 D-399) · 위탁이 중단이면 abort.
 """
 from __future__ import annotations
 
@@ -28,12 +31,14 @@ from coupang_analytics import settlement_seldoc_sheet as SH
 from coupang_analytics import settlement_seldoc_source as SS
 from coupang_analytics import settlement_statement_context as CTX
 from coupang_analytics.settlement_statement_book import safe_name
+from coupang_analytics.statement_jobs_consignor import skip_ids
 
 INPUT_DIR = ("output", "정산서", "입력_셀독")
 DB_GLOB = "계약서_정밀분석_DB*.xlsx"
 GROUP_DIR = "상품군"
 PREFIX = "시작 전 중단 — "
 GROUP_KEYS = ("managed_output", "settle_dir", "stats", "inputs", "settle_only", "supp", "snap", "account_history", "only")
+BATCH_GROUP_KEYS = ("managed_output", "settle_dir", "stats", "inputs")      # 배치(_job_opts)가 넘기는 상품군 인자
 
 
 def default_inputs(root: Path) -> Path:
@@ -90,13 +95,26 @@ class _Result:
         pid, name, amount = (product + (None, None, None))[:3]
         if pid:
             kind = "확인 필요"
-        self.skipped.append({"id": f"{aid}:상품:{pid}" if pid else _sid(aid, doc), "reason": shown, "kind": kind, "aid": aid,
-                             "doc_id": doc or None, "product_id": pid, "상품명": name, "금액": amount, "사유": shown})
+        row = {"id": f"{aid}:상품:{pid}" if pid else _sid(aid, doc), "reason": shown, "kind": kind, "aid": aid,
+               "doc_id": doc or None, "product_id": pid, "상품명": name, "금액": amount, "사유": shown}
+        row.update(account=aid, contract=doc or "", product=name or "", amount="" if amount is None else amount)   # 확인 필요 탭 칸(레인 A)
+        self.skipped.append(row)
         if blocking:
             self.blocked.append(reason)
 
     def out(self, abort: str | None = None) -> dict:
         return {"ok": self.ok, "skipped": self.skipped, "files": self.files, "group_files": self.group_files, "abort": abort}
+
+
+def _batch(opts: dict) -> dict:
+    """배치 꼴(레인 A 약속 · 칸 consignor 있음) → 이 모듈 칸. 손 실행(consignor 없음) = 그대로. 위탁 중단·결과 없음 = SeldocInputError."""
+    if "consignor" not in opts:
+        return opts
+    cons = opts["consignor"] or {}
+    if cons.get("abort") or cons.get("state") == "중단" or not cons.get("out"):
+        raise SS.SeldocInputError(f"{PREFIX}위탁정산서 단계 중단 — {cons.get('abort') or '위탁 결과 폴더 없음'}")
+    groups = {k: opts[k] for k in BATCH_GROUP_KEYS if opts.get(k)}
+    return {**opts, "statements": cons["out"], "groups": groups}
 
 
 def _load(opts: dict):
@@ -116,6 +134,7 @@ def _group_args(opts: dict, out: Path, basis: str, issued: str) -> CTX.Statement
     if unknown:
         raise SS.SeldocInputError(f"{PREFIX}상품군 인자 모름 {sorted(unknown)}")
     g["only"] = tuple(g.get("only") or ())
+    g.update({k: Path(v) for k, v in g.items() if k != "only" and v is not None})      # 배치 = 글자 경로
     return CTX.StatementArgs(out=out, basis=basis, issued=issued, **g)
 
 
@@ -124,7 +143,10 @@ def _groups(opts: dict, jobs: list, judge: dict, held: dict, res: _Result, on_lo
     if not opts.get("groups") or not any(j.split for j in jobs):
         return None
     gdir = Path(opts.get("group_statements") or Path(opts["out"]) / GROUP_DIR)
-    made, failed = G.run(_group_args(opts, gdir, basis, issued), jobs, judge, gdir, held, on_log)
+    made, failed, notes = G.run(_group_args(opts, gdir, basis, issued), jobs, judge, gdir, held, on_log)
+    for aid, items in notes.items():                                  # 판정표 확인 필요(판매 0 · 판정표 갱신 필요) = 한 줄 · 계정 안 막음
+        for pid, why, name, amount in items:
+            res.skip(aid, "", f"{aid} 관리 상품 {pid} {name or ''} — {why}", blocking=False, product=(pid, name, amount))
     for aid, doc, p, g in made:
         res.group_files.append(str(p))
         on_log(f"  {aid} {doc[:8]} G {g:,} → {p}")
@@ -199,7 +221,11 @@ def _names(ready: list, out: Path, basis: str, stamp: str, res: _Result) -> list
 
 
 def _plan(opts: dict, people: dict, contracts: dict, judge: dict, res: _Result) -> tuple[list, dict]:
+    bad = skip_ids(opts)
     aids = list(opts.get("accounts") or SS.auto_accounts(people, contracts, judge))
+    for aid in [a for a in aids if a in bad]:
+        res.skip(aid, "", f"{aid} 정산 받기 실패로 끝난 계정 — 정산서 안 만듦{' — ' + bad[aid] if bad[aid] else ''}")
+    aids = [a for a in aids if a not in bad]
     jobs, skips = SS.plan_isolated(people, contracts, judge, aids)
     held: dict = {}
     for s in skips:
@@ -254,6 +280,7 @@ def run_job(opts: dict, on_log=print) -> dict:
         return res.out(PREFIX + res.blocked[0]) if strict and res.blocked else None
 
     try:
+        opts = _batch(opts)
         judge, people, contracts, basis, issued = _load(opts)
     except (SS.SeldocInputError, ValueError, KeyError) as exc:
         return res.out(str(exc) if str(exc).startswith(PREFIX) else f"{PREFIX}{_why(exc)}")

@@ -714,8 +714,11 @@ def test_decision_products_structured() -> None:
     assert got[0]["id"] == "da1:상품:P7" and got[0]["kind"] == "확인 필요" and (got[0]["상품명"], got[0]["금액"]) == ("기저귀가방 CL02", 123_000)
     assert "관리대장에 없음(오류)" in got[0]["사유"] and got[0]["doc_id"] is None
     assert got[1]["id"] == f"da1:{DOC_B1}" and got[1]["doc_id"] == DOC_B1 and got[1]["product_id"] is None
-    keys = {"id", "reason", "kind", "aid", "doc_id", "product_id", "상품명", "금액", "사유"}
+    keys = {"id", "reason", "kind", "aid", "doc_id", "product_id", "상품명", "금액", "사유", "account", "contract", "product", "amount"}
     assert all(set(x) == keys for x in got), got
+    # 레인 A 약속(D399_레인A 문서 '추가') — 확인 필요 탭 칸 account·contract·product·amount 가 빈 칸이 아님
+    assert (got[0]["account"], got[0]["product"], got[0]["amount"]) == ("da1", "기저귀가방 CL02", 123_000), got[0]
+    assert (got[1]["account"], got[1]["contract"]) == ("da1", DOC_B1), got[1]
     print("test_decision_products_structured OK")
 
 
@@ -749,6 +752,83 @@ def test_decision_invest_left_check() -> None:
     print("test_decision_invest_left_check OK")
 
 
+def _batch_opts(base: Path, opts: dict) -> dict:
+    """배치 실행기(레인 A `statement_batch._job_opts`)가 셀독 단계에 넘기는 칸 그대로 — JSON 으로 건너가 경로 = 글자 · 위탁 단계 결과 = consignor."""
+    from types import SimpleNamespace
+    from coupang_analytics import statement_batch as SB
+    blog = SimpleNamespace(run_id="251125_000000", path=base / "배치.log")
+    o = SB._job_opts("2026-11-25", base / "배치_251125_000000", blog, base / "정산" / "정산집계_x.xlsx", {"이다라-다라커머스-da1": "받기 실패"})
+    o.update({"managed_output": str(base / "output"), "settle_dir": str(base / "정산"), "inputs": str(base / "입력"),
+              "seldoc_inputs": str(opts["root"] / "output" / "정산서" / "입력_셀독"), "basis": opts["basis"], "issued": opts["issued"],
+              "out": str(base / "배치_251125_000000" / "seldoc"),
+              "consignor": {"ok": ["ga1", "da1"], "skipped": [], "files": [], "abort": None, "state": "정상", "out": str(opts["statements"])}})
+    return json.loads(json.dumps(o, ensure_ascii=False))
+
+
+def test_batch_contract() -> None:
+    """레인 A 약속(D399_레인A_run_job_입력약속) 그대로 넘겨도 셀독 정산서가 나온다(T-177) — statements = consignor.out · 상품군 = 배치 칸에서 만듦
+    (경로 글자 → Path) · 정산 받기 실패 계정 = skipped · 위탁 단계 중단 = abort(옛 동작 = 배치 꼴이면 KeyError 'statements' 로 0장)."""
+    from coupang_analytics import settlement_seldoc_groups as G
+    from coupang_analytics import statement_jobs_seldoc as JOB
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        opts = _batch_dir(base)
+        seen: dict = {}
+
+        def fake_run(args, jobs, judge, out_dir, held, on_log):
+            seen["args"] = args
+            return [("da1", doc, G.group_path(Path(opts["group_statements"]), "da1", doc), 0) for doc in (DOC_B1, DOC_B2, DOC_ZS, DOC_B3)], {}, {}
+        real, G.run = G.run, fake_run
+        try:
+            bo = _batch_opts(base, opts)
+            res = JOB.run_job(bo, lambda _m: None)
+            solo = JOB.run_job({k: v for k, v in bo.items() if k not in ("skip_accounts",)} | {"skip_accounts": {}, "out": str(base / "o2")}, lambda _m: None)
+        finally:
+            G.run = real
+        assert res["abort"] is None, res
+        a = seen["args"]
+        assert all(isinstance(getattr(a, k), Path) for k in ("managed_output", "settle_dir", "stats", "inputs")), a
+        assert str(a.stats).endswith("정산집계_x.xlsx") and a.account_history is None and a.settle_only is None, a   # 원장 = 구글 실시간(사본 안 씀)
+        why = _reasons(res)
+        assert "받기 실패" in why["da1"] and not any(x.startswith("da1") for x in res["ok"]), why
+        assert len(res["files"]) == 1 and Path(res["files"][0]).parent == Path(bo["out"]), res      # ga1 한 장(위탁 결과 폴더에서)
+        assert len(solo["files"]) == 5 and solo["abort"] is None, solo                                # 실패 계정 없으면 5장(상품군도 배치 칸에서)
+        for bad in ({"abort": "정산집계 없음"}, {"state": "중단", "out": str(opts["statements"])}, {}):
+            got = JOB.run_job({**bo, "consignor": bad, "out": str(base / "o3")}, lambda _m: None)
+            assert got["abort"] and "위탁정산서 단계 중단" in got["abort"] and got["files"] == [], got
+    print("test_batch_contract OK")
+
+
+def test_groups_judge_marks() -> None:
+    """통제 판단 11-24(D-400 ②·③): 판정 '제외' 상품 = 어느 계약에도 안 넣고 계정을 안 막음 · '판정표 갱신 필요' = 대장에 없는데 배정됨/
+    '관리대장에 없음'인데 지금 대장에 있음(배정은 그대로)."""
+    from coupang_analytics import settlement_seldoc_groups as G
+    judged = {"P1": {"문서ID": DOC_B1}, "P2": {"문서ID": None, "판정": "제외", "사유": "맞는 계약 = 제외 유형"},
+              "P3": {"문서ID": None, "판정": "확인 필요", "사유": "관리대장에 없음(오류)"}}
+    assert G.assign({"P1", "P2"}, judged, [DOC_B1]) == {DOC_B1: {"P1"}}
+    assert [x[0] for x in G.unassigned({"P1", "P2", "P3"}, judged, [DOC_B1])] == ["P3"]
+    got = G.stale({"P1", "P2", "P3"}, judged, {"P3"})
+    assert [(p, why.startswith("판정표 갱신 필요")) for p, why, *_ in got] == [("P1", True), ("P3", True)], got
+    assert G.stale({"P1", "P3"}, judged, {"P1"}) == [], "어긋남 없음 = 줄 없음"
+    # ③ '근거 없음' + 실제 계산 0 = 안 막음 · 대장에 없음(오류 D-400 ③)·판정 없음·소유자 결정 대기·금액 있음 = 예전처럼 막음
+    judged.update({"P4": {"문서ID": None, "판정": "확인 필요", "사유": "관리대장에 있음 · 어느 계약 상품인지 근거 없음"},
+                   "P5": {"문서ID": None, "판정": "확인 필요", "사유": "x", "결정대기": "y"}})
+    sales: dict = {}
+    real = G.GroupAccount, G._effect
+    G.GroupAccount, G._effect = (lambda _c, _a, pids, _b, _i: pids), (lambda pids: any(sales.get(x) for x in pids))
+    try:
+        def free(*pids):
+            return G.free_pids(None, "", None, {}, G.unassigned(set(pids), judged, [DOC_B1]), judged)
+        assert free("P1", "P2", "P4") == {"P4"}
+        assert free("P3") == free("P5") == free("P9") == free("P1") == set()
+        assert free("P3", "P4") == set()                                          # 막는 상품이 하나라도 있으면 그 계정은 그대로 막힘
+        sales["P4"] = 1
+        assert free("P4") == set()
+    finally:
+        G.GroupAccount, G._effect = real
+    print("test_groups_judge_marks OK")
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -773,9 +853,11 @@ def main() -> int:
     test_decision_invest_note()
     test_decision_products_structured()
     test_decision_invest_left_check()
-    print("✅ 셀독 정산서 시험 19종 통과(규칙·읽기·대상 계약·관리대상 계약·상품군·양식 1장·목표수익금·입구·칸 이름"
+    test_batch_contract()
+    test_groups_judge_marks()
+    print("✅ 셀독 정산서 시험 21종 통과(규칙·읽기·대상 계약·관리대상 계약·상품군·양식 1장·목표수익금·입구·칸 이름"
           "·배치 꼴·계약별 격리·상품군 격리·입력 없음 중단·이름 겹침·입력 준비·유형 판정·투자형 카드·비고·상품 단위 확인 필요"
-          "·투자형 남은 지급 근거 없음 = 정산서 안 만듦)")
+          "·투자형 남은 지급 근거 없음 = 정산서 안 만듦·배치 꼴 그대로·판정 제외와 판정표 갱신 필요)")
     return 0
 
 

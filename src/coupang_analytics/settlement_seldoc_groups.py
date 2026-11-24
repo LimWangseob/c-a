@@ -7,6 +7,8 @@ D-155 ① 원문 규칙: 상품군 실지급 = 정산서와 같은 규칙으로 
 
 상품 → 계약 = 판정표(`셀독_계약상품군_판정.json` '상품' · 등록상품ID 단위 · AI 판정 · 근거 원문 · D-229). 판정 없는 관리 상품·
 등록상품을 못 찾는 관리 VID = SeldocInputError(그 계정만 못 만듦 · fallback 없음 · D-399 계정별 격리).
+통제 판단 11-24: 판정 '제외'(D-400 ② 제외 유형 품목) = 그 상품만 뺌(어느 계약에도 안 넣음) · 못 넣은 상품이 전부 '근거 없음'이고
+금액 영향이 0 = 확인 필요 한 줄(계정 안 막음) · 관리대장 계열 출처(D-227 · D-230)와 판정표가 어긋남 = '판정표 갱신 필요' 한 줄(배정은 판정표만 · 자동 배정 없음).
 """
 from __future__ import annotations
 
@@ -25,15 +27,18 @@ def group_path(folder: Path, aid: str, doc_id: str) -> Path:
     return folder / f"정산서_{aid}_계약_{doc_id}.xlsx"
 
 
-def assign(managed: set, judged: dict, docs: list) -> dict:
-    """관리 등록상품ID → {문서ID: {등록상품ID}} (판정표대로 · 판정 없거나 이 계정 계약이 아닌 문서ID = 중단 · 문제 상품 전부를 한 번에 알림)."""
-    out: dict = {d: set() for d in docs}
+EXCLUDE = "제외"                                  # 판정표 상품 판정 '제외' = 제외 유형 계약의 품목(D-400 ②) → 어느 계약에도 안 넣음
+NOT_IN_LEDGER = "관리대장에 없음"                   # 판정표 '사유' 머리(소유자 11-24 D-400 ③ '관리대장에도 없는 상품은 오류')
+STALE = "판정표 갱신 필요 — "
+
+
+def unassigned(managed: set, judged: dict, docs: list) -> list:
+    """계약에 못 넣은 관리 상품 [(등록상품ID, 사유, 상품명|None, 금액|None)] — 판정 '제외'는 못 넣은 것이 아님."""
     bad = []
     for pid in sorted(managed):
         j = judged.get(pid) or {}
         doc = j.get("문서ID")
-        if doc in out:
-            out[doc].add(pid)
+        if doc in docs or j.get("판정") == EXCLUDE:
             continue
         if j.get("결정대기"):
             why = f"확인 필요 — 소유자 결정 대기({j['결정대기']})"
@@ -43,8 +48,35 @@ def assign(managed: set, judged: dict, docs: list) -> dict:
             why = "판정 없음" if doc is None else f"문서ID {doc} = 이 계정 대상 계약 아님"
         amt = j.get("판매금액")
         bad.append((pid, why, j.get("상품명"), amt if isinstance(amt, (int, float)) and not isinstance(amt, bool) else None))
+    return bad
+
+
+def assign(managed: set, judged: dict, docs: list) -> dict:
+    """관리 등록상품ID → {문서ID: {등록상품ID}} (판정표대로 · 판정 없거나 이 계정 계약이 아닌 문서ID = 중단 · 문제 상품 전부를 한 번에 알림 ·
+    판정 '제외' = 어느 계약에도 안 넣음)."""
+    bad = unassigned(managed, judged, docs)
     if bad:
         raise ProductError("시작 전 중단 — " + " · ".join(f"관리 상품 {pid} 상품군 {why}" for pid, why, *_ in bad), bad)
+    out: dict = {d: set() for d in docs}
+    for pid in managed:
+        j = judged.get(pid) or {}
+        if j.get("판정") != EXCLUDE:
+            out[j["문서ID"]].add(pid)
+    return out
+
+
+def stale(managed: set, judged: dict, ledger: set) -> list:
+    """판정표 ↔ 지금 관리대장 계열 출처 대조(통제 판단 11-24 ④) → [(등록상품ID, '판정표 갱신 필요 — …', 상품명, 금액)] · 배정은 안 바꿈."""
+    out = []
+    for pid in sorted(managed):
+        j = judged.get(pid) or {}
+        if j.get("문서ID") and pid not in ledger:
+            why = "판정표는 계약 배정인데 지금 관리대장 계열 출처에 없음"
+        elif pid in ledger and NOT_IN_LEDGER in (j.get("사유") or ""):
+            why = f"판정표는 '{j['사유']}'인데 지금 관리대장 계열 출처에 있음"
+        else:
+            continue
+        out.append((pid, STALE + why, j.get("상품명"), j.get("판매금액")))
     return out
 
 
@@ -107,13 +139,57 @@ def _base(ctx, acct: str) -> Account:
     return b
 
 
-def _account(ctx, acct: str, docs: list, judged: dict, inv: dict, out_dir: Path, held=(), on_log=print) -> list:
+def ledger_pids(ctx, base: Account, inv: dict, vp: dict, managed: set) -> set:
+    """관리 등록상품 중 관리대장 계열 출처(대장 VID·같은 이름 D-107 · 옛 대장·정산전용상품·이력원장 D-227·D-230)로 관리 상품이 된 것.
+    계약서 품목·되찾은 로켓그로스로만 관리 상품이 된 것은 빠짐(D-400 ③ '관리대장에도 없는 상품')."""
+    aid = base.aid
+    led, names = set(ctx.ledger.get(aid) or ()), ctx.listings.get(aid) or set()
+    fam = {p: e for p, e in (ctx.ranked.get(aid) or {}).items() if e[0] in (SCOPE.OLD, SCOPE.SETTLE, SCOPE.HIST) and e[1] in SCOPE.KEEP}
+    famv = SCOPE.source_vids(fam, inv, SCOPE.sales_groups(ctx.periods.get(aid) or {}))
+    vids: dict = {}
+    for v, p in vp.items():
+        vids.setdefault(p, set()).add(v)
+    return {p for p in managed
+            if p in fam or vids.get(p, set()) & (led | famv) or any(base.vid_name.get(v) in names for v in vids.get(p, ()))}
+
+
+def _effect(g: GroupAccount) -> bool:
+    """이 상품들만의 상품군 계산에 금액·수량이 하나라도 있음(정산 끝난 판매·정산 중 판매·취소·지급)."""
+    a = g.run()
+    return any(round(a[k]) for k in ("pay_m", "settle_m", "gross", "refund", "um_sales")) or any(
+        round(e[1]) or round(e[2]) or round(e[3]) for (_p, m), e in a["prod"].items() if m)
+
+
+def no_basis(pid: str, judged: dict) -> bool:
+    """판정표가 '근거 없음'으로 둔 상품(확인 필요 · 관리대장에 없음(오류)·소유자 결정 대기·판정 없음은 아님) — 금액 영향 0 이면 계정을 안 막음."""
+    j = judged.get(pid) or {}
+    return j.get("판정") == "확인 필요" and bool(j.get("사유")) and not j.get("결정대기") and NOT_IN_LEDGER not in j["사유"]
+
+
+def free_pids(ctx, acct: str, base: Account, inv: dict, loose: list, judged: dict) -> set:
+    """못 넣은 상품이 전부 '근거 없음'이고 다 합친 실제 계산이 0 = 그 상품들(계정 안 막음). 하나라도 다른 사유·금액 있음 = 빈 집합(예전처럼 막음)."""
+    pids = {x[0] for x in loose}
+    if not pids or not all(no_basis(p, judged) for p in pids):
+        return set()
+    return set() if _effect(GroupAccount(ctx, acct, pids, base, inv)) else pids
+
+
+def _account(ctx, acct: str, docs: list, judged: dict, inv: dict, out_dir: Path, held, notes: list, on_log) -> list:
     """계정 하나 — 계정 전체 계산(관리 시작 달) → 판정표대로 상품군 → 계약마다 상품군 위탁정산서.
-    held = 아직 못 만드는 같은 계정 계약(상품 배정에만 씀 · 파일 안 만듦) · 모두 계산해 맞는지 본 뒤에만 파일을 씀."""
+    held = 아직 못 만드는 같은 계정 계약(상품 배정에만 씀 · 파일 안 만듦) · 모두 계산해 맞는지 본 뒤에만 파일을 씀.
+    notes = 계정을 막지 않는 확인 필요 줄(판정표 갱신 필요 · 금액 영향 0 인 못 넣은 상품)이 들어감."""
     base = _base(ctx, acct)
     vp = vid_pids(base.opt2pid, inv, ctx.periods.get(base.aid) or {})
     all_docs = list(docs) + [d for d in held if d not in docs]
-    groups = assign(managed_pids(base.result["mpids"], vp, lambda v: Account.is_mv(base, v), base.vids), judged, all_docs)
+    managed = managed_pids(base.result["mpids"], vp, lambda v: Account.is_mv(base, v), base.vids)
+    notes += stale(managed, judged, ledger_pids(ctx, base, inv, vp, managed))
+    loose = unassigned(managed, judged, all_docs)
+    free = free_pids(ctx, acct, base, inv, loose, judged)
+    notes += [(pid, f"{why} · 판매·정산 0원(정산서 금액 영향 없음 · 계정은 그대로 만듦)", name, 0) for pid, why, name, _amt in loose if pid in free]
+    groups = assign(managed - free, judged, all_docs)
+    out_pids = sorted(p for p in managed if (judged.get(p) or {}).get("판정") == EXCLUDE)
+    if out_pids:
+        on_log(f"{base.aid} 판정표 '제외' 상품 {len(out_pids)}개(어느 계약에도 안 넣음) {', '.join(out_pids)}")
     done = []
     for doc in docs:
         g = GroupAccount(ctx, acct, groups[doc], base, inv)
@@ -136,30 +212,32 @@ def _failed(exc: Exception) -> str:
     return str(exc).removeprefix("시작 전 중단 — ") if isinstance(exc, SeldocInputError) else f"{type(exc).__name__}: {exc}"
 
 
-def run(args: CTX.StatementArgs, jobs: list, judge: dict, out_dir: Path, held: dict | None = None, on_log=print) -> tuple[list, dict]:
-    """계약이 여럿인 계정(Job.split)마다 계약별 상품군 위탁정산서 → ([(계정ID, 문서ID, 경로, G)], {계정ID: {"reason", "products"}}).
+def run(args: CTX.StatementArgs, jobs: list, judge: dict, out_dir: Path, held: dict | None = None,
+        on_log=print) -> tuple[list, dict, dict]:
+    """계약이 여럿인 계정(Job.split)마다 계약별 상품군 위탁정산서 → ([(계정ID, 문서ID, 경로, G)], {계정ID: {"reason", "products"}},
+    {계정ID: [(등록상품ID, 사유, 상품명, 금액)]} = 막지 않는 확인 필요).
     계정별 격리(D-399) — 한 계정이 막혀도 다른 계정은 만든다 · held = {계정ID: [미확정 같은 계정 문서ID]}(상품 배정에만)."""
     split = [j for j in jobs if j.split]
     aids = list(dict.fromkeys(j.aid for j in split))
     if not aids:
-        return [], {}
+        return [], {}, {}
     try:
         ctx = CTX.load(args)
         inv = SCOPE.inventory(args.managed_output)
     except (FileNotFoundError, SeldocInputError) as exc:
-        return [], {aid: {"reason": f"상품군 정산서 입력을 못 읽음 — {exc}", "products": []} for aid in aids}
+        return [], {aid: {"reason": f"상품군 정산서 입력을 못 읽음 — {exc}", "products": []} for aid in aids}, {}
     accts = {SRC.aid_of(a): a for a in ctx.accts}
-    out, failed = [], {}
+    out, failed, notes = [], {}, {}
     for aid in aids:
         try:
             if aid not in accts:
                 raise SeldocInputError(f"{aid} 정산 자료 없음")
             out += _account(ctx, accts[aid], [j.contract.doc_id for j in split if j.aid == aid], _products(judge, aid),
-                            inv.get(aid) or {}, out_dir, (held or {}).get(aid, ()), on_log)
+                            inv.get(aid) or {}, out_dir, (held or {}).get(aid, ()), notes.setdefault(aid, []), on_log)
         except Exception as exc:                                    # 계정 하나의 계산 오류 = 그 계정만 못 만듦(사유를 보고 · 삼키지 않음)
             failed[aid] = {"reason": _failed(exc), "products": getattr(exc, "items", [])}
             on_log(f"❌ {aid} 상품군 정산서 못 만듦 — {failed[aid]['reason']}")
-    return out, failed
+    return out, failed, notes
 
 
 def _products(judge: dict, aid: str) -> dict:
