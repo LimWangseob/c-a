@@ -5,6 +5,7 @@
 한눈에(작동중/대기중/완료/오류·살아있나) 확인한다. 야간 파이프라인·정산 다운로드 로직은 건드리지 않는다.
 
 순수 읽기 로직 `read_settlement_status(로그폴더)` 는 Qt 없이 오프라인 검증한다(게이트 핀).
+정산서 배치(D-399 · output/정산서/_현재상태.txt)는 같은 카드 아래 칸에 따로 보인다(T-171) — `read_statement_status`.
 """
 from __future__ import annotations
 
@@ -36,6 +37,9 @@ _BADGE = {
     "정산서 중단": ("● 정산서 중단 — 보고 파일·로그 확인", "#b91c1c", "#ffffff"),
 }
 _UNKNOWN_BADGE = ("정산 자동 다운로드가 아직 실행된 적 없음", "#94a3b8", "#ffffff")
+_STATEMENT_NONE = ("정산서 배치 기록 없음", "#94a3b8", "#ffffff")
+_STATEMENT_BAD = ("정산서 배치 상태 파일을 읽을 수 없음", "#b91c1c", "#ffffff")
+_CHECK_LABEL = "확인 필요"          # 배치가 상태 파일 끝에 쓰는 건별 줄(statement_batch.CHECK_TAB)
 _RESULT_ORDER = ("정상", "건너뜀", "대기", "실패", "차단")
 
 
@@ -56,6 +60,22 @@ def _parse_status_file(path: Path) -> dict:
         if sep and key.strip() in _LABELS:
             out[_LABELS[key.strip()]] = val.strip()
     return out
+
+
+def read_statement_status(path: Path) -> dict:
+    """정산서 배치 상태 파일 → {state: none|bad|ok, 상태·내용·갱신·상세로그, items: 확인 필요 건별 줄, why}(읽기 전용)."""
+    path = Path(path)
+    if not path.exists():
+        return {"state": "none", "why": f"아직 배치가 돈 적이 없거나 기록이 없습니다({path.name})"}
+    try:
+        st = _parse_status_file(path)
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        return {"state": "bad", "why": f"{path.name} — {exc.__class__.__name__}"}
+    if not st.get("상태"):
+        return {"state": "bad", "why": f"{path.name} — '상태' 줄 없음"}
+    items = [ln.partition(":")[2].strip() for ln in lines if ln.partition(":")[0].strip() == _CHECK_LABEL]
+    return {"state": "ok", "items": items, **{k: st.get(k, "") for k in ("상태", "내용", "갱신", "상세로그")}}
 
 
 def _newest_log(log_dir: Path) -> Path | None:
@@ -146,6 +166,10 @@ class SettlementStatusMixin:
     def _settlement_log_dir() -> Path:
         return app_output_dir() / "정산" / "로그"
 
+    @staticmethod
+    def _statement_dir() -> Path:
+        return app_output_dir() / "정산서"
+
     def _settlement_status_card(self):
         from PySide6 import QtCore, QtWidgets   # Qt 는 여기서만 필요 — 지연 import(오프라인 게이트는 Qt 없이 리더만 씀)
         card = self._card("정산 자동 다운로드 — 지금 상태")
@@ -183,6 +207,8 @@ class SettlementStatusMixin:
         for w in (self.settle_active_lbl, self.settle_detail_lbl, self.settle_counts_lbl):
             v.addWidget(w)
 
+        v.addWidget(self._statement_status_box())   # 로그창 위 — 스크롤 없이 보이게
+
         self.settle_log_view = QtWidgets.QPlainTextEdit()
         self.settle_log_view.setReadOnly(True)
         self.settle_log_view.setMinimumHeight(180)
@@ -196,6 +222,9 @@ class SettlementStatusMixin:
         folder.clicked.connect(lambda: self._open_folder(str(self._settlement_log_dir())))
         btns.addWidget(refresh)
         btns.addWidget(folder)
+        st_folder = QtWidgets.QPushButton("정산서 폴더 열기")
+        st_folder.clicked.connect(lambda: self._open_folder(str(self._statement_dir())))
+        btns.addWidget(st_folder)
         btns.addStretch(1)
         self.settle_updated_lbl = QtWidgets.QLabel()
         self.settle_updated_lbl.setObjectName("muted")
@@ -209,9 +238,45 @@ class SettlementStatusMixin:
         self._refresh_settlement_status()
         return card
 
+    def _statement_status_box(self):
+        """정산서 배치 칸(T-171 · 소유자 11-24 '운용자가 알수 있는 방법이 있어야 함') — 배지·내용·확인 필요 건별 줄·갱신. 늘 보임."""
+        from PySide6 import QtCore, QtWidgets
+        self.statement_box = QtWidgets.QWidget()
+        v = QtWidgets.QVBoxLayout(self.statement_box)
+        v.setContentsMargins(0, 4, 0, 0)
+        title = QtWidgets.QLabel("정산서 배치(정산 받기 완료 뒤 자동) — 지금 상태")
+        f = title.font()
+        f.setBold(True)
+        title.setFont(f)
+        self.statement_badge = QtWidgets.QLabel()
+        self.statement_badge.setAlignment(QtCore.Qt.AlignCenter)
+        self.statement_badge.setMinimumHeight(36)
+        self.statement_badge.setFont(f)
+        self.statement_detail_lbl = QtWidgets.QLabel()
+        self.statement_items_lbl = QtWidgets.QLabel()
+        self.statement_items_lbl.setStyleSheet("color:#b45309;")
+        self.statement_updated_lbl = QtWidgets.QLabel()
+        self.statement_updated_lbl.setObjectName("muted")
+        for w in (title, self.statement_badge, self.statement_detail_lbl, self.statement_items_lbl, self.statement_updated_lbl):
+            w.setWordWrap(True)
+            v.addWidget(w)
+        return self.statement_box
+
+    def _refresh_statement_status(self) -> None:
+        info = read_statement_status(self._statement_dir() / "_현재상태.txt")
+        ok = info["state"] == "ok"
+        text, bg, fg = (_BADGE.get(info["상태"], (f"● {info['상태']}", "#64748b", "#ffffff")) if ok
+                        else _STATEMENT_NONE if info["state"] == "none" else _STATEMENT_BAD)
+        self.statement_badge.setText(text)
+        self.statement_badge.setStyleSheet(f"background:{bg}; color:{fg}; border-radius:8px; padding:6px;")
+        self.statement_detail_lbl.setText(info["내용"] if ok else info["why"])
+        self.statement_items_lbl.setText("\n".join(f"확인 필요 — {x}" for x in info["items"]) if ok else "")
+        self.statement_updated_lbl.setText(f"마지막 갱신 {info['갱신']} · 상세 로그 {info['상세로그']}" if ok else "")
+
     def _refresh_settlement_status(self):
         if getattr(self, "settle_badge", None) is None:
             return
+        self._refresh_statement_status()
         info = read_settlement_status(self._settlement_log_dir())
         if not info["exists"]:
             self._set_settle_badge(*_UNKNOWN_BADGE)
