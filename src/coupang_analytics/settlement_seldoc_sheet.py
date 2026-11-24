@@ -19,6 +19,7 @@ SHEET = "셀독 정산서"
 PURPLE, GRAY, BLACK, LIGHT, LINE = "5B3FA0", "595959", "000000", "EDE7F6", "D0C8E6"
 WON, WON_VAT, WON_GOAL, EA, PLAIN, PCT = ('#,##0"원"', '#,##0"원  (VAT 포함)"', '#,##0"원  (계약금액 + 목표수익금)"', '#,##0"개"', "#,##0",
                                          "0.0%")
+WON_INVEST = '#,##0"원  (계약금액 + 약정 수익금)"'
 BAR, MAX_PRODUCTS = 20, 8
 FOOT = "판매·정산 세부 내역은 위탁정산서를 참고하세요."
 THIN = Border(bottom=Side(style="thin", color=LINE))
@@ -26,6 +27,9 @@ HEAD_LINE = Border(bottom=Side(style="medium", color=PURPLE))
 CARD = Border(left=Side(style="thick", color="FFFFFF"))
 CARDS = (("목표 정산 총액", "계약금액 + 목표수익금", BLACK, WON), ("정산 기준 실적", "쿠팡 정산 기준", PURPLE, WON),
          ("목표 도달율", "실적 ÷ 목표 정산 총액", PURPLE, PCT), ("남은 금액", "목표까지 남은 금액", BLACK, WON))
+# 투자형(판정표 '양식') = 카드를 약정·지급 완료·남은 지급으로(소유자 11-24 '카드에 약정·지급완료 표시' · 도달율 대신 지급율)
+CARDS_INVEST = (("약정 지급 총액", "계약금액 + 약정 수익금", BLACK, WON), ("지급 완료", "지급된 금액", PURPLE, WON),
+                ("지급율", "지급 완료 ÷ 약정 지급 총액", PURPLE, PCT), ("남은 지급", "약정까지 남은 지급", BLACK, WON))
 
 
 def put(ws, r: int, c1: int, c2: int, v=None, *, size=10, bold=False, color=BLACK, fill=None, fmt=None, align="left", border=None,
@@ -49,18 +53,23 @@ def put(ws, r: int, c1: int, c2: int, v=None, *, size=10, bold=False, color=BLAC
     return x
 
 
-def _head(ws, c: Contract, pf: Perf, basis: str, issued: str) -> None:
+def _head(ws, c: Contract, pf: Perf, basis: str, issued: str, paid: int | None = None, left_check: str = "") -> None:
     put(ws, 1, 1, 20, SHEET, size=20, bold=True, color=PURPLE)
     put(ws, 2, 1, 20, f"계약자  {pf.label}     기준일  {basis}     발행일  {issued}", color=GRAY)
-    target, result = goal_total(c.amount, c.profit), pf.result
+    target = goal_total(c.amount, c.profit)
+    result = pf.result if paid is None else paid
     rate = reach(result, c.amount, c.profit)
-    vals = (target, result, rate, max(target - result, 0))
-    for k, ((title, note, color, fmt), v) in enumerate(zip(CARDS, vals)):
+    left = f"확인 필요 — {left_check}" if paid is not None and left_check else max(target - result, 0)   # 차이 근거 없음 = 금액 대신 사유
+    vals = (target, result, rate, left)
+    cards, word = (CARDS, "목표 도달율") if paid is None else (CARDS_INVEST, "지급율")
+    for k, ((title, note, color, fmt), v) in enumerate(zip(cards, vals)):
         c1 = 1 + 5 * k
         put(ws, 4, c1, c1 + 4, title, size=9, bold=True, color=GRAY, fill=LIGHT, align="center", border=CARD)
-        put(ws, 5, c1, c1 + 4, v, size=16, bold=True, color=color, fill=LIGHT, fmt=fmt, align="center", border=CARD)
+        text = isinstance(v, str)
+        put(ws, 5, c1, c1 + 4, v, size=9 if text else 16, bold=True, color=color, fill=LIGHT, fmt=None if text else fmt, align="center",
+            border=CARD)
         put(ws, 6, c1, c1 + 4, note, size=8, color=GRAY, fill=LIGHT, align="center", border=CARD)
-    put(ws, 8, 1, 20, f"목표 도달율  {rate:.1%}", size=11, bold=True)
+    put(ws, 8, 1, 20, f"{word}  {rate:.1%}", size=11, bold=True)
     filled = min(BAR, max(0, round(rate * BAR)))
     for k in range(1, BAR + 1):
         ws.cell(9, k).fill = PatternFill("solid", fgColor=PURPLE if k <= filled else LIGHT)
@@ -93,11 +102,14 @@ def _goal_text(c: Contract) -> str:
     return f"{rate}  ·  " + (f"{c.profit:,}원" if c.profit is not None else "없음")
 
 
-def _contract(ws, r: int, c: Contract) -> int:
+def _contract(ws, r: int, c: Contract, note: str = "", invest: bool = False) -> int:
     _section(ws, r, 1, 20, "계약 내용")
     r = _row(ws, r + 1, "계약 체결일", c.signed or "없음")
     r = _row(ws, r, "계약", f"{c.title or '없음'} (계약자 {c.party or c.rep or '없음'} · 회사 {c.company or '없음'})")
     r = _row(ws, r, "계약 기간", f"{c.signed} ~ {c.end}" if c.end else f"{c.signed} ~ (종료일 없음)")
+    if note:                                                            # 판정표 '비고'(예: 상계 관계 · 소유자 11-24 '두 장 다')
+        ws.row_dimensions[r].height = _name_height(note, per_line=40)
+        r = _row(ws, r, "비고", note)
     items = c.items or [("없음", None, None)]
     put(ws, r, 1, 5, "품목", bold=True, color=GRAY, border=THIN, rows=len(items) + 1)
     for c1, c2, t in ((6, 11, "품목"), (12, 16, "단가 (VAT 포함)"), (17, 20, "수량")):
@@ -110,8 +122,9 @@ def _contract(ws, r: int, c: Contract) -> int:
         put(ws, r + k, 17, 20, qv, fmt=qf, align="right", border=THIN)
     r += len(items) + 1
     r = _row(ws, r, "계약금액", c.amount, fmt=WON_VAT)
-    r = _row(ws, r, "목표수익률 · 목표수익금", _goal_text(c))
-    return _row(ws, r, "목표 정산 총액", goal_total(c.amount, c.profit), fmt=WON_GOAL, bold=True)
+    r = _row(ws, r, "약정 수익률 · 수익금" if invest else "목표수익률 · 목표수익금", _goal_text(c))
+    return _row(ws, r, "약정 지급 총액" if invest else "목표 정산 총액", goal_total(c.amount, c.profit),
+                fmt=WON_INVEST if invest else WON_GOAL, bold=True)
 
 
 def _month_label(ym: str, basis: str) -> str:
@@ -191,8 +204,8 @@ def _page(ws, last: int) -> None:
     ws.sheet_view.showGridLines = False
 
 
-def write(path: Path, c: Contract, pf: Perf, basis: str, issued: str) -> Path:
-    """계약 1건 = 셀독 정산서 1장(새 파일 · 있으면 덮어쓰지 않고 FileExistsError)."""
+def write(path: Path, c: Contract, pf: Perf, basis: str, issued: str, note: str = "", paid: int | None = None, left_check: str = "") -> Path:
+    """계약 1건 = 셀독 정산서 1장(새 파일 · 있으면 덮어쓰지 않고 FileExistsError) · note = 비고 줄 · paid = 투자형 지급 완료(카드 바뀜)."""
     if path.exists():
         raise FileExistsError(path)
     wb = openpyxl.Workbook()
@@ -200,8 +213,8 @@ def write(path: Path, c: Contract, pf: Perf, basis: str, issued: str) -> Path:
     ws.title = SHEET
     for k in range(20):
         ws.column_dimensions[chr(65 + k)].width = 4.6
-    _head(ws, c, pf, basis, issued)
-    r = _contract(ws, 12, c) + 1
+    _head(ws, c, pf, basis, issued, paid, left_check)
+    r = _contract(ws, 12, c, note, paid is not None) + 1
     r = max(_sales(ws, r, pf, basis), _settle(ws, r, pf)) + 1
     r = _products(ws, r, pf) + 1
     put(ws, r, 1, 20, FOOT, size=9, color=GRAY, align="center")

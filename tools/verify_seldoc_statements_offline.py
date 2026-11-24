@@ -9,6 +9,7 @@
 - 대상 계약(준비 문서 3절): '셀독 상품공급 OEM'·'보냉백 OEM 생산공급' = 대상 · 제로리스크·투자·위임 = 제외
 - D-397 ①(D-206 ③) 제로셀 계약 = 대상(유형 이름에 '제로셀' · 계정별 최종 = 판정표 · 판정 없으면 중단 = 빠뜨리지 않음)
 - D-155 서달원 = 계약별 상품군 · D-229 개별 판정 = 판정표 파일 · 판정표 없거나 계약 못 찾으면 시작 전 중단(fallback 금지)
+- D-399 배치(레인 D): 판정 없는 계약 = 그 계약만 건너뛰고 보고 · 입력 자체 없음만 중단 · 같은 이름 = 덮지 않음 · 입력 기본 = output\정산서\입력_셀독
 
     python tools/verify_seldoc_statements_offline.py
 """
@@ -416,6 +417,332 @@ def test_labels_match_book() -> None:
     print("test_labels_match_book OK")
 
 
+
+# ── 8. 배치(D-399 레인 D) — run_job · 계약별 격리 · 입력 없음 abort · 기본 입력 위치 · 이름 겹침 ──
+# 기대값 = 소유자 11-24 '실패 계정 있는 날 = 성공 계정만 생성' · 계획 레인 D '판정 없는 계약 = 건너뛰고 보고' ·
+# '입력 자체가 없을 때만 중단' · '같은 이름 파일 = 덮어쓰기 금지·이름 규칙 유지' · 인터페이스 {"ok","skipped","files","abort"}.
+def _batch_dir(base: Path, judge: dict | None = JUDGE, contracts=CONTRACTS) -> dict:
+    """위탁정산서 결과·상품군 정산서·셀독 입력 폴더(기본 위치 = root 아래 output/정산서/입력_셀독) 합성 → run_job opts."""
+    from coupang_analytics import settlement_seldoc_groups as G
+    from coupang_analytics import statement_jobs_seldoc as JOB
+    st, gs = base / "위탁", base / "상품군"
+    st.mkdir()
+    gs.mkdir()
+    make_statement(st / "정산서_가나상사_김가나_ga1_관리상품.xlsx", "가나상사 (대표 김가나)", "ga1", 3_000_000, 1_000_000, 0,
+                   months=[("2026-06", 4_000_000, "끝남")], prods=[("보냉백 YG1", 300, 4_000_000)])
+    for doc, done in ((DOC_B1, 1_000_000), (DOC_B2, 2_000_000), (DOC_ZS, 700_000), (DOC_B3, 0)):
+        make_statement(G.group_path(gs, "da1", doc), "다라커머스 (대표 이다라)", "da1", done, 0, 0)
+    inp = JOB.default_inputs(base)
+    inp.parent.mkdir(parents=True)
+    make_inputs(inp.parent, judge)                                        # → base\output\정산서\입력_셀독
+    make_db(inp / "계약서_정밀분석_DB_전수_v6.xlsx", contracts)
+    return {"root": base, "statements": st, "group_statements": gs, "out": base / "out", "basis": "2026-11-03", "issued": "2026-11-12",
+            "accounts": ["ga1", "da1"]}
+
+
+def _dates(files) -> dict:
+    return {openpyxl.load_workbook(f).active["F13"].value: openpyxl.load_workbook(f).active["F5"].value for f in files}
+
+
+def _reasons(res: dict) -> dict:
+    return {s["id"]: s["reason"] for s in res["skipped"]}
+
+
+def test_batch_shape() -> None:
+    """run_job 꼴 = {"ok","skipped","files","abort"} · 기본 입력 위치(--db·--seldoc-inputs 없이) · 손 실행과 같은 5장."""
+    from coupang_analytics import statement_jobs_seldoc as JOB
+    with tempfile.TemporaryDirectory() as d:
+        opts = _batch_dir(Path(d))
+        logs: list = []
+        res = JOB.run_job(opts, logs.append)
+        assert {"ok", "skipped", "files", "abort"} <= set(res) and res["abort"] is None, res
+        assert all(isinstance(x, str) for x in res["ok"] + res["files"]) and res["skipped"] == [], res
+        assert sorted(res["ok"]) == sorted(f"{a}:{x}" for a, x in (("ga1", DOC_A), ("da1", DOC_ZS), ("da1", DOC_B1), ("da1", DOC_B2), ("da1", DOC_B3)))
+        assert len(res["files"]) == 5 and all(Path(f).is_file() and Path(f).parent == opts["out"] for f in res["files"])
+        assert _dates(res["files"]) == {"2026-05-14": 4_000_000, "2026-01-09": 700_000, "2026-03-27": 1_000_000, "2026-06-09": 2_000_000,
+                                        "2026-05-21": 0}
+        assert any("셀독 정산서 5개" in x for x in logs), logs
+        auto = JOB.run_job({**opts, "accounts": None, "out": Path(d) / "out2"}, logs.append)    # 계정 안 줌 = 판정표·이름 후보 계정 전부
+        assert auto["abort"] is None and len(auto["files"]) == 5, auto
+    print("test_batch_shape OK")
+
+
+def test_batch_isolate() -> None:
+    """판정 없는 계약 1건·규칙 밖 후보·결정 대기·위탁정산서 없음 → 그 계약만 skipped · 나머지 생성(strict 손 실행 = 아무것도 안 만듦)."""
+    from coupang_analytics import statement_jobs_seldoc as JOB
+    judge = json.loads(json.dumps(JUDGE))
+    del judge["계약"][DOC_B3]                                                 # da1 계약 하나 판정 없음
+    with tempfile.TemporaryDirectory() as d:
+        opts = _batch_dir(Path(d), judge)
+        strict = JOB.run_job({**opts, "strict": True}, lambda _m: None)
+        assert strict["abort"] and "시작 전 중단" in strict["abort"] and DOC_B3 in strict["abort"] and strict["files"] == [], strict
+        assert not opts["out"].exists()                                       # 중단 = 파일 안 만듦(손 실행 그대로)
+        res = JOB.run_job(opts, lambda _m: None)
+        assert res["abort"] is None, res
+        why = _reasons(res)
+        assert list(why) == [f"da1:{DOC_B3}"] and "판정 없음" in why[f"da1:{DOC_B3}"], why
+        assert _dates(res["files"]) == {"2026-05-14": 4_000_000, "2026-01-09": 700_000, "2026-03-27": 1_000_000, "2026-06-09": 2_000_000}
+    # 한 계약 계정에 미확정 후보(규칙 밖 유형)가 있음 = 계약 수를 모름 → 계정 전체 숫자를 그 계약에 몰지 않음(상품군 정산서만)
+    odd = CONTRACTS + [_contract("eeeeeeee-0000-0000-0000-000000000001", "물품 공급(납품) 계약", "2026-01-01", None, "가나상사", "", 1)]
+    with tempfile.TemporaryDirectory() as d:
+        opts = _batch_dir(Path(d), JUDGE, odd)
+        res = JOB.run_job(opts, lambda _m: None)
+        why = _reasons(res)
+        assert "소유자 결정 대기(규칙 밖 유형 확정)" in why["ga1:eeeeeeee-0000-0000-0000-000000000001"], why
+        assert "상품군 정산서 없음" in why[f"ga1:{DOC_A}"], why                     # 위탁정산서(계정 전체)로 만들지 않음
+        assert len(res["files"]) == 4 and all("가나" not in Path(f).name for f in res["files"]), res
+    # 판정표 '확인 필요' + 결정대기 = '확인 필요 — 소유자 결정 대기(항목)' 로 건너뜀 · 결정대기 없는 '확인 필요' = 알림만(예전처럼 뺌)
+    judge = json.loads(json.dumps(JUDGE))
+    judge["계약"][DOC_ZS] = {"계정ID": "da1", "판정": "확인 필요", "판정_원래": "대상", "결정대기": "투자형 양식", "근거": "x"}
+    judge["계약"][DOC_B3] = {"계정ID": "da1", "판정": "확인 필요", "근거": "계정 매칭 불확실"}
+    with tempfile.TemporaryDirectory() as d:
+        opts = _batch_dir(Path(d), judge)
+        os_ = Path(opts["statements"]) / "정산서_가나상사_김가나_ga1_관리상품.xlsx"
+        os_.unlink()                                                          # ga1 위탁정산서 없음(정산 받기 실패 계정) = ga1 만 건너뜀
+        res = JOB.run_job(opts, lambda _m: None)
+        why = _reasons(res)
+        assert why[f"da1:{DOC_ZS}"].startswith("확인 필요 — 소유자 결정 대기(투자형 양식)"), why
+        assert why[f"da1:{DOC_B3}"].startswith("확인 필요 — ") and "계정 매칭 불확실" in why[f"da1:{DOC_B3}"], why
+        assert "위탁정산서 0개" in why[f"ga1:{DOC_A}"], why
+        assert _dates(res["files"]) == {"2026-03-27": 1_000_000, "2026-06-09": 2_000_000}, res
+        strict = JOB.run_job({**opts, "strict": True, "out": Path(d) / "o2"}, lambda _m: None)
+        assert strict["abort"] and strict["files"] == [], strict              # 결정 대기·위탁정산서 없음 = 손 실행은 중단
+    print("test_batch_isolate OK")
+
+
+def test_batch_groups_isolate() -> None:
+    """상품군 정산서를 이번에 만들 때 그 입력을 못 읽음 = 계약 여럿 계정만 skipped · 한 계약 계정은 생성 · 옛 상품군 파일을 쓰지 않음."""
+    from coupang_analytics import settlement_seldoc_groups as G
+    from coupang_analytics import statement_jobs_seldoc as JOB
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        opts = _batch_dir(base)
+        miss = base / "없는입력"
+        res = JOB.run_job({**opts, "groups": {"managed_output": miss, "settle_dir": miss, "stats": miss / "s.xlsx", "inputs": miss}},
+                          lambda _m: None)
+        assert res["abort"] is None, res
+        why = _reasons(res)
+        assert sorted(why) == sorted(f"da1:{x}" for x in (DOC_ZS, DOC_B1, DOC_B2, DOC_B3)), why
+        assert all("상품군 정산서 못 만듦" in v for v in why.values()), why
+        assert _dates(res["files"]) == {"2026-05-14": 4_000_000}, res        # group_statements 의 옛 파일은 안 씀
+        bad = JOB.run_job({**opts, "groups": {"모름": 1}, "out": base / "o2"}, lambda _m: None)
+        assert bad["abort"] and "상품군 인자" in bad["abort"], bad
+    # 상품 배정 — 미확정(held) 같은 계정 계약에 배정된 상품 = 통과(파일은 안 만듦) · 결정 대기 상품 = 사유 그대로
+    judged = {"P1": {"문서ID": DOC_B1}, "P2": {"문서ID": DOC_B2}, "P9": {"문서ID": None, "판정": "확인 필요", "결정대기": "나머지 상품 배정 규칙"}}
+    assert G.assign({"P1", "P2"}, judged, [DOC_B1, DOC_B2]) == {DOC_B1: {"P1"}, DOC_B2: {"P2"}}
+    msg = _raises(G.assign, {"P1", "P9", "P4"}, judged, [DOC_B1, DOC_B2], word="소유자 결정 대기(나머지 상품 배정 규칙)")
+    assert "P4 상품군 판정 없음" in msg and "P9" in msg, msg                  # 문제 상품 전부를 한 번에
+    print("test_batch_groups_isolate OK")
+
+
+def test_batch_abort() -> None:
+    """입력 자체가 없을 때만 abort — 판정표·대응표·계약 DB 사본 없음 · DB 사본 2개 · '관리대상' 칸 없음 · root 모름 · 날짜 틀림."""
+    from coupang_analytics import statement_jobs_seldoc as JOB
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        opts = _batch_dir(base, None)                                         # 판정표 없음
+        inp = JOB.default_inputs(base)
+        res = JOB.run_job(opts, lambda _m: None)
+        assert res["abort"] and "판정표" in res["abort"] and not res["files"] and not opts["out"].exists(), res
+        (inp / "셀독_계약상품군_판정.json").write_text(json.dumps(JUDGE, ensure_ascii=False), encoding="utf-8")
+        db = inp / "계약서_정밀분석_DB_전수_v6.xlsx"
+        db.rename(base / "옮김.xlsx")
+        cases = [("계약 DB 사본", {}), ("root", {"root": None}), ("계약 DB", {"db": base / "없음.xlsx"}), ("ValueError", {"basis": "2026-13-01", "db": base / "옮김.xlsx"})]
+        for word, extra in cases:
+            res = JOB.run_job({**opts, **extra}, lambda _m: None)
+            assert res["abort"] and word in res["abort"] and res["abort"].startswith("시작 전 중단") and not res["files"], (word, res)
+        make_db(inp / "계약서_정밀분석_DB_전수_v5.xlsx")
+        make_db(inp / "계약서_정밀분석_DB_전수_v6.xlsx")
+        res = JOB.run_job(opts, lambda _m: None)
+        assert res["abort"] and "2개" in res["abort"], res                   # 사본이 여럿 = 어느 것인지 모름
+        (inp / "계약서_정밀분석_DB_전수_v5.xlsx").unlink()
+        old = base / "old.xlsx"
+        make_db(old, head=HEAD[:-1])
+        res = JOB.run_job({**opts, "db": old}, lambda _m: None)               # --db 덮어쓰기 · '관리대상' 칸 없는 옛 DB = abort
+        assert res["abort"] and "관리대상" in res["abort"], res
+        (inp / "사업자_대응표.csv").unlink()
+        res = JOB.run_job(opts, lambda _m: None)
+        assert res["abort"] and "사업자_대응표" in res["abort"], res
+        assert not opts["out"].exists()
+    print("test_batch_abort OK")
+
+
+def test_batch_names() -> None:
+    """같은 이름 = 덮어쓰기 금지·이름 규칙 유지 → 이번 실행에서 같은 이름이 되는 계약 = 모두 skipped · 이미 있는 파일 = skipped(내용 그대로)."""
+    from coupang_analytics import settlement_seldoc_source as SS
+    from coupang_analytics import statement_jobs_seldoc as JOB
+    twin = "bbbbbbbb-0000-0000-0000-00000000000a"
+    rows = CONTRACTS + [_contract(twin, "셀독 상품공급 OEM", "2026-03-27", None, "이다라", None, 5_000_000)]   # B1 과 같은 날·같은 첫 품목
+    judge = json.loads(json.dumps(JUDGE))
+    judge["계약"][twin] = {"계정ID": "da1", "판정": "대상", "근거": "x"}
+    with tempfile.TemporaryDirectory() as d:
+        opts = _batch_dir(Path(d), judge, rows)
+        wb = openpyxl.load_workbook(JOB.find_db(JOB.default_inputs(Path(d))))
+        wb["품목"].append([twin, "f", "수영장 HW1", "수영장", "HW1", 1, 1, 1, None, "1쪽"])
+        wb.save(JOB.find_db(JOB.default_inputs(Path(d))))
+        from coupang_analytics import settlement_seldoc_groups as G
+        make_statement(G.group_path(opts["group_statements"], "da1", twin), "다라커머스 (대표 이다라)", "da1", 5, 0, 0)
+        res = JOB.run_job(opts, lambda _m: None)
+        why = _reasons(res)
+        assert sorted(why) == sorted([f"da1:{DOC_B1}", f"da1:{twin}"]) and all("이름이 계약 2건" in v for v in why.values()), why
+        assert len(res["files"]) == 4, res
+        assert JOB.file_name(SS.Job("da1", SS.load_contracts(JOB.find_db(JOB.default_inputs(Path(d))))[DOC_B1], True, ("다라커머스", "이다라")),
+                             "2026-11-03", "261112_000000") == "셀독정산서_이다라_260327_수영장_HW1_20261103기준_261112_000000.xlsx"
+    with tempfile.TemporaryDirectory() as d:                                  # 이미 있는 파일(같은 초에 다시 실행 등)
+        opts = _batch_dir(Path(d))
+        stamp = "261112_101010"
+        import coupang_analytics.statement_jobs_seldoc as M
+        real = M.datetime
+
+        class _Fixed(real):
+            @classmethod
+            def now(cls, tz=None):
+                return real(2026, 11, 12, 10, 10, 10)
+        M.datetime = _Fixed
+        try:
+            first = JOB.run_job(opts, lambda _m: None)
+            target = Path(first["files"][0])
+            before = target.read_bytes()
+            again = JOB.run_job(opts, lambda _m: None)
+        finally:
+            M.datetime = real
+        assert all(stamp in Path(f).name for f in first["files"]) and len(first["files"]) == 5, first
+        assert again["files"] == [] and len(again["skipped"]) == 5, again
+        assert all("같은 이름 파일 있음(덮지 않음)" in s["reason"] for s in again["skipped"]), again
+        assert target.read_bytes() == before                                  # 덮어쓰지 않음
+    print("test_batch_names OK")
+
+
+def test_batch_inputs_install() -> None:
+    """셀독 입력 1회 준비 = 복사만(원본 그대로) · 같은 내용 = 그대로 · 다른 내용·다른 DB 사본 = 거부(덮지 않음) · 명령줄 inputs."""
+    from coupang_analytics import settlement_seldoc_source as SS
+    from coupang_analytics import statement_jobs_seldoc as JOB
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        src = make_inputs(base, JUDGE)
+        db = make_db(base / "계약서_정밀분석_DB_전수_v6.xlsx")
+        dest = JOB.default_inputs(base / "운용")
+        code, log = _run(["inputs", "--from", str(src), "--db", str(db), "--to", str(dest)])
+        assert code == 0 and log.count("복사") == 3, log
+        assert sorted(p.name for p in dest.iterdir()) == sorted([SS.JUDGE, "사업자_대응표.csv", db.name])
+        assert (src / SS.JUDGE).is_file() and db.is_file()                    # 원본 그대로
+        assert all(x.startswith("같음") for x in JOB.install_inputs(dest, src, db))
+        (src / SS.JUDGE).write_text("{}", encoding="utf-8")
+        _raises(JOB.install_inputs, dest, src, db, word="내용이 다름")
+        assert json.loads((dest / SS.JUDGE).read_text(encoding="utf-8")) == JUDGE    # 덮지 않음
+        v7 = make_db(base / "계약서_정밀분석_DB_전수_v7.xlsx")
+        _raises(JOB.install_inputs, dest, src, v7, word="다른 계약 DB 사본")
+        _raises(JOB.install_inputs, dest, src, make_db(base / "db.xlsx"), word="이름")
+    print("test_batch_inputs_install OK")
+
+
+# ── 9. 소유자 11-24 결정 4건(통제 세션 전달 · 질문 카드 원문) ──
+# ① 투자형 = '카드에 약정·지급완료 표시'(도달률 대신 약정·지급 완료·남은 지급) ② 규칙 밖 36유형 = '제안대로 확정'(유형 판정표 · 확인 필요 = 건너뜀)
+# ③ "관리대장에도 없는 상품은 오류임. 확인필요 탬에 넣어줘." + "확인필요는 로그를 분석해야 만 인식됨" → skipped 에 상품명·금액·사유
+# ④ rladygks0221 = '두 장 다' · 상계 관계는 비고
+def test_decision_types() -> None:
+    from coupang_analytics import settlement_seldoc_source as SS
+    from coupang_analytics import statement_jobs_seldoc as JOB
+    e1, e2, e3 = ("eeeeeeee-0000-0000-0000-00000000000" + x for x in "123")
+    rows = CONTRACTS + [_contract(e1, "물품 공급(납품) 계약", "2026-01-01", None, "가나상사", "", 1),
+                        _contract(e2, "유튜브 광고 영상 제작", "2026-01-02", None, "가나상사", "", 1),
+                        _contract(e3, "운영대행", "2026-01-03", None, "가나상사", "", 1)]
+    types = {"유형": {"물품 공급(납품) 계약": {"판정": "대상", "근거": "x"}, "유튜브 광고 영상 제작": {"판정": "제외", "근거": "x"},
+                      "운영대행": {"판정": "확인 필요", "근거": "x"}}}
+    judge = json.loads(json.dumps(JUDGE))
+    judge["계약"][e1] = {"계정ID": "ga1", "판정": "대상", "근거": "x"}
+    with tempfile.TemporaryDirectory() as d:
+        opts = _batch_dir(Path(d), judge, rows)
+        inp = JOB.default_inputs(Path(d))
+        no = _reasons(JOB.run_job(opts, lambda _m: None))                      # 유형 판정표 없음 = 규칙 밖 3건 그대로 건너뜀(결정 대기)
+        assert all(f"ga1:{x}" in no and "규칙 밖 유형 확정" in no[f"ga1:{x}"] for x in (e1, e2, e3)), no
+        (inp / SS.TYPES).write_text(json.dumps(types, ensure_ascii=False), encoding="utf-8")
+        assert SS.target_kind(SS.load_contracts(JOB.find_db(inp))[e1], SS.load_types(inp)) == "대상"
+        res = JOB.run_job({**opts, "out": Path(d) / "o2"}, lambda _m: None)
+        why = _reasons(res)
+        assert f"ga1:{e2}" not in why, why                                                  # 제외 확정 = 뺌(대상 확정 e1 = 아래 상품군 단계까지 감)
+        assert why[f"ga1:{e3}"].startswith("확인 필요 — ") and "유형 판정표 '확인 필요'" in why[f"ga1:{e3}"], why                          # 확인 필요 유형 = 그 계약만 건너뜀
+        assert "상품군 정산서 없음" in why[f"ga1:{e1}"] and "상품군 정산서 없음" in why[f"ga1:{DOC_A}"], why   # ga1 계약 여럿 = 상품군만
+        (inp / SS.TYPES).write_text(json.dumps({"유형": {"운영대행": {"판정": "몰라"}}}, ensure_ascii=False), encoding="utf-8")
+        bad = JOB.run_job({**opts, "out": Path(d) / "o3"}, lambda _m: None)
+        assert bad["abort"] and "유형 판정표" in bad["abort"], bad                           # 모양 틀림 = 중단
+    print("test_decision_types OK")
+
+
+def test_decision_invest_note() -> None:
+    from coupang_analytics import statement_jobs_seldoc as JOB
+    judge = json.loads(json.dumps(JUDGE))
+    judge["계약"][DOC_A].update({"양식": "투자형", "지급완료": 8_000_000, "지급근거": "송금대조 확실 2건"})
+    judge["계약"][DOC_B1]["비고"] = "2026-06-19 조기 종료된 계약의 정산종료금액 26,000,000원을 이 계약 계약금에서 상계함"
+    with tempfile.TemporaryDirectory() as d:
+        res = JOB.run_job(_batch_dir(Path(d), judge), lambda _m: None)
+        assert res["abort"] is None and len(res["files"]) == 5, res
+        sheets = {openpyxl.load_workbook(f).active["F13"].value: openpyxl.load_workbook(f).active for f in res["files"]}
+        ws = sheets["2026-05-14"]                                                         # 투자형 = 카드 약정·지급 완료·지급율·남은 지급
+        c = _cells(ws)
+        assert (ws["A4"].value, ws["F4"].value, ws["K4"].value, ws["P4"].value) == ("약정 지급 총액", "지급 완료", "지급율", "남은 지급")
+        assert (ws["A5"].value, ws["F5"].value, ws["P5"].value) == (10_000_000, 8_000_000, 2_000_000) and abs(ws["K5"].value - .8) < 1e-12
+        assert ws["A8"].value == "지급율  80.0%" and "약정 지급 총액" in c.values() and "목표 정산 총액" not in c.values()
+        assert _right_of(ws, _find(c, "정산 기준 실적", 12), "Q") == 4_000_000                 # 쿠팡 정산 요약은 그대로(따로 나란히)
+        _assert_page(openpyxl.load_workbook(res["files"][0]))
+        b1 = sheets["2026-03-27"]
+        cb = _cells(b1)
+        assert _right_of(b1, _find(cb, "비고"), "F") == judge["계약"][DOC_B1]["비고"] and b1["A4"].value == "목표 정산 총액"
+        assert "비고" not in _cells(sheets["2026-06-09"]).values()                          # 비고 없는 계약 = 줄 없음
+    judge["계약"][DOC_A].pop("지급완료")
+    with tempfile.TemporaryDirectory() as d:
+        why = _reasons(JOB.run_job(_batch_dir(Path(d), judge), lambda _m: None))
+        assert "투자형인데 판정표 '지급완료' 금액 없음" in why[f"ga1:{DOC_A}"], why            # 지급 완료 모름 = 0 으로 그리지 않음
+    print("test_decision_invest_note OK")
+
+
+def test_decision_products_structured() -> None:
+    from coupang_analytics import settlement_seldoc_groups as G
+    from coupang_analytics import settlement_seldoc_source as SS
+    from coupang_analytics import statement_jobs_seldoc as JOB
+    judged = {"P1": {"문서ID": DOC_B1}, "P7": {"상품명": "기저귀가방 CL02", "문서ID": None, "판정": "확인 필요", "사유": "관리대장에 없음(오류)",
+                                               "판매금액": 123_000}}
+    try:
+        G.assign({"P1", "P7", "P8"}, judged, [DOC_B1])
+        raise AssertionError("ProductError 안 남")
+    except SS.ProductError as exc:
+        assert exc.items == [("P7", "확인 필요 — 관리대장에 없음(오류)", "기저귀가방 CL02", 123_000), ("P8", "판정 없음", None, None)], exc.items
+    r = JOB._Result()
+    r.skip("da1", "", "da1 관리 상품 P7 — 확인 필요 — 관리대장에 없음(오류)", product=("P7", "기저귀가방 CL02", 123_000))
+    r.skip("da1", DOC_B1, "da1 계약 … 판정 없음")
+    got = r.out()["skipped"]
+    assert got[0]["id"] == "da1:상품:P7" and got[0]["kind"] == "확인 필요" and (got[0]["상품명"], got[0]["금액"]) == ("기저귀가방 CL02", 123_000)
+    assert "관리대장에 없음(오류)" in got[0]["사유"] and got[0]["doc_id"] is None
+    assert got[1]["id"] == f"da1:{DOC_B1}" and got[1]["doc_id"] == DOC_B1 and got[1]["product_id"] is None
+    keys = {"id", "reason", "kind", "aid", "doc_id", "product_id", "상품명", "금액", "사유"}
+    assert all(set(x) == keys for x in got), got
+    print("test_decision_products_structured OK")
+
+
+def test_decision_invest_left_check() -> None:
+    """통제 세션 11-24 ⓓ: 투자형 약정−지급 차이의 근거가 계약 DB 송금 기록에 없음 = 추정 금지 → 판정표 '남은지급확인'(사유) 이 있으면
+    남은 지급 칸 = '확인 필요 — 사유'(금액을 지어내지 않음) · 정산서는 만듦 · 운용자 확인 목록에 한 줄(kind 확인 필요)."""
+    from coupang_analytics import statement_jobs_seldoc as JOB
+    judge = json.loads(json.dumps(JUDGE))
+    why = "회차 지급액이 약정보다 적은 사유 원문 없음"
+    judge["계약"][DOC_A].update({"양식": "투자형", "지급완료": 9_802_000, "남은지급확인": why})
+    with tempfile.TemporaryDirectory() as d:
+        res = JOB.run_job(_batch_dir(Path(d), judge), lambda _m: None)
+        assert res["abort"] is None and len(res["files"]) == 5 and f"ga1:{DOC_A}" in res["ok"], res
+        ws = next(openpyxl.load_workbook(f).active for f in res["files"] if openpyxl.load_workbook(f).active["F13"].value == "2026-05-14")
+        assert (ws["A5"].value, ws["F5"].value, ws["P4"].value, ws["P5"].value) == (10_000_000, 9_802_000, "남은 지급", f"확인 필요 — {why}")
+        assert abs(ws["K5"].value - .9802) < 1e-12 and ws["A8"].value == "지급율  98.0%"           # 지급율 = 실제 지급 ÷ 약정(사실 값 그대로)
+        row = next(x for x in res["skipped"] if x["id"] == f"ga1:{DOC_A}")
+        assert row["kind"] == "확인 필요" and why in row["사유"] and "정산서는 만듦" in row["사유"], row
+        assert len(res["skipped"]) == 1, res["skipped"]
+    judge["계약"][DOC_A].pop("남은지급확인")
+    with tempfile.TemporaryDirectory() as d:                                       # 사유 없음 = 남은 지급 금액 그대로(예전과 같음)
+        res = JOB.run_job(_batch_dir(Path(d), judge), lambda _m: None)
+        ws = next(openpyxl.load_workbook(f).active for f in res["files"] if openpyxl.load_workbook(f).active["F13"].value == "2026-05-14")
+        assert ws["P5"].value == 198_000 and res["skipped"] == [], res
+    print("test_decision_invest_left_check OK")
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -430,7 +757,19 @@ def main() -> int:
     test_sheet_goal()
     test_cli()
     test_labels_match_book()
-    print("✅ 셀독 정산서 시험 9종 통과(규칙·읽기·대상 계약·관리대상 계약·상품군·양식 1장·목표수익금·입구·칸 이름)")
+    test_batch_shape()
+    test_batch_isolate()
+    test_batch_groups_isolate()
+    test_batch_abort()
+    test_batch_names()
+    test_batch_inputs_install()
+    test_decision_types()
+    test_decision_invest_note()
+    test_decision_products_structured()
+    test_decision_invest_left_check()
+    print("✅ 셀독 정산서 시험 19종 통과(규칙·읽기·대상 계약·관리대상 계약·상품군·양식 1장·목표수익금·입구·칸 이름"
+          "·배치 꼴·계약별 격리·상품군 격리·입력 없음 중단·이름 겹침·입력 준비·유형 판정·투자형 카드·비고·상품 단위 확인 필요"
+          "·투자형 남은 지급 확인 필요)")
     return 0
 
 
