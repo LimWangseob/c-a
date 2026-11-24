@@ -78,6 +78,7 @@ class MonthState:
         self.pend_cost: dict = {}                             # 6·7·8 상품 자료 전 금액(계정 전체 · 빼는 돈 +)
         self.pend_cost_m: dict = {}                           # 그중 관리 몫(정산서 반영 · 부호 = 정산서)
         self.ad_note = ""
+        self.ad_alloc_share: float | None = None              # 그 달 광고비 상품별 배분 중 관리 몫(D-317 ②)
         self.fast = {"계정 전체": 0.0, "관리 몫": 0.0, "지급일": []}
         self.own: Counter = Counter()                         # 위탁자 본인 차감(D-312 ② · 관리 몫 0) — 항목 → 계정 금액
         self.missing: dict = {}
@@ -177,6 +178,7 @@ def _sales_row(st: MonthState, p: dict) -> None:
         c[4] += sett - (s - cp - fee)
 
 
+AD_NOCAMP = "ad:nocamp"        # 신규-01 캠페인 없는 광고 조정·지원금(D-317 ② 비중 · 9 그 밖의 쿠팡 공제 D-347 ①)
 SHIP_EST = "상품 모름(같은 주문·반품 조회 없음) → 이 달 윙 상품 정산금 비율로 나눔(D-391 ④)"
 
 
@@ -394,11 +396,20 @@ def ads(st: MonthState) -> None:
     if not t["bill_m"] and st.mk not in have and bill:
         st.ad_note = f"{int(st.m[5:])}월 광고 청구 자료 아직 없음 — 5 광고비 0 으로 둠(바뀔 수 있음 · 쿠팡 광고 청구·공제가 나오면 다시 계산)"
     unattributed = charged_v - t["prod_all"] * 1.1
+    # 신규-01 · D-317 ② 캠페인 없는 조정·지원금 = 그 달 옵션별 배분 합 비율(관리 배분 ÷ 전체 배분) · 줄 위치 = 9 '그 밖의 쿠팡 공제'(D-347 ①)
+    st.ad_alloc_share = t["prod_m"] / t["prod_all"] if t["prod_all"] else None
+    nocamp = t["nocamp"] * 1.1 if st.ad_alloc_share is not None else 0.0
+    if round(nocamp):
+        st.common.append((f"광고비 중 캠페인 없는 조정·지원금 (그 달 상품별 광고비 배분 비율 {pct(st.ad_alloc_share)} · D-317 ②)", nocamp, AD_NOCAMP))
+    elif round(t["nocamp"]):
+        st.j.append(f"확인 필요: {st.m} 캠페인 없는 광고 조정 {t['nocamp'] * 1.1:,.0f}원 — 이 달 상품별 광고비 배분이 없어 D-317 ② 비율을 못 구함 · "
+                    "상품 표시 없는 광고비와 같은 비중으로 둠")
+    unattributed -= nocamp
     if round(unattributed):
         why = []
         if st.mk not in have and t["charged"]:
             why.append("이 달 광고 보고서(상품별) 파일이 이 PC 에 없음")
-        if t["nocamp"]:
+        if t["nocamp"] and not round(nocamp):
             why.append(f"캠페인 없는 조정 {t['nocamp'] * 1.1:,.0f}")
         st.common.append(("광고비 중 쿠팡이 상품을 표시하지 않은 금액" + (f" ({' · '.join(why)})" if why else ""), unattributed, "ad"))
     st.ad = {"charged": charged_v, "deducted": deducted, "prod_all": t["prod_all"] * 1.1, "prod_m": t["prod_m"] * 1.1,

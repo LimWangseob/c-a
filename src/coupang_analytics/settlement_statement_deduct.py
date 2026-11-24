@@ -1,8 +1,8 @@
 """위탁정산서 계정 하나 — 관리 상품 몫 계산 2부(공제 몫·입금 완료/예정/보류 나누기·검산 사유). T-25 이관(옛 `statement_managed.py`
 `account()` 420~527줄 + `status_split` · 계산식·순서 그대로 · 1부 = `settlement_statement_account.py`).
 
-계정 단위 항목(D-116 ②·settlement_managed_alloc): 배송비 줄 = 같은 주문 상품 / 상품 없으면 반품 조회 상품 · 판매자서비스이용료 = 끝난 달의
-구매확정 판매로 규칙 판정(D-161) → 부과 달 순서로 쿠팡 공제를 채워 그 구매확정 달 관리 판매(배송비 제외) 비율 · 안 빠진 잔액 = 공제 예정 ·
+계정 단위 항목(D-116 ②·settlement_managed_alloc): 배송비 줄 = 같은 주문 상품 / 상품 없으면 반품 조회 상품 · 판매자서비스이용료·비즈니스 인사이트
+(계정 정액) = 그 달 등록 상품 비율(D-271 · 새 정산서와 같은 상품표 `reg_rows`) · 이용료 규칙 판정(D-161 끝난 달 구매확정 판매)의 안 빠진 잔액 = 공제 예정 ·
 광고비 = 날짜×캠페인 청구가능액 × 그날 광고 보고서 옵션 비율 · 밀크런 = 입고 건별 적치 수량 비율 · 우대수수료 환급 = 주문 → 상품 ·
 추가지급 = 옵션 → 상품. 그 자료가 없는 공제 = 공제를 받은 줄 판매 기간의 관리 정산금 비율(D-162) · 판매 0인 달 = 관리 몫 0(D-186).
 입금 완료/예정/보류 = 계정 실제 지급 비율.
@@ -14,8 +14,9 @@ from collections import Counter
 from coupang_analytics import settlement_additional_pay as AP
 from coupang_analytics import settlement_ledger as SL
 from coupang_analytics import settlement_managed_alloc as MA
+from coupang_analytics.settlement_consignor_month_cost import reg_rows
 from coupang_analytics.settlement_statement_account import (
-    AD, COMP, LOGI, MILK, OWN, REL, STS, SVC, AccountBase, ad_files, late_final_notes, milk_rows, month_add, num, ratio)
+    AD, BI, COMP, LOGI, MILK, OWN, REL, STS, SVC, AccountBase, ad_files, late_final_notes, milk_rows, month_add, num, ratio)
 
 
 def status_split(line_info: list, gen: dict, mset: dict, settle_m: float, rates: dict, S: float):
@@ -62,6 +63,34 @@ class Account(AccountBase):
         """공제 관리 몫 자료 창 시작 = max(그 달(기본 관리 시작 달), 2026-01) — 2025 판매 줄은 공제까지 빠짐(D-329 · D-342) · 관리 시작 표시(D-185)는 self.start 그대로."""
         return max(ym or self.start, SL.SALE_FROM[:7])
 
+    def reg(self, ym: str) -> float | None:
+        """D-271 계정 정액 관리 몫 = 그 달 등록 상품 비율(등록상품 ID 중 관리 ÷ 전체 · 판매중지 포함) — 새 정산서와 같은 상품표
+        (정산 기준일 상품조회 사본 · `reg_rows`) · 계약 전 달 = 0 · 상품조회 자료 없음 = None."""
+        inv = self.ctx.inv.get(self.aid) or {}
+        if not inv:
+            return None
+        pre = MA.pre_contract(ym, self.cdate)
+        memo = self.__dict__.setdefault("_reg_memo", {})
+        if pre not in memo:
+            rows = reg_rows(inv, self.mpids, self.is_mv, pre)
+            memo[pre] = (sum(r["관리"] for r in rows), len(rows))
+        mm, n = memo[pre]
+        return mm / n
+
+    def fixed_fee(self, k: str) -> float:
+        """계정 정액(D-271) — 관리 시작 뒤 공제 받은 줄마다 그 줄 판매 달 등록 비율 · rates·share 를 채우고 관리 몫 합을 돌려줌."""
+        since, D = self.win(), self.D
+        due = self.due(k, since)
+        got = sum(parts.get(k, 0.0) * (self.reg(ym) or 0.0) for _ch, ym, parts in self.deduct_lines if ym >= since)
+        self.rates[k] = (since, got / due if due else 0.0)
+        self.reg("9999-12")                                   # 계약 뒤 달 비율(설명 글) — 상품표를 한 번 만들어 둠
+        mm, n = self._reg_memo[False]
+        self.share[k] = (got / D[k] if D[k] else 0.0,
+                         f"계정 정액 = 그 달 등록 상품 비율 {mm}/{n}(등록상품 ID · 판매중지 포함 · 정산 기준일 상품조회 · D-271)"
+                         + (f" · 관리 시작 {self.start} 전 판매분 공제 제외" if self.active else " · 관리 상품 없음"),
+                         "관리 기간 공제 없음" if not round(due) else "등록 상품 비율")
+        return got
+
     def put(self, k: str, since: str, actual: float, covered: float, how: str, kind: str,
             fs_since: str = "", fs_actual: float = 0.0, fs_covered: float = 0.0) -> None:
         d = self.due(k, since)
@@ -107,7 +136,16 @@ class Account(AccountBase):
         conf = {ym: (wconf[ym][0], wconf[ym][1], wconf[ym][2] + max(self.pur.get(ym, 0.0) - sum(wconf[ym]), 0.0))
                 for ym in set(wconf) | set(self.pur)}
         charged = MA.svc_charges(conf, month_add(self.ctx.basis[:7], -1))
-        sv = self.sv = MA.svc_settle(charged, D[SVC], {ym: self.svc_month(ym) for ym in charged})
+        if self.reg(self.win()) is not None:                 # D-271 등록 비율 · 규칙 잔액(D-161 공제 예정)도 그 부과 달 등록 비율
+            self.sv = MA.svc_settle(charged, D[SVC], {ym: (self.reg(ym) or 0.0, 1.0) for ym in charged})
+            if D[SVC] or charged:
+                self.fixed_fee(SVC)
+                if round(self.sv["잔액 전체"]):
+                    r, how, kind = self.share[SVC]
+                    self.share[SVC] = (r, how + f" · 아직 안 빠진 규칙 부과(D-161) {self.sv['잔액 전체']:,.0f}원 중 관리 몫 "
+                                       f"{self.sv['잔액 관리']:,.0f}원은 공제 예정", kind)
+            return
+        sv = self.sv = MA.svc_settle(charged, D[SVC], {ym: self.svc_month(ym) for ym in charged})   # 상품조회 자료 없음 = D-161 판매 비율
         sv_out = sv["규칙 밖"] * MA.line_share(self.deduct_lines, SVC, "", self.line_ratio)
         if D[SVC] or charged:
             sv_r = (sv["공제 관리"] + sv_out) / D[SVC] if D[SVC] else 0.0
@@ -142,8 +180,11 @@ class Account(AccountBase):
         for k in [k for k in D if k.startswith(OWN)]:     # 위탁자 본인 차감 = 관리 몫 0(D-312 ②)
             self.rates[k] = ("", 0.0)
             share[k] = (0.0, "위탁자 개인 대출 상환·체크카드 대금 — 쿠팡이 계정 정산에서 뺀 돈 · 관리 상품 몫 0(D-312)", OWN)
+        if D[BI] and self.reg(self.win()) is not None:      # 74 비즈니스 인사이트 = 계정 정액(D-271)
+            self.fixed_fee(BI)
         for k in sorted(set(D) - set(share) - {REL}):
-            self.put(k, self.win(), 0.0, 0.0, "쿠팡이 상품 구분 없이 준 항목", "쿠팡 자료")
+            self.put(k, self.win(), 0.0, 0.0, "쿠팡이 상품 구분 없이 준 항목"
+                     + (" · 상품조회 자료 없어 D-271 등록 비율 못 씀" if k == BI else ""), "쿠팡 자료")
         rel_m = {st: -sum(x[4] * self.line_ratio(x[1], x[2]) for x in self.line_info if x[2] >= self.start and x[0] == st)
                  for st in STS}   # 공제 부호 = 음수(받은 돈)
         if D[REL]:

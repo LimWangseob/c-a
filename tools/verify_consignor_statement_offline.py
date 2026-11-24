@@ -39,6 +39,7 @@ from coupang_analytics.settlement_consignor_gsheet_layout import MARGIN, PAGE_H,
 from coupang_analytics.settlement_consignor_month_calc import cum_round  # noqa: E402
 from coupang_analytics import settlement_statement_account as AC  # noqa: E402
 from coupang_analytics import settlement_fee_rules as FR  # noqa: E402
+from coupang_analytics.settlement_consignor_month_calc import AD_NOCAMP, ads  # noqa: E402
 from coupang_analytics.settlement_consignor_month_cost import BI_CAT, KINDS, PEND_KIND, _rg_notes, expect_values  # noqa: E402
 from coupang_analytics.settlement_consignor_month_dep import dep_rows, flow  # noqa: E402
 from coupang_analytics.settlement_consignor_month_sep import separate  # noqa: E402
@@ -184,6 +185,23 @@ def test_post_purchase() -> None:
     assert (review["coupang_amount"], review["applied_amount"]) == (8_880, -4_440), review
     cat = st.common_items[0][2]
     assert st.loc[cat] == [(key, 8_880.0)] and coupang_by_cat(st)[cat] == 8_880
+
+
+def test_ad_nocamp_d317() -> None:
+    """신규-01 · D-317 ②: 캠페인 없는 광고 조정·지원금 = 그 달 옵션별 배분 합 비율(관리 6,000 ÷ 전체 10,000 = 60%)로 나눔 ·
+    줄 위치 = 9 '그 밖의 쿠팡 공제'(D-347 ① · 금액 영향 없음) · D-241 비중(0.5)을 쓰지 않음."""
+    cols: dict = defaultdict(lambda: [0.0] * 9)
+    pa = [(20261005, 111, 7001, 600.0), (20261005, 111, 7002, 400.0)]
+    bill = {(20261005, "111"): 10_000.0, (20261031, ""): -2_000.0}
+    st = SimpleNamespace(m="2026-10", mk="202610", d={"ads": (pa, bill, {"202610"})}, cols=cols, common=[], loc=defaultdict(list), j=[], chk=[],
+                         share=0.5, reg_share=0.4, lines=lambda: iter([]), ad_note="",
+                         managed_vid=lambda v: ({"7001": ("P1", True), "7002": ("P2", False)}[str(v)]))
+    ads(st)
+    assert st.ad_alloc_share == 0.6 and [c for _n, _a, c in st.common] == [AD_NOCAMP], st.common
+    assert round(cols["P1"][5]) == -6_600, cols["P1"]                  # 캠페인 광고비 관리 몫 6,000 × 1.1
+    items, applied = common_out(st)
+    etc = next(x for x in items if x["name"] == "그 밖의 쿠팡 공제")
+    assert (etc["coupang_amount"], etc["applied_amount"]) == (-2_200, 1_320), etc     # −2,200 × 60% (D-241 0.5 였으면 1,100)
 
 
 def _line(ch: str, s: str, e: str, bi: dict | None = None) -> tuple:
@@ -805,7 +823,7 @@ def main() -> int:
         pass
     for f in (test_run_job_abort, test_run_job_isolation_and_sheets, test_inputs_pack):
         f()
-    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_expect_values, test_flow_fixed, test_t125_additional_pay, test_d391_unknown_ship_same_month_wing_ratio, test_failed_checks, test_load_judge,
+    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_ad_nocamp_d317, test_expect_values, test_flow_fixed, test_t125_additional_pay, test_d391_unknown_ship_same_month_wing_ratio, test_failed_checks, test_load_judge,
               test_sale_months_2025_excluded, test_render, test_fixed_render, test_product_pages, test_overflow, test_unsplittable, test_check_reject,
               test_multi_month, test_tool):
         f()
