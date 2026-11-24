@@ -84,6 +84,18 @@ def milk_rows(base: Path, acct: str, since: str = "") -> list:
             for p in sorted(d.glob(f"{tok}_밀크런_*.xlsx")) if p.stem[-6:] >= since for r in xlsx_rows(p) if r.get("밀크런번호")]
 
 
+def late_final_notes(gen: dict, v: dict, basis: str, month: str = "") -> list[str]:
+    """장부 '줄 생성 전'(gen) 윙 달 중 쿠팡 정산 달력(검증자료 calendar · 'R' = 최종액 정산)의 정산일이 기준일 이하인 달 = 최종액(30%)
+    회차 지급 줄을 못 받음 → '확인 필요 — 사유'(금액은 예정 그대로 · 지급·공제 추정 없음 · 산식 23 · 실측 seankim137 2026-09 230,722).
+    달력에 그 달이 없으면 날짜를 지어내지 않음(사유 없음) · month = 'YYYY-MM' 이면 그 달만."""
+    due = {str(c.get("recognitionFrom"))[:7]: str(c.get("start"))[:10] for c in (v.get("calendar") or [])
+           if c.get("transactionCycleCode") == "R" and c.get("recognitionFrom")}
+    return [f"확인 필요 — 윙 {ym} 최종액(30%) 회차 지급 줄 없음: 쿠팡 정산 달력 정산일 {due[ym]} 지남(검증자료 조회 {v.get('수집일') or '-'})"
+            f" · 정산대상 {amt:,.0f}원은 '줄 생성 전' 예정으로만 둠(실제 지급·공제 모름 · 다시 받은 뒤 계산)"
+            for (ch, ym), amt in sorted(gen.items())
+            if ch == "윙" and round(amt) and (not month or ym == month) and ym in due and due[ym] <= basis]
+
+
 def payout_lines(led, aid: str, L: dict) -> tuple[list, list]:
     """쿠팡 지급 줄(장부 줄 순서) → [(장부 줄, 원본 줄)] · 모든 칸이 같은 원본 줄이 또 나오면 한 번만."""
     pool: dict = defaultdict(list)

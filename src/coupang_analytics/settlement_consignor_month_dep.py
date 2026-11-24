@@ -37,6 +37,7 @@ def _pay_items(st: MonthState, r_ch: dict) -> list:
         if ym == st.m and amt:
             items.append(((NO_DATE, ym, "", ch, ""), "예정", amt * r_ch[ch]))
             pay_ch[ch] += amt
+    st.j += AC.late_final_notes(st.d["L_gen"], st.d["v"], st.basis, st.m)      # 정산일 지난 최종액 회차 없음 = 확인 필요(산식 23)
     for ch in ("윙", "로켓그로스"):
         tot = sum(st.settle_by_ch[ch].values())
         st.chk.append({"검사": f"{ch} 이 달 판매 기간 지급 줄 정산금액 합 = 이 달 상품별 정산금액 합(계정 전체 · 확정+예정)", "값": [pay_ch[ch], round(tot)],

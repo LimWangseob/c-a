@@ -926,6 +926,39 @@ def test_d279_svc_estimate_row_and_d304_note() -> None:
     print("test_d279_svc_estimate_row_and_d304_note OK")
 
 
+def test_formula23_late_final_round_flagged() -> None:
+    """산식 23(정산차감 = 매출내역 F) 남은 차이 — 매출내역 deductionAmount = apAmount − finalPaidAmount(운용 사본 output44 검증자료
+    258/258줄 · 독립 공제 값이 아님). seankim137 2026-09 +230,722 = 그 달 정산대상 769,074 − 받은 70% 3회차 538,352 = 받지 못한 최종액(30%)
+    회차(쿠팡 정산 달력 '9월 최종액 정산' 2026-11-02 · 마지막 조회 10-30 뒤 로그인 막힘). 장부는 이 몫을 '30% 줄 생성 전' 예정으로 둠 →
+    달력 정산일이 기준일 이하면 '확인 필요 — 사유'로 드러냄(금액은 그대로 · 숨기지 않음 · 지급·공제 추정 없음).
+    기대값 = 위 실측 숫자 손 계산(코드에서 뽑지 않음)."""
+    from types import SimpleNamespace
+
+    from coupang_analytics import settlement_consignor_month_dep as DEP
+    from coupang_analytics import settlement_statement_account as SA
+    cal = [{"title": "9월 최종액 정산", "start": "2026-11-02 00:00:00", "transactionCycleCode": "R",
+            "recognitionFrom": "2026-09-01", "recognitionTo": "2026-09-30"},
+           {"title": "11월 최종액 정산", "start": "2027-01-04 00:00:00", "transactionCycleCode": "R",
+            "recognitionFrom": "2026-11-01", "recognitionTo": "2026-11-30"},
+           {"title": "[주정산]\n09/21 ~ 09/27", "start": "2026-10-22 00:00:00", "transactionCycleCode": "W",
+            "recognitionFrom": "2026-09-21", "recognitionTo": "2026-09-27"}]
+    v = {"수집일": "2026-10-30", "calendar": cal}
+    gen = {("윙", "2026-09"): 769_074.0 - 538_352.0, ("윙", "2026-11"): 5_000.0, ("로켓그로스", "2026-09"): 100.0}
+    notes = SA.late_final_notes(gen, v, "2026-11-24")
+    assert len(notes) == 1 and notes[0].startswith("확인 필요"), notes
+    assert all(s in notes[0] for s in ("윙 2026-09", "2026-11-02", "230,722", "2026-10-30")), notes
+    assert SA.late_final_notes(gen, v, "2026-11-01") == []                     # 정산일 전 = 정상 예정
+    assert SA.late_final_notes(gen, {"수집일": "2026-10-30"}, "2026-11-24") == []  # 달력 없음 = 날짜를 지어내지 않음
+    assert SA.late_final_notes(gen, v, "2026-11-24", "2026-11") == []           # 달 지정 = 그 달만
+    # 새 위탁정산서(날짜별 입금) — 금액은 그대로 '(지급일 미정) 예정' · 판정 글에 사유 한 줄
+    st = SimpleNamespace(m="2026-09", basis="2026-11-24", d={"line_info": [], "L_gen": gen, "v": v},
+                         settle_by_ch={"윙": {}, "로켓그로스": {}}, chk=[], j=[])
+    items = DEP._pay_items(st, {"윙": 0.5, "로켓그로스": 0.0})
+    assert [(k[0], s, round(a)) for k, s, a in items] == [(DEP.NO_DATE, "예정", 115_361), (DEP.NO_DATE, "예정", 0)], items
+    assert st.j == notes, st.j
+    print("test_formula23_late_final_round_flagged OK")
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -952,6 +985,7 @@ def main() -> int:
     test_scope_priority()
     test_scope_judge()
     test_status_split_pending_rest()
+    test_formula23_late_final_round_flagged()
     print("✅ 위탁정산서 계산 규칙 시험 3종 + 이관 입구 + 관리 상품 범위 통과")
     return 0
 
