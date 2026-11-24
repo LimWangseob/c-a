@@ -4,16 +4,16 @@
 - `build_statement(ds, issued)` = 순수 함수: 자료 dict 목록 → 탭 구성(이름·gid·순서) + 탭마다 Sheets API batchUpdate 요청.
   칸 값은 서식과 함께 `updateCells` 요청 안에 들어간다(값만 따로 쓰는 values.update 호출 없음 — 샘플과 같음).
 - `check(d)` = 합계 검산 → 어긋남 목록. 하나라도 있으면 `build_statement`·`write_statement` 가 예외로 중단.
-- `write_statement(client, ds, issued)` = 기존 시트(client 가 가리키는 스프레드시트)의 탭을 전부 지우고 다시 그림.
+- `write_statement(client, ds, issued)` = 기존 시트(client 가 가리키는 스프레드시트)의 탭을 지우고 다시 그림('변경 기록' 탭만 맨 끝에 남김 · D-242 ③).
   client = `gsheet_api.GSheetClient` 모양(`meta(refresh=True)`·`batch_update(requests)`). 새 파일 만들기(D-242 ④ OAuth)는 아직 없음.
-- `export_tab_pdf(session, spreadsheet_id, gid, out)` = 탭 하나를 A4 PDF 로(session = 인증된 HTTP 세션 · `.get(url, timeout=)`).
+- `export_tab_bytes(session, spreadsheet_id, gid)` = 탭 하나를 A4 PDF 로(session = 인증된 HTTP 세션 · `.get(url, timeout=)`).
+  위탁자별 PDF 묶기(D-260) = `settlement_consignor_pdf`.
 형식 규칙 = D-238·D-240·D-241·D-242·D-251·D-259·D-260·D-343 고정 형식 (docs/CURRENT_RULES.md 12절).
 """
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from coupang_analytics.settlement_consignor_gsheet_layout import C, Page, requests_for
 from coupang_analytics.settlement_consignor_gsheet_fixed import consignor_sheet
@@ -22,6 +22,7 @@ from coupang_analytics.settlement_consignor_gsheet_pages import evidence_sheet, 
 FIRST_GID = 1000                 # 탭 gid = 1000 부터 차례로(요약 → 위탁자들 → 다음 달 요약 …)
 TMP_GID = 990000                 # 옛 탭을 다 지우는 동안 남겨 둘 임시 탭
 TMP_TITLE = "_tmp_render"
+KEEP_TABS = ("변경 기록",)         # D-242 ③ 맨 끝 탭 — 다시 그려도 지우지 않음(매일 이어 쓰는 기록)
 TAB_COLOR = {"summary": "p", "consignor": "p2", "evidence": "mute"}
 PDF_QUERY = ("size=A4&portrait=true&fitw=true&gridlines=false&printtitle=false&sheetnames=false"
              "&pagenum=UNDEFINED&top_margin=0&bottom_margin=0&left_margin=0&right_margin=0&horizontal_alignment=CENTER")
@@ -89,6 +90,12 @@ def _check_product_rows(d: dict) -> list[str]:
     return errs
 
 
+def _check_pending_sales(d: dict) -> list[str]:
+    """D-261 ① E1: 2쪽 상품 줄(이름 묶은 뒤)의 정산 예정 판매 ≥ 0(관리 비율 0~100% 밖 = D-262 ③ · 계산 쪽)."""
+    return [f"E1 상품 '{p['name']}' 정산 예정 판매 {p['pending']['c1']:,} < 0" for p in d["products"]
+            if (p.get("pending") or {}).get("c1", 0) < 0]
+
+
 def _check_common_pending(d: dict, L: dict[int, int], P: dict[int, int]) -> list[str]:
     errs = []
     if d["rg_kinds"] and sum(k["amount"] for k in d["rg_kinds"]) != L.get(6):
@@ -121,12 +128,12 @@ def _check_settle(d: dict) -> list[str]:
 def check(d: dict) -> list[str]:
     """위탁자 자료 1개 합계 검산 → 어긋남 목록(빈 목록 = 통과).
 
-    1쪽 1~8 = 2쪽 상품표 열 합(확정 전 포함) · 상품 소계 · 6 종류별 · 9 반영/청구 · 확정 전 금액 · 상태 ·
+    1쪽 1~8 = 2쪽 상품표 열 합(확정 전 포함) · 상품 소계 · 상품 줄 정산 예정 판매 ≥ 0(D-261 E1) · 6 종류별 · 9 반영/청구 · 확정 전 금액 · 상태 ·
     정산 금액 = 상품 정산액 + 9 + 10 · 어디로 갔나요(flow)·입금 내역(deposits) 합 = 정산 금액."""
     L = {x["no"]: x["amount"] for x in d["lines"]}
     P = {x["no"]: x.get("pending", 0) for x in d["lines"]}
     return (_check_lines(d, L) + _check_product_columns(d, L, P) + _check_product_rows(d)
-            + _check_common_pending(d, L, P) + _check_settle(d))
+            + _check_pending_sales(d) + _check_common_pending(d, L, P) + _check_settle(d))
 
 
 def check_all(ds: list[dict]) -> list[str]:
@@ -180,7 +187,8 @@ def build_statement(ds: list[dict], issued: str) -> StatementPlan:
 
 
 def setup_requests(old_sheet_ids: list[int], tabs: list[TabPlan]) -> list[dict]:
-    """탭 다시 만들기: 임시 탭 → 옛 탭 전부 삭제 → 새 탭(순서·색) → 임시 탭 삭제 (batchUpdate 1회)."""
+    """탭 다시 만들기: 임시 탭 → 옛 탭 삭제 → 새 탭(맨 앞부터 순서·색) → 임시 탭 삭제 (batchUpdate 1회).
+    old_sheet_ids 에 없는 탭(`KEEP_TABS`)은 새 탭들 뒤 = 맨 끝에 그대로 남는다."""
     reqs: list[dict] = [{"addSheet": {"properties": {"sheetId": TMP_GID, "title": TMP_TITLE}}}]
     reqs += [{"deleteSheet": {"sheetId": sid}} for sid in old_sheet_ids]
     for i, t in enumerate(tabs):
@@ -190,18 +198,26 @@ def setup_requests(old_sheet_ids: list[int], tabs: list[TabPlan]) -> list[dict]:
     return reqs
 
 
+def _old_tabs(meta: dict, tabs: list[TabPlan]) -> list[int]:
+    """지울 옛 탭 gid — `KEEP_TABS` 는 뺌. 남길 탭 gid 가 새로 만들 탭과 겹치면 쓰기 전에 중단."""
+    props = [s["properties"] for s in meta["sheets"]]
+    used = {t.gid for t in tabs} | {TMP_GID}
+    clash = [f"{p['title']}(gid {p['sheetId']})" for p in props if p["title"] in KEEP_TABS and p["sheetId"] in used]
+    if clash:
+        raise StatementCheckError(f"남길 탭 번호가 새 탭과 겹침 {clash} — 시트를 쓰지 않음")
+    return [p["sheetId"] for p in props if p["title"] not in KEEP_TABS]
+
+
 def write_statement(client, ds: list[dict], issued: str, *, allow_multi_month: bool = False,
                     log: Callable[[str], None] | None = None) -> StatementPlan:
-    """기존 스프레드시트(client)의 탭을 전부 지우고 정산서 탭을 다시 그린다. 검산 실패 = 아무것도 안 씀.
+    """기존 스프레드시트(client)의 탭을 지우고 정산서 탭을 다시 그린다('변경 기록' 탭은 맨 끝에 남김). 검산 실패 = 아무것도 안 씀.
 
     판매 달마다 파일 1개(D-241 ⑥) — 여러 달 자료는 allow_multi_month=True(샘플 시트 다시 그리기)일 때만."""
     plan = build_statement(ds, issued)
     months = plan.months()
     if len(months) > 1 and not allow_multi_month:
         raise StatementCheckError(f"판매 달이 여러 개 {months} — 달마다 파일 1개(D-241 ⑥)")
-    meta = client.meta(refresh=True)
-    old = [s["properties"]["sheetId"] for s in meta["sheets"]]
-    client.batch_update(setup_requests(old, plan.tabs))
+    client.batch_update(setup_requests(_old_tabs(client.meta(refresh=True), plan.tabs), plan.tabs))
     for t in plan.tabs:
         client.batch_update(t.requests)
         if log is not None:
@@ -215,11 +231,9 @@ def pdf_export_url(spreadsheet_id: str, gid: int) -> str:
     return f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=pdf&gid={gid}&{PDF_QUERY}"
 
 
-def export_tab_pdf(session, spreadsheet_id: str, gid: int, out: str | Path, *, timeout: int = 120) -> Path:
-    """session(인증된 HTTP 세션 — 예 google.auth AuthorizedSession)으로 탭 PDF 를 받아 out 에 저장. 실패 = 예외."""
+def export_tab_bytes(session, spreadsheet_id: str, gid: int, *, timeout: int = 120) -> bytes:
+    """session(인증된 HTTP 세션 — 예 google.auth AuthorizedSession)으로 탭 PDF 를 받음. 실패 = 예외."""
     r = session.get(pdf_export_url(spreadsheet_id, gid), timeout=timeout)
     if r.status_code != 200 or r.content[:4] != b"%PDF":
         raise RuntimeError(f"PDF 내보내기 실패 gid={gid}: HTTP {r.status_code} {r.headers.get('content-type')} {len(r.content)}바이트")
-    path = Path(out)
-    path.write_bytes(r.content)
-    return path
+    return r.content

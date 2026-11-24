@@ -632,6 +632,254 @@ def test_multi_month() -> None:
     assert fake.calls == []
 
 
+class SheetClient(FakeClient):
+    """탭 추가·삭제를 실제 시트처럼 흉내(순서 = 구글 addSheet index 자리에 끼움 · index 없으면 맨 끝) — 남는 탭·순서를 봄."""
+
+    def __init__(self, tabs: list[tuple[int, str]], spreadsheet_id: str = "합성시트"):
+        super().__init__(())
+        self.tabs, self.spreadsheet_id, self.deleted = list(tabs), spreadsheet_id, []
+
+    def meta(self, refresh: bool = False) -> dict:
+        return {"sheets": [{"properties": {"sheetId": i, "title": t}} for i, t in self.tabs]}
+
+    def _add(self, p: dict) -> None:
+        assert p["sheetId"] not in [i for i, _ in self.tabs], f"탭 번호 겹침 {p}"
+        assert p["title"] not in [t for _, t in self.tabs], f"탭 이름 겹침 {p}"
+        self.tabs.insert(p.get("index", len(self.tabs)), (p["sheetId"], p["title"]))
+
+    def batch_update(self, requests: list[dict]) -> dict:
+        super().batch_update(requests)
+        for r in requests:
+            if "addSheet" in r:
+                self._add(r["addSheet"]["properties"])
+            if "deleteSheet" in r:
+                sid = r["deleteSheet"]["sheetId"]
+                assert sid in [i for i, _ in self.tabs], f"없는 탭 삭제 {sid}"
+                assert len(self.tabs) > 1, "마지막 탭 삭제(구글 거부)"
+                self.deleted.append(sid)
+                self.tabs = [x for x in self.tabs if x[0] != sid]
+        return {}
+
+
+def test_d242_change_log_tab_kept() -> None:
+    """D-242 ③ 탭 = 요약 · 위탁자별 · 맨 끝 '변경 기록' — 매일 다시 그려도 '변경 기록' 탭은 지우지 않고 맨 끝 그대로(T-147 ①)."""
+    names = ["9월 요약", "9월 합성 위탁자 (synth01)", "9월 근거"]
+    for old in ([(1000, names[0]), (1001, names[1]), (1002, names[2]), (77, "변경 기록")],       # 맨 끝
+                [(77, "변경 기록"), (1000, names[0]), (5, "옛 탭")],                           # 사람이 앞으로 옮김
+                [(77, "변경 기록")]):                                                           # 그 탭만
+        c = SheetClient(old)
+        GS.write_statement(c, [synthetic(True)], ISSUED)
+        assert [t for _, t in c.tabs] == [*names, "변경 기록"], c.tabs
+        assert c.tabs[-1][0] == 77 and 77 not in c.deleted, (c.tabs, c.deleted)
+    c = SheetClient([(0, "시트1")])                                                           # 없으면 만들지 않음(칸 내용 결정 없음)
+    GS.write_statement(c, [synthetic(True)], ISSUED)
+    assert [t for _, t in c.tabs] == names, c.tabs
+    c = SheetClient([(1001, "변경 기록"), (0, "시트1")])                                        # 번호가 새 탭과 겹침 = 쓰기 전 중단
+    try:
+        GS.write_statement(c, [synthetic(True)], ISSUED)
+        raise AssertionError("'변경 기록' 탭 번호 겹침인데 중단 안 됨")
+    except GS.StatementCheckError as exc:
+        assert "변경 기록" in str(exc), exc
+    assert c.calls == []
+    print("test_d242_change_log_tab_kept OK")
+
+
+def test_d261_e1_pending_not_negative() -> None:
+    """D-261 ① E1(CURRENT_RULES 12절): 2쪽 상품 줄(이름 묶은 뒤)의 정산 예정 판매 ≥ 0 — 음수면 검산 실패(사유에 상품·금액) · 0 = 통과 ·
+    확정 달(정산 예정 없음)의 확정 판매 음수는 대상 아님 · 다른 열(쿠폰·수수료 음수)은 대상 아님. 관리 비율 0~100% 밖 = D-262 ③(계산 쪽)."""
+    assert GS.check(synthetic(True)) == [] and GS.check(synthetic(False)) == []
+    d = synthetic(True)
+    b = d["products"][1]
+    a = d["products"][0]["pending"]
+    a["c1"] += 270_499                                                                         # 합계는 맞춘 채 한 상품만 음수(sg0141n 11월 −270,499)
+    a["subtotal"] += 270_499
+    b["pending"] = {**{f"c{k}": 0 for k in range(1, 9)}, "c1": -270_499, "subtotal": -270_499}
+    errs = GS.check(d)
+    assert len(errs) == 1 and "합성 상품 나" in errs[0] and "-270,499" in errs[0] and "E1" in errs[0], errs
+    fake = FakeClient()
+    try:
+        GS.write_statement(fake, [d], ISSUED)
+        raise AssertionError("E1 검산 실패인데 쓰기 예외 없음")
+    except GS.StatementCheckError:
+        pass
+    assert fake.calls == []
+    a["c1"] -= 270_499
+    a["subtotal"] -= 270_499
+    b["pending"].update(c1=0, subtotal=0)
+    assert GS.check(d) == []
+    print("test_d261_e1_pending_not_negative OK")
+
+
+# ── D-260 위탁자별 PDF ─────────────────────────────────────────
+def _pdf_bytes(text: str, pages: int = 1) -> bytes:
+    """글자 있는 합성 PDF(한글 = 유니코드 대응표 있는 Type0 글꼴) — pypdf extract_text 로 되읽힘."""
+    from pypdf import PdfWriter
+    from pypdf.generic import ArrayObject, DecodedStreamObject, DictionaryObject, NameObject
+    w = PdfWriter()
+    codes = {ch: i + 1 for i, ch in enumerate(sorted(set(text)))}
+    cmap = DecodedStreamObject()
+    rows = "\n".join(f"<{i:04X}> <{ord(ch):04X}>" for ch, i in codes.items())
+    cmap.set_data(("/CIDInit /ProcSet findresource begin 12 dict begin begincmap /CMapName /X def /CMapType 2 def\n"
+                   "1 begincodespacerange <0000> <FFFF> endcodespacerange\n"
+                   f"{len(codes)} beginbfchar\n{rows}\nendbfchar\nendcmap end end").encode())
+    desc = DictionaryObject({NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/CIDFontType2"),
+                             NameObject("/BaseFont"): NameObject("/X")})
+    font = DictionaryObject({NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type0"),
+                             NameObject("/BaseFont"): NameObject("/X"), NameObject("/Encoding"): NameObject("/Identity-H"),
+                             NameObject("/DescendantFonts"): ArrayObject([desc]), NameObject("/ToUnicode"): w._add_object(cmap)})
+    for _ in range(pages):
+        pg = w.add_blank_page(width=595, height=842)
+        st = DecodedStreamObject()
+        hexs = "".join(f"{codes[ch]:04X}" for ch in text)
+        st.set_data(f"BT /F1 9 Tf 10 800 Td <{hexs}> Tj ET".encode())
+        pg[NameObject("/Contents")] = w._add_object(st)
+        pg[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})})
+    buf = io.BytesIO()
+    w.write(buf)
+    return buf.getvalue()
+
+
+class PdfSession:
+    """구글 내보내기 흉내 — 주소의 (파일, gid) → 그 탭 PDF. 내보낸 순서를 남김."""
+
+    def __init__(self, pdfs: dict):
+        self.pdfs, self.asked = pdfs, []
+
+    def get(self, url: str, timeout: int = 0):
+        sid = url.split("/d/")[1].split("/")[0]
+        gid = int(url.split("gid=")[1].split("&")[0])
+        self.asked.append((sid, gid))
+        body = self.pdfs.get((sid, gid))
+        return SimpleNamespace(status_code=200 if body else 404, headers={"content-type": "application/pdf"}, content=body or b"none")
+
+
+def _month_pdf(d: dict, extra: str = "") -> bytes:
+    return _pdf_bytes(f"쿠팡 판매 정산서 {d['account']} 판매 기간 {d['period_start']} ~ {d['period_end']} "
+                      f"이번 정산 금액 {d['settle_amount']:,}원 {extra}", 2)
+
+
+def _pdf_case():
+    """9월·10월 = 달마다 파일 1개(D-241 ⑥) · 파일마다 요약·위탁자·근거 탭 + 다른 위탁자 탭."""
+    a, b = synthetic(False, "2026-09"), synthetic(True, "2026-10")
+    c9 = SheetClient([(1000, "9월 요약"), (1001, "9월 남의 정산서 (other1)"), (1002, "9월 합성 위탁자 (synth01)"), (1003, "9월 근거")], "S09")
+    c10 = SheetClient([(1000, "10월 요약"), (1001, "10월 합성 위탁자 (synth01)"), (1002, "10월 근거"), (77, "변경 기록")], "S10")
+    return a, b, c9, c10
+
+
+def test_d260_month_summary_page() -> None:
+    """D-260 ② 여러 달 위탁자 PDF 첫 장 = 그 위탁자 한 명의 월별 요약: 달마다 판매 금액·쿠팡이 뺀 돈·계정 공통·별도 입금·이번 정산 금액·
+    쿠팡 미확정 금액·입금 완료·입금 예정 + 합계 · '판매 기간 … · 발행 …' 굵게 · 다른 위탁자·'검토용'·내부 글자 없음."""
+    from coupang_analytics import settlement_consignor_pdf as PDF
+    from coupang_analytics.settlement_consignor_gsheet_layout import requests_for
+    a, b, _c9, _c10 = _pdf_case()
+    page = PDF.month_summary_sheet([b, a], ISSUED)                        # 넘긴 순서와 상관없이 판매 달 순서
+    tx = texts(requests_for(page, 1))
+    flat = [s for s, _ in tx]
+    joined = chr(10).join(flat)
+    for head in ("판매 금액", "쿠팡이", "계정 공통", "별도 입금", "이번 정산", "쿠팡 미확정", "입금 완료", "입금 예정"):
+        assert any(s.startswith(head) for s in flat), head
+    assert joined.index("9월" + chr(10)) < joined.index("10월" + chr(10)) < joined.rindex(chr(10) + "합계" + chr(10)), joined
+    nums = [s for s in _numbers(requests_for(page, 1))]
+    # 손 계산(synthetic 문서): 달마다 판매 1,000,000 · 뺀 돈 748,000−33,000−1,000,000 = −285,000 · 9 −33,000 · 10 +1,500 · 정산 716,500
+    sep, okt = [1_000_000, -285_000, -33_000, 1_500, 716_500, 0, 716_500, 0], [1_000_000, -285_000, -33_000, 1_500, 716_500, 168_400, 548_100, 168_400]
+    tot = [2_000_000, -570_000, -66_000, 3_000, 1_433_000, 168_400, 1_264_600, 168_400]
+    assert nums == sep + okt + tot, nums
+    who = [(s, r) for s, r in tx if "판매 기간 2026-09-01 ~ 2026-10-30" in s]
+    assert who and _bold_at(*who[0], "판매 기간"), who
+    assert "1,433,000원" in joined and "168,400원" in joined and "2개월" in joined, joined
+    for bad in ("검토용", "아직 반영 안 된", "확인 필요", "내부용", "보기 →", "위탁자별"):
+        assert bad not in joined, bad
+    chk = {**a, "status": "확인 필요"}                                      # D-402 요약 머리 = '확정 전'
+    j2 = chr(10).join(s for s, _ in texts(requests_for(PDF.month_summary_sheet([chk, {**chk, "period_start": "2026-10-01"}], ISSUED), 1)))
+    assert "확정 전" in j2 and "확인 필요" not in j2, j2
+    for bad_ds in ([a], [a, a], [a, {**b, "account": "other1"}]):          # 한 달 · 같은 달 둘 · 다른 위탁자 = 중단
+        try:
+            PDF.month_summary_sheet(bad_ds, ISSUED)
+            raise AssertionError("월별 요약 대상 아닌데 그려짐")
+        except PDF.ConsignorPdfError:
+            pass
+    print("test_d260_month_summary_page OK")
+
+
+def _numbers(reqs: list[dict]) -> list:
+    return [c["userEnteredValue"]["numberValue"] for r in reqs for row in r.get("updateCells", {}).get("rows", [])
+            for c in row.get("values", []) if "numberValue" in (c.get("userEnteredValue") or {})]
+
+
+def test_d260_consignor_pdf() -> None:
+    """D-260 ① 위탁자 1명 = PDF 1개(판매 달 순서로 이어 붙임) · 여러 달 = 첫 장 월별 요약 · 모음 '{n}월 요약'·'{n}월 근거'(D-401 ②) 안 넣음 ·
+    달 파일 둘(D-241 ⑥)에서 모음 · 월별 요약 탭은 잠깐 그렸다 지움(시트 탭 그대로) · 실패 = 파일 안 만듦."""
+    from pypdf import PdfReader
+
+    from coupang_analytics import settlement_consignor_pdf as PDF
+    a, b, c9, c10 = _pdf_case()
+    G = PDF.SUMMARY_GID
+    good = {("S09", 1002): _month_pdf(a), ("S10", 1001): _month_pdf(b), ("S10", G): _pdf_bytes("쿠팡 판매 정산서 — 월별 요약 1,433,000원")}
+    clients = {"2026-09": c9, "2026-10": c10}
+    with tempfile.TemporaryDirectory() as td:
+        before = [list(c9.tabs), list(c10.tabs)]
+        ses = PdfSession(good)
+        out = PDF.consignor_pdf(ses, clients, [b, a], ISSUED, Path(td))
+        assert out.name == "위탁자정산서_합성 위탁자_synth01_9~10월.pdf" and out.parent == Path(td), out
+        assert sorted(ses.asked) == [("S09", 1002), ("S10", 1001), ("S10", G)], ses.asked   # 요약·근거·남의 탭은 내보내지 않음
+        pages = [p.extract_text() for p in PdfReader(str(out)).pages]
+        assert len(pages) == 5 and "월별 요약" in pages[0] and "2026-09-01" in pages[1] and "2026-10-01" in pages[3], pages
+        assert [c9.tabs, c10.tabs] == before, (c9.tabs, c10.tabs)                      # 월별 요약 탭 지워짐 · 다른 탭 그대로
+        one = PDF.consignor_pdf(PdfSession(good), {"2026-09": c9}, [a], ISSUED, Path(td))     # 한 달 = 요약 첫 장 없음
+        assert one.name == "위탁자정산서_합성 위탁자_synth01_9월.pdf" and len(PdfReader(str(one)).pages) == 2, one
+        assert c9.tabs == before[0]
+    e1 = {**b, "products": [{**b["products"][0], "pending": {**b["products"][0]["pending"], "c1": -1}}, b["products"][1]]}
+    cases = {
+        "탭 없음": (good, {"2026-09": c9, "2026-10": SheetClient([(1000, "10월 요약")], "S10")}, [a, b]),
+        "그 달 시트 없음": (good, {"2026-09": c9}, [a, b]),
+        "내보내기 실패": ({k: v for k, v in good.items() if k != ("S10", 1001)}, clients, [a, b]),
+        "시트 금액 ≠ 자료": ({**good, ("S09", 1002): _month_pdf({**a, "settle_amount": 1})}, clients, [a, b]),
+        "다른 달 탭": ({**good, ("S09", 1002): _month_pdf(b)}, clients, [a, b]),
+        "요약 탭 금액 다름": ({**good, ("S10", G): _pdf_bytes("월별 요약 1원")}, clients, [a, b]),
+        "검토용 글자": ({**good, ("S09", 1002): _month_pdf(a, "검토용")}, clients, [a, b]),
+        "내부 글자": ({**good, ("S09", 1002): _month_pdf(a, "확인 필요")}, clients, [a, b]),
+        "검산 실패": (good, clients, [a, e1]),
+    }
+    for name, (pdfs, cl, ds) in cases.items():
+        with tempfile.TemporaryDirectory() as td:
+            try:
+                PDF.consignor_pdf(PdfSession(pdfs), cl, ds, ISSUED, Path(td))
+                raise AssertionError(f"{name}: 중단 안 됨")
+            except PDF.ConsignorPdfError as exc:
+                assert "synth01" in str(exc), (name, exc)
+            assert list(Path(td).iterdir()) == [], name
+            assert [c9.tabs, c10.tabs] == before, (name, c10.tabs)                     # 실패해도 월별 요약 탭 안 남음
+    stale = SheetClient([*before[1], (G, PDF.summary_title(a))], "S10")                # 앞 실행이 끊겨 남은 월별 요약 탭 = 다시 그림
+    with tempfile.TemporaryDirectory() as td:
+        PDF.consignor_pdf(PdfSession(good), {"2026-09": c9, "2026-10": stale}, [a, b], ISSUED, Path(td))
+        assert stale.tabs == before[1], stale.tabs
+    print("test_d260_consignor_pdf OK")
+
+
+def test_d260_pdf_run() -> None:
+    """위탁자별 PDF 묶기 입구: 자료 json 폴더 + 달별 시트 주소 → 위탁자마다 PDF 1개 · 위탁자 하나가 막히면 그 위탁자만 사유(나머지 계속)."""
+    from coupang_analytics import settlement_consignor_pdf as PDF
+    a, b, c9, c10 = _pdf_case()
+    x = {**synthetic(False, "2026-09"), "account": "other2", "ceo": "합성 위탁자 둘"}
+    with tempfile.TemporaryDirectory() as td:
+        data, out = Path(td) / "위탁자정산서", Path(td) / "PDF"
+        data.mkdir()
+        for d in (a, b, x):
+            (data / f"{d['account']}_{d['period_start'][:7].replace('-', '')}.json").write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        (data / "_요약.json").write_text("[]", encoding="utf-8")
+        good = {("S09", 1002): _month_pdf(a), ("S10", 1001): _month_pdf(b), ("S10", PDF.SUMMARY_GID): _pdf_bytes("월별 요약 1,433,000원")}
+        made, failed = PDF.run(data, {"2026-09": "u9", "2026-10": "u10"}, ISSUED, out, session=PdfSession(good),
+                               client_for=lambda u: {"u9": c9, "u10": c10}[u], log=lambda m: None)
+        assert [p.name for p in made] == ["위탁자정산서_합성 위탁자_synth01_9~10월.pdf"], made
+        assert len(failed) == 1 and failed[0][0] == "other2" and "탭 없음" in failed[0][1], failed
+        try:
+            PDF.run(data, {}, ISSUED, out, accounts=["none9"], session=PdfSession(good), client_for=lambda u: c9, log=lambda m: None)
+            raise AssertionError("없는 계정ID 인데 중단 안 됨")
+        except PDF.ConsignorPdfError:
+            pass
+    print("test_d260_pdf_run OK")
+
+
 # ── ③ 입구 ────────────────────────────────────────────────────
 def test_tool() -> None:
     T = _tool()
@@ -907,7 +1155,8 @@ def main() -> int:
         f()
     for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_ad_nocamp_d317, test_t175_old_forecast_record, test_new23_cross_week_flag, test_d401_remarks_and_evidence, test_d402_check_status_header, test_expect_values, test_flow_fixed, test_t125_additional_pay, test_d391_unknown_ship_same_month_wing_ratio, test_failed_checks, test_load_judge,
               test_sale_months_2025_excluded, test_render, test_fixed_render, test_product_pages, test_overflow, test_unsplittable, test_check_reject,
-              test_multi_month, test_tool):
+              test_multi_month, test_d242_change_log_tab_kept, test_d261_e1_pending_not_negative, test_d260_month_summary_page, test_d260_consignor_pdf,
+              test_d260_pdf_run, test_tool):
         f()
     print("✅ 위탁자 정산서 3차 형식 시험(숫자 반올림·상품표 열 합·종류별 9줄·검산 기준 · 그리기 구조·쪽 높이·결정 문구·넘침·검산/여러 달 거부 · 입구 · D-343 고정 형식(고정 줄·공란·쪽 규칙)·D-324 리뷰 이벤트) 통과")
     return 0

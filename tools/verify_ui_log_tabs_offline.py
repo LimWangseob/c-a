@@ -5,6 +5,10 @@
   ② 로그창 '복사' = 지금 탭 줄만(전체 기록은 로그 파일에 그대로)
 판정은 '그 탭을 열었을 때 화면 로그창에 보이는 글'로 한다(사람이 보는 결과 기준).
 
++ 정산 탭의 정산서 배치 상태(T-171 · 소유자 2026-11-24 "운용자가 알수 있는 방법이 있어야 함" · D-399 ④ 상태 카드):
+  배치가 쓰는 `output/정산서/_현재상태.txt`(실제 쓰는 코드 `statement_batch.BatchLog.status`)의 상태·확인 필요 N건·건별 줄이 정산 탭에 보임 ·
+  파일 없음 = '정산서 배치 기록 없음'(숨기지 않음) · 정산 받기 상태(`output/정산/로그`)와 서로 안 섞임.
+
     python tools/verify_ui_log_tabs_offline.py
 """
 from __future__ import annotations
@@ -29,10 +33,14 @@ except AttributeError:
 from PySide6 import QtWidgets  # noqa: E402
 
 import app_qt  # noqa: E402
+import settlement_status_panel_qt as SSP  # noqa: E402
 import transfer_panel_qt  # noqa: E402
+from coupang_analytics import statement_batch as SB  # noqa: E402
 
 _TMP = tempfile.mkdtemp(prefix="t19_log_")
 app_qt.app_output_dir = lambda: Path(_TMP)          # 로그 파일 미러를 임시 폴더로(실제 output 에 안 씀)
+SSP.app_output_dir = lambda: Path(_TMP)             # 정산·정산서 상태 파일도 임시 폴더에서 읽음
+SB.STATUS, SB.LOGS = Path(_TMP) / "정산서" / "_현재상태.txt", Path(_TMP) / "정산서" / "로그"
 app_qt.App._load_saved_secrets = lambda self: None  # 키·비번 저장소 안 읽음
 app_qt.App._probe_gsheet_links = lambda self, *a, **k: None   # 구글시트 연결 확인(네트워크) 안 함
 app_qt.App._auto_load_input = lambda self: self.log("시작줄-입력읽기")   # 시작 때 줄(어느 탭 작업도 아님)
@@ -218,6 +226,52 @@ def s8_close_mid_run_records(w):
     ok("창 닫기 = 닫은 단계 + 종합 '사람 중지 --> 중단'(한 번만) · 실행 없을 때 한 줄 · 무인 스스로 끝남은 안 씀")
 
 
+def _settle_screen(w) -> str:
+    """정산 탭을 열었을 때 '정산서 배치' 칸에 실제로 보이는 글(안 숨겨진 것만)."""
+    w.tabs.setCurrentIndex(_idx(w, "정산"))
+    w._refresh_settlement_status()                    # 5초 타이머가 부르는 것과 같은 함수
+    _pump()
+    box = w.statement_box
+    assert not box.isHidden(), "정산서 배치 칸이 숨겨짐"
+    return chr(10).join(x.text() for x in box.findChildren(QtWidgets.QLabel) if not x.isHidden() and x.text())
+
+
+def s9_statement_batch_status(w):
+    seen = _settle_screen(w)
+    assert "정산서 배치 기록 없음" in seen, seen                                       # 파일 없음 = 그렇게 보임(숨기지 않음)
+    blog = SB.BatchLog("261125_101112", echo=lambda m: None)
+    blog.status(SB.ST_RUN, "회차 2026-11-25 정산서 만드는 중")
+    seen = _settle_screen(w)
+    assert "● 정산서 만드는 중" in seen and "회차 2026-11-25" in seen and "기록 없음" not in seen, seen
+    lines = tuple(f"확인 필요: 위탁정산서 · acc{i} · 사유{i}" for i in range(5)) + ("확인 필요: … 외 12건(보고 파일)",)
+    blog.status(SB.ST_CHECK, "회차 2026-11-25 · 일부 실패 --> 확인 필요 · 확인 필요 17건 · 보고 배치보고_261125_101112.md", extra=lines)
+    seen = _settle_screen(w)
+    for want in ("정산서 만듦 — 건너뛴 계정 확인 필요", "확인 필요 17건", "배치보고_261125_101112.md", *(x.partition(": ")[2] for x in lines),
+                 "마지막 갱신", "배치_261125_101112.log"):
+        assert want in seen, (want, seen)
+    blog.status(SB.ST_DONE, "회차 2026-11-25 · 정상 완료 · 확인 필요 0건 · 보고 배치보고_261125_101112.md")
+    seen = _settle_screen(w)
+    assert "● 정산서 모두 만듦" in seen and "확인 필요 0건" in seen and "acc1" not in seen, seen      # 앞 배치 건별 줄 안 남음
+    blog.status(SB.ST_STOP, "정산 받기 '완료' 기록 없음(24:00 까지 못 끝난 날 = 안 돎)")
+    seen = _settle_screen(w)
+    assert "● 정산서 중단" in seen and "24:00 까지 못 끝난 날" in seen, seen
+    log = Path(_TMP) / "정산" / "로그"                                                # 정산 받기 상태와 서로 안 섞임
+    log.mkdir(parents=True, exist_ok=True)
+    (log / "_현재상태.txt").write_text(chr(10).join(["정산 자동 다운로드 — 현재 상태", "갱신: 2026-11-25 10:00:00", "상태: 완료", "내용: 받기끝줄", ""]),
+                                   encoding="utf-8")
+    seen = _settle_screen(w)
+    assert "● 모두 받음" in w.settle_badge.text() and w.settle_detail_lbl.text() == "받기끝줄", w.settle_badge.text()
+    assert "정산서 중단" in seen and "받기끝줄" not in seen, seen
+    SB.STATUS.write_text("깨진 파일", encoding="utf-8")                              # 꼴이 다름 = 못 읽었다고 보임
+    seen = _settle_screen(w)
+    assert "정산서 배치 상태 파일을 읽을 수 없음" in seen and "기록 없음" not in seen, seen
+    SB.STATUS.write_bytes(bytes([0xFF, 0xFE, 0xFF]))
+    assert "읽을 수 없음" in _settle_screen(w)
+    SB.STATUS.unlink()
+    assert "정산서 배치 기록 없음" in _settle_screen(w)
+    ok("정산 탭 = 정산서 배치 상태(배지 4종·확인 필요 N건·건별 줄·보고 파일·갱신) · 기록 없음·깨진 파일도 글로 보임 · 정산 받기 상태와 안 섞임")
+
+
 def main():
     w = _app()
     s1_current_tab(w)
@@ -227,8 +281,9 @@ def main():
     s5_transfer_poll_lines(w)
     s6_copy_clear_current_tab(w)
     s7_file_mirror_all(w)
+    s9_statement_batch_status(w)
     s8_close_mid_run_records(w)
-    print("앱 진행 로그창 탭별 표시(T-19) 오프라인 검증 통과")
+    print("앱 진행 로그창 탭별 표시(T-19)·정산 탭 정산서 배치 상태(T-171) 오프라인 검증 통과")
 
 
 if __name__ == "__main__":
