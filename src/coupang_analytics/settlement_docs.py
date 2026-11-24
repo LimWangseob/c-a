@@ -397,6 +397,19 @@ class _Run:
         DS.keep_before_overwrite(self.lp, self.now().date())
         self.lp.write_text(json.dumps(self.led, ensure_ascii=False, indent=1), encoding="utf-8")
 
+    def fail_path(self, label: str) -> Path:
+        return self.folder / f"_실패_{label.replace(' ', '_')}.json"
+
+    def clear_fail(self, kind: str) -> None:
+        """받은 달(받은 기록에 있는 달)의 옛 실패 근거 파일을 치움 — 받은 달은 다시 안 부르므로 그대로 두면 영영 남아 '실패'로 읽힘
+        (T-169 · output44 실측: 11-24 정상 받은 35달에 D-381 전 실패 파일). 지우기 전 수집일별보관에 보관(같은 날 파일도 —
+        date.min = 오늘 판정 없이 항상 · 앞 보관본과 같으면 새로 안 남김)."""
+        for ym in self.led.get(kind) or {}:
+            p = self.fail_path(f"{kind} {ym}")
+            if p.is_file():
+                DS.keep_before_overwrite(p, date.min)
+                p.unlink()
+
     def attempt(self, label: str, fn):
         """fn() → 결과 · 차단(fatal)은 그대로 올림 · 그 밖 오류 = 실패 목록에 남기고 None(근거 자료 한 종류 실패가 정산 전체를
         막지 않게 — D-120 과 같은 격리)."""
@@ -407,9 +420,8 @@ class _Run:
         except Exception as exc:  # noqa: BLE001 — 위 설명
             detail = getattr(exc, "detail", None)            # 원인 확인용 응답 요약(주문별 매출 쪽별 커서·중복 줄 — T-2)
             if detail:
-                DS.keep_before_overwrite(self.folder / f"_실패_{label.replace(' ', '_')}.json", self.now().date())
-                (self.folder / f"_실패_{label.replace(' ', '_')}.json").write_text(
-                    json.dumps(detail, ensure_ascii=False, indent=1), encoding="utf-8")
+                DS.keep_before_overwrite(self.fail_path(label), self.now().date())
+                self.fail_path(label).write_text(json.dumps(detail, ensure_ascii=False, indent=1), encoding="utf-8")
             self.out["실패"].append(f"{label}: {exc.__class__.__name__}: {str(exc)[:120]}")
             self.note(f"월자료 {label} 실패 — {exc.__class__.__name__}: {str(exc)[:120]}")   # 본문까지(11-08 이름만 남아 원인 못 봄)
             return None
@@ -435,6 +447,7 @@ class _Run:
             self.save(f"{kind}_{ym}.{ext}", body, kind, ym)
             self.out["받음"].append(f"{kind}_{ym}.{ext}({msg})")
             todo = [m for m in todo if m[0] != ym]
+        self.clear_fail(kind)
         self.out["남은 달"] += len(todo)
 
     def returns(self, vendor: str, today: date, get_bytes) -> None:
