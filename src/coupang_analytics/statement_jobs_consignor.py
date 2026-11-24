@@ -270,6 +270,13 @@ def issue(id_: str, reason: str, *, account: str = "", month: str = "", product:
     return {"id": id_, "account": account, "contract": "", "month": month, "product": product, "amount": amount, "reason": reason}
 
 
+def _excluded(results: list, names: dict) -> list:
+    """못 나눠 금액에서 뺀 정산 예정분(D-262 ③ · 정산서는 발행 = 계정 성공 그대로) → 확인 필요 줄."""
+    return [issue(r["account"], f"정산 예정분을 상품으로 못 나눔(그 금액만 빼고 정산서는 발행 · D-262 ③) — {x['판매 방식']} 판매 {x['판매']:,} — {x['사유']}",
+                  account=names.get(r["account"], r["account"]), month=r["month"], amount=x["정산"])
+            for r in results for x in r["data"].get("pending_excluded") or []]
+
+
 def _merge(st: dict, results: list, failed: list, skip: dict, names: dict) -> tuple[list, list, set]:
     """계정별 결과 합치기 → (ok 계정ID, skipped = 건마다 issue 1줄, 시트에 넣을 수 있는 계정ID).
     시트 대상 = 옛 정산서를 만든 위탁 계정(우리 사업자 = 통보 제외) 중 새 형식 계정 단위 실패가 없는 곳 — 그 안에서도 검산 통과한 달만 씀."""
@@ -283,6 +290,7 @@ def _merge(st: dict, results: list, failed: list, skip: dict, names: dict) -> tu
         x["account"] = names.get(x["id"], x["id"])
     bad = {x["id"] for x in out}
     ok = [aid for aid in st["made_ids"] if aid not in bad]
+    out += _excluded(results, names)
     sheet_ok = set(st["made_ids"]) - set(st.get("own_ids") or ()) - {aid for aid, m, _ in failed if not m}
     return ok, out, sheet_ok
 

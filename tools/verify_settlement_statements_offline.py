@@ -979,7 +979,7 @@ def test_formula23_late_final_round_flagged() -> None:
     assert SA.late_final_notes(gen, v, "2026-11-24", "2026-11") == []           # 달 지정 = 그 달만
     # 새 위탁정산서(날짜별 입금) — 금액은 그대로 '(지급일 미정) 예정' · 판정 글에 사유 한 줄
     st = SimpleNamespace(m="2026-09", basis="2026-11-24", d={"line_info": [], "L_gen": gen, "v": v},
-                         settle_by_ch={"윙": {}, "로켓그로스": {}}, chk=[], j=[])
+                         settle_by_ch={"윙": {}, "로켓그로스": {}}, chk=[], j=[], pend_check=[])
     items = DEP._pay_items(st, {"윙": 0.5, "로켓그로스": 0.0})
     assert [(k[0], s, round(a)) for k, s, a in items] == [(DEP.NO_DATE, "예정", 115_361), (DEP.NO_DATE, "예정", 0)], items
     assert st.j == notes, st.j
@@ -1010,7 +1010,7 @@ def test_t176_hold_release_flagged() -> None:
     assert "해제 2건 · 합 3,611,608원 · 지급 완료 1건 1,805,804원 · 보류 1건 1,805,804원" in DEP.hold_release_notes(ski, "2026-03")[0]
     # 금액 그대로: 날짜별 입금 항목 = 정산금액 × 비율만(해제액 0 더함) · 판정 글에 사유 · 상태 '확인 필요'(정산 예정 포함이 먼저)
     st = SimpleNamespace(m="2026-09", basis="2026-11-24", d={"line_info": roum, "L_gen": {}, "v": {}},
-                         settle_by_ch={"윙": {}, "로켓그로스": {}}, chk=[], j=[])
+                         settle_by_ch={"윙": {}, "로켓그로스": {}}, chk=[], j=[], pend_check=[])
     items = DEP._pay_items(st, {"윙": 1.0, "로켓그로스": 0.0})
     assert round(sum(a for _k, _s, a in items)) == 2_487_143 and st.hold == n9 and st.j == n9, (items, st.j)
     assert OUT.month_status(False, st.late + st.hold) == "확인 필요" and OUT.month_status(True, st.hold) == "정산 예정 포함"
@@ -1029,7 +1029,7 @@ def test_formula23_status_check_when_final_round_missing() -> None:
     assert OUT.month_status(False, late) == "확인 필요"
     assert OUT.month_status(False, []) == "확정"
     assert OUT.month_status(True, late) == "정산 예정 포함" == OUT.month_status(True, [])
-    st = SimpleNamespace(m="2026-09", basis="2026-11-24", late=late, hold=[])
+    st = SimpleNamespace(m="2026-09", basis="2026-11-24", late=late, hold=[], pend_check=[])
     txt = OUT._judge_status(st, {"status": "확인 필요"})
     assert "상태 '확인 필요'" in txt and "최종액" in txt and "확정" not in txt.split("—")[0], txt
     print("test_formula23_status_check_when_final_round_missing OK")

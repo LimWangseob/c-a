@@ -1017,6 +1017,20 @@ def test_run_job_isolation_and_sheets() -> None:
             {"시트 2026-09": "시트 쓰기 실패 —", "시트 2026-10": "시트 쓰기 실패 —"}, bad["skipped"]
 
 
+def test_d262_excluded_pending_listed() -> None:
+    """D-262 ③ · D-399 ④ — 못 나눠 뺀 정산 예정분 = 정산서는 발행(계정 성공 · 검산 실패 아님) + '확인 필요' 목록에 금액·사유 한 줄."""
+    from coupang_analytics import statement_jobs_consignor as J
+    d = synthetic(True, "2026-10")
+    d["pending_excluded"] = [{"판매 방식": "윙", "판매": 1300, "정산": 1077, "사유": "나눌 판매 없음"}]
+    r = {"account": "a1", "month": "2026-10", "data": d, "failures": J.statement_failures(d)}
+    assert r["failures"] == [], r["failures"]
+    ok, out, sheet_ok = J._merge({"made_ids": ["a1"], "none": [], "failed": []}, [r], [], {}, {"a1": "가-상회-a1"})
+    assert ok == ["a1"] and sheet_ok == {"a1"}, (ok, sheet_ok)
+    assert [(x["id"], x["account"], x["month"], x["amount"]) for x in out] == [("a1", "가-상회-a1", "2026-10", 1077)], out
+    assert "그 금액만 빼고" in out[0]["reason"] and "1,300" in out[0]["reason"] and "나눌 판매 없음" in out[0]["reason"], out
+    print("test_d262_excluded_pending_listed OK")
+
+
 def test_inputs_pack() -> None:
     spec = importlib.util.spec_from_file_location("statement_inputs_pack", ROOT / "tools" / "statement_inputs_pack.py")
     assert spec and spec.loader
@@ -1151,7 +1165,7 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     except AttributeError:
         pass
-    for f in (test_run_job_abort, test_run_job_isolation_and_sheets, test_inputs_pack):
+    for f in (test_run_job_abort, test_run_job_isolation_and_sheets, test_d262_excluded_pending_listed, test_inputs_pack):
         f()
     for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_ad_nocamp_d317, test_t175_old_forecast_record, test_new23_cross_week_flag, test_d401_remarks_and_evidence, test_d402_check_status_header, test_expect_values, test_flow_fixed, test_t125_additional_pay, test_d391_unknown_ship_same_month_wing_ratio, test_failed_checks, test_load_judge,
               test_sale_months_2025_excluded, test_render, test_fixed_render, test_product_pages, test_overflow, test_unsplittable, test_check_reject,
