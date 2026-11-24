@@ -816,6 +816,37 @@ def test_inputs_pack() -> None:
         assert P.seldoc_missing(sel) == []
 
 
+def test_t175_old_forecast_record() -> None:
+    """T-175 ③: 달 표시 칸 저장 전 예정 기록 줄(output44 예정 RG 29,709줄 전부) = 추가 공제 나머지를 9 에 못 넣음 → 0 으로 숨기지 않고
+    '확인 필요' 문장(금액 포함) · 새 기록·쿠팡 원문 줄 = 문장 없음. 금액 = output44 gyi0101 2026-03-05 줄(추가공제 2,587,570 − 광고 271,619 − 빠른정산 2,207,051)."""
+    from types import SimpleNamespace
+
+    from coupang_analytics import settlement_consignor_month_cost as C
+    old = {"채널": "로켓그로스", "수집일": "2026-11-23", "totalPayableAmount": 3_110_470, "totalAdditionalDeductionAmount": 2_587_570.0,
+           "totalAdSalesDeductionAmount": 271_619.0, "totalArFactoringDeductionAmount": 2_207_051.0, "totalSalesAdjustment": 0}
+    st = SimpleNamespace(j=[])
+    C._old_record(st, ("2026-12-01", "2026-11-10", "2026-11-16", "로켓그로스", 70), old)
+    assert len(st.j) == 1 and "108,900원" in st.j[0] and "확인 필요" in st.j[0], st.j
+    new = {**old, "totalPostPurchaseDeductionAmount": 0, "totalSubscriptionFeeDeductionAmount": 108_900.0}
+    st2 = SimpleNamespace(j=[])
+    C._old_record(st2, ("k",), new)
+    C._old_record(st2, ("k",), {k: v for k, v in old.items() if k != "수집일"})
+    assert st2.j == [], st2.j
+    print("test_t175_old_forecast_record OK")
+
+
+def test_new23_cross_week_flag() -> None:
+    """신규-23: 쿠팡 주 판매 기간은 달 끝에서 잘림(output44 지급 줄 3,469·예정 줄 522 중 달 걸친 70% 주 0) → 새 정산서는 주 시작 달 그대로 ·
+    걸친 주가 나오면 '확인 필요' 문장(금액 그대로) · 한 달 주 = 문장 없음."""
+    from coupang_analytics.settlement_consignor_month_calc import cross_weeks
+    us = [("로켓그로스", "2026-09", 100, 70, "쿠팡 계산", "n", [("2026-09-28", "2026-10-04", 100, 70), ("2026-09-21", "2026-09-27", 1, 1)]),
+          ("윙", "2026-09", 5, 4, "k", "n")]
+    got = cross_weeks(us, "2026-09")
+    assert len(got) == 1 and "2026-09-28~2026-10-04" in got[0] and "확인 필요" in got[0], got
+    assert cross_weeks([("로켓그로스", "2026-09", 1, 1, "k", "n", [("2026-09-01", "2026-09-06", 1, 1)])], "2026-09") == []
+    print("test_new23_cross_week_flag OK")
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -823,7 +854,7 @@ def main() -> int:
         pass
     for f in (test_run_job_abort, test_run_job_isolation_and_sheets, test_inputs_pack):
         f()
-    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_ad_nocamp_d317, test_expect_values, test_flow_fixed, test_t125_additional_pay, test_d391_unknown_ship_same_month_wing_ratio, test_failed_checks, test_load_judge,
+    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_ad_nocamp_d317, test_t175_old_forecast_record, test_new23_cross_week_flag, test_expect_values, test_flow_fixed, test_t125_additional_pay, test_d391_unknown_ship_same_month_wing_ratio, test_failed_checks, test_load_judge,
               test_sale_months_2025_excluded, test_render, test_fixed_render, test_product_pages, test_overflow, test_unsplittable, test_check_reject,
               test_multi_month, test_tool):
         f()

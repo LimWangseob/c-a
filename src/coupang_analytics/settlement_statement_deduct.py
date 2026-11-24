@@ -1,7 +1,7 @@
 """위탁정산서 계정 하나 — 관리 상품 몫 계산 2부(공제 몫·입금 완료/예정/보류 나누기·검산 사유). T-25 이관(옛 `statement_managed.py`
 `account()` 420~527줄 + `status_split` · 계산식·순서 그대로 · 1부 = `settlement_statement_account.py`).
 
-계정 단위 항목(D-116 ②·settlement_managed_alloc): 배송비 줄 = 같은 주문 상품 / 상품 없으면 반품 조회 상품 · 판매자서비스이용료·비즈니스 인사이트
+계정 단위 항목(D-116 ②·settlement_managed_alloc): 배송비 줄 = 같은 주문 상품 / 상품 없으면 반품 조회 상품 · 판매자서비스이용료·비즈니스 인사이트·세이버 구독료
 (계정 정액) = 그 달 등록 상품 비율(D-271 · 새 정산서와 같은 상품표 `reg_rows`) · 이용료 규칙 판정(D-161 끝난 달 구매확정 판매)의 안 빠진 잔액 = 공제 예정 ·
 광고비 = 날짜×캠페인 청구가능액 × 그날 광고 보고서 옵션 비율 · 밀크런 = 입고 건별 적치 수량 비율 · 우대수수료 환급 = 주문 → 상품 ·
 추가지급 = 옵션 → 상품. 그 자료가 없는 공제 = 공제를 받은 줄 판매 기간의 관리 정산금 비율(D-162) · 판매 0인 달 = 관리 몫 0(D-186).
@@ -16,7 +16,7 @@ from coupang_analytics import settlement_ledger as SL
 from coupang_analytics import settlement_managed_alloc as MA
 from coupang_analytics.settlement_consignor_month_cost import reg_rows
 from coupang_analytics.settlement_statement_account import (
-    AD, BI, COMP, LOGI, MILK, OWN, REL, STS, SVC, AccountBase, ad_files, late_final_notes, milk_rows, month_add, num, ratio)
+    AD, BI, COMP, LOGI, MILK, OWN, REL, SAVER, STS, SVC, AccountBase, ad_files, late_final_notes, milk_rows, month_add, num, ratio)
 
 
 def status_split(line_info: list, gen: dict, mset: dict, settle_m: float, rates: dict, S: float):
@@ -180,11 +180,12 @@ class Account(AccountBase):
         for k in [k for k in D if k.startswith(OWN)]:     # 위탁자 본인 차감 = 관리 몫 0(D-312 ②)
             self.rates[k] = ("", 0.0)
             share[k] = (0.0, "위탁자 개인 대출 상환·체크카드 대금 — 쿠팡이 계정 정산에서 뺀 돈 · 관리 상품 몫 0(D-312)", OWN)
-        if D[BI] and self.reg(self.win()) is not None:      # 74 비즈니스 인사이트 = 계정 정액(D-271)
-            self.fixed_fee(BI)
+        for k in (BI, SAVER):                               # 74 비즈니스 인사이트·세이버 구독료 = 계정 정액(D-271)
+            if D[k] and self.reg(self.win()) is not None:
+                self.fixed_fee(k)
         for k in sorted(set(D) - set(share) - {REL}):
             self.put(k, self.win(), 0.0, 0.0, "쿠팡이 상품 구분 없이 준 항목"
-                     + (" · 상품조회 자료 없어 D-271 등록 비율 못 씀" if k == BI else ""), "쿠팡 자료")
+                     + (" · 상품조회 자료 없어 D-271 등록 비율 못 씀" if k in (BI, SAVER) else ""), "쿠팡 자료")
         rel_m = {st: -sum(x[4] * self.line_ratio(x[1], x[2]) for x in self.line_info if x[2] >= self.start and x[0] == st)
                  for st in STS}   # 공제 부호 = 음수(받은 돈)
         if D[REL]:
@@ -230,6 +231,9 @@ class Account(AccountBase):
             why.append(f"지급 줄 공식 어긋남 {self.bad}")
         if self.start_note:
             why.append(self.start_note)
+        if self.old_fc:
+            why.append(f"확인 필요 — 정산 예정 기록 {len(self.old_fc)}줄(T-175 전 저장 · 비즈니스 인사이트·세이버·라이브·리뷰 칸 없음)의 "
+                       f"기타 공제 {sum(self.old_fc):,.0f}원에 계정 정액(D-271)이 섞였을 수 있음 — 관리 몫 = 줄 비율(D-162) · 다음 정산 수집부터 나눔")
         judged = self.ctx.own_judge.get(self.aid, {})
         why += [f"확인 필요 — 처리 판정표에 없는 {k} {x:,.0f}원(D-305)" for k, x in sorted(self.watch.items()) if round(x) and k not in judged]
         return why

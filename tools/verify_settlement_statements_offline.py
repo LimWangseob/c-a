@@ -1090,6 +1090,47 @@ def test_d271_fixed_fee_old() -> None:
     assert (a.sv["잔액 전체"], a.sv["잔액 관리"]) == (55_000, 27_500), a.sv
 
 
+def test_t175_saver_and_forecast_detail() -> None:
+    """T-175 ② D-271(소유자 11-17 "등록 상품 비율로 하자." · 3종 = 판매자서비스이용료·세이버 구독료·비즈니스 인사이트): 옛 위탁정산서
+    세이버 구독료도 '기타 공제'에서 떼고 관리 몫 = 등록 비율. 실측 = output44 gyi0101 로켓그로스 2026-03-05 줄(기간 01-26~31 ·
+    추가공제 2,587,570 = 광고 271,619 + 빠른정산 2,207,051 + 세이버 108,900 · 고치기 전 기타 공제 108,900).
+    ③ 예정 기록 = RG_DETAIL 8칸 저장(output44 예정 RG 29,709줄 중 0) · 옛 기록 = '확인 필요'(0 으로 숨기지 않음)."""
+    from collections import Counter
+    from datetime import date
+    from types import SimpleNamespace
+
+    from coupang_analytics import settlement_forecast as FC
+    from coupang_analytics.settlement_statement_account import ETC, SAVER, deductions
+    from coupang_analytics.settlement_statement_deduct import Account
+    raw = {"채널": "로켓그로스", "totalPayableAmount": 3_110_470, "totalAdditionalDeductionAmount": 2_587_570.0,
+           "totalAdSalesDeductionAmount": 271_619.0, "totalArFactoringDeductionAmount": 2_207_051.0,
+           "totalSubscriptionFeeDeductionAmount": 108_900.0, "totalBusinessInsightsDeductionAmount": 0, "totalCoupangLiveDeductionAmount": 0,
+           "totalPostPurchaseDeductionAmount": 0, "totalSalesAdjustment": 0, "subscriptionFeeOffsetYearMonthBreakdown": {"2026-01": 108_900.0}}
+    _pay, _rel, parts = deductions(raw)
+    assert (parts[SAVER], parts[ETC], sum(parts.values())) == (108_900, 0, 2_587_570), parts
+    inv = {p: {"created": "2026-01-01", "name": p, "types": {v: "판매중"}} for p, v in (("P1", "V1"), ("P2", "V2"), ("P3", "V3"), ("P4", "V4"))}
+    a = Account.__new__(Account)
+    a.ctx = SimpleNamespace(inv={"x1": inv}, basis="2026-11-15")
+    a.aid, a.cdate, a.start, a.active, a.fs = "x1", "2026-01", "2026-01", ["2026-01"], "2026-01"
+    a.mpids, a.is_mv = {"P1"}, lambda v: v == "V2"            # 관리 2/4
+    a.deduct_lines = [("로켓그로스", "2026-01", Counter({SAVER: 108_900}))]
+    a.line_info = [("지급 완료", ch, ym, 0.0, 0.0, pt, None) for ch, ym, pt in a.deduct_lines]
+    a.D, a.rates, a.share = Counter({SAVER: 108_900}), {}, {}
+    assert round(a.fixed_fee(SAVER)) == 54_450 and a.share[SAVER][2] == "등록 상품 비율", a.share[SAVER]
+    fut = {**{k: v for k, v in raw.items() if k != "채널"}, "정산일": "2026-12-01", "기간 시작": "2026-11-10", "기간 끝": "2026-11-16",
+           "지급비율": 70, "최종지급액": 522_900, "지급상태": "예정"}
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / FC.FORECAST_FILE
+        FC.record(f, "x-y-gyi0101", "로켓그로스", [fut], date(2026, 11, 24))
+        got = FC.load(f)[0]
+    assert all(k in got for k in FC.RG_DETAIL if k in fut) and got["subscriptionFeeOffsetYearMonthBreakdown"] == {"2026-01": 108_900.0}, sorted(got)
+    assert not FC.old_record(got)
+    old = {k: v for k, v in got.items() if k not in FC.RG_DETAIL}           # 옛 기록(T-175 전) = 칸 없음
+    assert FC.old_record(old) and not FC.old_record(raw)                     # 쿠팡 원문 줄(수집일 없음) = 옛 기록 아님
+    assert deductions(old, False)[2][ETC] == 108_900                         # 옛 기록 = 기타 공제에 남음 → '확인 필요' 사유로
+    print("test_t175_saver_and_forecast_detail OK")
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -1099,6 +1140,7 @@ def main() -> int:
     test_d342_deduction_window_2026()
     test_d279_svc_estimate_row_and_d304_note()
     test_d271_fixed_fee_old()
+    test_t175_saver_and_forecast_detail()
     test_d312_fast_used()
     test_d312_own_deduction()
     test_t125_forecast_keeps_own_cols()

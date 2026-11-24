@@ -11,6 +11,7 @@ from collections import Counter, defaultdict
 from datetime import date, timedelta
 
 from coupang_analytics import settlement_fee_rules as FR
+from coupang_analytics import settlement_forecast as FC
 from coupang_analytics import settlement_files as SF
 from coupang_analytics import settlement_managed_alloc as MA
 from coupang_analytics import settlement_statement_account as AC
@@ -318,6 +319,16 @@ def _rg_notes(st: MonthState, key, row, r) -> None:
             st.j.append(f"이 달 판매 기간 지급 줄 {key} {k} = {num(r.get(k)):,.0f} (달 표시 칸으로 따로 처리됨 여부 확인)")
 
 
+def _old_record(st: MonthState, key, r) -> None:
+    """T-175 전 예정 기록 줄 = 달 표시 칸(BI·세이버·라이브·광고)·리뷰 칸이 저장 안 됨 → 추가 공제 나머지를 9 에 넣지 못함(0 으로 숨기지 않고 문장)."""
+    if not FC.old_record(r):
+        return
+    rest = AC.deductions(r, False)[2].get(AC.ETC, 0.0)
+    if round(rest):
+        st.j.append(f"확인 필요: 정산 예정 줄 {key}(예정 기록 수집일 {r['수집일']} · T-175 전 저장) — 추가 공제 중 {rest:,.0f}원의 항목·달 표시"
+                    "(비즈니스 인사이트·세이버·라이브·리뷰·광고 달)가 없어 9 에 넣지 않음 · 이 달 몫인지 모름 · 다음 정산 수집부터 저장됨")
+
+
 def other_common(st: MonthState) -> None:
     watch: Counter = Counter()
     for key, row, r, parts in st.line_parts():
@@ -329,6 +340,7 @@ def other_common(st: MonthState) -> None:
             _rg_notes(st, key, row, r)
         if in_m:
             watch.update(AC.watched(r))
+        _old_record(st, key, r)
     judged = st.d["own_judge"]
     st.j += [f"확인 필요 — 처리 판정표에 없는 {k} {x:,.0f}원(이 달 판매 기간 지급 줄 · D-305)" for k, x in sorted(watch.items())
              if round(x) and k not in judged]

@@ -313,8 +313,17 @@ def _pend_alloc(st: MonthState, ch: str, w: Counter, nm: dict, amounts: tuple) -
     return man_s
 
 
+def cross_weeks(us: list, m: str) -> list:
+    """정산 예정 줄 중 달을 걸친 로켓그로스 판매 주 → '확인 필요' 문장(신규-23 감지 · 금액은 그대로)."""
+    return [f"확인 필요: 로켓그로스 정산 예정 판매 주 {w[0]}~{w[1]} 가 달을 걸침 — 이 정산서는 주 시작 달 {m} 에 전부 넣음(신규-23 · 날짜 달 나누기 없음)"
+            for x in us if x[0] == "로켓그로스" and len(x) > 6 for w in x[6] or () if str(w[0])[:7] != str(w[1])[:7]]
+
+
 def pending_sales(st: MonthState) -> None:
     us = [x for x in st.d["u"] if x[1] == st.m and (x[2] or x[3])]
+    # 신규-23: 새 정산서 로켓그로스 예정 = 주 시작 달 키(옛 위탁정산서는 날짜의 달로 나눔 D-266 ③) — 쿠팡 주 기간은 달 끝에서 잘림
+    # (output44 지급 줄 3,469·예정 줄 522 중 달 걸친 주 0) → 걸친 주가 나오면 나누지 않고 알림(금액 그대로 · 쿠폰·수수료 나누기 없이 판매만 나누면 검산 어긋남)
+    st.j += cross_weeks(us, st.m)
     pl = [(key, row, r) for key, row, r in st.lines() if st.pend_line(row, r)]
     for x in us:
         ch, _ym, s, e, kind, note = x[:6]
