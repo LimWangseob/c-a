@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from coupang_analytics import settlement_consignor_gsheet as GS  # noqa: E402
+from coupang_analytics import settlement_consignor_gsheet_pages as GS_PAGES  # noqa: E402
 from coupang_analytics import settlement_consignor_month as CM  # noqa: E402
 from coupang_analytics.settlement_consignor_gsheet_layout import MARGIN, PAGE_H, StatementLayoutError  # noqa: E402
 from coupang_analytics.settlement_consignor_month_calc import cum_round  # noqa: E402
@@ -847,6 +848,25 @@ def test_d401_remarks_and_evidence() -> None:
     print("test_d401_remarks_and_evidence OK")
 
 
+def test_d402_check_status_header() -> None:
+    """D-402(소유자 11-24 "'확정 전'으로 통일"): 상태 '확인 필요' 달 = 위탁자 탭 1쪽·2쪽 머리 둘 다 '확정 전'(내부 '확인 필요' 글자 없음) ·
+    내부 '{n}월 근거' 탭은 '상태 확인 필요' 그대로 · 정산 예정 포함·확정 달은 지금 글자 그대로."""
+    NL = chr(10)
+    a = {**synthetic(False), "status": "확인 필요", "judgments": ["확인 필요 — 보류 해제 규칙 미확정(해제 1건)"]}
+    plan = GS.build_statement([a], ISSUED)
+    assert not (structure_errors(plan) + page_errors(plan) + decision_text_errors(plan))
+    ta = plan.tabs[1]
+    ja = NL.join(s for s, _ in texts(ta.requests))
+    assert "확인 필요" not in ja, ja
+    assert ja.count("확정 전") >= 2, ja                                      # 1쪽 머리 + 2쪽 머리
+    je = NL.join(s for s, _ in texts([t for t in plan.tabs if t.kind == "evidence"][0].requests))
+    assert "상태 확인 필요" in je, je
+    for st, want in (("정산 예정 포함", "정산 예정 포함"), ("확정", "확정")):
+        assert GS_PAGES.shown_status({"status": st}) == want
+    assert GS_PAGES.shown_status({"status": "확인 필요"}) == "확정 전"
+    print("test_d402_check_status_header OK")
+
+
 def test_t175_old_forecast_record() -> None:
     """T-175 ③: 달 표시 칸 저장 전 예정 기록 줄(output44 예정 RG 29,709줄 전부) = 추가 공제 나머지를 9 에 못 넣음 → 0 으로 숨기지 않고
     '확인 필요' 문장(금액 포함) · 새 기록·쿠팡 원문 줄 = 문장 없음. 금액 = output44 gyi0101 2026-03-05 줄(추가공제 2,587,570 − 광고 271,619 − 빠른정산 2,207,051)."""
@@ -885,7 +905,7 @@ def main() -> int:
         pass
     for f in (test_run_job_abort, test_run_job_isolation_and_sheets, test_inputs_pack):
         f()
-    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_ad_nocamp_d317, test_t175_old_forecast_record, test_new23_cross_week_flag, test_d401_remarks_and_evidence, test_expect_values, test_flow_fixed, test_t125_additional_pay, test_d391_unknown_ship_same_month_wing_ratio, test_failed_checks, test_load_judge,
+    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_ad_nocamp_d317, test_t175_old_forecast_record, test_new23_cross_week_flag, test_d401_remarks_and_evidence, test_d402_check_status_header, test_expect_values, test_flow_fixed, test_t125_additional_pay, test_d391_unknown_ship_same_month_wing_ratio, test_failed_checks, test_load_judge,
               test_sale_months_2025_excluded, test_render, test_fixed_render, test_product_pages, test_overflow, test_unsplittable, test_check_reject,
               test_multi_month, test_tool):
         f()

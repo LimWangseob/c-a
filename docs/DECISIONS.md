@@ -3269,4 +3269,11 @@ umpy`) · 우리 코드는 numpy 를 직접 안 씀 · 정산 바퀴 끝 '남는
 - 근거: T-175 하위 세션(C-3 local_fcae46d3) 확인 — D-343 승인 샘플에 비고·판단 자리 검색 0건 · 지금 문구는 json 에만(`settlement_consignor_month_out.py` judgments·`_근거`·pending_detail) · 위탁자 탭 = 위탁자에게 가는 PDF.
 - 버린 대안: (나) 내부 탭만 · (가) 위탁자 탭 비고만 · (다) 요약 탭에 '확인 필요 n건'만.
 - 영향 범위: `settlement_consignor_gsheet_fixed.py`·`_pages`·`_layout`(T-126 그리기 · 74 새 경로 비고 · T-176 ②) · D-343 형식에 상자 1개 + 내부 탭 1개 추가 · 어느 문장이 '위탁자용'인지 = 구현 때 문장 종류별 표(내부 '확인 필요'·추정 문장은 위탁자 상자에 안 넣음 · D-221 ② 와 같은 원칙).
-- 상태: ACTIVE (구현 전 — T-176 ②)
+- 상태: ACTIVE (구현·병합 R253 `a835727`(0f417b9) — 위탁자용 문장 2종(정산 예정 금액 안내 · 74 남은 청구 예상값) · 나머지 전부 내부 탭 · 남은 = 상태 '확인 필요' 달의 위탁자 탭 쪽 머리 표기)
+
+### D-402 [STATEMENT_CHECK_STATUS_HEADER] 상태 '확인 필요' 달의 위탁자 탭·PDF 머리 = '확정 전'(1쪽·2쪽·요약 같은 글자) · '확인 필요'와 사유는 내부 '{n}월 근거' 탭·확인 필요 탭만 (2026-11-24, R253)
+- 결정(소유자 2026-11-24 질문 카드 답 원문 — "'확정 전'으로 통일"): 질문 = "정산 상태가 '확인 필요'인 달(예: 보류 해제 규칙 미확정 — roum0502 8·9월, ski1121 3~5월)의 위탁자용 PDF는 어떻게 할까요? 지금은 1쪽 머리에 '확정', 2쪽 머리에 '확인 필요'가 찍혀 두 쪽이 다르고, 내부 상태가 위탁자에게 보입니다." → 위탁자 탭 1쪽 머리(`who_line`)·2쪽 머리(`page2_head`)·요약 탭 머리 = '확정 전' · 정산서는 그대로 발행 · 정산 예정 포함·확정 달 글자는 그대로 · 내부 근거 탭은 '상태 확인 필요' 그대로.
+- 근거: T-176 하위 세션(C-4 local_1940a414) 발견 — 1쪽 `PENDING_STATUS if pending else "확정"` · 2쪽 `d['status']` 그대로 → 확인 필요 달에 두 쪽 글자가 다름 · D-401 '내부 확인 필요 문장은 위탁자 상자에 넣지 않음'·D-221 ② 와 같은 원칙.
+- 버린 대안: 두 쪽 모두 '정산 확인 중' · 확인 필요 달은 위탁자 PDF 를 만들지 않음(그 달 위탁자가 정산서를 못 받음).
+- 영향 범위: `settlement_consignor_gsheet_pages.py`(`shown_status`·`_summary_status`)·`settlement_consignor_gsheet_fixed.py`(`page2_head`) · 시험 `tools/verify_consignor_statement_offline.py` test_d402_check_status_header(고치기 전 실패 → 통과) · CURRENT_RULES 위탁자 정산서 줄.
+- 상태: ACTIVE (구현 R253)

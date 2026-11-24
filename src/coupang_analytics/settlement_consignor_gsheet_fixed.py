@@ -13,7 +13,8 @@ from coupang_analytics.settlement_consignor_gsheet_layout import (
 )
 from coupang_analytics.settlement_consignor_gsheet_layout import amt as _amt
 from coupang_analytics.settlement_consignor_gsheet_pages import (
-    DESC, NAME, NARROW_PAD, PCOLS, PENDING_CARD, PENDING_ROW, SHORT, coupang_took, line_amounts, separate_total, who_line,
+    DESC, NAME, NARROW_PAD, PCOLS, PENDING_CARD, PENDING_ROW, SHORT, coupang_took, line_amounts, separate_total, shown_status,
+    who_line,
 )
 
 FIXED_ROWS = {"rg_kinds": 9, "common": 9, "separate": 3, "flow": 4}      # 10 = 우대수수료 2 + 추가지급 1(소유자 11-19 "줄 추가 (추천)")
@@ -130,7 +131,7 @@ def page1_groups(d: dict, issued: str) -> list[Page]:
 def page2_head(d: dict, title: str = "정산 상세") -> Page:
     pg = Page()
     head(pg, title, "1쪽 번호와 같은 번호 · 합계 줄 = 1쪽 금액 · 회색 = 정산 예정 금액(쿠팡 미확정 · 바뀔 수 있음)",
-         f"{d['company']} · {d['account']} · {d['period_start'][:7]} · {d['status']}")
+         f"{d['company']} · {d['account']} · {d['period_start'][:7]} · {shown_status(d)}")
     return pg
 
 

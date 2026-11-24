@@ -36,6 +36,20 @@ def pending(d: dict) -> bool:
     return d.get("status") == PENDING_STATUS
 
 
+CHECK_STATUS, BEFORE_FINAL = "확인 필요", "확정 전"
+
+
+def shown_status(d: dict) -> str:
+    """위탁자 탭·PDF 머리 상태 글자(D-402 · 소유자 11-24 "'확정 전'으로 통일") — 내부 '확인 필요' = '확정 전' · 사유는 내부 탭만."""
+    return BEFORE_FINAL if d.get("status") == CHECK_STATUS else d["status"]
+
+
+def _summary_status(ds: list[dict]) -> str:
+    if any(pending(d) for d in ds):
+        return PENDING_STATUS
+    return BEFORE_FINAL if any(d.get("status") == CHECK_STATUS for d in ds) else "확정"
+
+
 def line_amounts(d: dict) -> dict[int, int]:
     return {x["no"]: x["amount"] for x in d["lines"]}
 
@@ -52,7 +66,7 @@ def coupang_took(d: dict) -> int:
 def who_line(d: dict, issued: str) -> str:
     return (f"{d['company']} (대표 {d['ceo']}) · 쿠팡 계정 {d['account']}\n"
             f"판매 기간 {d['period_start']} ~ {d['period_end']} · 발행 {issued}\n"
-            f"자료 기준일 {d['basis_date']} · " + (PENDING_STATUS if pending(d) else "확정"))
+            f"자료 기준일 {d['basis_date']} · " + shown_status(d))
 
 
 # ── 요약 탭 ───────────────────────────────────────────────────
@@ -66,7 +80,7 @@ def _summary_head(ds: list[dict], issued: str) -> Page:
     pg = Page()
     head(pg, "위탁자 정산 요약", "위탁자별 정산서는 이 달 요약 다음 탭들 · 모든 금액은 쿠팡이 준 정산 자료 기준(원 단위)",
          f"판매 기간 {' / '.join(period)}\n위탁자 {len(ds)}명 · 발행 {issued}\n자료 기준일 {' / '.join(basis)} · "
-         + (PENDING_STATUS if any(pending(d) for d in ds) else "확정"))
+         + _summary_status(ds))
     return pg
 
 
