@@ -26,6 +26,7 @@ from coupang_analytics import settlement_statement_source as SRC
 AD, LOGI, MILK, SVC, ETC, COMP, REL, FAST = ("광고비", "로켓그로스 물류비(입출고·배송·보관·반품)", "밀크런(창고 입고 운송비)",
                                              "판매자서비스이용료", "기타 공제", "재고 분실·파손 보상(쿠팡이 줌)", "보류됐다 풀린 돈",
                                              "빠른정산 계좌인출액")
+BI = "비즈니스 인사이트 이용료"     # 로켓그로스 추가공제 안 계정 정액(산식 74) — 관리 몫 = 그 달 등록 상품 비율(D-271)
 STS = ("지급 완료", "예정", "보류")
 # 위탁자 본인 차감(D-312 ② · D-305 따로 줄) = 쿠팡이 계정 정산에서 뺀 위탁자 개인 대출 상환·체크카드 대금 — 계정 합계엔 차감 · 관리 몫 0
 PM3 = "3PM_매출채권"              # 윙 차감 사유 원문 이름(D-304 음수 최종 회차 되돌림도 같은 항목)
@@ -130,9 +131,10 @@ def deductions(r: dict, done: bool = True) -> tuple[float, float, Counter]:
     ad, mr = num(r.get("totalAdSalesDeductionAmount")), num(r.get("totalMilkRunDeductionAmount"))
     ar = num(r.get("totalArFactoringDeductionAmount"))        # 빠른정산(셀러월렛) 상환 — 추가공제 안(KB §1-14)
     mca, card = num(r.get("totalMerchantCashAdvanceDeductionAmount")), num(r.get("totalDebitCardDeductionAmount"))  # 80·81 추가공제 안(D-312 ②)
+    bi = num(r.get("totalBusinessInsightsDeductionAmount"))   # 74 추가공제 안 · 관리 몫 D-271(기타 공제에서 뗌)
     # 판매 조정(totalSalesAdjustment)은 추가공제에도 같은 금액으로 들어 있어 서로 지워짐(줄 공식 E2 와 같은 결과)
-    parts.update({AD: ad, MILK: mr, FAST: ar, OWN_MCA: mca, OWN_CARD: card,
-                  ETC: num(r.get("totalAdditionalDeductionAmount")) - ad - mr - ar - mca - card - num(r.get("totalSalesAdjustment")),
+    parts.update({AD: ad, MILK: mr, FAST: ar, OWN_MCA: mca, OWN_CARD: card, **({BI: bi} if bi else {}),
+                  ETC: num(r.get("totalAdditionalDeductionAmount")) - ad - mr - ar - mca - card - bi - num(r.get("totalSalesAdjustment")),
                   LOGI: num(r.get("totalFinalCfsFeeDeductionAmount")), COMP: -num(r.get("totalCfsInventoryCompensationAmount"))})
     return num(r.get("totalPayableAmount")), 0.0, parts
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 
 from coupang_analytics import settlement_statement_account as AC
-from coupang_analytics.settlement_consignor_month_calc import MonthState, cum_round
+from coupang_analytics.settlement_consignor_month_calc import AD_NOCAMP, MonthState, cum_round
 
 FAST = "(빠른정산)"
 NO_DATE = "(지급일 미정)"
@@ -68,7 +68,7 @@ def _cost_locs(st: MonthState, dep: Counter, status: dict, lines8: dict, applied
     for cat, no in (("ad", 5), ("cfs", 6), ("milk", 7), ("comp", 8)):
         cat_cost[cat] = -lines8[no]
     for (_n, _a, cat), ap in zip(st.common_items, applied):
-        cat_cost[cat] += -ap
+        cat_cost["ad" if cat == AD_NOCAMP else cat] += -ap       # 캠페인 없는 광고 조정 = 광고 공제 지급 줄 위치(신규-01)
     st.unlocated = Counter()
     for cat, cost in cat_cost.items():
         if not round(cost):

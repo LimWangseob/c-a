@@ -1057,6 +1057,39 @@ def test_account_isolation() -> None:
     print("test_account_isolation OK")
 
 
+def test_d271_fixed_fee_old() -> None:
+    """D-271(소유자 11-17 "등록 상품 비율로 하자." · 등록상품 ID 개수 · 판매중지 포함 · 판매 비중과 비교 안 함): 옛 위탁정산서도
+    판매자서비스이용료(17)·비즈니스 인사이트(74) 관리 몫 = 쿠팡 공제 × (관리 등록상품 수 ÷ 등록상품 수) · 계약 전 달 줄 = 0 ·
+    로켓그로스 BI 는 추가공제의 '기타 공제'에서 따로 뗌(합 그대로) · D-161 규칙 잔액(쿠팡 줄 없음) = 공제 예정 그대로(관리 몫 = 등록 비율)."""
+    from collections import Counter
+    from types import SimpleNamespace
+
+    from coupang_analytics.settlement_statement_account import BI, ETC, SVC, deductions
+    from coupang_analytics.settlement_statement_deduct import Account
+    _pay, _rel, parts = deductions({"채널": "로켓그로스", "totalPayableAmount": 100_000, "totalAdditionalDeductionAmount": 40_000,
+                                    "totalBusinessInsightsDeductionAmount": 30_000})
+    assert (parts[BI], parts[ETC], sum(parts.values())) == (30_000, 10_000, 40_000), parts
+    inv = {p: {"created": "2026-01-01", "name": p, "types": {v: "판매중"}} for p, v in (("P1", "V1"), ("P2", "V2"), ("P3", "V3"), ("P4", "V4"))}
+    a = Account.__new__(Account)
+    a.ctx = SimpleNamespace(inv={"x1": inv}, basis="2026-11-15")
+    a.aid, a.cdate, a.start, a.active, a.fs = "x1", "2026-02", "2026-02", ["2026-02"], "2026-02"
+    a.mpids, a.is_mv = {"P1"}, lambda v: v == "V2"            # 관리 = P1(목록) · P2(옵션 관리) → 2/4
+    lines = [("윙", "2026-01", Counter({SVC: 55_000})), ("윙", "2026-10", Counter({SVC: 55_000})),
+             ("로켓그로스", "2026-10", Counter({BI: 30_000}))]
+    a.line_info = [("지급 완료", ch, ym, 0.0, 0.0, pt, None) for ch, ym, pt in lines]
+    a.deduct_lines = lines
+    a.D = Counter({SVC: 110_000, BI: 30_000})
+    a.rates, a.share = {}, {}
+    a.wconf, a.v = {"2026-10": (1_200_000.0, 0.0, 0.0)}, {"purchase": {}}
+    a._svc()
+    assert round(a.D[SVC] * a.share[SVC][0]) == 27_500, a.share[SVC]     # 계약 전 2026-01 줄 0 + 2026-10 55,000 × 2/4
+    assert a.sv["잔액 관리"] == 0 and "D-271" in a.share[SVC][1], a.sv   # 10월 부과 55,000 = 쿠팡이 이미 뺌
+    assert round(a.fixed_fee(BI)) == 15_000 and a.share[BI][2] == "등록 상품 비율", a.share[BI]
+    a.D, a.rates, a.share = Counter(), {}, {}                    # 쿠팡 줄 없음 → 규칙 부과 55,000 = 공제 예정 · 관리 몫 = 2/4
+    a._svc()
+    assert (a.sv["잔액 전체"], a.sv["잔액 관리"]) == (55_000, 27_500), a.sv
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -1065,6 +1098,7 @@ def main() -> int:
     test_account_isolation()
     test_d342_deduction_window_2026()
     test_d279_svc_estimate_row_and_d304_note()
+    test_d271_fixed_fee_old()
     test_d312_fast_used()
     test_d312_own_deduction()
     test_t125_forecast_keeps_own_cols()
