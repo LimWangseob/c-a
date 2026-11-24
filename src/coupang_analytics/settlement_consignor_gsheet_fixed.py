@@ -8,7 +8,8 @@
 from __future__ import annotations
 
 from coupang_analytics.settlement_consignor_gsheet_layout import (
-    CIRC, GAP, PAGE_H, Page, StatementLayoutError, _fill, cards_row, cell, foot, h2, head, name_h, numbered, paginate, stack_pages, th_row, won,
+    CIRC, GAP, PAGE_H, Page, StatementLayoutError, _fill, cards_row, cell, foot, h2, head, name_h, numbered, paginate, stack_pages, text_lines,
+    th_row, won,
 )
 from coupang_analytics.settlement_consignor_gsheet_layout import amt as _amt
 from coupang_analytics.settlement_consignor_gsheet_pages import (
@@ -17,6 +18,8 @@ from coupang_analytics.settlement_consignor_gsheet_pages import (
 
 FIXED_ROWS = {"rg_kinds": 9, "common": 9, "separate": 3, "flow": 4}      # 10 = 우대수수료 2 + 추가지급 1(소유자 11-19 "줄 추가 (추천)")
 FOOT = "항목은 계정·달과 상관없이 늘 같은 자리에 있고, 금액이 없는 항목은 비워 두었습니다 · 쿠팡 원본과 원 단위 대조 완료"
+REMARKS_TITLE = "비고"
+REMARKS_MIN_H = 53               # 비고 상자 글자 칸 = 3줄 높이 고정(문장이 더 길 때만 늘어남)
 
 
 def amt(v: int, **kw) -> dict:
@@ -104,12 +107,23 @@ def _p1_flow(d: dict) -> Page:
     return pg
 
 
+def _p1_remarks(d: dict) -> Page:
+    """'비고' 고정 상자(D-401 ① · 늘 같은 자리 · 문장 없으면 공란 D-343) — 위탁자용 문장(`remarks`)만 · 내부 판단은 '{n}월 근거' 탭."""
+    pg = Page()
+    pg.row(24, [(0, 730, cell(REMARKS_TITLE, bold=True, color="p", pad=(6, 11, 0, 11)))])
+    text = "\n".join(f"· {s}" for s in d["remarks"])
+    lines = sum(text_lines(s, 72) for s in d["remarks"])          # 문장마다 줄 수(9pt · 폭 708px)
+    pg.row(max(REMARKS_MIN_H, 8 + 15 * lines), [(0, 730, cell(text or None, size=9, color="mute", valign="TOP", pad=(2, 11, 4, 11)))])
+    pg.boxes.append((0, 1, 0, 730, "SOLID", "line"))
+    return pg
+
+
 def page1_groups(d: dict, issued: str) -> list[Page]:
-    """1쪽 묶음: 머리 · 카드 3개 · 계산표(1~10) · 9 설명 상자 · 어디로 갔나요. 아래 문의 문구 없음(D-241 ⑦)."""
+    """1쪽 묶음: 머리 · 카드 3개 · 계산표(1~10) · 9 설명 상자 · 어디로 갔나요 · 비고(D-401). 아래 문의 문구 없음(D-241 ⑦)."""
     L = line_amounts(d)
     top = Page()
     head(top, "쿠팡 판매 정산서", "관리 상품만 정산합니다 · 모든 금액은 쿠팡이 준 정산 자료 기준(원 단위)", who_line(d, issued))
-    return [top, _p1_cards(d, L), _p1_table(d, L), _p1_common_box(d), _p1_flow(d)]
+    return [top, _p1_cards(d, L), _p1_table(d, L), _p1_common_box(d), _p1_flow(d), _p1_remarks(d)]
 
 
 # ── 2쪽(고정 표) ─────────────────────────────────────────────

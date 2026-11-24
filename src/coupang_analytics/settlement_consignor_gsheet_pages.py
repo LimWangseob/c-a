@@ -1,5 +1,5 @@
 """위탁자 정산서(3차 형식 · 구글시트) 공용 이름·금액 도우미 + 달 요약 탭(행 묶음 Page).
-위탁자 탭(1쪽 + 2쪽 · 고정 형식 D-343) = `settlement_consignor_gsheet_fixed`.
+위탁자 탭(1쪽 + 2쪽 · 고정 형식 D-343) = `settlement_consignor_gsheet_fixed`. 달 '{n}월 근거' 탭(내부용 · PDF 안 냄 · D-401 ②) = `evidence_sheet`.
 
 T-38 S3: 샘플 `output\\_샘플_261115_위탁자정산서\\_sheet\\render_gsheet.py` 의 1쪽·2쪽·요약 탭을 옮김(요청 모양 같게).
 숫자는 입력 자료 그대로(계산 안 함 · 카드 '쿠팡이 뺀 돈'·요약 합계만 더하기). 문구 = D-238·D-241 ⑦(문의 문구 없음)·
@@ -8,7 +8,9 @@ D-260(판매 기간·발행 줄 진하게 · '검토용' 표시 없음).
 """
 from __future__ import annotations
 
-from coupang_analytics.settlement_consignor_gsheet_layout import MARGIN, Page, amt, cards_row, cell, foot, h2, head, name_h, place
+import json
+
+from coupang_analytics.settlement_consignor_gsheet_layout import MARGIN, Page, amt, cards_row, cell, foot, h2, head, name_h, place, text_lines
 
 PENDING_STATUS = "정산 예정 포함"
 PENDING_ROW = "└ 정산 예정(쿠팡 미확정)"                  # D-251
@@ -138,6 +140,66 @@ def summary_sheet(ds: list[dict], gids: list[int], issued: str) -> Page:
     out = Page()
     out.spacer(MARGIN)
     for i, p in enumerate(groups):
+        if i:
+            out.spacer(24)
+        place(out, p)
+    out.spacer(MARGIN)
+    return out
+
+
+# ── '{n}월 근거' 탭(D-401 ② · 내부용 · PDF 안 냄) ─────────────────────
+EVIDENCE_SUB = "내부용 — 위탁자에게 보내지 않음(PDF 안 냄 · D-401 ②) · 판단 문장·계정 공통 나누기·정산 예정 원천·근거 전부"
+CHUNK = 3000                     # 칸 하나 글자 수(긴 근거는 여러 행으로 나눔)
+
+
+def _js(v) -> str:
+    return json.dumps(v, ensure_ascii=False, default=str, separators=(", ", ": "))
+
+
+def _text_rows(pg: Page, text: str, x0: int = 11, size: int = 8, color: str = "ink") -> None:
+    for i in range(0, max(len(text), 1), CHUNK):
+        part = text[i:i + CHUNK]
+        pg.row(8 + 13 * text_lines(part, 60), [(x0, 730, cell(part, size=size, color=color, valign="TOP", pad=(2, 4, 2, 4)))])
+
+
+def _section(pg: Page, title: str, items: list[str]) -> None:
+    pg.row(22, [(0, 730, cell(title, size=9, bold=True, color="p", valign="BOTTOM", pad=(0, 0, 2, 0)))],
+           borders=[(0, 730, "bottom", "SOLID", "line")])
+    for t in items or ["(없음)"]:
+        _text_rows(pg, t, color="ink" if items else "mute")
+
+
+def common_lines(d: dict) -> list[str]:
+    """9 계정 공통 = 쿠팡 원문 항목 → 관리 몫(비중) · 비고(예: 74 남은 청구) — 금액 있는 줄만."""
+    cm = d["common"]
+    out = [f"적용 비중: {cm['basis_text']}"]
+    for it in cm["items"]:
+        if it["coupang_amount"] or it["applied_amount"] or it.get("note"):
+            parts = " · ".join(f"{x['name']} {x['coupang_amount']:,} → {x['applied_amount']:,}" for x in it.get("parts") or [])
+            out.append(f"{it['name']}: 쿠팡 청구 {it['coupang_amount']:,} → 반영 {it['applied_amount']:,}" + (f" (원문 {parts})" if parts else "")
+                       + (f" · 비고 {it['note']}" if it.get("note") else ""))
+    return out
+
+
+def _evidence_block(d: dict) -> Page:
+    pg = Page()
+    h2(pg, f"{d['company']} · {d['ceo']} · {d['account']}", f"상태 {d['status']} · 이번 정산 금액 {d['settle_amount']:,}원")
+    _section(pg, "판단", [f"{i}. {t}" for i, t in enumerate(d["judgments"], start=1)])
+    _section(pg, "9 계정 공통 — 쿠팡 원문 항목·관리 몫 나누기", common_lines(d))
+    _section(pg, "정산 예정 원천 (pending_detail)", [_js(x) for x in d["pending_detail"]])
+    _section(pg, "근거 (_근거)", [f"{k}: {_js(v)}" for k, v in d["_근거"].items()])
+    _section(pg, "위탁자 탭 '비고'에 넣은 문장", list(d["remarks"]))
+    return pg
+
+
+def evidence_sheet(ds: list[dict], issued: str) -> Page:
+    """달 '{n}월 근거' 탭 — 그 달 위탁자마다 판단·근거(위탁자 탭 '비고'에 안 넣는 내부 문장 전부) · 쪽 나누기 없음(PDF 안 냄)."""
+    period = sorted({f"{d['period_start']} ~ {d['period_end']}" for d in ds})
+    top = Page()
+    head(top, f"{int(ds[0]['period_start'][5:7])}월 근거", EVIDENCE_SUB, f"판매 기간 {' / '.join(period)}\n위탁자 {len(ds)}명 · 발행 {issued}")
+    out = Page()
+    out.spacer(MARGIN)
+    for i, p in enumerate([top] + [_evidence_block(d) for d in ds]):
         if i:
             out.spacer(24)
         place(out, p)

@@ -17,11 +17,12 @@ from pathlib import Path
 
 from coupang_analytics.settlement_consignor_gsheet_layout import C, Page, requests_for
 from coupang_analytics.settlement_consignor_gsheet_fixed import consignor_sheet
-from coupang_analytics.settlement_consignor_gsheet_pages import pending, summary_sheet
+from coupang_analytics.settlement_consignor_gsheet_pages import evidence_sheet, pending, summary_sheet
 
 FIRST_GID = 1000                 # 탭 gid = 1000 부터 차례로(요약 → 위탁자들 → 다음 달 요약 …)
 TMP_GID = 990000                 # 옛 탭을 다 지우는 동안 남겨 둘 임시 탭
 TMP_TITLE = "_tmp_render"
+TAB_COLOR = {"summary": "p", "consignor": "p2", "evidence": "mute"}
 PDF_QUERY = ("size=A4&portrait=true&fitw=true&gridlines=false&printtitle=false&sheetnames=false"
              "&pagenum=UNDEFINED&top_margin=0&bottom_margin=0&left_margin=0&right_margin=0&horizontal_alignment=CENTER")
 
@@ -34,8 +35,8 @@ class StatementCheckError(ValueError):
 class TabPlan:
     title: str
     gid: int
-    kind: str                    # "summary" | "consignor"
-    data: list[dict] | dict      # summary = 그 달 위탁자 자료 목록 · consignor = 위탁자 자료 1개
+    kind: str                    # "summary" | "consignor" | "evidence"(달 근거 · 내부용 D-401 ②)
+    data: list[dict] | dict      # summary·evidence = 그 달 위탁자 자료 목록 · consignor = 위탁자 자료 1개
     member_gids: list[int] = field(default_factory=list)   # summary 만: 위탁자 탭 gid(요약 표 '보기 →' 링크)
     page: Page | None = None
     pages: int = 0
@@ -49,6 +50,10 @@ class StatementPlan:
 
     def months(self) -> list[str]:
         return sorted({t.data["period_start"][:7] for t in self.tabs if isinstance(t.data, dict)})
+
+    def pdf_gids(self) -> list[int]:
+        """PDF 로 내보낼(위탁자에게 보낼) 탭 = 위탁자 탭만 · 요약(D-260)·'{n}월 근거'(D-401 ②) = 시트에만."""
+        return [t.gid for t in self.tabs if t.kind == "consignor"]
 
 
 # ── 검산(어긋나면 중단) ─────────────────────────────────────────
@@ -139,7 +144,7 @@ def tab_title(d: dict) -> str:
 
 
 def plan_tabs(ds: list[dict]) -> list[TabPlan]:
-    """판매 달 순서 · 달마다 '{n}월 요약' 다음 위탁자 탭들(넘겨준 순서) · gid = 1000 부터."""
+    """판매 달 순서 · 달마다 '{n}월 요약' → 위탁자 탭들(넘겨준 순서) → '{n}월 근거'(D-401 ②) · gid = 1000 부터."""
     out: list[TabPlan] = []
     gid = FIRST_GID
     for m in sorted({d["period_start"][:7] for d in ds}):
@@ -149,7 +154,8 @@ def plan_tabs(ds: list[dict]) -> list[TabPlan]:
         for i, d in enumerate(md, start=1):
             out.append(TabPlan(tab_title(d), gid + i, "consignor", d))
         summary.member_gids = [gid + i for i in range(1, len(md) + 1)]
-        gid += len(md) + 1
+        out.append(TabPlan(f"{month_label(md[0])} 근거", gid + len(md) + 1, "evidence", md))
+        gid += len(md) + 2
     return out
 
 
@@ -163,6 +169,9 @@ def build_statement(ds: list[dict], issued: str) -> StatementPlan:
         if t.kind == "summary":
             assert isinstance(t.data, list)
             t.page, t.pages = summary_sheet(t.data, t.member_gids, issued), 1
+        elif t.kind == "evidence":
+            assert isinstance(t.data, list)
+            t.page, t.pages = evidence_sheet(t.data, issued), 1
         else:
             assert isinstance(t.data, dict)
             t.page, t.pages = consignor_sheet(t.data, issued)
@@ -176,7 +185,7 @@ def setup_requests(old_sheet_ids: list[int], tabs: list[TabPlan]) -> list[dict]:
     reqs += [{"deleteSheet": {"sheetId": sid}} for sid in old_sheet_ids]
     for i, t in enumerate(tabs):
         reqs.append({"addSheet": {"properties": {"sheetId": t.gid, "title": t.title, "index": i,
-                                                 "tabColor": C["p"] if t.kind == "summary" else C["p2"]}}})
+                                                 "tabColor": C[TAB_COLOR[t.kind]]}}})
     reqs.append({"deleteSheet": {"sheetId": TMP_GID}})
     return reqs
 

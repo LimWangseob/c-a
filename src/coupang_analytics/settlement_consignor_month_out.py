@@ -7,7 +7,7 @@ from collections import Counter
 
 from coupang_analytics import settlement_statement_account as AC
 from coupang_analytics.settlement_consignor_month_calc import MonthState, cum_round, month_end, pct
-from coupang_analytics.settlement_consignor_month_cost import KINDS, PEND_KIND, RG_REVIEW_CAT, item_share
+from coupang_analytics.settlement_consignor_month_cost import BI_EXPECT, KINDS, PEND_KIND, RG_REVIEW_CAT, item_share
 from coupang_analytics.settlement_consignor_month_dep import FAST, dep_rows, deposits, flow
 from coupang_analytics.settlement_consignor_month_names import name_groups
 
@@ -157,15 +157,23 @@ FIXED = [
 
 
 def month_status(pending: bool, late: list) -> str:
-    """정산서 상태 — 정산 예정분 있음 = '정산 예정 포함'(D-242 · 그리기 검산이 확정 전 금액과 맞춤) > 정산일 지난 최종액 회차 지급 줄 없음
-    = '확인 필요'(금액 그대로 · 산식 23 · 통제 세션 11-24 D-288) > '확정'."""
+    """정산서 상태 — 정산 예정분 있음 = '정산 예정 포함'(D-242 · 그리기 검산이 확정 전 금액과 맞춤) > late(정산일 지난 최종액 회차 지급 줄 없음 ·
+    보류 해제 규칙 미확정 줄 있음) = '확인 필요'(금액 그대로 · 산식 23 · 21 T-176 · 통제 세션 11-24 D-288) > '확정'."""
     return "정산 예정 포함" if pending else "확인 필요" if late else "확정"
+
+
+def _check_why(st: MonthState) -> str:
+    why = []
+    if st.late:
+        why.append(f"쿠팡 정산 달력 정산일이 지난 최종액(30%) 회차 지급 줄이 없음(위 '확인 필요' {len(st.late)}줄) · 그 몫은 쿠팡 정산대상 그대로 예정으로 둠")
+    if st.hold:
+        why.append(f"보류 해제 지급 줄이 있는데 해제 규칙이 정해지지 않음(위 '확인 필요' {len(st.hold)}줄) · 해제액은 더하지 않고 금액 그대로 둠")
+    return " · ".join(why)
 
 
 def _judge_status(st: MonthState, out: dict) -> str:
     if out["status"] == "확인 필요":
-        return (f"기간 = {st.m} 판매분 · 자료 기준일 {st.basis} · 상태 '확인 필요' — 쿠팡 정산 달력 정산일이 지난 최종액(30%) 회차 지급 줄이 없음"
-                f"(위 '확인 필요' {len(st.late)}줄) · 그 몫은 쿠팡 정산대상 그대로 예정으로 둠 · 실제 지급·공제는 자료를 다시 받은 뒤 확정")
+        return (f"기간 = {st.m} 판매분 · 자료 기준일 {st.basis} · 상태 '확인 필요' — {_check_why(st)} · 실제 지급·공제는 자료를 다시 받은 뒤 확정")
     if out["status"] == "확정":
         return (f"기간 = {st.m} 판매분 · 자료 기준일 {st.basis} · 상태 '확정' — 이 달 판매 기간의 상품별 정산 파일이 모두 있음"
                 "(지급 '예정' 줄은 금액 확정·지급일만 남음)")
@@ -213,6 +221,19 @@ def _judge_share(st: MonthState) -> list:
                  f"={pct(st.reg_share)}({r['기준']} · 관리 = 관리 상품 목록 또는 옵션 하나라도 관리 판정) 중 작은 쪽 {pct(st.share)} (D-237 · D-241 ⑨)"
                  " · 계정 정액 3종(판매자서비스이용료·세이버 구독료·비즈니스 인사이트) = 등록 비중(D-271)")
     return j
+
+
+def remarks(st: MonthState, out: dict) -> list:
+    """위탁자 탭 '비고' 상자 문장(D-401 ① · PDF 에 나감) — 위탁자에게 보여도 되는 종류만(쿠팡이 준 금액·확정 산식 값).
+    내부 판단·'확인 필요'·Claude 판단·추정 문장은 넣지 않음(judgments·_근거 = 내부 탭 '{n}월 근거' · D-401 ② · D-221 ② 와 같은 원칙)."""
+    out_r = []
+    if out["pending_total"]:
+        out_r.append(f"정산 예정 금액 {out['pending_total']:,}원은 쿠팡이 아직 확정하지 않은 금액(쿠팡 정산 예정)이라 쿠팡 확정 때 바뀔 수 있습니다.")
+    bi = st.expect.get(BI_EXPECT) or {}
+    if isinstance(bi.get("예상값"), int) and bi["예상값"] > 0:      # 입력(플랜·유료 시작일) 있을 때만 숫자(D-325) · 없으면 내부 탭만
+        out_r.append(f"비즈니스 인사이트 이용료는 쿠팡이 나눠서 뺍니다 — {st.m} 몫 중 쿠팡이 아직 빼지 않은 금액 {bi['예상값']:,}원(계정 전체)은 "
+                     "다음 정산에서 빠질 수 있습니다.")
+    return out_r
 
 
 def judgments(st: MonthState, out: dict) -> list:
@@ -264,7 +285,7 @@ def assemble(st: MonthState) -> dict:
     rows = dep_rows(st, settle - sum(a for _, a in sep_int), sep_int)
     fl = flow(st, rows)
     pending_total = sum(pend8.values()) + sum(x["applied_amount"] for x in c_items if x.get("pending"))
-    out = {**_head(st), "status": month_status(bool(pending_total or st.pend_info), st.late),
+    out = {**_head(st), "status": month_status(bool(pending_total or st.pend_info), st.late + st.hold),
            "lines": [{"no": i, "name": LINE_NAMES[i - 1], "amount": lines8[i], "pending": pend8[i]} for i in range(1, 9)],
            "product_subtotal": subtotal, "products": [_product_row(t, n) for n in t["names"]], "rg_kinds": rg_kinds(st, lines8[6]),
            "common": {"items": c_items, "basis_text": st.basis_text,
@@ -273,5 +294,6 @@ def assemble(st: MonthState) -> dict:
            "settle_amount": settle, "pending_total": pending_total, "pending_detail": st.pend_info, "flow": fl, "deposits": rows}
     out["checks"] = checks(st, out, lines8)
     out["judgments"] = judgments(st, out)
+    out["remarks"] = remarks(st, out)
     out["_근거"] = evidence(st, merged, t["names"])
     return out

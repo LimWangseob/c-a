@@ -26,6 +26,24 @@ def _channel_ratio(st: MonthState) -> dict:
     return r_ch
 
 
+def hold_release_notes(line_info: list, month: str) -> list[str]:
+    """윙 보류 해제 지급 줄(보류 해제액 = pendingAmount · 판매 시작 달 = month) → '확인 필요 — 보류 해제 규칙 미확정' 한 줄(21 · T-176 ①).
+    해제액을 어느 판매 달 정산 금액에 더할지 규칙이 없음(T-175 후보 대조: 차이 0 후보가 하나로 안 정해짐 · 통제 11-24 D-288 · 추정 금지)
+    → 금액은 지금 그대로(해제액 안 더함 · 숫자 지어내지 않음) · 상태 '확인 필요'(out.month_status)."""
+    cnt: Counter = Counter()
+    amt: Counter = Counter()
+    for stt, ch, ym, _pay, rel, _parts, _row in line_info:
+        if ch == "윙" and ym == month and round(rel):
+            cnt[stt] += 1
+            amt[stt] += rel
+    if not cnt:
+        return []
+    order = sorted(cnt, key=lambda s: (AC.STS.index(s) if s in AC.STS else len(AC.STS), s))
+    by = " · ".join(f"{s} {cnt[s]}건 {amt[s]:,.0f}원" for s in order)
+    return [f"확인 필요 — 보류 해제 규칙 미확정(해제 {sum(cnt.values())}건 · 합 {sum(amt.values()):,.0f}원 · {by}) — "
+            "이 달 금액은 해제액을 더하지 않은 지금 값 그대로(규칙 확정 전 · D-288)"]
+
+
 def _pay_items(st: MonthState, r_ch: dict) -> list:
     items = []
     pay_ch: Counter = Counter()
@@ -38,7 +56,8 @@ def _pay_items(st: MonthState, r_ch: dict) -> list:
             items.append(((NO_DATE, ym, "", ch, ""), "예정", amt * r_ch[ch]))
             pay_ch[ch] += amt
     st.late = AC.late_final_notes(st.d["L_gen"], st.d["v"], st.basis, st.m)    # 정산일 지난 최종액 회차 없음 = 확인 필요(산식 23 · 상태 = out)
-    st.j += st.late
+    st.hold = hold_release_notes(st.d["line_info"], st.m)                       # 보류 해제 줄 = 확인 필요(21 · T-176 · 상태 = out)
+    st.j += st.late + st.hold
     for ch in ("윙", "로켓그로스"):
         tot = sum(st.settle_by_ch[ch].values())
         st.chk.append({"검사": f"{ch} 이 달 판매 기간 지급 줄 정산금액 합 = 이 달 상품별 정산금액 합(계정 전체 · 확정+예정)", "값": [pay_ch[ch], round(tot)],

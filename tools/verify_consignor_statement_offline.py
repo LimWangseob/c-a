@@ -111,7 +111,7 @@ def synthetic(pending: bool = True, month: str = "2026-09") -> dict:
             "separate": [{"name": FIX_SEP[0], "amount": 1_500}, {"name": FIX_SEP[1], "amount": 0}, {"name": FIX_SEP[2], "amount": 0}],
             "settle_amount": 716_500,
             "pending_total": 168_400 if pending else 0, "pending_detail": [{"방법": "합성"}] if pending else [],
-            "flow": fl, "deposits": deps, "checks": [], "judgments": []}
+            "flow": fl, "deposits": deps, "checks": [], "judgments": [], "remarks": [], "_근거": {"적용 비중": 0.4}}
 
 
 # ── ① 숫자 쪽 ─────────────────────────────────────────────────
@@ -484,7 +484,7 @@ def _consignor_text_errors(t, tx: list, joined: str) -> list[str]:
 
 def decision_text_errors(plan) -> list[str]:
     errs = []
-    for t in plan.tabs:
+    for t in (t for t in plan.tabs if t.kind != "evidence"):     # '{n}월 근거' = 내부용 · PDF 안 냄(D-401 ②) → 위탁자 문구 규칙 밖
         tx = texts(t.requests)
         joined = "\n".join(s for s, _ in tx)
         errs += [f"{t.title}: '{bad}' 글자 있음" for bad in ("검토용", "문의", "확정 전 금액", "아직 반영 안 된") if bad in joined]
@@ -498,14 +498,14 @@ def test_render() -> None:
     for d in ds:
         assert GS.check(d) == [], (d["account"], GS.check(d))
     plan = GS.build_statement(ds, ISSUED)
-    assert [t.kind for t in plan.tabs] == ["summary", "consignor", "consignor"] and [t.gid for t in plan.tabs] == [1000, 1001, 1002]
+    assert [t.kind for t in plan.tabs] == ["summary", "consignor", "consignor", "evidence"] and [t.gid for t in plan.tabs] == [1000, 1001, 1002, 1003]
     assert plan.tabs[0].member_gids == [1001, 1002] and plan.tabs[1].title == "9월 합성 위탁자 (synth01)"
     errs = structure_errors(plan) + page_errors(plan) + decision_text_errors(plan)
     assert not errs, errs
     fake = FakeClient()
     GS.write_statement(fake, ds, ISSUED)
     setup = fake.calls[0]
-    assert [next(iter(r)) for r in setup] == ["addSheet"] + ["deleteSheet"] * 3 + ["addSheet"] * 3 + ["deleteSheet"]
+    assert [next(iter(r)) for r in setup] == ["addSheet"] + ["deleteSheet"] * 3 + ["addSheet"] * 4 + ["deleteSheet"]
     assert len(fake.calls) == 1 + len(plan.tabs)
 
 
@@ -816,6 +816,37 @@ def test_inputs_pack() -> None:
         assert P.seldoc_missing(sel) == []
 
 
+def test_d401_remarks_and_evidence() -> None:
+    """D-401(소유자 11-24 "(가)+(나) 둘 다"): ① 위탁자 탭 1쪽 고정 '비고' 상자 = 위탁자용 문장(remarks)만 · 문장 없어도 상자 있음(D-343 공란) ·
+    내부 판단(judgments)·'확인 필요'·근거는 위탁자 탭에 없음 ② 달마다 '{n}월 근거' 탭 = judgments·_근거·pending_detail·9 원문 항목·비고 전부 ·
+    PDF 대상(pdf_gids) = 위탁자 탭만. ③ remarks 문장 종류: 정산 예정 금액(쿠팡 미확정) · 74 남은 청구 예상값(숫자 있을 때만) — 그 밖 = 내부."""
+    from coupang_analytics import settlement_consignor_month_out as OUT
+    NL = chr(10)
+    inner = ["확인 필요 — 보류 해제 규칙 미확정(해제 2건 · 합 1,950,408원 · 지급 완료 2건 1,950,408원)", "합성 Claude 판단 문장 가나다"]
+    a = {**synthetic(True), "judgments": inner, "remarks": ["합성 위탁자용 비고 문장"], "_근거": {"합성근거키": {"값": 1}}}
+    a["common"]["items"][2].update(note="합성 BI 비고 내부")
+    b = {**synthetic(False), "account": "synth02", "ceo": "합성 위탁자 둘", "judgments": ["합성 둘 판단"]}
+    plan = GS.build_statement([a, b], ISSUED)
+    ev = [t for t in plan.tabs if t.kind == "evidence"]
+    assert [t.title for t in ev] == ["9월 근거"] and plan.pdf_gids() == [1001, 1002], ([t.title for t in plan.tabs], plan.pdf_gids())
+    assert not (structure_errors(plan) + page_errors(plan) + decision_text_errors(plan))
+    ta, tb = plan.tabs[1], plan.tabs[2]
+    ja, jb = (NL.join(s for s, _ in texts(t.requests)) for t in (ta, tb))
+    assert "비고" in [s for s, _ in texts(ta.requests)] and "비고" in [s for s, _ in texts(tb.requests)]       # 문장 없어도 상자(공란)
+    assert "· 합성 위탁자용 비고 문장" in ja and ta.pages == tb.pages == 2, (ta.pages, tb.pages)
+    for bad in inner + ["합성 둘 판단", "확인 필요", "합성근거키", "합성 BI 비고 내부"]:
+        assert bad not in ja and bad not in jb, bad
+    je = NL.join(s for s, _ in texts(ev[0].requests))
+    for want in inner + ["합성 둘 판단", "합성근거키", "합성 BI 비고 내부", "합성 위탁자용 비고 문장", '"방법": "합성"', "내부용"]:
+        assert want in je, want
+    # 문장 종류(숫자 모듈): 정산 예정 · 74 예상값 숫자 = 위탁자용 / 예상값 없음(입력 없음) = 넣지 않음
+    st = SimpleNamespace(m="2026-09", expect={OUT.BI_EXPECT: {"예상값": 33_000}})
+    r = OUT.remarks(st, {"pending_total": 168_400})
+    assert len(r) == 2 and "168,400원" in r[0] and "33,000원" in r[1] and not any("확인 필요" in x for x in r), r
+    assert OUT.remarks(SimpleNamespace(m="2026-09", expect={OUT.BI_EXPECT: {"예상값": None}}), {"pending_total": 0}) == []
+    print("test_d401_remarks_and_evidence OK")
+
+
 def test_t175_old_forecast_record() -> None:
     """T-175 ③: 달 표시 칸 저장 전 예정 기록 줄(output44 예정 RG 29,709줄 전부) = 추가 공제 나머지를 9 에 못 넣음 → 0 으로 숨기지 않고
     '확인 필요' 문장(금액 포함) · 새 기록·쿠팡 원문 줄 = 문장 없음. 금액 = output44 gyi0101 2026-03-05 줄(추가공제 2,587,570 − 광고 271,619 − 빠른정산 2,207,051)."""
@@ -854,7 +885,7 @@ def main() -> int:
         pass
     for f in (test_run_job_abort, test_run_job_isolation_and_sheets, test_inputs_pack):
         f()
-    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_ad_nocamp_d317, test_t175_old_forecast_record, test_new23_cross_week_flag, test_expect_values, test_flow_fixed, test_t125_additional_pay, test_d391_unknown_ship_same_month_wing_ratio, test_failed_checks, test_load_judge,
+    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_ad_nocamp_d317, test_t175_old_forecast_record, test_new23_cross_week_flag, test_d401_remarks_and_evidence, test_expect_values, test_flow_fixed, test_t125_additional_pay, test_d391_unknown_ship_same_month_wing_ratio, test_failed_checks, test_load_judge,
               test_sale_months_2025_excluded, test_render, test_fixed_render, test_product_pages, test_overflow, test_unsplittable, test_check_reject,
               test_multi_month, test_tool):
         f()

@@ -959,6 +959,39 @@ def test_formula23_late_final_round_flagged() -> None:
     print("test_formula23_late_final_round_flagged OK")
 
 
+def test_t176_hold_release_flagged() -> None:
+    """21 보류 해제(T-176 ① · 통제 11-24 D-288 · 추정 금지): 차이 0 후보가 하나로 안 정해짐(T-175 후보 대조 표) → 보류 해제 줄(pendingAmount)이
+    있는 판매 달 = 금액 그대로(해제액 안 더함) + '확인 필요 — 보류 해제 규칙 미확정(해제 n건 · 합 금액)' + 상태 '확인 필요'.
+    기대값 = 운용 사본 output44 실측 줄 손 계산(코드에서 뽑지 않음): roum0502 10-20 해제 5줄(기간 08-16 277,218·272,651 · 08-23 451,452 ·
+    09-13 757,462 · 09-20 1,192,946 · 모두 DONE) · ski1121 3월 해제 2줄(05-12 보류 상태 03-25 1,805,804 · 06-16 지급 완료 03-14 1,805,804)."""
+    from types import SimpleNamespace
+
+    from coupang_analytics import settlement_consignor_month_dep as DEP
+    from coupang_analytics import settlement_consignor_month_out as OUT
+
+    def rel(st_, ym, a):                                   # 보류 해제 줄 = 정산금액 0 · 보류 해제액 = pendingAmount
+        return (st_, "윙", ym, 0.0, float(a), {}, ["윙", "윙", "2026-10-20", f"{ym}-16", f"{ym}-16", "", st_])
+    roum = [rel("지급 완료", "2026-08", 277_218), rel("지급 완료", "2026-08", 272_651), rel("지급 완료", "2026-08", 451_452),
+            rel("지급 완료", "2026-09", 757_462), rel("지급 완료", "2026-09", 1_192_946),
+            ("지급 완료", "윙", "2026-09", 2_487_143.0, 0.0, {}, ["윙", "윙", "2026-10-15", "2026-09-01", "2026-09-07", "", "지급 완료"]),
+            ("지급 완료", "로켓그로스", "2026-09", 10.0, 5.0, {}, ["로켓그로스"] * 7)]        # 로켓그로스 = 윙 보류 해제 아님
+    n9 = DEP.hold_release_notes(roum, "2026-09")
+    assert len(n9) == 1 and n9[0].startswith("확인 필요 — 보류 해제 규칙 미확정(해제 2건 · 합 1,950,408원 · 지급 완료 2건 1,950,408원)"), n9
+    assert "해제 3건 · 합 1,001,321원" in DEP.hold_release_notes(roum, "2026-08")[0]
+    assert DEP.hold_release_notes(roum, "2026-10") == []                                   # 해제 줄 없는 달 = 문장 없음
+    ski = [rel("보류", "2026-03", 1_805_804), rel("지급 완료", "2026-03", 1_805_804)]
+    assert "해제 2건 · 합 3,611,608원 · 지급 완료 1건 1,805,804원 · 보류 1건 1,805,804원" in DEP.hold_release_notes(ski, "2026-03")[0]
+    # 금액 그대로: 날짜별 입금 항목 = 정산금액 × 비율만(해제액 0 더함) · 판정 글에 사유 · 상태 '확인 필요'(정산 예정 포함이 먼저)
+    st = SimpleNamespace(m="2026-09", basis="2026-11-24", d={"line_info": roum, "L_gen": {}, "v": {}},
+                         settle_by_ch={"윙": {}, "로켓그로스": {}}, chk=[], j=[])
+    items = DEP._pay_items(st, {"윙": 1.0, "로켓그로스": 0.0})
+    assert round(sum(a for _k, _s, a in items)) == 2_487_143 and st.hold == n9 and st.j == n9, (items, st.j)
+    assert OUT.month_status(False, st.late + st.hold) == "확인 필요" and OUT.month_status(True, st.hold) == "정산 예정 포함"
+    txt = OUT._judge_status(st, {"status": "확인 필요"})
+    assert "보류 해제" in txt and "최종액" not in txt, txt
+    print("test_t176_hold_release_flagged OK")
+
+
 def test_formula23_status_check_when_final_round_missing() -> None:
     """통제 세션 11-24 판단(D-288 · 추정 금지 CURRENT_RULES 13절): 정산일 지난 최종액 회차 지급 줄이 없는 달 = 정산서 상태 '확인 필요'(금액 그대로).
     정산 예정분이 있는 달 = '정산 예정 포함' 유지(그리기 검산 = 상태 ↔ 확정 전 금액 · settlement_consignor_gsheet 레인 B) · 사유는 판정 글에 그대로."""
@@ -969,7 +1002,7 @@ def test_formula23_status_check_when_final_round_missing() -> None:
     assert OUT.month_status(False, late) == "확인 필요"
     assert OUT.month_status(False, []) == "확정"
     assert OUT.month_status(True, late) == "정산 예정 포함" == OUT.month_status(True, [])
-    st = SimpleNamespace(m="2026-09", basis="2026-11-24", late=late)
+    st = SimpleNamespace(m="2026-09", basis="2026-11-24", late=late, hold=[])
     txt = OUT._judge_status(st, {"status": "확인 필요"})
     assert "상태 '확인 필요'" in txt and "최종액" in txt and "확정" not in txt.split("—")[0], txt
     print("test_formula23_status_check_when_final_round_missing OK")
@@ -1161,6 +1194,7 @@ def main() -> int:
     test_scope_judge()
     test_status_split_pending_rest()
     test_formula23_late_final_round_flagged()
+    test_t176_hold_release_flagged()
     test_formula23_status_check_when_final_round_missing()
     print("✅ 위탁정산서 계산 규칙 시험 3종 + 이관 입구 + 관리 상품 범위 통과")
     return 0
