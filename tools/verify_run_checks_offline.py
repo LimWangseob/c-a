@@ -456,6 +456,54 @@ def s12_untracked_warn():
     ok("경고(이름·개수·메모리 사본 제외)·푸시 다시 검사 · 무시 목록 뒤 경고 없음·푸시 건너뜀")
 
 
+def s13_times_start():
+    print("[S13] 시간 기록 '시작' 칸 = 검사를 시작한 시각(T-157 — 예전엔 끝난 시각) · 잠금 기다림 뒤 · 칸 이름·순서 그대로 · 옛 줄과 섞여도 읽힘")
+    head = ["시작", "작업폴더", "종류", "결과", "잠금대기초", "걸린초", "검사합계초", "검사수", "검사별초"]
+    old_row = ["2026-11-21 00:07:53", "D:/x", "전체", "통과", "0.0", "195.6", "582.6", "39", "검사가=168.7"]
+    with tempfile.TemporaryDirectory() as tmp:
+        root, began = _repo(tmp), Path(tmp) / "began"
+        p = Path(tmp) / "gate.py"                                          # 검사가 실제로 시작한 시각을 남기고 2.5초 뒤 끝남
+        p.write_text(f"import pathlib, time\npathlib.Path(r'{began}').write_text(str(time.time()))\ntime.sleep(2.5)\n", encoding="utf-8")
+        saved = RC.ROOT, RC.CHECKS, RC.LOCK_PATH
+        RC.ROOT, RC.CHECKS, RC.LOCK_PATH = root, [("검사가", str(p), True)], Path(tmp) / "gate.lock"
+        try:
+            with RC.times_path().open("w", encoding="utf-8-sig", newline="") as f:
+                csv.writer(f).writerows([head, old_row])                   # 옛 줄이 있는 파일에 이어 씀
+            before = time.time()
+            assert _main([])[0] == 0
+            with RC.times_path().open(encoding="utf-8-sig", newline="") as f:
+                assert next(csv.reader(f)) == head, "칸 이름·순서가 바뀜"
+            old, row = _times_rows()
+            assert list(old.values()) == old_row, old
+            started = time.mktime(time.strptime(row["시작"], "%Y-%m-%d %H:%M:%S"))
+            check_at = float(began.read_text())
+            assert int(before) <= started <= check_at, (row["시작"], before, check_at, "끝난 시각이 적힘")
+            RC.times_path().unlink()                                       # 새 파일이면 머리줄부터 같은 순서
+            assert _main([])[0] == 0
+            with RC.times_path().open(encoding="utf-8-sig", newline="") as f:
+                assert next(csv.reader(f)) == head, "새 파일 칸 이름·순서가 다름"
+        finally:
+            RC.ROOT, RC.CHECKS, RC.LOCK_PATH = saved
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:   # 다른 게이트를 기다린 시간은 '시작' 앞(잠금대기초 칸)
+        t = Path(tmp)
+        root, release, lock = _repo(tmp), t / "release", t / "gate.lock"
+        code = _gate_child(root, _hold_check(t, release), lock)
+        a, b = _spawn(code, "A", t / "a.out"), None
+        try:
+            assert _until(lambda: (t / "ran_A").exists(), WAIT_SEC), "앞 게이트 검사가 시작 안 됨: " + _text(t / "a.out")
+            b = _spawn(code, "B", t / "b.out")
+            assert _until(lambda: "기다립니다" in _text(t / "b.out"), WAIT_SEC), "뒤 게이트가 기다린다고 안 함: " + _text(t / "b.out")
+            time.sleep(1.5)
+        finally:
+            released = time.time()
+            release.touch()
+            _finish(*[x for x in (a, b) if x])
+        with (t / "run_checks_times.csv").open(encoding="utf-8-sig", newline="") as f:
+            first, second = [time.mktime(time.strptime(r["시작"], "%Y-%m-%d %H:%M:%S")) for r in csv.DictReader(f)]
+        assert first <= released - 1.5 and second >= int(released), (first, second, released)
+    ok("시작 ≤ 검사가 실제로 시작한 시각 · 앞 게이트 시작 = 놓기 전 · 뒤 게이트 시작 = 앞 게이트가 놓은 뒤 · 머리줄 9칸 그대로 · 옛 줄 그대로 읽힘")
+
+
 def main():
     with tempfile.TemporaryDirectory() as lock_dir:      # 같은 프로세스 안 게이트(S5·S6·S7)도 실제 PC 잠금 대신 임시 잠금
         RC.LOCK_PATH = Path(lock_dir) / "gate.lock"
@@ -475,6 +523,7 @@ def _scenarios():
     s10_priority()
     s11_times_log()
     s12_untracked_warn()
+    s13_times_start()
     print("회귀 게이트 자체(동시 실행·통과 기록·PC 하나만·우선순위) 오프라인 검증 통과")
 
 

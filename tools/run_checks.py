@@ -153,10 +153,12 @@ def times_path() -> Path:
 _TIMES_HEAD = ["시작", "작업폴더", "종류", "결과", "잠금대기초", "걸린초", "검사합계초", "검사수", "검사별초"]
 
 
-def _log_times(root: Path, quick: bool, outcome: str, waited: float, wall: float, results: list) -> None:
-    """게이트 한 번 = 한 줄. 못 쓰면 경고만 출력(게이트 결과는 그대로 · 조용히 넘기지 않음)."""
+def _log_times(root: Path, quick: bool, outcome: str, waited: float, began: float, wall: float, results: list) -> None:
+    """게이트 한 번 = 한 줄 · 시작 = 잠금을 얻고 검사를 시작한 시각(began = time.time() · 기다린 초는 잠금대기초 칸 ·
+    시작+걸린초 = 끝). 못 쓰면 경고만 출력(게이트 결과는 그대로 · 조용히 넘기지 않음).
+    ⚠T-157(2026-11-25) 전 코드가 쓴 줄의 '시작' 칸에는 끝난 시각이 들어 있음(칸 이름·순서는 같음)."""
     p = times_path()
-    row = [time.strftime("%Y-%m-%d %H:%M:%S"), str(root), "빠른" if quick else "전체", outcome,
+    row = [time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(began)), str(root), "빠른" if quick else "전체", outcome,
            f"{waited:.1f}", f"{wall:.1f}", f"{sum(r[2] for r in results):.1f}", str(len(results)),
            ";".join(f"{r[0]}={r[2]:.1f}" for r in results)]
     try:
@@ -261,18 +263,18 @@ def _gate(a: argparse.Namespace, root: Path, waited: float = 0.0) -> int:
     label = "빠른 검증(--quick)" if a.quick else "전체 검증"
     if a.skip_if_passed and _already_passed(root, a.skip_if_passed, a.quick):
         print(f"  ⏭ {label} 건너뜀 — 같은 내용이 이미 통과함(통과 기록: check_stamp · D-180)")
-        _log_times(root, a.quick, "건너뜀", waited, 0.0, [])
+        _log_times(root, a.quick, "건너뜀", waited, time.time(), 0.0, [])
         return 0
     key = check_stamp.worktree_key(root)
     print("=" * 64)
     print(f"  회귀 게이트 — {label} ({len(checks)}종 · 동시 {max(1, a.jobs)}개)")
     print("=" * 64)
-    started = time.monotonic()
+    began, started = time.time(), time.monotonic()
     results = run_all(checks, a.jobs, root)
     wall = time.monotonic() - started
     total = sum(d for _, _, d, _ in results)
     failed = [n for n, ok, _, _ in results if not ok]
-    _log_times(root, a.quick, "실패" if failed else "통과", waited, wall, results)
+    _log_times(root, a.quick, "실패" if failed else "통과", waited, began, wall, results)
     print("=" * 64)
     if failed:
         print(f"  ❌ 실패 {len(failed)}종: {', '.join(failed)}  (걸린 시간 {wall:.1f}s · 검사 합계 {total:.1f}s)")
