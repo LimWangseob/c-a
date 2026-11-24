@@ -1,7 +1,7 @@
 """셀독 정산서 입력 읽기 — 위탁정산서 결과 파일 · 계약서 분석 DB · 셀독 입력 폴더(사업자 대응표 + 계약·상품군 판정표). T-25 4단계.
 
 - D-225 ① 쿠팡 판매·정산 숫자 = 위탁정산서 결과 파일에서만(따로 받거나 계산하지 않음) ② 계약 내용 = 계약서 분석 DB 값 그대로 ③ 없으면 없는 대로.
-- 대상 계약 = DB '계약유형(소)' 규칙(TARGET_TYPES·TARGET_WORDS 대상 · EXCLUDE_WORDS 제외 · 그 밖 = 규칙 밖 → 중단) + 계약자↔계정 판정표(D-229 · AI 판정 · 근거 원문).
+- 대상 계약 = DB '관리대상' 계약(D-398 · 유형 글자와 관계없음) + DB '계약유형(소)' 규칙(TARGET_TYPES·TARGET_WORDS 대상 · EXCLUDE_WORDS 제외 · 그 밖 = 규칙 밖 → 중단) + 계약자↔계정 판정표(D-229 · AI 판정 · 근거 원문).
   후보 = 계약자 명칭·대표가 계정 사업자·대표자와 이름 글자로 같은 계약(같은 사람인지는 판정표가 정함).
 - 판정표 없음·판정 없는 대상 계약·DB 에 없는 계약 = SeldocInputError(시작 전 중단 · fallback 없음).
 """
@@ -43,6 +43,11 @@ def contract_kind(kind: str) -> str:
     return "제외" if any(w in k for w in EXCLUDE_WORDS) else "규칙 밖"
 
 
+def target_kind(c: "Contract") -> str:
+    """DB '관리대상'(신규셀독 관리대상 계약) = 유형 글자와 관계없이 '대상'(D-398 · 소유자 '53건 전부') · 그 밖 = contract_kind."""
+    return "대상" if c.managed else contract_kind(c.kind)
+
+
 def goal_total(amount: int, profit: int | None) -> int:
     """목표 정산 총액 = 계약금액 + 목표수익금(빈 칸 = 0 · D-221 ①·D-225 ③)."""
     return amount + (profit or 0)
@@ -69,6 +74,7 @@ class Contract:
     rep: str
     company: str
     items: list = field(default_factory=list)       # [(품목명(원문), 단가|None, 수량|None)]
+    managed: bool = False                           # DB '관리대상' 칸 = '관리대상'(D-398)
 
 
 def _num_or_none(v):
@@ -86,6 +92,8 @@ def load_contracts(db: Path) -> dict:
     h, rows = _rows(wb["계약 통합"])
     ih, irows = _rows(wb["품목"])
     wb.close()
+    if "관리대상" not in h:
+        raise SeldocInputError(f"시작 전 중단 — {db.name} '계약 통합'에 '관리대상' 칸 없음(전수 DB v6 이상 · D-398)")
     out: dict = {}
     for r in rows:
         def g(k: str):
@@ -94,7 +102,8 @@ def load_contracts(db: Path) -> dict:
         if doc:
             out[doc] = Contract(doc, str(g("계약유형(소)") or ""), str(g("계약일(서명일)") or "")[:10], str(g("계약종료일") or "")[:10],
                                 _int(g("계약금액(원금)")), _num_or_none(g("수익금")), _num_or_none(g("수익률(%)")),
-                                str(g("문서제목(원문)") or ""), str(g("계약자 명칭") or ""), str(g("계약자 대표") or ""), str(g("회사측 명칭") or ""))
+                                str(g("문서제목(원문)") or ""), str(g("계약자 명칭") or ""), str(g("계약자 대표") or ""), str(g("회사측 명칭") or ""),
+                                managed=str(g("관리대상") or "").strip() == "관리대상")
     for r in irows:
         c = out.get(str(r[ih["문서ID"]] or ""))
         if c is not None:
@@ -139,7 +148,7 @@ def _from_candidates(aid: str, people: tuple, contracts: dict, judged: dict) -> 
     """이름이 같은 후보 중 규칙 '대상' + 판정표 '이 계정·대상' · 규칙 밖 유형·판정 없는 대상 계약 = 중단."""
     picked = []
     for c in candidates(contracts, people):
-        kind = contract_kind(c.kind)
+        kind = target_kind(c)
         if kind == "규칙 밖":
             raise SeldocInputError(f"시작 전 중단 — {aid} 후보 계약 {c.doc_id} 유형 '{c.kind}' = 대상 규칙 밖")
         if kind != "대상":
@@ -160,7 +169,7 @@ def _from_judge(aid: str, contracts: dict, judged: dict) -> list:
             continue
         if doc not in contracts:
             raise SeldocInputError(f"시작 전 중단 — {aid} 판정표 계약 {doc} 계약 못 찾음(DB 에 없음)")
-        if contract_kind(contracts[doc].kind) != "대상":
+        if target_kind(contracts[doc]) != "대상":
             raise SeldocInputError(f"시작 전 중단 — {aid} 판정표 계약 {doc} 유형 '{contracts[doc].kind}' = 대상 유형 아님")
         out.append(contracts[doc])
     return out

@@ -38,13 +38,14 @@ DOC_INV = "cccccccc-0000-0000-0000-000000000002"   # 투자계약(제외)
 DOC_POA = "cccccccc-0000-0000-0000-000000000003"   # 위임장(제외)
 DOC_ZS = "cccccccc-0000-0000-0000-000000000004"    # 제로셀(대상 D-397 · 다라커머스 대표 이다라)
 HEAD = ["관계그룹ID", "그룹 대표 이름", "문서ID(누르면 원문 PDF)", "파일명", "문서제목(원문)", "문서종류", "계약유형(대)", "계약유형(소)",
-        "계약일(서명일)", "계약종료일", "회사측 명칭", "계약자 명칭", "계약자 대표", "계약금액(원금)", "수익금", "수익률(%)", "품목"]
+        "계약일(서명일)", "계약종료일", "회사측 명칭", "계약자 명칭", "계약자 대표", "계약금액(원금)", "수익금", "수익률(%)", "품목", "관리대상"]
 INTERNAL = ("D-", "확인 필요", "출처", "판정", "Claude", "추정", "R1")
 
 
 # ── 합성 입력(작게) ──
-def _contract(doc, kind, signed, end, party, rep, amount, profit=None, rate=None, title="“셀독” 상품공급 OEM 계약서", company="㈜회사"):
-    return {"문서ID(누르면 원문 PDF)": doc, "계약유형(소)": kind, "계약일(서명일)": signed, "계약종료일": end, "회사측 명칭": company,
+def _contract(doc, kind, signed, end, party, rep, amount, profit=None, rate=None, title="“셀독” 상품공급 OEM 계약서", company="㈜회사",
+              managed=None):
+    return {"관리대상": managed, "문서ID(누르면 원문 PDF)": doc, "계약유형(소)": kind, "계약일(서명일)": signed, "계약종료일": end, "회사측 명칭": company,
             "계약자 명칭": party, "계약자 대표": rep, "계약금액(원금)": amount, "수익금": profit, "수익률(%)": rate, "문서제목(원문)": title}
 
 
@@ -62,13 +63,13 @@ ITEMS = [(DOC_A, "보냉백 YG1", 6000, 1000), (DOC_A, "보냉백 BG1", 4000, 10
          (DOC_B2, "매트 MN1", 8000, 2000), (DOC_B3, "가방 C1", 6500, 2000)]
 
 
-def make_db(p: Path, contracts=CONTRACTS, items=ITEMS) -> Path:
+def make_db(p: Path, contracts=CONTRACTS, items=ITEMS, head=HEAD) -> Path:
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "계약 통합"
-    ws.append(HEAD)
+    ws.append(head)
     for c in contracts:
-        ws.append([c.get(h) for h in HEAD])
+        ws.append([c.get(h) for h in head])
     wi = wb.create_sheet("품목")
     wi.append(["문서ID", "파일명", "품목명(원문)", "품목 종류", "모델", "단가", "수량", "금액", "품목별 지급액", "근거"])
     for doc, name, price, qty in items:
@@ -235,6 +236,30 @@ def test_plan() -> None:
     print("test_plan OK")
 
 
+# ── 3-2. 신규셀독 관리대상 계약 = 유형 글자와 관계없이 대상(D-398 · 소유자 11-24 '53건 전부') ──
+def test_managed() -> None:
+    from coupang_analytics import settlement_seldoc_source as SS
+    m1, m2 = "ffffffff-0000-0000-0000-000000000001", "ffffffff-0000-0000-0000-000000000002"
+    rows = CONTRACTS + [_contract(m1, "물품 공급(납품) 계약", "2026-04-10", None, "가나상사", "김가나", 20_000_000, managed="관리대상"),
+                        _contract(m2, "OEM 제품공급 제로리스크", "2025-11-27", None, "가나상사", "김가나", 50_000_000, managed="관리대상")]
+    judge = json.loads(json.dumps(JUDGE))
+    for doc in (m1, m2):
+        judge["계약"][doc] = {"계정ID": "ga1", "판정": "대상", "근거": "x"}
+    with tempfile.TemporaryDirectory() as d:
+        db = SS.load_contracts(make_db(Path(d) / "db.xlsx", rows))
+        assert db[m1].managed and db[m2].managed and not db[DOC_Z].managed
+        assert SS.target_kind(db[m1]) == SS.target_kind(db[m2]) == "대상"                # 규칙 밖·제외 낱말이어도 관리대상 = 대상
+        assert SS.target_kind(db[DOC_Z]) == "제외" and SS.target_kind(db[DOC_A]) == "대상"  # 관리대상 아님 = 글자 규칙 그대로
+        inp = make_inputs(Path(d), judge)
+        jobs = SS.plan(SS.load_people(inp), db, SS.load_judge(inp), ["ga1"])
+        assert [j.contract.doc_id for j in jobs] == [m2, m1, DOC_A]                       # 관리대상 2건 + 보냉백 · 계약일 순 · 제로리스크 DOC_Z 빠짐
+        bad = json.loads(json.dumps(judge))
+        del bad["계약"][m1]
+        _raises(SS.plan, SS.load_people(inp), db, bad, ["ga1"], word=m1)                # 관리대상인데 판정 없음 = 중단
+        _raises(SS.load_contracts, make_db(Path(d) / "old.xlsx", head=HEAD[:-1]), word="관리대상")   # '관리대상' 칸 없는 옛 DB = 중단
+    print("test_managed OK")
+
+
 # ── 4. 상품군 나누기(D-155 · 판정표대로) ──
 def test_groups() -> None:
     from coupang_analytics import settlement_seldoc_groups as G
@@ -399,12 +424,13 @@ def main() -> int:
     test_rules()
     test_read_statement()
     test_plan()
+    test_managed()
     test_groups()
     test_sheet()
     test_sheet_goal()
     test_cli()
     test_labels_match_book()
-    print("✅ 셀독 정산서 시험 8종 통과(규칙·읽기·대상 계약·상품군·양식 1장·목표수익금·입구·칸 이름)")
+    print("✅ 셀독 정산서 시험 9종 통과(규칙·읽기·대상 계약·관리대상 계약·상품군·양식 1장·목표수익금·입구·칸 이름)")
     return 0
 
 
