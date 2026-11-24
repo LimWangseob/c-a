@@ -8,6 +8,7 @@
   python tools/settlement_download.py run      [--from …] [--to …] [--accounts …]   # 요청+받기 한 세션(전체 확대용)
   python tools/settlement_download.py watch                             # 운용 PC 상시: 00:10 앱 ①판매수집 완료 후 받기·24:00 멈춤
   python tools/settlement_download.py stats                             # 받은 파일 집계 엑셀
+  python tools/settlement_download.py statements --cycle <회차 키> [--redo]   # 정산서 배치(D-399 · 보통 watch 완료 뒤 자동)
   python tools/settlement_download.py merge --src output\정산\정산          # 다른 PC 정산 폴더 합치기(자동 실행 중지 후)
   (request·download·run 에 --originals <폴더> = 받은 쿠팡 원본을 그대로 증빙 폴더에 복사 — D-062)
   python tools/settlement_download.py evidence --out <증빙 상위 폴더> [--from 2026-01-01] [--accounts …] [--until 17:30] [--redo]
@@ -1288,6 +1289,7 @@ WATCH_POLL_SEC = 300             # ①판매수집 진행 중 정지·파일 생
 WATCH_CATCHUP_REST_SEC = 60      # 소급(받을 게 남음) 중 한 바퀴와 다음 바퀴 사이 짧은 쉼
 WATCH_PENDING_SEC = 20 * 60      # 쿠팡 파일 생성 대기만 남으면 그 계정만 20분마다 확인(소유자 11-20 '20분으로 해줘' · D-373)
 DONE_FILE = BASE / "로그" / "_완료.json"   # 같은 ①완료 기준 '완료' 기록(중복 실행 방지·D-010)
+DONE_FAILS_FILE = BASE / "로그" / "_완료_실패계정.json"   # 완료 회차의 실패 계정 이름 — 정산서 배치가 건너뜀(D-399)
 CYCLE = RL.Totals()                        # watch 한 회차의 바퀴 합계 — 회차 끝 [실행 결과 종합](D-168)
 PASS_ACCOUNTS: list = []                   # 마지막 바퀴의 정산 계정 — 자동 증빙 대상 고르기(원장을 다시 읽지 않음 · D-365)
 
@@ -1732,12 +1734,38 @@ def _ledger_ready(args) -> bool:
     return True
 
 
+def _start_statements(cycle: str, args) -> None:
+    """D-399 — 정산 받기 '완료' 뒤 정산서 배치(`statements --cycle <회차>`)를 분리 프로세스로 띄움(watch 는 그대로 끝남 ·
+    띄우기 = 바퀴 끝 집계와 같은 정산 프로그램 명령 app_process._settle_program_cmd). 이번 회차 배치 기록이 있으면 안 띄움(하루 1번) ·
+    --dry-run = 안 띄움. 띄우기 실패 = 로그에 사유(정산 받기 완료 기록은 그대로)."""
+    from coupang_analytics import app_process as AP
+    from coupang_analytics import statement_batch as SB
+    if getattr(args, "dry_run", False):
+        return
+    ran, why = SB.ran_for(cycle)
+    if ran:
+        log(f"[자동] 정산서 배치 — 이번 회차({cycle}) 이미 돎({SB.RECORD}) — 다시 안 띄움")
+        return
+    if why:
+        log(f"[자동] ⚠ 정산서 배치 기록 읽기 실패({why}) — 배치를 띄워 그 사유로 중단 보고")
+    cmd, cwd = AP._settle_program_cmd(["statements", "--cycle", cycle])
+    if getattr(sys, "frozen", False) and not Path(cmd[0]).exists():
+        log(f"[자동] ⚠ {AP.SETTLE_EXE} 를 찾을 수 없어 정산서 배치를 못 띄움: {cmd[0]}")
+        return
+    proc, err, note = AP._spawn_detached(cmd, cwd)
+    if proc is None:
+        log(f"[자동] ⚠ 정산서 배치 시작 실패: {err}")
+        return
+    log(f"[자동] 정산서 배치 시작(PID {proc.pid} · 회차 {cycle}) — 상태 {SB.STATUS} · 보고 {SB.REPORTS}" + note)
+
+
 def cmd_watch(args) -> int:
     """00:10 앱과 함께 뜨는 정산 자동 수집(D-021·D-372). **이번 회차 ①판매수집 완료까지 기다렸다가** 받고, 다 받으면
     기록하고 종료·**그날 24:00** 이 되면 종료(남은 건 다음 회차). 오류는 계정·항목별 3번(처음 + 다시 2번) 뒤 그 회차에
     더 시도 안 함 → 받은 것·3번 소진·예외(비밀번호 거부·2차 인증)만 남으면 24:00 전에도 종료 · 파일 생성 대기는 24:00 까지(D-373). 회차 첫 바퀴 = 전 계정 정기+소급 · 그 뒤 바퀴 = 남은 일이 있는 계정의 그 단계만(D-382). 같은 ①완료 기준으로 이미 '완료'면 바로 끝낸다. 앱을 사람이 끄면 함께 종료(--parent·D-020).
     같은 PC 에 둘 뜨지 않게 잠금."""
     from coupang_analytics import settlement_watch as W
+    from coupang_analytics import statement_batch as SB
     from coupang_analytics.pipeline_paths import _progress_path, _run_stage_path
     from coupang_analytics.registry_lock import RegistryLockError, registry_lock
     global TRIES
@@ -1774,6 +1802,7 @@ def cmd_watch(args) -> int:
                 if not manual and W.already_done(done, key, cycle_start):   # 같은 회차 '완료'면 끝(D-091 · 수동 = D-354)
                     log(f"[자동] 이번 ①판매수집({key}) 기준 정산은 이미 끝남 — {done.get('reason', '')} — 종료")
                     LOG.heartbeat(W.done_status(int(done.get("failed") or 0)), f"이미 끝남 — {done.get('reason', '')}")
+                    _start_statements(str(done.get("key")), args)   # 완료 직후 죽어 정산서를 못 띄웠으면 여기서(D-399)
                     return 0
                 if not _ledger_ready(args):   # D-366 ②: 첫 바퀴 계정 읽기 전 대장→원장·비밀번호 · 실패 = 이 바퀴 중단
                     _sleep_until(WATCH_POLL_SEC, cycle_end)
@@ -1798,7 +1827,9 @@ def cmd_watch(args) -> int:
                     LOG.heartbeat("대기중", reason)
                     (_rest_open if waiting and rest == WATCH_PENDING_SEC else _sleep_until)(rest, cycle_end)
                     continue
+                SB.write_failures(DONE_FAILS_FILE, key, fails)   # 완료 기록보다 먼저(정산서 배치가 '성공 계정만' · D-399)
                 W.write_done(DONE_FILE, key, action, reason, failed=len(fails))
+                _start_statements(key, args)
                 if not swept:
                     _cycle_sources(args)
                 _evidence_sweep(args, action)
@@ -1885,7 +1916,7 @@ def main() -> int:
     global LOG
     ap = argparse.ArgumentParser(description="쿠팡 정산 파일 배치 다운로드")
     ap.add_argument("command", choices=("probe", "request", "download", "run", "watch", "stats", "merge", "evidence",
-                                        "transfer-login", "transfer-settle", "sources", "view"))
+                                        "transfer-login", "transfer-settle", "sources", "view", "statements"))
     ap.add_argument("--accounts", default="", help="계정ID 쉼표 구분(비우면 관리대장 전체)")
     ap.add_argument("--from", dest="start", type=date.fromisoformat, default=date(2026, 1, 1))
     ap.add_argument("--to", dest="end", type=date.fromisoformat, default=date.today())
@@ -1901,12 +1932,15 @@ def main() -> int:
     ap.add_argument("--manual", action="store_true", help="watch: 정산 탭 '정산 시작' — 이번 회차 완료 기록·①완료 대기 없이 바로 받음(D-354)")
     ap.add_argument("--out", default="", help="evidence: 증빙 상위 폴더(계정마다 증빙_{사업자}_쿠팡원본 — D-067)")
     ap.add_argument("--source", default="", help="view: 화면 출처 ID(settlement_screen_view.SPECS · 첫 시험 = 한 계정 1회)")
-    ap.add_argument("--redo", action="store_true", help="evidence: 끝난 계정도 다시 받기")
+    ap.add_argument("--redo", action="store_true", help="evidence: 끝난 계정도 다시 받기 · statements: 하루 1번 기록 무시")
     ap.add_argument("--file", default="", help="transfer-login: 셀독전환자 파일(비우면 설정 transfer/file)")
     ap.add_argument("--retry", action="store_true", help="transfer-login: 성공·인증번호·같은 틀린 비번 제외하고 다시")
     ap.add_argument("--start", default="", help="transfer-login: HH:MM 까지 기다렸다 시작(밤에 이어 하기)")
     ap.add_argument("--run-id", default="", help="stats: 이어 쓸 실행ID(watch 바퀴 끝 별도 프로세스 · T-113)")
-    ap.add_argument("--result", default="", help="stats: 결과 JSON 경로(watch 바퀴 끝 별도 프로세스 · T-113)")
+    ap.add_argument("--result", default="", help="stats: 결과 JSON 경로(watch 바퀴 끝 별도 프로세스 · T-113) · statements --stage 결과")
+    ap.add_argument("--cycle", default="", help="statements: 정산서 배치 회차 키(_완료.json key · D-399)")
+    ap.add_argument("--stage", default="", help="statements: 자식 단계(배치가 띄움 — consignor·seldoc·diff)")
+    ap.add_argument("--opts", default="", help="statements --stage: 단계 입력 JSON 경로(배치가 씀)")
     args = ap.parse_args()
     global CHANNELS, ORIGINALS, JOBS
     CHANNELS = (args.channel,) if args.channel else ()
@@ -1919,6 +1953,9 @@ def main() -> int:
         return transfer_login.main_cli(args)
     if args.command == "transfer-settle":   # D-187 셀독전환자 정산 자료 받기 — output/정산_셀독전환/정산(원장 정산 기록과 따로)
         return _transfer_settle(args)
+    if args.command == "statements":       # D-399 정산서 배치 — 정산 받기 로그·상태(output/정산/로그)와 섞지 않음(output/정산서)
+        from coupang_analytics import statement_batch as SB
+        return SB.main_cli(args, DONE_FILE, DONE_FAILS_FILE)
     LOG = RL.RunLog(BASE, now=datetime.strptime(args.run_id, "%y%m%d_%H%M%S") if args.run_id else None)
     log(f"실행 {LOG.run_id} · 명령 {args.command} · 기간 {args.start}~{args.end} · 데이터 폴더 {Path.cwd()}")
     if args.command != "watch" and not args.result:   # watch 는 잠금을 얻은 뒤 cmd_watch 가 상태를 쓴다 — 2중 실행(잠금
