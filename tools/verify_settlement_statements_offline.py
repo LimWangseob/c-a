@@ -959,6 +959,22 @@ def test_formula23_late_final_round_flagged() -> None:
     print("test_formula23_late_final_round_flagged OK")
 
 
+def test_formula23_status_check_when_final_round_missing() -> None:
+    """통제 세션 11-24 판단(D-288 · 추정 금지 CURRENT_RULES 13절): 정산일 지난 최종액 회차 지급 줄이 없는 달 = 정산서 상태 '확인 필요'(금액 그대로).
+    정산 예정분이 있는 달 = '정산 예정 포함' 유지(그리기 검산 = 상태 ↔ 확정 전 금액 · settlement_consignor_gsheet 레인 B) · 사유는 판정 글에 그대로."""
+    from types import SimpleNamespace
+
+    from coupang_analytics import settlement_consignor_month_out as OUT
+    late = ["확인 필요 — 윙 2026-09 최종액(30%) 회차 지급 줄 없음"]
+    assert OUT.month_status(False, late) == "확인 필요"
+    assert OUT.month_status(False, []) == "확정"
+    assert OUT.month_status(True, late) == "정산 예정 포함" == OUT.month_status(True, [])
+    st = SimpleNamespace(m="2026-09", basis="2026-11-24", late=late)
+    txt = OUT._judge_status(st, {"status": "확인 필요"})
+    assert "상태 '확인 필요'" in txt and "최종액" in txt and "확정" not in txt.split("—")[0], txt
+    print("test_formula23_status_check_when_final_round_missing OK")
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -986,6 +1002,7 @@ def main() -> int:
     test_scope_judge()
     test_status_split_pending_rest()
     test_formula23_late_final_round_flagged()
+    test_formula23_status_check_when_final_round_missing()
     print("✅ 위탁정산서 계산 규칙 시험 3종 + 이관 입구 + 관리 상품 범위 통과")
     return 0
 
