@@ -926,6 +926,55 @@ def test_d279_svc_estimate_row_and_d304_note() -> None:
     print("test_d279_svc_estimate_row_and_d304_note OK")
 
 
+def test_formula23_late_final_round_flagged() -> None:
+    """산식 23(정산차감 = 매출내역 F) 남은 차이 — 매출내역 deductionAmount = apAmount − finalPaidAmount(운용 사본 output44 검증자료
+    258/258줄 · 독립 공제 값이 아님). seankim137 2026-09 +230,722 = 그 달 정산대상 769,074 − 받은 70% 3회차 538,352 = 받지 못한 최종액(30%)
+    회차(쿠팡 정산 달력 '9월 최종액 정산' 2026-11-02 · 마지막 조회 10-30 뒤 로그인 막힘). 장부는 이 몫을 '30% 줄 생성 전' 예정으로 둠 →
+    달력 정산일이 기준일 이하면 '확인 필요 — 사유'로 드러냄(금액은 그대로 · 숨기지 않음 · 지급·공제 추정 없음).
+    기대값 = 위 실측 숫자 손 계산(코드에서 뽑지 않음)."""
+    from types import SimpleNamespace
+
+    from coupang_analytics import settlement_consignor_month_dep as DEP
+    from coupang_analytics import settlement_statement_account as SA
+    cal = [{"title": "9월 최종액 정산", "start": "2026-11-02 00:00:00", "transactionCycleCode": "R",
+            "recognitionFrom": "2026-09-01", "recognitionTo": "2026-09-30"},
+           {"title": "11월 최종액 정산", "start": "2027-01-04 00:00:00", "transactionCycleCode": "R",
+            "recognitionFrom": "2026-11-01", "recognitionTo": "2026-11-30"},
+           {"title": "[주정산]\n09/21 ~ 09/27", "start": "2026-10-22 00:00:00", "transactionCycleCode": "W",
+            "recognitionFrom": "2026-09-21", "recognitionTo": "2026-09-27"}]
+    v = {"수집일": "2026-10-30", "calendar": cal}
+    gen = {("윙", "2026-09"): 769_074.0 - 538_352.0, ("윙", "2026-11"): 5_000.0, ("로켓그로스", "2026-09"): 100.0}
+    notes = SA.late_final_notes(gen, v, "2026-11-24")
+    assert len(notes) == 1 and notes[0].startswith("확인 필요"), notes
+    assert all(s in notes[0] for s in ("윙 2026-09", "2026-11-02", "230,722", "2026-10-30")), notes
+    assert SA.late_final_notes(gen, v, "2026-11-01") == []                     # 정산일 전 = 정상 예정
+    assert SA.late_final_notes(gen, {"수집일": "2026-10-30"}, "2026-11-24") == []  # 달력 없음 = 날짜를 지어내지 않음
+    assert SA.late_final_notes(gen, v, "2026-11-24", "2026-11") == []           # 달 지정 = 그 달만
+    # 새 위탁정산서(날짜별 입금) — 금액은 그대로 '(지급일 미정) 예정' · 판정 글에 사유 한 줄
+    st = SimpleNamespace(m="2026-09", basis="2026-11-24", d={"line_info": [], "L_gen": gen, "v": v},
+                         settle_by_ch={"윙": {}, "로켓그로스": {}}, chk=[], j=[])
+    items = DEP._pay_items(st, {"윙": 0.5, "로켓그로스": 0.0})
+    assert [(k[0], s, round(a)) for k, s, a in items] == [(DEP.NO_DATE, "예정", 115_361), (DEP.NO_DATE, "예정", 0)], items
+    assert st.j == notes, st.j
+    print("test_formula23_late_final_round_flagged OK")
+
+
+def test_formula23_status_check_when_final_round_missing() -> None:
+    """통제 세션 11-24 판단(D-288 · 추정 금지 CURRENT_RULES 13절): 정산일 지난 최종액 회차 지급 줄이 없는 달 = 정산서 상태 '확인 필요'(금액 그대로).
+    정산 예정분이 있는 달 = '정산 예정 포함' 유지(그리기 검산 = 상태 ↔ 확정 전 금액 · settlement_consignor_gsheet 레인 B) · 사유는 판정 글에 그대로."""
+    from types import SimpleNamespace
+
+    from coupang_analytics import settlement_consignor_month_out as OUT
+    late = ["확인 필요 — 윙 2026-09 최종액(30%) 회차 지급 줄 없음"]
+    assert OUT.month_status(False, late) == "확인 필요"
+    assert OUT.month_status(False, []) == "확정"
+    assert OUT.month_status(True, late) == "정산 예정 포함" == OUT.month_status(True, [])
+    st = SimpleNamespace(m="2026-09", basis="2026-11-24", late=late)
+    txt = OUT._judge_status(st, {"status": "확인 필요"})
+    assert "상태 '확인 필요'" in txt and "최종액" in txt and "확정" not in txt.split("—")[0], txt
+    print("test_formula23_status_check_when_final_round_missing OK")
+
+
 # ── 계정별 격리(D-399 계획 설계 5 · 소유자 11-24 '성공 계정만 생성') — 계산은 가짜(경계만) · 반복·보고·파일만 봄 ──
 class _Patch:
     """모듈 속성 잠깐 바꾸기(끝나면 되돌림)."""
@@ -1035,6 +1084,8 @@ def main() -> int:
     test_scope_priority()
     test_scope_judge()
     test_status_split_pending_rest()
+    test_formula23_late_final_round_flagged()
+    test_formula23_status_check_when_final_round_missing()
     print("✅ 위탁정산서 계산 규칙 시험 3종 + 이관 입구 + 관리 상품 범위 통과")
     return 0
 

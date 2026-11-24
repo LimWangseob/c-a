@@ -15,7 +15,7 @@ from coupang_analytics import settlement_additional_pay as AP
 from coupang_analytics import settlement_ledger as SL
 from coupang_analytics import settlement_managed_alloc as MA
 from coupang_analytics.settlement_statement_account import (
-    AD, COMP, LOGI, MILK, OWN, REL, STS, SVC, AccountBase, ad_files, milk_rows, month_add, num, ratio)
+    AD, COMP, LOGI, MILK, OWN, REL, STS, SVC, AccountBase, ad_files, late_final_notes, milk_rows, month_add, num, ratio)
 
 
 def status_split(line_info: list, gen: dict, mset: dict, settle_m: float, rates: dict, S: float):
@@ -201,7 +201,7 @@ class Account(AccountBase):
         self._milk()
         self._rest_and_status()
         self._extra_in()
-        why = self._why()
+        why = self._why() + late_final_notes(self.L["gen"], self.v, self.ctx.basis)    # 정산일 지난 최종액 회차 없음(산식 23)
         g = self.__dict__
         out = {k: g[k] for k in ("acct", "aid", "t", "u", "L", "D", "Dm", "share", "fin", "gross", "refund", "st_settle", "st_ded",
                                  "line_m", "paid_total", "rows_out", "dup", "bad", "mpids", "tm", "tx", "prod", "mmon", "ushare",

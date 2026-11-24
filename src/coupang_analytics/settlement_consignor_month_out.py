@@ -156,7 +156,16 @@ FIXED = [
 ]
 
 
+def month_status(pending: bool, late: list) -> str:
+    """정산서 상태 — 정산 예정분 있음 = '정산 예정 포함'(D-242 · 그리기 검산이 확정 전 금액과 맞춤) > 정산일 지난 최종액 회차 지급 줄 없음
+    = '확인 필요'(금액 그대로 · 산식 23 · 통제 세션 11-24 D-288) > '확정'."""
+    return "정산 예정 포함" if pending else "확인 필요" if late else "확정"
+
+
 def _judge_status(st: MonthState, out: dict) -> str:
+    if out["status"] == "확인 필요":
+        return (f"기간 = {st.m} 판매분 · 자료 기준일 {st.basis} · 상태 '확인 필요' — 쿠팡 정산 달력 정산일이 지난 최종액(30%) 회차 지급 줄이 없음"
+                f"(위 '확인 필요' {len(st.late)}줄) · 그 몫은 쿠팡 정산대상 그대로 예정으로 둠 · 실제 지급·공제는 자료를 다시 받은 뒤 확정")
     if out["status"] == "확정":
         return (f"기간 = {st.m} 판매분 · 자료 기준일 {st.basis} · 상태 '확정' — 이 달 판매 기간의 상품별 정산 파일이 모두 있음"
                 "(지급 '예정' 줄은 금액 확정·지급일만 남음)")
@@ -255,7 +264,7 @@ def assemble(st: MonthState) -> dict:
     rows = dep_rows(st, settle - sum(a for _, a in sep_int), sep_int)
     fl = flow(st, rows)
     pending_total = sum(pend8.values()) + sum(x["applied_amount"] for x in c_items if x.get("pending"))
-    out = {**_head(st), "status": "정산 예정 포함" if pending_total or st.pend_info else "확정",
+    out = {**_head(st), "status": month_status(bool(pending_total or st.pend_info), st.late),
            "lines": [{"no": i, "name": LINE_NAMES[i - 1], "amount": lines8[i], "pending": pend8[i]} for i in range(1, 9)],
            "product_subtotal": subtotal, "products": [_product_row(t, n) for n in t["names"]], "rg_kinds": rg_kinds(st, lines8[6]),
            "common": {"items": c_items, "basis_text": st.basis_text,
