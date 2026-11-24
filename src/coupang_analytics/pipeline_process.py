@@ -468,14 +468,27 @@ def _carry_rep_keywords(wb, biz: str, names: list[str], log) -> None:
                 f"(새로 더한 키워드 {len(added)}개·옛 블록은 판매정보만)")
 
 
+def _record_unmatched(biz: str, report_acc, unmatched: list[str], log) -> None:
+    """매칭 안 된 대장 상품 경고 + [실행 결과 종합] '확인 필요' 재료(T-162 ②). 대장에서 취소선·판매중지로 표시한 상품은
+    쿠팡에서 내려가 못 찾는 게 당연하므로 '확인 필요'로 세지 않고 정보 줄만 남긴다(블록 미생성은 그대로 · 소유자 11-24
+    '반영해줘' — 실측 kc11345 '접이식 정리함 JK0026' 대장 취소선인데 '매칭 안 된 새 상품'에 섞임)."""
+    stopped = {p.name for p in report_acc.products if p.discontinued}
+    active = [n for n in unmatched if n not in stopped]
+    quiet = [n for n in unmatched if n in stopped]
+    if quiet:
+        log(f"  [{biz}] 대장 취소선·판매중지 상품 {len(quiet)}개 = 쿠팡 상품 못 찾음(블록 없음·확인 필요 아님): "
+            f"{quiet[:5]}{'…' if len(quiet) > 5 else ''}")
+    if active:
+        log(f"  ⚠ [{biz}] 쿠팡 상품과 매칭 안 된 대장 상품 {len(active)}개 — 블록 미생성(D-008·대장 상품명/쿠팡 등록 "
+            f"확인 필요): {active[:5]}{'…' if len(active) > 5 else ''}")
+        got = LAST_SALES.setdefault("unmatched", {}).setdefault(biz, [])   # [실행 결과 종합] '확인 필요'(T-162 ②)
+        got.extend(n for n in active if n not in got)
+
+
 def _finish_account(wb, biz: str, report_acc, seen_products, unmatched, live_vids, log) -> None:
     """계정 루프 뒤 마무리(행동 불변 분해 — _process_account 복잡도 C 유지): 미매칭 경고 → 죽은 중복·VID 없는
     잔재 정리 → 대장 대조(완전삭제·판매중지 표기) 로그."""
-    if unmatched:
-        log(f"  ⚠ [{biz}] 쿠팡 상품과 매칭 안 된 대장 상품 {len(unmatched)}개 — 블록 미생성(D-008·대장 상품명/쿠팡 등록 "
-            f"확인 필요): {unmatched[:5]}{'…' if len(unmatched) > 5 else ''}")
-        got = LAST_SALES.setdefault("unmatched", {}).setdefault(biz, [])   # [실행 결과 종합] '확인 필요'(T-162 ②)
-        got.extend(n for n in unmatched if n not in got)
+    _record_unmatched(biz, report_acc, unmatched, log)
     # 죽은 중복 블록 정리(안전 규칙): live 형제 있고 vid 가 상품조회서 소멸한 잔재만 삭제(reconcile 판매중지 표기 전)
     _sweep_dead_duplicates(wb, biz, live_vids, log)
     _purge_vidless_blocks(wb, biz, seen_products, report_acc.account_id, live_vids, log)   # VID 없는 잔재(D-008)

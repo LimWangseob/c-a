@@ -2390,6 +2390,25 @@ def t1_no_vidless_blocks():
         "VID 있는(매칭) 상품을 건너뜀"
     _ok("미매칭=블록 미생성·로그 기록·같은 이름 VID 블록 보존·매칭 상품은 정상 처리")
 
+    # ③-2 대장 취소선·판매중지 상품이 쿠팡에서 안 찾아짐 = 당연 → '매칭 안 된 새 상품'(확인 필요)에 세지 않음(소유자 11-24)
+    #     실측 R249 11-24 회차: kc11345 '접이식 정리함 JK0026'(대장 취소선)이 확인 필요 3개 중 하나로 섞임
+    from types import SimpleNamespace
+    from coupang_analytics.pipeline_process import _record_unmatched
+    from coupang_analytics import run_result as _rr
+    _rr.LAST_SALES.pop("unmatched", None)
+    acc = SimpleNamespace(products=[Product(name="접이식 정리함 JK0026", options=[Option("")], discontinued=True),
+                                    Product(name="가습기 HJ093", options=[Option("")])])
+    msgs: list[str] = []
+    _record_unmatched(BIZ, acc, ["접이식 정리함 JK0026", "가습기 HJ093"], msgs.append)
+    assert _rr.LAST_SALES.get("unmatched") == {BIZ: ["가습기 HJ093"]}, \
+        f"취소선 상품이 확인 필요에 섞임: {_rr.LAST_SALES.get('unmatched')}"
+    assert any("확인 필요 아님" in m and "JK0026" in m for m in msgs) and \
+        not any("⚠" in m and "JK0026" in m for m in msgs), f"취소선 상품 로그 오류: {msgs}"
+    _rr.LAST_SALES.pop("unmatched", None)
+    _record_unmatched(BIZ, SimpleNamespace(products=acc.products[:1]), ["접이식 정리함 JK0026"], msgs.append)
+    assert "unmatched" not in _rr.LAST_SALES, "취소선 상품만 있으면 확인 필요 0 이어야"
+    _ok("대장 취소선·판매중지 상품 미매칭 = 정보 줄만·확인 필요 아님 · 활성 상품 미매칭은 그대로 확인 필요")
+
     # ② VID 없는 잔재 블록 정리(실측: 웨이브텍 '문어발선풍기m10 (대체요망)' — 9/29 M10 VID 블록으로 매칭된 뒤에도 잔존)
     wb2 = OutputWorkbook.empty()
     for name, vids, acct in (("문어발선풍기 M10", ["v_m10"], "wavetech"), ("문어발선풍기m10 (대체요망)", [], "wavetech"),
