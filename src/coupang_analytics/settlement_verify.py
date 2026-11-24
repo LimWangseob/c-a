@@ -8,6 +8,7 @@
 - 월렛장부: 입금 합 − 인출 합 = 잔액(조회 시작 전 내역이 있으면 다를 수 있음)
 - 윙판매: 우리 윙 파일 월 합(매출·판매자쿠폰·수수료·정산대상액) = 매출내역 (월=구매확정일)
 - 윙지급: 정산현황 월별(지급액·정산차감·최종지급액) = 매출내역(정산대상액·정산차감·최종지급예정액), 지급 회차는 지급완료
+  (매출내역 최종 = 정산대상 − 차감 → 보류 해제 줄이 푼 돈(pendingAmount)은 앞 보류 줄에 이미 있어 뺌 · 추가지급 줄은 매출내역 밖)
 - 윙부가세: 우리 윙 (매출 − 판매자쿠폰) 월 합 = 부가세 신고내역 월 합계
 - RG부가세: 우리 로켓그로스 판매액(A×B)·판매자쿠폰 월 합 = 로켓그로스 부가세(카드+현금+기타·판매자쿠폰)
 판정: 일치 · 다름 · 미정산(최근 달 — 정산 전 몫이 빠져 다를 수 있음) · 자료 없음 · 확인 필요.
@@ -15,6 +16,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
+
+from . import settlement_ledger as SL
 
 OK, DIFF, PENDING, NODATA, CHECK, CONFIRMED = "일치", "다름", "미정산", "자료 없음", "확인 필요", "확인됨"
 HELP_RG = "쿠팡 도움말 「로켓그로스 상품의 정산은 어떻게 되나요?」"
@@ -139,7 +142,8 @@ def wing_pay(acct: str, amounts: list, vdata: dict | None) -> list[dict]:
         ym = r["기간 시작"][:7].replace("-", "")
         by[ym]["정산대상"] += r.get("paidAmount") or 0
         by[ym]["차감"] += r.get("totalDeductionAmount") or 0
-        by[ym]["최종"] += r["최종지급액"] or 0
+        if not SL.additional(r):
+            by[ym]["최종"] += (r["최종지급액"] or 0) - (r.get("pendingAmount") or 0)
         if r["정산일"] < vdata["수집일"] and r.get("지급상태") not in (None, "DONE"):
             out.append({**_row(acct, "윙지급", f"정산일 {r['정산일']}", "지급상태", None, None, str(r.get("지급상태"))),
                         "판정": CHECK})

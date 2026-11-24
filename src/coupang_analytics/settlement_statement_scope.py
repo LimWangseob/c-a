@@ -53,12 +53,21 @@ def ledger_vids(output: Path) -> dict:
 
 
 # ── ③ 쿠팡 등록 상품 자료 ──
+def _raw_page(p: Path) -> dict:
+    return json.loads(gzip.decompress(p.read_bytes()).decode("utf-8"))["data"]
+
+
 def inventory(output: Path) -> dict:
-    """{계정ID: {등록상품ID: {"created": YYYY-MM-DD, "name": 상품명, "types": {VID: RFM|NORMAL}}}} — 상품조회 원문(`_raw`)."""
+    """{계정ID: {등록상품ID: {"created": YYYY-MM-DD, "name": 상품명, "types": {VID: RFM|NORMAL}}}} — 상품조회 원문(`_raw`).
+    `_raw` 는 쪽마다 덮어쓰기라 쪽 수가 줄면 옛 뒤쪽 파일이 남음(T-142 rladygks0221 72쪽인데 192쪽까지) → 1쪽이 말한 전체 쪽까지만."""
     out: dict = defaultdict(dict)
+    pages: dict = defaultdict(dict)
     for p in sorted((output / "_raw").glob("*_vendor_inventory_p*.json.gz")):
-        aid = p.name.split("_vendor_inventory_p")[0]
-        for x in json.loads(gzip.decompress(p.read_bytes()).decode("utf-8"))["data"]["productList"]:
+        aid, n = p.name.removesuffix(".json.gz").rsplit("_vendor_inventory_p", 1)
+        pages[aid][int(n)] = p
+    for aid, files in pages.items():
+        total = int(_raw_page(files[1])["pagination"]["totalPages"])
+        for x in (x for n, p in files.items() if n <= total for x in _raw_page(p)["productList"]):
             out[aid][str(x["vendorInventoryId"])] = {
                 "created": str(x["createdOn"])[:10], "name": x.get("productName") or "",
                 "types": {str(i["vendorItemId"]): i.get("registrationType") for i in x.get("vendorInventoryItems") or []}}
