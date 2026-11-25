@@ -304,9 +304,10 @@ def run_job(opts: dict, on_log=print) -> dict:
 
 
 def install_inputs(dest: Path, judge_dir: Path, db: Path) -> list[str]:
-    """셀독 입력(판정표·사업자 대응표·계약 DB 사본)을 dest 에 복사(1회 준비 · 원본 그대로 · 덮어쓰기 없음).
+    """셀독 입력(판정표·사업자 대응표·계약 DB 사본 · 있으면 유형 판정표)을 dest 에 복사(1회 준비 · 원본 그대로 · 덮어쓰기 없음).
     이미 같은 내용 = 그대로 · 다른 내용·다른 이름의 DB 사본이 이미 있음 = SeldocInputError(손으로 옮긴 뒤 다시)."""
-    pairs = [(Path(judge_dir) / SS.JUDGE, SS.JUDGE), (Path(judge_dir) / CTX.MAP_CSV, CTX.MAP_CSV), (Path(db), Path(db).name)]
+    types = [SS.TYPES] if (Path(judge_dir) / SS.TYPES).is_file() else []      # 선택 파일(없음 = 규칙 밖 유형은 그 계약만 건너뜀 · load_types)
+    pairs = [(Path(judge_dir) / n, n) for n in (SS.JUDGE, CTX.MAP_CSV, *types)] + [(Path(db), Path(db).name)]
     for src, _ in pairs:
         if not src.is_file():
             raise SS.SeldocInputError(f"{PREFIX}{src} 없음")

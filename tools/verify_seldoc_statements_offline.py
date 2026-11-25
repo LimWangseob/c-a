@@ -633,6 +633,17 @@ def test_batch_inputs_install() -> None:
         v7 = make_db(base / "계약서_정밀분석_DB_전수_v7.xlsx")
         _raises(JOB.install_inputs, dest, src, v7, word="다른 계약 DB 사본")
         _raises(JOB.install_inputs, dest, src, make_db(base / "db.xlsx"), word="이름")
+    with tempfile.TemporaryDirectory() as d:                                   # 유형 판정표(소유자 11-24 '제안대로 확정')가 있으면 함께 복사
+        base = Path(d)                                                         # (빠지면 규칙 밖 유형의 대상 계약이 안 만들어짐 · T-179 재현)
+        src = make_inputs(base, JUDGE)
+        (src / SS.TYPES).write_text('{"유형": {"운영대행": {"판정": "대상", "근거": "x"}}}', encoding="utf-8")
+        db = make_db(base / "계약서_정밀분석_DB_전수_v6.xlsx")
+        dest = JOB.default_inputs(base / "운용")
+        JOB.install_inputs(dest, src, db)
+        assert SS.load_types(dest) == SS.load_types(src) != {}
+        assert all(x.startswith("같음") for x in JOB.install_inputs(dest, src, db))
+        (src / SS.TYPES).write_text('{"유형": {}}', encoding="utf-8")
+        _raises(JOB.install_inputs, dest, src, db, word="내용이 다름")
     print("test_batch_inputs_install OK")
 
 
