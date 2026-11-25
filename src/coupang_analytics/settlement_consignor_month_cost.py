@@ -7,6 +7,7 @@ D-304·D-319 지급 끝난 윙 음수 회차 3PM 되돌림 = 기존 계산의 �
 """
 from __future__ import annotations
 
+import glob
 from collections import Counter, defaultdict
 from datetime import date, timedelta
 
@@ -202,7 +203,7 @@ def milkrun(st: MonthState) -> None:
 
 # ── 8 재고 분실·파손 보상 ──
 def _comp_report(st: MonthState) -> tuple[list, float]:
-    tok = SF._token(st.acct, "계정명")
+    tok = glob.escape(SF._token(st.acct, "계정명"))        # 계정명 [ ] = 문자 묶음 아님
     files = []
     for p in sorted((st.base / "파일" / "비용").glob(f"{tok}_*_재고-손실-보상_*.xlsx")):
         meta = SF.parse_file_name(p.name)

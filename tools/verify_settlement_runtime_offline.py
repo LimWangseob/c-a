@@ -4692,6 +4692,79 @@ def p75_stale_fail_evidence_cleared():
     ok("받은 달 옛 실패 파일 = 보관 후 치움(받은기록에 있던 달·이번에 받은 달·같은 날) · 못 받은 달 실패 파일은 그대로")
 
 
+def p76_bracket_account_files():
+    print("[P76] 계정명에 [ ] 가 있어도 그 계정 파일을 읽음(광고·밀크런·재고 보상·윙·이름 맞춤 · T-183) — glob 문자 묶음으로 읽지 않음")
+    import gc
+    import json
+    from types import SimpleNamespace
+    import openpyxl
+    from coupang_analytics import settlement_consignor_month_cost as MC
+    from coupang_analytics import settlement_files as SF
+    from coupang_analytics import settlement_jobs as SJ
+    from coupang_analytics import settlement_statement_account as AC
+    from coupang_analytics import settlement_store as STORE
+    sys.path.insert(0, str(ROOT / "tools"))
+    import settlement_download as TD
+
+    def xlsx(path, rows):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        wb = openpyxl.Workbook()
+        for r in rows:
+            wb.active.append(r)
+        wb.save(path)
+
+    comp_rows = lambda amt: [[None] * 6, ["발생일", "정산주기(종료일)", "주문ID", "옵션ID", "등록상품명", "보상 금액"],  # noqa: E731
+                             ["2026-01-09", "2026-01-11", "", "92733163987", "가상품", amt]]
+
+    def lay(base, acct, n):
+        """가짜 계정 하나의 파일 한 벌 — 금액 = 광고 10n · 청구 20n · 밀크런 30n+n · 재고 보상 40n."""
+        tok = SF._token(acct, "계정명")
+        ad = base / "검증자료" / "광고"
+        xlsx(ad / f"{tok}_매출성장광고_202601.xlsx", [["날짜", "캠페인 ID", "광고집행 옵션ID", "광고비"], [20260109, 7, 111, 10 * n]])
+        (ad / f"{tok}_광고정산_202601.json").write_text(json.dumps(
+            {"items": [{"date": 20260109, "campaignId": 7, "billableAmount": 20 * n}]}), encoding="utf-8")
+        xlsx(ad / f"{tok}_밀크런_202601.xlsx", [["밀크런번호", "총 합계금액", "취소수수료"], [f"M{n}", str(30 * n), str(n)]])
+        xlsx(base / "파일" / "비용" / SF.settle_file_name(acct, D("2026-01-30"), "로켓그로스", "주정산", "재고 손실 보상",
+                                                        D("2026-01-05"), D("2026-01-11")), comp_rows(40 * n))
+        (base / "파일" / SF.settle_file_name(acct, D("2026-01-30"), "윙", "주정산", "주문상세", D("2026-01-05"),
+                                            D("2026-01-11"))).write_bytes(b"x")
+
+    # 괄호 계정 · 괄호 속 글자 하나와 이름이 같은 남의 계정('가짜[나다]' 를 문자 묶음으로 읽으면 '가짜나' 가 잡힘) · 보통 계정
+    ours, other, plain = "가짜[나다]-x1", "가짜나-x1", "보통-x2"
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:     # 읽기 전용 엑셀 손잡이가 늦게 닫힘(Windows)
+        base, moved = Path(tmp) / "정산", Path(tmp) / "이름맞춤"
+        for acct, n in ((ours, 1), (other, 5), (plain, 3)):
+            lay(base, acct, n)
+            lay(moved, acct, n)
+        got = {}
+        saved = TD.FILES, SF.load_settle_file
+        TD.FILES, SF.load_settle_file = base / "파일", (lambda p: p.name)
+        try:
+            for acct in (ours, other, plain):
+                pa, bill, have = AC.ad_files(base, acct)
+                st = SimpleNamespace(base=base, acct=acct, m="2026-01", managed_vid=lambda o, w: ("P", True),
+                                     cols={"P": [0] * 20}, common=[])
+                _files, comp = MC._comp_report(st)
+                got[acct] = ([x[3] for x in pa], bill, have, AC.milk_rows(base, acct), AC.milk_rows(base, acct, "202602"), comp,
+                             [x.partition("_")[0] for x in TD._wing_files(acct)])
+        finally:
+            TD.FILES, SF.load_settle_file = saved
+        for acct, n in ((ours, 1), (other, 5), (plain, 3)):
+            assert got[acct] == ([10 * n], {(20260109, "7"): 20 * n}, {"202601"}, [(f"M{n}", 31 * n)], [], 40 * n, [acct]), (acct, got[acct])
+        # 이름 맞춤: 옛 이름에 [ ] 가 있으면 그 이름 광고 파일만 지금 이름으로 — 남의 계정 파일은 그대로
+        saved = STORE.BASE, STORE.VERIFY
+        STORE.BASE, STORE.VERIFY = moved, moved / "검증자료"
+        try:
+            STORE._migrate_side_data({ours: "새이름-x1"}, [])
+        finally:
+            STORE.BASE, STORE.VERIFY = saved
+        names = sorted(p.name for p in (moved / "검증자료" / "광고").iterdir())
+        assert names == sorted(f"{a}_{t}" for a in ("새이름-x1", other, plain)
+                               for t in ("광고정산_202601.json", "매출성장광고_202601.xlsx", "밀크런_202601.xlsx")), names
+        gc.collect()
+    ok("괄호 계정 = 자기 파일만(광고 보고서·광고정산·받은 달·밀크런·재고 보상·윙) · 남의 계정 안 잡음 · 이름 맞춤도 자기 파일만")
+
+
 def main():
     import settlement_download as TD
     TD._start_statements = lambda cycle, args: None   # 시험이 실제 정산서 배치(구글시트 쓰기 포함)를 띄우지 않게(D-399 · 띄우기 시험 = verify_statement_batch_offline)
@@ -4762,6 +4835,7 @@ def main():
     p73_evidence_reuse_batch_abort()
     p74_restart_rest_and_finish_now()
     p75_stale_fail_evidence_cleared()
+    p76_bracket_account_files()
     print("정산 런타임 오프라인 검증 통과")
 
 

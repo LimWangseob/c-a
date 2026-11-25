@@ -6,6 +6,7 @@ tools/settlement_download.py 에서 분리(2026-10-08·행동 불변): 경로 �
 """
 from __future__ import annotations
 
+import glob
 import json
 import os
 import re
@@ -161,7 +162,7 @@ def _migrate_side_data(mt: dict, jobs) -> bool:
             if (base / old).is_dir():
                 _move_folder(base / old, base / new, old, sub)
         ad = VERIFY / "광고"
-        for p in sorted(ad.glob(f"{old}_*")) if ad.is_dir() else []:
+        for p in sorted(ad.glob(f"{glob.escape(old)}_*")) if ad.is_dir() else []:
             tail = p.name.partition("_")[2]
             _move_or_keep(p, ad / f"{new}_{tail}", old, "광고", _merge_ad_state if tail == "광고.json" else None)
     changed = False

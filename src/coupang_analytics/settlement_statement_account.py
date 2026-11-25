@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import glob
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -60,7 +61,7 @@ def xlsx_rows(p: Path) -> list:
 
 def ad_files(base: Path, acct: str) -> tuple[list, dict, set]:
     """검증자료/광고 — (보고서 줄[(날짜, 캠페인 ID, 광고집행 옵션ID, 광고비)], {(날짜, 캠페인 ID): 청구가능 광고비}, 보고서 받은 달). 없으면 ([], {}, set())."""
-    d, tok = base / "검증자료" / "광고", SF._token(acct, "계정명")
+    d, tok = base / "검증자료" / "광고", glob.escape(SF._token(acct, "계정명"))   # 계정명 [ ] = 문자 묶음 아님
     pa = [(r.get("날짜"), r.get("캠페인 ID"), r.get("광고집행 옵션ID"), num(r.get("광고비")))
           for p in sorted(d.glob(f"{tok}_매출성장광고_*.xlsx")) for r in xlsx_rows(p) if r.get("날짜") and r.get("캠페인 ID")]
     bill: Counter = Counter()
@@ -82,7 +83,7 @@ def _txt_num(v) -> float:
 
 def milk_rows(base: Path, acct: str, since: str = "") -> list:
     """since = 'YYYYMM' — 그 달 뒤 밀크런 파일만."""
-    d, tok = base / "검증자료" / "광고", SF._token(acct, "계정명")
+    d, tok = base / "검증자료" / "광고", glob.escape(SF._token(acct, "계정명"))   # 계정명 [ ] = 문자 묶음 아님
     return [(str(r.get("밀크런번호")), _txt_num(r.get("총 합계금액")) + _txt_num(r.get("취소수수료")))
             for p in sorted(d.glob(f"{tok}_밀크런_*.xlsx")) if p.stem[-6:] >= since for r in xlsx_rows(p) if r.get("밀크런번호")]
 
