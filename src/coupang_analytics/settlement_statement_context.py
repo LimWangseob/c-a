@@ -22,6 +22,7 @@ from coupang_analytics import sales_history, sales_summary
 from coupang_analytics import settlement_experience as XP
 from coupang_analytics import settlement_files as SF
 from coupang_analytics import settlement_ledger as SL
+from coupang_analytics import settlement_read_files as RF
 from coupang_analytics import settlement_statement_scope as SCOPE
 from coupang_analytics import settlement_statement_source as SRC
 
@@ -84,21 +85,7 @@ def contracts(table: Path) -> dict:
 
 def unjudged(p: Path, svc_judge: dict) -> set:
     """윙 주문상세의 서비스이용율 칸 → 가전 요율인데 판정표에 없는 등록상품ID."""
-    wb = openpyxl.load_workbook(p, read_only=True)
-    h, out = None, set()
-    for r in wb.worksheets[0].iter_rows(values_only=True):
-        if h is None:
-            h = {str(c): i for i, c in enumerate(r) if c} if r and "상품 ID" in r and "서비스이용율(%,VAT별도)" in r else None
-            continue
-        pid = r[h["상품 ID"]]
-        try:
-            rate = round(float(r[h["서비스이용율(%,VAT별도)"]] or 0), 1)
-        except ValueError:
-            continue
-        if pid and rate in DIGITAL_RATES and str(pid) not in svc_judge:
-            out.add(str(pid))
-    wb.close()
-    return out
+    return {pid for pid, rate in RF.wing_rates(p) if rate in DIGITAL_RATES and pid not in svc_judge}
 
 
 def settle_files(base: Path) -> list:
@@ -106,7 +93,7 @@ def settle_files(base: Path) -> list:
     out = []
     for p in sorted((base / "파일").glob("*.xlsx")):
         try:
-            out.append((p, SF.load_settle_file(p)))
+            out.append((p, RF.settle_file(p)))
         except Exception:  # noqa: BLE001 — 읽는 방법 없는 리포트는 옵션↔상품 대응에 필요 없음
             continue
     return out

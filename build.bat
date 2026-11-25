@@ -33,6 +33,7 @@ copy /Y "%~dp0deploy\정산_상태확인.bat" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0deploy\정산증빙_전체받기.bat" "dist\coupang-analytics\" >nul
 rem 정산서입력_반영.bat = 개발 PC 가 만든 정산서입력_YYMMDD.zip 을 output\정산서\입력\ 에 더하기만(지우기 없음 · D-399 계획 6).
 copy /Y "%~dp0deploy\정산서입력_반영.bat" "dist\coupang-analytics\" >nul
+copy /Y "%~dp0deploy\inputs_apply.ps1" "dist\coupang-analytics\" >nul
 rem output 내보내기(D-243 ①②) = bat + 표준 라이브러리만 쓰는 .py 2개(운용 PC py -3) · 기준본 기록은 개발 PC output 에 있을 때만(처음 1회용).
 copy /Y "%~dp0deploy\output_내보내기.bat" "dist\coupang-analytics\" >nul
 copy /Y "%~dp0tools\output_export.py" "dist\coupang-analytics\" >nul
@@ -77,10 +78,15 @@ if exist "%~dp0proxies.txt" (
   echo   [건너뜀] 노트북에 proxies.txt 없음 — 프록시 ON 이어도 운용 PC에 파일 없으면 순위 스킵^(fail-closed^)
 )
 echo.
+echo [4.7/5] 정산서 입력 묶음(업데이트.bat 이 output\정산서\ 에 더함 · 평문 비밀번호 없음 검사)...
+del /Q "dist\정산서입력_*.zip" 2>nul
+python tools\statement_inputs_pack.py --strict --dest dist
+if errorlevel 1 goto :err
+echo.
 echo [5/5] 배포용 zip 압축(폴더째 — 개발·운용 폴더명 동일: coupang-analytics)...
 del /Q "dist\쿠팡애널리틱스_배포.zip" 2>nul
 rem zip 루트에 '0_먼저실행_보안제외.bat' 을 함께 넣는다(압축 풀기 전 관리자로 실행 → Defender 오탐 삭제 방지).
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path 'dist\coupang-analytics','dist\0_먼저실행_보안제외.bat','dist\업데이트.bat' -DestinationPath 'dist\쿠팡애널리틱스_배포.zip' -Force"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$in = @(Get-ChildItem 'dist\정산서입력_*.zip' | ForEach-Object FullName); if ($in.Count -ne 1) { throw '정산서 입력 묶음이 1개가 아님' }; Compress-Archive -Path (@('dist\coupang-analytics','dist\0_먼저실행_보안제외.bat','dist\업데이트.bat') + $in) -DestinationPath 'dist\쿠팡애널리틱스_배포.zip' -Force"
 if errorlevel 1 goto :err
 echo.
 echo 완료!
@@ -93,7 +99,7 @@ echo     설치가 _씨앗\의 검증된 config.json·proxies.txt·통계마스�
 echo     + 바로가기·야간무인 등록. 설정 탭에 다시 입력할 것 없음(노트북 설정 그대로 복사됨).
 echo   [운용 PC · 업데이트] 새 zip 을 **임시 폴더**에 풀기 → zip 루트의 "업데이트.bat" 더블클릭(관리자 확인 '예') → 끝.
 echo     돌고 있는 앱·정산 프로그램을 스스로 멈추고(작업 관리자 강제 종료 불필요) 설치 폴더에 덮어쓴 뒤 설치(Y)·정산 이어서.
-echo     output·data·config.json·proxies.txt 는 건드리지 않습니다(마스터·크롬 프로필·설정 유지).
+echo     output·data·config.json·proxies.txt 는 건드리지 않습니다(마스터·크롬 프로필·설정 유지 · 정산서 입력만 output\정산서\ 에 더함).
 echo   (실행 PC 에 Google Chrome 설치 필수)
 echo   ⚠ _설정값.json·배포 zip 에는 API/SA 키가 평문으로 들어있으니 외부 공유·업로드 금지, 설치 후 삭제하세요.
 echo.

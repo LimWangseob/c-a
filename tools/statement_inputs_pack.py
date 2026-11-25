@@ -1,5 +1,6 @@
 """정산서 입력 묶기(개발 PC → 운용 PC · D-399 계획 설계 6) — `output\\정산서\\입력\\` 손 입력 10종 + `output\\정산서\\입력_셀독\\` →
-`정산서입력_YYMMDD.zip`(이름 UTF-8). 운용 PC 는 `deploy\\정산서입력_반영.bat` 로 `output\\정산서\\` 에 더하기만 한다.
+`정산서입력_YYMMDD.zip`(이름 UTF-8). 운용 PC 는 `업데이트.bat`(배포 zip 안의 묶음) 또는
+`deploy\\정산서입력_반영.bat` 로 `output\\정산서\\` 에 더하기만 한다.
 
     python tools/statement_inputs_pack.py [--output <output 폴더>] [--seldoc <셀독 입력 폴더>] [--dest <zip 둘 폴더>]
 
@@ -81,14 +82,16 @@ def zip_name(dest: Path, now: datetime) -> Path:
     return p if not p.exists() else dest / f"정산서입력_{now:%y%m%d_%H%M%S}.zip"
 
 
-def pack(inputs: Path, seldoc: Path, dest: Path, now: datetime | None = None, log=print) -> Path:
-    """두 폴더 → zip 1개(원본 그대로 둠). 입력 폴더가 비었거나 비밀번호 칸이 있으면 ValueError."""
+def pack(inputs: Path, seldoc: Path, dest: Path, now: datetime | None = None, log=print, strict: bool = False) -> Path:
+    """두 폴더 → zip 1개(원본 그대로 둠). 입력 폴더가 비었거나 비밀번호 칸이 있으면 ValueError · strict(배포 빌드) = 셀독 입력이 빠져도 ValueError."""
     now = now or datetime.now()
     plan = [(p, Path("입력") / p.relative_to(inputs)) for p in files_of(inputs)]
     plan += [(p, Path("입력_셀독") / p.relative_to(seldoc)) for p in files_of(seldoc)]
     if not any(arc.parts[0] == "입력" for _, arc in plan):
         raise ValueError(f"입력 폴더에 묶을 파일 없음: {inputs}")
     miss = seldoc_missing(seldoc)
+    if miss and strict:
+        raise ValueError(f"셀독 입력 빠짐: {', '.join(miss)} — {seldoc}")
     if miss:
         log(f"⚠ 셀독 입력 빠짐(셀독 정산서는 운용 PC 에서 '중단'으로 보고됨): {', '.join(miss)}")
     bad = [str(p) for p, _ in plan if has_password(p)]
@@ -113,10 +116,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--output", type=Path, default=ROOT / "output")
     ap.add_argument("--seldoc", type=Path, help="셀독 정산서 입력 폴더(기본 <output>/정산서/입력_셀독)")
     ap.add_argument("--dest", type=Path, help="zip 둘 폴더(기본 <output>/정산서)")
+    ap.add_argument("--strict", action="store_true", help="셀독 입력이 빠지면 묶지 않음(배포 빌드용)")
     a = ap.parse_args(argv)
     base = a.output / "정산서"
     try:
-        pack(base / "입력", a.seldoc or base / "입력_셀독", a.dest or base)
+        pack(base / "입력", a.seldoc or base / "입력_셀독", a.dest or base, strict=a.strict)
     except ValueError as exc:
         print(f"❌ 묶지 않음 — {exc}")
         return 1

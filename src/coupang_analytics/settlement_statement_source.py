@@ -22,6 +22,7 @@ import openpyxl
 
 from coupang_analytics import settlement_files as SF
 from coupang_analytics import settlement_forecast as FC
+from coupang_analytics import settlement_read_files as RF
 from coupang_analytics import settlement_stats as SS
 from coupang_analytics.settlement_ledger import sold_2025, wing_month_targets
 
@@ -267,7 +268,7 @@ def rg_file_targets(base: Path) -> dict:
     out: dict = defaultdict(dict)
     for p in (base / "파일").glob("*_로켓그로스_*판매수수료_*.xlsx"):
         m = SF.parse_file_name(p.name)
-        out[aid_of(m["account"])][(str(m["period_start"]), str(m["period_end"]))] = SF.load_settle_file(p).settle_total
+        out[aid_of(m["account"])][(str(m["period_start"]), str(m["period_end"]))] = RF.settle_file(p).settle_total
     return out
 
 

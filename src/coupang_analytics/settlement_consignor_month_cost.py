@@ -15,6 +15,7 @@ from coupang_analytics import settlement_fee_rules as FR
 from coupang_analytics import settlement_forecast as FC
 from coupang_analytics import settlement_files as SF
 from coupang_analytics import settlement_managed_alloc as MA
+from coupang_analytics import settlement_read_files as RF
 from coupang_analytics import settlement_statement_account as AC
 from coupang_analytics.settlement_consignor_month_calc import AD_NOCAMP, MonthState, jl, kst_month, month_end, pct
 from coupang_analytics.settlement_statement_account import num
@@ -182,8 +183,7 @@ def milkrun(st: MonthState) -> None:
     if not p.exists():
         _milk_nofile(st, by_date)
         return
-    rows = [(str(r.get("밀크런번호")), AC._txt_num(r.get("총 합계금액")) + AC._txt_num(r.get("취소수수료")))
-            for r in AC.xlsx_rows(p) if r.get("밀크런번호")]
+    rows = AC.milk_file(p)
     total, miss = _milk_alloc(st, rows)
     if miss and round(sum(x[1] for x in miss)):
         st.common.append((f"밀크런 중 쿠팡 입고 내역이 없는 금액 (밀크런 {', '.join(str(x[0]) for x in miss)})", sum(x[1] for x in miss), "milk"))
@@ -212,7 +212,7 @@ def _comp_report(st: MonthState) -> tuple[list, float]:
     total = 0
     unk = 0
     for p, meta in files:
-        for cl in SF.rg_cost_lines(SF.read_sheets(p), st.acct, meta["period_end"]):
+        for cl in RF.comp_lines(p):
             if cl.kind != SF.COMPENSATION:
                 continue
             total += cl.ex_vat

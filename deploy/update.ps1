@@ -4,9 +4,10 @@
 #   3) 정산 프로그램 → 앱 → 나머지 순서로 트리째 종료(00:10 시작 정리·[정산 중지]와 같은 taskkill /F /T · D-024)
 #   4) 다 멈췄는지(프로세스 다시 조회 + 덮어쓸 파일 잠금) 확인 — 하나라도 남으면 **복사 안 함**(이유 표시)
 #   5) 복사(⛔ output\ · data\ · config.json · proxies.txt 는 절대 안 덮음 · 설치 폴더 파일은 지우지 않음) + 크기·exe 내용 대조
-#   6) install.ps1(설치.bat 과 같은 단계 — 예약 작업 Y)  7) 정산·무인 앱을 멈췄으면 '재부팅 복구' 예약 작업(--resume)으로 다시 띄움
+#   6) 정산서 입력 묶음(정산서입력_*.zip — 새 폴더나 그 위 zip 루트에 있으면)을 output\정산서\ 에 더하기만(inputs_apply.ps1 · 다시 띄우기 전)
+#   7) install.ps1(설치.bat 과 같은 단계 — 예약 작업 Y)  8) 정산·무인 앱을 멈췄으면 '재부팅 복구' 예약 작업(--resume)으로 다시 띄움
 #      = 재부팅 때와 같은 길: 오늘 끊긴 단계만 이어서 + 정산 자동 수집 다시 기동(같은 회차 '완료'면 정산은 바로 끝남 D-091).
-# 종료코드: 0 = 업데이트됨 · 2 = 아무것도 안 바꿈(이유 표시) · 3 = 복사 도중 실패(다시 실행하면 이어서 덮어씀).
+# 종료코드: 0 = 업데이트됨 · 4 = 프로그램은 업데이트됨 · 정산서 입력 반영 실패 · 2 = 아무것도 안 바꿈(이유 표시) · 3 = 복사 도중 실패(다시 실행하면 이어서 덮어씀).
 param(
     [string]$Source = '',      # 새 zip 을 푼 coupang-analytics 폴더(기본 = 이 스크립트 폴더)
     [string]$Target = '',      # 설치 폴더(기본 = 예약 작업·바로가기에서 찾음)
@@ -23,6 +24,7 @@ $SETTLE = '정산다운로드.exe'
 $NEED = @($APP, $SETTLE)                        # 새 폴더에 꼭 있어야 하는 실행 파일(Defender 가 지웠으면 멈춤)
 $KEEP_DIRS = @('output', 'data')                # ⛔ 사용자 자료 — 절대 덮어쓰기·삭제 안 함
 $KEEP_FILES = @('config.json', 'proxies.txt')
+$INPUTS_ZIP = '정산서입력_*.zip'                  # 설치 폴더로 복사하지 않음(output\정산서 에 풀기만)
 
 function Say([string]$m) { Write-Host $m }
 function Stop-Here([string]$m) {
@@ -136,6 +138,7 @@ function Get-CopyList([string]$src) {
         $top = ($rel -split '\\')[0]
         if ($KEEP_DIRS -contains $top.ToLower() -and $rel.Contains('\')) { continue }
         if ($KEEP_FILES -contains $rel.ToLower()) { continue }
+        if ($rel -like $INPUTS_ZIP) { continue }
         $list += [pscustomobject]@{ Rel = $rel; Full = $f.FullName }
     }
     return $list
@@ -220,6 +223,38 @@ function Start-Again([string]$root, [string]$why) {
     Say '  [확인 필요] 30초 안에 정산 프로그램이 안 보임 — 이번 회차가 이미 끝났으면 정상입니다. 정산_상태확인.bat 으로 확인하세요.'
 }
 
+function Find-InputsZip([string]$s) {
+    # 새 폴더 · 그 위(zip 루트 = 업데이트.bat 이 있는 폴더)에서 이름 순 마지막 묶음
+    $dirs = @($s)
+    $up = Split-Path -Parent $s
+    if ($up -and (Test-Path -LiteralPath (Join-Path $up '업데이트.bat'))) { $dirs += $up }
+    $z = @($dirs | ForEach-Object { Get-ChildItem -LiteralPath $_ -Filter $INPUTS_ZIP -File } | Sort-Object Name)
+    if ($z.Count) { return $z[-1].FullName }
+    return ''
+}
+
+function Add-Inputs([string]$s, [string]$d) {
+    # 정산서 입력 더하기 → $true = 됨(묶음 없음 포함) · $false = 묶음이 있는데 실패
+    $zip = Find-InputsZip $s
+    $out = Join-Path $d 'output'
+    if (-not $zip) {
+        $now = Join-Path $out '정산서\입력'
+        if ((Test-Path -LiteralPath $now) -and @(Get-ChildItem -LiteralPath $now -File).Count) { Say '  (새 입력 묶음 없음 — 지금 들어 있는 정산서 입력 그대로)' }
+        else { Say '  ⚠ 정산서 입력 묶음이 없고 설치 폴더에도 정산서 입력이 없음 — 정산서 배치는 입력 없음 중단으로 보고됩니다.' }
+        return $true
+    }
+    $code = 1
+    try {
+        $ErrorActionPreference = 'Continue'
+        $lines = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $s 'inputs_apply.ps1') -OutDir $out -Zip $zip 2>&1
+        $code = $LASTEXITCODE
+        $lines | ForEach-Object { Say ([string]$_) }
+    } catch { Say ('  ' + $_.Exception.Message) }
+    if ($code -eq 0) { Say '  [확인] 정산서 입력 반영됨'; return $true }
+    Say '  [실패] 정산서 입력 반영 실패(위 이유) — 프로그램 업데이트는 됐고 입력만 안 들어갔습니다. 설치 폴더의 정산서입력_반영.bat 에 묶음을 끌어다 놓아 다시 하세요.'
+    return $false
+}
+
 function Get-RestartReason($procs) {
     $why = @()
     if (@($procs | Where-Object { $_.Name -ieq $SETTLE }).Count) { $why += '정산 프로그램을 멈춤' }
@@ -246,19 +281,19 @@ foreach ($n in $NEED) {
         Stop-Here "새 폴더에 '$n' 이 없습니다($src) — Windows Defender 가 지웠을 수 있어요. 0_먼저실행_보안제외.bat 을 관리자로 실행한 뒤 zip 을 다시 푸세요."
     }
 }
-Say "[1/6] 새 폴더: $src"
+Say "[1/7] 새 폴더: $src"
 $dst = Resolve-Target
 if (-not (Test-Path (Join-Path $dst $APP))) { Stop-Here "설치 폴더에 '$APP' 이 없습니다: $dst" }
 if ($dst -ieq $src) { Stop-Here '새 폴더와 설치 폴더가 같습니다 — 새 zip 을 다른(임시) 폴더에 풀고 그 안의 업데이트.bat 을 실행하세요.' }
 Say "      설치 폴더: $dst"
 
-Say '[2/6] 설치 폴더에서 실행 중인 프로그램 확인...'
+Say '[2/7] 설치 폴더에서 실행 중인 프로그램 확인...'
 $running = @(Get-Running $dst)
 if ($running.Count -eq 0) { Say '  [확인] 실행 중인 프로그램 없음 — 바로 덮어씁니다.' } else { Show-Running $running }
 Confirm-Go $dst $running
 $why = Get-RestartReason $running
 
-Say '[3/6] 멈추기...'
+Say '[3/7] 멈추기...'
 if ($running.Count) { Stop-All $running } else { Say '  (멈출 것 없음)' }
 $left = @(Get-Running $dst)
 if ($left.Count) {
@@ -276,7 +311,7 @@ if ($locked.Count) {
 }
 Say "  [확인] 멈춤 확인 — 실행 중 0개 · 덮어쓸 파일 잠금 0개"
 
-Say "[4/6] 덮어쓰기 $($list.Count)개(⛔ output\ · data\ · config.json · proxies.txt 는 건드리지 않음 · 지우는 파일 없음)..."
+Say "[4/7] 덮어쓰기 $($list.Count)개(⛔ output\ · data\ · config.json · proxies.txt 는 건드리지 않음 · 지우는 파일 없음)..."
 $fail = @(Copy-All $list $dst)
 if ($fail.Count) {
     $fail | Select-Object -First 10 | ForEach-Object { Say "    - $_" }
@@ -291,16 +326,19 @@ if ($bad.Count) {
 }
 Say "  [확인] 복사 $($list.Count)개 · 크기·exe 내용 대조 일치"
 
-Say '[5/6] 설치(바로가기·설정 적용·야간 무인 예약 — 설치.bat 과 같음)...'
+Say '[5/7] 정산서 입력(있으면 output\정산서\ 에 더하기만 · 지우는 파일 없음)...'
+$inOk = Add-Inputs $src $dst
+
+Say '[6/7] 설치(바로가기·설정 적용·야간 무인 예약 — 설치.bat 과 같음)...'
 $inst = Join-Path $dst 'install.ps1'
 if ($NoInstall) { Say '  (-NoInstall 로 건너뜀)' }
 elseif (-not (Test-Path $inst)) { Say "  [경고] install.ps1 이 없어 건너뜀: $inst" }
 else { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $inst }
 
-Say '[6/6] 이어서 하기...'
+Say '[7/7] 이어서 하기...'
 if ($why) { Start-Again $dst $why } else { Say '  (멈춘 정산·무인 실행 없음 — 다시 띄울 것 없음 · 앱은 바로가기로 켜세요)' }
 Say ''
 Say '=============================================='
-Say '  업데이트 완료'
+if ($inOk) { Say '  업데이트 완료' } else { Say '  업데이트 완료 — ⚠ 정산서 입력은 안 들어감(위 [실패] 확인)' }
 Say '=============================================='
-exit 0
+if ($inOk) { exit 0 } else { exit 4 }

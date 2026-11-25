@@ -17,6 +17,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from coupang_analytics import settlement_files as SF
+from coupang_analytics import settlement_read_files as RF
+from coupang_analytics import settlement_read_store as STORE
 from coupang_analytics import settlement_statement_pending as PEND
 from coupang_analytics.settlement_consignor_month_cost import CFS_FEES as FEES
 from coupang_analytics.settlement_ledger import SALE_FROM
@@ -115,6 +117,10 @@ def day_lines(sheets: dict) -> list:
     return out
 
 
+def _logi_lines(p: Path) -> list:
+    return day_lines(SF.read_sheets(p))
+
+
 def read_costs(base: Path, acct: str) -> tuple[dict, dict, dict]:
     """계정 비용 리포트 → ({정산주기 끝: 물류비 줄}, {정산주기 끝: 재고 보상 [(옵션ID, 달, 금액)]}, {물류비 정산주기 끝: 시작})."""
     logi: dict = {}
@@ -123,11 +129,10 @@ def read_costs(base: Path, acct: str) -> tuple[dict, dict, dict]:
     for p in sorted((base / "파일" / "비용").glob(glob.escape(SF._token(acct, "계정명")) + "_*.xlsx")):     # 계정명의 '[ ]' = 글자 그대로
         m = SF.parse_file_name(p.name)
         end = m["period_end"].isoformat()
-        sheets = SF.read_sheets(p)
         if m["report"].startswith("재고"):
-            comp.setdefault(end, []).extend((x.option_id, x.month, float(x.ex_vat)) for x in SF.rg_cost_lines(sheets, acct, m["period_end"]))
+            comp.setdefault(end, []).extend((x.option_id, x.month, float(x.ex_vat)) for x in RF.comp_lines(p))
         elif not m["report"].startswith("리뷰"):
-            logi.setdefault(end, []).extend(day_lines(sheets))
+            logi.setdefault(end, []).extend(STORE.read("물류비", p, _logi_lines, ("settlement_statement_cfs",)))
             starts[end] = max(starts.get(end, ""), m["period_start"].isoformat())
     return logi, comp, starts
 

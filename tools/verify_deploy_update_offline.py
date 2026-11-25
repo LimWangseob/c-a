@@ -7,6 +7,9 @@ r"""배포 업데이트(deploy/update.ps1 · 업데이트.bat) 오프라인 검�
   ③ 실행 중 아님 → 바로 복사(다시 띄울 것 없음)
   ④ 멈추기 실패(곧바로 다시 뜸 · 파일을 다른 프로그램이 쥠) → 복사 안 함 + 이유 표시(종료코드 2)
   ⑤ 새 폴더에 exe 없음(Defender) · 새 폴더 = 설치 폴더 → 아무것도 안 함
+  ⑦ 정산서 입력 묶음(소유자 11-25 '1, 2 모두 권장안대로 진행해줘' = 업데이트 하나로 입력까지) : zip 루트·새 폴더의 정산서입력_*.zip →
+     output\정산서\입력·입력_셀독 에 더하기만(다른 내용 = 옛 파일 보관 · 같은 내용 = 그대로) · 다시 띄우기 전 · 설치 폴더로는 복사 안 함 ·
+     묶음이 깨짐 = 종료코드 4·이유 · 묶음 없음 = 지금 입력 그대로 또는 ⚠ 안내
   ⑥ 배포 묶음: build.bat 이 두 파일을 zip 에 넣음 · ps1 = UTF-8 BOM(Windows PowerShell 한글) · bat = chcp 65001 · CRLF
 가짜 프로세스 = 시스템 cmd.exe 를 임시 설치 폴더에 앱·정산 이름으로 복사해 ping 을 자식으로 띄움(실제 앱·계정·네트워크 없음).
 
@@ -21,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from pathlib import Path
 
 try:
@@ -30,6 +34,8 @@ except AttributeError:
 
 ROOT = Path(__file__).resolve().parents[1]
 PS1 = ROOT / "deploy" / "update.ps1"
+APPLY = ROOT / "deploy" / "inputs_apply.ps1"
+APPLY_BAT = ROOT / "deploy" / "정산서입력_반영.bat"
 BAT = ROOT / "deploy" / "업데이트.bat"
 APP, SETTLE = "쿠팡애널리틱스.exe", "정산다운로드.exe"
 CMD = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "cmd.exe"
@@ -206,13 +212,73 @@ def case_refuse(base: Path) -> None:
     ok(code == 2 and "새 폴더와 설치 폴더가 같습니다" in out, f"같은 폴더 → 종료코드 2 (실제 {code})")
 
 
+def make_zip(p: Path, files: dict) -> None:
+    with zipfile.ZipFile(p, "w") as z:
+        for rel, text in files.items():
+            z.writestr(rel, text)
+
+
+def case_inputs(base: Path) -> None:
+    print("⑦ 정산서 입력 묶음 = 업데이트 하나로 output\\정산서\\ 에 더함")
+    src, dst = make_fixture(base / "c7")
+    shutil.copy2(APPLY, src / APPLY.name)
+    st = dst / "output" / "정산서"
+    for rel, text in {"입력/ledger.json": "옛", "입력/사업자_대응표.csv": "같음", "입력/손으로.json": "남음"}.items():
+        (st / rel).parent.mkdir(parents=True, exist_ok=True)
+        (st / rel).write_text(text, encoding="utf-8")
+    code, out = run_update(src, dst)
+    ok(code == 0 and "새 입력 묶음 없음 — 지금 들어 있는 정산서 입력 그대로" in out, f"묶음 없음 + 입력 있음 = 그대로 (실제 {code})")
+    (src.parent / "업데이트.bat").write_text("x", encoding="utf-8")                        # zip 루트 표시
+    make_zip(src.parent / "정산서입력_261101.zip", {"입력/ledger.json": "더 옛"})
+    make_zip(src.parent / "정산서입력_261126.zip", {"입력/ledger.json": "새", "입력/사업자_대응표.csv": "같음",
+                                              "입력_셀독/판정.json": "셀독", "밖/x.txt": "모르는 자리"})
+    code, out = run_update(src, dst)
+    ok(code == 0 and "[확인] 정산서 입력 반영됨" in out, f"종료코드 0·반영 표시 (실제 {code})")
+    ok(read(st / "입력/ledger.json") == "새" and read(st / "입력_셀독/판정.json") == "셀독", "새 입력 들어감(가장 최근 이름 묶음)")
+    ok(read(st / "입력/사업자_대응표.csv") == "같음" and read(st / "입력/손으로.json") == "남음", "같은 내용·묶음에 없는 파일 그대로")
+    old = [p for p in (st / "입력" / "보관").rglob("ledger.json") if "받은묶음" not in p.parts]
+    ok([read(p) for p in old] == ["옛"], "바뀐 파일의 옛 내용은 보관에 남음")
+    ok(not (st / "밖").exists() and "모르는 자리" in out, "모르는 자리는 안 넣음")
+    ok(not list(dst.glob("정산서입력_*")), "묶음을 설치 폴더로 복사하지 않음")
+    ok(out.index("정산서 입력 반영됨") < out.index("[6/7]") < out.index("[7/7]"), "설치·다시 띄우기보다 먼저")
+    ok(read(dst / "output" / "쿠팡데이타분석_통계.xlsx") == "OLD-MASTER" and not (dst / "output" / "x.txt").exists(), "output 다른 파일 그대로")
+    (src / "정산서입력_261127.zip").write_bytes(b"not a zip")                             # 새 폴더 안 묶음(가장 최근)이 깨짐
+    code, out = run_update(src, dst)
+    ok(code == 4 and "[실패] 정산서 입력 반영 실패" in out and "정산서 입력은 안 들어감" in out, f"깨진 묶음 = 종료코드 4·이유 (실제 {code})")
+    ok(read(dst / APP) == "NEW-APP" and read(st / "입력/ledger.json") == "새", "프로그램은 업데이트됨 · 있던 입력 그대로")
+    ok(not list(dst.glob("정산서입력_*")), "새 폴더 안 묶음도 설치 폴더로 복사하지 않음")
+    src, dst = make_fixture(base / "c8")
+    code, out = run_update(src, dst)
+    ok(code == 0 and "정산서 입력이 없음" in out, f"묶음도 입력도 없음 = ⚠ 안내 (실제 {code})")
+
+
+def case_apply_bat(base: Path) -> None:
+    print("⑦ 정산서입력_반영.bat(사람이 끌어다 놓기) = 같은 ps1")
+    home = base / "c9"
+    (home / "output").mkdir(parents=True)
+    shutil.copy2(APPLY_BAT, home / APPLY_BAT.name)
+    shutil.copy2(APPLY, home / APPLY.name)
+    make_zip(home / "정산서입력_261126.zip", {"입력/a.json": "1"})
+    for args in ([], [str(home / "정산서입력_261126.zip")]):
+        time.sleep(1.1)                                    # 보관 폴더 이름 = 초 단위 시각
+        r = subprocess.run(["cmd", "/c", str(home / APPLY_BAT.name), *args], capture_output=True, stdin=subprocess.DEVNULL,
+                           creationflags=NO_WIN, timeout=120)
+        ok(r.returncode == 0 and read(home / "output/정산서/입력/a.json") == "1",
+           f"{'끌어다 놓기' if args else '옆에 두고 실행'} 종료코드 0 (실제 {r.returncode}) {r.stdout.decode('utf-8', 'replace')[-200:] if r.returncode else ''}")
+
+
 def case_package() -> None:
     print("⑥ 배포 묶음(build.bat·인코딩)")
     build = (ROOT / "build.bat").read_text(encoding="utf-8")
     ok('deploy\\update.ps1" "dist\\coupang-analytics\\"' in build, "build.bat: update.ps1 → 코드 폴더")
     ok('deploy\\업데이트.bat" "dist\\"' in build and 'deploy\\업데이트.bat" "dist\\coupang-analytics\\"' in build,
        "build.bat: 업데이트.bat → zip 루트·코드 폴더")
-    ok("'dist\\업데이트.bat' -DestinationPath" in build, "build.bat: zip 에 업데이트.bat 포함")
+    ok("'dist\\업데이트.bat') + $in) -DestinationPath" in build, "build.bat: zip 에 업데이트.bat 포함")
+    ok('deploy\\inputs_apply.ps1" "dist\\coupang-analytics\\"' in build and "statement_inputs_pack.py --strict --dest dist" in build
+       and "$in = @(Get-ChildItem 'dist\\정산서입력_*.zip'" in build, "build.bat: 정산서 입력 묶음을 만들어 zip 루트에 · inputs_apply.ps1 포함")
+    raw_ap, raw_ab = APPLY.read_bytes(), APPLY_BAT.read_bytes()
+    ok(raw_ap.startswith(b"\xef\xbb\xbf") and b"\n" not in raw_ap.replace(b"\r\n", b"")
+       and not raw_ab.startswith(b"\xef\xbb\xbf") and b"\n" not in raw_ab.replace(b"\r\n", b""), "inputs_apply.ps1 = BOM·CRLF · 반영 bat = BOM 없음·CRLF")
     raw_ps1, raw_bat = PS1.read_bytes(), BAT.read_bytes()
     ok(raw_ps1.startswith(b"\xef\xbb\xbf"), "update.ps1 = UTF-8 BOM(Windows PowerShell 5.1 한글)")
     ok(b"chcp 65001" in raw_bat and not raw_bat.startswith(b"\xef\xbb\xbf"), "업데이트.bat = chcp 65001 · BOM 없음")
@@ -231,6 +297,8 @@ def main() -> int:
         case_respawn(base)
         case_locked(base)
         case_refuse(base)
+        case_inputs(base)
+        case_apply_bat(base)
     if FAILS:
         print(f"❌ 배포 업데이트 검증 실패 {len(FAILS)}건")
         return 1

@@ -20,6 +20,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from coupang_analytics import sales_summary, workbook_sales
+from coupang_analytics import settlement_read_store as STORE
 from coupang_analytics.registry_model import ITEM_ACCT_ID, K_CONFIRMED, K_INIT, K_NEW_ACCT, K_RESUME, SHEET_ACCT
 from coupang_analytics.workbook import OutputWorkbook
 
@@ -47,9 +48,13 @@ def merge_ledgers(blocks: list) -> dict:
     return dict(out)
 
 
+def _ledger_blocks(p: Path) -> dict:
+    return workbook_sales.managed_vids(OutputWorkbook.load(p))
+
+
 def ledger_vids(output: Path) -> dict:
     """{계정ID: 대장 VID} — 결과 엑셀(지금) + 날짜별 사본 블록(판매중지 블록 포함 · D-094)."""
-    return merge_ledgers([workbook_sales.managed_vids(OutputWorkbook.load(p)) for p in ledger_files(output)])
+    return merge_ledgers([STORE.read("결과엑셀", p, _ledger_blocks, ("settlement_statement_scope",)) for p in ledger_files(output)])
 
 
 # ── ③ 쿠팡 등록 상품 자료 ──

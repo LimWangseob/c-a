@@ -14,12 +14,11 @@ import json
 from collections import Counter, defaultdict
 from pathlib import Path
 
-import openpyxl
-
 from coupang_analytics import settlement_files as SF
 from coupang_analytics import settlement_ledger as SL
 from coupang_analytics import settlement_forecast as FC
 from coupang_analytics import settlement_managed_alloc as MA
+from coupang_analytics import settlement_read_files as RF
 from coupang_analytics import settlement_statement_pending as PEND
 from coupang_analytics import settlement_statement_scope as SCOPE
 from coupang_analytics import settlement_stats as SS
@@ -51,19 +50,10 @@ def verify_json(base: Path, acct: str) -> dict:
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
 
 
-def xlsx_rows(p: Path) -> list:
-    rows = list(openpyxl.load_workbook(p, read_only=True).active.iter_rows(values_only=True))
-    if not rows:
-        return []
-    h = [str(x or "").strip() for x in rows[0]]
-    return [dict(zip(h, r)) for r in rows[1:] if r and any(x is not None for x in r)]
-
-
 def ad_files(base: Path, acct: str) -> tuple[list, dict, set]:
     """검증자료/광고 — (보고서 줄[(날짜, 캠페인 ID, 광고집행 옵션ID, 광고비)], {(날짜, 캠페인 ID): 청구가능 광고비}, 보고서 받은 달). 없으면 ([], {}, set())."""
     d, tok = base / "검증자료" / "광고", glob.escape(SF._token(acct, "계정명"))   # 계정명 [ ] = 문자 묶음 아님
-    pa = [(r.get("날짜"), r.get("캠페인 ID"), r.get("광고집행 옵션ID"), num(r.get("광고비")))
-          for p in sorted(d.glob(f"{tok}_매출성장광고_*.xlsx")) for r in xlsx_rows(p) if r.get("날짜") and r.get("캠페인 ID")]
+    pa = [(day, cid, opt, num(cost)) for p in sorted(d.glob(f"{tok}_매출성장광고_*.xlsx")) for day, cid, opt, cost in RF.ad_rows(p)]
     bill: Counter = Counter()
     for p in sorted(d.glob(f"{tok}_광고정산_*.json")):
         for it in json.loads(p.read_text(encoding="utf-8")).get("items") or []:
@@ -98,11 +88,15 @@ def _txt_num(v) -> float:
         return 0.0
 
 
+def milk_file(p: Path) -> list:
+    """밀크런 엑셀 1개 → [(밀크런번호, 총 합계금액 + 취소수수료)]."""
+    return [(seq, _txt_num(total) + _txt_num(cancel)) for seq, total, cancel in RF.milk_rows(p)]
+
+
 def milk_rows(base: Path, acct: str, since: str = "") -> list:
     """since = 'YYYYMM' — 그 달 뒤 밀크런 파일만."""
     d, tok = base / "검증자료" / "광고", glob.escape(SF._token(acct, "계정명"))   # 계정명 [ ] = 문자 묶음 아님
-    return [(str(r.get("밀크런번호")), _txt_num(r.get("총 합계금액")) + _txt_num(r.get("취소수수료")))
-            for p in sorted(d.glob(f"{tok}_밀크런_*.xlsx")) if p.stem[-6:] >= since for r in xlsx_rows(p) if r.get("밀크런번호")]
+    return [x for p in sorted(d.glob(f"{tok}_밀크런_*.xlsx")) if p.stem[-6:] >= since for x in milk_file(p)]
 
 
 def late_final_notes(gen: dict, v: dict, basis: str, month: str = "") -> list[str]:

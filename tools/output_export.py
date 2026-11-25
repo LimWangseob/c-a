@@ -12,7 +12,7 @@
 
 지키는 규칙:
 - 한글 이름 = UTF-8 표시(0x800) — Python zipfile 로 쓰고 다시 열어 표시·해시 대조(D-201 방식 · tar 안 씀).
-- 정산 증빙(`정산\\증빙`) 포함(D-149) — 빼는 폴더 없음(잠금 파일·임시 파일·이 도구 기록만 뺌).
+- 정산 증빙(`정산\\증빙`) 포함(D-149) — 빼는 폴더 = 정산서 배치가 다시 만드는 `정산서\\_읽은결과` 하나(잠금 파일·임시 파일·이 도구 기록도 뺌).
 - 평문 비밀번호 든 파일은 넣지 않는다(CLAUDE.md '비밀번호 평문 = 출력물 금지' · 관리대장 로컬 백업 없음 규칙).
   판정 = 엑셀 칸 글자 전체가 비밀번호 머리글('비밀번호'·'비번'·'패스워드'·'password'·'pw' + 숫자)인 칸이 있음,
   또는 json·csv 에 비밀번호 키/열이 있음. 실측(output (37)): `백업\\원장_*.xlsx`(registry_gsheet.backup_local
@@ -47,6 +47,7 @@ RECORD_NAME = "_내보내기기록.json"          # output 안 · 보낸 기록
 MERGE_RECORD_NAME = "_합치기기록.json"       # 개발 PC 기준본 안 · 합친 기록(output_merge)
 MANIFEST_NAME = "_내보내기목록.json"         # zip 맨 끝
 ARC_PREFIX = "output/"
+SKIP_PREFIX = "정산서/_읽은결과/"            # 정산서 배치가 원본에서 다시 만드는 저장분(D-419 ① · 원본이 아님)
 CHUNK = 1 << 20
 EXIT_BUSY, EXIT_NO_RECORD = 3, 2
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # output_archive(같은 폴더)
@@ -200,7 +201,7 @@ def walk_files(out: Path, skip_dirs: tuple[Path, ...] = ()) -> dict[str, os.stat
         for fn in filenames:
             p = here / fn
             rel = p.relative_to(out).as_posix()
-            if not skip_file(rel):
+            if not skip_file(rel) and not rel.startswith(SKIP_PREFIX):
                 found[rel] = p.stat()
     return found
 

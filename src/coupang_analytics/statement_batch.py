@@ -33,6 +33,7 @@ from contextlib import redirect_stdout
 from datetime import date, datetime
 from pathlib import Path
 
+from . import settlement_read_store as READS
 from . import settlement_store as STORE
 from . import settlement_watch as W
 from .registry_lock import RegistryLockError, registry_lock
@@ -221,7 +222,14 @@ def _job(opts: dict, on_log) -> dict:
         if exc.name != module:            # 모듈 안의 다른 import 실패 = 진짜 오류(위로)
             raise
         return _result(f"모듈 없음 — {module}")
-    return mod.run_job(opts, on_log)
+    out = opts.get("managed_output")                  # 파일별 읽은 결과 저장(D-419 ①) — 배치에서만 켬
+    READS.use(Path(out) / "정산서" / READS.DIR if out else None)
+    try:
+        return mod.run_job(opts, on_log)
+    finally:
+        if READS.note():
+            on_log(READS.note())
+        READS.use(None)
 
 
 # ── 차이 비교 ─────────────────────────────────────────────
