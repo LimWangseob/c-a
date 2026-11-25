@@ -105,7 +105,7 @@ def _save(path: Path | None, memo: dict) -> None:
 
 def cost_checks(costs: Path, amounts: Path, memo_path: Path | None = None, budget: dict | None = None) -> list[dict]:
     """비용 리포트마다 시트 합 ↔ 그 정산 줄 대응 공제 칸 합 · memo_path = 파일별 시트 합 기억(없으면 매번 다 읽음).
-    같은 정산 줄이 없는 물류비 5종(CFS_KINDS) = 미납 CFS 주에 받는 리포트(D-065)라 건너뜀 · 그 밖 리포트는 확인 필요."""
+    같은 정산 줄이 없는 물류비(CFS_KINDS) = 미납 CFS 주에 받는 리포트(D-065)라 건너뜀 · 그 밖 리포트는 확인 필요."""
     fields, out, cache = report_fields(), [], {}
     cfs_weeks = {SF._token(k, "리포트") for k in CFS_KINDS}
     memo, budget = _load(memo_path), budget if budget is not None else new_budget(10 ** 9)

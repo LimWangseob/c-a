@@ -2312,7 +2312,8 @@ def p49_rg_missing_costs():
     jobs: list = []
     SJ.plan_requests(have + miss + extra, jobs, today=D("2026-04-01"), now=TD.datetime(2026, 4, 1, 9), per_account_cap=50)
     by = {(j.kind, j.report) for j in jobs}
-    assert {(SJ.MISSING_KIND, k) for k in API.CFS_KINDS} <= by and (SJ.MISSING_KIND, "판매수수료") not in by, by
+    assert {r for k, r in by if k == SJ.MISSING_KIND} == {"부가서비스비", "입출고/배송비", "보관비", "반품 회수/재입고 비용", "반출비",
+                                                          "반출 배송 서비스비"}, by   # D-413 — 물류비 6종(판매수수료는 안 받음)
     assert ("주정산", "반출 배송 서비스비") in by and ("주정산", "판매수수료") in by and ("주정산", "보관비") in by, by
     j = next(j for j in jobs if j.kind == SJ.MISSING_KIND)
     assert API.rg_request_body(j, 1)["settlementGroupKeys"] == ["A0001-2026-01-26-2026-02-01"]
