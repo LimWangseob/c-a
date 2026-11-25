@@ -17,7 +17,8 @@ from coupang_analytics import settlement_files as SF
 from coupang_analytics import settlement_managed_alloc as MA
 from coupang_analytics import settlement_read_files as RF
 from coupang_analytics import settlement_statement_account as AC
-from coupang_analytics.settlement_consignor_month_calc import AD_NOCAMP, MonthState, jl, kst_month, month_end, pct
+from coupang_analytics.settlement_consignor_month_calc import AD_NOCAMP, MonthState, jl, kst_day, kst_month, month_end, pct
+from coupang_analytics.settlement_consignor_month_milk import milk_months
 from coupang_analytics.settlement_statement_account import num
 
 CFS_FEES = ("totalStorageFeeDeductionAmount", "totalFulfillmentFeeDeductionAmount", "totalWarehousingFeeDeductionAmount",
@@ -86,8 +87,11 @@ def _cfs_pending_line(st: MonthState, key, row, r, fees: float, acc: dict) -> No
 
 def _cfs_details(st: MonthState, key, r, acc: dict) -> None:
     for x in jl(r.get("cfsDeductionDetails")) or []:
-        if kst_month(x["settlementPeriodStartDate"]) == st.m and num(x.get("lastSettlementUnpaidCfsDeductionAmount")):
-            st.loc["cfs"].append((key, num(x["lastSettlementUnpaidCfsDeductionAmount"])))
+        amt = num(x.get("lastSettlementUnpaidCfsDeductionAmount"))
+        if kst_month(x["settlementPeriodStartDate"]) == st.m and amt:
+            st.loc["cfs"].append((key, amt))
+            if kst_day(x["settlementPeriodStartDate"]) not in acc["starts"]:      # 그 주기 지급 줄이 없음 = 비용 칸도 없고 뒤 줄이 갚은 금액만 있음
+                acc["noline"] += amt
     for x in jl(r.get("cfsFeeAdjustmentDetails")) or []:
         if str(x.get("recognitionDate") or "")[:7] == st.m and num(x.get("totalReconciledCfsAmount")):
             acc["adj"] += num(x["totalReconciledCfsAmount"])
@@ -96,7 +100,8 @@ def _cfs_details(st: MonthState, key, r, acc: dict) -> None:
 
 def logistics(st: MonthState) -> None:
     tot_all = _cfs_report(st)
-    acc = {"own": 0.0, "adj": 0.0, "pend": 0.0, "lines": []}
+    acc = {"own": 0.0, "adj": 0.0, "pend": 0.0, "noline": 0.0, "lines": [],
+           "starts": {str(row[3]) for _key, row, r in st.lines() if r["채널"] == "로켓그로스"}}
     for key, row, r in st.lines():
         if r["채널"] != "로켓그로스":
             continue
@@ -109,8 +114,9 @@ def logistics(st: MonthState) -> None:
         if st.pend_line(row, r):
             _cfs_pending_line(st, key, row, r, fees, acc)
         _cfs_details(st, key, r, acc)
-    own, adj, pend = acc["own"], acc["adj"], acc["pend"]
-    st.chk.append({"검사": "상품별 물류비 리포트(이 달) 합 = 이 달 판매 기간 지급 줄의 창고·배송비 칸 합", "값": [tot_all, own], "차이": tot_all - own})
+    own, adj, pend, noline = acc["own"], acc["adj"], acc["pend"], acc["noline"]
+    st.chk.append({"검사": "상품별 물류비 리포트(이 달) 합 = 이 달 판매 기간 지급 줄의 창고·배송비 칸 합 + 지급 줄 없는 정산주기를 뒤 줄이 갚은 금액(cfsDeductionDetails)",
+                   "값": [tot_all, own, noline], "차이": tot_all - own - noline})
     if round(adj):        # D-299 ① CFS 비용 조정 = 물류비 리포트 순액 안에 이미 있음 → 9 에 더하지 않음(위치만 날짜별 표에)
         st.j.append(f"창고·배송비 정산 조정(cfsFeeAdjustmentDetails) {adj:,.0f}원 = 상품별 물류비 리포트 순액에 이미 들어 있어 9 계정 공통에 "
                     "더하지 않음(D-299 ① 이중 반영 금지) · 쿠팡이 뺀 지급 줄 위치만 날짜별 표에 씀")
@@ -119,7 +125,7 @@ def logistics(st: MonthState) -> None:
         st.pend_info.append({"항목": "6 창고·배송비 — 상품별 물류비 리포트 전", "추정": False,
                              "방법": "쿠팡 정산 줄의 창고비 공제(totalFinalCfsFeeDeductionAmount · 쿠팡 계산) → 이 달 로켓그로스 상품 판매(확정+예정) 비율로 나눔",
                              "원천": " · ".join(acc["lines"]), "계정 전체": round(pend)})
-    st.cfs = {"product_report": tot_all, "line_fees": own, "adjust": adj, "pending": pend}
+    st.cfs = {"product_report": tot_all, "line_fees": own, "adjust": adj, "pending": pend, "noline": noline}
 
 
 # ── 7 밀크런 ──
@@ -187,17 +193,18 @@ def milkrun(st: MonthState) -> None:
     total, miss = _milk_alloc(st, rows)
     if miss and round(sum(x[1] for x in miss)):
         st.common.append((f"밀크런 중 쿠팡 입고 내역이 없는 금액 (밀크런 {', '.join(str(x[0]) for x in miss)})", sum(x[1] for x in miss), "milk"))
-    # 밀크런 공제 위치: 쿠팡 달 표시는 '공제한 지급 줄의 판매 기간 달'이라 밀크런 달과 다름 → 이 달 파일 합과 원 단위로 같은 한 지급일을 찾음
-    ded, hit = 0.0, ""
-    for dt in sorted(by_date):
-        if round(sum(a for _, a in by_date[dt])) == round(total):
-            ded, hit = total, dt
-            st.loc["milk"] += by_date[dt]
-            break
-    st.chk.append({"검사": "밀크런 파일(이 달 픽업) 합 = 쿠팡이 한 지급일에 뺀 밀크런 합(원 단위로 같은 날을 찾음)",
-                   "값": [total, ded], "차이": total - ded, "공제 지급일": hit or "못 찾음", "파일": str(p)})
-    if total and not hit:
-        st.j.append(f"확인 필요: 이 달 밀크런 {total:,.0f}원을 뺀 쿠팡 지급일을 원 단위로 못 찾음 — 날짜별 표에서 '아직 안 뺀 금액'으로 둠")
+    # 밀크런 공제 위치: 쿠팡 달 표시는 '공제한 지급 줄의 판매 기간 달'이라 밀크런 달과 다름 → 이 달 파일 합과 원 단위로 같은 지급 줄(한 지급일 · 나눠 뺀 여러 지급일)
+    found = milk_months(st.d["milk_files"], [(key, num(r.get("totalMilkRunDeductionAmount"))) for key, _row, r in st.lines()])
+    got = found.get(st.m, [])
+    ded = total if got else 0.0
+    st.loc["milk"] += got
+    st.chk.append({"검사": "밀크런 파일(이 달 픽업) 합 = 쿠팡이 뺀 밀크런 합(원 단위로 같은 한 지급일 또는 나눠 뺀 여러 지급일)",
+                   "값": [total, ded], "차이": total - ded, "공제 지급일": " · ".join(sorted({str(key[0]) for key, _a in got})) or "못 찾음", "파일": str(p)})
+    if round(total) and not got:
+        mine = {key for xs in found.values() for key, _a in xs}
+        rest = [(key, a) for xs in by_date.values() for key, a in xs if key not in mine]
+        st.j.append(f"확인 필요: 이 달 밀크런 {total:,.0f}원을 뺀 쿠팡 지급일을 원 단위로 못 찾음 — 날짜별 표에서 '아직 안 뺀 금액'으로 둠 · 달 끝 뒤 지급 줄 중 "
+                    f"다른 달 밀크런으로 안 맞은 공제 {len(rest)}줄 {sum(a for _key, a in rest):,.0f}원(앞 해 몫이 섞였거나 아직 다 안 뺀 것일 수 있음)")
     st.milk = {"file_total": total, "deducted": ded, "pending": 0.0}
 
 

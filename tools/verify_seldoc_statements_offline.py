@@ -840,6 +840,49 @@ def test_groups_judge_marks() -> None:
     print("test_groups_judge_marks OK")
 
 
+def test_consignor_wait() -> None:
+    """위탁 '판정 대기'(원장 정산전용상품 구분 빈 칸) 계정 = 관리 상품을 모름 → 셀독 정산서를 실적 0 으로 내지 않고 '확인 필요 — 위탁 판정 대기'(T-179 ⑫).
+    판정이 끝난 계정의 실적 0 계약 = 그대로 만듦(D-406 '실적 0으로 냄')."""
+    from types import SimpleNamespace
+
+    from coupang_analytics import settlement_seldoc_groups as G
+    from coupang_analytics import settlement_statement_account as AC
+    from coupang_analytics import settlement_statement_scope as SCOPE
+    from coupang_analytics import statement_jobs_seldoc as JOB
+    so = {"da1": {"111": "", "222": "본인상품"}}
+    ctx = SimpleNamespace(ledger={}, listings={}, rg={}, settle_only=so, settle_only_err="", ranked={"da1": SCOPE.ranked(so["da1"], {})}, src_vids={},
+                          periods={}, daily={}, accts=["이다라-다라커머스-da1"])
+    waiting = AC.scope(ctx, "da1")[0]
+    assert "구분 빈 칸 1줄" in waiting, waiting
+    for sc, made in ((waiting, False), ("관리대장 상품", True)):
+        with tempfile.TemporaryDirectory() as d:
+            opts = _batch_dir(Path(d))
+            real = G._base, G.GroupAccount, G.book, G.CTX.load, G.SCOPE.inventory, G.ledger_pids
+            G._base = lambda _c, _a, sc=sc: SimpleNamespace(aid="da1", sc=sc, plan_in=None, opt2pid={}, vids=set(), vid_name={}, mnames=set(), marks={},
+                                                            result={"mpids": set(), "pay_m": 0})
+            G.GroupAccount = lambda _c, _a, _p, _b, _i, _pl=None: SimpleNamespace(unmapped=set(), run=lambda: {"pay_m": 0})
+            G.book = lambda _c, _a, dest: (dest.parent.mkdir(parents=True, exist_ok=True),
+                                           make_statement(dest, "다라커머스 (대표 이다라)", "da1", 0, 0, 0))
+            G.CTX.load, G.SCOPE.inventory, G.ledger_pids = (lambda _a: ctx), (lambda _o: {}), (lambda *_a: set())
+            try:
+                res = JOB.run_job({**opts, "group_statements": None, "groups": {"managed_output": d, "settle_dir": d, "stats": d, "inputs": d}},
+                                  lambda _m: None)
+            finally:
+                G._base, G.GroupAccount, G.book, G.CTX.load, G.SCOPE.inventory, G.ledger_pids = real
+        assert res["abort"] is None, res
+        da = [x for x in res["ok"] if x.startswith("da1")]
+        if made:
+            assert len(da) == 4 and res["skipped"] == [], res                       # 실적 0 계약 = 그대로 만듦(D-406)
+            continue
+        assert da == [] and len(res["files"]) == 1 and res["group_files"] == [], res   # ga1(다른 계정) 1장만
+        skipped = [x for x in res["skipped"] if x["aid"] == "da1"]
+        assert sorted(x["doc_id"] for x in skipped) == sorted((DOC_ZS, DOC_B1, DOC_B2, DOC_B3)), skipped
+        for x in skipped:
+            assert x["kind"] == "확인 필요" and x["reason"].startswith("확인 필요 — ") and "위탁 판정 대기" in x["reason"], x
+            assert "구분 빈 칸 1줄" in x["reason"], x
+    print("test_consignor_wait OK")
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -866,9 +909,10 @@ def main() -> int:
     test_decision_invest_left_check()
     test_batch_contract()
     test_groups_judge_marks()
-    print("✅ 셀독 정산서 시험 21종 통과(규칙·읽기·대상 계약·관리대상 계약·상품군·양식 1장·목표수익금·입구·칸 이름"
+    test_consignor_wait()
+    print("✅ 셀독 정산서 시험 22종 통과(규칙·읽기·대상 계약·관리대상 계약·상품군·양식 1장·목표수익금·입구·칸 이름"
           "·배치 꼴·계약별 격리·상품군 격리·입력 없음 중단·이름 겹침·입력 준비·유형 판정·투자형 카드·비고·상품 단위 확인 필요"
-          "·투자형 남은 지급 근거 없음 = 정산서 안 만듦·배치 꼴 그대로·판정 제외와 판정표 갱신 필요)")
+          "·투자형 남은 지급 근거 없음 = 정산서 안 만듦·배치 꼴 그대로·판정 제외와 판정표 갱신 필요·위탁 판정 대기 계정)")
     return 0
 
 

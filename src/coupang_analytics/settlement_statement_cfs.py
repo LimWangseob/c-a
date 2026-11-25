@@ -13,13 +13,14 @@ from __future__ import annotations
 import glob
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 from coupang_analytics import settlement_files as SF
 from coupang_analytics import settlement_read_files as RF
 from coupang_analytics import settlement_read_store as STORE
 from coupang_analytics import settlement_statement_pending as PEND
+from coupang_analytics.settlement_consignor_month_calc import kst_day
 from coupang_analytics.settlement_consignor_month_cost import CFS_FEES as FEES
 from coupang_analytics.settlement_ledger import SALE_FROM
 from coupang_analytics.settlement_statement_account import month_add, num
@@ -29,11 +30,6 @@ FINAL, UNPAID, UNPAID_ONE = ("totalFinalCfsFeeDeductionAmount", "totalLastSettle
 ADJUST, COMP = "totalCfsFeeAdjustment", "totalCfsInventoryCompensationAmount"
 TOL = 5.0                              # 시트·날마다 VAT 를 원 단위로 떨군 끝전(실측 최대 3.3원)
 PLAN_WEEKS, PLAN_MAX = 3, 9.0          # 예정 줄 환산 = 비용 리포트 있는 직전 3주기(D-415) · 상한 9(D-414 ②)
-
-
-def kst_day(s: str) -> str:
-    """쿠팡 시각(UTC · '2026-04-18T15:00:00Z') → 한국 날짜 'YYYY-MM-DD'."""
-    return (datetime.fromisoformat(str(s).replace("Z", "+00:00")) + timedelta(hours=9)).date().isoformat()
 
 
 def paid_periods(r: dict) -> list | None:

@@ -58,6 +58,8 @@ class Account(AccountBase):
     """계정 하나 전체 — `run()` = 1부 gather → 2부 공제 → 결과 사전(옛 account() 반환과 같은 키)."""
     exact: dict = {}                # {(id(장부 줄), 항목): 관리 공제} — _cfs_lines 가 계정마다 새로 만듦
     cfs_why: list = []              # 줄 원문·리포트로 못 정한 물류비·보상 = '확인 필요' 사유
+    plan_in: tuple | None = None    # 예정 줄 물류비 입력(예정 줄 · 주기 · 주기 시작) — 계약 묶음 나누기(settlement_seldoc_groups)가 다시 씀
+    plan_how = f"그 주기 로켓그로스 판매 비율 × 직전 {CFS.PLAN_WEEKS}주기 물류비 환산"
 
     def due(self, k: str, since: str) -> float:
         return MA.due_since([(x[2], x[5]) for x in self.line_info], k, since)
@@ -163,24 +165,35 @@ class Account(AccountBase):
         판매분석으로 r 을 못 내는 줄 = 전 기간 비율 그대로 + '확인 필요'."""
         if not plan:
             return
+        self.plan_in, lost = (plan, per, starts), 0.0
+        for (amt, row, _raw), rate in zip(plan, self.plan_shares(), strict=True):
+            if rate is None:
+                lost += amt
+            else:
+                self.exact[(id(row), LOGI)] = amt * rate
+        if round(lost):
+            self.cfs_why.append(f"확인 필요 — {LOGI} 예정 줄 {lost:,.0f}원은 판매분석 로켓그로스 판매로 관리 비율을 못 내 전 기간 비율 그대로(D-414 ①)")
+
+    def plan_shares(self) -> list:
+        """예정 줄마다 관리 비율(못 냄 = None)."""
+        got = self.plan_rates(lambda v, ym: self.is_mv(v) and not MA.pre_contract(ym, self.cdate), self._is_mpid)
+        return [None if x is None else x[1] for x in got]
+
+    def plan_rates(self, sold, cost) -> list:
+        """예정 줄마다 (r, min(1, r × k)) · 판매분석으로 r 을 못 냄 = None — sold(옵션, 달)·cost(등록상품ID, 달) = 관리 판정."""
+        assert self.plan_in is not None
+        plan, per, starts = self.plan_in
         daily, cut = self.ctx.daily.get(self.aid) or {}, date.fromisoformat(str(self.ctx.basis)[:10]) - timedelta(days=1)
         memo: dict = {}
 
         def r_of(start: str, end: str) -> float | None:
             if (start, end) not in memo:
-                memo[start, end] = CFS.sale_ratio(daily, lambda v, ym: self.is_mv(v) and not MA.pre_contract(ym, self.cdate), start, end, cut)
+                memo[start, end] = CFS.sale_ratio(daily, sold, start, end, cut)
             return memo[start, end]
-        past = [(e, sum(x[2] for x in p.base()), *p.shares(self._is_mpid), r_of(starts[e], e) or 0.0)
+        past = [(e, sum(x[2] for x in p.base()), *p.shares(cost), r_of(starts[e], e) or 0.0)
                 for e, p in sorted(per.items()) if e >= SL.SALE_FROM and not p.why()]
-        lost = 0.0
-        for amt, row, raw in plan:
-            r = r_of(str(raw["기간 시작"])[:10], str(raw["기간 끝"])[:10])
-            if r is None:
-                lost += amt
-            else:
-                self.exact[(id(row), LOGI)] = amt * CFS.plan_rate(r, [x[1:] for x in past if x[0] < raw["기간 끝"]])
-        if round(lost):
-            self.cfs_why.append(f"확인 필요 — {LOGI} 예정 줄 {lost:,.0f}원은 판매분석 로켓그로스 판매로 관리 비율을 못 내 전 기간 비율 그대로(D-414 ①)")
+        rs = [(r_of(str(raw["기간 시작"])[:10], str(raw["기간 끝"])[:10]), raw["기간 끝"]) for _amt, _row, raw in plan]
+        return [None if r is None else (r, CFS.plan_rate(r, [x[1:] for x in past if x[0] < end])) for r, end in rs]
 
     def _rate(self, k: str, row) -> float:
         since, r = self.rates[k]
@@ -226,7 +239,7 @@ class Account(AccountBase):
             return
         _r, text, kind = self.share[k]
         self.share[k] = (sum(by.values()) / D[k], f"지급 끝난 줄 = {how}의 관리 상품 금액(관리 {by[STS[0]]:,.0f}원 · T-130)"
-                         + (f" · 비용 리포트 없는 예정 줄 = 그 주기 로켓그로스 판매 비율 × 직전 {CFS.PLAN_WEEKS}주기 물류비 환산"
+                         + (f" · 비용 리포트 없는 예정 줄 = {self.plan_how}"
                             f"(관리 {by[STS[1]]:,.0f}원 · D-414·D-415)" if STS[1] in by else "")
                          + (f" · 예정·보류 줄 = {text}" if round(by["나머지"]) else ""), kind)
         if round(sum(miss.values())):

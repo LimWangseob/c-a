@@ -155,7 +155,8 @@ def _groups(opts: dict, jobs: list, judge: dict, held: dict, res: _Result, on_lo
             res.skip(aid, "", f"{aid} 관리 상품 {pid} {name or ''} — {why}", product=(pid, name, amount))
     for j in jobs:
         if j.split and j.aid in failed:
-            res.skip(j.aid, j.contract.doc_id, f"{j.aid} 계약 {j.contract.doc_id} 상품군 정산서 못 만듦 — {failed[j.aid]['reason']}")
+            res.skip(j.aid, j.contract.doc_id, f"{j.aid} 계약 {j.contract.doc_id} 상품군 정산서 못 만듦 — {failed[j.aid]['reason']}",
+                     unsure=failed[j.aid]["wait"])
     return {(aid, doc): p for aid, doc, p, _ in made}
 
 
