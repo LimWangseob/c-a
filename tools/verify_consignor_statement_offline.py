@@ -1263,8 +1263,8 @@ def test_inputs_pack() -> None:
             assert "비밀번호" in str(exc)
         assert len(list(dest.iterdir())) == 2, "중단인데 zip 생김"
         (inp / "ledger.json").write_text('{"accounts": []}', encoding="utf-8")
-        assert P.seldoc_missing(sel) == ["사업자_대응표.csv", "셀독_계약상품군_판정.json", P.SELDOC_DB]
-        for n in ("사업자_대응표.csv", "셀독_계약상품군_판정.json", "계약서_정밀분석_DB_v6.xlsx", "계약서_정밀분석_DB_v5.xlsx"):
+        assert P.seldoc_missing(sel) == ["사업자_대응표.csv", "셀독_계약상품군_판정.json", "셀독_계약유형_판정.json", P.SELDOC_DB]
+        for n in ("사업자_대응표.csv", "셀독_계약상품군_판정.json", "셀독_계약유형_판정.json", "계약서_정밀분석_DB_v6.xlsx", "계약서_정밀분석_DB_v5.xlsx"):
             (sel / n).write_text("{}" if n.endswith(".json") else "계정ID\n", encoding="utf-8")
         try:
             P.pack(inp, sel, dest, now=now, log=lambda s: None)

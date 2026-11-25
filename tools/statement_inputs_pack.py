@@ -5,7 +5,7 @@
 
 - 원본은 읽기만(지우기·옮기기 없음) · 같은 이름 zip 이 이미 있으면 덮지 않고 `_HHMMSS` 를 붙인 새 이름.
 - 넣는 것 = 두 폴더 안의 파일(하위 폴더 포함) · 빼는 것 = 이름이 `_`·`~$` 로 시작하는 파일·폴더, `보관` 폴더.
-- 셀독 입력 3종 = 사업자_대응표.csv · 셀독_계약상품군_판정.json · 계약서_정밀분석_DB*.xlsx 1개 — 빠지면 알림(묶기는 함) · DB 가 여럿 = 중단.
+- 셀독 입력 4종 = 사업자_대응표.csv · 셀독_계약상품군_판정.json · 셀독_계약유형_판정.json · 계약서_정밀분석_DB*.xlsx 1개 — 빠지면 알림(묶기는 함) · DB 가 여럿 = 중단.
 - 비밀번호 칸이 든 파일(json 키 · csv 첫 줄 · xlsx 머리 3줄에 '비밀번호'·password 등)이 있으면 묶지 않고 중단(평문 비밀번호 사본 금지).
 - zip 안 경로 = `입력/<파일>` · `입력_셀독/<파일>`(운용 PC `output\\정산서\\` 아래 같은 자리).
 """
@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PW_NAMES = {"비밀번호", "비번", "password", "passwd", "pw", "pwd"}
 SKIP_DIR = "보관"
-SELDOC_FILES = ("사업자_대응표.csv", "셀독_계약상품군_판정.json")      # 셀독 입력 3종(레인 D 결정 · 통제 세션 11-24) + 계약 DB 1개
+SELDOC_FILES = ("사업자_대응표.csv", "셀독_계약상품군_판정.json", "셀독_계약유형_판정.json")      # 셀독 입력(+ 계약 DB 1개) · 유형 판정 = 소유자 11-24 확정
 SELDOC_DB = "계약서_정밀분석_DB*.xlsx"
 
 
@@ -69,7 +69,7 @@ def has_password(p: Path) -> bool:
 
 
 def seldoc_missing(seldoc: Path) -> list[str]:
-    """셀독 입력 3종 중 없는 이름 · 계약 DB 가 여럿이면 ValueError(어느 것인지 모름 — 1개만 둘 것)."""
+    """셀독 입력 4종 중 없는 이름 · 계약 DB 가 여럿이면 ValueError(어느 것인지 모름 — 1개만 둘 것)."""
     dbs = sorted(seldoc.glob(SELDOC_DB)) if seldoc.is_dir() else []
     if len(dbs) > 1:
         raise ValueError(f"셀독 계약 DB 가 {len(dbs)}개 — 1개만 두세요: {[p.name for p in dbs]}")
