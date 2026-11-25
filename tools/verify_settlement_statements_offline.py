@@ -968,18 +968,21 @@ def _sales(*weeks):
     return out
 
 
-def _t130_account(rows, by_m, logi, comp=None, mpids=frozenset({"15467003062"}), daily=None, cdate=None):
+def _t130_account(rows, by_m, logi, comp=None, mpids=frozenset({"15467003062"}), daily=None, cdate=None, vids=("777",), cls=None,
+                  **attrs):
     """지급 줄 원본 → 물류비·보상 단계만 돌린 계정(비용 리포트 = logi·comp · 판매분석 일별 = daily · 관리 옵션 = "777")."""
     from collections import Counter
     from types import SimpleNamespace
 
     from coupang_analytics import settlement_statement_account as SA
     from coupang_analytics import settlement_statement_deduct as DED
-    a = DED.Account.__new__(DED.Account)
+    cls = cls or DED.Account
+    a = cls.__new__(cls)
     a.ctx = SimpleNamespace(base=Path(tempfile.gettempdir()), led=_Led([], rows), cost_opts={"x1": {"777": ("15467003062", "")}},
                             basis="2026-11-12", daily={"x1": daily or {}})
     a.acct, a.aid, a.mpids, a.cdate, a.opt2pid = "가-x1", "x1", set(mpids), cdate, {"888": "15468930091"}
-    a.vids, a.vid_name, a.mnames, a.marks = {"777"}, {}, set(), {}
+    a.vids, a.vid_name, a.mnames, a.marks = set(vids), {}, set(), {}
+    a.__dict__.update(attrs)
     a.start = a.fs = "2026-01"
     a.active, a.S, a.mset, a.share, a.rates = ["2026-01"], 0.5, {}, {}, {}
     a.lines, a.line_info = [], []
@@ -1130,6 +1133,56 @@ def test_t130_plan_lines() -> None:
     a, ded, line = run(cyc, [_plan_row("2026-12-02", "2026-11-08", 70, 70_000), _plan_row("2026-12-15", "2026-11-08", 30, 30_000)], [nov])
     assert [round(x) for x in line.values() if round(x)] == [21_000, 9_000], line
     print("test_t130_plan_lines OK")
+
+
+def test_t179_plan_parts() -> None:
+    """예정 줄 물류비 — 계약 묶음 몫 = 계정 관리 몫(D-414·D-415)을 묶음의 r×k 비율로 나눔 → 묶음 합('제외'·못 만든 계약 묶음까지) = 계정(T-179 ⑪).
+    단일 계약 계정(묶음 없음) = 그대로."""
+    from coupang_analytics import settlement_seldoc_groups as G
+    from coupang_analytics.settlement_statement_account import LOGI
+    M, X, VP = "15467003062", "15468930091", {"777": "15467003062", "888": "15468930091"}
+    cyc = [("2026-09-06", 90_000, 100_000, 50, 100), ("2026-09-13", 2_000, 10_000, 50, 100),
+           ("2026-09-20", 3_000, 20_000, 25, 100), ("2026-09-27", 5_000, 20_000, 50, 100)]
+    by = {"2026-09": {"logi": 150_000, "m_logi": 150_000}}
+    plan = [_plan_row("2026-12-02", "2026-11-08", 70, 70_000), _plan_row("2026-12-15", "2026-11-08", 30, 30_000)]
+    nov = ("2026-11-02", "2026-11-08", 60, 100)
+
+    def run(cs, sales, **kw):
+        logi = {e: [(e, M, float(m)), (e, X, float(t - m))] for e, m, t, _k, _a in cs}
+        daily = _sales(*[(*_wk(e), k, t) for e, _m, _t, k, t in cs], *sales)
+        rows = [_cfs_row("2026-10-20", *_wk(e), 70, 0, 0, totalStorageFeeDeductionAmount=t) for e, _m, t, _k, _a in cs]
+        return _t130_account([*rows, *plan], by, logi, daily=daily, **kw)
+
+    def whole(cs, sales):
+        return run(cs, sales, mpids={M, X}, vids=("777", "888"))
+
+    def part(cs, sales, mine, shares, vid):
+        _a, ded, _l = run(cs, sales, mpids=mine, vids=(vid,), cls=G.GroupAccount, g_plan=shares, _gf=None)
+        return round(ded["예정"][LOGI])
+
+    # 관리 상품 2개(계약 묶음 둘) · 계정 = 전부 관리 → 100,000 · 묶음 따로 재면 M .6×.5 = .3 · X .4×(8+17+15천 ÷ (5+15+10천)) = .5333 → 합 83,333 ≠ 계정
+    base, ded, _l = whole(cyc, [nov])
+    assert round(ded["예정"][LOGI]) == 100_000, ded
+    m, x = G.plan_parts(base, [{M}, {X}], VP)
+    assert (part(cyc, [nov], {M}, m, "777"), part(cyc, [nov], {X}, x, "888")) == (36_000, 64_000)      # .3 : .5333 = 36 : 64
+    # 어느 계약에도 안 들어가는 묶음('제외')도 자기 몫을 가짐 — 계약 묶음 {M} + 제외 {X} 합 = 계정
+    for i in range(2):
+        assert abs(m[i] + x[i] - base.plan_shares()[i]) < 1e-12
+    # 계약 하나에 전부 = 계정 그대로
+    assert G.plan_parts(base, [{M, X}, set()], VP) == [base.plan_shares(), [0.0, 0.0]]
+    # r×k 가 모두 0(M = 그 주기에 팔리나 직전 비용 0 · X = 안 팔림)인데 계정 몫이 있음 → 그 주기 판매 비율로(M 이 전부)
+    dry = [cyc[0], *[(e, 0, t, k, 100) for e, _m, t, k, _a in cyc[1:]]]
+    all_m = ("2026-11-02", "2026-11-08", 100, 100)
+    b2, d2, _l = whole(dry, [all_m])
+    assert round(d2["예정"][LOGI]) == 100_000
+    m2, x2 = G.plan_parts(b2, [{M}, {X}], VP)
+    assert (part(dry, [all_m], {M}, m2, "777"), part(dry, [all_m], {X}, x2, "888")) == (100_000, 0)
+    # 판매분석이 없어 계정도 비율을 못 냄 = 묶음도 못 냄(전 기간 비율 + '확인 필요' 그대로) · 예정 줄 없음 = 나눌 것 없음(None)
+    b3, _d, _l = whole([], [])
+    assert G.plan_parts(b3, [{M}, {X}], VP) == [[None, None], [None, None]] and "확인 필요" in b3.cfs_why[0], b3.cfs_why
+    b4, _d, _l = _t130_account([], by, {}, mpids={M, X}, vids=("777", "888"))
+    assert G.plan_parts(b4, [{M}, {X}], VP) == [None, None]
+    print("test_t179_plan_parts OK")
 
 
 def test_d342_deduction_window_2026() -> None:
@@ -1477,6 +1530,7 @@ def main() -> int:
     test_t130_cfs_periods()
     test_t130_cfs_lines()
     test_t130_plan_lines()
+    test_t179_plan_parts()
     test_formula23_late_final_round_flagged()
     test_t176_hold_release_flagged()
     test_formula23_status_check_when_final_round_missing()

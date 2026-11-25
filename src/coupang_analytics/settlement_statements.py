@@ -52,7 +52,7 @@ def _one(ctx, acct) -> tuple:
     """계정 1개 → ('made', 요약 줄, 우리 사업자?, 파일) 또는 ('none', 요약 줄) — 옛 반복 본문 그대로(T-25 · 행동 불변)."""
     a = account(ctx, acct)
     row = summary_row(a, shown(a))                      # 정산서 1쪽과 같은 숫자(줄 합계 검산 포함)
-    if not (a["mpids"] or a["scope"].startswith(AC.LEDGER) or a["scope"] == AC.SETTLE_ONLY):
+    if not AC.issued(a["scope"], a["mpids"]):
         return ("none", row)
     own = a["info"]["사업자"] in SRC.OWN_BUSINESSES
     dest = _dest(ctx, a, own)

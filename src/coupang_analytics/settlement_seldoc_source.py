@@ -35,6 +35,10 @@ class SeldocInputError(Exception):
     """입력이 모자라거나 맞지 않음 — 셀독 정산서를 만들지 않는다(시작 전 중단)."""
 
 
+class ScopeWait(SeldocInputError):
+    """위탁정산서를 안 만드는 계정(판정 대기 · 관리 상품 자료 없음) — 셀독도 안 만들고 '확인 필요'(관리 상품이 없는 것이 아니라 모름)."""
+
+
 class ProductError(SeldocInputError):
     """관리 상품 → 계약 배정이 안 되는 상품들 — items = [(등록상품ID, 사유, 상품명|None, 금액|None)](확인 필요 목록에 상품 단위로)."""
 

@@ -14,10 +14,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from coupang_analytics import settlement_managed_alloc as MA
+from coupang_analytics import settlement_statement_account as AC
 from coupang_analytics import settlement_statement_context as CTX
 from coupang_analytics import settlement_statement_scope as SCOPE
 from coupang_analytics import settlement_statement_source as SRC
-from coupang_analytics.settlement_seldoc_source import ProductError, SeldocInputError
+from coupang_analytics.settlement_seldoc_source import ProductError, ScopeWait, SeldocInputError
 from coupang_analytics.settlement_statement_book import book
 from coupang_analytics.settlement_statement_deduct import Account
 
@@ -112,14 +114,20 @@ def managed_pids(mpids: set, vp: dict, is_mv, extra_vids=()) -> set:
 class GroupAccount(Account):
     """계정 하나의 계약 상품군 몫 — 위탁정산서 계산 그대로 · 관리 상품만 상품군으로 · 관리 시작 달 고정."""
 
-    def __init__(self, ctx, acct: str, pids: set, base: Account, inv: dict):
+    g_plan: list | None = None      # 예정 줄 물류비 관리 비율(plan_parts · None = 묶음 혼자 잰 값)
+    plan_how = Account.plan_how + " — 계정 관리 몫을 계약 묶음끼리 이 비율로 나눔"
+
+    def __init__(self, ctx, acct: str, pids: set, base: Account, inv: dict, plan: list | None = None):
         super().__init__(ctx, acct)
-        self.g_pids, self.g_base, self.g_inv = pids, base, inv
+        self.g_pids, self.g_base, self.g_inv, self.g_plan = pids, base, inv, plan
         self.unmapped: set = set()
         self._gf = None
 
     def is_mv(self, v: str) -> bool:
         return self._gf(v) if self._gf is not None else Account.is_mv(self, v)
+
+    def plan_shares(self) -> list:
+        return super().plan_shares() if self.g_plan is None else self.g_plan
 
     def _scope(self) -> None:
         super()._scope()
@@ -131,6 +139,25 @@ class GroupAccount(Account):
         super()._start()
         b = self.g_base
         self.start, self.fs, self.start_note, self.active = b.start, b.fs, b.start_note, b.active
+
+
+def plan_parts(base: Account, parts: list, vp: dict) -> list:
+    """예정 줄(비용 리포트 전) 물류비 — 계정 관리 비율(D-414·D-415)을 묶음(등록상품 집합)의 r×k 비율로 나눔 → 묶음마다 줄별 비율 ·
+    parts 가 관리 상품 전부를 빠짐없이 나눈 묶음이면 합 = 계정. r×k 가 모두 0 인 줄 = 그 주기 판매 비율 r 로 · 그것도 0 = None('확인 필요').
+    묶음마다 따로 재면 k 의 분모가 묶음 판매라 합이 계정과 안 맞음(ljung0622 +2,378,310 · T-179 ⑪). 예정 줄 없음 = 묶음마다 None."""
+    if base.plan_in is None:
+        return [None] * len(parts)
+    whole = base.plan_shares()
+    raw = [base.plan_rates(lambda v, ym, p=p: vp.get(str(v)) in p and Account.is_mv(base, v) and not MA.pre_contract(ym, base.cdate),
+                           lambda pid, ym, p=p: pid in p and base._is_mpid(pid, ym)) for p in parts]
+    out: list = [[] for _ in parts]
+    for i, rate in enumerate(whole):
+        ws = [x[i] or (0.0, 0.0) for x in raw]
+        col = 1 if sum(w[1] for w in ws) > 0 else 0
+        tot = sum(w[col] for w in ws)
+        for o, w in zip(out, ws, strict=True):
+            o.append(None if rate is None or (rate and tot <= 0) else rate * w[col] / tot if tot > 0 else 0.0)
+    return out
 
 
 def _base(ctx, acct: str) -> Account:
@@ -179,6 +206,8 @@ def _account(ctx, acct: str, docs: list, judged: dict, inv: dict, out_dir: Path,
     held = 아직 못 만드는 같은 계정 계약(상품 배정에만 씀 · 파일 안 만듦) · 모두 계산해 맞는지 본 뒤에만 파일을 씀.
     notes = 계정을 막지 않는 확인 필요 줄(판정표 갱신 필요 · 금액 영향 0 인 못 넣은 상품)이 들어감."""
     base = _base(ctx, acct)
+    if base.sc.startswith(AC.WAIT) or not AC.issued(base.sc, base.result["mpids"]):     # 관리 상품을 모름 → 실적 0 으로 내지 않음(위탁정산서도 없음)
+        raise ScopeWait(f"시작 전 중단 — 위탁 {base.sc}")
     vp = vid_pids(base.opt2pid, inv, ctx.periods.get(base.aid) or {})
     all_docs = list(docs) + [d for d in held if d not in docs]
     managed = managed_pids(base.result["mpids"], vp, lambda v: Account.is_mv(base, v), base.vids)
@@ -190,9 +219,11 @@ def _account(ctx, acct: str, docs: list, judged: dict, inv: dict, out_dir: Path,
     out_pids = sorted(p for p in managed if (judged.get(p) or {}).get("판정") == EXCLUDE)
     if out_pids:
         on_log(f"{base.aid} 판정표 '제외' 상품 {len(out_pids)}개(어느 계약에도 안 넣음) {', '.join(out_pids)}")
+    rest = managed.difference(*groups.values())                       # 어느 계약에도 안 넣는 상품('제외' · 금액 영향 0) = 자기 몫만 갖고 정산서 없음
+    plans = dict(zip([*all_docs, None], plan_parts(base, [*(groups[d] for d in all_docs), rest], vp), strict=True))
     done = []
     for doc in docs:
-        g = GroupAccount(ctx, acct, groups[doc], base, inv)
+        g = GroupAccount(ctx, acct, groups[doc], base, inv, plans[doc])
         a = g.run()
         if g.unmapped:
             raise SeldocInputError(f"시작 전 중단 — {base.aid} 등록상품을 못 찾는 관리 VID {sorted(g.unmapped)}")
@@ -214,7 +245,7 @@ def _failed(exc: Exception) -> str:
 
 def run(args: CTX.StatementArgs, jobs: list, judge: dict, out_dir: Path, held: dict | None = None,
         on_log=print) -> tuple[list, dict, dict]:
-    """계약이 여럿인 계정(Job.split)마다 계약별 상품군 위탁정산서 → ([(계정ID, 문서ID, 경로, G)], {계정ID: {"reason", "products"}},
+    """계약이 여럿인 계정(Job.split)마다 계약별 상품군 위탁정산서 → ([(계정ID, 문서ID, 경로, G)], {계정ID: {"reason", "products", "wait"}},
     {계정ID: [(등록상품ID, 사유, 상품명, 금액)]} = 막지 않는 확인 필요).
     계정별 격리(D-399) — 한 계정이 막혀도 다른 계정은 만든다 · held = {계정ID: [미확정 같은 계정 문서ID]}(상품 배정에만)."""
     split = [j for j in jobs if j.split]
@@ -225,7 +256,7 @@ def run(args: CTX.StatementArgs, jobs: list, judge: dict, out_dir: Path, held: d
         ctx = CTX.load(args)
         inv = SCOPE.inventory(args.managed_output)
     except (FileNotFoundError, SeldocInputError) as exc:
-        return [], {aid: {"reason": f"상품군 정산서 입력을 못 읽음 — {exc}", "products": []} for aid in aids}, {}
+        return [], {aid: {"reason": f"상품군 정산서 입력을 못 읽음 — {exc}", "products": [], "wait": False} for aid in aids}, {}
     accts = {SRC.aid_of(a): a for a in ctx.accts}
     out, failed, notes = [], {}, {}
     for aid in aids:
@@ -235,7 +266,7 @@ def run(args: CTX.StatementArgs, jobs: list, judge: dict, out_dir: Path, held: d
             out += _account(ctx, accts[aid], [j.contract.doc_id for j in split if j.aid == aid], _products(judge, aid),
                             inv.get(aid) or {}, out_dir, (held or {}).get(aid, ()), notes.setdefault(aid, []), on_log)
         except Exception as exc:                                    # 계정 하나의 계산 오류 = 그 계정만 못 만듦(사유를 보고 · 삼키지 않음)
-            failed[aid] = {"reason": _failed(exc), "products": getattr(exc, "items", [])}
+            failed[aid] = {"reason": _failed(exc), "products": getattr(exc, "items", []), "wait": isinstance(exc, ScopeWait)}
             on_log(f"❌ {aid} 상품군 정산서 못 만듦 — {failed[aid]['reason']}")
     return out, failed, notes
 

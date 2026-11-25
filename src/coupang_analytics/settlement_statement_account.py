@@ -174,7 +174,12 @@ def watched(r: dict) -> Counter:
     return out
 
 
-LEDGER, SETTLE_ONLY = "관리대장 상품", "원장 정산전용상품"
+LEDGER, SETTLE_ONLY, WAIT = "관리대장 상품", "원장 정산전용상품", "판정 대기"
+
+
+def issued(sc: str, mpids: set) -> bool:
+    """위탁정산서를 만드는 계정 — 관리 상품이 있거나 대장·원장 정산전용상품 계정(판정 대기·관리 상품 자료 없음 = 정산서 없음)."""
+    return bool(mpids) or sc.startswith(LEDGER) or sc == SETTLE_ONLY
 
 
 def scope(ctx, aid: str) -> tuple[str, set, set, dict]:
@@ -190,7 +195,7 @@ def scope(ctx, aid: str) -> tuple[str, set, set, dict]:
         return "관리 상품 자료 없음" + (f"({ctx.settle_only_err})" if ctx.settle_only_err else ""), set(), set(), {}
     blank = sum(v not in ("관리", "본인상품") for v in sheet.values())
     if blank:
-        return f"판정 대기(원장 정산전용상품 구분 빈 칸 {blank}줄)", set(), set(), marks
+        return f"{WAIT}(원장 정산전용상품 구분 빈 칸 {blank}줄)", set(), set(), marks
     named = ([SETTLE_ONLY] if sheet else []) + [p for p in SCOPE.source_counts(rk) if not p.startswith(SETTLE_ONLY)]
     return (" + ".join(named) or f"관리 상품 출처 확인 필요 {len(SCOPE.source_checks(rk))}개"), src_vids, set(), marks
 
