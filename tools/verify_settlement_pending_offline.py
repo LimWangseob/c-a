@@ -11,6 +11,9 @@
      그 달 판매분석 판매 없음·0~100% 밖 = 그 금액만 '확인 필요'.
   ⑤ 쿠팡 예정 줄 금액은 그대로(D-279 ①) — 나눈 조각의 판매·정산 합 = 쿠팡 예정 줄 금액(원 단위).
   윙 예정분 판매·정산 = 같은 기간(매출내역) · 음수 예정(환불 구매확정)도 남김.
+  ⑥ 새 형식 위탁자 정산서(T-178)도 같은 순서·같은 값 — 상품 줄 합 = 옛 엑셀 관리 몫 · ① 은 쿠폰·수수료도 실제값(D-261 ② E2) ·
+     ②는 옵션 합 뒤 음수 0(D-266 ①) → 윙 상품 줄 예정 판매 ≥ 0(E1) · 로켓그로스 = M: 달 전체(그 달에 시작한 주 W: 아님 D-269 ②) ·
+     못 나눈 금액만 빼고 정산서 발행(D-262 ③ · 상태·지급 줄 검산 안 막음).
   재현 근거 = output\\_검증_261117_정산끝난달\\판정_보고.md 6절(scripts\\b2_wing.py C2 · b5_fill.py).
 
     python tools/verify_settlement_pending_offline.py
@@ -28,7 +31,12 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from coupang_analytics import settlement_consignor_month as CM  # noqa: E402
+from coupang_analytics import settlement_consignor_month_calc as CALC  # noqa: E402
+from coupang_analytics import settlement_consignor_month_dep as DEP  # noqa: E402
+from coupang_analytics import settlement_consignor_month_out as OUT  # noqa: E402
 from coupang_analytics import settlement_files as SF  # noqa: E402
+from coupang_analytics import settlement_statement_pending as PEND  # noqa: E402
 from coupang_analytics import settlement_statement_source as SRC  # noqa: E402
 from coupang_analytics.settlement_statement_deduct import Account  # noqa: E402
 
@@ -308,6 +316,75 @@ def test_actual_cut() -> None:
         assert mixed[:2] == alone[:2], f"i 기준일 뒤 정산된 윙 파일을 넣어도 = 없을 때와 같음: {mixed} ≠ {alone}"
 
 
+def _new_form(a: Account, month: str, judge: CM.ConsignorJudge | None = None) -> CALC.MonthState:
+    """옛 엑셀과 같은 계정 자료(_stub)로 새 형식 한 달 — 옵션 n 의 등록상품 = 'Pn' · 관리 판정 = 옛 코드 is_mv."""
+    vids = ("1", "2", "3", "4")
+    src = {"acct": a.acct, "aid": a.aid, "base": str(a.ctx.base), "basis": a.ctx.basis, "cdate": a.cdate,
+           "mpids": {f"P{v}" for v in vids if a.is_mv(v)}, "opt2pid": {v: f"P{v}" for v in vids}, "is_mv": {v: a.is_mv(v) for v in vids},
+           "inventory": {}, "prows": [], "file_rows": [], "lines": [], "line_info": [], "L_gen": {}, "v": {},
+           "files_meta": [(i, f.channel, f.kind, str(f.period_start), str(f.period_end)) for i, f in enumerate(a.files)],
+           "periods": a.ctx.periods[a.aid], "daily": a.ctx.daily[a.aid], "orders": PEND.order_months(a.ctx.base, a.acct), "files": a.files,
+           "u": [tuple(x) for x in a.u]}
+    st = CALC.MonthState(src, month, judge or CM.ConsignorJudge())
+    CALC.pending_sales(st)
+    return st
+
+
+def _c(st: CALC.MonthState, pid: str) -> list:
+    return [round(x, 2) for x in st.pend[pid][1:5]] if pid in st.pend else [0.0] * 4
+
+
+def test_new_form_wing() -> None:
+    """⑥ 윙 — 11월 B8: 옵션 1·2 모두 관리 · 판매분석 주별(W) 순액 옵션2 = −50(환불) → 옛 새 형식(주별 원값 비율)은 옵션2 예정 판매 음수(E1 걸림).
+    B8 남은 판매(E1 손 계산 = test_pending_split) = 옵션1 만 400 · 옵션2 음수 → 0 → 상품 줄 P1 판매 400 · 정산 320, P2 = 0.
+    10월 ①: 주문 3 옵션1 판매 1,000·쿠폰 150·수수료 50·정산 800 + 배송비 100·수수료 3·정산 97 → P1 = 1,100 · −150 · −53 · 4 = 897 − (1,100−150−53) = 0.
+    주문 2 줄(옵션 2 · 200·180·쿠폰 0·수수료 20) → P2(관리 밖) = 계정 판매에만."""
+    with tempfile.TemporaryDirectory() as td:
+        base = _base(Path(td))
+        f = base / "검증자료" / "월자료" / ACCT / "주문별매출_202610.json"
+        rows = json.loads(f.read_text(encoding="utf-8"))["줄"]
+        for r, (cp, fee) in zip(rows, ((0, 20), (150, 50), (0, 3))):
+            r.update(sfcAmount=cp, trAmountIncVat=fee)
+        f.write_text(json.dumps({"줄": rows}), encoding="utf-8")
+        a = _stub(base, [("윙", "2026-11", 400, 320, "쿠팡 계산", "조회", []), ("윙", "2026-10", 1300, 1077, "쿠팡 계산", "조회", [])])
+        a.vids = {"1", "2"}
+        a.ctx.periods[AID]["W:2026-11-02"] = {"옵션": {"1": {"구분": "윙", "판매금액": 999}, "2": {"구분": "윙", "판매금액": -50}}}
+        st = _new_form(a, "2026-11")
+        assert _c(st, "P1") == [400, 0, -80, 0] and _c(st, "P2") == [0, 0, 0, 0], f"⑥ 윙 B8 상품 줄 = P1 400·320 · P2 0: {dict(st.pend)}"
+        assert st.settle_by_ch["윙"] == Counter({"P1": 320}) and not st.pend_check, f"⑥ 윙 정산 나누기 = 320: {st.settle_by_ch}"
+        a.vids = set(MV)
+        st = _new_form(a, "2026-10")
+        assert _c(st, "P1") == [1100, -150, -53, 0], f"⑥ 윙 ① 실제값 쿠폰·수수료(D-261 ②): {dict(st.pend)}"
+        assert "P2" not in st.pend and round(st.allsales["P2"]) == 200, f"⑥ 관리 밖 상품 = 계정 판매에만: {dict(st.allsales)}"
+        assert st.pend_info[0]["추정"] is False and "주문별매출 실제값" in st.pend_info[0]["상품 나눈 기준"], st.pend_info
+        a._unsettled_share()
+        assert _near(a.um_settle, 320 + 897), f"옛 엑셀 관리 몫(같은 자료) = 1,217: {a.um_settle}"
+
+
+def test_new_form_rg_and_excluded() -> None:
+    """⑥ 로켓그로스 10월 = M:2026-10 판매 비율 60%(W: 주별 = 옵션3 −50 은 안 씀) → P3 판매 600·정산 420 = 옛 엑셀 관리 몫.
+    9월 = 그 달 판매분석 없음 → 그 금액(50·35)만 빼고 발행: 상품 줄 0 · '확인 필요' 문장 1줄 · 지급 줄 검산(정산 35 = 상품 0 + 뺀 35) 차이 0 ·
+    상태 = 다른 예정분 없으면 '확인 필요'(사유에 뺀 금액)."""
+    with tempfile.TemporaryDirectory() as td:
+        base = _base(Path(td))
+        a = _stub(base, [("로켓그로스", "2026-10", 1000, 700, "쿠팡 계산", "조회", [("2026-10-05", "2026-10-11", 1000, 700)]),
+                         ("로켓그로스", "2026-09", 50, 35, "쿠팡 계산", "조회", [("2026-09-07", "2026-09-13", 50, 35)])])
+        a.ctx.periods[AID]["W:2026-10-05"] = {"옵션": {"3": {"구분": "로켓그로스", "판매금액": -50}, "4": {"구분": "로켓그로스", "판매금액": 500}}}
+        st = _new_form(a, "2026-10")
+        assert _c(st, "P3")[0] == 600 and _near(sum(st.pend["P3"][1:5]), 420), f"⑥ RG = M: 달 판매 비율 60%: {dict(st.pend)}"
+        assert st.rgsales == Counter({"P3": 600, "P4": 400}), st.rgsales
+        a._unsettled_share()
+        assert _near(a.um_sales, 600) and _near(a.um_settle, 420), f"옛 엑셀 관리 몫 = 600·420: {a.um_sales} {a.um_settle}"
+        st = _new_form(a, "2026-09")
+        assert not st.pend and not st.pend_info and [(x["판매"], x["정산"]) for x in st.pend_check] == [(50, 35)], (dict(st.pend), st.pend_check)
+        assert sum("확인 필요" in j and "나눌 판매 없음" in j for j in st.j) == 1, st.j
+        st.d["line_info"] = [("예정", "로켓그로스", "2026-09", 35.0, 0.0, Counter(), ["", "", "2026-10-30", "2026-09-07", "2026-09-13", "70", "예정"])]
+        items = DEP._pay_items(st, {"윙": 0.0, "로켓그로스": 0.0})
+        assert [c["차이"] for c in st.chk if c["검사"].startswith("로켓그로스 이 달 판매 기간 지급 줄")] == [0], (items, st.chk)
+        out = {"status": OUT.month_status(False, OUT.check_lists(st))}
+        assert out["status"] == "확인 필요" and "정산 35" in OUT._judge_status(st, out), OUT._judge_status(st, out)
+
+
 def main() -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -317,7 +394,9 @@ def main() -> int:
     test_pending_split()
     test_cut_basis()
     test_actual_cut()
-    print("✅ 정산 예정분 관리 몫 나누기 시험(D-262 ① 실제값 · 윙 B8 → ⓒ2 → ⓑo 채움(D-282)·지연 분포 저장 D-269 ① · 로켓그로스 그 달 판매 비율 D-269 ② · 쿠팡 예정 금액 그대로 D-279 · 금액 판정 D-281) 통과")
+    test_new_form_wing()
+    test_new_form_rg_and_excluded()
+    print("✅ 정산 예정분 관리 몫 나누기 시험(D-262 ① 실제값 · 윙 B8 → ⓒ2 → ⓑo 채움(D-282)·지연 분포 저장 D-269 ① · 로켓그로스 그 달 판매 비율 D-269 ② · 쿠팡 예정 금액 그대로 D-279 · 금액 판정 D-281 · 새 형식 = 같은 순서·같은 값·못 나눈 금액만 뺌 T-178) 통과")
     return 0
 
 

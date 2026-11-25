@@ -162,8 +162,13 @@ def month_status(pending: bool, late: list) -> str:
     return "정산 예정 포함" if pending else "확인 필요" if late else "확정"
 
 
+def check_lists(st: MonthState) -> list:
+    """상태 '확인 필요' 사유 목록 — 최종액 회차 없음 · 보류 해제 · 못 나눠 뺀 정산 예정분(D-262 ③)."""
+    return st.late + st.hold + st.pend_check
+
+
 def _check_why(st: MonthState) -> str:
-    why = []
+    why = [f"{x['판매 방식']} 정산 예정 판매 {x['판매']:,}·정산 {x['정산']:,} 을 상품으로 못 나눠 금액에서 뺌({x['사유']})" for x in st.pend_check]
     if st.late:
         why.append(f"쿠팡 정산 달력 정산일이 지난 최종액(30%) 회차 지급 줄이 없음(위 '확인 필요' {len(st.late)}줄) · 그 몫은 쿠팡 정산대상 그대로 예정으로 둠")
     if st.hold:
@@ -285,13 +290,14 @@ def assemble(st: MonthState) -> dict:
     rows = dep_rows(st, settle - sum(a for _, a in sep_int), sep_int)
     fl = flow(st, rows)
     pending_total = sum(pend8.values()) + sum(x["applied_amount"] for x in c_items if x.get("pending"))
-    out = {**_head(st), "status": month_status(bool(pending_total or st.pend_info), st.late + st.hold),
+    out = {**_head(st), "status": month_status(bool(pending_total or st.pend_info), check_lists(st)),
            "lines": [{"no": i, "name": LINE_NAMES[i - 1], "amount": lines8[i], "pending": pend8[i]} for i in range(1, 9)],
            "product_subtotal": subtotal, "products": [_product_row(t, n) for n in t["names"]], "rg_kinds": rg_kinds(st, lines8[6]),
            "common": {"items": c_items, "basis_text": st.basis_text,
                       "total_coupang": sum(x["coupang_amount"] for x in c_items), "total_applied": sum(applied)},
            "separate": [{"name": n, "amount": a} for n, a in sep_int],
-           "settle_amount": settle, "pending_total": pending_total, "pending_detail": st.pend_info, "flow": fl, "deposits": rows}
+           "settle_amount": settle, "pending_total": pending_total, "pending_detail": st.pend_info,
+           "pending_excluded": st.pend_check, "flow": fl, "deposits": rows}
     out["checks"] = checks(st, out, lines8)
     out["judgments"] = judgments(st, out)
     out["remarks"] = remarks(st, out)

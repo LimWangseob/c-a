@@ -14,6 +14,8 @@
 - 지연 분포 = cut 앞 모든 계정 주문별매출 주문 줄 · 계산할 때마다 `검증자료/결제확정_지연분포.json` 에 '기준 달' = cut 으로 저장(더 늦은 달 것이 있으면 그대로 · D-269 ①).
 로켓그로스(D-269 ②): 예정 판매 주마다 그 달 판매분석(기간 M:YYYY-MM · 없으면 그 달 주별 W:) 로켓그로스 판매 비율(T-63 이전 방식) · 기준일 뒤 주도 같음 ·
   주가 달을 걸치면 날짜의 달로 나눔(D-266 ③ · 그 달 날짜들 판매분석 일별 순액 비율) · 그 달 판매 없음·0~100% 밖 = 그 금액만 '확인 필요'.
+나누기 결과 = 옵션별 조각(`Split` · T-178) — 관리 몫 = 그중 관리 옵션 합(`managed` · 옛 엑셀 위탁정산서) · 새 형식 위탁자 정산서(`settlement_consignor_month_calc`)는
+  같은 조각을 상품 줄로 씀(`wing_one`·`rg_month`).
 근거 = `output/_검증_261117_정산끝난달/판정_보고.md` 6절·6-1b(ⓑo)(`scripts/b2_wing.py` C2 · `b5_fill.py`) · `output/_분석_261116_예정분나누기/미정산장부_방안.md` 7~8절.
 """
 from __future__ import annotations
@@ -23,6 +25,7 @@ from collections import Counter, defaultdict
 from datetime import date, timedelta
 from functools import lru_cache
 from pathlib import Path
+from typing import NamedTuple
 
 from coupang_analytics import settlement_stats as SS
 from coupang_analytics.settlement_docs import LAG_DAYS
@@ -32,6 +35,19 @@ WING_BACK, WING_CUT, RATE_BACK = 30, 8, 60
 PMF_FILE = "결제확정_지연분포.json"           # 저장해 둔 결제→구매확정 지연 분포(D-269 ①)
 WING, RG = "윙", "로켓그로스"
 SD_LAG = LAG_DAYS["주문별매출"]       # 주문별매출 받는 날 = 말일 + 이 날수 뒤(앱 규칙 · D-282 ⓑo 자료 시점)
+
+
+class Split(NamedTuple):
+    """정산 예정 줄 하나를 옵션으로 나눈 결과 — why(확인 필요 사유)가 있으면 opts 는 빈 사전 · 조각 합 = 쿠팡 예정 금액."""
+    opts: dict                        # {옵션: (판매, 정산대상)} — 상품을 못 찾은 조각 = 옵션 ''
+    how: str = ""
+    why: str = ""
+    cf: dict = {}                     # ① 실제값만 {옵션: (판매자 할인쿠폰, 판매수수료)} · ②③④ = 빈 사전(쿠팡이 안 줌)
+
+
+def managed(sp: Split, is_mv) -> tuple[float, float, str, str]:
+    """(관리 판매, 관리 정산, 근거, 확인 필요 사유)."""
+    return sum(s for v, (s, _e) in sp.opts.items() if is_mv(v)), sum(e for v, (_s, e) in sp.opts.items() if is_mv(v)), sp.how, sp.why
 
 
 def _d(s) -> date:
@@ -85,11 +101,11 @@ def stored_pmf(base: Path, cut: str) -> tuple:
     return tuple((int(k), float(v)) for k, v in j.get("분포") or []) if j.get("기준 달", "") <= cut else ()
 
 
-def _conv(pos: dict, rate: dict, acc: float | None, is_mv) -> float:
-    """정산대상 환산 뒤 관리 비율 — 옵션 판매 × 옵션 정산대상/판매(없으면 계정 비율 · 그것도 없으면 1)."""
+def _conv(pos: dict, rate: dict, acc: float | None) -> dict:
+    """정산대상 환산 뒤 옵션별 비율 — 옵션 판매 × 옵션 정산대상/판매(없으면 계정 비율 · 그것도 없으면 1)."""
     w = {v: y * rate.get(v, acc if acc is not None else 1.0) for v, y in pos.items()}
     t = sum(w.values())
-    return sum(y for v, y in w.items() if is_mv(v)) / t if t else 0.0
+    return {v: y / t if t else 0.0 for v, y in w.items()}
 
 
 def _rates(pairs) -> tuple[dict, float | None]:
@@ -119,35 +135,45 @@ def _ap(r: dict) -> float:
     return float(r.get("apAmount") or 0)
 
 
-def _order_frac(rows: list, pend: list, is_mv):
-    """줄 → 관리 비율 함수 — 상품 줄 = 0/1 · 상품 없는 줄(배송비·취소) = 같은 주문 상품 줄 수 비율(못 찾으면 예정분 관리 비율 · None 표시)."""
+def _order_opts(rows: list, pend: list):
+    """줄 → [(옵션, 몫)] 함수 — 상품 줄 = 그 옵션 · 상품 없는 줄(배송비·취소) = 같은 주문 상품 줄 수 비율(못 찾으면 예정분 옵션 판매 비율 · False 표시)."""
     by_o: dict = defaultdict(list)
     for r in rows:
         if r.get("vendorItemId") is not None:
-            by_o[str(r["orderId"])].append(is_mv(str(r["vendorItemId"])))
+            by_o[str(r["orderId"])].append(str(r["vendorItemId"]))
     opt = [r for r in pend if r.get("vendorItemId") is not None]
     tot = sum(gmv(r) for r in opt)
-    base_sh = sum(gmv(r) for r in opt if is_mv(str(r["vendorItemId"]))) / tot if tot else 0.0
+    rest = [(str(r["vendorItemId"]), gmv(r) / tot) for r in opt] if tot else [("", 1.0)]
 
-    def frac(r: dict) -> tuple[float, bool]:
+    def opts(r: dict) -> tuple[list, bool]:
         if r.get("vendorItemId") is not None:
-            return (1.0 if is_mv(str(r["vendorItemId"])) else 0.0), True
+            return [(str(r["vendorItemId"]), 1.0)], True
         o = by_o.get(str(r["orderId"]))
-        return (sum(o) / len(o), True) if o else (base_sh, False)
-    return frac
+        return ([(v, 1 / len(o)) for v in o], True) if o else (rest, False)
+    return opts
 
 
-def wing_actual(rows: list, periods: list, s: float, e: float, is_mv) -> tuple | None:
-    """(관리 판매, 관리 정산, 근거) 또는 None(파일 기간 밖 줄 합이 쿠팡 예정과 원 단위 다름)."""
+def _actual_vals(r: dict) -> tuple:
+    """(판매, 정산대상, 판매자 할인쿠폰, 판매수수료)."""
+    return gmv(r), _ap(r), float(r.get("sfcAmount") or 0), float(r.get("trAmountIncVat") or 0)
+
+
+def wing_actual(rows: list, periods: list, s: float, e: float) -> Split | None:
+    """옵션별 실제값(판매·정산·쿠폰·수수료 · D-261 ② E2) 또는 None(파일 기간 밖 줄 합이 쿠팡 예정과 원 단위 다름)."""
     pend = [r for r in rows if not any(a <= str(r["confirmDate"])[:10] <= b for a, b in periods)]
     if not pend or round(sum(gmv(r) for r in pend)) != round(s) or round(sum(_ap(r) for r in pend)) != round(e):
         return None
-    frac = _order_frac(rows, pend, is_mv)
-    got = [(gmv(r), _ap(r), *frac(r)) for r in pend]
-    loose = sum(not found for *_x, found in got)
-    return (sum(g * f for g, _a, f, _k in got), sum(a * f for _g, a, f, _k in got),
-            f"주문별매출 실제값 — 정산 파일 기간 밖 구매확정 {len(pend)}줄(쿠팡 예정과 원 단위 같음)"
-            + (f" · 상품 못 찾은 줄 {loose}개 = 예정분 관리 비율" if loose else ""))
+    of = _order_opts(rows, pend)
+    got: dict = defaultdict(lambda: [0.0] * 4)
+    loose = 0
+    for r in pend:
+        ks, found = of(r)
+        loose += not found
+        for v, k in ks:
+            got[v] = [g + x * k for g, x in zip(got[v], _actual_vals(r))]
+    return Split({v: (g[0], g[1]) for v, g in got.items()},
+                 f"주문별매출 실제값 — 정산 파일 기간 밖 구매확정 {len(pend)}줄(쿠팡 예정과 원 단위 같음)"
+                 + (f" · 상품 못 찾은 줄 {loose}개 = 예정분 관리 비율" if loose else ""), "", {v: (g[2], g[3]) for v, g in got.items()})
 
 
 # ── ② 윙 B8+환산 ──
@@ -197,25 +223,26 @@ def _file_rates(file_rows: list, s0: date) -> tuple[dict, float | None]:
     return _rates((v, sl, st) for (_o, v, sl), st in seen.items())
 
 
-def wing_b8(daily: dict, known: list, file_rows: list, pmf: tuple, win: tuple, s: float, e: float, is_mv, how: tuple) -> tuple:
-    """(관리 판매, 관리 정산, 근거, 확인 필요 사유) — win = (그 달, 판매 끝 last) · how = (이름, 환산 함수(s0) → (옵션 비율, 계정 비율))."""
+def wing_b8(daily: dict, known: list, file_rows: list, pmf: tuple, win: tuple, s: float, e: float, is_mv, how: tuple) -> Split:
+    """옵션별 조각 — win = (그 달, 판매 끝 last) · how = (이름, 환산 함수(s0) → (옵션 비율, 계정 비율))."""
     ym, last = win
     if s <= 0:
-        return 0.0, 0.0, "", f"나눌 판매 없음(쿠팡 예정 판매 {s:,.0f}원 — 0 이하)"
+        return Split({}, "", f"나눌 판매 없음(쿠팡 예정 판매 {s:,.0f}원 — 0 이하)")
     s0 = _d(ym + "-01") - timedelta(days=WING_BACK)
     end = last - timedelta(days=WING_CUT)
     kp, ok = _wing_sub(known, file_rows, pmf, s0)
     if not ok:
-        return 0.0, 0.0, "", "결제→구매확정 지연 자료 없음"
+        return Split({}, "", "결제→구매확정 지연 자료 없음")
     pos = _wing_residual(daily, kp, s0, end)
     pt = sum(pos.values())
     mm = sum(y for v, y in pos.items() if is_mv(v))
     why = _judge(mm, pt, s)
     if why:
-        return 0.0, 0.0, "", why
+        return Split({}, "", why)
     rate, acc = how[1](s0)
-    return (s * mm / pt, e * _conv(pos, rate, acc, is_mv),
-            f"{how[0]} — 결제일 {s0}~{end} 판매분석 일별 − 이미 구매확정 · 남은 판매 {pt:,.0f}원(쿠팡 판매 {s:,.0f}원) 중 관리 {mm:,.0f}원", "")
+    cv = _conv(pos, rate, acc)
+    return Split({v: (s * y / pt, e * cv[v]) for v, y in pos.items()},
+                 f"{how[0]} — 결제일 {s0}~{end} 판매분석 일별 − 이미 구매확정 · 남은 판매 {pt:,.0f}원(쿠팡 판매 {s:,.0f}원) 중 관리 {mm:,.0f}원")
 
 
 # ── ③-2 윙 ⓑo 운용 시점 그 달 판매 비율(D-282) ──
@@ -241,25 +268,25 @@ def _basis_wing(files: list, basis: date) -> tuple[list, list]:
     return _wing_files([f for f in files if f.channel == WING and f.settle_date <= basis])
 
 
-def wing_ops(daily: dict, got: tuple, win: tuple, s: float, e: float, is_mv) -> tuple:
+def wing_ops(daily: dict, got: tuple, win: tuple, s: float, e: float, is_mv) -> Split:
     """ⓑo — 판매분석 일별 윙 순액 결제일 [그 달 1일−30일, 판매 끝] − 이미 확정된 판매(got = basis_data: 기준일 전에 받은 주문별매출 + 기준일까지 정산된 윙 정산 파일 ·
-    지연 분포도 받은 달로만)의 관리 비율 × 쿠팡 예정 판매·정산(D-282) → (관리 판매, 관리 정산, 근거, 확인 필요 사유)."""
+    지연 분포도 받은 달로만)의 관리 비율 × 쿠팡 예정 판매·정산(D-282) → 옵션별 조각."""
     ym, last = win
     cut, known, wrows, pmf = got
     s0 = _d(ym + "-01") - timedelta(days=WING_BACK)
     kp, ok = _wing_sub(known, wrows, pmf, s0)
     if not ok:
-        return 0.0, 0.0, "", f"결제→구매확정 지연 자료 없음({cut} 앞 달 주문별매출 · 기준일 전에 받은 것 없음)"
+        return Split({}, "", f"결제→구매확정 지연 자료 없음({cut} 앞 달 주문별매출 · 기준일 전에 받은 것 없음)")
     pos = _wing_residual(daily, kp, s0, last)
     pt = sum(pos.values())
     mm = sum(y for v, y in pos.items() if is_mv(v))
     if not pt:
-        return 0.0, 0.0, "", f"나눌 판매 없음(결제일 {s0}~{last} 판매분석 일별 − 이미 확정 = 남은 판매 0원 · 쿠팡 예정 판매 {s:,.0f}원)"
+        return Split({}, "", f"나눌 판매 없음(결제일 {s0}~{last} 판매분석 일별 − 이미 확정 = 남은 판매 0원 · 쿠팡 예정 판매 {s:,.0f}원)")
     why = _judge(mm, pt, None)
     if why:
-        return 0.0, 0.0, "", why
-    return (s * mm / pt, e * mm / pt,
-            f"윙 ⓑo 그 달 판매 비율(운용 시점 · 주문별매출 {cut} 앞 달까지) — 결제일 {s0}~{last} 판매분석 일별 − 이미 확정 · 남은 판매 {pt:,.0f}원 중 관리 {mm:,.0f}원", "")
+        return Split({}, "", why)
+    return Split({v: (s * y / pt, e * y / pt) for v, y in pos.items()},
+                 f"윙 ⓑo 그 달 판매 비율(운용 시점 · 주문별매출 {cut} 앞 달까지) — 결제일 {s0}~{last} 판매분석 일별 − 이미 확정 · 남은 판매 {pt:,.0f}원 중 관리 {mm:,.0f}원")
 
 
 # ── 로켓그로스 그 달 판매 비율(D-269 ②) ──
@@ -277,16 +304,26 @@ def _rg_net(daily: dict, a: date, b: date) -> tuple[dict, int]:
     return net, miss
 
 
-def month_share(periods: dict, ch: str, ym: str, is_mv) -> tuple[float, float]:
-    """그 달 판매분석(기간 M:YYYY-MM · 없으면 그 달 주별 W:) 판매 방식 판매 → (관리 판매, 전체 판매) — T-63 이전 방식."""
+def month_weights(periods: dict, ch: str, ym: str) -> dict:
+    """그 달 판매분석(기간 M:YYYY-MM · 없으면 그 달 주별 W:) 판매 방식 옵션별 판매 {옵션: 금액} — T-63 이전 방식."""
     keys = [f"M:{ym}"] if f"M:{ym}" in periods else [k for k in periods if k.startswith(f"W:{ym}")]
-    mm = aa = 0.0
+    w: dict = defaultdict(float)
     for k in keys:
         for v, o in (periods[k].get("옵션") or {}).items():
             if o.get("구분") == ch:
-                aa += float(o.get("판매금액") or 0)
-                mm += float(o.get("판매금액") or 0) if is_mv(str(v)) else 0.0
-    return mm, aa
+                w[str(v)] += float(o.get("판매금액") or 0)
+    return w
+
+
+def rg_month(periods: dict, line: tuple, is_mv) -> Split:
+    """로켓그로스 예정 (달, 판매, 정산대상) → 그 달 판매 비율로 나눈 옵션별 조각(D-269 ②) · 그 달 판매 없음·관리 몫 0~100% 밖 = 확인 필요."""
+    ym, s, e = line
+    w = month_weights(periods, RG, ym)
+    aa, mm = sum(w.values()), sum(a for v, a in w.items() if is_mv(v))
+    why = _judge(mm, aa, None)
+    if why:
+        return Split({}, "", why)
+    return Split({v: (s * a / aa, e * a / aa) for v, a in w.items() if a}, f"{ym} 판매분석 판매 {aa:,.0f}원 중 관리 {mm:,.0f}원")
 
 
 def _month_parts(a: date, b: date) -> list:
@@ -320,11 +357,8 @@ def rg_week(daily: dict, periods: dict, week: tuple, is_mv) -> list:
     out = []
     for (a, b), f in zip(parts, fr):
         ym, ps, pe = str(a)[:7], (sales or 0) * f, amt * f
-        mm, aa = month_share(periods, RG, ym, is_mv)
-        bad = _judge(mm, aa, None)
-        sh = 0.0 if bad else mm / aa
-        out.append((ym, ps, pe, ps * sh, pe * sh,
-                    "" if bad else f"로켓그로스 그 달 판매 비율 — 판매 주 {s0}~{e0} 중 {a}~{b} · {ym} 판매분석 판매 {aa:,.0f}원 중 관리 {mm:,.0f}원", bad))
+        ms, me, how, bad = managed(rg_month(periods, (ym, ps, pe), is_mv), is_mv)
+        out.append((ym, ps, pe, ms, me, "" if bad else f"로켓그로스 그 달 판매 비율 — 판매 주 {s0}~{e0} 중 {a}~{b} · {how}", bad))
     return [x for x in out if round(x[1]) or round(x[2])]
 
 
@@ -347,32 +381,32 @@ def split(acct) -> list:
         if kind in ("자료 없음", "확인 필요") or ym == "-":
             out.append((ch, ym, s, e, 0.0, 0.0, f"{kind} — {note}", ""))
         elif ch == WING:
-            out.append((ch, ym, s, e, *_wing_one(c.base, (ym, s, e), orders, daily, acct.is_mv, basis, acct.files)))
+            out.append((ch, ym, s, e, *managed(wing_one(c.base, (ym, s, e), orders, daily, acct.is_mv, basis, acct.files), acct.is_mv)))
         else:
             out += [(ch, *x) for wk in (rest[0] if rest else []) for x in rg_week(daily, periods, wk, acct.is_mv)]
     return out
 
 
-def _wing_one(base, line: tuple, orders: dict, daily: dict, is_mv, basis: date, files: list) -> tuple:
+def wing_one(base, line: tuple, orders: dict, daily: dict, is_mv, basis: date, files: list) -> Split:
     """① 실제값 → ② B8+환산 → ③ ⓒ2(저장 지연 분포 + 정산 파일 환산) → ④ ⓑo(운용 시점 그 달 판매 비율 D-282) → 안 되면 확인 필요(D-269 ①)."""
     ym, s, e = line
     have, why = basis_data(orders, files, base, ym, basis)      # ①·B8·ⓒ2·ⓑo = 기준일에 앱이 가진 자료만(T-84 · D-292)
     if why:
-        return 0.0, 0.0, "", f"①·B8·ⓒ2·ⓑo: {why}"
+        return Split({}, "", f"①·B8·ⓒ2·ⓑo: {why}")
     if ym < _received_ym(basis):                                # ① = 기준일 전에 받은 그 달 주문별매출 · 정산일 ≤ 기준일 윙 정산 파일 기간(D-292)
-        got = wing_actual(orders.get(ym.replace("-", "")) or [], _basis_wing(files, basis)[0], s, e, is_mv)
+        got = wing_actual(orders.get(ym.replace("-", "")) or [], _basis_wing(files, basis)[0], s, e)
         if got:
-            return (*got, "")
+            return got
     nxt = date(int(ym[:4]) + (ym[5:] == "12"), int(ym[5:]) % 12 + 1, 1)
     win = (ym, min(nxt - timedelta(days=1), basis - timedelta(days=1)))
     cut, known, wrows, pmf = have
     save_pmf(base, cut, pmf)
     b8 = wing_b8(daily, known, wrows, pmf, win, s, e, is_mv, ("윙 B8+환산", lambda s0: _known_rates(known, s0)))
-    if not b8[3]:
+    if not b8.why:
         return b8
     c2 = wing_b8(daily, [], wrows, pmf or stored_pmf(base, cut), win, s, e, is_mv,
-                 ("윙 ⓒ2 저장 지연 분포+정산 파일 환산(B8 확인 필요 조건 — %s)" % b8[3], lambda s0: _file_rates(wrows, s0)))
-    if not c2[3]:
+                 ("윙 ⓒ2 저장 지연 분포+정산 파일 환산(B8 확인 필요 조건 — %s)" % b8.why, lambda s0: _file_rates(wrows, s0)))
+    if not c2.why:
         return c2
     bo = wing_ops(daily, have, win, s, e, is_mv)
-    return bo if not bo[3] else (0.0, 0.0, "", f"B8: {b8[3]} · ⓒ2: {c2[3]} · ⓑo: {bo[3]}")
+    return bo if not bo.why else Split({}, "", f"B8: {b8.why} · ⓒ2: {c2.why} · ⓑo: {bo.why}")

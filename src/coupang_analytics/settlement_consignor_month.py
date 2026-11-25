@@ -16,6 +16,7 @@ from pathlib import Path
 
 from coupang_analytics import settlement_ledger as SL
 from coupang_analytics import settlement_statement_account as AC
+from coupang_analytics import settlement_statement_pending as PEND
 from coupang_analytics import settlement_statement_source as SRC
 from coupang_analytics.settlement_consignor_month_calc import MonthState, ads, pending_sales, sales, settle_by_channel
 from coupang_analytics.settlement_consignor_month_cost import (
@@ -69,12 +70,13 @@ def _file_rows(files: list) -> list:
     return out
 
 
-def _all_vids(a: Account, pa: list, inv: dict) -> set:
-    """관리 판정을 미리 구해 둘 VID — 정산 파일·판매분석·광고 보고서·입고·상품조회에 나온 옵션 전부(샘플 s01 과 같은 범위)."""
+def _all_vids(a: Account, pa: list, inv: dict, orders: dict) -> set:
+    """관리 판정을 미리 구해 둘 VID — 정산 파일·판매분석·광고 보고서·입고·상품조회·주문별매출에 나온 옵션 전부(샘플 s01 과 같은 범위 + 주문별매출 T-178)."""
     allv = set(a.opt2pid) | set(a.vid_name) | {str(int(float(x[2]))) for x in pa if x[2] not in (None, "")}
     allv |= {str(k.get("vendorItemId")) for s in (a.v.get("inbound") or []) for k in s.get("skus") or []}
     for p in inv.values():
         allv |= set(p["types"])
+    allv |= {str(r["vendorItemId"]) for rs in orders.values() for r in rs if r.get("vendorItemId") is not None}
     allv |= {str(x["옵션ID"]) for x in a.add["줄"]}                  # 10 추가지급 = 옵션 → 관리 VID(T-125 A1)
     return allv
 
@@ -93,15 +95,17 @@ def account_source(ctx, acct: str) -> dict:
         raise ValueError(f"{acct} 지급 줄 수가 기존 계산과 다름: {len(lines)} vs {len(a.line_info)}")
     pa, bill, have = AC.ad_files(ctx.base, acct)
     inv = ctx.inv.get(a.aid) or {}
+    orders = PEND.order_months(ctx.base, acct)
     return {
         "acct": acct, "aid": a.aid, "info": ctx.names.get(acct), "cdate": a.cdate, "base": str(ctx.base), "basis": ctx.basis,
-        "mpids": set(a.mpids), "is_mv": {v: a.is_mv(v) for v in _all_vids(a, pa, inv)}, "opt2pid": dict(a.opt2pid),
+        "mpids": set(a.mpids), "is_mv": {v: a.is_mv(v) for v in _all_vids(a, pa, inv, orders)}, "opt2pid": dict(a.opt2pid),
         "files_meta": [(i, f.channel, f.kind, str(f.period_start), str(f.period_end)) for i, f in enumerate(a.files)],
         "file_rows": _file_rows(a.files),
         "lines": [(list(row), dict(r), li[5]) for (row, r), li in zip(lines, a.line_info)],
         "line_info": [(st, ch, ym, pay, rel, dict(parts), list(row)) for st, ch, ym, pay, rel, parts, row in a.line_info],
         "prows": _rows_of(ctx, "상품별 월별", acct), "rg_cost_rows": _rows_of(ctx, STATS_COST, acct),
         "ads": (pa, bill, sorted(have)), "v": a.v, "add": a.add, "periods": ctx.periods.get(a.aid) or {}, "inventory": inv,
+        "daily": ctx.daily.get(a.aid) or {}, "orders": orders, "files": a.files,
         "u": [tuple(x) for x in a.u], "extras": ctx.extras.get(a.aid, []), "L_gen": dict(a.L["gen"]),
         "pur": dict(a.pur), "wconf": {k: tuple(v) for k, v in a.wconf.items()}, "own_judge": ctx.own_judge.get(a.aid, {}),
     }

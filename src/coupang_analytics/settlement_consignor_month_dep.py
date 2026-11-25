@@ -59,8 +59,8 @@ def _pay_items(st: MonthState, r_ch: dict) -> list:
     st.hold = hold_release_notes(st.d["line_info"], st.m)                       # 보류 해제 줄 = 확인 필요(21 · T-176 · 상태 = out)
     st.j += st.late + st.hold
     for ch in ("윙", "로켓그로스"):
-        tot = sum(st.settle_by_ch[ch].values())
-        st.chk.append({"검사": f"{ch} 이 달 판매 기간 지급 줄 정산금액 합 = 이 달 상품별 정산금액 합(계정 전체 · 확정+예정)", "값": [pay_ch[ch], round(tot)],
+        tot = sum(st.settle_by_ch[ch].values()) + sum(x["정산"] for x in st.pend_check if x["판매 방식"] == ch)
+        st.chk.append({"검사": f"{ch} 이 달 판매 기간 지급 줄 정산금액 합 = 이 달 상품별 정산금액 합(계정 전체 · 확정+예정 · 확인 필요로 뺀 예정분 포함)", "값": [pay_ch[ch], round(tot)],
                        "차이": round(pay_ch[ch] - tot)})
     st.pay_ch = pay_ch
     return items
