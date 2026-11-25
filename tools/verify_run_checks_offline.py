@@ -504,6 +504,21 @@ def s13_times_start():
     ok("시작 ≤ 검사가 실제로 시작한 시각 · 앞 게이트 시작 = 놓기 전 · 뒤 게이트 시작 = 앞 게이트가 놓은 뒤 · 머리줄 9칸 그대로 · 옛 줄 그대로 읽힘")
 
 
+def s14_racy_index():
+    import os
+    print("[S14] 커밋과 같은 초에 같은 크기로 바꾼 파일도 다른 키 — 인덱스 복사본 시각이 나중이면 git 보호(racy)가 꺼져 놓침(2026-11-25 재현 4/4)")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        while time.time() % 1 > 0.35:                      # 한 초 안에서 저장소 만들기·커밋·수정이 끝나게
+            time.sleep(0.01)
+        root = _repo(tmp)
+        st = os.stat(root / "a.py")
+        (root / "a.py").write_text("x = 2\n", encoding="utf-8")
+        os.utime(root / "a.py", ns=(st.st_atime_ns, st.st_mtime_ns))     # 파일 시각·크기는 커밋 때와 같음
+        time.sleep(1.3)
+        assert CS.worktree_key(root) != CS.commit_key(root, "HEAD"), "같은 초에 바뀐 파일을 못 잡음(이미 통과함으로 건너뛸 수 있음)"
+    ok("같은 초·같은 크기 수정도 다른 키")
+
+
 def main():
     with tempfile.TemporaryDirectory() as lock_dir:      # 같은 프로세스 안 게이트(S5·S6·S7)도 실제 PC 잠금 대신 임시 잠금
         RC.LOCK_PATH = Path(lock_dir) / "gate.lock"
@@ -524,6 +539,7 @@ def _scenarios():
     s11_times_log()
     s12_untracked_warn()
     s13_times_start()
+    s14_racy_index()
     print("회귀 게이트 자체(동시 실행·통과 기록·PC 하나만·우선순위) 오프라인 검증 통과")
 
 

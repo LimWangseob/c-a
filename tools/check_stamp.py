@@ -50,7 +50,7 @@ def _key(root: Path, fill: list[str]) -> str:
         idx = Path(d) / "index"
         real = _git_path(root, "index")
         if real.exists():
-            shutil.copyfile(real, idx)          # 파일 상태 캐시 재사용(빠름)
+            shutil.copy2(real, idx)             # 파일 상태 캐시 재사용(빠름) · 시각 보존 = git 의 같은 초 수정 감지(racy) 유지(copyfile 은 놓침 · S14)
         env = {**clean_env(), "GIT_INDEX_FILE": str(idx)}
         _git(root, fill, env)
         _git(root, ["rm", "-r", "--cached", "-q", "--ignore-unmatch", "--", *EXCLUDE], env)
