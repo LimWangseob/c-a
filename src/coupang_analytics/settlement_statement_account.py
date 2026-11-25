@@ -73,6 +73,19 @@ def ad_files(base: Path, acct: str) -> tuple[list, dict, set]:
     return pa, dict(bill), have
 
 
+def ad_wing_bills(base: Path, acct: str) -> dict:
+    """검증자료/광고 광고정산 json — {달 'YYYY-MM': 윙 광고 청구금액(summary.nonRod.totalFinalAmount · 부가세 포함 · null = 윙 광고 없음 0)}.
+    nonRod 칸이 없는 파일 = 윙 청구를 모름 → 그 달 안 넣음."""
+    d, tok = base / "검증자료" / "광고", glob.escape(SF._token(acct, "계정명"))   # 계정명 [ ] = 문자 묶음 아님
+    out = {}
+    for p in sorted(d.glob(f"{tok}_광고정산_*.json")):
+        s = json.loads(p.read_text(encoding="utf-8")).get("summary") or {}
+        if "nonRod" in s:
+            ym = p.stem.rsplit("_", 1)[-1]
+            out[f"{ym[:4]}-{ym[4:]}"] = num((s["nonRod"] or {}).get("totalFinalAmount"))
+    return out
+
+
 def _txt_num(v) -> float:
     """밀크런 엑셀 금액 = 글자('14960', '-2,400')로 들어옴(2026-11-02 output(29) 실측)."""
     try:

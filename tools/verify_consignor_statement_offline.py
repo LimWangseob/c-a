@@ -42,8 +42,9 @@ from coupang_analytics import settlement_statement_account as AC  # noqa: E402
 from coupang_analytics import settlement_fee_rules as FR  # noqa: E402
 from coupang_analytics.settlement_consignor_month_calc import AD_NOCAMP, ads  # noqa: E402
 from coupang_analytics.settlement_consignor_month_cost import BI_CAT, KINDS, PEND_KIND, _rg_notes, expect_values  # noqa: E402
-from coupang_analytics.settlement_consignor_month_dep import dep_rows, flow  # noqa: E402
+from coupang_analytics.settlement_consignor_month_dep import _cost_locs, dep_rows, flow  # noqa: E402
 from coupang_analytics.settlement_consignor_month_sep import separate  # noqa: E402
+from coupang_analytics.settlement_consignor_month_wingad import wing_ad_months  # noqa: E402
 from coupang_analytics.settlement_consignor_month_out import LINE_NAMES, _product_row, common_out, coupang_by_cat, product_table, rg_kinds  # noqa: E402
 
 ISSUED = "2026-11-18"
@@ -195,7 +196,7 @@ def test_ad_nocamp_d317() -> None:
     cols: dict = defaultdict(lambda: [0.0] * 9)
     pa = [(20261005, 111, 7001, 600.0), (20261005, 111, 7002, 400.0)]
     bill = {(20261005, "111"): 10_000.0, (20261031, ""): -2_000.0}
-    st = SimpleNamespace(m="2026-10", mk="202610", d={"ads": (pa, bill, {"202610"})}, cols=cols, common=[], loc=defaultdict(list), j=[], chk=[],
+    st = SimpleNamespace(m="2026-10", mk="202610", d={"ads": (pa, bill, {"202610"}), "ad_wing": {}}, cols=cols, common=[], loc=defaultdict(list), j=[], chk=[],
                          share=0.5, reg_share=0.4, lines=lambda: iter([]), ad_note="",
                          managed_vid=lambda v: ({"7001": ("P1", True), "7002": ("P2", False)}[str(v)]))
     ads(st)
@@ -204,6 +205,86 @@ def test_ad_nocamp_d317() -> None:
     items, applied = common_out(st)
     etc = next(x for x in items if x["name"] == "그 밖의 쿠팡 공제")
     assert (etc["coupang_amount"], etc["applied_amount"]) == (-2_200, 1_320), etc     # −2,200 × 60% (D-241 0.5 였으면 1,100)
+
+
+def _ad_month(m: str, bills: dict, wing: list, rg: dict | None = None, charged: float = 0.0) -> SimpleNamespace:
+    """T-186 시험 자료 — 윙 줄 = (지급일, 판매 기간 시작, 차감 사유) · rg = 로켓그로스 줄의 달별 광고 칸 · charged = 그 달 광고 청구(부가세 전)."""
+    lines = []
+    for day, start, why in wing:
+        row = ["", "", day, start, start, "70", "지급 완료"]
+        lines.append(((day, start, start, "윙", "70"), row, {"채널": "윙", "차감 사유": [{"사유": k, "금액": v} for k, v in why]}))
+    if rg:
+        row = ["", "", "2026-12-30", f"{m}-01", f"{m}-07", "70", "지급 완료"]
+        lines.append(((row[2], row[3], row[4], "로켓그로스", "70"), row, {"채널": "로켓그로스", "adSalesOffsetYearMonthBreakdown": json.dumps(rg)}))
+    st = SimpleNamespace(m=m, mk=m.replace("-", ""), d={"ads": ([], {(int(m.replace("-", "") + "15"), ""): charged}, set()), "ad_wing": bills},
+                         cols=defaultdict(lambda: [0.0] * 9), common=[], loc=defaultdict(list), j=[], chk=[], lines=lambda: iter(lines), ad_note="",
+                         managed_vid=lambda v: ("", False))
+    ads(st)
+    return st
+
+
+def test_t186_wing_ad_deducted() -> None:
+    """T-186: 쿠팡이 윙 지급 줄에서 이미 뺀 광고비(달 표시 없음)는 '아직 안 뺀 금액'이 아님 — 광고 달 = 줄의 판매 달(그 달 윙 청구액까지) ·
+    기대값 = 쿠팡 원문 금액(광고센터 nonRod 청구 127,478 = 98,095 + 223,665 − 202,522 + 8,240 · 4월 66,000)."""
+    ad = "상품/브랜드광고비"
+    wing = [("2026-05-26", "2026-04-27", [(ad, 66_000)]), ("2026-05-26", "2026-05-01", [(ad, 98_095)]), ("2026-06-01", "2026-05-04", [(ad, 223_665)]),
+            ("2026-06-09", "2026-05-11", [(ad, -202_522)]), ("2026-06-16", "2026-05-18", []),
+            ("2026-07-01", "2026-05-01", [(ad, 8_240), ("판매자서비스이용료", 55_000)])]
+    bills = {"2026-04": 66_000, "2026-05": 127_478}
+    for m, charged, want in (("2026-04", 60_000.0, {"2026-05-26": 66_000}),
+                             ("2026-05", 115_889.0, {"2026-05-26": 98_095, "2026-06-01": 223_665, "2026-06-09": -202_522, "2026-07-01": 8_240})):
+        st = _ad_month(m, bills, wing, charged=charged)
+        assert {k[0]: a for k, a in st.loc["ad"]} == want and st.ad["deducted"] == sum(want.values()), (m, st.loc["ad"])
+        assert abs(st.chk[0]["차이"]) < 1 and not [j for j in st.j if "윙 지급 줄" in j], (st.chk, st.j)
+        # 날짜별 표 = 쿠팡이 실제로 뺀 날 · '지급일 미정'(unlocated) 0
+        st.common_items, st.coupang_cat, dep = [], Counter({"ad": st.ad["deducted"]}), Counter()
+        _cost_locs(st, dep, {k: "지급 완료" for k, _a in st.loc["ad"]}, {5: -sum(want.values()), 6: 0, 7: 0, 8: 0}, [])
+        assert {k[0]: round(a) for k, a in dep.items()} == {d: -a for d, a in want.items()} and not st.unlocated, (m, dep, st.unlocated)
+    # 로켓그로스 + 윙 = 둘 다
+    st = _ad_month("2026-05", bills, wing, rg={"2026-05": 500, "2026-04": 70}, charged=(127_478 + 500) / 1.1)
+    assert st.ad["deducted"] == 127_978 and abs(st.chk[0]["차이"]) < 1, st.chk
+
+
+def test_t186_wing_ad_carry() -> None:
+    """T-186 · D-289 ②: 그 달 줄에서 모자란 몫은 뒤 달 줄에서 빠짐(지급 순서 누적) — 뒤 달 줄의 그 달 청구를 넘는 금액 = 앞 달 모자란 몫 ·
+    같은 금액 먼저(앞 달 미납이 남아도 다음 달들이 자기 청구액 그대로 빠진 실측) · 못 가른 금액 = '확인 필요'(위치에 안 넣음)."""
+    def line(day, start, a):
+        return start[:7], (day, start, start, "윙", "70"), a
+    # 6월 청구 137,530 한 푼도 못 뺌 → 7월 줄 79,273 + 8월 줄 58,257
+    got, unk = wing_ad_months({"2026-06": 137_530, "2026-07": 141_730, "2026-08": 90_254},
+                              [line("2026-08-10", "2026-07-06", 100_000), line("2026-09-01", "2026-07-01", 121_003),
+                               line("2026-09-20", "2026-08-03", 148_511)])
+    tot = {m: sum(a for _k, a in v) for m, v in got.items()}
+    assert tot == {"2026-06": 137_530, "2026-07": 141_730, "2026-08": 90_254} and not unk, (tot, unk)
+    assert [(k[0], a) for k, a in got["2026-06"]] == [("2026-08-10", 79_273), ("2026-09-20", 58_257)], got["2026-06"]
+    # 4월 1,108 은 끝내 안 빠짐 · 7월 333 은 8월 줄에서 빠짐(같은 금액) → 4월 위치 0 · 8월 = 청구 그대로
+    got, unk = wing_ad_months({"2026-04": 1_108, "2026-07": 333, "2026-08": 1_577}, [line("2026-09-10", "2026-08-10", 1_910)])
+    assert {m: sum(a for _k, a in v) for m, v in got.items() if v} == {"2026-07": 333, "2026-08": 1_577} and not unk, (got, unk)
+    # 음수 청구(지원금) · 청구 0 인 달의 환급 · 앞 달 미납 없는 넘침 · 청구 자료 없는 달 = 확인 필요(달 모름)
+    got, unk = wing_ad_months({"2026-01": -356, "2026-02": 0, "2026-03": 0},
+                              [line("2026-02-10", "2026-01-12", -356), line("2026-03-10", "2026-02-12", -80_321), line("2026-04-10", "2026-03-12", 1_802),
+                               line("2026-06-10", "2026-05-12", 56_030)])
+    assert got["2026-01"] == [(("2026-02-10", "2026-01-12", "2026-01-12", "윙", "70"), -356)], got
+    assert [(m, a) for _k, m, a in unk] == [("2026-02", -80_321), ("2026-03", 1_802), ("2026-05", 56_030)] and not any(got[m] for m in ("2026-02", "2026-03", "2026-05")), (got, unk)
+    # 같은 것을 한 달 계산에서: 청구 자료 없는 달 = 지금처럼 '확인 필요' 문장만(위치·뺀 금액 0) · 이월 = 설명 한 줄
+    st = _ad_month("2026-05", {}, [("2026-06-10", "2026-05-12", [("상품/브랜드광고비", 56_030)])])
+    assert st.ad["deducted"] == 0 and not st.loc["ad"] and [j for j in st.j if j.startswith("확인 필요") and "56030" in j.replace(",", "")], st.j
+    st = _ad_month("2026-03", {"2026-03": 12_354, "2026-04": 219_996}, [("2026-05-20", "2026-04-13", [("상품/브랜드광고비", 232_350)])], charged=12_354 / 1.1)
+    assert st.ad["deducted"] == 12_354 and st.loc["ad"][0][0][0] == "2026-05-20" and [j for j in st.j if "이월" in j and "12,354" in j], (st.loc, st.j)
+
+
+def test_t186_ad_wing_bills_file() -> None:
+    """T-186: 윙 청구액 = 광고정산 json summary.nonRod.totalFinalAmount(부가세 포함) · null = 0 · 칸 없음 = 모름(달 안 넣음) · 진행 중 달 파일 안 읽음 · 괄호 계정."""
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp) / "검증자료" / "광고"
+        d.mkdir(parents=True)
+        for name, data in (("가짜[나다]-x1_광고정산_202604", {"summary": {"nonRod": None}, "items": []}),
+                           ("가짜[나다]-x1_광고정산_202605", {"summary": {"nonRod": {"billableAmount": 115_889, "totalFinalAmount": 127_478}}, "items": []}),
+                           ("가짜[나다]-x1_광고정산_202606", {"summary": {}, "items": []}),
+                           ("가짜[나다]-x1_광고정산진행_202607", {"summary": {"nonRod": {"totalFinalAmount": 9}}}),
+                           ("가짜나-x1_광고정산_202605", {"summary": {"nonRod": {"totalFinalAmount": 5}}})):
+            (d / f"{name}.json").write_text(json.dumps(data), encoding="utf-8")
+        assert AC.ad_wing_bills(Path(tmp), "가짜[나다]-x1") == {"2026-04": 0, "2026-05": 127_478}
 
 
 def _line(ch: str, s: str, e: str, bi: dict | None = None) -> tuple:
@@ -1178,7 +1259,8 @@ def main() -> int:
         pass
     for f in (test_run_job_abort, test_run_job_isolation_and_sheets, test_d262_excluded_pending_listed, test_inputs_pack):
         f()
-    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_ad_nocamp_d317, test_t175_old_forecast_record, test_new23_cross_week_flag, test_d401_remarks_and_evidence, test_d402_check_status_header, test_expect_values, test_flow_fixed, test_t125_additional_pay, test_d391_unknown_ship_same_month_wing_ratio, test_failed_checks, test_load_judge,
+    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_ad_nocamp_d317, test_t186_wing_ad_deducted, test_t186_wing_ad_carry, test_t186_ad_wing_bills_file,
+              test_t175_old_forecast_record, test_new23_cross_week_flag, test_d401_remarks_and_evidence, test_d402_check_status_header, test_expect_values, test_flow_fixed, test_t125_additional_pay, test_d391_unknown_ship_same_month_wing_ratio, test_failed_checks, test_load_judge,
               test_sale_months_2025_excluded, test_render, test_fixed_render, test_product_pages, test_overflow, test_unsplittable, test_check_reject,
               test_multi_month, test_d242_change_log_tab_kept, test_d261_e1_pending_not_negative, test_d260_month_summary_page, test_d260_consignor_pdf,
               test_d260_pdf_run, test_tool):
