@@ -211,13 +211,13 @@ class AccountBase:
         c, acct, aid = self.ctx, self.acct, self.aid
         self.L = c.led.account(acct, SRC.per_dict(c.per), c.un[acct], c.rgf.get(aid, {}), c.aps[acct])
         self.t, self.u = c.tot[acct], c.un[acct]
-        lines, self.dup = payout_lines(c.led, aid, self.L)
+        self.lines, self.dup = payout_lines(c.led, aid, self.L)
         self.D: Counter = Counter()
         self.rows_out, self.bad = [], 0
         self.line_info: list = []          # (상태, 판매 방식, 판매 시작 달, 정산금액, 보류 해제액, 공제 항목, 장부 줄) — 관리 상품 입금 나누기용
         self.watch: Counter = Counter()    # D-305 감지 항목 계정 합
         self.old_fc: list = []             # T-175 전 예정 기록 줄의 기타 공제(BI·세이버·라이브·리뷰를 못 나눔)
-        for row, r in lines:
+        for row, r in self.lines:
             st = row[6].split(" ·")[0]
             pay, rel, parts = deductions(r, st == STS[0])
             self.watch.update(watched(r))

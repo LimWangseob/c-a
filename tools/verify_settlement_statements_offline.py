@@ -880,6 +880,258 @@ def test_status_split_pending_rest() -> None:
     print("test_status_split_pending_rest OK")
 
 
+# ── 지급 끝난 줄 물류비 = 그 줄 실제 관리 몫(T-130 · D-294 ①) — 기대값 = 쿠팡 지급 줄 원문·비용 리포트 실측(output44 · 기준일 2026-11-23) ──
+def _cfs_row(pay, s, e, pct, fin, unpaid, det=(), **kw):
+    """로켓그로스 지급 줄 원문 모양 — det = [(갚은 주기 시작, 끝, 금액)](쿠팡 시각 = 한국 날짜 전날 15:00Z)."""
+    from datetime import date as D
+    from datetime import timedelta
+    z = lambda d: f"{D.fromisoformat(d) - timedelta(days=1)}T15:00:00Z"  # noqa: E731
+    return {**_rg_line(totalFinalCfsFeeDeductionAmount=fin), "정산일": pay, "기간 시작": s, "기간 끝": e, "지급비율": pct, "최종지급액": -fin,
+            "totalLastSettlementUnpaidCfsDeductionAmount": unpaid, "totalStorageFeeDeductionAmount": 0,
+            "cfsDeductionDetails": [{"settlementPeriodStartDate": z(a), "settlementPeriodEndDate": z(b), "lastSettlementUnpaidCfsDeductionAmount": x}
+                                    for a, b, x in det], **kw}
+
+
+def test_t130_cfs_periods() -> None:
+    from coupang_analytics import settlement_statement_cfs as CFS
+    P26 = ("2026-07-20", "2026-07-26")
+    # 줄 → 갚은 주기(한국 날짜) · 자기 주기 몫 = 공제 − 미납 칸(WBpeak 10-07 지급 줄 12,522 · 91white 05-01 주기 4,400)
+    assert CFS.paid_periods(_cfs_row("2026-10-07", "2026-09-01", "2026-09-06", 70, 12522, 12522, [(*P26, 12522)])) == [("2026-07-26", 12522)]
+    assert CFS.paid_periods(_cfs_row("2026-06-02", "2026-05-01", "2026-05-03", 70, 9000, 4400, [("2026-04-13", "2026-04-19", 4400)])) == [
+        ("2026-04-19", 4400), ("2026-05-03", 4600)]
+    # 상세 합 ≠ 미납 칸 · 예정 기록(미납 칸 없음) · 이월이 물류비 칸에서 빠진 줄(Difpick 11-03 · 공제 61,495 < 상세 64,199) = 정하지 않음
+    assert CFS.paid_periods(_cfs_row("2026-10-07", "2026-09-01", "2026-09-06", 70, 12522, 12522, [(*P26, 12000)])) is None
+    fc = _cfs_row("2026-11-24", "2026-11-02", "2026-11-08", 70, 35771, 0)
+    assert CFS.paid_periods({k: v for k, v in fc.items() if k != "totalLastSettlementUnpaidCfsDeductionAmount"}) is None
+    assert CFS.paid_periods(_cfs_row("2026-11-03", "2026-10-01", "2026-10-04", 70, 61495, 64199,
+                                     [("2026-09-07", "2026-09-13", 42799), ("2026-09-01", "2026-09-06", 21400)])) is None
+    # 마이너스 물류비 날(hk66597582 04-13~19 · 리포트 순액 47,667 · 04-15 −3,390 = 조정 3,390 · 쿠팡이 갚게 한 금액 51,057 = 뺀 날 밖 합)
+    days = [("2026-04-13", 22395), ("2026-04-14", 17763), ("2026-04-15", -3390), ("2026-04-16", 9976), ("2026-04-17", 301),
+            ("2026-04-18", 307), ("2026-04-19", 315)]
+    own = _cfs_row("2026-05-19", "2026-04-13", "2026-04-19", 70, 0, 0, totalStorageFeeDeductionAmount=47667, totalCfsFeeAdjustment=3390,
+                   cfsFeeAdjustmentDetails=[{"recognitionDate": "2026-04-15", "totalReconciledCfsAmount": 3390}])
+    late = [_cfs_row("2026-06-10", "2026-05-11", "2026-05-17", pct, x, x, [("2026-04-13", "2026-04-19", x)]) for pct, x in ((70, 37968), (30, 13089))]
+    logi = {"2026-04-19": [(d, "A" if d == "2026-04-13" else "B", float(x)) for d, x in days]}
+    p = CFS.periods([own, *late], logi)["2026-04-19"]
+    assert (p.why(), p.paid, sum(x[2] for x in p.base())) == ("", 51057, 51057), p
+    assert abs(p.shares(lambda pid, ym: pid == "A")[0] - 22395 / 51057) < 1e-12
+    assert p.refund(lambda pid, ym: pid == "B") == (3390, 3390)
+    # 리포트가 쿠팡 줄 칸과 다름(hk 09-07~13 = 조정일 줄이 리포트에 없음) · 리포트 없음 · 갚은 금액보다 적음(jazzdream7 = 반출 배송 리포트 안 받음)
+    bad = _cfs_row("2026-10-12", "2026-09-07", "2026-09-13", 70, 0, 0, totalStorageFeeDeductionAmount=188375, totalCfsFeeAdjustment=3575,
+                   cfsFeeAdjustmentDetails=[{"recognitionDate": "2026-09-09", "totalReconciledCfsAmount": 3575}])
+    assert "쿠팡 줄" in CFS.periods([bad], {"2026-09-13": [("2026-09-07", "A", 188375.0)]})["2026-09-13"].why()
+    jz = _cfs_row("2026-08-03", "2026-06-01", "2026-06-07", 30, 7260, 7260, [("2026-07-01", "2026-07-05", 7260)])
+    assert "리포트 없음" in CFS.periods([jz], {})["2026-07-05"].why()
+    assert "적은" in CFS.periods([jz], {"2026-07-05": []})["2026-07-05"].why()
+    # 비용 리포트 시트 → 날·상품 줄(세액 = 금액 비율 · 합 = 최종비용)
+    sheet = [["보관비"], ["", ""], ["정산주기(종료일)", "합계", "세액", "최종비용"], ["2026-06-28", 148, 16, 164], [],
+             ["정산유형", "정산주기(종료일)", "매출인식일", "등록상품 ID", "비용"], ["", "", "", "", "최종비용"],
+             ["WEEKLY", "2026-06-28", "2026-06-22", "16131930801", 100], ["WEEKLY", "2026-06-28", "2026-06-23", "16131928633", 48]]
+    got = CFS.day_lines({"보관비": sheet})
+    assert [x[:2] for x in got] == [("2026-06-22", "16131930801"), ("2026-06-23", "16131928633")] and round(sum(x[2] for x in got), 6) == 164, got
+    # 계정명에 '[ ]'(가짜 이름) = 글자 그대로 찾음(못 찾으면 '리포트 없음'으로 잘못 드러남)
+    from types import SimpleNamespace
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td) / "파일" / "비용"
+        d.mkdir(parents=True)
+        (d / "가나다[라마바]-시험상사-x1_20260901_로켓그로스_주정산_보관비_20260803-20260809.xlsx").write_bytes(b"")
+        saved = CFS.SF
+        CFS.SF = SimpleNamespace(**{**vars(saved), "read_sheets": lambda p: {"보관비": sheet}})
+        try:
+            got = CFS.read_costs(Path(td), "가나다[라마바]-시험상사-x1")
+        finally:
+            CFS.SF = saved
+    assert list(got[0]) == ["2026-08-09"] and len(got[0]["2026-08-09"]) == 2, got
+    print("test_t130_cfs_periods OK")
+
+
+def _wk(end):
+    """로켓그로스 정산주기 끝 → (시작, 끝) — 월요일 시작 · 달이 바뀌면 1일(쿠팡 리포트 파일 이름 기간)."""
+    from datetime import date as D
+    from datetime import timedelta
+    e = D.fromisoformat(end)
+    return str(max(e - timedelta(e.weekday()), e.replace(day=1))), end
+
+
+def _sales(*weeks):
+    """(시작, 끝, 관리 판매, 전체 판매) … → 판매분석 일별 — 기간 판매 전부를 첫날에, 나머지 날 = 판매 0(빠진 날 없음)."""
+    from datetime import date as D
+    from datetime import timedelta
+    out = {}
+    for a, b, k, t in weeks:
+        d, z = D.fromisoformat(a), D.fromisoformat(b)
+        first = True
+        while d <= z:
+            out[str(d)] = {"옵션": {"777": {"구분": "로켓그로스", "판매금액": k if first else 0}, "888": {"구분": "로켓그로스", "판매금액": (t - k) if first else 0},
+                                  "777w": {"구분": "윙", "판매금액": 9_999_999}}}
+            first, d = False, d + timedelta(days=1)
+    return out
+
+
+def _t130_account(rows, by_m, logi, comp=None, mpids=frozenset({"15467003062"}), daily=None, cdate=None):
+    """지급 줄 원본 → 물류비·보상 단계만 돌린 계정(비용 리포트 = logi·comp · 판매분석 일별 = daily · 관리 옵션 = "777")."""
+    from collections import Counter
+    from types import SimpleNamespace
+
+    from coupang_analytics import settlement_statement_account as SA
+    from coupang_analytics import settlement_statement_deduct as DED
+    a = DED.Account.__new__(DED.Account)
+    a.ctx = SimpleNamespace(base=Path(tempfile.gettempdir()), led=_Led([], rows), cost_opts={"x1": {"777": ("15467003062", "")}},
+                            basis="2026-11-12", daily={"x1": daily or {}})
+    a.acct, a.aid, a.mpids, a.cdate, a.opt2pid = "가-x1", "x1", set(mpids), cdate, {"888": "15468930091"}
+    a.vids, a.vid_name, a.mnames, a.marks = {"777"}, {}, set(), {}
+    a.start = a.fs = "2026-01"
+    a.active, a.S, a.mset, a.share, a.rates = ["2026-01"], 0.5, {}, {}, {}
+    a.lines, a.line_info = [], []
+    for r in rows:
+        row = ("가-x1", "로켓그로스", *SL._key(r), r.get("상태", "지급 완료"))
+        a.lines.append((row, r))
+        a.line_info.append((row[6], "로켓그로스", str(row[3])[:7], 0.0, 0.0, SA.deductions(r)[2], row))
+    a.deduct_lines = [(x[1], x[2], x[5]) for x in a.line_info]
+    a.D, a.by_m = Counter(), {k: Counter(v) for k, v in by_m.items()}
+    for x in a.line_info:
+        a.D.update(x[5])
+    saved = getattr(DED, "CFS", None) and DED.CFS.read_costs
+    if saved:
+        DED.CFS.read_costs = lambda base, acct: (logi, comp or {}, {e: _wk(e)[0] for e in logi})
+    try:
+        a._logi_comp()
+    finally:
+        if saved:
+            DED.CFS.read_costs = saved
+    args = (a.line_info, {}, {}, 0.0, a.rates, 0.0) + ((a.exact,) if saved else ())
+    _st, ded, lines = DED.status_split(*args)
+    return a, ded, {(x[0][2], x[0][3], x[0][5]): x[3] for x in lines if x[0]}
+
+
+def test_t130_cfs_lines() -> None:
+    """WBpeak 2026-09 판매 줄 물류비 공제 64,203 = 전부 2026-07-20~26 주기(비용 104,023 중 관리 9,644)를 갚음 → 관리 공제 5,952
+    (고치기 전 = 전 기간 비율 0.7742 → 49,709) · 예정 줄(비용 리포트 없는 주기 · 35,771 · 판매 전부 관리 r = 1) = 35,771 × 9,644/104,023 = 3,316(D-415)."""
+    from coupang_analytics.settlement_statement_account import COMP, LOGI
+    sep = [("2026-10-07", "2026-09-01", "2026-09-06", 70, 12522), ("2026-10-15", "2026-09-01", "2026-09-06", 30, 5366),
+           ("2026-10-15", "2026-09-07", "2026-09-13", 70, 7065), ("2026-10-22", "2026-09-14", "2026-09-20", 70, 4081),
+           ("2026-10-27", "2026-09-21", "2026-09-27", 70, 17327), ("2026-11-02", "2026-09-07", "2026-09-13", 30, 4587),
+           ("2026-11-02", "2026-09-14", "2026-09-20", 30, 1749), ("2026-11-02", "2026-09-21", "2026-09-27", 30, 7425),
+           ("2026-11-03", "2026-09-28", "2026-09-30", 70, 4081)]
+    done = [_cfs_row(*k, x, x, [("2026-07-20", "2026-07-26", x)]) for *k, x in sep]
+    cost_row = _cfs_row("2026-08-18", "2026-07-20", "2026-07-26", 70, 0, 0, totalStorageFeeDeductionAmount=104023)
+    plan = {**_cfs_row("2026-12-02", "2026-11-02", "2026-11-08", 70, 35771, 0), "상태": "예정"}
+    for k in ("totalLastSettlementUnpaidCfsDeductionAmount", "totalStorageFeeDeductionAmount"):      # 예정 기록 = 이 칸 저장 안 함
+        plan.pop(k)
+    logi = {"2026-07-26": [("2026-07-20", "15467003062", 9644.0), ("2026-07-21", "15468930091", 94379.0)]}
+    a, ded, line = _t130_account([cost_row, *done, plan], {"2026-07": {"logi": 99974, "m_logi": 77405}}, logi,
+                                 daily=_sales(("2026-07-20", "2026-07-26", 500, 500), ("2026-11-02", "2026-11-08", 300, 300)))
+    assert round(line["2026-10-07", "2026-09-01", 70]) == 1161 and round(line["2026-10-27", "2026-09-21", 70]) == 1606, line
+    assert round(ded["지급 완료"][LOGI]) == 5952 and round(ded["예정"][LOGI]) == 3316, ded
+    assert round(a.share[LOGI][0] * a.D[LOGI]) == 9269 and not a.cfs_why, (a.share, a.cfs_why)      # 관리 몫 합 = (64,203 + 35,771) × 9,644/104,023
+
+    # 원문으로 못 정함(jazzdream7 = 반출 배송 리포트 안 받음 · 상세 합 ≠ 미납 칸) = 지금 비율 그대로 + '확인 필요'(0 으로 숨기지 않음)
+    jz = _cfs_row("2026-08-03", "2026-06-01", "2026-06-07", 30, 7260, 7260, [("2026-07-01", "2026-07-05", 7260)])
+    nodet = _cfs_row("2026-08-10", "2026-06-08", "2026-06-14", 30, 1000, 1000)
+    a, ded, _line = _t130_account([jz, nodet], {"2026-06": {"logi": 8260, "m_logi": 4130}}, {"2026-07-05": []})
+    assert round(ded["지급 완료"][LOGI]) == 4130, ded
+    assert len(a.cfs_why) == 1 and a.cfs_why[0].startswith("확인 필요") and "8,260원" in a.cfs_why[0] and "2026-07-05" in a.cfs_why[0], a.cfs_why
+
+    # 재고 보상 = 자기 주기 보상 리포트(옵션 → 상품) · 리포트 합 ≠ 쿠팡 줄 = 전 기간 비율 + '확인 필요'
+    cp = _cfs_row("2026-08-31", "2026-07-27", "2026-07-31", 70, 0, 0, totalCfsInventoryCompensationAmount=10000)
+    by = {"2026-07": {"comp": 10000, "m_comp": 5000}}
+    a, ded, _line = _t130_account([cp], by, {}, {"2026-07-31": [("777", "2026-07", 3000.0), ("888", "2026-07", 7000.0)]})
+    assert round(ded["지급 완료"][COMP]) == -3000 and round(a.share[COMP][0] * a.D[COMP]) == -3000 and not a.cfs_why, (ded, a.cfs_why)
+    a, ded, _line = _t130_account([cp], by, {}, {"2026-07-31": [("777", "2026-07", 3000.0)]})
+    assert round(ded["지급 완료"][COMP]) == -5000 and "≠ 쿠팡 줄" in a.cfs_why[0], (ded, a.cfs_why)
+    print("test_t130_cfs_lines OK")
+
+
+def _plan_row(pay, end, pct, fin, st="예정"):
+    """예정 기록 줄 = 비용 칸·미납 상세를 저장하지 않음."""
+    r = {**_cfs_row(pay, *_wk(end), pct, fin, 0), "상태": st}
+    for k in ("totalLastSettlementUnpaidCfsDeductionAmount", "totalStorageFeeDeductionAmount", "cfsDeductionDetails"):
+        r.pop(k)
+    return r
+
+
+def test_t130_plan_lines() -> None:
+    """예정 줄(비용 리포트 없는 주기) 관리 몫 = 공제 × min(1, r × k)(D-414 ①②③ · D-415 직전 3주기) — 기대값 = 결정문 식 손계산."""
+    from coupang_analytics.settlement_statement_account import LOGI
+    M, X = "15467003062", "15468930091"
+    # 리포트 있는 주기(끝, 관리 비용, 전체 비용, 관리 판매, 전체 판매) — 09-06 주기는 3주기 밖(4주기로 재면 값이 달라짐)
+    cyc = [("2026-09-06", 90_000, 100_000, 50, 100), ("2026-09-13", 2_000, 10_000, 50, 100),
+           ("2026-09-20", 3_000, 20_000, 25, 100), ("2026-09-27", 5_000, 20_000, 50, 100)]
+    by = {"2026-09": {"logi": 150_000, "m_logi": 100_000}}
+
+    def run(cs, plan, sales, extra=(), **kw):
+        logi = {e: [(e, M, float(m)), (e, X, float(t - m))] for e, m, t, _k, _a in cs}
+        daily = _sales(*[(*_wk(e), k, t) for e, _m, _t, k, t in cs], *sales)
+        rows = [_cfs_row("2026-10-20", *_wk(e), 70, 0, 0, totalStorageFeeDeductionAmount=t) for e, _m, t, _k, _a in cs]
+        return _t130_account([*rows, *extra, *plan], by, logi, daily=daily, **kw)
+
+    def one(cs, sales, end="2026-11-08", **kw):
+        a, ded, _l = run(cs, [_plan_row("2026-12-02", end, 70, 100_000)], sales, **kw)
+        assert round(a.share[LOGI][0] * a.D[LOGI]) == round(sum(d[LOGI] for d in ded.values())), (a.share, ded)      # 관리 몫 합 = 줄 합
+        return a, round(ded["예정"][LOGI])
+
+    nov = ("2026-11-02", "2026-11-08", 60, 100)
+    # ② k = (2,000+3,000+5,000) ÷ (10,000×.5 + 20,000×.25 + 20,000×.5 = 20,000) = 0.5 → 100,000 × .6 × .5 = 30,000
+    a, got = one(cyc, [nov])
+    assert got == 30_000 and not a.cfs_why and "D-415" in a.share[LOGI][1], (got, a.share, a.cfs_why)
+    # 두 주기만 있으면 두 주기로: (3,000+5,000) ÷ (5,000+10,000) = .5333 → 32,000
+    assert one(cyc[2:], [nov])[1] == 32_000
+    # 그 주기보다 뒤 주기 리포트는 '직전'이 아님 — 뒤 주기(11-15) 리포트가 있어도 30,000
+    assert one([*cyc, ("2026-11-15", 900_000, 900_000, 0, 0)], [nov])[1] == 30_000
+    # min(1, r×k): 관리 비용 48,000 ÷ (50,000 × .1) = 9.6 → 상한 9 · r .05 → 0.45 = 45,000 · r .6 → 1 = 100,000
+    hi = [("2026-09-27", 48_000, 50_000, 10, 100)]
+    assert one(hi, [("2026-11-02", "2026-11-08", 5, 100)])[1] == 45_000
+    assert one(hi, [nov])[1] == 100_000
+    # 분모 0(직전 3주기 관리 판매 0) = k 1 — 앞에 관리 이력은 있음
+    zero = [cyc[0], *[(e, 0, t, 0, 100) for e, _m, t, _k, _a in cyc[1:]]]
+    assert one(zero, [nov])[1] == 60_000
+    # ③ 시작기(관리 판매 비율>0 이고 관리 비용>0 인 앞 주기 0개) = k 1: 관리 판매는 있고 관리 비용 0 / 관리 비용은 있고 관리 판매 0
+    start = [("2026-09-20", 0, 20_000, 25, 100), ("2026-09-27", 5_000, 20_000, 0, 100)]
+    assert one(start, [nov])[1] == 60_000
+    assert one(zero[1:], [nov])[1] == 60_000
+    # 시작기 여부는 3주기 밖 앞 주기까지 봄 — 09-06 이력 있음 + 3주기 관리 비용 0 = k 0 → 0원
+    dry = [cyc[0], *[(e, 0, t, k, 100) for e, _m, t, k, _a in cyc[1:]]]
+    assert one(dry, [nov])[1] == 0 and one(dry[1:], [nov])[1] == 60_000
+    # 앞 리포트가 하나도 없음 = k 1
+    assert one([], [nov])[1] == 60_000
+
+    # ① r: 그 주기가 기준일(11-12) 전날까지만 — 11-09~15 주기는 09~11 사흘(12일 판매는 안 봄) 40/100 → ×.5 = 20,000
+    late = [("2026-11-09", "2026-11-11", 40, 100), ("2026-11-12", "2026-11-15", 9_000, 9_000)]
+    assert one(cyc, late, "2026-11-15")[1] == 20_000
+    # 그 주기가 기준일 뒤 → 그 달(11-01~11) (60+40)/200 = .5 → 25,000 · 그 주기 판매 0 → 그 달 · 0~100% 밖 → 그 달
+    mon = [("2026-11-01", "2026-11-01", 0, 0), nov, late[0]]
+    assert one(cyc, mon, "2026-11-22")[1] == 25_000
+    assert one(cyc, [("2026-11-01", "2026-11-01", 40, 200), ("2026-11-02", "2026-11-08", 0, 0), ("2026-11-09", "2026-11-11", 0, 0)])[1] == 10_000
+    assert one(cyc, [("2026-11-01", "2026-11-01", 80, 200), ("2026-11-02", "2026-11-08", 120, 100), ("2026-11-09", "2026-11-11", -80, 100)])[1] == 15_000
+    # 그 달 판매 없음 → 앞 달(10월 70/100) → 35,000 · 판매분석 빠진 날이 있는 기간은 그 달 비율도 못 냄 → 앞 달
+    oct_ = ("2026-10-01", "2026-10-31", 70, 100)
+    assert one(cyc, [oct_, ("2026-11-01", "2026-11-11", 0, 0)])[1] == 35_000
+    assert one(cyc, [oct_, ("2026-11-02", "2026-11-07", 1, 100)])[1] == 35_000
+    # 앞 주기의 r 도 같은 정의 — 09-20 주기 판매 없음 → 9월 비율 (50+0+50+50)/300 = .5 → k = 10,000 ÷ (5,000+10,000+10,000) = .4 → 24,000
+    gap = [cyc[0], cyc[1], ("2026-09-20", 3_000, 20_000, 0, 0), cyc[3]]
+    assert one(gap, [("2026-09-28", "2026-09-30", 0, 0), nov])[1] == 24_000
+    # 계약 전 달 판매 = 관리 아님(D-185) → 계약 2026-12 이면 r 0
+    assert one(cyc, [nov], cdate="2026-12-01")[1] == 0
+    # 판매분석이 아예 없음 = 비율을 못 냄 → 0 으로 숨기지 않고 전 기간 비율(100,000/150,000) + '확인 필요'
+    a, _ded, _l = run([], [_plan_row("2026-12-02", "2026-11-08", 70, 150_000)], [])
+    assert round(a.share[LOGI][0] * a.D[LOGI]) == 100_000 and "확인 필요" in a.cfs_why[0] and "150,000원" in a.cfs_why[0], (a.share, a.cfs_why)
+
+    # 다른 줄은 그대로: 지급 끝난 줄(상세 = 09-27 주기 5,000/20,000) · 비용 리포트 있는 예정 줄 · 보류 줄 = 전 기간 비율(100,000/150,000)
+    paid = _cfs_row("2026-11-03", *_wk("2026-10-04"), 70, 4_000, 4_000, [(*_wk("2026-09-27"), 4_000)])
+    has, hold = _plan_row("2026-11-20", "2026-09-27", 30, 30_000), _plan_row("2026-11-21", "2026-11-01", 70, 60_000, "보류")
+    rest = 56_000                                   # 공제 합 150,000 = 리포트 합 150,000 이 되게(전 기간 비율 = 100,000/150,000)
+    a, ded, line = run(cyc, [has, hold, _plan_row("2026-12-02", "2026-11-08", 70, rest)], [nov], extra=[paid])
+    assert round(a.rates[LOGI][1], 6) == round(100_000 / 150_000, 6), a.rates
+    assert round(ded["지급 완료"][LOGI]) == 1_000, ded
+    assert round(line["2026-11-20", "2026-09-21", 30]) == 20_000 and round(line["2026-11-21", "2026-11-01", 70]) == 40_000, line
+    assert round(line["2026-12-02", "2026-11-02", 70]) == round(rest * .6 * .5) == 16_800, line
+    assert round(a.share[LOGI][0] * a.D[LOGI]) == 1_000 + 20_000 + 40_000 + 16_800, a.share
+    # 70%·30% 두 줄 = 줄마다 같은 비율
+    a, ded, line = run(cyc, [_plan_row("2026-12-02", "2026-11-08", 70, 70_000), _plan_row("2026-12-15", "2026-11-08", 30, 30_000)], [nov])
+    assert [round(x) for x in line.values() if round(x)] == [21_000, 9_000], line
+    print("test_t130_plan_lines OK")
+
+
 def test_d342_deduction_window_2026() -> None:
     """D-342: 공제 관리 몫(광고·밀크런 등)을 나눌 자료 창 시작 = max(관리 시작 달, 2026-01) · 밀크런 '시작 전달부터'(D-154)는 그 전달이
     2025 면 적용 안 함(안 (나)) · 관리 시작 표시(D-185)는 그대로. 실측 ljung0622(관리 시작 2025-10 · 2025 판매 줄 통째 빠짐 D-329):
@@ -890,13 +1142,14 @@ def test_d342_deduction_window_2026() -> None:
     from coupang_analytics import settlement_statement_deduct as DED
     from coupang_analytics.settlement_statement_account import AD, LOGI, MILK
     a = DED.Account.__new__(DED.Account)
-    a.ctx, a.acct = SimpleNamespace(base=Path(tempfile.gettempdir())), "가-x1"
+    a.ctx, a.acct = SimpleNamespace(base=Path(tempfile.gettempdir()), led=_Led([]), cost_opts={}), "가-x1"
     a.vids, a.vid_name, a.mnames, a.marks, a.opt2pid = {"111"}, {}, set(), {}, {}
     a.start, a.fs, a.active, a.S = "2025-10", "2026-01", ["2026-01"], 0.5
     a.mset = {("로켓그로스", "2026-01"): (500.0, 1000.0)}
     parts = Counter({AD: 2_200.0, MILK: 600.0, LOGI: 1_000.0})                 # 2026 판매 줄 공제(2025 줄 = D-329 로 이미 빠짐)
     a.line_info = [("지급 완료", "로켓그로스", "2026-01", 10_000.0, 0.0, parts, ("x", "로켓그로스", "2026-02-10", "2026-01-01"))]
     a.deduct_lines = [(x[1], x[2], x[5]) for x in a.line_info]
+    a.lines, a.aid = [], "x1"                                                # 지급 줄 원본 없음 = 물류비는 전 기간 비율(T-130 확인 필요)
     a.D, a.share, a.rates = Counter(parts), {}, {}
     a.by_m = {"2026-01": Counter({"logi": 1_000.0, "m_logi": 400.0})}        # 상품별 물류비 = 2026 만(D-328)
     a.v = {"inbound": [{"milkrunSeq": s, "skus": [{"vendorItemId": 111, "stowedQty": q1}, {"vendorItemId": 222, "stowedQty": q2}]}
@@ -1221,6 +1474,9 @@ def main() -> int:
     test_scope_priority()
     test_scope_judge()
     test_status_split_pending_rest()
+    test_t130_cfs_periods()
+    test_t130_cfs_lines()
+    test_t130_plan_lines()
     test_formula23_late_final_round_flagged()
     test_t176_hold_release_flagged()
     test_formula23_status_check_when_final_round_missing()
