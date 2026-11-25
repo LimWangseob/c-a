@@ -301,6 +301,24 @@ def test_t186_ad_bills_file() -> None:
         assert AC.ad_bills(Path(tmp), "가짜[나다]-x1") == {"윙": {"2026-04": 0, "2026-05": 127_478}, "로켓그로스": {"2026-04": 0, "2026-05": 500}}
 
 
+def test_t186_2025_bill_not_owed() -> None:
+    """T-186 ②: 정산서 지급 줄에 2025 판매 줄이 없음(D-328) → 2025 청구가 '안 빠진 청구'로 남아 2026 이월을 가져가면 안 됨.
+    기대값 = 쿠팡 원문 금액: 9월 줄 866,759 = 9월 청구 854,588 + 7월 남은 8,398 + 8월 남은 3,773(2025-12 청구 8,309 은 2025 줄에서 빠짐)."""
+    bill = {"202512": 8_309, "202607": 1_652_221, "202608": 570_706, "202609": 854_588}
+    ad = "상품/브랜드광고비"
+    wing = [("2026-08-20", "2026-07-06", [(ad, 1_643_823)]), ("2026-09-20", "2026-08-10", [(ad, 566_933)]), ("2026-10-20", "2026-09-07", [(ad, 866_759)])]
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp) / "검증자료" / "광고"
+        d.mkdir(parents=True)
+        for ym, n in bill.items():
+            (d / f"가짜-x1_광고정산_{ym}.json").write_text(json.dumps({"summary": {"nonRod": {"totalFinalAmount": n}, "rocketGrowth": None}}), encoding="utf-8")
+        bills = AC.ad_bills(Path(tmp), "가짜-x1")["윙"]
+    for m in ("2026-07", "2026-08", "2026-09"):
+        want = bill[m.replace("-", "")]
+        st = _ad_month(m, bills, wing, charged=want / 1.1)
+        assert st.ad["deducted"] == want and _ad_dates(st, want)[1] == 0 and not [j for j in st.j if j.startswith("확인 필요: 윙")], (m, st.loc, st.j)
+
+
 RG_0930 = [("2026-10-15", "2026-09-07", "2026-09-13", "70", 1_505_014), ("2026-11-03", "2026-09-28", "2026-09-30", "70", 94_419),
            ("2026-11-03", "2026-10-01", "2026-10-04", "70", 272_357), ("2026-11-06", "2026-10-05", "2026-10-11", "70", 1_100_159)]
 
@@ -1345,7 +1363,7 @@ def main() -> int:
         pass
     for f in (test_run_job_abort, test_run_job_isolation_and_sheets, test_d262_excluded_pending_listed, test_inputs_pack):
         f()
-    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_ad_nocamp_d317, test_t186_wing_ad_deducted, test_t186_wing_ad_carry, test_t186_ad_bills_file, test_t186_partly_deducted, test_t186_rg_month_border,
+    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_ad_nocamp_d317, test_t186_wing_ad_deducted, test_t186_wing_ad_carry, test_t186_ad_bills_file, test_t186_2025_bill_not_owed, test_t186_partly_deducted, test_t186_rg_month_border,
               test_t175_old_forecast_record, test_new23_cross_week_flag, test_d401_remarks_and_evidence, test_d402_check_status_header, test_expect_values, test_flow_fixed, test_t125_additional_pay, test_d391_unknown_ship_same_month_wing_ratio, test_failed_checks, test_load_judge,
               test_sale_months_2025_excluded, test_render, test_fixed_render, test_product_pages, test_overflow, test_unsplittable, test_check_reject,
               test_multi_month, test_d242_change_log_tab_kept, test_d261_e1_pending_not_negative, test_d260_month_summary_page, test_d260_consignor_pdf,
