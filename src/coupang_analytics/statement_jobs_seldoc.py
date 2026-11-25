@@ -3,6 +3,8 @@
 `run_job(opts, on_log) -> {"ok": [id], "skipped": [건너뜀], "files": [경로], "group_files": [경로], "abort": str|None}`
 - 건너뜀 = {"id", "reason", "kind"(건너뜀|확인 필요), "aid", "doc_id", "product_id", "상품명", "금액", "사유"} — 로그를 읽지 않아도
   운용자가 알 수 있게(소유자 11-24 '확인필요는 로그를 분석해야 만 인식됨') · 관리대장에 없는 상품 등 = 상품 단위 줄(id = 계정ID:상품:등록상품ID).
+- 계약 종료 계정(D-427 · 관리기준 폴더 groups.managed_output 의 지금 결과 엑셀에 계정 없음) = 셀독 정산서 안 만들고 건너뜀·확인 필요 줄도
+  없음(안내 로그 한 줄 · 위탁정산서도 없음). 관리기준 폴더를 안 주면 가리지 못함(그 계정은 '위탁정산서 0개'로 그 계약만 건너뜀).
 - 계약별 격리: 판정 없음·규칙 밖 유형·DB 에 없음·위탁정산서 1개 아님·같은 이름 파일·투자형 남은 지급 근거 없음(판정표 '남은지급확인')
   = 그 계약만 skipped · 나머지 계약은 만든다(고객용 정산서에 '확인 필요' 같은 내부 글자를 쓰지 않음 · D-221 ②).
   미확정 계약이 있는 계정의 나머지 계약 = 상품군 정산서로만(계정 전체 숫자를 한 계약에 몰지 않음 · `SS.Skip.held`).
@@ -13,10 +15,10 @@
 
 opts: root · seldoc_inputs · db · accounts(없으면 `SS.auto_accounts`) · statements(위탁정산서 결과 폴더) · out · basis · issued ·
       group_statements(상품군 정산서 폴더 · 기본 out\\상품군) · groups(dict = 위탁정산서 인자 managed_output·settle_dir·stats·inputs·
-      settle_only·supp·snap·account_history·only → 주면 상품군 정산서를 이번에 만듦) · steps(("groups", "make") 기본) · strict(False) ·
+      settle_only·supp·snap·only → 주면 상품군 정산서를 이번에 만듦) · steps(("groups", "make") 기본) · strict(False) ·
       skip_accounts({계정명 '대표자-사업자-계정ID': 사유} = 정산 받기 실패 → 그 계정은 안 만들고 skipped)
 배치 꼴(레인 A `statement_batch._job_opts` · 칸 consignor = 위탁 단계 결과): statements = consignor.out · groups = 배치 칸 managed_output·
-settle_dir·stats·inputs(원장 계정이력·정산전용상품 = 구글 실시간 읽기 · 사본 안 만듦 D-399) · 위탁이 중단이면 abort.
+settle_dir·stats·inputs(원장 정산전용상품 = 구글 실시간 읽기 · 사본 안 만듦 D-399) · 위탁이 중단이면 abort.
 """
 from __future__ import annotations
 
@@ -29,7 +31,9 @@ from pathlib import Path
 from coupang_analytics import settlement_seldoc_groups as G
 from coupang_analytics import settlement_seldoc_sheet as SH
 from coupang_analytics import settlement_seldoc_source as SS
+from coupang_analytics import settlement_statement_account as AC
 from coupang_analytics import settlement_statement_context as CTX
+from coupang_analytics import settlement_statement_scope as SCOPE
 from coupang_analytics.settlement_statement_book import safe_name
 from coupang_analytics.statement_jobs_consignor import skip_ids
 
@@ -37,7 +41,7 @@ INPUT_DIR = ("output", "정산서", "입력_셀독")
 DB_GLOB = "계약서_정밀분석_DB*.xlsx"
 GROUP_DIR = "상품군"
 PREFIX = "시작 전 중단 — "
-GROUP_KEYS = ("managed_output", "settle_dir", "stats", "inputs", "settle_only", "supp", "snap", "account_history", "only")
+GROUP_KEYS = ("managed_output", "settle_dir", "stats", "inputs", "settle_only", "supp", "snap", "only")
 BATCH_GROUP_KEYS = ("managed_output", "settle_dir", "stats", "inputs")      # 배치(_job_opts)가 넘기는 상품군 인자
 
 
@@ -155,8 +159,7 @@ def _groups(opts: dict, jobs: list, judge: dict, held: dict, res: _Result, on_lo
             res.skip(aid, "", f"{aid} 관리 상품 {pid} {name or ''} — {why}", product=(pid, name, amount))
     for j in jobs:
         if j.split and j.aid in failed:
-            res.skip(j.aid, j.contract.doc_id, f"{j.aid} 계약 {j.contract.doc_id} 상품군 정산서 못 만듦 — {failed[j.aid]['reason']}",
-                     unsure=failed[j.aid]["wait"])
+            res.skip(j.aid, j.contract.doc_id, f"{j.aid} 계약 {j.contract.doc_id} 상품군 정산서 못 만듦 — {failed[j.aid]['reason']}")
     return {(aid, doc): p for aid, doc, p, _ in made}
 
 
@@ -221,12 +224,30 @@ def _names(ready: list, out: Path, basis: str, stamp: str, res: _Result) -> list
     return keep
 
 
-def _plan(opts: dict, people: dict, contracts: dict, judge: dict, res: _Result) -> tuple[list, dict]:
+def _ended(opts: dict, aids: list, on_log) -> set:
+    """계약 종료 계정(D-427) = 관리기준 폴더(groups.managed_output) 지금 결과 엑셀에 없는 계정 — 안내 한 줄씩(건너뜀·확인 필요 아님).
+    관리기준 폴더를 안 줌 = 가리지 않음 · 결과 엑셀 없음 = 가리지 않고 안내 한 줄(위탁정산서가 없는 계약은 그 계약만 건너뜀)."""
+    mo = (opts.get("groups") or {}).get("managed_output")
+    if not mo:
+        return set()
+    try:
+        now = SCOPE.current_accounts(Path(mo))
+    except FileNotFoundError as exc:
+        on_log(f"⚠ 계약 종료 계정을 못 가림 — {exc}")
+        return set()
+    out = {a for a in aids if a not in now}
+    for aid in sorted(out):
+        on_log(f"{aid} {AC.ENDED} — 셀독 정산서 안 만듦(D-427)")
+    return out
+
+
+def _plan(opts: dict, people: dict, contracts: dict, judge: dict, res: _Result, on_log) -> tuple[list, dict]:
     bad = skip_ids(opts)
     aids = list(opts.get("accounts") or SS.auto_accounts(people, contracts, judge))
     for aid in [a for a in aids if a in bad]:
         res.skip(aid, "", f"{aid} 정산 받기 실패로 끝난 계정 — 정산서 안 만듦{' — ' + bad[aid] if bad[aid] else ''}")
-    aids = [a for a in aids if a not in bad]
+    ended = _ended(opts, aids, on_log)
+    aids = [a for a in aids if a not in bad and a not in ended]
     jobs, skips = SS.plan_isolated(people, contracts, judge, aids)
     held: dict = {}
     for s in skips:
@@ -285,7 +306,7 @@ def run_job(opts: dict, on_log=print) -> dict:
         judge, people, contracts, basis, issued = _load(opts)
     except (SS.SeldocInputError, ValueError, KeyError) as exc:
         return res.out(str(exc) if str(exc).startswith(PREFIX) else f"{PREFIX}{_why(exc)}")
-    jobs, held = _plan(opts, people, contracts, judge, res)
+    jobs, held = _plan(opts, people, contracts, judge, res, on_log)
     made = None
     if (s := stop()) is None and "groups" in steps:
         try:

@@ -1,15 +1,13 @@
-"""위탁정산서 관리 상품 범위 — 소유자 2026-11-12 승인 규칙 ①~⑤(원문 "규칙안 5가지 승인, 기준일·달 단위도 제안대로 진행해").
+"""위탁정산서 관리 상품 범위 — D-427(소유자 2026-11-26 원문 "우선 위탁 계정 쿠팡 정산은 셀독관리대장에 계정이 있고 관리대장에 있는 상품이
+판매(과거 상품 변경 이력 포함)되고 있으면 정산 파일을 내려 받아서 정산 파일 생성, 반대로 관리대장에 계정이 없으면 계약 종료인것임, 계약서상
+만료가 되어 있어도 관리대장에 계정이 있으면 계약 연장으로 봄").
 
-① 관리 상품 = 관리대장 상품: 지금 결과 엑셀 사업자 시트 블록 + 날짜별 사본(`쿠팡데이타분석_통계_yymmdd.xlsx` · 보관본) 블록 —
-  예전에 대장에 있다가 지운 상품도 넣고 관리 기간을 자르지 않음(D-223 ②). 계정째 대장에서 빠진 계정도 같음(D-210).
-② 같은 상품명의 다른 VID(판매자배송·다른 수량 옵션·재등록) = `sales_summary.managed_listings`(D-107 · 같은 계정만) — 호출부.
-③ 대장에서 이력 없이 지워진 상품만 그 계정의 쿠팡 등록 **로켓그로스** 상품에서 되찾음(D-222 · D-159 ②): 상품조회(`_raw`) 상품 중
-  RFM 옵션이 있는 상품 → 그 상품의 모든 VID(판매자배송 겸용분 포함) · 상품조회에 없는 판매분석 등록상품 중 '로켓그로스' 옵션이 있는 것.
-  판매자배송으로만 등록된 상품은 되찾지 않음.
-④ 등록 조건 = 등록 달 ≥ 기준 달(달 단위): 기준 = 계약일(`관리시작달_차이표` F칸) · 계약을 못 찾고 대장에만 있는 계정 = 원장
-  '계정이력'의 첫 관리 시작. 상품조회에 없는 상품의 등록 달 = 등록상품ID 순서(D-159 근거: ID 시간순 역전 0건) — 앞뒤로 못 가르면 확인 필요.
-⑤ 위탁자 본인 상품 제외(D-107 · D-159 ③) = 입력 폴더 AI 판정표 `JUDGE`(되찾을 후보마다 '관리'·'본인상품'·'제외' + 근거).
-⑤를 판정 못 했거나 자료가 없으면 '확인 필요'(금액에 넣지 않음 · 정산서 '관리 상품 확인 필요' 시트) — 추정·대신 진행 없음.
+- 정산서를 만드는 계정 = 지금 관리대장 계정 = 지금 결과 엑셀(`MASTER`) 사업자 시트에 블록이 있는 계정. 날짜별 사본에만 있는 계정 = 대장에서
+  빠짐 = 계약 종료(`ledger_scope` 의 지금 계정 집합 · 호출부 `settlement_statement_account.scope`).
+- 관리 상품(지금 대장 계정만) = ① 관리대장 VID(지금 + 날짜별 사본 `쿠팡데이타분석_통계_yymmdd.xlsx`·보관본 — 예전에 대장에 있다가 지운 상품도
+  넣고 기간을 자르지 않음 · D-223 ②) + 출처판정 '옛 대장' · 원장 '정산전용상품' 시트 ② 출처판정 '이력원장'(원장 '상품이력') ·
+  같은 상품명의 다른 VID(D-107 · `sales_summary.managed_listings` — 호출부). 계약서 품목·쿠팡 등록 로켓그로스 되찾기는 출처가 아님(D-427).
+- 출처를 못 정한 상품('확인 필요')은 금액에 넣지 않음(정산서 '관리 상품 확인 필요' 시트) — 추정·대신 진행 없음.
 """
 from __future__ import annotations
 
@@ -21,16 +19,12 @@ from pathlib import Path
 
 from coupang_analytics import sales_summary, workbook_sales
 from coupang_analytics import settlement_read_store as STORE
-from coupang_analytics.registry_model import ITEM_ACCT_ID, K_CONFIRMED, K_INIT, K_NEW_ACCT, K_RESUME, SHEET_ACCT
 from coupang_analytics.workbook import OutputWorkbook
 
 MASTER = "쿠팡데이타분석_통계.xlsx"
 SNAP = re.compile(r"쿠팡데이타분석_통계_(\d{6}|보관_\d{6}_\d{6})\.xlsx")     # 날짜별 사본(pipeline_paths._snapshot_path) · 보관본
-JUDGE = "관리상품_되찾기_판정.json"
-SOURCE = "관리상품_출처판정.json"     # 옛 대장·이력원장·계약서 → 등록상품 AI 판정(D-230 · D-231)
+SOURCE = "관리상품_출처판정.json"     # 옛 대장·이력원장 → 등록상품 AI 판정(D-230 · D-427)
 KEEP, OWN = ("관리",), ("본인상품", "제외")
-NO_INV = "상품조회 자료 없음 — 이력 없이 지운 로켓그로스 상품을 되찾지 못함"
-NO_BASE = "기준일 없음(계약 없음 · 원장 계정이력에 관리 시작 없음)"
 
 
 # ── ① 관리대장(지금 + 날짜별 사본) ──
@@ -52,12 +46,36 @@ def _ledger_blocks(p: Path) -> dict:
     return workbook_sales.managed_vids(OutputWorkbook.load(p))
 
 
+def _read_ledger(p: Path) -> dict:
+    return STORE.read("결과엑셀", p, _ledger_blocks, ("settlement_statement_scope",))
+
+
+def _master(output: Path) -> Path:
+    """지금 결과 엑셀 — 없으면 FileNotFoundError(대장 계정을 모르면 전 계정이 계약 종료로 보이므로 시작 전 중단 · D-427)."""
+    p = output / MASTER
+    if not p.is_file():
+        raise FileNotFoundError(f"관리대장 결과 엑셀 없음: {p}")
+    return p
+
+
+def current_accounts(output: Path) -> set:
+    """지금 관리대장 계정 = 지금 결과 엑셀 블록이 있는 계정(D-427 · 판매중지 블록 포함 D-094)."""
+    return set(_read_ledger(_master(output)))
+
+
+def ledger_scope(output: Path) -> tuple[set, dict]:
+    """(지금 관리대장 계정, {계정ID: 대장 VID}) — VID = 결과 엑셀(지금) + 날짜별 사본 블록(판매중지 블록 포함 · D-094) · 결과 엑셀은 한 번만 읽음."""
+    files = [_master(output)] + [p for p in ledger_files(output) if p.name != MASTER]
+    blocks = [_read_ledger(p) for p in files]
+    return set(blocks[0]), merge_ledgers(blocks)
+
+
 def ledger_vids(output: Path) -> dict:
-    """{계정ID: 대장 VID} — 결과 엑셀(지금) + 날짜별 사본 블록(판매중지 블록 포함 · D-094)."""
-    return merge_ledgers([STORE.read("결과엑셀", p, _ledger_blocks, ("settlement_statement_scope",)) for p in ledger_files(output)])
+    """{계정ID: 대장 VID} — `ledger_scope` 의 VID."""
+    return ledger_scope(output)[1]
 
 
-# ── ③ 쿠팡 등록 상품 자료 ──
+# ── 쿠팡 등록 상품 자료(상품조회 · 판매분석) ──
 def _raw_page(p: Path) -> dict:
     return json.loads(gzip.decompress(p.read_bytes()).decode("utf-8"))["data"]
 
@@ -98,79 +116,6 @@ def vid_names(stores, aid: str) -> dict:
             for v, o in (rec.get("옵션") or {}).items()}
 
 
-# ── ④ 기준 달 ──
-def first_starts(rows: list) -> dict:
-    """원장 '계정이력' 줄(머리줄 + 줄) → {계정ID: (첫 관리 시작일, 원장 기록 시작일의 최초등록인가)}. 비밀번호 줄은 읽지 않음."""
-    if not rows:
-        return {}
-    h = {str(c): k for k, c in enumerate(rows[0])}
-    body = sorted((list(r) + [""] * len(h) for r in rows[1:]), key=lambda r: (str(r[h["효력일"]])[:10], str(r[h["번호"]]).zfill(9)))
-    begin = min((str(r[h["효력일"]])[:10] for r in body if r[h["변동유형"]] == K_INIT), default="")
-    out: dict = {}
-    for r in body:
-        aid, kind, eff = str(r[h["계정아이디"]]).strip(), r[h["변동유형"]], str(r[h["효력일"]])[:10]
-        if kind == K_CONFIRMED and r[h["항목"]] == ITEM_ACCT_ID and str(r[h["이전값"]]).strip() in out:
-            out.setdefault(str(r[h["변경값"]]).strip(), out[str(r[h["이전값"]]).strip()])
-        elif kind in (K_INIT, K_NEW_ACCT, K_RESUME) and aid:
-            out.setdefault(aid, (eff, kind == K_INIT and eff == begin))
-    return out
-
-
-def account_history(snapshot: Path | None) -> tuple[dict, str]:
-    """원장 '계정이력' → (first_starts, 못 읽은 사유). 사본 json 을 주면 그것, 없으면 구글 실시간."""
-    if snapshot is not None:
-        return first_starts(json.loads(snapshot.read_text(encoding="utf-8"))), ""
-    try:
-        from coupang_analytics import appconfig, gsheet_api
-        rows = gsheet_api.GSheetClient(appconfig.get("registry/url", "")).read_values(SHEET_ACCT)
-    except Exception as exc:  # noqa: BLE001 — 못 읽으면 계약 없는 계정의 되찾기 후보가 전부 '확인 필요'(사유를 정산서에 적음)
-        return {}, f"원장 계정이력 못 읽음: {exc.__class__.__name__}"
-    return first_starts(rows), ""
-
-
-def baseline(aid: str, contracts: dict, starts: tuple) -> tuple:
-    """(기준 달 YYYY-MM | None, 근거 이름, 기준일, 기준 전 등록 = 확인 필요인가(원장 기록 시작 전부터 관리), 없을 때 사유)."""
-    if contracts.get(aid):
-        return contracts[aid][:7], "계약", contracts[aid], False, ""
-    got, err = starts
-    if aid in got:
-        d, at_begin = got[aid]
-        return d[:7], "원장 첫 관리 시작", d, at_begin, ""
-    return None, "", "", False, NO_BASE + (f" · {err}" if err else "")
-
-
-def _bounds(bm: str, inv_all: dict) -> tuple:
-    """(bm 달 앞 등록 상품 ID 최댓값, bm 달 이후 등록 상품 ID 최솟값) — 상품조회 전 계정."""
-    ids = [(int(p), e["created"][:7]) for prods in inv_all.values() for p, e in prods.items() if p.isdigit()]
-    return max((i for i, m in ids if m < bm), default=None), min((i for i, m in ids if m >= bm), default=None)
-
-
-def id_side(pid: str, bm: str, inv_all: dict) -> str | None:
-    """상품조회에 없는 등록상품의 등록 달 ≥ bm 여부를 ID 순서로 — 'after'·'before'·None(못 가름 · 앞뒤가 엇갈림)."""
-    lo, hi = _bounds(bm, inv_all)
-    if not pid.isdigit() or (lo is not None and hi is not None and lo >= hi):
-        return None
-    if hi is not None and int(pid) >= hi:
-        return "after"
-    if lo is not None and int(pid) <= lo:
-        return "before"
-    return None
-
-
-# ── ③④⑤ 되찾기 ──
-def candidates(inv: dict, groups: dict, is_mv, decided=frozenset()) -> list:
-    """[(등록상품ID, 상품명, VID 집합, 등록일 | None)] — 대장 상품(VID·같은 이름)도, 1~3순위 출처로 정한 상품(decided)도 아닌
-    로켓그로스 등록 상품(D-230 · 아래 순위는 위 순위가 정한 상품을 바꾸지 않음)."""
-    out = []
-    for pid, e in inv.items():
-        if pid not in decided and "RFM" in e["types"].values() and not any(is_mv(v) for v in e["types"]):
-            out.append((pid, e["name"], set(e["types"]), e["created"]))
-    for g, e in groups.items():
-        if g not in inv and g not in decided and e["rg"] and not any(is_mv(v) for v in e["vids"]):
-            out.append((g, e["name"], set(e["vids"]), None))
-    return out
-
-
 COST_ONLY = "비용만 있는 등록상품(판매 줄 없음 · 상품조회·판매분석에 없음) — 출처 판정 전 · 금액 밖(D-244)"
 
 
@@ -204,79 +149,17 @@ def cost_only(costs: dict, inv: dict, groups: dict, sold) -> dict:
 
 
 def cost_only_checks(costs: dict, inv: dict, groups: dict, seen: set) -> list:
-    """[(등록상품ID, 상품명, 사유)] — 비용만 있는 등록상품 중 아직 어느 경로(관리·판매 줄·출처판정·되찾기)도 다루지 않은 것(D-244 ⑤)."""
+    """[(등록상품ID, 상품명, 사유)] — 비용만 있는 등록상품 중 아직 어느 경로(관리·판매 줄·출처판정)도 다루지 않은 것(D-244 ⑤)."""
     return [(pid, name, COST_ONLY) for pid, (name, _o) in sorted(cost_only(costs, inv, groups, seen).items())]
 
 
-def _side(pid: str, created: str | None, bm: str, inv_all: dict) -> tuple:
-    if created:
-        return ("after" if created[:7] >= bm else "before"), f"등록 {created}"
-    return id_side(pid, bm, inv_all), "등록일 = 등록상품ID 순서(상품조회에 없음)"
-
-
-def classify(cand: tuple, base: tuple, judge: dict, inv_all: dict) -> tuple:
-    """후보 하나 → ('관리' | '제외' | '확인 필요', 사유)."""
-    pid, _name, _vids, created = cand
-    bm, src, bdate, unsure_before, why = base
-    if bm is None:
-        return "확인 필요", why
-    side, how = _side(pid, created, bm, inv_all)
-    if side is None:
-        return "확인 필요", f"등록일 모름 — 상품조회에 없고 등록상품ID 순서로도 {src} 달({bdate}) 앞뒤를 못 가름"
-    if side == "before":
-        if unsure_before:
-            return "확인 필요", f"관리 시작일 모름 — 원장 기록 시작({bdate}) 전부터 관리 · {how}"
-        return "제외", f"{src} 달 전 등록({src} {bdate} · {how})"
-    j = judge.get(pid) or {}
-    if j.get("판정") in KEEP:
-        return "관리", f"{src} 달 이후 등록({how}) · {j.get('근거') or ''}".rstrip(" ·")
-    if j.get("판정") in OWN:
-        return "제외", f"위탁자 본인 상품 등({j['판정']}) — {j.get('근거') or ''}".rstrip(" —")
-    if j:
-        return "확인 필요", f"위탁자 본인 상품인지 못 정함 — {j.get('근거') or j.get('판정')}"
-    return "확인 필요", "위탁자 본인 상품인지 판정 없음"
-
-
-def recover(aid: str, is_mv, stores, inv_all: dict, base: tuple, judge: dict, decided=frozenset()) -> dict:
-    """계정 하나 → {"vids": 되찾은 VID, "got"·"excl"·"check": [(등록상품ID, 상품명, 사유)]}."""
-    r: dict = {"vids": set(), "got": [], "excl": [], "check": []}
-    if aid not in inv_all:
-        r["check"].append(("", "", NO_INV))
-        return r
-    groups = sales_groups(stores[1].get(aid) or {})
-    for cand in sorted(candidates(inv_all[aid], groups, is_mv, decided)):
-        verdict, why = classify(cand, base, judge.get(aid) or {}, inv_all)
-        r[{"관리": "got", "제외": "excl", "확인 필요": "check"}[verdict]].append((cand[0], cand[1], why))
-        if verdict == "관리":
-            r["vids"] |= cand[2]
-    return r
-
-
-def recover_all(ledger: dict, listings: dict, stores, inv_all: dict, contracts: dict, starts: tuple, judge: dict,
-                rank: dict) -> dict:
-    """대장 계정마다 recover — {계정ID: 결과}. stores = (일별, 기간) 판매분석 저장 · rank = {계정ID: ranked()}(1~3순위로 정한 상품)."""
-    out = {}
-    for aid, vids in ledger.items():
-        names, vname = listings.get(aid) or set(), vid_names(stores, aid)
-
-        def is_mv(v: str, vids=vids, names=names, vname=vname) -> bool:
-            return v in vids or vname.get(v) in names
-        out[aid] = recover(aid, is_mv, stores, inv_all, baseline(aid, contracts, starts), judge, decided(rank.get(aid) or {}))
-    return out
-
-
-def load_judge(path: Path) -> dict:
-    """입력 폴더 AI 판정표 → {계정ID: {등록상품ID: {"판정", "근거", ...}}}."""
-    return json.loads(path.read_text(encoding="utf-8"))["계정"]
-
-
-# ── 정산 대상 상품 출처 순위(D-230 · D-231) ──
-# ① 관리대장(지금·사본 = ledger_vids · 옛 PC 대장 = 출처판정 '옛 대장') ② 이력원장(원장 '정산전용상품' 시트 → '상품이력' = 출처판정
-# '이력원장') ③ 계약서 품목(출처판정 '계약서' · 판매 방식 안 가림) ④ 쿠팡 등록 로켓그로스 = recover(위 순위에서 정한 상품은 후보 아님).
-# 옛 대장·이력원장·계약서 → 등록상품 = AI 판정표(코드에 계정·상품 조건 없음 · D-229). 아래 순위는 위 순위가 정한 상품을 바꾸지 않음.
-OLD, HIST, CONTRACT = "옛 대장", "이력원장", "계약서"
+# ── 정산 대상 상품 출처 순위(D-230 · D-427) ──
+# ① 관리대장(지금·사본 = ledger_vids · 옛 PC 대장 = 출처판정 '옛 대장') ② 이력원장(원장 '정산전용상품' 시트 → '상품이력' = 출처판정 '이력원장').
+# 옛 대장·이력원장 → 등록상품 = AI 판정표(코드에 계정·상품 조건 없음 · D-229). 아래 순위는 위 순위가 정한 상품을 바꾸지 않음.
+OLD, HIST = "옛 대장", "이력원장"
 SETTLE = "원장 정산전용상품"
-ORDER = (OLD, SETTLE, HIST, CONTRACT)
+SOURCES = (OLD, HIST)                 # 출처판정 json 이 쓸 수 있는 출처(계약서 = 출처 아님 · D-427)
+ORDER = (OLD, SETTLE, HIST)
 CHECK = "확인 필요"
 VERDICTS = KEEP + OWN + (CHECK,)
 
@@ -286,14 +169,14 @@ def load_sources(path: Path) -> dict:
     data = json.loads(path.read_text(encoding="utf-8"))["계정"]
     for aid, prods in data.items():
         for pid, e in prods.items():
-            if e.get("출처") not in (OLD, HIST, CONTRACT) or e.get("판정") not in VERDICTS:
-                raise ValueError(f"{SOURCE} {aid} {pid}: 출처 {e.get('출처')!r} · 판정 {e.get('판정')!r} — 허용 = {(OLD, HIST, CONTRACT)} · {VERDICTS}")
+            if e.get("출처") not in SOURCES or e.get("판정") not in VERDICTS:
+                raise ValueError(f"{SOURCE} {aid} {pid}: 출처 {e.get('출처')!r} · 판정 {e.get('판정')!r} — 허용 = {SOURCES} · {VERDICTS}")
     return data
 
 
 def ranked(settle_marks: dict, sources: dict) -> dict:
     """계정 하나 → {등록상품ID: (출처, 판정, 근거, 상품명)} — ORDER 순서로 먼저 정한 출처가 그 상품을 정함."""
-    by: dict = {OLD: {}, HIST: {}, CONTRACT: {}}
+    by: dict = {OLD: {}, HIST: {}}
     for pid, e in sources.items():
         by[e["출처"]][str(pid)] = (e["판정"], e.get("근거") or "", e.get("상품명") or "")
     by[SETTLE] = {str(p): ((k, "", "") if k in KEEP + OWN else (CHECK, "원장 정산전용상품 구분 빈 칸", ""))
@@ -305,30 +188,19 @@ def ranked(settle_marks: dict, sources: dict) -> dict:
     return out
 
 
-def decided(rk: dict) -> frozenset:
-    """1~3순위 출처가 정한 등록상품('관리'·'본인상품'·'제외') — '확인 필요'는 정해지지 않은 것이라 4순위로 넘어감(D-230)."""
-    return frozenset(pid for pid, (_s, verdict, *_x) in rk.items() if verdict != CHECK)
-
-
-def source_checks(rk: dict, later=frozenset()) -> list:
-    """[(등록상품ID, 상품명, 사유)] — 출처에서 '확인 필요'로 남았고 4순위(later = 되찾기에서 다룬 상품)에서도 안 다룬 상품."""
-    return [(pid, name, f"{src}: {why}".rstrip(": ")) for pid, (src, verdict, why, name) in sorted(rk.items())
-            if verdict == CHECK and pid not in later]
+def source_checks(rk: dict) -> list:
+    """[(등록상품ID, 상품명, 사유)] — 출처에서 '확인 필요'로 남은 상품(금액 밖 · 정산서 '관리 상품 확인 필요' 시트)."""
+    return [(pid, name, f"{src}: {why}".rstrip(": ")) for pid, (src, verdict, why, name) in sorted(rk.items()) if verdict == CHECK]
 
 
 def source_vids(rk: dict, inv: dict, groups: dict) -> set:
-    """1~3순위 '관리' 등록상품 → 그 상품의 VID 전부(상품조회 옵션 + 판매분석 옵션 · 판매자배송 포함) — 정산 파일 상품 ID 와
-    상품조회 등록상품ID 가 달라도 VID 로 잡는다(되찾기 recover 와 같은 방식)."""
+    """출처 '관리' 등록상품 → 그 상품의 VID 전부(상품조회 옵션 + 판매분석 옵션 · 판매자배송 포함) — 정산 파일 상품 ID 와
+    상품조회 등록상품ID 가 달라도 VID 로 잡는다."""
     out: set = set()
     for pid, (_s, verdict, *_x) in rk.items():
         if verdict in KEEP:
             out |= set((inv.get(pid) or {}).get("types") or {}) | set((groups.get(pid) or {}).get("vids") or ())
     return out
-
-
-def handled(r: dict) -> frozenset:
-    """되찾기 결과에서 다룬 등록상품(관리·제외·확인 필요)."""
-    return frozenset(p for k in ("got", "excl", "check") for p, *_x in r.get(k) or [])
 
 
 def source_counts(rk: dict) -> list:

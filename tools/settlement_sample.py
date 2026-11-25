@@ -2,7 +2,7 @@ r"""정산 표본 전후 계산 시험 도구(S1 · D-353) — 계정 자료를 
 옛 코드(src 폴더 A)·새 코드(src 폴더 B)가 같은 저장 자료로 계산만 다시 해 전후 금액을 비교한다. 정산서·앱은 이 파일을 안 씀(시험 도구만).
 
     python tools/settlement_sample.py cache --name output38 --accounts seankim137 --managed-output <output> --settle-dir <output\정산>
-        --stats <정산집계.xlsx> --basis 2026-11-15 --inputs <입력 폴더> --issued 2026-11-16 [--settle-only <json>] [--account-history <json>]
+        --stats <정산집계.xlsx> --basis 2026-11-15 --inputs <입력 폴더> --issued 2026-11-16 [--settle-only <json>]
     python tools/settlement_sample.py run --name output38 --src <src 폴더> --out 후.json [--kind both|old|new] [--direct]
     python tools/settlement_sample.py diff 전.json 후.json [--paths 30]
     python tools/settlement_sample.py ab --name output38 --old-src <src A> --new-src <src B> --out-dir <폴더>   # run 2번 + diff → 전후.txt
@@ -35,7 +35,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 import settlement_sample_track as TR  # noqa: E402
 
-ARG_PATHS = ("managed_output", "settle_dir", "stats", "inputs", "settle_only", "supp", "snap", "account_history")
+ARG_PATHS = ("managed_output", "settle_dir", "stats", "inputs", "settle_only", "supp", "snap")
 ARG_TEXT = ("basis", "issued")
 CTX_OUT = "ctx_out"          # CTX.load 가 쓰는 출력 폴더(사업자_대응표.csv) — 저장 폴더 안 · 지문에서 뺌
 META = "meta.json"
@@ -79,7 +79,7 @@ def real_kit(src: Path) -> Kit:
     ctx_mod = importlib.import_module("coupang_analytics.settlement_statement_context")
 
     def load(args: dict, out: Path):
-        kw = {k: (Path(v) if v and k in ARG_PATHS else v) for k, v in args.items()}
+        kw = {k: (Path(v) if v and k in ARG_PATHS else v) for k, v in args.items() if v is not None}   # 빈 칸 = 기본값(옛 저장분의 없어진 칸 포함)
         return ctx_mod.load(ctx_mod.StatementArgs(out=out, **kw))
 
     return Kit(src=src, load=load, compute=lambda ctx, accts, kind: _real_compute(ctx, accts, kind))
@@ -87,7 +87,7 @@ def real_kit(src: Path) -> Kit:
 
 class _NoNet:
     def __init__(self, *a, **k):
-        raise TR.NetworkBlocked("네트워크 금지(표본 시험 도구) — 구글시트 실시간 읽기 대신 --settle-only·--account-history 사본을 줄 것")
+        raise TR.NetworkBlocked("네트워크 금지(표본 시험 도구) — 구글시트 실시간 읽기 대신 --settle-only 사본을 줄 것")
 
 
 def _real_compute(ctx, accts: list, kind: str) -> dict:

@@ -31,10 +31,7 @@ def _head(ws, ctx, a: dict) -> int:
     for k, val in (("사업자", f"{info['사업자']} (대표 {info['대표자']})"), ("쿠팡 계정", a["aid"]), ("판매 기간", period),
                    ("기준일", f"{ctx.basis}  (발행 {ctx.issued})")):     # 진하게·항목마다 줄(소유자 2026-10-27)
         cell(ws, r, 2, k, bold=True, fill="soft")
-        note = k == "판매 기간" and a["start_note"]           # D-185 — 다르거나 계약 없음 = 확인 필요(줄 위치는 그대로·칸 안 둘째 줄)
-        merge(ws, r, 3, 6, f"{val}\n{a['start_note']}" if note else val, bold=True, wrap=bool(note))
-        if note:
-            ws.row_dimensions[r].height = 34
+        merge(ws, r, 3, 6, val, bold=True)
         r += 1
     return r - 1                             # 범위 줄 삭제(소유자 2026-10-28) — 제외 상품은 '제외한 상품' 시트
 
@@ -275,7 +272,7 @@ def summary_book(ctx, res: list, skipped: list) -> Path:
     table_rows = rows + [["(정산서 없음)", *r[1:]] for r in skipped if r[0] not in SRC.OWN_BUSINESSES]
     wb.remove(ws)
     table(wb, "전체 요약", SUM_HDR, table_rows, (22, 10, 14, 26, 14, 14, 14, 14, 14, 10, 30, 12, 12, 12, 16, 12, 60), money_from=4,
-          note=f"위탁 계정 · 관리 상품만 · 장부 기준일 {ctx.basis} · '(정산서 없음)' = 관리 상품을 정할 자료가 없거나 판정 대기 · "
+          note=f"위탁 계정 · 관리 상품만 · 장부 기준일 {ctx.basis} · '(정산서 없음)' = 계약 종료(관리대장에 계정 없음 · D-427) · "
           f"정산 100% 일치 = 계정 전체 금액이 쿠팡 정산 리포트·지급 내역·보류 목록과 원 단위로 맞음(D-083).")
     table(wb, "우리 사업자(통보 제외)", SUM_HDR, [r for r, own in res if own], [14] * len(SUM_HDR), money_from=4)
     dest = ctx.out / f"전체_위탁정산서_관리상품_{date.fromisoformat(ctx.issued):%y%m%d}.xlsx"

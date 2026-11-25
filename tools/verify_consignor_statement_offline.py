@@ -595,14 +595,14 @@ def _add(day: str, vid: str, amt: int, status: str = "PAID") -> dict:
     return {"지급일": day, "옵션ID": vid, "지급금액": amt, "지급구분": status}
 
 
-def _sep_st(m: str, rows: list, managed: set, cdate: str = "2026-01-01", basis: str = "2026-11-15") -> SimpleNamespace:
+def _sep_st(m: str, rows: list, managed: set, basis: str = "2026-11-15") -> SimpleNamespace:
     return SimpleNamespace(m=m, mk=m.replace("-", ""), basis=basis, j=[], order_pids={}, is_m=lambda p: False, is_mv={v: True for v in managed},
-                           d={"v": {"favorable": {}}, "add": {"줄": rows}, "extras": [], "cdate": cdate})
+                           d={"v": {"favorable": {}}, "add": {"줄": rows}, "extras": []})
 
 
 def test_t125_additional_pay() -> None:
     """T-125 A1(D-236 별도 입금 = 정산 금액에 넣음 · D-308 ① 추가지급 = finalRewardAmount · 보류 해제와 따로): 10 셋째 줄 '추가지급 (관리 상품 몫)' =
-    이 달 지급일 PAID 줄의 관리 옵션 금액(옛 엑셀과 같은 옵션 → 관리 VID · 계약 전 0) · '이번 계산에 안 넣음' 문장 없음 · 날짜별 표 = 지급일 줄
+    이 달 지급일 PAID 줄의 관리 옵션 금액(옛 엑셀과 같은 옵션 → 관리 VID · 계약일로 안 자름 D-427) · '이번 계산에 안 넣음' 문장 없음 · 날짜별 표 = 지급일 줄
     '쿠팡 추가지급' · 기준일 뒤·지급일 없음 = '(지급일 미정)'(D-294 ②) · 지급일 없는 줄 = 확인 필요 문장.
     실자료 모양 = output38 검증자료 roum0502 202610 PAID 16,897(옵션 95878257194 · 10-22) · freewin7777 202611 PAID 117,960(11-13)."""
     rows = [_add("2026-10-22", "95878257194", 16_897), _add("2026-10-30", "111", 5_000), _add("2026-10-25", "95878257194", 7_000, "REJECT"),
@@ -615,9 +615,6 @@ def test_t125_additional_pay() -> None:
                       [(n, round(a)) for n, a in st.sep])
     assert [(r["date"], r["amount"], r["_status"]) for r in rows_d] == [("2026-10-22", 16_897, "지급 완료")], rows_d
     assert [x["amount"] for x in flow(SimpleNamespace(basis="2026-11-15"), rows_d)] == [16_897, 0, 0, 0]
-    pre = _sep_st("2026-10", [_add("2026-10-22", "95878257194", 16_897)], managed={"95878257194"}, cdate="2026-11-01")
-    separate(pre)
-    assert pre.sep[2][1] == 0, pre.sep                                                 # 계약 전 지급 = 0
     later = _sep_st("2026-11", [_add("2026-11-13", "96036856804", 117_960), _add("", "96036856804", 300)], managed={"96036856804"}, basis="2026-11-10")
     separate(later)
     assert later.sep[2][1] == 117_960 and later.add_rows == [(None, 117_960)], (later.sep, later.add_rows)
@@ -1340,6 +1337,35 @@ def test_run_job_isolation_and_sheets() -> None:
             {"시트 2026-09": "시트 쓰기 실패 —", "시트 2026-10": "시트 쓰기 실패 —"}, bad["skipped"]
 
 
+def test_t189_contract_ended_consignor() -> None:
+    """(사) D-427 — 새 형식 위탁자정산서도 지금 관리대장 계정(옛 형식 정산서를 만드는 계정과 같은 판정)만 만든다. 계약 종료 계정(c3 · 관리대장에
+    계정 없음) = 달별 자료·시트 줄 없음 · 실패·'확인 필요' 줄도 없음(안내 로그 한 줄만)."""
+    from coupang_analytics import statement_jobs_consignor as J
+    V = _vs()
+    accts = ["가-상회-a1", "다-상회-c3"]
+    built: list = []
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        _job_output(base, V)
+        out = base / "결과"
+        layer = V.fake_statement_layer(out, accts, bad=set(), none={"c3"})
+
+        def build(ctx, src, m, judge):
+            built.append(src["aid"])
+            return {**synthetic(True, m), "account": src["aid"]}
+        cm = V._Patch((CM, "account_source", lambda ctx, acct: {"aid": acct.rsplit("-", 1)[-1]}),
+                      (CM, "sale_months", lambda src: ["2026-09"]), (CM, "build_month", build))
+        buf = io.StringIO()
+        with layer, cm, contextlib.redirect_stdout(buf):
+            got = J.run_job({"output": str(base), "out": str(out), "basis": "2026-11-26", "issued": "2026-11-26"}, print)
+        names = {Path(f).name for f in got["files"]}
+    assert got["abort"] is None and got["ok"] == ["a1"] and built == ["a1"], (got, built)
+    assert not [x for x in got["skipped"] if x["id"] == "c3"], got["skipped"]                 # 계약 종료 = 확인 필요 아님
+    assert "a1_202609.json" in names and not any(n.startswith("c3") for n in names), names
+    assert "정산서 없음 상회c3 (c3)" in buf.getvalue() and "계약 종료(관리대장에 계정 없음)" in buf.getvalue(), buf.getvalue()
+    print("test_t189_contract_ended_consignor OK")
+
+
 def test_d262_excluded_pending_listed() -> None:
     """D-262 ③ · D-399 ④ — 못 나눠 뺀 정산 예정분 = 정산서는 발행(계정 성공 · 검산 실패 아님) + '확인 필요' 목록에 금액·사유 한 줄."""
     from coupang_analytics import statement_jobs_consignor as J
@@ -1494,7 +1520,7 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     except AttributeError:
         pass
-    for f in (test_run_job_abort, test_run_job_isolation_and_sheets, test_d262_excluded_pending_listed, test_inputs_pack):
+    for f in (test_run_job_abort, test_run_job_isolation_and_sheets, test_t189_contract_ended_consignor, test_d262_excluded_pending_listed, test_inputs_pack):
         f()
     for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_ad_nocamp_d317, test_t186_wing_ad_deducted, test_t186_wing_ad_carry, test_t186_ad_bills_file, test_t186_2025_bill_not_owed, test_t186_partly_deducted, test_t186_rg_month_border, test_t179_milk_months, test_t179_ad_wait, test_t179_cfs_no_line_period, test_t179_cash_reference, test_t179_pending_rg_missing_70,
               test_t175_old_forecast_record, test_new23_cross_week_flag, test_d401_remarks_and_evidence, test_d402_check_status_header, test_expect_values, test_flow_fixed, test_t125_additional_pay, test_d391_unknown_ship_same_month_wing_ratio, test_failed_checks, test_load_judge,

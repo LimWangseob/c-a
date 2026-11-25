@@ -799,7 +799,7 @@ def test_batch_contract() -> None:
         assert res["abort"] is None, res
         a = seen["args"]
         assert all(isinstance(getattr(a, k), Path) for k in ("managed_output", "settle_dir", "stats", "inputs")), a
-        assert str(a.stats).endswith("정산집계_x.xlsx") and a.account_history is None and a.settle_only is None, a   # 원장 = 구글 실시간(사본 안 씀)
+        assert str(a.stats).endswith("정산집계_x.xlsx") and a.settle_only is None, a   # 원장 = 구글 실시간(사본 안 씀)
         why = _reasons(res)
         assert "받기 실패" in why["da1"] and not any(x.startswith("da1") for x in res["ok"]), why
         assert len(res["files"]) == 1 and Path(res["files"][0]).parent == Path(bo["out"]), res      # ga1 한 장(위탁 결과 폴더에서)
@@ -840,47 +840,54 @@ def test_groups_judge_marks() -> None:
     print("test_groups_judge_marks OK")
 
 
-def test_consignor_wait() -> None:
-    """위탁 '판정 대기'(원장 정산전용상품 구분 빈 칸) 계정 = 관리 상품을 모름 → 셀독 정산서를 실적 0 으로 내지 않고 '확인 필요 — 위탁 판정 대기'(T-179 ⑫).
-    판정이 끝난 계정의 실적 0 계약 = 그대로 만듦(D-406 '실적 0으로 냄')."""
+def test_t189_contract_ended_seldoc() -> None:
+    """(바) D-427(소유자 2026-11-26 "관리대장에 계정이 없으면 계약 종료인것임") — 계약 종료 계정(지금 관리대장 결과 엑셀에 계정 없음) = 셀독 정산서도
+    상품군 정산서도 안 만들고 '확인 필요'·건너뜀 줄도 없음(안내 로그 한 줄) · 지금 대장 계정의 실적 0 계약 = 그대로 만듦(D-406 '실적 0으로 냄')."""
     from types import SimpleNamespace
 
     from coupang_analytics import settlement_seldoc_groups as G
-    from coupang_analytics import settlement_statement_account as AC
     from coupang_analytics import settlement_statement_scope as SCOPE
     from coupang_analytics import statement_jobs_seldoc as JOB
-    so = {"da1": {"111": "", "222": "본인상품"}}
-    ctx = SimpleNamespace(ledger={}, listings={}, rg={}, settle_only=so, settle_only_err="", ranked={"da1": SCOPE.ranked(so["da1"], {})}, src_vids={},
-                          periods={}, daily={}, accts=["이다라-다라커머스-da1"])
-    waiting = AC.scope(ctx, "da1")[0]
-    assert "구분 빈 칸 1줄" in waiting, waiting
-    for sc, made in ((waiting, False), ("관리대장 상품", True)):
-        with tempfile.TemporaryDirectory() as d:
-            opts = _batch_dir(Path(d))
-            real = G._base, G.GroupAccount, G.book, G.CTX.load, G.SCOPE.inventory, G.ledger_pids
-            G._base = lambda _c, _a, sc=sc: SimpleNamespace(aid="da1", sc=sc, plan_in=None, opt2pid={}, vids=set(), vid_name={}, mnames=set(), marks={},
-                                                            result={"mpids": set(), "pay_m": 0})
-            G.GroupAccount = lambda _c, _a, _p, _b, _i, _pl=None: SimpleNamespace(unmapped=set(), run=lambda: {"pay_m": 0})
-            G.book = lambda _c, _a, dest: (dest.parent.mkdir(parents=True, exist_ok=True),
-                                           make_statement(dest, "다라커머스 (대표 이다라)", "da1", 0, 0, 0))
-            G.CTX.load, G.SCOPE.inventory, G.ledger_pids = (lambda _a: ctx), (lambda _o: {}), (lambda *_a: set())
-            try:
-                res = JOB.run_job({**opts, "group_statements": None, "groups": {"managed_output": d, "settle_dir": d, "stats": d, "inputs": d}},
-                                  lambda _m: None)
-            finally:
-                G._base, G.GroupAccount, G.book, G.CTX.load, G.SCOPE.inventory, G.ledger_pids = real
-        assert res["abort"] is None, res
-        da = [x for x in res["ok"] if x.startswith("da1")]
-        if made:
-            assert len(da) == 4 and res["skipped"] == [], res                       # 실적 0 계약 = 그대로 만듦(D-406)
-            continue
-        assert da == [] and len(res["files"]) == 1 and res["group_files"] == [], res   # ga1(다른 계정) 1장만
-        skipped = [x for x in res["skipped"] if x["aid"] == "da1"]
-        assert sorted(x["doc_id"] for x in skipped) == sorted((DOC_ZS, DOC_B1, DOC_B2, DOC_B3)), skipped
-        for x in skipped:
-            assert x["kind"] == "확인 필요" and x["reason"].startswith("확인 필요 — ") and "위탁 판정 대기" in x["reason"], x
-            assert "구분 빈 칸 1줄" in x["reason"], x
-    print("test_consignor_wait OK")
+    # ① 배치 — 관리기준 폴더의 지금 결과 엑셀에 ga1 만 있음 → da1(계약 4개 · 상품군) = 계약 종료
+    with tempfile.TemporaryDirectory() as d:
+        base = Path(d)
+        opts = _batch_dir(base)
+        mo = base / "관리기준"
+        mo.mkdir()
+        (mo / SCOPE.MASTER).write_bytes(b"x")
+        logs: list = []
+        real = SCOPE._ledger_blocks
+        SCOPE._ledger_blocks = lambda p: {"ga1": {"1"}}
+        try:
+            res = JOB.run_job({**opts, "groups": {"managed_output": mo, "settle_dir": mo, "stats": mo / "s.xlsx", "inputs": mo}}, logs.append)
+        finally:
+            SCOPE._ledger_blocks = real
+    assert res["abort"] is None and res["ok"] == [f"ga1:{DOC_A}"] and len(res["files"]) == 1, res
+    assert res["skipped"] == [] and res["group_files"] == [], res["skipped"]                   # 계약 종료 = 확인 필요·건너뜀 아님
+    assert any("da1" in x and "계약 종료(관리대장에 계정 없음)" in x for x in logs), logs
+    # ② 상품군 정산서 입구(G.run)를 바로 불러도 계약 종료 계정은 계산하지 않고 실패 목록에도 안 올림
+    jobs = [SimpleNamespace(split=True, aid="da1", contract=SimpleNamespace(doc_id=x)) for x in (DOC_B1, DOC_B2)]
+
+    def run_groups(current: set, sc: str = "관리대장 상품") -> tuple:
+        ctx = SimpleNamespace(current=current, accts=["이다라-다라커머스-da1"], periods={})
+        real = G._base, G.GroupAccount, G.book, G.CTX.load, G.SCOPE.inventory, G.ledger_pids
+        G._base = lambda _c, _a: SimpleNamespace(aid="da1", sc=sc, plan_in=None, opt2pid={}, vids=set(), vid_name={}, mnames=set(), marks={},
+                                                 result={"mpids": set(), "pay_m": 0})
+        G.GroupAccount = lambda _c, _a, _p, _b, _i, _pl=None: SimpleNamespace(unmapped=set(), run=lambda: {"pay_m": 0})
+        G.book = lambda _c, _a, dest: None
+        G.CTX.load, G.SCOPE.inventory, G.ledger_pids = (lambda _a: ctx), (lambda _o: {}), (lambda *_a: set())
+        glog: list = []
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                return G.run(SimpleNamespace(managed_output=None), jobs, {}, Path(d), on_log=glog.append), glog
+        finally:
+            G._base, G.GroupAccount, G.book, G.CTX.load, G.SCOPE.inventory, G.ledger_pids = real
+    (made, failed, notes), glog = run_groups({"ga1"})
+    assert (made, failed) == ([], {}) and not notes.get("da1"), (made, failed, notes)
+    assert any("da1" in x and "계약 종료" in x for x in glog), glog
+    (made, failed, _n), _g = run_groups({"da1"})
+    assert [x[1] for x in made] == [DOC_B1, DOC_B2] and failed == {}, (made, failed)           # 지금 대장 계정 = 실적 0 이어도 만듦
+    print("test_t189_contract_ended_seldoc OK")
 
 
 def main() -> int:
@@ -909,10 +916,10 @@ def main() -> int:
     test_decision_invest_left_check()
     test_batch_contract()
     test_groups_judge_marks()
-    test_consignor_wait()
+    test_t189_contract_ended_seldoc()
     print("✅ 셀독 정산서 시험 22종 통과(규칙·읽기·대상 계약·관리대상 계약·상품군·양식 1장·목표수익금·입구·칸 이름"
           "·배치 꼴·계약별 격리·상품군 격리·입력 없음 중단·이름 겹침·입력 준비·유형 판정·투자형 카드·비고·상품 단위 확인 필요"
-          "·투자형 남은 지급 근거 없음 = 정산서 안 만듦·배치 꼴 그대로·판정 제외와 판정표 갱신 필요·위탁 판정 대기 계정)")
+          "·투자형 남은 지급 근거 없음 = 정산서 안 만듦·배치 꼴 그대로·판정 제외와 판정표 갱신 필요·계약 종료 계정 D-427)")
     return 0
 
 

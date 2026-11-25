@@ -2,10 +2,9 @@
 + `run_contract_window.py` 계약 기간 보강 · 행동 불변). 고정 경로 없음 — 모든 경로는 `StatementArgs` 로 받는다.
 
 입력 폴더(`inputs`) 고정 이름(손 입력·AI 판정표 · 없으면 ❌ 시작 전 중단):
-  사업자_대응표.csv · 체험단_보충.json · 쿠팡_별도보상.json · 관리시작달_차이표.xlsx(계약일 AI 판정 D-185) ·
-  svc_digital_judge.json(가전 AI 판정 D-161) · ledger.json(관리대장 스냅샷·비밀번호 없음) ·
-  관리상품_되찾기_판정.json(이력 없이 지운 로켓그로스 상품 — 위탁자 본인 상품 AI 판정 · settlement_statement_scope ⑤) ·
-  관리상품_출처판정.json(옛 PC 대장·이력원장 상품이력·계약서 품목 → 등록상품 AI 판정 · 출처 순위 D-230·D-231)
+  사업자_대응표.csv · 체험단_보충.json · 쿠팡_별도보상.json · svc_digital_judge.json(가전 AI 판정 D-161) ·
+  ledger.json(관리대장 스냅샷·비밀번호 없음) · 관리상품_출처판정.json(옛 PC 대장·이력원장 상품이력 → 등록상품 AI 판정 · 출처 순위 D-230)
+정산 범위 = 관리대장 기준(D-427): 지금 결과 엑셀에 계정이 없으면 계약 종료 · 계약서·계약일은 읽지 않음.
 """
 from __future__ import annotations
 
@@ -15,8 +14,6 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
-
-import openpyxl
 
 from coupang_analytics import sales_history, sales_summary
 from coupang_analytics import settlement_experience as XP
@@ -28,8 +25,7 @@ from coupang_analytics import settlement_statement_source as SRC
 
 MAP_CSV = "사업자_대응표.csv"
 OWN_JUDGE = "본인차감_처리판정.json"    # 선택 · {"계정": {계정ID: {감지 항목: 근거}}} — D-305 처리 판정표(근거 남긴 파일 · D-229)
-REQUIRED = (MAP_CSV, "체험단_보충.json", "쿠팡_별도보상.json", "관리시작달_차이표.xlsx", "svc_digital_judge.json", "ledger.json",
-            SCOPE.JUDGE, SCOPE.SOURCE)
+REQUIRED = (MAP_CSV, "체험단_보충.json", "쿠팡_별도보상.json", "svc_digital_judge.json", "ledger.json", SCOPE.SOURCE)
 DIGITAL_RATES = {5.8, 6.4, 7.8}
 
 
@@ -45,7 +41,6 @@ class StatementArgs:
     settle_only: Path | None = None   # 원장 '정산전용상품' 시트 사본 json(없으면 구글 실시간 읽기)
     supp: Path | None = None          # 보충 조회 폴더(옛 기준일 조회 방식 · 보통 없음)
     snap: Path | None = None          # 같은 시각대 조회 스냅샷 폴더(보통 없음)
-    account_history: Path | None = None   # 원장 '계정이력' 시트 사본 json(없으면 구글 실시간 · 계약 없는 계정의 관리 시작)
     only: tuple = ()                      # 이 계정ID 만 정산서 만들기(시험용 · 비면 전 계정)
 
 
@@ -63,24 +58,15 @@ def _settle_only_rows(rows: list) -> dict:
 
 
 def settle_only_sheet(snapshot: Path | None) -> tuple[dict, str]:
-    """원장 '정산전용상품' 시트 → {계정ID: {등록상품ID: 구분}}. 못 읽으면 ({}, 사유) — 그 계정들은 '판정 대기'."""
+    """원장 '정산전용상품' 시트 → {계정ID: {등록상품ID: 구분}}. 못 읽으면 ({}, 사유) — 사유는 대장 계정 정산서 범위 칸에 적음(D-427)."""
     if snapshot is not None:
         return _settle_only_rows(json.loads(snapshot.read_text(encoding="utf-8"))), ""
     try:
         from coupang_analytics import appconfig, gsheet_api
         rows = gsheet_api.GSheetClient(appconfig.get("registry/url", "")).read_values("정산전용상품")
-    except Exception as exc:  # noqa: BLE001 — 시트 없음·권한 = 그 계정들은 '판정 대기'(사유를 정산서 범위 칸에 적음)
+    except Exception as exc:  # noqa: BLE001 — 시트 없음·권한 = 사유를 정산서 범위 칸에 적음(조용히 넘기지 않음)
         return {}, f"정산전용상품 시트 못 읽음: {exc.__class__.__name__}"
     return _settle_only_rows(rows), ""
-
-
-def contracts(table: Path) -> dict:
-    """{계정ID: 계약일 YYYY-MM-DD 또는 None(맞는 계약 못 찾음)} — 차이 표 6행 머리글 · A=계정ID · F=계약일('-' = 없음)."""
-    rows = list(openpyxl.load_workbook(table, read_only=True, data_only=True).active.iter_rows(values_only=True))
-    head = rows[5]
-    if head[0] != "계정ID" or not str(head[5]).startswith("계약일"):
-        raise ValueError(f"계약 대조 표 머리글이 다름: {head[:6]}")
-    return {str(r[0]): (None if r[5] in (None, "-") else str(r[5])[:10]) for r in rows[6:] if r[0]}
 
 
 def unjudged(p: Path, svc_judge: dict) -> set:
@@ -124,37 +110,27 @@ def _accounts(a: StatementArgs, c: SimpleNamespace) -> None:
     c.rgf = SRC.rg_file_targets(a.settle_dir)
 
 
-def _account_history(a: StatementArgs, rows: list | None) -> tuple[dict, str]:
-    """원장 '계정이력' — 메모리 행(rows · 원장 백업에서 읽음 · 평문 비밀번호 사본 파일 안 만듦)이 있으면 그것, 없으면 사본 json·구글 실시간(옛 동작)."""
-    if rows is not None:
-        return SCOPE.first_starts(rows), ""
-    return SCOPE.account_history(a.account_history)
-
-
-def _managed(a: StatementArgs, c: SimpleNamespace, history_rows: list | None = None) -> None:
-    """관리 상품 기준 — 출처 순위(D-230·D-231): ① 대장(결과 엑셀 + 날짜별 사본) VID·같은 상품명(D-107)·옛 대장 ② 원장 정산전용상품
-    (모든 계정)·이력원장 ③ 계약서 ④ 되찾은 로켓그로스 상품(1~3순위로 정한 상품 뺌) · 체험단."""
-    c.ledger = SCOPE.ledger_vids(a.managed_output)
+def _managed(a: StatementArgs, c: SimpleNamespace) -> None:
+    """관리 상품 기준(D-427) — 지금 대장 계정(c.current · 그 밖 = 계약 종료) · 출처 순위(D-230): ① 대장(결과 엑셀 + 날짜별 사본) VID·
+    같은 상품명(D-107)·옛 대장 ② 원장 정산전용상품·이력원장 · 체험단."""
+    c.current, c.ledger = SCOPE.ledger_scope(a.managed_output)
     c.daily, c.periods = sales_history.load_daily(a.managed_output), sales_history.load_periods(a.managed_output)
     c.listings = sales_summary.managed_listings((c.daily, c.periods), c.ledger)
-    c.contracts = contracts(a.inputs / "관리시작달_차이표.xlsx")
     c.settle_only, c.settle_only_err = settle_only_sheet(a.settle_only)
     c.sources = SCOPE.load_sources(a.inputs / SCOPE.SOURCE)
     c.ranked = {aid: SCOPE.ranked(c.settle_only.get(aid) or {}, c.sources.get(aid) or {}) for aid in set(c.settle_only) | set(c.sources)}
     inv = c.inv = SCOPE.inventory(a.managed_output)
     c.src_vids = {aid: SCOPE.source_vids(rk, inv.get(aid) or {}, SCOPE.sales_groups(c.periods.get(aid) or {})) for aid, rk in c.ranked.items()}
-    c.rg = SCOPE.recover_all(c.ledger, c.listings, (c.daily, c.periods), inv, c.contracts,
-                             _account_history(a, history_rows), SCOPE.load_judge(a.inputs / SCOPE.JUDGE), c.ranked)
     c.xrows = XP.load(a.out, None, a.inputs / "체험단_보충.json")
 
 
-def load(a: StatementArgs, history_rows: list | None = None) -> SimpleNamespace:
-    """공통 자료를 한 번 읽음(옛 모듈 전역과 같은 순서·같은 값). history_rows = 원장 '계정이력' 행(메모리 · 배치용 · 없으면 옛 동작)."""
+def load(a: StatementArgs) -> SimpleNamespace:
+    """공통 자료를 한 번 읽음(옛 모듈 전역과 같은 순서·같은 값)."""
     c = SimpleNamespace(args=a, base=a.settle_dir, basis=a.basis, issued=a.issued, out=a.out)
     a.out.mkdir(parents=True, exist_ok=True)
     c.extras = SRC.extras(a.inputs / "쿠팡_별도보상.json")
     _accounts(a, c)
-    _managed(a, c, history_rows)
+    _managed(a, c)
     c.svc_judge = json.loads((a.inputs / "svc_digital_judge.json").read_text(encoding="utf-8"))
     oj = a.inputs / OWN_JUDGE          # 선택 파일 · 없으면 빈 판정표 = 감지 항목 전부 '확인 필요' 사유(D-305 · 조용한 대체 아님)
     c.own_judge = json.loads(oj.read_text(encoding="utf-8"))["계정"] if oj.is_file() else {}

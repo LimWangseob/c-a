@@ -4,9 +4,9 @@
 도구 본체(옛 `tools/settlement_consignor.py` 의 고르기·검산·저장·시트 쓰기)를 여기로 옮겼다(위치만 · 계산 바꾸지 않음). 도구 2개는 얇은 껍데기.
 
 - 계정별 격리: 계정 하나가 예외를 내면 그 계정만 skipped(사유) · 나머지는 계속(소유자 11-24 '성공 계정만 생성').
+- 계약 종료 계정(D-427 · 지금 관리대장에 계정 없음 = 옛 형식 '정산서 없음') = 새 형식도 안 만들고 실패·'확인 필요'로도 안 올림(로그 한 줄).
 - 입력 자동 선택(`pick_inputs`): 정산집계 = 정산 폴더의 최신 `정산집계_*.xlsx` · 관리기준 = output 루트 · 기준일·발행일 = 실행일 ·
-  손 입력 = `output/정산서/입력/`(고정 이름 8종 없으면 abort) · 원장 '계정이력' = `ledger_backup`(원장 백업 xlsx)을 메모리로만 읽음
-  (평문 비밀번호가 든 사본 파일 안 만듦) · 없으면 옛 동작(구글 실시간 읽기).
+  손 입력 = `output/정산서/입력/`(고정 이름 없으면 abort).
 - 시트: 판매 달마다 파일 1개(D-241 ⑥) · 주소 = opts['sheets'] 또는 입력 폴더 `위탁자정산서_시트.json` {"YYYY-MM": 주소} ·
   그 달 시트가 없으면 '확인 필요 — 시트 없음(T-43)'(새 달 파일 만들기 = 소유자 OAuth 1회 뒤 · 발송 없음).
 
@@ -31,8 +31,6 @@ from coupang_analytics import settlement_statement_source as SRC
 OUT_DIR = "위탁자정산서"
 SHEETS_FILE = "위탁자정산서_시트.json"
 STATS_GLOB = "정산집계_*.xlsx"
-LEDGER_GLOB = "원장_*.xlsx"
-LEDGER_SHEET = "계정이력"
 NO_SHEET = "확인 필요 — 시트 없음(T-43)"
 SKIP_REASON = "정산 받기 실패 계정 — 건너뜀"
 
@@ -127,16 +125,6 @@ def latest_file(folder: Path, pattern: str) -> Path | None:
     return got[-1] if got else None
 
 
-def ledger_rows(backup: Path) -> list:
-    """원장 백업 xlsx 의 '계정이력' 행 → 메모리 목록(파일로 안 남김 · 비밀번호 줄은 first_starts 가 읽지 않음)."""
-    import openpyxl
-    wb = openpyxl.load_workbook(backup, read_only=True, data_only=True)
-    try:
-        return [["" if v is None else str(v) for v in r] for r in wb[LEDGER_SHEET].iter_rows(values_only=True)]
-    finally:
-        wb.close()
-
-
 def _opt_path(opts: dict, key: str) -> Path | None:
     v = opts.get(key)
     return Path(v) if v else None
@@ -146,16 +134,8 @@ def _path(opts: dict, key: str, default: Path) -> Path:
     return _opt_path(opts, key) or default
 
 
-def _ledger_backup(opts: dict, output: Path) -> Path | None:
-    v = opts.get("ledger_backup")
-    if v == "latest":
-        return latest_file(output / "백업", LEDGER_GLOB)
-    return Path(v) if v else None
-
-
-def pick_inputs(opts: dict) -> tuple[CTX.StatementArgs | None, list | None, list[str], str | None]:
-    """opts → (StatementArgs, 원장 '계정이력' 행(메모리 · 없으면 None = 옛 동작), 안내 줄, abort 사유).
-    빠진 입력(손 입력 8종·정산집계·정산 폴더) = abort 에 이름."""
+def pick_inputs(opts: dict) -> tuple[CTX.StatementArgs | None, list[str], str | None]:
+    """opts → (StatementArgs, 안내 줄, abort 사유). 빠진 입력(손 입력·정산집계·정산 폴더) = abort 에 이름."""
     output = Path(opts.get("output") or opts["managed_output"])
     today = f"{date.today():%Y-%m-%d}"
     basis, issued = opts.get("basis") or today, opts.get("issued") or today
@@ -168,23 +148,14 @@ def pick_inputs(opts: dict) -> tuple[CTX.StatementArgs | None, list | None, list
     if stats is None or not stats.is_file():
         miss.append(f"정산집계 파일({settle_dir / STATS_GLOB})")
     if miss:
-        return None, None, [], f"입력 없음 — {', '.join(miss)}"
+        return None, [], f"입력 없음 — {', '.join(miss)}"
     notes = [f"정산집계 = {stats.name} · 기준일 {basis} · 발행 {issued} · 입력 = {inputs}"]
-    rows = None
-    backup = _ledger_backup(opts, output)
-    if backup is not None:
-        if not backup.is_file():
-            return None, None, [], f"입력 없음 — 원장 백업 {backup}"
-        rows = ledger_rows(backup)
-        notes.append(f"원장 계정이력 = 백업 {backup.name}(메모리로만 읽음)")
-    else:
-        notes.append("원장 계정이력 = 구글 실시간 읽기(백업 지정 없음)")
     so = _opt_path(opts, "settle_only")
     notes.append(f"정산전용상품 = {'사본 ' + so.name if so else '구글 실시간 읽기'}")
     args = CTX.StatementArgs(out=out, managed_output=_path(opts, "managed_output", output), settle_dir=settle_dir, stats=stats,
                              basis=basis, inputs=inputs, issued=issued, settle_only=so,
                              only=tuple(opts.get("only") or ()))
-    return args, rows, notes, None
+    return args, notes, None
 
 
 def sheet_map(opts: dict, inputs: Path) -> dict:
@@ -222,22 +193,22 @@ class _Lines(io.TextIOBase):
             self.buf = ""
 
 
-def _xlsx(args: CTX.StatementArgs, skip: tuple, rows: list | None, on_log) -> tuple[dict | None, str | None]:
+def _xlsx(args: CTX.StatementArgs, skip: tuple, on_log) -> tuple[dict | None, str | None]:
     from coupang_analytics import settlement_statements as ST
     w = _Lines(on_log)
     try:
         with contextlib.redirect_stdout(w):
-            return ST.run(args, skip=skip, history_rows=rows), None
+            return ST.run(args, skip=skip), None
     except Exception as exc:  # noqa: BLE001 — 공통 자료를 못 읽음(정산집계 옛 형식 등) = 이 작업 전체 중단(사유 보고)
         return None, f"위탁정산서 공통 자료 못 읽음 — {_why(exc)}"
     finally:
         w.flush()
 
 
-def _consignor(args: CTX.StatementArgs, skip: tuple, rows: list | None, on_log) -> tuple[list, list, dict, str | None]:
-    """(결과, 실패, {계정ID: 정산집계 계정 이름}, abort)."""
+def _consignor(args: CTX.StatementArgs, skip: tuple, on_log) -> tuple[list, list, dict, str | None]:
+    """(결과, 실패, {계정ID: 정산집계 계정 이름}, abort) — skip = 정산 받기 실패 계정 + 계약 종료 계정(옛 형식 '정산서 없음' · D-427)."""
     try:
-        ctx = CTX.load(args, rows)
+        ctx = CTX.load(args)
     except Exception as exc:  # noqa: BLE001 — 공통 자료를 못 읽음 = 새 형식 전체 중단(사유 보고)
         return [], [], {}, f"위탁자정산서 공통 자료 못 읽음 — {_why(exc)}"
     accts = [a for a in ctx.accts if (not args.only or SRC.aid_of(a) in args.only) and SRC.aid_of(a) not in skip]
@@ -281,7 +252,6 @@ def _merge(st: dict, results: list, failed: list, skip: dict, names: dict) -> tu
     """계정별 결과 합치기 → (ok 계정ID, skipped = 건마다 issue 1줄, 시트에 넣을 수 있는 계정ID).
     시트 대상 = 옛 정산서를 만든 위탁 계정(우리 사업자 = 통보 제외) 중 새 형식 계정 단위 실패가 없는 곳 — 그 안에서도 검산 통과한 달만 씀."""
     out = [issue(aid, f"{SKIP_REASON}{' — ' + why if why else ''}") for aid, why in skip.items()]
-    out += [issue(aid, f"정산서 없음 — {reason}") for aid, reason in st["none"]]
     out += [issue(aid, f"위탁정산서 못 만듦 — {reason}") for aid, reason in st["failed"]]
     out += [issue(aid, f"위탁자정산서 못 만듦 — {reason}", month=m) for aid, m, reason in failed]
     out += [issue(r["account"], f"검산 실패(그 달 시트 반영 안 함) — {' / '.join(r['failures'])}", month=r["month"],
@@ -304,11 +274,10 @@ def skip_ids(opts: dict) -> dict:
 
 def run_job(opts: dict, on_log: Callable[[str], None], *, client_for=None) -> dict:
     """위탁정산서 배치 1회. opts = output(루트 · 없으면 managed_output) · managed_output · settle_dir · inputs · stats · basis · issued ·
-    out · skip_accounts({계정명: 사유}) · skip([계정ID]) · only(시험용) · ledger_backup(원장 백업 경로 또는 'latest') ·
-    settle_only(정산전용상품 사본) · sheet / write_sheet(bool · 시트 반영) · sheets({달: 주소}) · 그 밖의 칸(cycle·run_id·log 등)은 안 씀.
+    out · skip_accounts({계정명: 사유}) · skip([계정ID]) · only(시험용) · settle_only(정산전용상품 사본) · sheet / write_sheet(bool · 시트 반영) · sheets({달: 주소}) · 그 밖의 칸(cycle·run_id·log 등)은 안 씀.
     결과 = 약속 4칸 + sheet(이번에 그린 가장 최근 판매 달 시트 주소 · 없으면 None) + sheets({달: 그린 주소}).
     client_for = 시험용(주소 → 가짜 시트 클라이언트)."""
-    args, rows, notes, abort = pick_inputs(opts)
+    args, notes, abort = pick_inputs(opts)
     skip = skip_ids(opts)
     if abort:
         on_log(f"❌ 시작 전 중단 — {abort}")
@@ -316,11 +285,12 @@ def run_job(opts: dict, on_log: Callable[[str], None], *, client_for=None) -> di
     assert args is not None
     for n in notes:
         on_log(n)
-    st, abort = _xlsx(args, tuple(skip), rows, on_log)
+    st, abort = _xlsx(args, tuple(skip), on_log)
     if abort:
         return _result([], [], [], abort)
     assert st is not None
-    results, failed, names, abort = _consignor(args, tuple(skip), rows, on_log)
+    ended = tuple(aid for aid, _why in st["none"])     # 계약 종료(D-427) = 옛 형식과 같은 판정 · 새 형식도 안 만듦(확인 필요 아님)
+    results, failed, names, abort = _consignor(args, tuple(skip) + ended, on_log)
     if abort:
         return _result([], [], st["files"], abort)
     folder = save(results, args.out)

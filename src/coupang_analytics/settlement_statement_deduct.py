@@ -2,7 +2,7 @@
 `account()` 420~527줄 + `status_split` · 계산식·순서 그대로 · 1부 = `settlement_statement_account.py`).
 
 계정 단위 항목(D-116 ②·settlement_managed_alloc): 배송비 줄 = 같은 주문 상품 / 상품 없으면 반품 조회 상품 · 판매자서비스이용료·비즈니스 인사이트·세이버 구독료
-(계정 정액) = 그 달 등록 상품 비율(D-271 · 새 정산서와 같은 상품표 `reg_rows`) · 이용료 규칙 판정(D-161 끝난 달 구매확정 판매)의 안 빠진 잔액 = 공제 예정 ·
+(계정 정액) = 등록 상품 비율(D-271 · 새 정산서와 같은 상품표 `reg_rows`) · 이용료 규칙 판정(D-161 끝난 달 구매확정 판매)의 안 빠진 잔액 = 공제 예정 ·
 광고비 = 날짜×캠페인 청구가능액 × 그날 광고 보고서 옵션 비율 · 밀크런 = 입고 건별 적치 수량 비율 · 우대수수료 환급 = 주문 → 상품 ·
 추가지급 = 옵션 → 상품. 그 자료가 없는 공제 = 공제를 받은 줄 판매 기간의 관리 정산금 비율(D-162) · 판매 0인 달 = 관리 몫 0(D-186).
 입금 완료/예정/보류 = 계정 실제 지급 비율.
@@ -68,33 +68,35 @@ class Account(AccountBase):
         return ratio(self.mset, ch, ym, self.S)
 
     def win(self, ym: str = "") -> str:
-        """공제 관리 몫 자료 창 시작 = max(그 달(기본 관리 시작 달), 2026-01) — 2025 판매 줄은 공제까지 빠짐(D-329 · D-342) · 관리 시작 표시(D-185)는 self.start 그대로."""
+        """공제 관리 몫 자료 창 시작 = max(그 달(기본 관리 시작 달), 2026-01) — 2025 판매 줄은 공제까지 빠짐(D-329 · D-342) · 관리 시작 표시는 self.start 그대로."""
         return max(ym or self.start, SL.SALE_FROM[:7])
 
-    def reg(self, ym: str) -> float | None:
-        """D-271 계정 정액 관리 몫 = 그 달 등록 상품 비율(등록상품 ID 중 관리 ÷ 전체 · 판매중지 포함) — 새 정산서와 같은 상품표
-        (정산 기준일 상품조회 사본 · `reg_rows`) · 계약 전 달 = 0 · 상품조회 자료 없음 = None."""
+    def reg_count(self) -> tuple[int, int] | None:
+        """(관리 등록상품 수, 등록상품 수) — 새 정산서와 같은 상품표(정산 기준일 상품조회 사본 · `reg_rows` · 판매중지 포함) · 상품조회 자료 없음 = None."""
         inv = self.ctx.inv.get(self.aid) or {}
         if not inv:
             return None
-        pre = MA.pre_contract(ym, self.cdate)
-        memo = self.__dict__.setdefault("_reg_memo", {})
-        if pre not in memo:
-            rows = reg_rows(inv, self.mpids, self.is_mv, pre)
-            memo[pre] = (sum(r["관리"] for r in rows), len(rows))
-        mm, n = memo[pre]
-        return mm / n
+        if "_reg_n" not in self.__dict__:
+            rows = reg_rows(inv, self.mpids, self.is_mv)
+            self._reg_n = (sum(r["관리"] for r in rows), len(rows))
+        return self._reg_n
+
+    def reg(self) -> float | None:
+        """D-271 계정 정액 관리 몫 = 등록 상품 비율(등록상품 ID 중 관리 ÷ 전체) · 상품조회 자료 없음 = None."""
+        got = self.reg_count()
+        return None if got is None else got[0] / got[1]
 
     def fixed_fee(self, k: str) -> float:
-        """계정 정액(D-271) — 관리 시작 뒤 공제 받은 줄마다 그 줄 판매 달 등록 비율 · rates·share 를 채우고 관리 몫 합을 돌려줌."""
+        """계정 정액(D-271) — 관리 시작 뒤 공제 받은 줄 × 등록 비율 · rates·share 를 채우고 관리 몫 합을 돌려줌."""
         since, D = self.win(), self.D
+        cnt = self.reg_count()
+        assert cnt is not None, "계정 정액 — 상품조회 자료가 있을 때만 부름(_svc·_rest_and_status)"
+        mm, n = cnt
         due = self.due(k, since)
-        got = sum(parts.get(k, 0.0) * (self.reg(ym) or 0.0) for _ch, ym, parts in self.deduct_lines if ym >= since)
+        got = due * mm / n
         self.rates[k] = (since, got / due if due else 0.0)
-        self.reg("9999-12")                                   # 계약 뒤 달 비율(설명 글) — 상품표를 한 번 만들어 둠
-        mm, n = self._reg_memo[False]
         self.share[k] = (got / D[k] if D[k] else 0.0,
-                         f"계정 정액 = 그 달 등록 상품 비율 {mm}/{n}(등록상품 ID · 판매중지 포함 · 정산 기준일 상품조회 · D-271)"
+                         f"계정 정액 = 등록 상품 비율 {mm}/{n}(등록상품 ID · 판매중지 포함 · 정산 기준일 상품조회 · D-271)"
                          + (f" · 관리 시작 {self.start} 전 판매분 공제 제외" if self.active else " · 관리 상품 없음"),
                          "관리 기간 공제 없음" if not round(due) else "등록 상품 비율")
         return got
@@ -127,8 +129,8 @@ class Account(AccountBase):
         self._cfs_lines()
 
     # ── 물류비·재고 보상 — 지급 끝난 줄 = 그 줄 실제 관리 몫(T-130 · D-294 ①) · 비용 리포트 없는 예정 줄 물류비 = 예상 몫(D-414 · D-415) ──
-    def _is_mpid(self, pid: str, ym: str) -> bool:
-        return pid in self.mpids and not MA.pre_contract(ym, self.cdate)
+    def _is_mpid(self, pid: str, _ym: str) -> bool:
+        return pid in self.mpids
 
     def _lines_with(self, st: str, *keys) -> list:
         """그 상태 지급 줄 중 이 항목 공제가 있는 줄 [(판매 달, 공제 항목, 장부 줄)]."""
@@ -176,7 +178,7 @@ class Account(AccountBase):
 
     def plan_shares(self) -> list:
         """예정 줄마다 관리 비율(못 냄 = None)."""
-        got = self.plan_rates(lambda v, ym: self.is_mv(v) and not MA.pre_contract(ym, self.cdate), self._is_mpid)
+        got = self.plan_rates(lambda v, _ym: self.is_mv(v), self._is_mpid)
         return [None if x is None else x[1] for x in got]
 
     def plan_rates(self, sold, cost) -> list:
@@ -253,7 +255,7 @@ class Account(AccountBase):
         mm_, aa_ = self.msales.get(("윙", ym), (0.0, 0.0))
         if aa_ and self.pur.get(ym, 0.0) - sum(self.wconf[ym]) <= 1:
             return mm_, aa_
-        p = self.upend.get(("윙", ym)) or [0.0, 0.0, 0.0]
+        p = self.upend.get(("윙", ym)) or [0.0, 0.0]
         mm_, aa_ = mm_ + p[1], aa_ + p[0]
         return (mm_, aa_) if aa_ else (self.S, 1.0)
 
@@ -265,8 +267,8 @@ class Account(AccountBase):
         conf = {ym: (wconf[ym][0], wconf[ym][1], wconf[ym][2] + max(self.pur.get(ym, 0.0) - sum(wconf[ym]), 0.0))
                 for ym in set(wconf) | set(self.pur)}
         charged = MA.svc_charges(conf, month_add(self.ctx.basis[:7], -1))
-        if self.reg(self.win()) is not None:                 # D-271 등록 비율 · 규칙 잔액(D-161 공제 예정)도 그 부과 달 등록 비율
-            self.sv = MA.svc_settle(charged, D[SVC], {ym: (self.reg(ym) or 0.0, 1.0) for ym in charged})
+        if self.reg() is not None:                          # D-271 등록 비율 · 규칙 잔액(D-161 공제 예정)도 등록 비율
+            self.sv = MA.svc_settle(charged, D[SVC], {ym: (self.reg() or 0.0, 1.0) for ym in charged})
             if D[SVC] or charged:
                 self.fixed_fee(SVC)
                 if round(self.sv["잔액 전체"]):
@@ -310,7 +312,7 @@ class Account(AccountBase):
             self.rates[k] = ("", 0.0)
             share[k] = (0.0, "위탁자 개인 대출 상환·체크카드 대금 — 쿠팡이 계정 정산에서 뺀 돈 · 관리 상품 몫 0(D-312)", OWN)
         for k in (BI, SAVER):                               # 74 비즈니스 인사이트·세이버 구독료 = 계정 정액(D-271)
-            if D[k] and self.reg(self.win()) is not None:
+            if D[k] and self.reg() is not None:
                 self.fixed_fee(k)
         for k in sorted(set(D) - set(share) - {REL}):
             self.put(k, self.win(), 0.0, 0.0, "쿠팡이 상품 구분 없이 준 항목"
@@ -333,15 +335,12 @@ class Account(AccountBase):
 
     # ── 별도 입금(옛 500~507) ──
     def _extra_in(self) -> None:
-        cdate, v = self.cdate, self.v
+        v = self.v
         fav_rows = [(x.get("orderId"), num(x.get("refundAmount"))) for mth in (v.get("favorable") or {}).values()
                     for x in ((mth or {}).get("rows") or [])]
-        order_ym = {str(r.order_id): f"{(r.recognized or f.period_end):%Y-%m}" for f in self.files for r in f.rows if r.product_id}
-        pids_g = {o: (p if not MA.pre_contract(order_ym.get(o, "9999-99"), cdate) else {"(계약 전)"}) for o, p in self.order_pids.items()}
-        self.fav = MA.order_share(fav_rows, pids_g, self.mpids) if fav_rows else None
+        self.fav = MA.order_share(fav_rows, self.order_pids, self.mpids) if fav_rows else None
         self.add = AP.summarize(AP.months_of(self.ctx.base, self.acct, self.ctx.snaps.get(self.aid)))
-        self.addm = MA.vid_share([(x["옵션ID"], num(x["지급금액"]) if not MA.pre_contract(str(x.get("지급일") or "")[:7], cdate) else 0)
-                                  for x in self.add["줄"] if x["지급구분"] == AP.PAID], self.is_mv)
+        self.addm = MA.vid_share([(x["옵션ID"], num(x["지급금액"])) for x in self.add["줄"] if x["지급구분"] == AP.PAID], self.is_mv)
 
     # ── 쿠팡 대조 사유(옛 508~521) ──
     def _why(self) -> list:
@@ -358,8 +357,6 @@ class Account(AccountBase):
             why.append(f"④ 정산 예정분 관리 몫 확인 필요 {len(self.ucheck)}건(정산대상 {sum(x[3] for x in self.ucheck):,.0f}원은 관리 몫에 안 넣음 · D-262 ③)")
         if self.bad:
             why.append(f"지급 줄 공식 어긋남 {self.bad}")
-        if self.start_note:
-            why.append(self.start_note)
         why += self.cfs_why
         if self.old_fc:
             why.append(f"확인 필요 — 정산 예정 기록 {len(self.old_fc)}줄(T-175 전 저장 · 비즈니스 인사이트·세이버·라이브·리뷰 칸 없음)의 "
@@ -381,7 +378,7 @@ class Account(AccountBase):
         out = {k: g[k] for k in ("acct", "aid", "t", "u", "L", "D", "Dm", "share", "fin", "gross", "refund", "st_settle", "st_ded",
                                  "line_m", "paid_total", "rows_out", "dup", "bad", "mpids", "tm", "tx", "prod", "mmon", "ushare",
                                  "u_sales", "um_sales", "um_settle", "ucheck", "settle_all", "settle_m", "pay_m", "ship", "ship_u", "ship_stats",
-                                 "fav", "add", "addm", "start_note", "sv")}
+                                 "fav", "add", "addm", "sv")}
         out.update({"info": self.ctx.names[self.acct], "ok": self.L["ok"] and not self.bad, "why": why, "scope": self.sc, "scope_check": self.scope_check,
                     "extras": self.ctx.extras.get(self.aid, [])})
         return out

@@ -408,14 +408,14 @@ def expect_values(st: MonthState) -> None:
 
 
 # ── 비중(D-237 · D-241 ①⑨ · D-271) ──
-def reg_rows(inventory: dict, mpids: set, is_mv, pre: bool) -> list:
-    """등록 비중 상품표(D-241 ① · D-271) — inventory = 정산 기준일 상품조회 사본 · is_mv(VID) = 옵션 관리 판정 · pre = 계약 전 달(관리 0).
+def reg_rows(inventory: dict, mpids: set, is_mv) -> list:
+    """등록 비중 상품표(D-241 ① · D-271) — inventory = 정산 기준일 상품조회 사본 · is_mv(VID) = 옵션 관리 판정(계약일로 안 자름 D-427).
     옛 위탁정산서(`settlement_statement_deduct`)와 새 정산서가 같이 씀."""
     rows = []
     for pid, p in sorted(inventory.items(), key=lambda kv: (kv[1]["created"], kv[0])):
         opts = {str(v): {"구분": t, "관리": bool(is_mv(str(v)))} for v, t in p["types"].items()}
         in_m = str(pid) in mpids
-        m = (not pre) and (in_m or any(o["관리"] for o in opts.values()))
+        m = in_m or any(o["관리"] for o in opts.values())
         why = []
         if in_m:
             why.append("관리 상품 목록(정산 파일 판매 상품 · 판정표 추가 포함)")
@@ -431,7 +431,7 @@ def shares(st: MonthState) -> None:
     st.sales_share = man / tot if tot else 0.0
     sold = [p for p, v in st.allsales.items() if round(v)]
     st.sold_n, st.sold_m = len(sold), sum(1 for p in sold if st.is_m(p))
-    rows = reg_rows(st.d["inventory"], st.mpids, st.is_mv.get, st.pre)
+    rows = reg_rows(st.d["inventory"], st.mpids, st.is_mv.get)
     n, mm = len(rows), sum(r["관리"] for r in rows)
     st.reg_share = mm / n if n else None
     st.reg = {"구함": bool(n), "기준": f"정산 기준일 {st.basis} 상품조회 사본(`_raw/{st.aid}_vendor_inventory_p1.json.gz` · 쿠팡 전체 건수와 같음) · D-241 ①",

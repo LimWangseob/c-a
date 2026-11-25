@@ -97,7 +97,7 @@ def _stub(base: Path, u: list) -> Account:
                "M:2026-10": {"옵션": {"1": {"구분": "윙", "판매금액": 500}, "2": {"구분": "윙", "판매금액": 500},
                                     "3": {**rg, "판매금액": 600}, "4": {**rg, "판매금액": 400}}}}
     a.ctx = SimpleNamespace(base=base, basis="2026-11-15", daily={AID: _daily()}, periods={AID: periods})
-    a.acct, a.aid, a.cdate, a.u = ACCT, AID, None, u
+    a.acct, a.aid, a.u = ACCT, AID, u
     a.t, a.tm, a.settle_all = Counter(settle=1000), Counter(settle=500), 1000.0
     a.mset, a.mmon = defaultdict(lambda: [0.0, 0.0]), defaultdict(lambda: [0.0, 0.0])
     a.files = [_file("윙", date(2026, 11, 2), date(2026, 11, 8), [(9, "2", 50, 45, date(2026, 11, 3))]),
@@ -319,7 +319,7 @@ def test_actual_cut() -> None:
 def _new_form(a: Account, month: str, judge: CM.ConsignorJudge | None = None) -> CALC.MonthState:
     """옛 엑셀과 같은 계정 자료(_stub)로 새 형식 한 달 — 옵션 n 의 등록상품 = 'Pn' · 관리 판정 = 옛 코드 is_mv."""
     vids = ("1", "2", "3", "4")
-    src = {"acct": a.acct, "aid": a.aid, "base": str(a.ctx.base), "basis": a.ctx.basis, "cdate": a.cdate,
+    src = {"acct": a.acct, "aid": a.aid, "base": str(a.ctx.base), "basis": a.ctx.basis,
            "mpids": {f"P{v}" for v in vids if a.is_mv(v)}, "opt2pid": {v: f"P{v}" for v in vids}, "is_mv": {v: a.is_mv(v) for v in vids},
            "inventory": {}, "prows": [], "file_rows": [], "lines": [], "line_info": [], "L_gen": {}, "v": {},
            "files_meta": [(i, f.channel, f.kind, str(f.period_start), str(f.period_end)) for i, f in enumerate(a.files)],

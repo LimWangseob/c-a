@@ -34,7 +34,7 @@ def _fav_split(st: MonthState, rows: list) -> tuple[float, float, float]:
 
 def _additional(st: MonthState) -> float:
     """10 추가지급(D-236 · D-308 ① finalRewardAmount · 보류 해제와 따로) — 이 달 지급일 PAID 줄 · 관리 몫 = 옛 엑셀과 같은 옵션 → 관리 VID
-    (`MA.vid_share` · 계약 전 지급 0) · 날짜별 표 줄(st.add_rows: 지급 끝 = 지급일 · 그 밖 = 지급일 미정 D-294 ②)."""
+    (`MA.vid_share`) · 날짜별 표 줄(st.add_rows: 지급 끝 = 지급일 · 그 밖 = 지급일 미정 D-294 ②)."""
     st.add_rows = []
     rows = [x for x in st.d["add"]["줄"] if x["지급구분"] == AP.PAID]
     nodate = [x for x in rows if not x.get("지급일")]
@@ -45,14 +45,13 @@ def _additional(st: MonthState) -> float:
         day = str(x.get("지급일") or "")[:10]
         if day[:7] != st.m:
             continue
-        a = num(x["지급금액"]) if not MA.pre_contract(day[:7], st.d["cdate"]) else 0.0
-        am = MA.vid_share([(x["옵션ID"], a)], lambda v: bool(st.is_mv.get(v)))[0]
+        am = MA.vid_share([(x["옵션ID"], num(x["지급금액"]))], lambda v: bool(st.is_mv.get(v)))[0]
         tot, m = tot + num(x["지급금액"]), m + am
         st.add_rows.append((day if day <= st.basis else None, am))
     st.addpay = {"계정 전체": tot, "관리 몫(옵션 → 관리 VID)": m, "줄": len(st.add_rows)}
     if st.add_rows:
         st.j.append(f"10 추가지급 = 이 달 지급 {len(st.add_rows)}줄 계정 전체 {tot:,.0f}원 중 관리 옵션 {m:,.0f}원(쿠팡 추가지급 메뉴 finalRewardAmount · "
-                    "옵션 → 관리 VID · 계약 전 0 · D-236 · D-308 ①)")
+                    "옵션 → 관리 VID · D-236 · D-308 ①)")
     return m
 
 

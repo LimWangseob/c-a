@@ -97,7 +97,7 @@ def account_source(ctx, acct: str) -> dict:
     inv = ctx.inv.get(a.aid) or {}
     orders = PEND.order_months(ctx.base, acct)
     return {
-        "acct": acct, "aid": a.aid, "info": ctx.names.get(acct), "cdate": a.cdate, "base": str(ctx.base), "basis": ctx.basis,
+        "acct": acct, "aid": a.aid, "info": ctx.names.get(acct), "base": str(ctx.base), "basis": ctx.basis,
         "mpids": set(a.mpids), "is_mv": {v: a.is_mv(v) for v in _all_vids(a, pa, inv, orders)}, "opt2pid": dict(a.opt2pid),
         "files_meta": [(i, f.channel, f.kind, str(f.period_start), str(f.period_end)) for i, f in enumerate(a.files)],
         "file_rows": _file_rows(a.files),

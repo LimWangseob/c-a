@@ -52,7 +52,7 @@ def _one(ctx, acct) -> tuple:
     """계정 1개 → ('made', 요약 줄, 우리 사업자?, 파일) 또는 ('none', 요약 줄) — 옛 반복 본문 그대로(T-25 · 행동 불변)."""
     a = account(ctx, acct)
     row = summary_row(a, shown(a))                      # 정산서 1쪽과 같은 숫자(줄 합계 검산 포함)
-    if not AC.issued(a["scope"], a["mpids"]):
+    if not AC.issued(a["scope"]):
         return ("none", row)
     own = a["info"]["사업자"] in SRC.OWN_BUSINESSES
     dest = _dest(ctx, a, own)
@@ -62,14 +62,14 @@ def _one(ctx, acct) -> tuple:
     return ("made", row, own, dest)
 
 
-def run(args: CTX.StatementArgs, *, skip: tuple = (), history_rows: list | None = None) -> dict:
+def run(args: CTX.StatementArgs, *, skip: tuple = ()) -> dict:
     """정산서를 만들고 요약 숫자를 돌려줌. 입력 폴더에 필요한 파일이 없으면 FileNotFoundError(시작 전 중단).
     계정 하나가 예외를 내면 그 계정만 'failed'(사유)로 남기고 나머지 계정은 계속 만든다(계정별 격리 · D-399 계획 설계 5).
-    skip = 건너뛸 계정ID(정산 받기 실패 계정) · history_rows = 원장 '계정이력' 행(메모리 · CTX.load)."""
+    skip = 건너뛸 계정ID(정산 받기 실패 계정) · 계약 종료 계정(D-427) = '정산서 없음'(요약 줄만)."""
     miss = CTX.missing_inputs(args.inputs)
     if miss:
         raise FileNotFoundError(f"입력 폴더 {args.inputs} 에 없음: {', '.join(miss)}")
-    ctx = CTX.load(args, history_rows)
+    ctx = CTX.load(args)
     res, skipped, failed, files = [], [], [], []
     for acct in ctx.accts:
         aid = SRC.aid_of(acct)

@@ -95,20 +95,7 @@ def test_managed_alloc() -> None:
     # 환급: 주문 → 상품 / 추가지급: 옵션 → 관리
     assert MA.order_share([("1", 100), ("3", 10), ("x", 5)], order_pids, {"P1"})[:2] == (105, 115)
     assert MA.vid_share([(95425233537, 3000), (5, 1000)], ismv)[:2] == (3000, 4000)
-    # 관리 시작 달(D-185 · 소유자 2026-11-09): 자동·계약 중 이른 달 · 계약 전 판매 뺌 · 다르거나 계약 없음 = 확인 필요
-    st, note = MA.contract_start("2026-02", "2026-08-05", True)         # 휴라엘: 자동이 빠름 → 계약 전 판매가 빠져 계약 달부터
-    assert st == "2026-08" and "계약 전 판매 제외" in note and "확인 필요" in note, (st, note)
-    st, note = MA.contract_start("2026-07", "2026-05-18", True)         # 케이씨메뉴팩처: 계약이 이름 → 계약 달
-    assert st == "2026-05" and "확인 필요" in note and "계약 전 판매" not in note, (st, note)
-    assert MA.contract_start("2026-04", "2026-04-09", True) == ("2026-04", "")      # 같은 달 = 표시 없음
-    st, note = MA.contract_start("2026-04", None, True)                 # 맞는 계약 없음 → 자동 그대로 + 확인 필요
-    assert st == "2026-04" and "계약 못 찾음" in note and "확인 필요" in note, (st, note)
-    st, note = MA.contract_start("2026-04", None, False)                # 대조 표에 없는 계정 = 자동 + 확인 필요(조용히 넘어가지 않음)
-    assert st == "2026-04" and "표에 없음" in note, (st, note)
-    assert MA.contract_start("", "2026-10-13", True) == ("", "")        # 관리 상품 활동 없음 = 시작 달 없음
-    assert MA.pre_contract("2026-07", "2026-08-05") and not MA.pre_contract("2026-08", "2026-08-05")
-    assert not MA.pre_contract("2025-11", None)
-    # 판매 0인 달(계약 달 ~ 관리 첫 판매 전) — 상품 자료 없는 공제는 첫 판매 달부터의 나눌 금액·평균으로만(그 달 관리 비율 0 = 몫 0)
+    # 판매 0인 달(관리 시작 달 ~ 관리 첫 판매 전) — 상품 자료 없는 공제는 첫 판매 달부터의 나눌 금액·평균으로만(그 달 관리 비율 0 = 몫 0)
     # 첫 판매 뒤: 공제 200 · 상품 자료 150(관리 60) · 비율 0.5 → 60 + 50 × 0.5 = 85 — 판매 0인 달 공제가 얼마든 같은 값
     assert MA.gap_free(60, 60, 150, 200, 0.5) == (85, 50)
     assert MA.gap_free(70, 60, 150, 200, 0.5) == (95, 50)          # 판매 0인 달 상품별 관리 금액 10 = 그대로 더함
@@ -219,12 +206,12 @@ def test_d328_product_rows_2025_excluded() -> None:
     assert [x[1] for x in un] == ["2026-01"] and un[0][3] == 54_000 - 45_000, un           # 2025 달 = 미정산(정산 예정) 밖
     ctx = SimpleNamespace(st={"data": {"상품별 월별": (h, rows)}}, unjudged={"x1": set()}, svc_judge={}, base=Path(tempfile.gettempdir()))
     a = SA.AccountBase(ctx, acct)
-    a.mpids, a.opt2pid, a.cdate, a.files = {"P1"}, {}, None, []
+    a.mpids, a.opt2pid, a.files = {"P1"}, {}, []
     a._products()
     assert (a.tm["sales"], a.tm["settle"]) == (50_000, 45_000), a.tm                        # 관리 몫 = 2026 판매만
     assert not [k for k in a.mset if k[1] < "2026"] and not [k for k in a.msales if k[1] < "2026"], (dict(a.mset), dict(a.msales))
     assert a.prod[("P1", True)][2:4] == [50_000, 45_000], a.prod
-    assert a.raw_s["2025-12"] == 100_000, a.raw_s            # 관리 시작 달 자동 판정(D-185) = 판매 이력이라 2025 도 그대로 봄
+    assert a.raw_s["2025-12"] == 100_000, a.raw_s            # 관리 시작 달 = 관리 상품 첫 판매(판매 이력이라 2025 도 그대로 봄)
 
     def srow(order, pid, day, sales, settle):
         return SF.SettleRow("윙", acct, day, day, order, pid, "o1" if pid else "", "상품", "", 1 if pid else 0, sales, 0, 0, settle, day, "판매")
@@ -258,7 +245,7 @@ def test_d391_unknown_ship_same_month_wing_ratio() -> None:
             [acct, "2026-03", "P2", "비관리", 55_000, 0, 5_000, 0, 50_000, 0, 0, 50_000, 50_000, 0, 1, 0]]
     ctx = SimpleNamespace(st={"data": {"상품별 월별": (h, rows)}}, unjudged={"x2": set()}, svc_judge={}, base=Path(tempfile.mkdtemp()))
     a = SA.AccountBase(ctx, acct)
-    a.mpids, a.opt2pid, a.cdate = {"P1"}, {}, None
+    a.mpids, a.opt2pid = {"P1"}, {}
 
     def srow(order, pid, day, sales, settle):
         return SF.SettleRow("윙", acct, day, day, order, pid, "o1" if pid else "", "상품", "", 1 if pid else 0, sales, 0, 0, settle, day, "판매")
@@ -328,18 +315,16 @@ def test_migration_inputs() -> None:
         assert (dict(rows), err) == ({"a1": {"111": "관리", "222": ""}}, ""), rows
     from coupang_analytics import settlement_statement_scope as SCOPE
     so = {"a1": {"111": "관리", "222": ""}}
-    ctx = SimpleNamespace(ledger={"m1": {"5", "6"}}, listings={"m1": {"노출명"}}, rg={}, settle_only=so, settle_only_err="",
+    ctx = SimpleNamespace(current={"m1"}, ledger={"m1": {"5", "6"}}, listings={"m1": {"노출명"}}, settle_only=so, settle_only_err="",
                           ranked={"a1": SCOPE.ranked(so["a1"], {})}, src_vids={})
     assert AC.scope(ctx, "m1") == ("관리대장 상품", {"5", "6"}, {"노출명"}, {})
-    assert AC.scope(ctx, "a1")[0] == "판정 대기(원장 정산전용상품 구분 빈 칸 1줄)"
-    assert AC.scope(ctx, "zz")[0] == "관리 상품 자료 없음"
+    assert AC.scope(ctx, "a1")[0] == AC.scope(ctx, "zz")[0] == "계약 종료(관리대장에 계정 없음)"     # 대장 밖 = 정산전용상품이 있어도(D-427)
+    ctx.settle_only_err = "정산전용상품 시트 못 읽음: X"
+    assert AC.scope(ctx, "m1")[0] == "관리대장 상품 · 정산전용상품 시트 못 읽음: X"                    # 못 읽은 사유는 조용히 넘기지 않음
     assert (AC.month_add("2026-01", -1), AC.month_add("2026-12", 1), AC.month_add("9999-99", -1)) == ("2025-12", "2027-01", "9999-99")
 
 
-# ── 관리 상품 범위(소유자 2026-11-12 승인 규칙 ①~⑤ · 원문 "규칙안 5가지 승인, 기준일·달 단위도 제안대로 진행해") ──
-# ① 대장 상품(지금 + 예전에 있다가 지운 상품 · 기간 자르지 않음 D-223 ②) ② 같은 상품명 다른 VID(D-107 · 같은 계정만)
-# ③ 이력 없이 지워진 상품만 쿠팡 등록 로켓그로스 상품에서 되찾음(같은 상품의 판매자배송 VID 포함 · D-222)
-# ④ 등록 '계약 달 이후'(달 단위) · 계약 없고 대장에만 있으면 원장 계정이력 첫 관리 시작 ⑤ 위탁자 본인 상품 제외 · 판정 못 함/자료 없음 = 확인 필요
+# ── 관리 상품 범위(D-427) — ① 대장 상품(지금 + 예전에 있다가 지운 상품 · 기간 자르지 않음 D-223 ②) ② 같은 상품명 다른 VID(D-107 · 같은 계정만) ──
 def _inv(created: str, **types) -> dict:
     return {"created": created, "name": f"상품{created}", "types": {k[1:]: t for k, t in types.items()}}
 
@@ -385,68 +370,133 @@ def test_managed_scope() -> None:
             "쿠팡데이타분석_통계.xlsx", "쿠팡데이타분석_통계_261001.xlsx", "쿠팡데이타분석_통계_보관_261002_101010.xlsx"]
     ledger = SCOPE.merge_ledgers([{"a1": {11}, "e1": {"901"}, "f1": {"911"}, "c1": {"951"}, "d1": {"961"}},
                                   {"a1": {"21"}, "gone": {"31"}}])
-    assert ledger["a1"] == {"11", "21"} and ledger["gone"] == {"31"}, ledger           # 지운 상품·계정째 빠진 계정도 대장 상품
+    assert ledger["a1"] == {"11", "21"} and ledger["gone"] == {"31"}, ledger           # 지운 상품도 대장 상품(계정 범위 = 지금 대장 · D-427)
     assert SCOPE.merge_ledgers([{"x": {"1|2 ", 3}}]) == {"x": {"1", "2", "3"}}          # 옛 결과 엑셀 'a|b' 한 칸 = 옵션 2개
-    # ④ 원장 계정이력 → 첫 관리 시작(비밀번호 줄은 안 봄 · 계정아이디 변경은 이어짐 · 기록 시작일 최초등록 = 그 전부터 관리)
-    head = ["번호", "실행번호", "일시", "효력일", "계정아이디", "사업자명", "변동유형", "항목", "이전값", "변경값"]
-    rows = [head, ["1", "", "", "2026-09-20", "d1", "", "최초등록", "", "", ""],
-            ["2", "", "", "2026-10-02", "c0", "", "신규계정", "", "", ""],
-            ["3", "", "", "2026-10-05", "c1", "", "확인완료", "계정아이디", "c0", "c1"],
-            ["4", "", "", "2026-09-25", "c1", "", "수정", "비밀번호", "x", "y"]]
-    starts = SCOPE.first_starts(rows)
-    assert starts == {"d1": ("2026-09-20", True), "c0": ("2026-10-02", False), "c1": ("2026-10-02", False)}, starts
     stores = ({"a1": {"2026-06-01": {"옵션": {"11": {"상품": "보냉백 A", "구분": "로켓그로스"},
                                                "13": {"상품": "보냉백  A", "구분": "윙"}}}},
-               "b1": {"2026-06-01": {"옵션": {"91": {"상품": "보냉백 A", "구분": "윙"}}}}},
-              {"a1": {"M:2026-06": {"옵션": {"101": {"상품": "재등록", "구분": "로켓그로스", "등록상품ID": "16280000000"},
-                                             "111": {"상품": "옛", "구분": "로켓그로스", "등록상품ID": "16050000000"},
-                                             "121": {"상품": "모름", "구분": "로켓그로스", "등록상품ID": "16150000000"},
-                                             "131": {"상품": "윙만", "구분": "윙", "등록상품ID": "16290000000"}}}}})
-    inv = {"a1": {"16000000001": _inv("2026-01-01", v11="RFM", v12="NORMAL"),          # 대장 상품(계약 전 등록이어도 대장 우선)
-                  "16250000000": _inv("2026-07-01", v41="RFM", v42="NORMAL"),          # ③ 이력 없이 지운 RG — 판매자배송 VID 포함
-                  "16251000000": _inv("2026-07-01", v51="NORMAL"),                     # 판매자배송 전용·대장과 무관 = 후보 아님
-                  "16100000000": _inv("2026-04-30", v61="RFM"),                        # 계약 달 전 등록 = 제외
-                  "16200000000": _inv("2026-05-13", v71="RFM", v72="NORMAL"),          # 진공포장기: 05-13 등록·계약 05-14 = 같은 달 = 포함
-                  "16260000000": _inv("2026-08-01", v81="RFM"),                        # 위탁자 본인 상품 = 제외
-                  "16270000000": _inv("2026-08-01", v91="RFM")},                       # 판정 없음 = 확인 필요
-           "c1": {"16300000001": _inv("2026-09-15", v52="RFM"), "16400000001": _inv("2026-10-05", v53="RFM")},
-           "d1": {"16255000002": _inv("2026-08-10", v62="RFM")},
-           "f1": {"16255000003": _inv("2026-08-10", v63="RFM")}}
-    judge = {"a1": {"16250000000": {"판정": "관리"}, "16200000000": {"판정": "관리"}, "16100000000": {"판정": "관리"},
-                    "16260000000": {"판정": "본인상품", "근거": "위탁자 브랜드"}, "16280000000": {"판정": "관리"}},
-             "c1": {"16400000001": {"판정": "관리"}, "16300000001": {"판정": "관리"}}}
+               "b1": {"2026-06-01": {"옵션": {"91": {"상품": "보냉백 A", "구분": "윙"}}}}}, {})
+    inv = {"a1": {"16000000001": _inv("2026-01-01", v11="RFM", v12="NORMAL"), "16250000000": _inv("2026-07-01", v41="RFM", v42="NORMAL")}}
     from coupang_analytics import sales_summary
     listings = sales_summary.managed_listings(stores, ledger)
-    contracts = {"a1": "2026-05-14", "c1": None}
-    rg = SCOPE.recover_all(ledger, listings, stores, inv, contracts, (starts, ""), judge, {})
-    a1 = rg["a1"]
-    assert a1["vids"] == {"41", "42", "71", "72", "101"}, a1["vids"]
-    assert {p for p, _n, _w in a1["got"]} == {"16250000000", "16200000000", "16280000000"}, a1["got"]
-    excl = {p: w for p, _n, w in a1["excl"]}
-    assert set(excl) == {"16100000000", "16260000000", "16050000000"}, excl            # 계약 달 전(상품조회·ID 순서) · 본인 상품
-    assert "계약 달 전 등록" in excl["16100000000"] and "위탁자 본인" in excl["16260000000"], excl
-    check = {p: w for p, _n, w in a1["check"]}
-    assert set(check) == {"16270000000", "16150000000"}, check                          # 판정 없음 · 등록일 모름(ID 사이)
-    assert rg["c1"]["vids"] == {"53"} and {p for p, *_ in rg["c1"]["excl"]} == {"16300000001"}, rg["c1"]   # 대장 관리 시작 2026-10 기준
-    assert [p for p, *_ in rg["d1"]["check"]] == ["16255000002"] and not rg["d1"]["vids"], rg["d1"]      # 기록 시작일 최초등록 = 확인 필요
-    assert [w for *_x, w in rg["f1"]["check"]] == ["기준일 없음(계약 없음 · 원장 계정이력에 관리 시작 없음)"], rg["f1"]
-    assert [w for *_x, w in rg["e1"]["check"]] == ["상품조회 자료 없음 — 이력 없이 지운 로켓그로스 상품을 되찾지 못함"], rg["e1"]
-    ctx = SimpleNamespace(ledger=ledger, listings=listings, rg=rg, settle_only={}, settle_only_err="", files={}, contracts=contracts,
+    ctx = SimpleNamespace(current={"a1"}, ledger=ledger, listings=listings, settle_only={}, settle_only_err="", files={},
                           daily=stores[0], periods=stores[1], ranked={}, src_vids={}, cost_opts={}, inv=inv)
     sc, vids, names, marks = AC.scope(ctx, "a1")
-    assert sc == "관리대장 상품 + 되찾은 로켓그로스 상품 3개(확인 필요 2개)" and vids == {"11", "21", "41", "42", "71", "72", "101"}, (sc, vids)
-    assert names == {"보냉백 A"} and marks == {}, names
+    assert (sc, vids, names, marks) == ("관리대장 상품", {"11", "21"}, {"보냉백 A"}, {}), (sc, vids, names, marks)
     acc = AC.AccountBase(ctx, "벅스-a1")
     acc._scope()
-    assert acc.is_mv("13") and not acc.is_mv("51") and not acc.is_mv("91") and acc.scope_check == a1["check"]   # ② 같은 이름 윙 VID
-    sc, vids, _n, _m = AC.scope(ctx, "gone")                                                # D-210: 계정째 대장에서 빠진 계정도 대장 상품
-    assert (sc, vids) == ("관리대장 상품(확인 필요 1개)", {"31"}), (sc, vids)                 # 상품조회 없음 = 되찾기 확인 필요
+    assert acc.is_mv("13") and not acc.is_mv("91") and not acc.is_mv("41") and acc.scope_check == [], acc.scope_check   # ② 같은 이름 윙 VID
+    print("test_managed_scope OK")
 
 
-# ── 정산 대상 상품 출처 순위(D-230 · D-231 · 소유자 2026-11-13) ──
-# ① 관리대장(지금 + 사본 + 옛 PC 대장) ② 이력원장('상품이력' + '정산전용상품' 시트 · 모든 계정) ③ 계약서 품목(판매 방식 안 가림)
-# ④ 쿠팡 등록 로켓그로스(되찾기 D-227) — 상품 단위로 위 순위에 없을 때만 아래 순위 · 아래 순위가 위를 빼지 않음.
-# 옛 대장·이력원장·계약서 → 등록상품 = AI 판정표(관리상품_출처판정.json · 코드에 계정·상품 조건 없음 D-229).
+def _inv_page(raw: Path, aid: str, prods: dict) -> None:
+    """상품조회 원문 1쪽(`_raw/{계정}_vendor_inventory_p1.json.gz`) — prods = {등록상품ID: {VID: RFM|NORMAL}}."""
+    import gzip
+    body = {"data": {"pagination": {"page": 1, "totalPages": 1}, "productList": [
+        {"vendorInventoryId": int(p), "createdOn": "2026-01-02T00:00:00", "productName": f"상품{p}",
+         "vendorInventoryItems": [{"vendorItemId": int(v), "registrationType": t} for v, t in vs.items()]} for p, vs in prods.items()]}}
+    raw.mkdir(exist_ok=True)
+    (raw / f"{aid}_vendor_inventory_p1.json.gz").write_bytes(gzip.compress(json.dumps(body, ensure_ascii=False).encode("utf-8")))
+
+
+def test_t189_ledger_scope() -> None:
+    """(가) 날짜별 사본에만 있는 계정 = 지금 대장에서 빠짐 = '계약 종료(관리대장에 계정 없음)' · 정산서 없음
+    (나) 지금 대장 밖 계정은 원장 정산전용상품·출처판정 '관리'가 있어도 정산서 없음 (다) 출처판정 '계약서' 출처 = ValueError(③ 계약서 출처 없음)
+    (마) 대장에서 이력 없이 사라진 로켓그로스 등록 상품 = 관리 아님 · '확인 필요'도 아님(④ 되찾기 없음) · 계약 입력(관리시작달 차이표)·되찾기 판정표 = 필수 입력 아님."""
+    from types import SimpleNamespace
+
+    from coupang_analytics import settlement_statement_account as AC
+    from coupang_analytics import settlement_statement_context as CTX
+    from coupang_analytics import settlement_statement_scope as SCOPE
+    assert "관리시작달_차이표.xlsx" not in CTX.REQUIRED and "관리상품_되찾기_판정.json" not in CTX.REQUIRED, CTX.REQUIRED
+    with tempfile.TemporaryDirectory() as t:
+        d = Path(t)
+        snap_name = "쿠팡데이타분석_통계_261001.xlsx"
+        for n in (SCOPE.MASTER, snap_name):
+            (d / n).write_bytes(b"x")
+        blocks = {SCOPE.MASTER: {"a1": {"11"}}, snap_name: {"a1": {"21"}, "gone": {"31"}}}    # gone = 사본에만(지금 대장에서 빠짐)
+        _inv_page(d / "_raw", "a1", {"16000000001": {"11": "RFM"}, "16250000000": {"41": "RFM"}, "16210000000": {"51": "RFM"},
+                                    "16220000000": {"52": "NORMAL"}, "16260000000": {"53": "RFM"}})
+        _inv_page(d / "_raw", "gone", {"18000000001": {"61": "RFM"}})
+        inp = d / "입력"
+        inp.mkdir()
+        (inp / SCOPE.SOURCE).write_text(json.dumps({"계정": {
+            "a1": {"16210000000": {"출처": "옛 대장", "판정": "관리", "근거": "옛 대장 3행"},
+                   "16220000000": {"출처": "이력원장", "판정": "관리", "근거": "상품이력 7"}},
+            "gone": {"18000000001": {"출처": "이력원장", "판정": "관리", "근거": "상품이력 8"}},
+            "x1": {"17000000001": {"출처": "이력원장", "판정": "관리", "근거": "상품이력 9"}}}}, ensure_ascii=False), encoding="utf-8")
+        so = d / "정산전용상품.json"
+        so.write_text(json.dumps([["계정ID", "", "등록상품ID", "", "구분"], ["a1", "", "16260000000", "", ""],
+                                  ["gone", "", "18000000002", "", "관리"], ["x1", "", "17000000002", "", "관리"]]), encoding="utf-8")
+        args = CTX.StatementArgs(out=d / "출력", managed_output=d, settle_dir=d, stats=d / "x.xlsx", basis="2026-11-26", inputs=inp,
+                                 issued="2026-11-26", settle_only=so)
+        real, SCOPE._ledger_blocks = SCOPE._ledger_blocks, lambda p: blocks[p.name]
+        try:
+            c = SimpleNamespace()
+            CTX._managed(args, c)
+        finally:
+            SCOPE._ledger_blocks = real
+        bad = d / "bad.json"
+        bad.write_text(json.dumps({"계정": {"a1": {"16220000000": {"출처": "계약서", "판정": "관리"}}}}, ensure_ascii=False), encoding="utf-8")
+        try:
+            SCOPE.load_sources(bad)
+            raise AssertionError("(다) 계약서 출처를 받아들임")
+        except ValueError:
+            pass
+    assert c.current == {"a1"} and c.ledger["a1"] == {"11", "21"}, (c.current, c.ledger)       # 지금 대장 계정 · 관리 VID = 지금 + 사본
+    sc, vids, _names, marks = AC.scope(c, "a1")
+    assert sc == "관리대장 상품 + 옛 대장 1개 + 이력원장 1개(확인 필요 1개)" and AC.issued(sc), sc
+    assert vids == {"11", "21", "51", "52"} and "41" not in vids, vids                            # (마) 이력 없이 사라진 RG = 관리 아님
+    assert {p for p, k in marks.items() if k == "관리"} == {"16210000000", "16220000000"}, marks
+    for aid in ("gone", "x1"):                                                                    # (가) 사본에만 · (나) 대장 밖 + 정산전용·출처 '관리'
+        assert AC.scope(c, aid) == ("계약 종료(관리대장에 계정 없음)", set(), set(), {}), AC.scope(c, aid)
+        assert not AC.issued(AC.scope(c, aid)[0]), aid
+    c.files, c.cost_opts = {}, {}
+    acc = AC.AccountBase(c, "가-a1")
+    acc._scope()
+    assert [p for p, *_ in acc.scope_check] == ["16260000000"], acc.scope_check                  # (마) 사라진 RG 는 '확인 필요'도 아님
+    assert not acc.is_mv("41") and acc.is_mv("52"), acc.vids
+    print("test_t189_ledger_scope OK")
+
+
+def test_t189_no_contract_cut() -> None:
+    """(라) 계약일로 자르지 않음(소유자 "계약서상 만료가 되어 있어도 관리대장에 계정이 있으면 계약 연장으로 봄") — 계약일 앞 달 관리 상품 판매·배송비도
+    관리 몫 · 관리 시작 달 = 관리 상품 첫 판매 달 · '확인 필요' 문구 없음. a.cdate·a.known = 옛 계약일 칸(지금 코드는 읽지 않음 · 줘도 결과 같아야 함)."""
+    from types import SimpleNamespace
+
+    from coupang_analytics import settlement_files as SF
+    from coupang_analytics import settlement_statement_account as SA
+    h = ["계정", "월(매출인식)", "등록상품ID", "상품명", "윙 판매액", "로켓그로스 매출금액", "판매수수료(VAT포함)", "판매자할인쿠폰",
+         "쿠팡 정산금액 합계(부가비용 차감 전)", "로켓그로스 물류비(VAT포함)", "재고 손실 보상", "물류비·보상 반영 후(광고비 등 계정 차감 전)",
+         "윙 정산금액", "로켓그로스 정산대상액", "윙 수량", "로켓그로스 수량"]
+    acct = "가-사업자-x9"
+    rows = [[acct, "2026-03", "P1", "상품", 100_000, 0, 10_000, 0, 90_000, 0, 0, 90_000, 90_000, 0, 1, 0],
+            [acct, "2026-06", "P1", "상품", 50_000, 0, 5_000, 0, 45_000, 0, 0, 45_000, 45_000, 0, 1, 0]]
+    ctx = SimpleNamespace(st={"data": {"상품별 월별": (h, rows)}}, unjudged={"x9": set()}, svc_judge={}, base=Path(tempfile.mkdtemp()))
+    a = SA.AccountBase(ctx, acct)
+    a.mpids, a.opt2pid, a.vids, a.vid_name, a.mnames, a.marks = {"P1"}, {}, set(), {}, set(), {}
+    a.cdate, a.known = "2026-05-14", True                         # 옛 계약일(2026-05) — 3월 판매가 계약 전이어도 관리 몫이어야 함
+
+    def srow(order, pid, day, sales, settle):
+        return SF.SettleRow("윙", acct, day, day, order, pid, "o1" if pid else "", "상품", "", 1 if pid else 0, sales, 0, 0, settle, day, "판매")
+    a.files = [SF.SettleFile("윙", acct, date(2026, 3, 1), date(2026, 6, 30), kind="주정산",
+                             rows=[srow("A", "P1", date(2026, 3, 5), 100_000, 90_000), srow("A", "", date(2026, 3, 5), 3_000, 2_910),
+                                   srow("B", "P1", date(2026, 6, 5), 50_000, 45_000)])]
+    a._ships()
+    a._products()
+    a._gross_and_ship()
+    a.upend, a.line_info = {}, []
+    a._start()
+    assert [round(x) for x in a.ship["관리"]] == [3_000, 2_910] and not a.ship["근거"].get("계약 전"), a.ship
+    assert (a.tm["sales"], a.tm["settle"]) == (153_000, 137_910) and not a.tx["sales"], (a.tm, a.tx)
+    assert a.gross == 150_000 and a.prod[("P1", True)][2] == 150_000 and ("P1", False) not in a.prod, a.prod
+    assert (a.start, a.fs) == ("2026-03", "2026-03"), (a.start, a.fs)                              # 관리 시작 = 첫 판매 달
+    assert "확인 필요" not in str(getattr(a, "start_note", "")), a.start_note
+    print("test_t189_no_contract_cut OK")
+
+
+# ── 정산 대상 상품 출처 순위(D-230 · D-427) ──
+# ① 관리대장(지금 + 사본 + 옛 PC 대장) ② 이력원장('정산전용상품' 시트 > '상품이력') — 상품 단위로 위 순위에 없을 때만 아래 순위 · 아래가 위를 빼지 않음.
+# 계약서 품목·쿠팡 등록 로켓그로스 되찾기 = 출처 아님(D-427). 옛 대장·이력원장 → 등록상품 = AI 판정표(관리상품_출처판정.json · D-229).
 def test_scope_priority() -> None:
     from types import SimpleNamespace
 
@@ -457,65 +507,44 @@ def test_scope_priority() -> None:
     assert SCOPE.SOURCE in CTX.REQUIRED                                       # 출처판정 파일 없으면 시작 전 중단
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / SCOPE.SOURCE
-        p.write_text(json.dumps({"계정": {"a1": {"1": {"출처": "카톡", "판정": "관리"}}}}, ensure_ascii=False), encoding="utf-8")
-        try:
-            SCOPE.load_sources(p)
-            raise AssertionError("모르는 출처를 받아들임")
-        except ValueError:
-            pass
-        p.write_text(json.dumps({"계정": {"a1": {"1": {"출처": "계약서", "판정": "아마도"}}}}, ensure_ascii=False), encoding="utf-8")
-        try:
-            SCOPE.load_sources(p)
-            raise AssertionError("모르는 판정을 받아들임")
-        except ValueError:
-            pass
+        for bad in ({"출처": "카톡", "판정": "관리"}, {"출처": "이력원장", "판정": "아마도"}):
+            p.write_text(json.dumps({"계정": {"a1": {"1": bad}}}, ensure_ascii=False), encoding="utf-8")
+            try:
+                SCOPE.load_sources(p)
+                raise AssertionError(f"모르는 출처·판정을 받아들임 {bad}")
+            except ValueError:
+                pass
     ledger = {"a1": {"11"}}
     stores: tuple = ({"a1": {"2026-06-01": {"옵션": {"11": {"상품": "대장상품", "구분": "로켓그로스"}}}}}, {"a1": {}})
     inv = {"a1": {"16000000001": _inv("2026-06-01", v11="RFM"),                 # 대장 상품 — 정산전용상품 '본인상품'이어도 관리(①>②)
-                  "16210000000": _inv("2026-03-01", v21="RFM"),                 # 옛 대장 — 계약 달 전 등록이어도 관리(①>④)
-                  "16220000000": _inv("2026-07-01", v31="NORMAL"),              # 계약 품목 · 판매자배송 전용 = 관리(D-231 ③)
-                  "16230000000": _inv("2026-07-01", v41="RFM"),                 # 이력원장 = 관리
-                  "16240000000": _inv("2026-07-01", v51="RFM"),                 # 정산전용상품 '본인상품' — 4순위 판정 '관리'로 안 돌아옴
+                  "16210000000": _inv("2026-03-01", v21="RFM"),                 # 옛 대장 = 관리
+                  "16230000000": _inv("2026-07-01", v41="RFM"),                 # 이력원장 '관리'여도 정산전용상품 '본인상품'이 먼저
                   "16250000000": _inv("2026-07-01", v61="RFM"),                 # 출처판정 '확인 필요' = 금액 밖 · 표시
                   "16260000000": _inv("2026-07-01", v71="RFM"),                 # 정산전용상품 구분 빈 칸 = 확인 필요
-                  "16270000000": _inv("2026-07-01", v81="RFM")}}                # 출처 없음 → 4순위 되찾기(지금 규칙)
-    settle_only = {"a1": {"16000000001": "본인상품", "16240000000": "본인상품", "16260000000": "", "16230000000": "본인상품"},
-                   "x1": {"18000000001": "관리"}}
+                  "16270000000": _inv("2026-07-01", v81="RFM")}}                # 출처 없음 = 관리 아님(되찾기 없음 D-427)
+    settle_only = {"a1": {"16000000001": "본인상품", "16260000000": "", "16230000000": "본인상품"}, "x1": {"18000000001": "관리"}}
     sources = {"a1": {"16210000000": {"출처": "옛 대장", "판정": "관리", "상품명": "물총", "근거": "옛 대장 10행"},
-                      "16220000000": {"출처": "계약서", "판정": "관리", "상품명": "가방", "근거": "공급계약 품목"},
                       "16230000000": {"출처": "이력원장", "판정": "관리", "상품명": "샌들", "근거": "상품이력 관리중단 줄"},
-                      "16250000000": {"출처": "계약서", "판정": "확인 필요", "상품명": "모름", "근거": "계약자 ↔ 계정 애매"}},
-               "x1": {"17000000001": {"출처": "계약서", "판정": "관리", "상품명": "청소기", "근거": "계약 품목"}},
+                      "16250000000": {"출처": "이력원장", "판정": "확인 필요", "상품명": "모름", "근거": "이름만으로 못 정함"}},
                "y1": {"19000000001": {"출처": "이력원장", "판정": "관리", "상품명": "칫솔", "근거": "상품이력"}}}
     ranked = {a: SCOPE.ranked(settle_only.get(a) or {}, sources.get(a) or {}) for a in set(settle_only) | set(sources)}
     assert ranked["a1"]["16230000000"][:2] == ("원장 정산전용상품", "본인상품"), ranked["a1"]   # 같은 2순위면 시트가 먼저
     assert ranked["a1"]["16210000000"][:2] == ("옛 대장", "관리") and ranked["a1"]["16260000000"][1] == "확인 필요", ranked["a1"]
-    judge = {"a1": {"16240000000": {"판정": "관리"}, "16270000000": {"판정": "관리"}, "16210000000": {"판정": "제외"},
-                    "16250000000": {"판정": "관리"}}}                                     # 출처 '확인 필요' = 정해지지 않음 → 4순위로 넘어감
-    listings = sales_summary.managed_listings(stores, ledger)
-    rg = SCOPE.recover_all(ledger, listings, stores, inv, {"a1": "2026-05-14"}, ({}, ""), judge, ranked)
-    assert {p for p, *_ in rg["a1"]["got"]} == {"16270000000", "16250000000"}, rg["a1"]   # 1~3순위로 정한 상품만 4순위 후보 아님
-    assert not rg["a1"]["excl"] and [p for p, *_ in rg["a1"]["check"]] == ["16260000000"], rg["a1"]   # 시트 빈 칸 → 4순위 판정 없음
     src_vids = {a: SCOPE.source_vids(rk, inv.get(a) or {}, SCOPE.sales_groups(stores[1].get(a) or {})) for a, rk in ranked.items()}
-    assert src_vids["a1"] == {"21", "31"}, src_vids                                   # 1~3순위 '관리' 등록상품 → 그 상품의 VID 전부
-    ctx = SimpleNamespace(ledger=ledger, listings=listings, rg=rg, settle_only=settle_only, settle_only_err="", ranked=ranked,
-                          src_vids=src_vids, files={}, contracts={"a1": "2026-05-14"}, daily=stores[0], periods=stores[1], cost_opts={}, inv=inv)
+    assert src_vids["a1"] == {"21"}, src_vids                                         # '관리' 등록상품 → 그 상품의 VID 전부
+    listings = sales_summary.managed_listings(stores, ledger)
+    ctx = SimpleNamespace(current={"a1"}, ledger=ledger, listings=listings, settle_only=settle_only, settle_only_err="", ranked=ranked,
+                          src_vids=src_vids, files={}, daily=stores[0], periods=stores[1], cost_opts={}, inv=inv)
     sc, vids, _names, marks = AC.scope(ctx, "a1")
-    assert sc == "관리대장 상품 + 옛 대장 1개 + 계약서 1개 + 되찾은 로켓그로스 상품 2개(확인 필요 1개)", sc   # 0개 출처는 안 적음
-    assert vids == {"11", "81", "61", "21", "31"}, vids
-    keep = {p for p, k in marks.items() if k == "관리"}
-    assert keep == {"16210000000", "16220000000"}, marks                             # 정산전용 '본인상품'이 이력원장보다 먼저
+    assert sc == "관리대장 상품 + 옛 대장 1개(확인 필요 2개)" and vids == {"11", "21"}, (sc, vids)   # 0개 출처는 안 적음
+    assert {p for p, k in marks.items() if k == "관리"} == {"16210000000"}, marks
     acc = AC.AccountBase(ctx, "벅스-a1")
     acc._scope()
-    acc.opt2pid = {"11": "16000000001", "21": "90000000021", "31": "90000000031", "41": "16230000000", "51": "16240000000",
-                   "61": "16250000000", "71": "16260000000", "81": "16270000000"}   # 정산 파일 상품 ID ≠ 상품조회 등록상품ID 여도 VID 로 잡힘
-    assert [acc.is_mv(v) for v in ("11", "21", "31", "41", "51", "61", "71", "81")] == \
-        [True, True, True, False, False, True, False, True]                          # ①은 ②가 못 뺌 · ③ 판매자배송 포함
-    assert [p for p, *_ in acc.scope_check] == ["16260000000"], acc.scope_check     # 4순위에서도 못 정한 것만 · 두 번 안 셈
-    sc, _v, _n, marks = AC.scope(ctx, "x1")                                           # 대장 밖 계정 = 2·3순위
-    assert sc == "원장 정산전용상품 + 계약서 1개" and marks == {"18000000001": "관리", "17000000001": "관리"}, (sc, marks)
-    sc, _v, _n, marks = AC.scope(ctx, "y1")
-    assert sc == "이력원장 1개" and marks == {"19000000001": "관리"}, (sc, marks)
+    acc.opt2pid = {"11": "16000000001", "21": "90000000021", "41": "16230000000", "61": "16250000000", "71": "16260000000", "81": "16270000000"}
+    assert [acc.is_mv(v) for v in ("11", "21", "41", "61", "71", "81")] == [True, True, False, False, False, False]   # ①은 ②가 못 뺌
+    assert [p for p, *_ in acc.scope_check] == ["16250000000", "16260000000"], acc.scope_check
+    for aid in ("x1", "y1"):                                                          # 대장 밖 계정 = 정산전용상품·이력원장이 있어도 계약 종료
+        assert AC.scope(ctx, aid)[0] == "계약 종료(관리대장에 계정 없음)", AC.scope(ctx, aid)
     print("test_scope_priority OK")
 
 
@@ -547,7 +576,7 @@ def test_scope_judge() -> None:
     assert hist == {"ga1": [{"번호": "7", "효력일": "2026-10-01", "상품명": "칫솔살균기 DP77", "변동유형": "관리중단"}]}, hist
     pk = J.packet("ga1", ("가나상회", "홍길동"), [{"등록상품ID": "161", "상품명": "UZI 충전식 물총", "등록일": "", "판매방식": ["RFM"]},
                                                   {"등록상품ID": "162", "상품명": "칫솔 살균기", "등록일": "", "판매방식": ["NORMAL"]}],
-                  got, hist["ga1"], [])
+                  got, hist["ga1"])
     good = {"계정ID": "ga1", "판정": [
         {"등록상품ID": "161", "상품명": "UZI 충전식 물총", "출처": "옛 대장", "판정": "관리", "근거": "옛대장 3행 모델 TTGW02", "원문": "물총 TTGW02"},
         {"등록상품ID": "162", "상품명": "칫솔 살균기", "출처": "이력원장", "판정": "확인 필요", "근거": "모델 없음", "원문": "칫솔살균기 DP77"}]}
@@ -563,8 +592,8 @@ def test_scope_judge() -> None:
     print("test_scope_judge OK")
 
 
-# ── 판매 없이 비용만 있는 관리 상품(D-244 · 소유자 2026-11-15) — 근거 T-42 보고: dalbong1849 16258713629 보관비(옵션 = 대장 VID)·
-# ljung0622 TTGW02 반출비(옵션 = 되찾은 VID)가 관리 상품ID 를 주문 줄 짝에서만 만들어 '관리 밖'으로 빠짐.
+# ── 판매 없이 비용만 있는 관리 상품(D-244 · 소유자 2026-11-15) — 근거 T-42 보고: dalbong1849 16258713629 보관비(옵션 = 대장 VID)가
+# 관리 상품ID 를 주문 줄 짝에서만 만들어 '관리 밖'으로 빠짐. (ljung0622 TTGW02 반출비 = 옛 되찾은 VID → D-427 뒤 대장·출처에 없으면 '비용만' 확인 필요)
 def test_cost_only_scope() -> None:
     from types import SimpleNamespace
 
@@ -616,7 +645,6 @@ def test_cost_only_scope() -> None:
             assert isinstance(exc, SRC.StatsTooOld) and "정산집계를 다시 만드세요" in str(exc), exc
     # ③ 관리 VID 옵션의 등록상품 = 관리(판매 줄 짝 opt2pid 는 그대로)
     ledger = {"d1": {"95609464754", "95322412626"}}
-    rg = {"d1": {"vids": {"95273555059"}, "got": [("16157622592", "전동물총", "되찾기")], "excl": [], "check": []}}
     files = {"d1": [SimpleNamespace(channel="로켓그로스", rows=[SimpleNamespace(option_id="95322412626", product_id="16142251017", product_name="관리 상품"),
                                           SimpleNamespace(option_id="95111", product_id="8758835645", product_name="판매만 상품"),
                                           # 판매 + 같은 달 취소(합 0 · 정산집계 '상품별 월별' 주문 칸은 0) — 그래도 주문 줄이 있는 상품(T-53)
@@ -624,28 +652,29 @@ def test_cost_only_scope() -> None:
                                           SimpleNamespace(option_id="95700000010", product_id="16700000000", product_name="")])]}
     rk = {"16400000000": ("옛 대장", "관리", "옛 대장 3행", "판정표 관리 상품")}
     inv = {"d1": {"16142251017": _inv("2026-04-08", v95322412626="RFM"), "16500000000": _inv("2026-08-01", v95700000003="RFM")}}
-    ctx = SimpleNamespace(ledger=ledger, listings={}, rg=rg, settle_only={}, settle_only_err="", files=files, contracts={},
+    ctx = SimpleNamespace(current={"d1"}, ledger=ledger, listings={}, settle_only={}, settle_only_err="", files=files,
                           daily={}, periods={}, ranked={"d1": rk}, src_vids={}, cost_opts=opts, inv=inv)
     acc = AC.AccountBase(ctx, acct)
     acc._scope()
     assert acc.opt2pid == {"95322412626": "16142251017", "95111": "8758835645", "95700000010": "16700000000"}, acc.opt2pid
-    assert acc.mpids == {"16142251017", "16258713629", "16157622592", "16400000000"}, acc.mpids
-    # ⑤ 판정 전(출처판정·되찾기에 없음 · 상품조회·판매분석에 없음) = '관리 상품 확인 필요'(금액 밖) — 16500000000 은 상품조회 경로
+    assert acc.mpids == {"16142251017", "16258713629", "16400000000"}, acc.mpids
+    # ⑤ 판정 전(출처판정에 없음 · 상품조회·판매분석에 없음) = '관리 상품 확인 필요'(금액 밖) — 16500000000 은 상품조회 경로
     chk = {p: (n, w) for p, n, w in acc.scope_check}
-    assert set(chk) == {"16377117417", "16600000000", "옵션 95700000009"} and chk["16377117417"][0] == "빔프로젝터거치대 LN167", acc.scope_check
+    assert set(chk) == {"16377117417", "16600000000", "옵션 95700000009", "16157622592"} and chk["16377117417"][0] == "빔프로젝터거치대 LN167", acc.scope_check
     assert chk["16600000000"][0] == "반출비만 상품", chk                          # 옵션ID 없는 비용 줄도 조용히 빠지지 않음
     assert "비용만" in chk["16377117417"][1] and "금액 밖" in chk["16377117417"][1], chk
     # ④ 출처 AI 판정 대상 = 상품조회 + 판매분석 + 비용만 있는 등록상품(관리 VID 옵션 상품은 뺌 · 정산 파일 주문 줄에 나온 상품은 뺌 =
     #    정산서 seen 의 opt2pid 값과 같은 기준 · T-53) — 16700000000 = 비용 줄 + 주문 줄 → '비용만' 아님
     assert "16700000000" not in chk, chk
-    vids = ledger["d1"] | rg["d1"]["vids"]
+    vids = ledger["d1"]
     from coupang_analytics import settlement_statement_scope as SCOPE
     sold = SCOPE.sold_products(files["d1"])                                     # prepare 가 쓰는 판매 줄 상품 = 정산서 seen 의 판매 줄 몫
     assert set(sold) == set(acc.opt2pid.values()) == {"16142251017", "8758835645", "16700000000"}, sold
     tg = J.targets("d1", inv, {}, lambda v: v in vids, {}, opts["d1"], sold)
     got = {t["등록상품ID"]: t for t in tg}
     # 판매 줄은 있는데 상품조회·판매분석에 없는 상품도 판정 대상(관리 VID 옵션 상품 16142251017 은 뺌 · 소유자 2026-11-16 D-256)
-    assert set(got) == {"16377117417", "16400000000", "16500000000", "16600000000", "옵션 95700000009", "8758835645", "16700000000"}, got
+    assert set(got) == {"16377117417", "16400000000", "16500000000", "16600000000", "옵션 95700000009", "8758835645", "16700000000",
+                        "16157622592"}, got
     assert got["16700000000"] == {"등록상품ID": "16700000000", "상품명": "비용+판매 상품", "노출명": [], "등록일": "",
                                   "판매방식": ["RFM"]}, got["16700000000"]
     assert got["16600000000"]["노출명"] == [] and got["16600000000"]["상품명"] == "반출비만 상품", got["16600000000"]
@@ -843,7 +872,7 @@ def test_d305_watch_warning() -> None:
                      totalAdditionalDeductionAmount=8_121_756),
           "정산일": "2026-08-26", "기간 시작": "2026-08-01", "기간 끝": "2026-08-07", "지급비율": 70, "최종지급액": 1_878_244}
     a = _acct([wing], [rg], judge={"x1": {"채권추심": "시험 근거"}})
-    a.ucheck, a.start_note = [], ""
+    a.ucheck = []
     assert a.bad == 0, a.bad
     assert a._why() == ["확인 필요 — 처리 판정표에 없는 MCA 상환 8,121,756원(D-305)",
                         "확인 필요 — 처리 판정표에 없는 쿠팡 판매자 성장 대출 798,784원(D-305)"], a._why()
@@ -968,7 +997,7 @@ def _sales(*weeks):
     return out
 
 
-def _t130_account(rows, by_m, logi, comp=None, mpids=frozenset({"15467003062"}), daily=None, cdate=None, vids=("777",), cls=None,
+def _t130_account(rows, by_m, logi, comp=None, mpids=frozenset({"15467003062"}), daily=None, vids=("777",), cls=None,
                   **attrs):
     """지급 줄 원본 → 물류비·보상 단계만 돌린 계정(비용 리포트 = logi·comp · 판매분석 일별 = daily · 관리 옵션 = "777")."""
     from collections import Counter
@@ -980,7 +1009,7 @@ def _t130_account(rows, by_m, logi, comp=None, mpids=frozenset({"15467003062"}),
     a = cls.__new__(cls)
     a.ctx = SimpleNamespace(base=Path(tempfile.gettempdir()), led=_Led([], rows), cost_opts={"x1": {"777": ("15467003062", "")}},
                             basis="2026-11-12", daily={"x1": daily or {}})
-    a.acct, a.aid, a.mpids, a.cdate, a.opt2pid = "가-x1", "x1", set(mpids), cdate, {"888": "15468930091"}
+    a.acct, a.aid, a.mpids, a.opt2pid = "가-x1", "x1", set(mpids), {"888": "15468930091"}
     a.vids, a.vid_name, a.mnames, a.marks = set(vids), {}, set(), {}
     a.__dict__.update(attrs)
     a.start = a.fs = "2026-01"
@@ -1113,8 +1142,6 @@ def test_t130_plan_lines() -> None:
     # 앞 주기의 r 도 같은 정의 — 09-20 주기 판매 없음 → 9월 비율 (50+0+50+50)/300 = .5 → k = 10,000 ÷ (5,000+10,000+10,000) = .4 → 24,000
     gap = [cyc[0], cyc[1], ("2026-09-20", 3_000, 20_000, 0, 0), cyc[3]]
     assert one(gap, [("2026-09-28", "2026-09-30", 0, 0), nov])[1] == 24_000
-    # 계약 전 달 판매 = 관리 아님(D-185) → 계약 2026-12 이면 r 0
-    assert one(cyc, [nov], cdate="2026-12-01")[1] == 0
     # 판매분석이 아예 없음 = 비율을 못 냄 → 0 으로 숨기지 않고 전 기간 비율(100,000/150,000) + '확인 필요'
     a, _ded, _l = run([], [_plan_row("2026-12-02", "2026-11-08", 70, 150_000)], [])
     assert round(a.share[LOGI][0] * a.D[LOGI]) == 100_000 and "확인 필요" in a.cfs_why[0] and "150,000원" in a.cfs_why[0], (a.share, a.cfs_why)
@@ -1371,7 +1398,7 @@ def fake_statement_layer(out: Path, accts: list[str], bad: set, none: frozenset 
         if aid in bad:
             raise KeyError(f"합성 오류 {aid}")
         return {"aid": aid, "info": {"사업자": f"상회{aid}", "대표자": "합성"}, "mpids": set() if aid in none else {"1"},
-                "scope": "관리 상품 자료 없음" if aid in none else "관리대장 상품", "ship_stats": 0,
+                "scope": "계약 종료(관리대장에 계정 없음)" if aid in none else "관리대장 상품", "ship_stats": 0,
                 "ship": {"관리": (0, 0), "제외": (0, 0), "확인 필요": (0, 0)}}
 
     def row(a, v):
@@ -1413,9 +1440,9 @@ def test_account_isolation() -> None:
         buf = io.StringIO()
         with fake_statement_layer(args.out, accts, bad={"b2"}, none={"c3"}), contextlib.redirect_stdout(buf):
             got = ST.run(args, skip=("d4",))
-        assert got["made_ids"] == ["a1"], got                       # b2 예외 = 그 계정만 · d4 = 건너뜀 · c3 = 정산서 없음
+        assert got["made_ids"] == ["a1"], got                       # b2 예외 = 그 계정만 · d4 = 건너뜀 · c3 = 계약 종료(정산서 없음 D-427)
         assert [x[0] for x in got["failed"]] == ["b2"] and "합성 오류 b2" in got["failed"][0][1], got
-        assert got["none"] == [("c3", "관리 상품 자료 없음")] and got["made"] == 1 and got["skipped"] == 1, got
+        assert got["none"] == [("c3", "계약 종료(관리대장에 계정 없음)")] and got["made"] == 1 and got["skipped"] == 1, got
         names = sorted(Path(f).name for f in got["files"])
         assert names == ["전체_합성.xlsx", "정산서_상회a1_합성_a1_관리상품.xlsx"], names
         assert (args.out / "정산서_상회a1_합성_a1_관리상품.xlsx").is_file() and not list(args.out.glob("*b2*")), list(args.out.iterdir())
@@ -1425,7 +1452,7 @@ def test_account_isolation() -> None:
 
 def test_d271_fixed_fee_old() -> None:
     """D-271(소유자 11-17 "등록 상품 비율로 하자." · 등록상품 ID 개수 · 판매중지 포함 · 판매 비중과 비교 안 함): 옛 위탁정산서도
-    판매자서비스이용료(17)·비즈니스 인사이트(74) 관리 몫 = 쿠팡 공제 × (관리 등록상품 수 ÷ 등록상품 수) · 계약 전 달 줄 = 0 ·
+    판매자서비스이용료(17)·비즈니스 인사이트(74) 관리 몫 = 쿠팡 공제 × (관리 등록상품 수 ÷ 등록상품 수) · 관리 시작 전 달 줄 = 0 ·
     로켓그로스 BI 는 추가공제의 '기타 공제'에서 따로 뗌(합 그대로) · D-161 규칙 잔액(쿠팡 줄 없음) = 공제 예정 그대로(관리 몫 = 등록 비율)."""
     from collections import Counter
     from types import SimpleNamespace
@@ -1438,7 +1465,7 @@ def test_d271_fixed_fee_old() -> None:
     inv = {p: {"created": "2026-01-01", "name": p, "types": {v: "판매중"}} for p, v in (("P1", "V1"), ("P2", "V2"), ("P3", "V3"), ("P4", "V4"))}
     a = Account.__new__(Account)
     a.ctx = SimpleNamespace(inv={"x1": inv}, basis="2026-11-15")
-    a.aid, a.cdate, a.start, a.active, a.fs = "x1", "2026-02", "2026-02", ["2026-02"], "2026-02"
+    a.aid, a.start, a.active, a.fs = "x1", "2026-02", ["2026-02"], "2026-02"
     a.mpids, a.is_mv = {"P1"}, lambda v: v == "V2"            # 관리 = P1(목록) · P2(옵션 관리) → 2/4
     lines = [("윙", "2026-01", Counter({SVC: 55_000})), ("윙", "2026-10", Counter({SVC: 55_000})),
              ("로켓그로스", "2026-10", Counter({BI: 30_000}))]
@@ -1448,7 +1475,7 @@ def test_d271_fixed_fee_old() -> None:
     a.rates, a.share = {}, {}
     a.wconf, a.v = {"2026-10": (1_200_000.0, 0.0, 0.0)}, {"purchase": {}}
     a._svc()
-    assert round(a.D[SVC] * a.share[SVC][0]) == 27_500, a.share[SVC]     # 계약 전 2026-01 줄 0 + 2026-10 55,000 × 2/4
+    assert round(a.D[SVC] * a.share[SVC][0]) == 27_500, a.share[SVC]     # 관리 시작(2026-02) 전 2026-01 줄 0 + 2026-10 55,000 × 2/4
     assert a.sv["잔액 관리"] == 0 and "D-271" in a.share[SVC][1], a.sv   # 10월 부과 55,000 = 쿠팡이 이미 뺌
     assert round(a.fixed_fee(BI)) == 15_000 and a.share[BI][2] == "등록 상품 비율", a.share[BI]
     a.D, a.rates, a.share = Counter(), {}, {}                    # 쿠팡 줄 없음 → 규칙 부과 55,000 = 공제 예정 · 관리 몫 = 2/4
@@ -1477,7 +1504,7 @@ def test_t175_saver_and_forecast_detail() -> None:
     inv = {p: {"created": "2026-01-01", "name": p, "types": {v: "판매중"}} for p, v in (("P1", "V1"), ("P2", "V2"), ("P3", "V3"), ("P4", "V4"))}
     a = Account.__new__(Account)
     a.ctx = SimpleNamespace(inv={"x1": inv}, basis="2026-11-15")
-    a.aid, a.cdate, a.start, a.active, a.fs = "x1", "2026-01", "2026-01", ["2026-01"], "2026-01"
+    a.aid, a.start, a.active, a.fs = "x1", "2026-01", ["2026-01"], "2026-01"
     a.mpids, a.is_mv = {"P1"}, lambda v: v == "V2"            # 관리 2/4
     a.deduct_lines = [("로켓그로스", "2026-01", Counter({SAVER: 108_900}))]
     a.line_info = [("지급 완료", ch, ym, 0.0, 0.0, pt, None) for ch, ym, pt in a.deduct_lines]
@@ -1525,6 +1552,8 @@ def main() -> int:
     test_t142_inventory_old_pages_ignored()
     test_managed_scope()
     test_scope_priority()
+    test_t189_ledger_scope()
+    test_t189_no_contract_cut()
     test_scope_judge()
     test_status_split_pending_rest()
     test_t130_cfs_periods()

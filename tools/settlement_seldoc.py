@@ -3,7 +3,7 @@
 
 1) 계약이 여럿인 계정(서달원 등)만 — 계약별 상품군 위탁정산서(D-155 · 위탁정산서와 같은 규칙 · 범위만 상품군):
     python tools/settlement_seldoc.py groups --accounts a,b --out <상품군 정산서 폴더> --managed-output … --settle-dir … --stats …
-        --basis YYYY-MM-DD [--inputs <위탁정산서 입력 폴더>] [--issued …] [--settle-only …] [--account-history …]
+        --basis YYYY-MM-DD [--inputs <위탁정산서 입력 폴더>] [--issued …] [--settle-only …]
 2) 셀독 정산서:
     python tools/settlement_seldoc.py make --statements <위탁정산서 결과 폴더> [--group-statements <상품군 정산서 폴더>]
         --out <출력 폴더> --basis YYYY-MM-DD --issued YYYY-MM-DD [--accounts a,b] [--isolate]
@@ -70,7 +70,7 @@ def groups(argv: list) -> int:
     ap.add_argument("--settle-dir", required=True, type=Path)
     ap.add_argument("--stats", required=True, type=Path)
     ap.add_argument("--inputs", type=Path, default=ROOT / "output" / "정산서" / "입력", help="위탁정산서 입력 폴더")
-    for k in ("--settle-only", "--supp", "--snap", "--account-history"):
+    for k in ("--settle-only", "--supp", "--snap"):
         ap.add_argument(k, type=Path)
     ap.add_argument("--only", default="")
     a = ap.parse_args(argv)

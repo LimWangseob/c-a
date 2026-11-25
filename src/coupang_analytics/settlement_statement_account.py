@@ -1,10 +1,11 @@
 """위탁정산서 계정 하나 — 관리 상품 몫 계산 1부(지급 줄·관리 범위·상품별 자료·정산 중 판매). T-25 이관(옛 `statement_managed.py`
 `account()` 270~418줄을 메서드로 나눔 · 계산식·순서 그대로 · 2부 = `settlement_statement_deduct.py`).
 
-- 관리 상품 = 대장 VID(결과 엑셀 + 날짜별 사본 — 지운 상품 포함) + 판매분석 노출 상품명이 같은 VID(D-107) + 이력 없이 지운
-  로켓그로스 상품에서 되찾은 VID(`settlement_statement_scope` · 소유자 2026-11-12 규칙 ①~⑤). 정산 원본 옵션ID(=VID)로 등록상품ID 를 찾아
-  관리 VID 가 하나라도 있는 등록상품은 상품 전체를 관리로 본다. 대장 밖 계정 = 원장 '정산전용상품' 시트(구분 '관리').
-- 상품별 쿠팡 자료(정확): 끝난 판매의 판매금액·쿠폰·수수료·정산금액 · 계약 달 앞 판매 = 관리 밖(D-185 ②).
+- 정산서를 만드는 계정 = 지금 관리대장(결과 엑셀)에 있는 계정 · 없으면 계약 종료(정산서 없음) · 계약서·계약일은 보지 않음(D-427).
+- 관리 상품 = 대장 VID(결과 엑셀 + 날짜별 사본 — 지운 상품 포함) + 판매분석 노출 상품명이 같은 VID(D-107) + 출처판정('옛 대장'·
+  원장 '정산전용상품'·'이력원장') '관리' 등록상품(`settlement_statement_scope`). 정산 원본 옵션ID(=VID)로 등록상품ID 를 찾아
+  관리 VID 가 하나라도 있는 등록상품은 상품 전체를 관리로 본다.
+- 상품별 쿠팡 자료(정확): 끝난 판매의 판매금액·쿠폰·수수료·정산금액 · 관리 시작 달 = 관리 상품 첫 판매·첫 물류비 달(계약일로 자르지 않음 D-427).
 - 정산 중 판매 = 쿠팡 상품별 자료 전까지 같은 달 관리 판매 비율(D-148 예외).
 """
 from __future__ import annotations
@@ -181,38 +182,35 @@ def watched(r: dict) -> Counter:
     return out
 
 
-LEDGER, SETTLE_ONLY, WAIT = "관리대장 상품", "원장 정산전용상품", "판정 대기"
+LEDGER, ENDED = "관리대장 상품", "계약 종료(관리대장에 계정 없음)"
 
 
-def issued(sc: str, mpids: set) -> bool:
-    """위탁정산서를 만드는 계정 — 관리 상품이 있거나 대장·원장 정산전용상품 계정(판정 대기·관리 상품 자료 없음 = 정산서 없음)."""
-    return bool(mpids) or sc.startswith(LEDGER) or sc == SETTLE_ONLY
+def issued(sc: str) -> bool:
+    """위탁정산서를 만드는 계정 = 지금 관리대장 계정(D-427 · 계약 종료 = 정산서 없음)."""
+    return sc != ENDED
+
+
+def ended(ctx, aid: str) -> bool:
+    """계약 종료 = 지금 관리대장(결과 엑셀 · ctx.current)에 계정 없음(D-427 · 계약서상 만료여도 대장에 있으면 연장)."""
+    return aid not in ctx.current
 
 
 def scope(ctx, aid: str) -> tuple[str, set, set, dict]:
-    """(범위, 관리 VID, 관리 노출 상품명, 등록상품ID 판정) — 출처 순위(D-230·D-231): 관리대장 VID·같은 이름이 먼저(아래 출처가 못 뺌) ·
-    옛 대장 > 원장 정산전용상품(모든 계정) > 이력원장 > 계약서(판정표 · 등록상품 단위) > 되찾은 로켓그로스 상품(대장 계정만)."""
+    """(범위, 관리 VID, 관리 노출 상품명, 등록상품ID 판정) — D-427: 지금 관리대장(ctx.current)에 없는 계정 = 계약 종료(관리 상품 없음).
+    대장 계정 = 관리대장 VID(지금 + 날짜별 사본)·같은 이름이 먼저(아래 출처가 못 뺌) · 옛 대장 > 원장 정산전용상품 > 이력원장(판정표 · 등록상품 단위)."""
+    if ended(ctx, aid):
+        return ENDED, set(), set(), {}
     rk = ctx.ranked.get(aid) or {}
     marks = {pid: verdict for pid, (_src, verdict, *_x) in rk.items()}
-    src_vids = set(ctx.src_vids.get(aid) or set())
-    if aid in ctx.ledger:
-        return _ledger_scope(ctx, aid, rk), set(ctx.ledger[aid]) | (ctx.rg.get(aid) or {}).get("vids", set()) | src_vids,             ctx.listings.get(aid) or set(), marks
-    sheet = ctx.settle_only.get(aid) or {}
-    if not marks:
-        return "관리 상품 자료 없음" + (f"({ctx.settle_only_err})" if ctx.settle_only_err else ""), set(), set(), {}
-    blank = sum(v not in ("관리", "본인상품") for v in sheet.values())
-    if blank:
-        return f"{WAIT}(원장 정산전용상품 구분 빈 칸 {blank}줄)", set(), set(), marks
-    named = ([SETTLE_ONLY] if sheet else []) + [p for p in SCOPE.source_counts(rk) if not p.startswith(SETTLE_ONLY)]
-    return (" + ".join(named) or f"관리 상품 출처 확인 필요 {len(SCOPE.source_checks(rk))}개"), src_vids, set(), marks
+    vids = set(ctx.ledger.get(aid) or ()) | set(ctx.src_vids.get(aid) or ())
+    return _ledger_scope(ctx, rk), vids, ctx.listings.get(aid) or set(), marks
 
 
-def _ledger_scope(ctx, aid: str, rk: dict) -> str:
-    """대장 계정의 범위 글 — 관리대장 상품 + 출처별 개수 + 되찾은 로켓그로스 상품(확인 필요 n개)."""
-    r = ctx.rg.get(aid) or {"vids": set(), "got": [], "check": []}
-    n_check = len(r["check"]) + len(SCOPE.source_checks(rk, SCOPE.handled(r)))
-    return LEDGER + "".join(f" + {p}" for p in SCOPE.source_counts(rk)) + (
-        f" + 되찾은 로켓그로스 상품 {len(r['got'])}개" if r["got"] else "") + (f"(확인 필요 {n_check}개)" if n_check else "")
+def _ledger_scope(ctx, rk: dict) -> str:
+    """대장 계정의 범위 글 — 관리대장 상품 + 출처별 개수(확인 필요 n개) + 원장 정산전용상품 시트를 못 읽은 사유."""
+    n_check = len(SCOPE.source_checks(rk))
+    return (LEDGER + "".join(f" + {p}" for p in SCOPE.source_counts(rk)) + (f"(확인 필요 {n_check}개)" if n_check else "")
+            + (f" · {ctx.settle_only_err}" if ctx.settle_only_err else ""))
 
 
 def ratio(mset: dict, ch: str, ym: str, S: float) -> float:
@@ -274,17 +272,16 @@ class AccountBase:
     def _scope(self) -> None:
         c, aid = self.ctx, self.aid
         self.sc, self.vids, self.mnames, self.marks = scope(c, aid)
-        r = c.rg.get(aid) or {}
-        self.scope_check = r.get("check", []) + SCOPE.source_checks(c.ranked.get(aid) or {}, SCOPE.handled(r))   # 못 정한 상품(금액 밖·표시)
-        self.known, self.cdate = aid in c.contracts, c.contracts.get(aid)     # D-185 — 계약 달 앞 판매 = 관리 상품 아님
+        self.scope_check = SCOPE.source_checks(c.ranked.get(aid) or {}) if issued(self.sc) else []   # 못 정한 상품(금액 밖·표시)
         self.vid_name = SCOPE.vid_names((c.daily, c.periods), aid)
         self.files = c.files.get(aid, [])
         self.opt2pid = SCOPE.option_products(self.files)   # 판매 줄 짝 — 출처 판정 준비(prepare)와 같은 함수(T-53)
         self.mpids = {pid for o, pid in self.opt2pid.items() if self.is_mv(o)} | {p for p, k in self.marks.items() if k == "관리"}
         costs = c.cost_opts.get(aid) or {}                 # 비용 리포트 짝 — 판매 없이 비용만 있는 상품도 옵션으로(D-244 ③)
         self.mpids |= {pid for o, (pid, _n) in costs.items() if self.is_mv(o)}
-        seen = self.mpids | set(self.opt2pid.values()) | set(c.ranked.get(aid) or {}) | SCOPE.handled(r)
-        self.scope_check += SCOPE.cost_only_checks(costs, c.inv.get(aid) or {}, SCOPE.sales_groups(c.periods.get(aid) or {}), seen)
+        seen = self.mpids | set(self.opt2pid.values()) | set(c.ranked.get(aid) or {})
+        if issued(self.sc):
+            self.scope_check += SCOPE.cost_only_checks(costs, c.inv.get(aid) or {}, SCOPE.sales_groups(c.periods.get(aid) or {}), seen)
 
     def is_mv(self, v: str) -> bool:
         return v in self.vids or self.vid_name.get(v) in self.mnames or self.marks.get(self.opt2pid.get(v, "")) == "관리"
@@ -300,14 +297,8 @@ class AccountBase:
                 elif f.channel == "윙" and (r.sales or r.settle) and not SL.sold_2025(f"{(r.recognized or f.period_end):%Y-%m}"):
                     ships[(str(r.order_id), r.option_id, r.recognized, r.sales, r.settle)] = (       # 2025 판매 배송비 = 정산 밖(D-328)
                         str(r.order_id), r.sales, r.settle, f"{(r.recognized or f.period_end):%Y-%m}")
-        ship_rows = [x for x in ships.values() if not MA.pre_contract(x[3], self.cdate)]
         self.v = verify_json(self.ctx.base, self.acct)
-        self.ship = MA.ship_split(ship_rows, self.order_pids, self.mpids, self.v.get("returns") or {}, self.is_mv)
-        for _o, s_, e_, ym_ in ships.values():                 # 계약 전 배송비 = 관리 밖(D-185 ②)
-            if MA.pre_contract(ym_, self.cdate):
-                self.ship["제외"][0] += s_
-                self.ship["제외"][1] += e_
-                self.ship["근거"]["계약 전"] += 1
+        self.ship = MA.ship_split(list(ships.values()), self.order_pids, self.mpids, self.v.get("returns") or {}, self.is_mv)
 
     # ── 상품별 월별(옛 321~370) ──
     def _products(self) -> None:
@@ -322,7 +313,7 @@ class AccountBase:
         self.wconf: dict = defaultdict(lambda: [0.0, 0.0, 0.0])   # 윙 구매확정 달 → [일반, 가전, 구분 모름] 판매(D-161)
         self.mset: dict = defaultdict(lambda: [0.0, 0.0])      # (판매 방식, 판매 달) → [관리 상품 정산금액, 전체 정산금액]
         self.prod: dict = {}
-        self.raw_s: Counter = Counter()                        # 자동 판정 달 후보(계약 전 포함) — 달별 관리 상품 판매·물류비 합
+        self.raw_s: Counter = Counter()                        # 관리 시작 달 후보(2025 판매 달 포함) — 달별 관리 상품 판매·물류비 합
         self.raw_l: Counter = Counter()
         for row in prow:
             if row[0] != self.acct:
@@ -347,9 +338,9 @@ class AccountBase:
         if pid in self.mpids:
             self.raw_s[ym] += ws + rs
             self.raw_l[ym] += lg
-        if SL.sold_2025(ym):                                     # 2025 판매 달 = 금액 밖(D-328) · 위 관리 시작 달 판정(D-185)엔 그대로
+        if SL.sold_2025(ym):                                     # 2025 판매 달 = 금액 밖(D-328) · 위 관리 시작 달 판정엔 그대로
             return
-        m = pid in self.mpids and not MA.pre_contract(ym, self.cdate)
+        m = pid in self.mpids
         (self.tm if m else self.tx).update({"sales": ws + rs, "coupon": g("판매자할인쿠폰"), "fee": g("판매수수료(VAT포함)"),
                                             "settle": settle, "logi": g("로켓그로스 물류비(VAT포함)"),
                                             "comp": g("재고 손실 보상")})
@@ -357,7 +348,7 @@ class AccountBase:
         if m:
             self.mmon[ym.replace("-", "")][0] += ws + rs
             self.mmon[ym.replace("-", "")][1] += settle
-        e = self.prod.setdefault((pid, m), [row[ix["상품명"]] or pid, 0, 0, 0, m])   # 계약 전 판매는 '제외한 상품'(D-185)
+        e = self.prod.setdefault((pid, m), [row[ix["상품명"]] or pid, 0, 0, 0, m])   # 관리 밖 상품 = '제외한 상품' 시트
         e[1] += g("윙 수량") + g("로켓그로스 수량")
         e[2] += ws + rs
         e[3] += settle
@@ -380,7 +371,7 @@ class AccountBase:
         self.gross = self.refund = 0.0      # 관리 상품 판매액(+)·취소·반품(−) — 정산 집계와 같은 줄(중복 제거)로
         for _f, r in SS._order_rows(self.files, []):
             ym = f"{(r.recognized or _f.period_end):%Y-%m}"
-            if r.product_id and str(r.product_id) in self.mpids and not MA.pre_contract(ym, self.cdate) and not SL.sold_2025(ym):
+            if r.product_id and str(r.product_id) in self.mpids and not SL.sold_2025(ym):
                 if r.sales >= 0:
                     self.gross += r.sales
                 else:
@@ -402,14 +393,11 @@ class AccountBase:
     # ── 정산 중 판매(D-262 · D-264 · D-266 · D-269 — 나누기 = settlement_statement_pending) ──
     def _unsettled_share(self) -> None:
         """ushare = (판매 방식, 달, 판매, 정산대상, 관리 비율, 관리 판매, 관리 정산, 근거) · ucheck = 관리 몫에 안 넣은 '확인 필요'(D-262 ③) ·
-        upend[(판매 방식, 달)] = [나눈 판매, 관리 판매(계약 반영), 관리 판매(계약 무시 — 관리 시작 달 후보)]."""
+        upend[(판매 방식, 달)] = [나눈 판매, 관리 판매](관리 판매 = 관리 시작 달 후보)."""
         tm = self.tm
         self.ushare, self.ucheck = [], []
-        self.upend: dict = defaultdict(lambda: [0.0, 0.0, 0.0])
+        self.upend: dict = defaultdict(lambda: [0.0, 0.0])
         for ch, ym, s, e_, ms, me, how, why in PEND.split(self):
-            raw_ms = ms
-            if MA.pre_contract(ym, self.cdate):                  # 계약 전 달 = 관리 몫 0(D-185 ②)
-                ms, me, how = 0.0, 0.0, "계약 전 달 — 관리 몫 0(D-185 ②)"
             if why:
                 self.ucheck.append((ch, ym, s, e_, why))
                 how = f"확인 필요 — {why} · 이 금액은 관리 몫에 넣지 않음(쿠팡 상품별 자료가 오면 다음 정산서에 반영 · D-262 ③)"
@@ -417,7 +405,7 @@ class AccountBase:
                 self.mset[(ch, ym)][1] += e_
                 self.mset[(ch, ym)][0] += me
                 p = self.upend[(ch, ym)]
-                p[0], p[1], p[2] = p[0] + s, p[1] + ms, p[2] + raw_ms
+                p[0], p[1] = p[0] + s, p[1] + ms
             self.ushare.append((ch, ym, s, e_, me / e_ if e_ else (ms / s if s else 0.0), ms, me, how))
             self.mmon[ym.replace("-", "")][0] += ms
             self.mmon[ym.replace("-", "")][1] += me
@@ -432,14 +420,13 @@ class AccountBase:
                        + [ym for ym, c in self.by_m.items() if round(c["m_logi"])])
         self.start = min(self.active) if self.active else "9999-99"
         raw = {ym for ym, x in self.raw_s.items() if round(x)} | {ym for ym, x in self.raw_l.items() if round(x)}
-        raw |= {ym for (_ch, ym), p in self.upend.items() if round(p[2])}   # 정산 중 판매(상품별 자료 전 · 계약 무시 몫)
-        st_, self.start_note = MA.contract_start(min(raw) if raw else "", self.cdate, self.known)   # D-185 — 자동·계약 중 이른 달 · 계약 전 판매 제외
-        if st_:
-            self.start = st_
+        raw |= {ym for (_ch, ym), p in self.upend.items() if round(p[1])}   # 정산 중 판매(상품별 자료 전)
+        if raw:                                     # 관리 시작 달 = 관리 상품 첫 판매·첫 물류비 달(2025 판매 달 포함 · 계약일로 안 자름 D-427)
+            self.start = min(raw)
         self.share: dict = {}
         self.rates: dict = {}
         self.deduct_lines = [(x[1], x[2], x[5]) for x in self.line_info]
-        self.fs = min(self.active) if self.active else self.start     # 관리 첫 판매 달(계약 전 판매 뺀 뒤) — 그 앞 = 판매 0인 달(D-186)
+        self.fs = min(self.active) if self.active else self.start     # 관리 첫 판매 달(2025 판매 달 뺀 뒤) — 그 앞 = 판매 0인 달(D-186)
 
     def gather(self) -> None:
         """1부 — 지급 줄 → 관리 범위 → 배송비 → 상품별 → 판매액·배송비 나누기 → 정산 중 판매 → 관리 시작 달."""

@@ -1,7 +1,7 @@
-"""정산 대상 상품 출처 AI 판정 — 준비(prepare) · 반영(apply) (D-230 · D-231 · 모듈 = `coupang_analytics.settlement_scope_judge`).
+"""정산 대상 상품 출처 AI 판정 — 준비(prepare) · 반영(apply) (D-230 · D-427 · 모듈 = `coupang_analytics.settlement_scope_judge`).
 
   python tools/settlement_scope_judge.py prepare --managed-output <output 폴더> --inputs <입력 폴더> --out <요청 폴더>
-      --old-ledger <옛 대장.xlsx> [...] --history <원장 상품이력 사본.json> --contract-db <계약 DB v4.xlsx> --stats <정산집계.xlsx>
+      --old-ledger <옛 대장.xlsx> [...] --history <원장 상품이력 사본.json> --stats <정산집계.xlsx>
       --settle-dir <output/정산 폴더> [--accounts a,b,c]
   (정산집계 '옵션별 등록상품' 시트 = 판매 없이 비용만 있는 등록상품도 판정대상 · 없는 옛 집계 = ❌ 시작 전 중단 · D-244)
   ('비용만' = 정산 파일 주문 줄에 나온 등록상품은 뺌 — 정산서와 같은 정산 파일·같은 짝 함수 · T-53)
@@ -67,7 +67,6 @@ def prepare(a) -> int:
     inv = SCOPE.inventory(a.managed_output)
     old = J.old_ledger_rows(a.old_ledger, set(people))
     hist = J.history_rows(json.loads(a.history.read_text(encoding="utf-8")))
-    cons = J.contract_rows(a.contract_db, {k: people[k] for k in want if k in people})
     a.out.mkdir(parents=True, exist_ok=True)
     (a.out / "프롬프트.md").write_text(J.PROMPT, encoding="utf-8")
     for aid in want:
@@ -77,10 +76,9 @@ def prepare(a) -> int:
             return v in vids or vname.get(v) in names
         tg = J.targets(aid, inv, SCOPE.sales_groups(stores[1].get(aid) or {}), is_mv, vname, costs.get(aid) or {},
                        sold.get(aid) or {})
-        pk = J.packet(aid, people.get(aid, ("", "")), tg, old.get(aid, []), hist.get(aid, []), cons.get(aid, []))
+        pk = J.packet(aid, people.get(aid, ("", "")), tg, old.get(aid, []), hist.get(aid, []))
         (a.out / f"요청_{aid}.json").write_text(json.dumps(pk, ensure_ascii=False, indent=1), encoding="utf-8")
-        print(f"{aid}: 판정대상 {len(tg)} · 옛대장 {len(pk['근거자료']['① 옛대장'])} · 이력원장 {len(pk['근거자료']['② 이력원장'])}"
-              f" · 계약서 {len(pk['근거자료']['③ 계약서'])}")
+        print(f"{aid}: 판정대상 {len(tg)} · 옛대장 {len(pk['근거자료']['① 옛대장'])} · 이력원장 {len(pk['근거자료']['② 이력원장'])}")
     return 0
 
 
@@ -120,7 +118,6 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", required=True, type=Path)
     p.add_argument("--old-ledger", nargs="+", required=True, type=Path)
     p.add_argument("--history", required=True, type=Path)
-    p.add_argument("--contract-db", required=True, type=Path)
     p.add_argument("--stats", required=True, type=Path, help="정산집계 xlsx('옵션별 등록상품' 시트 · D-244)")
     p.add_argument("--settle-dir", required=True, type=Path, help="output/정산 폴더(파일\\ 의 정산 파일 주문 줄 = 판매 있는 상품 · T-53)")
     p.add_argument("--accounts", default="")

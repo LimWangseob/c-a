@@ -370,7 +370,7 @@ def _wing_files(files: list) -> tuple[list, list]:
 
 
 def split(acct) -> list:
-    """계정의 정산 예정 줄(acct.u) → [(판매 방식, 달, 판매, 정산대상, 관리 판매, 관리 정산, 근거, 확인 필요 사유)] — 계약 전 달 처리는 부르는 쪽."""
+    """계정의 정산 예정 줄(acct.u) → [(판매 방식, 달, 판매, 정산대상, 관리 판매, 관리 정산, 근거, 확인 필요 사유)]."""
     c = acct.ctx
     basis = _d(c.basis)
     daily = (c.daily or {}).get(acct.aid) or {}

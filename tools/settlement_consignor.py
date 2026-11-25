@@ -3,7 +3,7 @@
 
     python tools/settlement_consignor.py --out <출력 폴더> --managed-output <관리기준 output> --settle-dir <output/정산>
         --stats <정산집계.xlsx> --basis YYYY-MM-DD [--inputs <입력 폴더>] [--issued YYYY-MM-DD] [--settle-only <json>]
-        [--account-history <json>] [--accounts 계정ID,계정ID] [--month YYYY-MM] [--sheet <구글시트 주소>]
+        [--accounts 계정ID,계정ID] [--month YYYY-MM] [--sheet <구글시트 주소>]
 
 - 계정마다 기존 위탁정산서 계산(Account.run)을 한 번 돌려 판매 달마다 자료를 만든다(--month 를 주면 그 달만).
   자료 = `<out>/위탁자정산서/<계정ID>_<YYYYMM>.json` · 요약 = `<out>/위탁자정산서/_요약.json`.
@@ -41,7 +41,6 @@ def _args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--settle-only", type=Path)
     ap.add_argument("--supp", type=Path)
     ap.add_argument("--snap", type=Path)
-    ap.add_argument("--account-history", type=Path)
     ap.add_argument("--accounts", default="", help="쉼표로 나눈 계정ID(비면 정산집계의 전 계정)")
     ap.add_argument("--month", default="", help="판매 달 YYYY-MM(비면 계정의 모든 판매 달)")
     ap.add_argument("--sheet", default="", help="다시 그릴 구글시트 주소·ID(검산 통과 · --month 하나일 때만)")
@@ -59,8 +58,7 @@ def _args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def statement_args(a: argparse.Namespace) -> CTX.StatementArgs:
     return CTX.StatementArgs(out=a.out, managed_output=a.managed_output, settle_dir=a.settle_dir, stats=a.stats, basis=a.basis,
-                             inputs=a.inputs, issued=a.issued, settle_only=a.settle_only, supp=a.supp, snap=a.snap,
-                             account_history=a.account_history)
+                             inputs=a.inputs, issued=a.issued, settle_only=a.settle_only, supp=a.supp, snap=a.snap)
 
 
 def main(argv: list[str] | None = None) -> int:

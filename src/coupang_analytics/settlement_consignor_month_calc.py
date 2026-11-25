@@ -66,7 +66,6 @@ class MonthState:
         self.added = list(judge.added.get(self.aid, []))           # 관리 상품 추가 판정(판정표 · 소유자 원문 근거)
         self.judge = judge
         self.mpids |= {str(x["등록상품ID"]) for x in self.added}
-        self.pre = MA.pre_contract(month, d["cdate"])
         self.j: list = []            # judgments
         self.chk: list = []          # checks
         self._vid_map()
@@ -118,11 +117,11 @@ class MonthState:
 
     # ── 공통 도구 ──
     def managed(self, pid: str) -> bool:
-        return (not self.pre) and pid in self.mpids
+        return pid in self.mpids
 
     def is_m(self, pid: str) -> bool:
         """관리 상품 = mpids(판정표 추가 포함) 또는 옵션 단위 자료로 관리 판정된 상품(ext_used · 등록상품ID 모르는 관리 옵션)."""
-        return self.managed(pid) or ((not self.pre) and (pid in self.ext_used or pid in self.m_extra))
+        return self.managed(pid) or pid in self.ext_used or pid in self.m_extra
 
     def vid_pid(self, vid: str) -> str:
         return self.vid2pid.get(str(vid), "")
@@ -130,8 +129,8 @@ class MonthState:
     def vid_managed(self, vid: str, unit: str = "vid") -> bool:
         pid = self.vid_pid(vid)
         if unit == "vid" and str(vid) in self.is_mv:
-            return (not self.pre) and bool(self.is_mv[str(vid)])
-        return self.managed(pid) if pid else (not self.pre) and bool(self.is_mv.get(str(vid)))
+            return bool(self.is_mv[str(vid)])
+        return self.managed(pid) if pid else bool(self.is_mv.get(str(vid)))
 
     def managed_vid(self, vid: str, unit: str = "vid") -> tuple[str, bool]:
         pid, m = self.vid_pid(vid), self.vid_managed(vid, unit)

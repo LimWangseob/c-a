@@ -215,32 +215,8 @@ def vid_share(rows: list, is_managed_vid) -> tuple:
     return m, sum(a for _, a in rows), ""
 
 
-def contract_start(auto: str, contract: str | None, known: bool) -> tuple[str, str]:
-    """관리 시작 달(D-185) → (시작 달 YYYY-MM, 정산서 '확인 필요' 문구 · 같으면 '').
-    auto = 자동 판정 달(관리 상품 첫 판매·첫 물류비 · 활동 없으면 '') · contract = 관리 상품과 품목이 맞는 계약일(YYYY-MM-DD ·
-    못 찾으면 None) · known = 계정이 계약 대조 표에 있음. 규칙 = 자동·계약 중 이른 달 + 계약 전 판매 제외 — 자동이 더 빠르면 그 앞 판매가
-    빠지므로 결과는 계약 달."""
-    if not auto:
-        return "", ""
-    if not known:
-        return auto, f"관리 시작 {auto} = 자동 판정(관리 상품 첫 판매) · 계약 대조 표에 없음 — 확인 필요"
-    if not contract:
-        return auto, f"관리 시작 {auto} = 자동 판정(관리 상품 첫 판매) · 관리 상품과 맞는 계약 못 찾음 — 확인 필요"
-    cm = contract[:7]
-    if cm == auto:
-        return cm, ""
-    if auto < cm:
-        return cm, f"관리 시작 {cm} = 계약 {contract} · 자동 판정 {auto}(첫 판매)보다 늦음 — 계약 전 판매 제외 · 확인 필요"
-    return cm, f"관리 시작 {cm} = 계약 {contract} · 자동 판정 {auto}(첫 판매)보다 이름 — 확인 필요"
-
-
-def pre_contract(ym: str, contract: str | None) -> bool:
-    """그 달(YYYY-MM)이 계약 달 앞이면 True — 계약 전 판매는 관리 상품으로 보지 않음(D-185 ②)."""
-    return bool(contract) and ym < str(contract)[:7]
-
-
 def gap_free(actual: float, fs_actual: float, fs_covered: float, due_fs: float, share_fs: float) -> tuple[float, float]:
-    """판매 0인 달(계약 달 ~ 관리 첫 판매 전 · D-186) 을 뺀 공제 관리 몫 → (관리 몫, 상품 자료 없는 공제).
+    """판매 0인 달(관리 시작 달 ~ 관리 첫 판매 전 · D-186) 을 뺀 공제 관리 몫 → (관리 몫, 상품 자료 없는 공제).
     상품 자료 없는 공제는 첫 판매 달부터의 공제(due_fs)·상품 자료(fs_covered)·평균 비율(share_fs)로만 나눈다 — 판매 0인 달은 그 달 관리
     비율이 0 이라 몫 0(나눌 금액·평균 양쪽에서 뺌). actual − fs_actual = 판매 0인 달의 상품별 관리 금액(쿠팡 자료) = 그대로 더함."""
     amt, miss = scoped(fs_actual, due_fs, fs_covered)
