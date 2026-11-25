@@ -71,6 +71,7 @@ class MonthState:
         self.files = {(f[1], f[3], f[4]) for f in d["files_meta"]}   # 상품별 정산 파일이 있는 (판매 방식, 기간)
         self.cols: dict = defaultdict(lambda: [0.0] * 9)     # pid → c1..c8 (index 1..8) · 정산 예정분 포함
         self.pend: dict = defaultdict(lambda: [0.0] * 9)     # pid → 그중 정산 예정분(쿠팡 확정 전)
+        self.pend_wing: Counter = Counter()                   # pid → 그중 윙 정산 예정 판매(E1 검산 · D-405)
         self.allsales: Counter = Counter()                    # pid → 판매금액(관리 여부 무관 · 확정+예정)
         self.rgsales: Counter = Counter()                     # pid → 로켓그로스 판매(확정+예정) — 상품 자료 전 창고 비용 나누기
         self.common: list = []                                # (이름, 쿠팡 금액(+=빼는 돈), 위치 분류)
@@ -326,6 +327,8 @@ def _pend_alloc(st: MonthState, ch: str, sp: PEND.Split, cf) -> dict:
             for i, val in ((1, s), (2, -cp), (3, -fee), (4, c4)):
                 st.cols[key][i] += val
                 st.pend[key][i] += val
+            if ch != PEND.RG:
+                st.pend_wing[key] += s
     return t
 
 

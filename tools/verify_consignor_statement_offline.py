@@ -26,7 +26,7 @@ import io
 import json
 import sys
 import tempfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -44,7 +44,7 @@ from coupang_analytics.settlement_consignor_month_calc import AD_NOCAMP, ads  # 
 from coupang_analytics.settlement_consignor_month_cost import BI_CAT, KINDS, PEND_KIND, _rg_notes, expect_values  # noqa: E402
 from coupang_analytics.settlement_consignor_month_dep import dep_rows, flow  # noqa: E402
 from coupang_analytics.settlement_consignor_month_sep import separate  # noqa: E402
-from coupang_analytics.settlement_consignor_month_out import LINE_NAMES, common_out, coupang_by_cat, product_table, rg_kinds  # noqa: E402
+from coupang_analytics.settlement_consignor_month_out import LINE_NAMES, _product_row, common_out, coupang_by_cat, product_table, rg_kinds  # noqa: E402
 
 ISSUED = "2026-11-18"
 # 고정 줄(기대 = 승인 샘플 `_render_fixed_sample.py` KIND_ROWS·COMMON_ROWS·SEP_ROWS·FLOW_ROWS 의 정산서 이름 · 코드에서 뽑지 않음)
@@ -129,13 +129,14 @@ def test_product_table() -> None:
     cols["p2"][1:] = [300.4, 0, -30.4, 0.3, -2.5, 0, 0, 0]
     cols["p3"][1:] = [100.4, 0, -10.4, 0.3, 0, 0, 0, 0]
     pend["p3"][1:] = [50.4, 0, -5.4, 0, 0, 0, 0, 0]
-    st = SimpleNamespace(cols=cols, pend=pend)
+    st = SimpleNamespace(cols=cols, pend=pend, pend_wing=Counter({"p3": 20.4}))
     t = product_table(st, {"가": ["p1"], "나": ["p2"], "다": ["p3"], "빈": ["p0"]})
     assert t["names"] == ["나", "가", "다"], t["names"]             # 판매 금액 큰 순 · 같으면 이름 순 · 금액 없는 '빈' 뺌
     for k in range(1, 9):
         exp = round(sum(cols[p][k] for p in ("p1", "p2", "p3")))
         assert t["lines8"][k] == exp == sum(t["int"][n][k] for n in t["names"]), (k, t["lines8"][k], exp)
         assert t["pend8"][k] == sum(t["pint"][n][k] for n in t["names"])
+    assert _product_row(t, "다")["pending"]["wing_c1"] == 20 and "pending" not in _product_row(t, "가")   # D-405 윙 예정 판매만 따로
     assert t["lines8"][1] == 501 and t["pend8"][1] == 50 and t["lines8"]["E"] == 501 - 1 - 51 + 1
 
 
@@ -707,6 +708,16 @@ def test_d261_e1_pending_not_negative() -> None:
     a["subtotal"] -= 270_499
     b["pending"].update(c1=0, subtotal=0)
     assert GS.check(d) == []
+    # D-405(소유자 11-25 (가)): 로켓그로스 음수 = 쿠팡 순액 그대로 통과 · 윙 음수 = 막음(합이 양수여도)
+    b["pending"].update(c1=-78_000, c2=78_000, wing_c1=0)
+    a["c1"] += 78_000
+    a["c2"] -= 78_000
+    assert GS.check(d) == [], GS.check(d)
+    b["pending"].update(c1=200, c2=-200, wing_c1=-1)
+    a["c1"] -= 78_200
+    a["c2"] += 78_200
+    errs = GS.check(d)
+    assert len(errs) == 1 and "E1" in errs[0] and "합성 상품 나" in errs[0] and "윙" in errs[0], errs
     print("test_d261_e1_pending_not_negative OK")
 
 

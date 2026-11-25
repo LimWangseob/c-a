@@ -351,6 +351,7 @@ def test_new_form_wing() -> None:
         a.ctx.periods[AID]["W:2026-11-02"] = {"옵션": {"1": {"구분": "윙", "판매금액": 999}, "2": {"구분": "윙", "판매금액": -50}}}
         st = _new_form(a, "2026-11")
         assert _c(st, "P1") == [400, 0, -80, 0] and _c(st, "P2") == [0, 0, 0, 0], f"⑥ 윙 B8 상품 줄 = P1 400·320 · P2 0: {dict(st.pend)}"
+        assert {k: round(v) for k, v in st.pend_wing.items() if v} == {"P1": 400}, st.pend_wing
         assert st.settle_by_ch["윙"] == Counter({"P1": 320}) and not st.pend_check, f"⑥ 윙 정산 나누기 = 320: {st.settle_by_ch}"
         a.vids = set(MV)
         st = _new_form(a, "2026-10")
@@ -373,6 +374,7 @@ def test_new_form_rg_and_excluded() -> None:
         st = _new_form(a, "2026-10")
         assert _c(st, "P3")[0] == 600 and _near(sum(st.pend["P3"][1:5]), 420), f"⑥ RG = M: 달 판매 비율 60%: {dict(st.pend)}"
         assert st.rgsales == Counter({"P3": 600, "P4": 400}), st.rgsales
+        assert not st.pend_wing, f"⑥ 로켓그로스 예정 = 윙 예정 판매 아님(E1 D-405): {st.pend_wing}"
         a._unsettled_share()
         assert _near(a.um_sales, 600) and _near(a.um_settle, 420), f"옛 엑셀 관리 몫 = 600·420: {a.um_sales} {a.um_settle}"
         st = _new_form(a, "2026-09")

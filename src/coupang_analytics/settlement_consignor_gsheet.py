@@ -91,9 +91,10 @@ def _check_product_rows(d: dict) -> list[str]:
 
 
 def _check_pending_sales(d: dict) -> list[str]:
-    """D-261 ① E1: 2쪽 상품 줄(이름 묶은 뒤)의 정산 예정 판매 ≥ 0(관리 비율 0~100% 밖 = D-262 ③ · 계산 쪽)."""
-    return [f"E1 상품 '{p['name']}' 정산 예정 판매 {p['pending']['c1']:,} < 0" for p in d["products"]
-            if (p.get("pending") or {}).get("c1", 0) < 0]
+    """E1: 2쪽 상품 줄(이름 묶은 뒤)의 윙 정산 예정 판매 ≥ 0(D-405 — 로켓그로스 음수 = 반품 순액 그대로 · 관리 비율 0~100% 밖 = D-262 ③ · 계산 쪽).
+    'wing_c1' 없는 옛 json = 전체 예정 판매로 봄(막는 쪽)."""
+    wing = [(p["name"], pp.get("wing_c1", pp["c1"])) for p in d["products"] if (pp := p.get("pending"))]
+    return [f"E1 상품 '{name}' 윙 정산 예정 판매 {v:,} < 0" for name, v in wing if v < 0]
 
 
 def _check_common_pending(d: dict, L: dict[int, int], P: dict[int, int]) -> list[str]:

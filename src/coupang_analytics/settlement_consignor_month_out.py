@@ -45,7 +45,8 @@ def product_table(st: MonthState, merged: dict) -> dict:
     vals, pvals = _group_sums(st, merged)
     names = sorted((n for n in merged if any(abs(vals[n][k]) > 1e-9 for k in range(1, 9))),
                    key=lambda n: (-vals[n][1], n))          # 판매 금액 큰 순 · 금액 전혀 없는 상품은 뺌
-    t = {"names": names, "int": {n: [0] * 9 for n in names}, "pint": {n: [0] * 9 for n in names}, "lines8": {}, "pend8": {}}
+    t = {"names": names, "int": {n: [0] * 9 for n in names}, "pint": {n: [0] * 9 for n in names}, "lines8": {}, "pend8": {},
+         "wing1": {n: round(sum(st.pend_wing[p] for p in merged[n])) for n in names}}
     for k in range(1, 9):
         t["lines8"][k] = _round_col(names, vals, k, t["int"])
         t["pend8"][k] = _round_col(names, pvals, k, t["pint"])
@@ -58,7 +59,7 @@ def _product_row(t: dict, n: str) -> dict:
     v, pv = t["int"][n], t["pint"][n]
     row = {"name": n, **{f"c{k}": v[k] for k in range(1, 9)}, "subtotal": sum(v[1:9])}
     if any(pv[1:9]):
-        row["pending"] = {**{f"c{k}": pv[k] for k in range(1, 9)}, "subtotal": sum(pv[1:9])}
+        row["pending"] = {**{f"c{k}": pv[k] for k in range(1, 9)}, "subtotal": sum(pv[1:9]), "wing_c1": t["wing1"][n]}
     return row
 
 
