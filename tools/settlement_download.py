@@ -26,6 +26,7 @@ reap_orphan_chrome 미호출. 기록: output/정산/로그/(실행·처리기록
 from __future__ import annotations
 
 import argparse
+import glob
 import html
 import json
 import os
@@ -981,7 +982,7 @@ def source_checks(web: bool = True) -> None:
 def _wing_files(name: str) -> list:
     """이 계정의 윙 정산 파일(읽을 수 없는 파일은 건너뜀 — 받기 단계가 이미 오류로 기록)."""
     out = []
-    for p in sorted(FILES.glob(f"{SF._token(name, '계정명')}_*_윙_*.xlsx")):
+    for p in sorted(FILES.glob(f"{glob.escape(SF._token(name, '계정명'))}_*_윙_*.xlsx")):
         try:
             out.append(SF.load_settle_file(p))
         except Exception:  # noqa: BLE001

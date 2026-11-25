@@ -407,6 +407,24 @@ def s6_cumulative():
     ok("시트 4개·요약(지급 2줄 9,444·파일 2·비용 1·상품 2·남은 요청 1·미확인)·상품 칸 원본 그대로·다시 만들어도 같음·열림 = 오류")
 
 
+def s6b_bracket_name():
+    print("[S6b] 사업자명에 [ ] 가 있는 계정도 누적 파일에 자기 파일을 셈(T-183 — glob 문자 묶음으로 읽어 0개였음)")
+    a = TA.TransferAccount("acc9", "가짜[나다]", "대표9", "가짜[나다]", "010-9", "①셀독진행", 9, (), PW)
+    with tempfile.TemporaryDirectory() as d:
+        store = Path(d) / "정산"
+        name, ps, pe = TS.display_name(a), date(2026, 1, 5), date(2026, 1, 11)
+        assert "[" in name, name
+        for n in (name, name.replace("[나다]", "나")):               # 뒤 = 문자 묶음으로 읽으면 잡히는 남의 계정
+            _xlsx(store / "파일" / SF.settle_file_name(n, date(2026, 1, 30), "윙", "주정산", "주문상세", ps, pe),
+                  [WING_HDR, _wing_row("1001" if n == name else "1002", "8358672052", "가상품", "92285508987", "옵션", 10690, 1, 1246, 9444)])
+            _touch(store / "파일" / "비용" / SF.settle_file_name(n, date(2026, 1, 30), "로켓그로스", "주정산", "입출고비", ps, pe))
+        _touch(store / "파일" / "비용" / SF.settle_file_name(name, date(2026, 1, 30), "로켓그로스", "주정산", "보관비", ps, pe))
+        _pays, prods, row = TS._gather(a, store, [], lambda m: None)
+        assert (row["정산 파일"], row["비용 리포트"], row["상품 줄"]) == (1, 2, 1), row
+        assert "1001" in prods[0] and "1002" not in prods[0], prods
+    ok("괄호 계정 = 정산 파일 1·비용 리포트 2·상품 줄 1(자기 파일만)")
+
+
 def s7_launch():
     print("[S7] 띄우기 — 00:10 무인·재부팅 복구 앱이 정산 자동 수집과 함께(--parent) · 탭 버튼")
     from coupang_analytics import app_process as AP
@@ -500,6 +518,7 @@ def main() -> int:
     s4_reuse()
     s5_store_and_request()
     s6_cumulative()
+    s6b_bracket_name()
     s7_launch()
     s8_one_at_a_time()
     s9_cycle_done()

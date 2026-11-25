@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import glob
 import json
 import os
 import random
@@ -245,7 +246,7 @@ def _gather(a, store: Path, jobs: list, log) -> tuple[list, list, dict]:
             pays.append((*who, ch, r["정산일"], r["기간 시작"], r["기간 끝"], r.get("지급비율"), r.get("최종지급액"),
                          r.get("지급상태", "")))
             last = max(last, r["정산일"])
-    files = sorted((store / "파일").glob(f"{tok}_*.xlsx"))
+    files = sorted((store / "파일").glob(f"{glob.escape(tok)}_*.xlsx"))
     for f in files:
         try:
             sf = SF.load_settle_file(f)
@@ -259,7 +260,7 @@ def _gather(a, store: Path, jobs: list, log) -> tuple[list, list, dict]:
                           r.qty, r.sales, r.coupon, r.fee, r.settle, r.recognized.isoformat() if r.recognized else "",
                           r.kind, f.name))
     left = _left(a, jobs)
-    costs = len(list((store / "파일" / "비용").glob(f"{tok}_*.xlsx")))
+    costs = len(list((store / "파일" / "비용").glob(f"{glob.escape(tok)}_*.xlsx")))
     return pays, prods, {"지급 줄": len(pays), "최종지급액 합": sum(int(x[9] or 0) for x in pays), "정산 파일": len(files),
                          "비용 리포트": costs, "상품 줄": len(prods), "마지막 정산일": last, "남은 요청": left}
 
