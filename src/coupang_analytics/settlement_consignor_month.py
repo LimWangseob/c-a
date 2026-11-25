@@ -104,7 +104,7 @@ def account_source(ctx, acct: str) -> dict:
         "lines": [(list(row), dict(r), li[5]) for (row, r), li in zip(lines, a.line_info)],
         "line_info": [(st, ch, ym, pay, rel, dict(parts), list(row)) for st, ch, ym, pay, rel, parts, row in a.line_info],
         "prows": _rows_of(ctx, "상품별 월별", acct), "rg_cost_rows": _rows_of(ctx, STATS_COST, acct),
-        "ads": (pa, bill, sorted(have)), "ad_bills": AC.ad_bills(ctx.base, acct), "v": a.v, "add": a.add, "periods": ctx.periods.get(a.aid) or {}, "inventory": inv,
+        "ads": (pa, bill, sorted(have)), "ad_bills": AC.ad_bills(ctx.base, acct), "milk_files": AC.milk_totals(ctx.base, acct), "v": a.v, "add": a.add, "periods": ctx.periods.get(a.aid) or {}, "inventory": inv,
         "daily": ctx.daily.get(a.aid) or {}, "orders": orders, "files": a.files,
         "u": [tuple(x) for x in a.u], "extras": ctx.extras.get(a.aid, []), "L_gen": dict(a.L["gen"]),
         "pur": dict(a.pur), "wconf": {k: tuple(v) for k, v in a.wconf.items()}, "own_judge": ctx.own_judge.get(a.aid, {}),

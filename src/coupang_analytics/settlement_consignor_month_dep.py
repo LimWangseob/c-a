@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 
+from coupang_analytics import settlement_ledger as SL
 from coupang_analytics import settlement_statement_account as AC
 from coupang_analytics.settlement_consignor_month_calc import AD_NOCAMP, MonthState, cum_round
 
@@ -15,6 +16,9 @@ FAST = "(빠른정산)"
 NO_DATE = "(지급일 미정)"
 FAV = "쿠팡페이"
 ADD = "쿠팡 추가지급 (10번)"
+# 참고 대조 — 줄 공식(지급액 = 정산금액 + 보류 해제 − 공제)에서 '그 줄 정산금액 합'과 다른 쿠팡 원문 금액(T-179 ⑩ · output44 30달 원 단위 설명)
+GEN, RELEASE = "지급 줄 생성 전 정산금액(아직 지급 줄 없음)", "보류 해제액(윙 pendingAmount)"
+NEGATIVE, EXTRA = "지급 끝난 윙 음수 최종 회차(0 지급 · 다음 회차 3PM 회수 D-304)", "윙 추가지급 줄(10번 · D-308 ①)"
 
 
 def _channel_ratio(st: MonthState) -> dict:
@@ -119,6 +123,14 @@ def deposits(st: MonthState, lines8: dict, applied: list) -> None:
     _cash_reference(st)
 
 
+def _cash_extras(st: MonthState) -> dict:
+    """참고 대조에서 '그 줄 정산금액 합'과 실제 지급액 사이의 쿠팡 원문 금액 — 이 달 판매 기간(GEN = 아직 줄 없음 · 나머지 = 지급 줄 칸)."""
+    wing = [(row, r) for _key, row, r in st.lines() if str(row[3])[:7] == st.m and r["채널"] == "윙"]
+    neg = [AC.num(r.get("최종지급액")) for row, r in wing if row[6].split(" ·")[0] == AC.STS[0]]
+    return {GEN: sum(a for (_ch, ym), a in st.d["L_gen"].items() if ym == st.m), RELEASE: sum(x[4] for x in st.d["line_info"] if x[2] == st.m),
+            NEGATIVE: sum(x for x in neg if x < 0), EXTRA: sum(AC.num(r.get("최종지급액")) for _row, r in wing if SL.additional(r))}
+
+
 def _cash_reference(st: MonthState) -> None:
     """참고 대조: 이 달 판매 기간 지급 줄의 실제 지급액(계정 전체) ↔ 이 정산서 쿠팡 몫(별도 입금 뺀 금액)."""
     sept = {key for key, row, _r in st.lines() if str(row[3])[:7] == st.m}
@@ -132,6 +144,7 @@ def _cash_reference(st: MonthState) -> None:
     on_sept = sum(a for key, a in located if key in sept)
     off_sept = sum(a for key, a in located if key not in sept)
     st.cash = {"이 달 판매 기간 지급 줄 실제 지급액 합(계정 전체)": actual, "그 줄 정산금액 합": sum(st.pay_ch.values()),
+               **_cash_extras(st),
                "그 줄에서 빠진 공제(판매 조정 제외)": sum(parts.values()), "그중 이 달 비용": on_sept,
                "다른 달 비용(이 달 줄에서 빠짐)": sum(parts.values()) - on_sept,
                "이 달 비용이 다른 달 판매 기간 줄에서 빠짐": off_sept, "판매 조정·음수 공제(환불 회수 · 날짜만 옮김)": etc}

@@ -97,23 +97,31 @@ def _note(st, ch: str, mine: list, unknown: list) -> None:
             st.j.append(f"확인 필요: {ch} 지급 줄 {key} 광고 차감 {a:,.0f} — 달 표시 없음 · 광고 청구 자료로 어느 달 광고인지 못 가름(위치에 안 넣음 · 금액은 광고 청구 자료 기준)")
 
 
-def _rest_note(st, ch: str, bill: float, done: float, lines: list) -> None:
+def _waiting(st, ch: str, lines: list) -> bool:
+    """안 빠진 청구를 쿠팡이 앞으로 뺄 수 있음 — 뒤 달 판매 줄 중 지급 끝난 줄(= 빼지 않고 지급함)도, 청구를 아는 뒤 달의 광고 공제 줄도 없음."""
+    paid = any(str(row[3])[:7] > st.m and row[6].split(" ·")[0] == "지급 완료" and "추가지급" not in row[6]
+               for _key, row, r in st.lines() if r["채널"] == ch)
+    return not paid and not any(m > st.m and a and m in st.d["ad_bills"][ch] for m, _key, a in lines)
+
+
+def _rest_note(st, ch: str, bill: float, done: float, waiting: bool) -> None:
     rest = bill - done
     if rest <= TOL:
         return
-    if any(m > st.m and a for m, _key, a in lines):
-        st.j.append(f"확인 필요: {st.m} {ch} 광고 청구 {bill:,.0f} 중 {rest:,.0f}원을 뺀 지급 줄을 못 찾음 — 뒤 달 지급 줄에 광고 공제가 있지만 이 달 몫인지 "
+    if not waiting:
+        st.j.append(f"확인 필요: {st.m} {ch} 광고 청구 {bill:,.0f} 중 {rest:,.0f}원을 뺀 지급 줄을 못 찾음 — 뒤 달 지급이 끝났거나 광고 공제가 있지만 이 달 몫인지 "
                     "쿠팡 표시가 없음(미납일 수 있음 D-309) · 날짜별 표 '지급일 미정'으로 둠")
     else:
         st.j.append(f"5 광고비 — {st.m} {ch} 광고 청구 {bill:,.0f} 중 {rest:,.0f}원은 쿠팡이 아직 안 뺌 → 날짜별 표 '지급일 미정'(예정)")
 
 
-def ad_deducted(st, rg_lines: list) -> tuple[float, float]:
-    """쿠팡이 지급 줄에서 뺀 이 달 광고비 → 위치(loc) · (뺀 합, 날짜별 표 나누는 분모 = 다 빠졌거나 청구를 모르면 뺀 합 · 안 빠진 몫이 있으면 청구액).
+def ad_deducted(st, rg_lines: list) -> tuple[float, float, float]:
+    """쿠팡이 지급 줄에서 뺀 이 달 광고비 → 위치(loc) · (뺀 합, 날짜별 표 나누는 분모 = 다 빠졌거나 청구를 모르면 뺀 합 · 안 빠진 몫이 있으면 청구액,
+    지급일 미정 = 안 빠진 몫 중 쿠팡이 앞으로 뺄 수 있는 것 · 못 뺀 채 뒤 달이 지급됨 = 0(확인 필요)).
     rg_lines = 로켓그로스 줄 [(달 표시, key, 금액)] — 공제 0 인 줄도(달 경계 주 찾기)."""
     wing = [(str(row[3])[:7], key, num(x.get("금액"))) for key, row, r in st.lines() if r["채널"] == "윙"
             for x in r.get("차감 사유") or [] if "광고" in (x.get("사유") or "") and num(x.get("금액"))]
-    deducted, billed = 0.0, 0.0
+    deducted, billed, wait = 0.0, 0.0, 0.0
     for ch, lines in (("윙", wing), ("로켓그로스", rg_lines)):
         bills = st.d["ad_bills"][ch]
         got, unknown = ad_months(bills, lines, rg=ch != "윙")
@@ -123,5 +131,7 @@ def ad_deducted(st, rg_lines: list) -> tuple[float, float]:
         billed += bills.get(st.m, float("nan"))          # 청구 모름 = nan → 분모는 뺀 합
         _note(st, ch, got[st.m], unknown)
         if st.m in bills:
-            _rest_note(st, ch, bills[st.m], done, lines)
-    return deducted, billed if abs(billed - deducted) > TOL else deducted
+            waiting = _waiting(st, ch, lines)
+            _rest_note(st, ch, bills[st.m], done, waiting)
+            wait += bills[st.m] - done if waiting and bills[st.m] - done > TOL else 0.0
+    return deducted, billed if abs(billed - deducted) > TOL else deducted, wait

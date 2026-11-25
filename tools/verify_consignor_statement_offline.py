@@ -43,6 +43,7 @@ from coupang_analytics import settlement_fee_rules as FR  # noqa: E402
 from coupang_analytics.settlement_consignor_month_calc import AD_NOCAMP, ads  # noqa: E402
 from coupang_analytics.settlement_consignor_month_cost import BI_CAT, KINDS, PEND_KIND, _rg_notes, expect_values  # noqa: E402
 from coupang_analytics.settlement_consignor_month_dep import _cost_locs, dep_rows, flow  # noqa: E402
+from coupang_analytics.settlement_consignor_month_milk import milk_months  # noqa: E402
 from coupang_analytics.settlement_consignor_month_sep import separate  # noqa: E402
 from coupang_analytics.settlement_consignor_month_wingad import ad_months  # noqa: E402
 from coupang_analytics.settlement_consignor_month_out import LINE_NAMES, _product_row, common_out, coupang_by_cat, product_table, rg_kinds  # noqa: E402
@@ -179,7 +180,7 @@ def test_post_purchase() -> None:
     """D-324 ①④: 로켓그로스 리뷰 이벤트 공제(totalPostPurchaseDeductionAmount) = 원문 값 → 9 '리뷰 이벤트' 줄 · 날짜별 표 위치 · 판단 문장만 쓰던 것 없앰."""
     st = SimpleNamespace(own=defaultdict(float), common=[], loc=defaultdict(list), j=[], share=0.5, reg_share=0.4,
                          pend_line=lambda row, r: False, ad={"deducted": 0, "base": 0}, milk={"deducted": 0},
-                         cfs={"line_fees": 0, "adjust": 0, "pending": 0}, comp={"paid": 0})
+                         cfs={"line_fees": 0, "adjust": 0, "pending": 0, "noline": 0}, comp={"paid": 0})
     key = ("2026-11-10", "2026-10-01", "2026-10-07", "로켓그로스", "")
     _rg_notes(st, key, list(key), {"totalPostPurchaseDeductionAmount": 8_880.0})
     assert not [j for j in st.j if "PostPurchase" in j], st.j
@@ -207,12 +208,13 @@ def test_ad_nocamp_d317() -> None:
     assert (etc["coupang_amount"], etc["applied_amount"]) == (-2_200, 1_320), etc     # −2,200 × 60% (D-241 0.5 였으면 1,100)
 
 
-def _ad_month(m: str, bills: dict, wing: list, rg: list | None = None, charged: float = 0.0, rg_bills: dict | None = None) -> SimpleNamespace:
+def _ad_month(m: str, bills: dict, wing: list, rg: list | None = None, charged: float = 0.0, rg_bills: dict | None = None,
+              plan: tuple = ()) -> SimpleNamespace:
     """T-186 시험 자료 — 윙 줄 = (지급일, 판매 기간 시작, 차감 사유) · rg = 로켓그로스 줄 (지급일, 시작, 끝, 비율, 광고 공제 · 달 표시 = 판매 달) ·
     charged = 그 달 광고 청구(부가세 전) · bills·rg_bills = 달별 윙·로켓그로스 청구금액."""
     lines = []
     for day, start, why in wing:
-        row = ["", "", day, start, start, "70", "지급 완료"]
+        row = ["", "", day, start, start, "70", "예정" if day in plan else "지급 완료"]
         lines.append(((day, start, start, "윙", "70"), row, {"채널": "윙", "차감 사유": [{"사유": k, "금액": v} for k, v in why]}))
     for day, start, end, pct_, amt in rg or []:
         row = ["", "", day, start, end, pct_, "지급 완료"]
@@ -220,7 +222,7 @@ def _ad_month(m: str, bills: dict, wing: list, rg: list | None = None, charged: 
     st = SimpleNamespace(m=m, mk=m.replace("-", ""), d={"ads": ([], {(int(m.replace("-", "") + "15"), ""): charged}, set()),
                                                         "ad_bills": {"윙": bills, "로켓그로스": rg_bills if rg_bills is not None else dict.fromkeys(bills, 0)}},
                          cols=defaultdict(lambda: [0.0] * 9), common=[], loc=defaultdict(list), j=[], chk=[], lines=lambda: iter(lines), ad_note="",
-                         managed_vid=lambda v: ("", False), milk={"deducted": 0}, cfs={"line_fees": 0, "adjust": 0, "pending": 0}, comp={"paid": 0})
+                         managed_vid=lambda v: ("", False), milk={"deducted": 0}, cfs={"line_fees": 0, "adjust": 0, "pending": 0, "noline": 0}, comp={"paid": 0})
     ads(st)
     return st
 
@@ -389,6 +391,131 @@ def test_t186_rg_month_border() -> None:
     st = _ad_month("2026-06", {"2026-06": 0, "2026-07": 0}, [], [("2026-08-24", "2026-07-20", "2026-07-26", "70", 29_990)], charged=73_000 / 1.1,
                    rg_bills={"2026-06": 73_000, "2026-07": 29_990})
     assert _ad_dates(st, 73_000) == ({}, 73_000) and [j for j in st.j if j.startswith("확인 필요: 2026-06 로켓그로스") and "73,000" in j], st.j
+
+
+def _mk(day: str, start: str, pct_: str, amt: float) -> tuple:
+    return (day, start, start, "로켓그로스", pct_), amt
+
+
+def test_t179_milk_months() -> None:
+    """T-179 ⑩: 쿠팡은 한 달 밀크런을 여러 지급일에 나눠 뺌 → 나눠 뺀 합이 파일 합과 원 단위로 같으면 찾은 것 · 1원이라도 다르면 못 찾음(느슨하게 안 맞춤).
+    기대값 = 쿠팡 원문 금액(nicoable 5·6·8·10월 · 91white 4·5월 · ski1121 2·3월 · woolins 10월)."""
+    nic = {"2026-05": 60_500, "2026-06": 144_760, "2026-07": 59_180, "2026-08": 69_850, "2026-09": 13_200, "2026-10": 25_300}
+    lines = [_mk("2026-06-23", "2026-05-18", "70", 52_908), _mk("2026-06-29", "2026-05-25", "70", 7_592), _mk("2026-07-03", "2026-06-01", "70", 144_760),
+             _mk("2026-08-10", "2026-07-06", "70", 59_180), _mk("2026-10-07", "2026-09-01", "70", 53_566), _mk("2026-10-15", "2026-09-07", "70", 16_284),
+             _mk("2026-11-03", "2026-10-01", "70", 13_200), _mk("2026-11-06", "2026-10-05", "70", 9_983), _mk("2027-01-04", "2026-11-30", "30", 15_317)]
+    got = {m: [(k[0], a) for k, a in xs] for m, xs in milk_months(nic, lines).items()}
+    assert got == {"2026-05": [("2026-06-23", 52_908), ("2026-06-29", 7_592)], "2026-06": [("2026-07-03", 144_760)], "2026-07": [("2026-08-10", 59_180)],
+                   "2026-08": [("2026-10-07", 53_566), ("2026-10-15", 16_284)], "2026-09": [("2026-11-03", 13_200)],
+                   "2026-10": [("2026-11-06", 9_983), ("2027-01-04", 15_317)]}, got
+    # 1원 다름 = 못 찾음 · 덜 빠짐(woolins 194,000 중 13,834) = 못 찾음 · 달이 끝나기 전 지급 줄 = 그 달 것 아님
+    assert milk_months({"2026-08": 69_851}, lines) == {} and milk_months({"2026-10": 194_000}, [_mk("2026-11-13", "2026-10-12", "70", 9_684),
+                                                                                               _mk("2026-12-01", "2026-10-12", "30", 4_150)]) == {}
+    assert milk_months({"2026-08": 69_850}, [_mk("2026-08-20", "2026-07-06", "70", 53_566), _mk("2026-10-15", "2026-09-07", "70", 16_284)]) == {}
+    # 한 지급 줄에 두 달 몫이 섞임(91white 06-09 21,806 = 4월 14,634 + 5월 7,172) → 두 달 합 47,190 이 줄 합과 같고 지급 순서대로 앞 달부터
+    w = [_mk("2026-05-19", "2026-04-13", "70", 7_075), _mk("2026-06-01", "2026-04-13", "30", 3_675), _mk("2026-06-02", "2026-05-01", "70", 9_596),
+         _mk("2026-06-09", "2026-05-04", "70", 21_806), _mk("2026-06-10", "2026-05-01", "30", 925), _mk("2026-07-01", "2026-05-04", "30", 4_113),
+         _mk("2026-07-03", "2026-06-01", "70", 14_080)]
+    got = {m: [(k[0], a) for k, a in xs] for m, xs in milk_months({"2026-04": 34_980, "2026-05": 12_210, "2026-06": 14_080}, w).items()}
+    assert got["2026-04"] == [("2026-05-19", 7_075), ("2026-06-01", 3_675), ("2026-06-02", 9_596), ("2026-06-09", 14_634)], got
+    assert got["2026-05"] == [("2026-06-09", 7_172), ("2026-06-10", 925), ("2026-07-01", 4_113)] and got["2026-06"] == [("2026-07-03", 14_080)], got
+    # 사이에 다른 달을 한 번에 뺀 지급일이 끼어도 남은 줄끼리 이어서 봄(ski1121 2월 208,445 + 358,825 · 3월 = 04-03 689,591)
+    got = milk_months({"2026-02": 567_270, "2026-03": 689_591}, [_mk("2026-03-05", "2026-01-26", "70", 208_445), _mk("2026-04-03", "2026-03-01", "70", 689_591),
+                                                                 _mk("2026-04-06", "2026-02-23", "30", 358_825)])
+    assert [a for _k, a in got["2026-02"]] == [208_445, 358_825] and [a for _k, a in got["2026-03"]] == [689_591], got
+    # 파일 → 달 합(글자 금액 · 취소수수료) · 2025 달 = 정산 밖 · 괄호 계정 · 없음 = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp) / "검증자료" / "광고"
+        d.mkdir(parents=True)
+        for ym in ("202512", "202605"):
+            (d / f"가짜[나다]-x1_밀크런_{ym}.xlsx").write_bytes(b"")
+        real, AC.milk_file = AC.milk_file, lambda p: [("1", 52_908.0), ("2", 7_592.0)]
+        try:
+            assert AC.milk_totals(Path(tmp), "가짜[나다]-x1") == {"2026-05": 60_500.0} and AC.milk_totals(Path(tmp), "x") == {}
+        finally:
+            AC.milk_file = real
+
+
+def test_t179_ad_wait() -> None:
+    """T-179 ⑩: 광고 청구 = 뺀 것 + '지급일 미정'(쿠팡이 아직 안 뺀 몫) 이면 검산 통과 · 뒤 달 지급이 끝났는데 안 뺀 몫(theirumlab 4월 6,986)은 그대로 실패 ·
+    끝전 ±2원 = 통과(D-281) · 청구 자료 없는 달 = 실패."""
+    rb = {"2026-09": 1_646_910, "2026-10": 1_533_752}
+    z = dict.fromkeys(rb, 0)
+    st = _ad_month("2026-10", z, [], RG_0930, charged=1_533_752 / 1.1, rg_bills=rb)
+    assert st.chk[0]["차이"] == 0 and st.chk[0]["값"][1:] == [1_325_039, 208_713], st.chk
+    st = _ad_month("2026-04", {"2026-04": 0}, [], [("2026-05-12", "2026-04-06", "2026-04-12", "70", 65_870), ("2026-06-12", "2026-05-04", "2026-05-10", "70", 0)],
+                   charged=72_856 / 1.1, rg_bills={"2026-04": 72_856})
+    assert round(st.chk[0]["차이"]) == 6_986 and [j for j in st.j if j.startswith("확인 필요") and "6,986" in j], (st.chk, st.j)     # 5월 줄 지급 완료 = 안 빼고 지급함
+    # 윙 10월 22,000 이 남고 11월 줄은 아직 예정(11월 청구 자료 없음) = 지급일 미정 · 11월 청구를 알면 = 확인 필요
+    ad, wing = "상품/브랜드광고비", [("2026-11-20", "2026-10-26", [("상품/브랜드광고비", 460_182)]), ("2026-11-27", "2026-11-02", [("상품/브랜드광고비", 96_936)])]
+    for bills, want in (({"2026-10": 482_182}, 0), ({"2026-10": 482_182, "2026-11": 96_936}, 22_000)):
+        lines = _ad_month("2026-10", bills, wing, charged=482_182 / 1.1, plan=("2026-11-27",))
+        assert round(lines.chk[0]["차이"]) == want, (bills, lines.chk, lines.j)
+    assert round(_ad_month("2026-10", {"2026-10": 482_182}, wing, charged=482_182 / 1.1).chk[0]["차이"]) == 22_000     # 11월 줄이 지급 완료 = 안 빼고 지급함
+    st = _ad_month("2026-04", {"2026-04": 51_302}, [("2026-05-20", "2026-04-13", [(ad, 51_300)])], charged=51_301.7 / 1.1)
+    assert st.chk[0]["차이"] == 0 and st.chk[0]["끝전(±2원 · D-281)"] == 1.7, st.chk
+    st = _ad_month("2026-07", {}, [], [("2026-08-20", "2026-07-06", "2026-07-12", "70", 66_324)])
+    assert st.chk[0]["차이"] == -66_324, st.chk
+
+
+def test_t179_cfs_no_line_period() -> None:
+    """T-179 ⑩: 지급 줄이 없는 정산주기의 물류비 = 뒤 줄 상세(cfsDeductionDetails)가 갚은 금액과 원 단위로 같으면 통과 · 다르면 실패 그대로.
+    기대값 = WBpeak 2026-02 원문(리포트 147,647 = 줄 칸 139,271 + 02-01 하루 주기 8,376)."""
+    from coupang_analytics.settlement_consignor_month_cost import logistics
+
+    def run(paid: int, own_start: str = "2026-02-02") -> SimpleNamespace:
+        own = {"채널": "로켓그로스", "totalStorageFeeDeductionAmount": 139_271}
+        late = {"채널": "로켓그로스", "cfsDeductionDetails": json.dumps([{"settlementPeriodStartDate": "2026-01-31T15:00:00Z", "settlementPeriodEndDate": "2026-01-31T15:00:00Z",
+                                                                    "lastSettlementUnpaidCfsDeductionAmount": paid}])}
+        lines = [(("2026-03-12", own_start, "2026-02-08", "로켓그로스", 70), ["", "", "2026-03-12", own_start, "2026-02-08", 70, "지급 완료"], own),
+                 (("2026-04-06", "2026-03-02", "2026-03-08", "로켓그로스", 70), ["", "", "2026-04-06", "2026-03-02", "2026-03-08", 70, "지급 완료"], late)]
+        st = SimpleNamespace(m="2026-02", d={"rg_cost_rows": [{"월(매출인식)": "2026-02", "등록상품ID": "P1", "물류비 합계(VAT포함)": 147_647}]}, managed=lambda p: False,
+                             common=[], loc=defaultdict(list), chk=[], j=[], lines=lambda: iter(lines), pend_line=lambda row, r: False)
+        logistics(st)
+        return st
+    st = run(8_376)
+    assert st.chk[0]["차이"] == 0 and st.cfs["noline"] == 8_376 and st.loc["cfs"][-1][0][0] == "2026-04-06", (st.chk, st.loc)
+    assert run(8_000).chk[0]["차이"] == 376
+    assert run(8_376, "2026-02-01").chk[0]["차이"] == 8_376           # 그 주기 줄이 있으면 줄 칸으로 봐야 함(갚은 금액을 더하지 않음)
+
+
+def test_t179_cash_reference() -> None:
+    """T-179 ⑩: 참고 대조(실제 지급액 = 줄 공식) — 보류 해제액·줄 생성 전 금액·지급 끝난 윙 음수 회차·추가지급 줄을 원문 값으로 넣으면 0 · 그 밖의 차이는 그대로.
+    기대값 = 쿠팡 원문(Difpick 5월 해제 9,724,088 · bux1004 11월 생성 전 13,834 · guarisen2024 7월 음수 −52,343 · freewin7777 추가지급 117,960)."""
+    from coupang_analytics.settlement_consignor_month_dep import _cash_reference
+    from coupang_analytics.settlement_consignor_month_out import cash_gap
+
+    def run(rows: list, gen: dict) -> int:
+        lines, info = [], []
+        for day, start, status, pay, rel, parts, final, extra in rows:
+            row = ["", "윙", day, start, start, 100 if extra else 70, status]
+            r = {"채널": "윙", "최종지급액": final, "정산일": day, "기간 시작": start, "기간 끝": start, "지급비율": 100 if extra else 70,
+                 "targetAmount": 0 if extra else pay, "paidAmount": 0 if extra else pay, "pendingAmount": rel}
+            lines.append(((day, start, start, "윙", 70), row, r))
+            info.append((status.split(" ·")[0], "윙", start[:7], pay, rel, Counter(parts), row))
+        st = SimpleNamespace(m="2026-05", d={"line_info": info, "L_gen": gen}, lines=lambda: iter(lines), loc={}, pay_ch=Counter({"윙": sum(x[3] for x in rows) + sum(gen.values())}))
+        _cash_reference(st)
+        return cash_gap(st.cash)
+    sale = ("2026-06-30", "2026-05-04", "지급 완료", 100_000, 0, {AC.AD: 30_000}, 70_000, False)
+    assert run([sale, ("2026-07-20", "2026-05-11", "지급 완료 · 보류 해제", 0, 9_724_088, {}, 9_724_088, False)], {}) == 0
+    assert run([sale], {("윙", "2026-05"): 13_834}) == 0
+    assert run([sale, ("2026-07-01", "2026-05-18", "지급 완료", 0, 0, {AC.AD: 52_343, AC.PM3: -52_343}, -52_343, False)], {}) == 0
+    assert run([sale, ("2026-05-13", "2026-05-13", "지급 완료 · 추가지급", 0, 0, {}, 117_960, True)], {}) == 0
+    assert run([(*sale[:6], 69_990, False)], {}) == 10                       # 설명 안 되는 10원 = 그대로 실패
+    assert run([("2026-07-01", "2026-05-18", "예정", 0, 0, {AC.AD: 52_343}, -52_343, False)], {}) == 0      # 예정 음수 = 줄 공식 그대로(D-319)
+
+
+def test_t179_pending_rg_missing_70() -> None:
+    """T-179 ⑩: 정산 예정 로켓그로스 — 70% 줄을 못 받은 판매 주는 30% 줄의 할인·수수료(기간 전체 값 · 두 줄이 같음)로. 정산 금액은 그대로.
+    기대값 = bux1004 2026-10 원문(판매 600,930 · 쿠폰 81,630 + 97,700 · 수수료 22,779 + 27,326 · 정산 371,495 → 차 0)."""
+    from coupang_analytics.settlement_consignor_month_calc import _pend_rg
+
+    def row(start, end, pct_, coupon, fee):
+        return None, ["", "", "x", start, end], {"채널": "로켓그로스", "지급비율": pct_, "totalSellerDiscount": coupon, "totalTakeRateAmountWithVat": fee}
+    pl = [row("2026-10-19", "2026-10-25", 30, 81_630, 22_779), row("2026-10-26", "2026-10-31", 70, 97_700, 27_326), row("2026-10-26", "2026-10-31", 30, 97_700, 27_326)]
+    st = SimpleNamespace(chk=[])
+    cf, est, _how = _pend_rg(st, pl, 600_930, 371_495, SimpleNamespace(opts={"v": (600_930, 371_495)}))
+    assert st.chk[0]["차이"] == 0 and cf("v") == (179_330, 50_105) and not est, (st.chk, cf("v"))
 
 
 def _line(ch: str, s: str, e: str, bi: dict | None = None) -> tuple:
@@ -1369,7 +1496,7 @@ def main() -> int:
         pass
     for f in (test_run_job_abort, test_run_job_isolation_and_sheets, test_d262_excluded_pending_listed, test_inputs_pack):
         f()
-    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_ad_nocamp_d317, test_t186_wing_ad_deducted, test_t186_wing_ad_carry, test_t186_ad_bills_file, test_t186_2025_bill_not_owed, test_t186_partly_deducted, test_t186_rg_month_border,
+    for f in (test_cum_round, test_product_table, test_rg_kinds, test_common_fixed, test_post_purchase, test_ad_nocamp_d317, test_t186_wing_ad_deducted, test_t186_wing_ad_carry, test_t186_ad_bills_file, test_t186_2025_bill_not_owed, test_t186_partly_deducted, test_t186_rg_month_border, test_t179_milk_months, test_t179_ad_wait, test_t179_cfs_no_line_period, test_t179_cash_reference, test_t179_pending_rg_missing_70,
               test_t175_old_forecast_record, test_new23_cross_week_flag, test_d401_remarks_and_evidence, test_d402_check_status_header, test_expect_values, test_flow_fixed, test_t125_additional_pay, test_d391_unknown_ship_same_month_wing_ratio, test_failed_checks, test_load_judge,
               test_sale_months_2025_excluded, test_render, test_fixed_render, test_product_pages, test_overflow, test_unsplittable, test_check_reject,
               test_multi_month, test_d242_change_log_tab_kept, test_d261_e1_pending_not_negative, test_d260_month_summary_page, test_d260_consignor_pdf,

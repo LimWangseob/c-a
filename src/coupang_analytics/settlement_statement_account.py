@@ -106,6 +106,13 @@ def milk_rows(base: Path, acct: str, since: str = "") -> list:
     return [x for p in sorted(d.glob(f"{tok}_밀크런_*.xlsx")) if p.stem[-6:] >= since for x in milk_file(p)]
 
 
+def milk_totals(base: Path, acct: str) -> dict:
+    """밀크런 파일 → {픽업 달 'YYYY-MM': 총 합계금액 + 취소수수료 합} · 2025 달 = 정산 밖(D-328)."""
+    d, tok = base / "검증자료" / "광고", glob.escape(SF._token(acct, "계정명"))   # 계정명 [ ] = 문자 묶음 아님
+    return {f"{p.stem[-6:-2]}-{p.stem[-2:]}": sum(x for _seq, x in milk_file(p)) for p in sorted(d.glob(f"{tok}_밀크런_*.xlsx"))
+            if not SL.sold_2025(p.stem[-6:])}
+
+
 def late_final_notes(gen: dict, v: dict, basis: str, month: str = "") -> list[str]:
     """장부 '줄 생성 전'(gen) 윙 달 중 쿠팡 정산 달력(검증자료 calendar · 'R' = 최종액 정산)의 정산일이 기준일 이하인 달 = 최종액(30%)
     회차 지급 줄을 못 받음 → '확인 필요 — 사유'(금액은 예정 그대로 · 지급·공제 추정 없음 · 산식 23 · 실측 seankim137 2026-09 230,722).

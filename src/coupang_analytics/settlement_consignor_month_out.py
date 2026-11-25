@@ -8,7 +8,7 @@ from collections import Counter
 from coupang_analytics import settlement_statement_account as AC
 from coupang_analytics.settlement_consignor_month_calc import MonthState, cum_round, month_end, pct
 from coupang_analytics.settlement_consignor_month_cost import BI_EXPECT, KINDS, PEND_KIND, RG_REVIEW_CAT, item_share
-from coupang_analytics.settlement_consignor_month_dep import FAST, dep_rows, deposits, flow
+from coupang_analytics.settlement_consignor_month_dep import EXTRA, FAST, GEN, NEGATIVE, RELEASE, dep_rows, deposits, flow
 from coupang_analytics.settlement_consignor_month_names import name_groups
 
 LINE_NAMES = ("판매 금액", "판매자 할인쿠폰", "쿠팡 판매수수료", "쿠팡 부담 할인", "광고비", "창고·배송비(로켓그로스)",
@@ -103,7 +103,7 @@ def coupang_by_cat(st: MonthState) -> Counter:
     c: Counter = Counter()
     c["ad"] = st.ad["base"]                               # 안 빠진 몫이 있으면 청구액(T-186)
     c["milk"] = st.milk["deducted"]
-    c["cfs"] = st.cfs["line_fees"] + st.cfs["adjust"] + st.cfs["pending"]
+    c["cfs"] = st.cfs["line_fees"] + st.cfs["adjust"] + st.cfs["pending"] + st.cfs["noline"]
     c["comp"] = -st.comp["paid"]
     for _n, a, cat in st.common_items:
         if cat.startswith(("o:", "w:", "r:", "svc")):
@@ -127,6 +127,12 @@ def _check(name: str, a, b) -> dict:
     return {"검사": name, "값": [a, b], "차이": a - b}
 
 
+def cash_gap(cc: dict) -> int:
+    """참고 대조 — 실제 지급액 = 정산금액(− 줄 생성 전) + 보류 해제 − 공제 − 판매 조정 + 지급 끝난 윙 음수 회차 + 추가지급 줄(쿠팡 원문 값)."""
+    return round(cc["그 줄 정산금액 합"] - cc[GEN] + cc[RELEASE] + cc[NEGATIVE] + cc[EXTRA] - cc["그 줄에서 빠진 공제(판매 조정 제외)"]
+                 - cc["판매 조정·음수 공제(환불 회수 · 날짜만 옮김)"] - cc["이 달 판매 기간 지급 줄 실제 지급액 합(계정 전체)"])
+
+
 def checks(st: MonthState, out: dict, lines8: dict) -> list:
     sub = sum(p["subtotal"] for p in out["products"])
     s = out["product_subtotal"] + out["common"]["total_applied"] + sum(x["amount"] for x in out["separate"])
@@ -139,8 +145,7 @@ def checks(st: MonthState, out: dict, lines8: dict) -> list:
         _check("어디로 갔나요 합 = 이번 정산 금액", sum(x["amount"] for x in out["flow"]), out["settle_amount"]),
         _check("11 날짜별 합 = 이번 정산 금액", sum(x["amount"] for x in out["deposits"]), out["settle_amount"])]
     cc = st.cash
-    cc["검산(실제 = 정산금액 − 공제 − 판매 조정)"] = round(cc["그 줄 정산금액 합"] - cc["그 줄에서 빠진 공제(판매 조정 제외)"]
-                                               - cc["판매 조정·음수 공제(환불 회수 · 날짜만 옮김)"] - cc["이 달 판매 기간 지급 줄 실제 지급액 합(계정 전체)"])
+    cc["검산(실제 = 정산금액 − 공제 − 판매 조정)"] = cash_gap(cc)
     return c + st.chk + [{"검사": "참고 — 이 달 판매 기간 쿠팡 지급 줄 실제 지급액과 이 정산서의 차이 구성", **{k: round(v) for k, v in cc.items()}}]
 
 

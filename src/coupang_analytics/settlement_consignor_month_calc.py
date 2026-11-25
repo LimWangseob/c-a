@@ -12,7 +12,7 @@ from pathlib import Path
 
 from coupang_analytics import settlement_managed_alloc as MA
 from coupang_analytics import settlement_statement_pending as PEND
-from coupang_analytics.settlement_consignor_month_wingad import ad_deducted
+from coupang_analytics.settlement_consignor_month_wingad import TOL, ad_deducted
 from coupang_analytics.settlement_statement_account import num
 
 
@@ -23,10 +23,14 @@ def jl(v):
     return json.loads(v) if isinstance(v, str) else v
 
 
+def kst_day(iso: str) -> str:
+    """쿠팡 시각(UTC · '2026-08-31T15:00:00Z') → 한국 날짜 '2026-09-01'."""
+    return f"{datetime.strptime(iso[:19], '%Y-%m-%dT%H:%M:%S') + timedelta(hours=9):%Y-%m-%d}"
+
+
 def kst_month(iso: str) -> str:
     """'2026-08-31T15:00:00Z' → KST 달 '2026-09'."""
-    t = datetime.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S") + timedelta(hours=9)
-    return f"{t:%Y-%m}"
+    return kst_day(iso)[:7]
 
 
 def cum_round(xs: list, target: int) -> list:
@@ -277,10 +281,13 @@ def _option_names(st: MonthState) -> dict:
 
 def _pend_rg(st: MonthState, pl: list, s: float, e: float, sp: PEND.Split) -> tuple:
     """(옵션 → (쿠폰, 수수료) 함수, 추정, 방법 글)."""
-    ls = [r for _key, _row, r in pl if r["채널"] == PEND.RG and num(r.get("지급비율")) in (70, 100)]
+    by: dict = {}                              # 판매 기간마다 한 줄 — 70%(100%) 줄 · 그 줄을 못 받았으면 30% 줄(할인·수수료 칸 = 기간 전체로 같은 값)
+    for _key, row, r in sorted((x for x in pl if x[2]["채널"] == PEND.RG), key=lambda x: num(x[2].get("지급비율")) not in (70, 100)):
+        by.setdefault((str(row[3]), str(row[4])), r)
+    ls = list(by.values())
     cp = sum(num(r.get("totalSellerDiscount")) for r in ls)
     fee = sum(num(r.get("totalTakeRateAmountWithVat")) for r in ls)
-    how = ("판매·정산 = 쿠팡 정산 줄(정산현황·매출내역 조회) · 2·3 = 그 판매 기간 지급비율 70 줄의 판매자 할인(totalSellerDiscount)·"
+    how = ("판매·정산 = 쿠팡 정산 줄(정산현황·매출내역 조회) · 2·3 = 그 판매 기간 지급 줄(70% · 없으면 30%)의 판매자 할인(totalSellerDiscount)·"
            "판매수수료(totalTakeRateAmountWithVat) 합 · 4 = 정산 − (판매 − 2 − 3)")
     st.chk.append({"검사": "정산 예정 로켓그로스: 판매 − 쿠폰 − 수수료 − 정산 (쿠팡 정산 줄 · 원 단위)", "값": [s, cp, fee, e],
                    "차이": round(s - cp - fee - e)})
@@ -400,7 +407,7 @@ def _ad_split(st: MonthState, cv: dict, b: float, tot: float, t: dict) -> None:
             t["prod_all"] -= b * c / tot
 
 
-def _ad_deducted(st: MonthState) -> tuple[float, float]:
+def _ad_deducted(st: MonthState) -> tuple[float, float, float]:
     rg = []
     for key, row, r in st.lines():
         if r["채널"] != "윙":
@@ -413,9 +420,10 @@ def ads(st: MonthState) -> None:
     pa, bill, have = st.d["ads"]
     t = _ad_bill(st, bill, have, _ad_cost(st, pa))
     charged_v = t["charged"] * 1.1
-    deducted, base = _ad_deducted(st)
-    st.chk.append({"검사": "광고 청구(청구가능액×1.1) ↔ 쿠팡이 지급 줄에서 뺀 이 달 광고비(로켓그로스 adSalesOffsetYearMonthBreakdown + 윙 차감 사유)",
-                   "값": [round(charged_v, 1), deducted], "차이": round(charged_v - deducted, 1)})
+    deducted, base, wait = _ad_deducted(st)
+    gap = round(charged_v - deducted - wait, 1)
+    st.chk.append({"검사": "광고 청구(청구가능액×1.1) ↔ 쿠팡이 지급 줄에서 뺀 이 달 광고비(로켓그로스 adSalesOffsetYearMonthBreakdown + 윙 차감 사유) + 지급일 미정(아직 안 뺀 몫)",
+                   "값": [round(charged_v, 1), deducted, wait], "차이": gap if abs(gap) > TOL else 0, "끝전(±2원 · D-281)": gap if abs(gap) <= TOL else 0})
     if not t["bill_m"] and st.mk not in have and bill:
         st.ad_note = f"{int(st.m[5:])}월 광고 청구 자료 아직 없음 — 5 광고비 0 으로 둠(바뀔 수 있음 · 쿠팡 광고 청구·공제가 나오면 다시 계산)"
     unattributed = charged_v - t["prod_all"] * 1.1
