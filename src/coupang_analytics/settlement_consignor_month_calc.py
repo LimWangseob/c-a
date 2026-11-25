@@ -12,7 +12,7 @@ from pathlib import Path
 
 from coupang_analytics import settlement_managed_alloc as MA
 from coupang_analytics import settlement_statement_pending as PEND
-from coupang_analytics.settlement_consignor_month_wingad import wing_ad_deducted
+from coupang_analytics.settlement_consignor_month_wingad import ad_deducted
 from coupang_analytics.settlement_statement_account import num
 
 
@@ -400,21 +400,20 @@ def _ad_split(st: MonthState, cv: dict, b: float, tot: float, t: dict) -> None:
             t["prod_all"] -= b * c / tot
 
 
-def _ad_deducted(st: MonthState) -> float:
-    deducted = wing_ad_deducted(st)
-    for key, _row, r in st.lines():
-        br = jl(r.get("adSalesOffsetYearMonthBreakdown"))
-        if isinstance(br, dict) and br.get(st.m):
-            st.loc["ad"].append((key, num(br[st.m])))
-            deducted += num(br[st.m])
-    return deducted
+def _ad_deducted(st: MonthState) -> tuple[float, float]:
+    rg = []
+    for key, row, r in st.lines():
+        if r["채널"] != "윙":
+            br = jl(r.get("adSalesOffsetYearMonthBreakdown"))
+            rg += [(m, key, num(a)) for m, a in (br if isinstance(br, dict) and br else {str(row[3])[:7]: 0}).items()]
+    return ad_deducted(st, rg)
 
 
 def ads(st: MonthState) -> None:
     pa, bill, have = st.d["ads"]
     t = _ad_bill(st, bill, have, _ad_cost(st, pa))
     charged_v = t["charged"] * 1.1
-    deducted = _ad_deducted(st)
+    deducted, base = _ad_deducted(st)
     st.chk.append({"검사": "광고 청구(청구가능액×1.1) ↔ 쿠팡이 지급 줄에서 뺀 이 달 광고비(로켓그로스 adSalesOffsetYearMonthBreakdown + 윙 차감 사유)",
                    "값": [round(charged_v, 1), deducted], "차이": round(charged_v - deducted, 1)})
     if not t["bill_m"] and st.mk not in have and bill:
@@ -436,5 +435,5 @@ def ads(st: MonthState) -> None:
         if t["nocamp"] and not round(nocamp):
             why.append(f"캠페인 없는 조정 {t['nocamp'] * 1.1:,.0f}")
         st.common.append(("광고비 중 쿠팡이 상품을 표시하지 않은 금액" + (f" ({' · '.join(why)})" if why else ""), unattributed, "ad"))
-    st.ad = {"charged": charged_v, "deducted": deducted, "prod_all": t["prod_all"] * 1.1, "prod_m": t["prod_m"] * 1.1,
+    st.ad = {"charged": charged_v, "deducted": deducted, "base": base, "prod_all": t["prod_all"] * 1.1, "prod_m": t["prod_m"] * 1.1,
              "nocamp": t["nocamp"] * 1.1, "have_report": st.mk in have, "판단": st.ad_note}

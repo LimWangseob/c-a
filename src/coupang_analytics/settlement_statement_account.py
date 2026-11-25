@@ -73,16 +73,20 @@ def ad_files(base: Path, acct: str) -> tuple[list, dict, set]:
     return pa, dict(bill), have
 
 
-def ad_wing_bills(base: Path, acct: str) -> dict:
-    """검증자료/광고 광고정산 json — {달 'YYYY-MM': 윙 광고 청구금액(summary.nonRod.totalFinalAmount · 부가세 포함 · null = 윙 광고 없음 0)}.
-    nonRod 칸이 없는 파일 = 윙 청구를 모름 → 그 달 안 넣음."""
+AD_BILL_KEYS = {"윙": "nonRod", "로켓그로스": "rocketGrowth"}       # 광고정산 json summary 칸(판매 방식)
+
+
+def ad_bills(base: Path, acct: str) -> dict:
+    """검증자료/광고 광고정산 json — {판매 방식: {달 'YYYY-MM': 광고 청구금액(summary 칸 totalFinalAmount · 부가세 포함 · null = 그 방식 광고 없음 0)}}.
+    칸이 없는 파일 = 청구를 모름 → 그 달 안 넣음 · 2025 판매 달 = 안 씀(지급 줄도 2025 판매 줄 없음 D-328 — 남기면 안 빠진 청구로 보임)."""
     d, tok = base / "검증자료" / "광고", glob.escape(SF._token(acct, "계정명"))   # 계정명 [ ] = 문자 묶음 아님
-    out = {}
+    out: dict = {ch: {} for ch in AD_BILL_KEYS}
     for p in sorted(d.glob(f"{tok}_광고정산_*.json")):
+        ym = p.stem.rsplit("_", 1)[-1]
         s = json.loads(p.read_text(encoding="utf-8")).get("summary") or {}
-        if "nonRod" in s:
-            ym = p.stem.rsplit("_", 1)[-1]
-            out[f"{ym[:4]}-{ym[4:]}"] = num((s["nonRod"] or {}).get("totalFinalAmount"))
+        for ch, k in AD_BILL_KEYS.items():
+            if k in s and not SL.sold_2025(ym):
+                out[ch][f"{ym[:4]}-{ym[4:]}"] = num((s[k] or {}).get("totalFinalAmount"))
     return out
 
 

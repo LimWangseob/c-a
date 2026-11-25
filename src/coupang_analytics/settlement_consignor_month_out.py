@@ -101,7 +101,7 @@ def common_out(st: MonthState) -> tuple[list, list]:
 def coupang_by_cat(st: MonthState) -> Counter:
     """분류별 쿠팡이 지급 줄에서 실제로 뺀 계정 금액(날짜별 표 위치 비율의 분모)."""
     c: Counter = Counter()
-    c["ad"] = st.ad["deducted"]
+    c["ad"] = st.ad["base"]                               # 안 빠진 몫이 있으면 청구액(T-186)
     c["milk"] = st.milk["deducted"]
     c["cfs"] = st.cfs["line_fees"] + st.cfs["adjust"] + st.cfs["pending"]
     c["comp"] = -st.comp["paid"]
