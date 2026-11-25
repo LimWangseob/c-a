@@ -7,6 +7,7 @@
 순서(각 단계 = 자식 프로세스 `statements --stage …` · 메모리 격리 · 한 단계가 실패해도 다음 단계는 돎):
   ① 입력 확인(위탁 = 입력 폴더 고정 이름 8종 · 셀독 = `입력_셀독` 폴더) — 없으면 그 종류만 '중단'
   ② 최신 `정산집계_*.xlsx`(없거나 옛 형식 = `stats` 자식 1번)
+  확정 장부(`settlement_confirmed.run_job` · D-419 ②) = 쿠팡 확정 값 장부를 원본과 대조·갱신 — 실패해도 다음 단계는 원본으로 돎
   ③ 위탁정산서(`statement_jobs_consignor.run_job`) ④ 셀독 정산서(`statement_jobs_seldoc.run_job`)
   ⑤ 지난 배치 위탁정산서와 차이 비교(`tools/check_settlement_statements.py`) ⑥ 보고 파일
 일 함수 약속(레인 B·D) = `run_job(opts: dict, on_log) -> {"ok": [...], "skipped": [{"id", "reason"}], "files": [...],
@@ -33,6 +34,7 @@ from contextlib import redirect_stdout
 from datetime import date, datetime
 from pathlib import Path
 
+from . import settlement_confirmed_read as CONFIRMED
 from . import settlement_read_store as READS
 from . import settlement_store as STORE
 from . import settlement_watch as W
@@ -47,10 +49,12 @@ LOGS = ROOT_DIR / "로그"
 INPUTS = ROOT_DIR / "입력"
 SELDOC_INPUTS = ROOT_DIR / "입력_셀독"
 STATS_GLOB = "정산집계_*.xlsx"
+CONFIRMED_DIR = STORE.BASE.parent / CONFIRMED.DIRNAME  # output/정산확정(장부 · 지우지 않음)
 STAGE_TIMEOUT_SEC = 3 * 3600          # 단계 하나 상한(개발 PC 실측 위탁 약 21분 · 셀독 읽기 약 7분 · 집계 약 16분)
 DIFF_TOOL = "check_settlement_statements.py"
 DIFF = "diff"
 STATS = "stats"
+LEDGER = ("confirmed", "쿠팡 확정 장부", "coupang_analytics.settlement_confirmed")     # (단계, 이름, 일 함수 모듈)
 # (단계, 이름, 일 함수 모듈) — 레인 B·D 약속 경로
 JOBS = (("consignor", "위탁정산서", "coupang_analytics.statement_jobs_consignor"),
         ("seldoc", "셀독 정산서", "coupang_analytics.statement_jobs_seldoc"))
@@ -224,9 +228,13 @@ def _job(opts: dict, on_log) -> dict:
         return _result(f"모듈 없음 — {module}")
     out = opts.get("managed_output")                  # 파일별 읽은 결과 저장(D-419 ①) — 배치에서만 켬
     READS.use(Path(out) / "정산서" / READS.DIR if out else None)
+    closed = CONFIRMED.use(Path(opts["confirmed"]) if opts.get("confirmed") else None)
+    if closed:
+        on_log(f"확정 장부 사용 — 닫힌 계정×판매 달 {closed}개는 장부 값(그 밖 = 원본)")
     try:
         return mod.run_job(opts, on_log)
     finally:
+        CONFIRMED.use(None)
         if READS.note():
             on_log(READS.note())
         READS.use(None)
@@ -312,6 +320,16 @@ def _run_job(name: str, label: str, module: str, opts: dict, block: str, run_dir
     return res
 
 
+def _ledger_stage(opts: dict, run_dir: Path, blog: BatchLog) -> dict:
+    """확정 장부 갱신(D-419 ②) — 성공하면 뒤 단계 opts 에 장부 폴더를 넣음. 실패 = 장부 없이(원본으로) 진행 + 확인 필요."""
+    name, label, module = LEDGER
+    res = _run_job(name, label, module, {**opts, "out": str(CONFIRMED_DIR.resolve())}, "", run_dir, blog)
+    if res["abort"]:
+        return {**res, "state": CHECK}
+    opts["confirmed"] = str(CONFIRMED_DIR.resolve())
+    return res
+
+
 def _job_opts(cycle: str, run_dir: Path, blog: BatchLog, stats: Path | None, skip: dict) -> dict:
     """일 함수 공통 입력(약속 · 레인 B·D) — 경로는 절대경로. 기준일·발행일 = 배치 실행일."""
     today = date.today().isoformat()
@@ -337,7 +355,7 @@ def _diff_stage(prev: dict | None, cons: dict, run_dir: Path, blog: BatchLog) ->
 
 # ── 확인 필요 목록 ────────────────────────────────────────
 def _labels() -> dict:
-    return {STATS: "정산집계", **{n: lb for n, lb, _m in JOBS}, DIFF: "지난 배치와 차이 비교", "inputs": "입력 확인"}
+    return {STATS: "정산집계", LEDGER[0]: LEDGER[1], **{n: lb for n, lb, _m in JOBS}, DIFF: "지난 배치와 차이 비교", "inputs": "입력 확인"}
 
 
 def check_items(day: str, stages: dict, skip: dict, others: dict) -> list[list]:
@@ -446,6 +464,7 @@ def _stages(cycle: str, done: dict, prev: dict | None, fails_file: Path, run_dir
                                "state": CHECK if any(need.values()) else OK}}
     stats, stages[STATS] = pick_stats(run_dir, blog)
     opts = _job_opts(cycle, run_dir, blog, stats, skip)
+    stages[LEDGER[0]] = _ledger_stage(opts, run_dir, blog)
     for name, label, module in JOBS:
         block = fwhy or need[name] or ("" if stats or name != "consignor" else "정산집계 없음")
         job = {**opts, "out": str((run_dir / name).resolve()), "consignor": stages.get("consignor")}

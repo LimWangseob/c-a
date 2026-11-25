@@ -60,6 +60,7 @@ CHECKS = [
     ("정산 런타임(다운로드·감시·검증 시트·지급일 대조)", "tools/verify_settlement_runtime_offline.py", True),
     ("정산서 배치 실행기(완료 뒤 띄우기·재시작·하루 1번·실패 계정·모듈 없음·잠금 D-399)", "tools/verify_statement_batch_offline.py", True),
     ("정산서 파일별 읽은 결과 저장(내용·코드 지문·값 같음·배치에서만 켬 D-419)", "tools/verify_settlement_read_store_offline.py", True),
+    ("쿠팡 확정 장부(닫는 조건·다시 열림·원문 값·두 길 값 같음·배치 단계 D-419)", "tools/verify_settlement_confirmed_offline.py", True),
     ("위탁정산서 계산 규칙(배분·장부·추가지급·입력 폴더)", "tools/verify_settlement_statements_offline.py", True),
     ("위탁정산서 정산 예정분 나누기(D-262·D-266 실제값·B8·B+환산·확인 필요)", "tools/verify_settlement_pending_offline.py", True),
     ("정산 받기 의심·자료 출처 대조(T-82·T-78 S1~S3)", "tools/verify_settlement_sources_offline.py", True),

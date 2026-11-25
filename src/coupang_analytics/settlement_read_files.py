@@ -18,11 +18,10 @@ def settle_file(p: Path) -> SF.SettleFile:
     return STORE.read("정산파일", p, SF.load_settle_file, _BASE)
 
 
-def _wing_rates(p: Path) -> list:
-    """윙 주문상세 → [(등록상품ID, 서비스이용율(소수 1자리))] 서로 다른 짝."""
-    wb = openpyxl.load_workbook(p, read_only=True)
+def rates_of(grid: list) -> list:
+    """윙 주문상세 격자 → [(등록상품ID, 서비스이용율(소수 1자리))] 서로 다른 짝."""
     h, out = None, set()
-    for r in wb.worksheets[0].iter_rows(values_only=True):
+    for r in grid:
         if h is None:
             h = {str(c): i for i, c in enumerate(r) if c} if r and "상품 ID" in r and "서비스이용율(%,VAT별도)" in r else None
             continue
@@ -33,8 +32,11 @@ def _wing_rates(p: Path) -> list:
             continue
         if pid:
             out.add((str(pid), rate))
-    wb.close()
     return sorted(out)
+
+
+def _wing_rates(p: Path) -> list:
+    return rates_of(SF.read_grid(p))
 
 
 def wing_rates(p: Path) -> list:

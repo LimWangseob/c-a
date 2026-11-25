@@ -14,6 +14,7 @@ import json
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from coupang_analytics import settlement_confirmed_read as CONFIRMED
 from coupang_analytics import settlement_files as SF
 from coupang_analytics import settlement_ledger as SL
 from coupang_analytics import settlement_forecast as FC
@@ -50,13 +51,19 @@ def verify_json(base: Path, acct: str) -> dict:
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
 
 
+def ad_json(p: Path) -> dict:
+    """광고정산 json 내용 — 닫힌 판매 달 = 확정 장부(D-419 ②) · 그 밖 = 원본."""
+    got = CONFIRMED.ad_json(p)
+    return json.loads(p.read_text(encoding="utf-8")) if got is None else got
+
+
 def ad_files(base: Path, acct: str) -> tuple[list, dict, set]:
     """검증자료/광고 — (보고서 줄[(날짜, 캠페인 ID, 광고집행 옵션ID, 광고비)], {(날짜, 캠페인 ID): 청구가능 광고비}, 보고서 받은 달). 없으면 ([], {}, set())."""
     d, tok = base / "검증자료" / "광고", glob.escape(SF._token(acct, "계정명"))   # 계정명 [ ] = 문자 묶음 아님
     pa = [(day, cid, opt, num(cost)) for p in sorted(d.glob(f"{tok}_매출성장광고_*.xlsx")) for day, cid, opt, cost in RF.ad_rows(p)]
     bill: Counter = Counter()
     for p in sorted(d.glob(f"{tok}_광고정산_*.json")):
-        for it in json.loads(p.read_text(encoding="utf-8")).get("items") or []:
+        for it in ad_json(p).get("items") or []:
             cid = it.get("campaignId")                    # 없음 = 캠페인 없는 조정(광고 프로모션 할인 등)
             bill[(int(it["date"]), str(int(float(cid))) if cid not in (None, "") else "")] += num(it.get("billableAmount"))
     have = {p.stem.rsplit("_", 1)[-1] for p in d.glob(f"{tok}_매출성장광고_*.xlsx")}
@@ -73,7 +80,7 @@ def ad_bills(base: Path, acct: str) -> dict:
     out: dict = {ch: {} for ch in AD_BILL_KEYS}
     for p in sorted(d.glob(f"{tok}_광고정산_*.json")):
         ym = p.stem.rsplit("_", 1)[-1]
-        s = json.loads(p.read_text(encoding="utf-8")).get("summary") or {}
+        s = ad_json(p).get("summary") or {}
         for ch, k in AD_BILL_KEYS.items():
             if k in s and not SL.sold_2025(ym):
                 out[ch][f"{ym[:4]}-{ym[4:]}"] = num((s[k] or {}).get("totalFinalAmount"))

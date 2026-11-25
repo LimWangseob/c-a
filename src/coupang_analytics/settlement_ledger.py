@@ -20,6 +20,7 @@ from datetime import date
 from pathlib import Path
 
 from coupang_analytics import settlement_additional_pay as AP
+from coupang_analytics import settlement_confirmed_read as CONFIRMED
 from coupang_analytics import settlement_forecast as FC
 
 
@@ -108,7 +109,8 @@ class Ledger:
         self.supp_data: dict = {}
         for p in (base / "쿠팡지급내역").glob("*.json"):
             acct, ch = p.stem.rsplit("_", 1)
-            self._put(_aid(acct), ch, json.loads(p.read_text(encoding="utf-8")), True)
+            rows = json.loads(p.read_text(encoding="utf-8"))
+            self._put(_aid(acct), ch, CONFIRMED.pay_rows(_aid(acct), ch, rows), True)      # 닫힌 달 줄 = 확정 장부(D-419 ②)
         if supp and supp.is_dir():
             for p in supp.glob("*.json"):
                 if p.stem.endswith("_판매분석주별"):

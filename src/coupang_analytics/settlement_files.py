@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
+from . import settlement_confirmed_read as CONFIRMED
 from .settlement_parse import SettlementParseError, parse_date, parse_id, parse_int
 
 CH_WING = "윙"
@@ -172,6 +173,9 @@ def parse_rg_fee(rows: list, *, account: str, period_start: date, period_end: da
 # ── xlsx 입출력 ───────────────────────────────────────────────────
 def read_grid(path) -> list:
     import openpyxl
+    got = CONFIRMED.sheets(path)                         # 닫힌 달 = 확정 장부 값(정산서 배치에서만 켜짐 D-419 ②)
+    if got is not None:
+        return next(iter(got.values()))
     wb = openpyxl.load_workbook(Path(path), read_only=True, data_only=True)
     try:
         return [list(r) for r in wb.worksheets[0].iter_rows(values_only=True)]
@@ -202,6 +206,9 @@ def scrub_pii(src, dst, columns=PII_COLUMNS) -> int:
 def read_sheets(path) -> dict:
     """모든 시트 → {시트명: 격자}. 비용 리포트는 시트가 여럿(입출고비·배송비 등)."""
     import openpyxl
+    got = CONFIRMED.sheets(path)                         # 닫힌 달 = 확정 장부 값(read_grid 와 같음)
+    if got is not None:
+        return got
     wb = openpyxl.load_workbook(Path(path), read_only=True, data_only=True)
     try:
         return {ws.title: [list(r) for r in ws.iter_rows(values_only=True)] for ws in wb.worksheets}
@@ -435,10 +442,10 @@ def parse_file_name(name: str) -> dict:
             "report": d["report"], "period_start": to_d(d["ps"]), "period_end": to_d(d["pe"])}
 
 
-def load_settle_file(path) -> SettleFile:
-    """이름 규칙대로 저장된 파일 → 이름에서 계정·기간을 얻어 채널별로 파싱."""
+def load_settle_file(path, rows: list | None = None) -> SettleFile:
+    """이름 규칙대로 저장된 파일 → 이름에서 계정·기간을 얻어 채널별로 파싱. rows = 이미 읽은 격자(없으면 파일을 읽음)."""
     meta = parse_file_name(Path(path).name)
-    rows = read_grid(path)
+    rows = read_grid(path) if rows is None else rows
     kw = {"account": meta["account"], "period_start": meta["period_start"], "period_end": meta["period_end"]}
     if meta["channel"] == CH_WING:
         out = parse_wing_detail(rows, **kw)

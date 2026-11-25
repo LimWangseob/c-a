@@ -185,7 +185,7 @@ def b1_full_run_and_failed_accounts():
         key = "2026-11-21T01:30:00"
         _done(key, {"홍길동-길동상사-acc2": "로그인", RLG.ALL: "받기 의심"})
         assert _batch(key) == 0
-        assert CALLS["stage"] == [SB.STATS, "consignor", "seldoc"], CALLS["stage"]     # 첫 배치 = 차이 비교 안 함
+        assert CALLS["stage"] == [SB.STATS, SB.LEDGER[0], "consignor", "seldoc"], CALLS["stage"]     # 첫 배치 = 차이 비교 안 함
         c, s = CALLS["consignor"][0], CALLS["seldoc"][0]
         assert c["skip_accounts"] == {"홍길동-길동상사-acc2": "로그인"}, c["skip_accounts"]   # '(전체)' = 계정 아님 → 보고만
         assert c["cycle"] == key and Path(c["stats"]).name.startswith("정산집계_") and c["sheet"] is True, c
@@ -223,7 +223,7 @@ def b2_same_cycle_once_and_diff():
         _stats_file("정산집계_261120_010000.xlsx")
         k1 = "2026-11-21T01:30:00"
         _done(k1)
-        assert _batch(k1) == 0 and CALLS["stage"] == ["consignor", "seldoc"], CALLS["stage"]   # 최신 집계 형식 맞음 = stats 안 함
+        assert _batch(k1) == 0 and CALLS["stage"] == [SB.LEDGER[0], "consignor", "seldoc"], CALLS["stage"]   # 최신 집계 형식 맞음 = stats 안 함
         first = json.loads(SB.RECORD.read_text(encoding="utf-8"))
         assert first["result"] == "일부 실패 --> 확인 필요", first
         CALLS.clear()
@@ -239,7 +239,7 @@ def b2_same_cycle_once_and_diff():
         _done(k2)
         CALLS.clear()
         assert _patched([(SB, "tools_dir", lambda: tool.parent)], lambda: _batch(k2)) == 0
-        assert CALLS["stage"] == [SB.STATS, "consignor", "seldoc", SB.DIFF], CALLS["stage"]
+        assert CALLS["stage"] == [SB.STATS, SB.LEDGER[0], "consignor", "seldoc", SB.DIFF], CALLS["stage"]
         rec = json.loads(SB.RECORD.read_text(encoding="utf-8"))
         d = rec["stages"][SB.DIFF]
         assert d["state"] == SB.OK and "독립 검산 1/1" in d["note"] and "계정 수 1 1 일치 1" in d["note"], d

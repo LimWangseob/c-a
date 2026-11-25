@@ -21,6 +21,8 @@ from pathlib import Path
 
 import openpyxl
 
+from . import settlement_confirmed_read as CONFIRMED
+
 PKG = "coupang_analytics"
 DIR = "_읽은결과"                 # output/정산서/_읽은결과
 MAGIC = b"READ1\n"
@@ -84,6 +86,10 @@ def code_version(roots: tuple) -> str:
 
 # ── 저장·재사용 ──────────────────────────────────────────────
 def _sha(p: Path) -> str:
+    """파일 내용 지문 — 닫힌 판매 달의 파일은 확정 장부에 적힌 원본 지문(값도 장부에서 읽음 · D-419 ②)."""
+    got = CONFIRMED.source_sha(p)
+    if got is not None:
+        return got
     with p.open("rb") as f:
         return hashlib.file_digest(f, "sha256").hexdigest()
 
