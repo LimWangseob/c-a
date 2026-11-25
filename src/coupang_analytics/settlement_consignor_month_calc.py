@@ -12,6 +12,7 @@ from pathlib import Path
 
 from coupang_analytics import settlement_managed_alloc as MA
 from coupang_analytics import settlement_statement_pending as PEND
+from coupang_analytics.settlement_consignor_month_wingad import wing_ad_deducted
 from coupang_analytics.settlement_statement_account import num
 
 
@@ -400,17 +401,12 @@ def _ad_split(st: MonthState, cv: dict, b: float, tot: float, t: dict) -> None:
 
 
 def _ad_deducted(st: MonthState) -> float:
-    deducted = 0.0
+    deducted = wing_ad_deducted(st)
     for key, _row, r in st.lines():
         br = jl(r.get("adSalesOffsetYearMonthBreakdown"))
         if isinstance(br, dict) and br.get(st.m):
             st.loc["ad"].append((key, num(br[st.m])))
             deducted += num(br[st.m])
-    for key, row, r in st.lines():
-        if r["채널"] == "윙":
-            for x in r.get("차감 사유") or []:
-                if "광고" in (x.get("사유") or "") and str(row[3])[:7] == st.m:
-                    st.j.append(f"확인 필요: 윙 지급 줄 {key} 광고 차감 {x.get('금액')} — 달 표시 없음(위치만 · 금액은 광고 청구 자료 기준)")
     return deducted
 
 
@@ -419,7 +415,7 @@ def ads(st: MonthState) -> None:
     t = _ad_bill(st, bill, have, _ad_cost(st, pa))
     charged_v = t["charged"] * 1.1
     deducted = _ad_deducted(st)
-    st.chk.append({"검사": "광고 청구(청구가능액×1.1) ↔ 쿠팡이 지급 줄에서 뺀 이 달 광고비(adSalesOffsetYearMonthBreakdown)",
+    st.chk.append({"검사": "광고 청구(청구가능액×1.1) ↔ 쿠팡이 지급 줄에서 뺀 이 달 광고비(로켓그로스 adSalesOffsetYearMonthBreakdown + 윙 차감 사유)",
                    "값": [round(charged_v, 1), deducted], "차이": round(charged_v - deducted, 1)})
     if not t["bill_m"] and st.mk not in have and bill:
         st.ad_note = f"{int(st.m[5:])}월 광고 청구 자료 아직 없음 — 5 광고비 0 으로 둠(바뀔 수 있음 · 쿠팡 광고 청구·공제가 나오면 다시 계산)"
