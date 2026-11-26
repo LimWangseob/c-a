@@ -19,7 +19,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .settlement_docs import months_after
-from .settlement_jobs import DOC_KIND, MAX_ATTEMPTS, ST_DONE, ST_FAILED, Job, _due, mark_requested
+from .settlement_jobs import DOC_KIND, MAX_ATTEMPTS, ST_DONE, ST_FAILED, ST_PLANNED, Job, _due, mark_requested
 from .settlement_wing_api import (RG_REQUEST, WING_REQUEST, RequestThrottled, SiteChangedError, rg_request_id,
                                   wing_request_id)
 
@@ -60,6 +60,12 @@ def plan(jobs: list[Job], account: str, today: date, now: datetime, since: str, 
         if len(picked) < left:
             picked.append(j)
     return picked
+
+
+def unrequested(jobs: list[Job], account: str) -> int:
+    """그 계정의 아직 요청 안 한 부가세 상세('요청예정') 수. 요청은 소급 단계만 회차 계정당 VAT_BUDGET 까지 하므로(받기 단계는 안 함 ·
+    settlement_jobs.plan_requests) 첫 바퀴 뒤 남은 것 = 다음 회차 몫 — 쿠팡 생성 대기가 아님(회차 완료를 막지 않고 남은 소급에 표시)."""
+    return sum(1 for j in jobs if j.account == account and j.kind == DOC_KIND and j.status == ST_PLANNED)
 
 
 def wing_body(j: Job) -> dict:

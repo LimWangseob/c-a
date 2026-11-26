@@ -4766,6 +4766,133 @@ def p76_bracket_account_files():
     ok("괄호 계정 = 자기 파일만(광고 보고서·광고정산·받은 달·밀크런·재고 보상·윙) · 남의 계정 안 잡음 · 이름 맞춤도 자기 파일만")
 
 
+def p77_vat_budget_not_pending():
+    print("[P77] 정산 회차 '완료' 기록(소유자 11-26 '수정해줘') — 회차 요청 수(부가세 상세 계정당 4건 · D-170)를 다 써 이번 회차에 요청할 수 없는 "
+          "부가세 상세 '요청예정' = 생성 대기 아님(다음 회차 · 남은 소급에 표시) → 받을 것을 다 받으면 24:00 전 '완료' · 요청한 파일의 생성 대기·"
+          "받기 단계가 요청하는 정산 파일 '요청예정' = 그대로 기다림(거짓 완료 없음) · 실측 output46 11-24 6건·11-25 2건이 24:00 까지 회차를 열어 둠")
+    import os
+    from datetime import datetime as RealDT, timedelta
+    from types import SimpleNamespace
+    sys.path.insert(0, str(ROOT / "tools"))
+    import settlement_download as TD
+    from coupang_analytics import settlement_jobs as SJ
+    from coupang_analytics import settlement_retry as TR
+    from coupang_analytics import settlement_runlog as RLG
+    from coupang_analytics import settlement_watch as W
+    a, h = "가-유통-a1", "나-온라인-h1"
+    vat = lambda acct, m, st=SJ.ST_PLANNED, at="": SJ.Job(acct, "윙", SJ.DOC_KIND, "윙부가세상세", f"2026-{m:02d}-01",  # noqa: E731
+                                                            f"2026-{m:02d}-28", f"2026-{m:02d}-28", status=st, requested_at=at,
+                                                            attempts=1 if at else 0)
+    settle = lambda acct, st: SJ.Job(acct, "윙", "주정산", "주문상세", "2026-11-10", "2026-11-16", "2026-11-20", status=st)  # noqa: E731
+    copy_end = ([vat(a, 1), vat(a, 2)] + [vat(h, m, SJ.ST_FAILED) for m in range(1, 11)]   # 사본 11-25 끝 = 받음 외 요청예정 2·실패 10
+                + [vat(a, m, SJ.ST_DONE) for m in range(3, 11)] + [settle(a, SJ.ST_DONE), settle(h, SJ.ST_DONE)])
+    accts = [SimpleNamespace(nm=a, account_id="a1"), SimpleNamespace(nm=h, account_id="h1")]
+    cwd = os.getcwd()
+
+    # ① 사본 11-25 회차 끝 상태(남은 일 바퀴 뒤) — 받을 수 있는 것을 다 받음 = 생성 대기 0 · 남은 일 0 · '완료'
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            Path("output").mkdir()
+            jobs_p = Path(tmp) / "_요청기록.json"
+            tries = TR.Tries(Path(tmp) / "로그", "2026-11-25T00:10:00", line=lambda m: None)
+            tries.begin_pass("p9")
+            done = {"정기": {a, h}, "소급": {a, h}}
+            plan: dict = {}
+
+            def after_pass(js):
+                SJ.save_jobs(jobs_p, js)
+                TD._plan_rest({}, False, RLG.RunLog(tmp, now=RealDT(2026, 11, 25, 23, 47), echo=lambda m: None))
+                pending = TD._pending_jobs()
+                return pending, dict(TD.REST_PLAN), W.plan_after_pass(False, TD._work_left(False, 0, pending, 0), pending, 0)
+            pat = [(TD, "TRIES", tries), (TD, "JOBS", jobs_p), (TD, "name_of", lambda x: x.nm), (TD, "PASS_ACCOUNTS", accts),
+                   (TD, "PHASE_DONE", done), (TD, "REST_PLAN", plan)]
+            pending, rest, (act, why) = _patched(pat, lambda: after_pass(copy_end))
+            assert (pending, rest, act) == (0, {}, "done"), (pending, rest, act, why)   # 옛 코드 = 2 · {a: 받기} · later(24:00 까지)
+            # 거짓 완료 없음 — 요청한 부가세 상세(쿠팡 생성 중) · 받기 단계가 요청할 정산 파일(요청예정) = 기다림
+            for extra in ([vat(a, 11, SJ.ST_REQUESTED, "2026-11-25T09:50:00")], [settle(a, SJ.ST_PLANNED)]):
+                pending, rest, (act, why) = _patched(pat, lambda: after_pass(copy_end + extra))
+                assert (pending, rest, act) == (1, {a: {"받기"}}, "later"), (extra[0].status, pending, rest, act)
+        finally:
+            os.chdir(cwd)
+    ok("사본 11-25 끝 상태 = 생성 대기 0 · 남은 일 0 · 완료 · 요청한 파일 생성 대기·요청할 정산 파일 = 그대로 기다림")
+
+    # ② 다음 회차로 넘긴 부가세 상세 = [실행 결과 종합] '남은 소급'에 보임(조용히 사라지지 않음 · 회차 완료는 안 막음)
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        jobs_p = t / "_요청기록.json"
+        SJ.save_jobs(jobs_p, copy_end)
+        lg = RLG.RunLog(t, echo=lambda m: None)
+        _patched([(TD, "LOG", lg), (TD, "JOBS", jobs_p), (TD, "name_of", lambda x: x.nm), (TD, "VERIFY", t / "v"),
+                  (TD, "_sales_left", lambda *x: None), (TD, "_rg_vendor", lambda *x: "")],
+                 lambda: TD._backlog_left(accts, SimpleNamespace(start=D("2026-01-01"))))
+        assert lg.left.get((a, "부가세 상세 요청")) == (2, "건") and lg.left.get((h, "부가세 상세 요청")) == (0, "건"), lg.left
+        assert "부가세 상세 요청 2건(1계정)" in RLG.result_block(lg)[-1], RLG.result_block(lg)[-1]
+    ok("다음 회차로 넘긴 부가세 상세 요청 = 남은 소급 'N건(계정 수)'로 표시")
+
+    # ③ 사본 11-25 회차 흐름(가짜 시계 · 진짜 _plan_rest·_pending_jobs·cmd_watch) — 첫 바퀴 소급이 4건 요청·2건 남김 → 남은 일 바퀴가
+    #    4건 받음 → 그 바퀴로 '완료' 기록 · 정산서 배치 띄움(옛 코드 = 남은 일 바퀴 20분마다 24:00 까지 · '완료' 없음)
+    with tempfile.TemporaryDirectory() as tmp:
+        os.chdir(tmp)
+        try:
+            Path("output").mkdir()
+            clock = {"now": RealDT(2026, 11, 25, 2, 40)}
+            kinds: list = []
+            started: list = []
+
+            class FakeDT(RealDT):
+                @classmethod
+                def now(cls, tz=None):
+                    return clock["now"]
+
+            def fake_sleep(sec):
+                clock["now"] += timedelta(seconds=max(sec, 1))
+            requested = [vat(a, m, SJ.ST_REQUESTED, "2026-11-25T09:55:00") for m in range(3, 7)]
+
+            def one_pass(args):                                # 회차 첫 바퀴 — 정기·소급 끝 · 소급이 3~6월 요청(한도 4) · 1·2월 요청예정
+                kinds.append(("전체", clock["now"]))
+                TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
+                TD.TRIES.begin_pass("p1")
+                TD.PASS_ACCOUNTS[:] = accts
+                TD.PHASE_DONE["정기"].update({a, h})
+                TD.PHASE_DONE["소급"].update({a, h})
+                SJ.save_jobs(TD.JOBS, [j for j in copy_end if j.status == SJ.ST_DONE and j.period_start[5:7] not in
+                                       ("03", "04", "05", "06")] + requested + copy_end[:12])
+                clock["now"] += timedelta(hours=8, minutes=27)
+                TD._plan_rest({}, False, TD.LOG)
+                return False, 42
+
+            def rest_pass(args):                               # 남은 일 바퀴 — 요청한 4건 받음
+                kinds.append(("남은 일", clock["now"]))
+                prev = {n: set(s) for n, s in TD.REST_PLAN.items()}
+                TD.LOG = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
+                TD.TRIES.begin_pass(f"p{len(kinds)}")
+                js = SJ.load_jobs(TD.JOBS)
+                for j in js:
+                    if j.status == SJ.ST_REQUESTED:
+                        j.status = SJ.ST_DONE
+                SJ.save_jobs(TD.JOBS, js)
+                clock["now"] += timedelta(minutes=7)
+                TD._plan_rest(prev, False, TD.LOG)
+                return False, 4 if len(kinds) == 2 else 0
+            args = SimpleNamespace(parent=0, ledger_synced=True, until="", until_at=None, hidden=False, manual=False)
+            log0 = RLG.RunLog(TD.BASE, now=clock["now"], echo=lambda m: None)
+            _patched([(TD, "datetime", FakeDT), (TD.time, "sleep", fake_sleep), (TD, "_one_pass", one_pass),
+                      (TD, "_rest_pass", rest_pass), (TD, "name_of", lambda x: x.nm), (TD, "PASS_ACCOUNTS", []),
+                      (TD, "PHASE_DONE", {"정기": set(), "소급": set()}), (TD, "REST_PLAN", {}), (TD, "CYCLE", RLG.Totals()),
+                      (TD, "_watch_wait_reason", lambda *x, **k: ("", None)), (TD, "_between_passes", lambda: None),
+                      (TD, "_cycle_sources", lambda x: None), (TD, "_evidence_sweep", lambda x, act: None),
+                      (TD, "_start_statements", lambda key, x: started.append(key)), (TD, "LOG", log0), (TD, "TRIES", None)],
+                     lambda: TD.cmd_watch(args))
+            rec = W.read_done(TD.DONE_FILE)
+            assert [k for k, _ in kinds] == ["전체", "남은 일"], kinds[:6]             # 옛 코드 = 남은 일 바퀴 20분마다 24:00 까지
+            assert rec and rec["result"] == "완료" and started == [rec["key"]], (rec, started)
+            assert clock["now"] < RealDT(2026, 11, 25, 12, 0), clock["now"]
+        finally:
+            os.chdir(cwd)
+    ok("사본 11-25 흐름 = 요청한 4건 받은 남은 일 바퀴로 '완료' 기록 · 정산서 배치 띄움 · 24:00 까지 안 열어 둠")
+
+
 def main():
     import settlement_download as TD
     TD._start_statements = lambda cycle, args: None   # 시험이 실제 정산서 배치(구글시트 쓰기 포함)를 띄우지 않게(D-399 · 띄우기 시험 = verify_statement_batch_offline)
@@ -4837,6 +4964,7 @@ def main():
     p74_restart_rest_and_finish_now()
     p75_stale_fail_evidence_cleared()
     p76_bracket_account_files()
+    p77_vat_budget_not_pending()
     print("정산 런타임 오프라인 검증 통과")
 
 
