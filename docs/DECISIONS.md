@@ -3491,3 +3491,10 @@ umpy`) · 우리 코드는 numpy 를 직접 안 씀 · 정산 바퀴 끝 '남는
 - 영향 범위: `tools/settlement_download.py`(`_waitable`·`_backlog_left`)·`src/coupang_analytics/settlement_docs_request.py`(`unrequested`)·`tools/verify_settlement_runtime_offline.py` P77. 정산서 배치(D-399)가 '완료' 뒤 뜨는 조건은 그대로.
 - 상태: ACTIVE (운용 PC 설치 뒤 첫 회차 `_완료.json`·'[자동] 정산서 배치 시작' 줄로 확인)
 
+
+### D-430 [BUILD_OWN_SUBMODULES] 빌드 = 앱 모듈 전체를 exe 에 넣음(spec 이 src 를 경로에 넣은 뒤 모음) · 정산서 배치 일 모듈이 빠지면 빌드 중단 (2026-11-26, R262)
+- 결정(통제 · 소유자 2026-11-26 "정산 배치 프로그램이 완성되었으면 배포버젼에 추가해줘" 수행 중 발견): `coupang_analytics.spec` 이 `collect_submodules("coupang_analytics")` 전에 `SPECPATH\src` 를 sys.path 에 넣음 · `statement_jobs_consignor`·`statement_jobs_seldoc`·`settlement_statements` 를 못 모으면 `SystemExit`(빌드 중단).
+- 근거(사실·재현): R262 첫 빌드 PYZ 대조 — 정산서 일 모듈이 끌어오는 75개 중 28개가 `정산다운로드.exe` 에 없음(`output\_배포검증\R262_261126\missing_modules.log`) · 원인 = `statement_batch._job` 의 `importlib.import_module` 을 정적 분석이 못 봄 + spec 의 collect_submodules 가 src 없는 경로에서 0개(같은 python 실측 0 → 경로 넣으면 156). R252 부터 정산서 배치가 exe 에선 '모듈 없음'으로 멈출 상태였음(운용 PC 는 R250 이라 아직 영향 없음).
+- 버린 대안: hiddenimports 에 일 모듈 2개만 적기(그 모듈이 끌어오는 것은 정적 분석으로 들어오지만 새 동적 import 가 생기면 또 빠짐).
+- 영향 범위: `coupang_analytics.spec` · 배포 zip 3 exe 모두(같은 hiddenimports) · 빌드 검증에 '정산서 일 모듈 exe 포함' 대조 추가(R262 검증 절차).
+- 상태: ACTIVE

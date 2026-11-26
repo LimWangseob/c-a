@@ -25,7 +25,16 @@ for _pkg in ("playwright", "googleapiclient", "google_auth_httplib2"):
 # google.oauth2 / google.auth 는 네임스페이스 패키지 → 서브모듈을 명시 수집(hidden import 누락 방지).
 hiddenimports += collect_submodules("google.auth")
 hiddenimports += collect_submodules("google.oauth2")
-hiddenimports += collect_submodules("coupang_analytics")
+# coupang_analytics 전체 = 정산서 배치가 일 모듈을 이름으로 import(statement_batch._job · importlib) → 정적 분석이 못 봄.
+# spec 이 돌 때 src 가 sys.path 에 없으면 collect_submodules 가 조용히 0개(R262 빌드 실측 · 정산다운로드.exe 에 28개 빠짐) → 먼저 넣음.
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.join(SPECPATH, "src"))
+_own = collect_submodules("coupang_analytics")
+for _m in ("statement_jobs_consignor", "statement_jobs_seldoc", "settlement_statements"):   # 빠지면 빌드 중단(조용히 빠진 채 배포 금지)
+    if f"coupang_analytics.{_m}" not in _own:
+        raise SystemExit(f"빌드 중단 — coupang_analytics.{_m} 를 못 모음(src 경로 확인)")
+hiddenimports += _own
 
 _EXCLUDES = [
     "tkinter", "torch", "torchvision", "torchaudio", "scipy", "pandas",
