@@ -7,6 +7,9 @@
 - 하루 한 번(그날 기록 · 08:00 전·23:00 뒤 안 함 · 무인 앱은 그날 남았으면 종료 미룸) (M4)
 - 날짜 지정 실행과 섞이지 않음(대상 = 이번 ① 이 어제 칸을 받은 계정 · 다른 칸 안 건드림 · ① 미완료 회차 = 대기) (M5)
 - 아침 값도 노출·방문 0 인데 판매가 있는 계정 = ⚠ 줄(값은 그대로 씀) (M6)
+- 쿠팡 집계 전(판매 있는데 응답 노출·방문 전부 0 · 소유자 2026-11-26 '11.25 … 원인 파악해서 수정') = 0 으로 확정 안 함 · 같은 날 뒤 시각에
+  다시 · 무인 앱은 그때까지 켜 둠 (M10) · 이미 0 으로 들어간 지난 칸(7일 안)도 다음 회차가 메움 (M11) · 집계 끝난 날의 0 = 진짜 0 확정 ·
+  판매 있는데 0 = 확정 안 함 (M12) · 집계 전으로 보이면 남은 계정 로그인 안 함 (M13) · 실제 조회 = 창 한 번에 날마다 하루 조회 (M14)
 - 앱 타이머·무인 앱 종료 미룸 = tools/verify_ui_morning_offline.py (화면 라이브러리 PySide6 필요라 따로)
 실행: python tools/verify_traffic_morning_offline.py
 """
@@ -86,23 +89,28 @@ def rank(out: Path, biz: str, prod: str, lbl: str):
 
 
 class Fake:
-    """가짜 계정 조회 — 계정마다 정한 값/예외를 차례로. calls = 부른 순서."""
+    """가짜 계정 조회 — 계정마다 정한 값/예외를 차례로(한 번 부를 때 하나). calls = (계정, 날) 부른 순서.
+    값 = {VID: OptionMetric}(받은 날 모두 같은 값) 또는 {'YYYY-MM-DD': {VID: …}}(날마다 다른 값)."""
 
     def __init__(self, plan: dict):
-        self.plan, self.calls = plan, []
+        self.plan, self.calls, self.opens = plan, [], []
 
-    def __call__(self, a, day_iso, get_password, log):
-        self.calls.append((a.account_id, day_iso))
+    def __call__(self, a, days, get_password, log):
+        one = isinstance(days, str)            # 옛 방식(하루 문자열)으로 불려도 같은 기록
+        want = [days] if one else list(days)
+        self.opens.append(a.account_id)        # 계정 창 연 횟수(로그인 1번 = 1)
+        self.calls += [(a.account_id, d) for d in want]
         todo = self.plan[a.account_id]
         r = todo.pop(0) if isinstance(todo, list) else todo
         if isinstance(r, Exception):
             raise r
-        return r, False
+        by_day = {d: (r.get(d, {}) if any(str(k)[:2] == "20" for k in r) else r) for d in want}
+        return (by_day[want[0]] if one else by_day), False
 
 
-def run(out: Path, fake, *, log=None, in_use=lambda p: False, sleep=lambda s: None, pushed=None, now=NOW):
+def run(out: Path, fake, *, log=None, in_use=lambda p: False, sleep=lambda s: None, pushed=None, now=NOW, accs=None):
     lines = []
-    res = TM.run_daily(accounts(), now=now, out_dir=out, on_log=(log or lines.append), gsheet_url="URL",
+    res = TM.run_daily(accs or accounts(), now=now, out_dir=out, on_log=(log or lines.append), gsheet_url="URL",
                        pipe_lock=out / "_잠금" / "파이프라인.lock", fetch=fake, in_use=in_use, sleep=sleep,
                        push=lambda wb, url, lg: (pushed if pushed is not None else []).append(url),
                        lock_dir=out / "정산" / "_잠금", clock=lambda: now)   # 23:50 마감도 시험 시각 기준(실제 시계 X)
@@ -379,8 +387,166 @@ def m9_stop_new_2350():
         check(len(cut) == 1 and "acc1" in cut[0], f"남은 계정 = 다시 시도 남은 acc1 {cut}")
 
 
+def raw_metrics(vid: str, pv: int, uv: int, sold: int) -> dict:
+    """판매분석 하루 응답 1옵션 → 지표(실제 파싱 함수 · 칸 모양 = 운용 PC 사본 `_raw/sg0141n_sales_p1`(11-26 00:10 · 11-25 하루):
+    판매·주문은 있는데 totalPageViews·totalUniqueVisitor = 0.0 · 변화율 −100 · 장바구니 0)."""
+    from coupang_analytics import collector
+    body = {"vendorItemDetails": {"vendorItemId": vid, "productName": "p", "itemName": "o", "itemId": "i",
+                                  "registrationType": "RFM"},
+            "businessInsightsMetricsResponse": {"totalPageViews": float(pv), "pageViewsVariance": -100.0 if not pv else 5.0,
+                                                "totalUniqueVisitor": float(uv), "uniqueVisitorVariance": -100.0 if not uv else 5.0,
+                                                "totalUnitsSold": float(sold), "totalOrders": float(sold),
+                                                "totalGmv": 19900.0 * sold, "totalAddToCart": 0.0, "totalCogs": None}}
+    return collector._parse_vendor_items([body])
+
+
+def master_multi(out: Path, shops, cols) -> None:
+    """여러 날 칸 — cols = [(칸, 노출)] · 모든 칸 ① 스탬프(그 칸을 ① 이 받음) · 판매 5 · 방문 = 노출 // 2."""
+    wb = OutputWorkbook.empty()
+    for biz, aid, prod, vid in shops:
+        wb.ensure_account(biz)
+        wb.set_account_id(biz, aid)
+        wb.ensure_product_block(biz, prod, "로켓그로스", ["kw"])
+        wb.set_product_vids(biz, prod, [vid])
+        for lbl, views in cols:
+            wb.set_product_metric(biz, prod, config.M_SALES, lbl, 5)
+            wb.set_product_metric(biz, prod, config.M_VIEWS, lbl, views)
+            wb.set_product_metric(biz, prod, config.M_VISITORS, lbl, views // 2)
+            wb.mark_sales_collected(aid, lbl)
+    wb.save(_master_path(out))
+
+
+def m10_not_yet_same_day():
+    print("[M10] 쿠팡 집계 전(판매는 있는데 응답 노출·방문 전부 0 · 11-26 08:07 실측 모양) = 0 으로 확정 안 함 · 같은 날 뒤 시각에 다시")
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d)
+        master(out)
+        zero = Fake({"acc1": raw_metrics("111", 0, 0, 14), "acc2": raw_metrics("222", 0, 0, 3)})
+        _, lines = run(out, zero)
+        check(val(out, "가게A", "상품A", config.M_VIEWS, LABEL) == 0, "집계 전 응답 = 칸 그대로(0)")
+        check(any(getattr(TM, "NOT_YET", "쿠팡 노출·방문 집계 전") in x for x in lines),
+              f"로그 '쿠팡 노출·방문 집계 전' 줄 {[x for x in lines if '집계' in x]}")
+        later = NOW + timedelta(minutes=30)
+        check(TM.owed_today(later, out), "같은 날 다시 남음 = 무인 앱 종료 미룸")
+        check(not TM.daily_due(later, out), "바로 되풀이 안 함(30분 뒤 = 아직)")
+        t2 = NOW + timedelta(seconds=getattr(TM, "RETRY_LATER_SEC", 7200))
+        check(TM.daily_due(t2, out), f"정한 뒤 시각({t2:%H:%M}) = 다시 할 때")
+        real = Fake({"acc1": raw_metrics("111", 120, 60, 14), "acc2": raw_metrics("222", 80, 40, 3)})
+        run(out, real, now=t2)
+        check(val(out, "가게A", "상품A", config.M_VIEWS, LABEL) == 120
+              and val(out, "가게B", "상품B", config.M_VISITORS, LABEL) == 40, "뒤 시각에 실제 값으로 채움(120·40)")
+        t3 = t2 + timedelta(minutes=1)
+        check(not TM.owed_today(t3, out) and not TM.daily_due(t3, out), "다 받은 뒤 = 그날 끝(무인 앱 종료 가능)")
+
+
+def m11_past_zero_next_day():
+    print("[M11] 이미 0 으로 들어간 지난 칸(11.25 처럼 · 그날 기록 '바뀐 칸 0'으로 끝남) = 다음 날 회차가 어제 칸과 함께 메움")
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d)
+        master_multi(out, SHOPS, [("11.10", 0), ("11.20", 0), ("11.21", 0)])
+        (out / TM.STATE_DIR).mkdir(parents=True)
+        (out / TM.STATE_DIR / TM.RUN_MARK).write_text(json.dumps(   # 고치기 전 판이 11-21 에 남긴 기록
+            {"날짜": "2026-11-21", "보충한 날": "2026-11-20", "메모": "성공 2 · 실패 0 · 바뀐 칸 0"}), encoding="utf-8")
+        now = datetime(2026, 11, 22, 8, 0, 30)
+        fake = Fake({"acc1": {"2026-11-21": raw_metrics("111", 70, 30, 1), "2026-11-20": raw_metrics("111", 120, 60, 5)},
+                     "acc2": {"2026-11-21": raw_metrics("222", 7, 3, 0), "2026-11-20": raw_metrics("222", 80, 40, 5)}})
+        run(out, fake, now=now)
+        days = sorted({c[1] for c in fake.calls})
+        check(days == ["2026-11-20", "2026-11-21"], f"어제(11-21)·지난 0 칸(11-20) 둘 다 조회 · 7일 넘은 11-10 은 안 함 {days}")
+        check(val(out, "가게A", "상품A", config.M_VIEWS, "11.20") == 120
+              and val(out, "가게B", "상품B", config.M_VISITORS, "11.20") == 40, "지난 칸 11.20 실제 값으로 메움")
+        check(val(out, "가게A", "상품A", config.M_VIEWS, "11.21") == 70, "어제 칸 11.21 도 채움")
+        check(fake.opens == ["acc1", "acc2"], f"계정마다 창 한 번(같은 세션에서 두 날) {fake.opens}")
+    with tempfile.TemporaryDirectory() as d:   # 어제 칸은 집계 끝 · 지난 칸만 아직 집계 전 = 같은 날 되풀이 안 함(다음 날 회차가 다시)
+        out = Path(d)
+        master_multi(out, SHOPS, [("11.20", 0), ("11.21", 0)])
+        now = datetime(2026, 11, 22, 8, 0, 30)
+        run(out, Fake({"acc1": {"2026-11-21": raw_metrics("111", 70, 30, 1), "2026-11-20": raw_metrics("111", 0, 0, 5)},
+                       "acc2": {"2026-11-21": raw_metrics("222", 7, 3, 0), "2026-11-20": raw_metrics("222", 0, 0, 5)}}), now=now)
+        check(not TM.owed_today(now + timedelta(minutes=1), out), "지난 칸만 집계 전 = 같은 날 다시 안 함(무인 앱 종료)")
+        nxt = Fake({"acc1": {}, "acc2": {}})
+        run(out, nxt, now=now + timedelta(days=1))
+        check(("acc1", "2026-11-20") in nxt.calls, f"다음 날 회차가 지난 칸 11-20 다시 조회 {nxt.calls}")
+
+
+def m12_true_zero_confirmed():
+    print("[M12] 집계 끝난 날(다른 계정 노출 있음) = 활동 없는 계정 0 은 진짜 0 으로 확정(다시 안 받음) · 판매 있는데 0 = 확정 안 함(다음 날 다시)")
+    nxt = datetime(2026, 11, 22, 8, 0, 30)
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d)
+        master(out)
+        run(out, Fake({"acc1": raw_metrics("111", 50, 20, 2), "acc2": {}}))
+        check(not TM.owed_today(NOW + timedelta(minutes=1), out), "집계 끝난 날 = 같은 날 다시 안 함")
+        again = Fake({"acc1": {}, "acc2": {}})
+        run(out, again, now=nxt)
+        check(not again.calls, f"진짜 0 으로 확정된 칸(acc2 11.20) = 다음 날 다시 안 받음 {again.calls}")
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d)
+        master(out)
+        run(out, Fake({"acc1": raw_metrics("111", 50, 20, 2), "acc2": raw_metrics("222", 0, 0, 3)}))
+        again = Fake({"acc1": {}, "acc2": raw_metrics("222", 9, 5, 3)})
+        run(out, again, now=nxt)
+        check(again.calls == [("acc2", "2026-11-20")] and val(out, "가게B", "상품B", config.M_VIEWS, LABEL) == 9,
+              f"판매 3 인데 노출 0 = 확정 안 함 → 다음 날 다시 받아 메움 {again.calls}")
+
+
+def m13_probe_stop():
+    print("[M13] 집계 전으로 보이면(판매 있는데 노출·방문 0 계정이 3개 이어짐 · 노출 있는 계정 없음) 남은 계정은 이번에 로그인 안 함")
+    shops = SHOPS + [("가게C", "acc3", "상품C", "333"), ("가게D", "acc4", "상품D", "444")]
+    accs = [Account(aid, "대표", biz) for biz, aid, _p, _v in shops]
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d)
+        master_multi(out, shops, [(LABEL, 0)])
+        fake = Fake({aid: raw_metrics(vid, 0, 0, 4) for _b, aid, _p, vid in shops})
+        res, lines = run(out, fake, accs=accs)
+        check(fake.opens == ["acc1", "acc2", "acc3"], f"3계정만 열고 멈춤(acc4 로그인 안 함) {fake.opens}")
+        check(TM.owed_today(NOW + timedelta(minutes=30), out), "남은 계정 = 같은 날 뒤 시각에 다시")
+        check(res is not None and res.get("acc4", {}).get("결과") != "실패", f"acc4 = 실패로 세지 않음 {res and res.get('acc4')}")
+
+
+def m14_live_fetch_days():
+    print("[M14] 실제 조회 함수 = 창 한 번(로그인 한 번)에 받을 날마다 판매분석 하루 조회(시작일 = 끝일) · 날 사이 쉼")
+    from types import SimpleNamespace
+    from coupang_analytics import browser, collector, pipeline_sales
+    asked, sleeps, opened = [], [], []
+
+    class FakeBrowser:
+        def __init__(self, profile_dir, offscreen):
+            opened.append(offscreen)
+            self.page = SimpleNamespace(wait_for_timeout=lambda ms: None)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def goto(self, url):
+            pass
+
+        def authenticated(self):
+            return True
+
+        def is_suspended(self):
+            return False
+    saved = (browser.WingBrowser, pipeline_sales._login_with_candidates, collector.fetch_sales_details, TM.time)
+    try:
+        browser.WingBrowser = FakeBrowser
+        pipeline_sales._login_with_candidates = lambda b, a, pws, log, login, semi: True
+        collector.fetch_sales_details = lambda page, f, t, log=None: (asked.append((f, t)), {"1": om("1", 1, 1)})[1]
+        TM.time = SimpleNamespace(sleep=sleeps.append, monotonic=saved[3].monotonic)
+        got, fresh = TM.fetch_live(Account("acc1", "대표", "가게A"), ["2026-11-21", "2026-11-20"], None, lambda m: None)
+    finally:
+        browser.WingBrowser, pipeline_sales._login_with_candidates, collector.fetch_sales_details, TM.time = saved
+    check(asked == [("2026-11-21", "2026-11-21"), ("2026-11-20", "2026-11-20")], f"날마다 하루 조회 {asked}")
+    check(sorted(got) == ["2026-11-20", "2026-11-21"] and opened == [False] and fresh is False,
+          f"창 한 번(보이는 창) · 날별 결과 {sorted(got)} {opened}")
+    check(len(sleeps) == 1, f"날 사이 쉼 1번 {sleeps}")
+
+
 def main() -> int:
-    for t in (m1_only_two_rows, m2_no_overlap, m3_three_tries, m4_once_a_day, m5_not_mixed, m6_zero_warn, m8_missed_after_23, m9_stop_new_2350):
+    for t in (m1_only_two_rows, m2_no_overlap, m3_three_tries, m4_once_a_day, m5_not_mixed, m6_zero_warn, m8_missed_after_23,
+              m9_stop_new_2350, m10_not_yet_same_day, m11_past_zero_next_day, m12_true_zero_confirmed, m13_probe_stop, m14_live_fetch_days):
         t()
     print(f"\n결과: {'통과' if not FAILS else f'실패 {len(FAILS)}건'}")
     for f in FAILS:
