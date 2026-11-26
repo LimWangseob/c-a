@@ -865,15 +865,17 @@ def _sales_left(name: str, account_id: str, days: int) -> None:
 def _backlog_left(accts, args) -> None:
     """바퀴 끝 남은 소급을 **전 계정**의 저장 자료로 다시 셈 — 그 바퀴 소급 단계를 못 돈 계정(로그인 실패·중단된 바퀴·새 프로세스)도
     판매분석·월자료·광고 남은 양이 [실행 결과 종합]에 잡힘(T-46 ⑤ · output (37) 보고 B ⑤ — 적게 세어 '다 받았다' 오판 방지).
-    받기 없음(파일만 읽음) · 판정 = 각 단계와 같은 함수(_sales_left · DOC/AD.left_months)."""
+    받기 없음(파일만 읽음) · 판정 = 각 단계와 같은 함수(_sales_left · DOC/AD.left_months · 다음 회차 부가세 상세 요청 = DR.unrequested)."""
     from coupang_analytics import settlement_ads as AD
     from coupang_analytics import settlement_docs as DOC
+    from coupang_analytics import settlement_docs_request as DR
     jobs = SJ.load_jobs(JOBS)
     today = date.today()
     for a in accts:
         name = name_of(a)
         tok = SF._token(name, "계정명")
         _sales_left(name, a.account_id, 0)
+        LOG.remaining(name, "부가세 상세 요청", DR.unrequested(jobs, name), "건")
         try:
             LOG.remaining(name, "월자료", DOC.left_months(VERIFY / "월자료" / tok, today, bool(_rg_vendor(a, jobs))), "달")
             LOG.remaining(name, "광고", AD.left_months(VERIFY / "광고", tok, min(args.start, AD.FROM), today), "달")
@@ -1317,15 +1319,17 @@ def _is_suspended(account: str, ids: set) -> bool:
 
 def _waitable(j, ids: set) -> bool:
     """이번 회차에 아직 받으러 갈 작업인가 — 정지 계정(D-247) · 3번 소진된 파일 · 로그인 안 하는 계정(비밀번호 거부·2차 인증·
-    로그인 3번 소진) · 남은 일 바퀴 3번 소진 계정은 뺌(D-373·D-382 — 다시 로그인하지 않으니 기다릴 것도 아님)."""
-    if _is_suspended(j.account, ids):
+    로그인 3번 소진) · 남은 일 바퀴 3번 소진 계정은 뺌(D-373·D-382 — 다시 로그인하지 않으니 기다릴 것도 아님) ·
+    요청 안 한 부가세 상세(월자료 '요청예정')도 뺌 — 받기 단계는 요청하지 않고 소급 단계가 회차 계정당 4건(D-170)까지만 요청하므로
+    이번 회차에 더 할 수 없음 = 다음 회차(남은 소급 표시 · 실측 output46 11-24 6건·11-25 2건이 회차를 24:00 까지 열어 '완료' 못 함)."""
+    if _is_suspended(j.account, ids) or (j.kind == SJ.DOC_KIND and j.status == SJ.ST_PLANNED):
         return False
     return not (TRIES and (TRIES.ended(j.account, *_job_item(j)) or TRIES.cannot_login(j.account)
                            or TRIES.ended(j.account, REST_ITEM, _PHASE_DATA["남은 일"])))
 
 
 def _pending_jobs() -> int:
-    """요청예정·요청됨(쿠팡 파일 생성 대기) 작업 수 — 받으러 갈 것만 셈(_waitable · 받기는 D-215 대로 계속 · D-247 ·
+    """요청예정·요청됨(쿠팡 파일 생성 대기) 작업 수 — 받으러 갈 것만 셈(_waitable · 다음 회차 부가세 상세 요청 뺌 · 받기는 D-215 대로 계속 · D-247 ·
     실측 output (37) hide4u 요청됨 9건이 받기 500 반복으로 회차 '완료'를 막음)."""
     jobs, ids = _open_jobs()
     return sum(1 for j in jobs if _waitable(j, ids))
